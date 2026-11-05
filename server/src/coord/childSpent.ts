@@ -203,7 +203,7 @@ const LIVE_PHASE: Readonly<Record<PrPhase, 'spent' | 'unspent' | 'unmeasured'>> 
  * sources, in this order, and the order is the argument:
  *
  *  1. `rec.prNumber` — present is evidence of spent. ONE DIRECTION ONLY: the
- *     registry reads `.prnumber` through the collapsing `field()`, which folds
+ *     registry reads `.prnumber` through the collapsing `listedField`, which folds
  *     an unreadable file into the same null as an absent one, so a null says
  *     nothing and the verdict falls through.
  *  2. `.prhistory`, through `readPrHistory` — which tells absent from

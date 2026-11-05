@@ -1,6 +1,8 @@
 import { createHistogram, performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { WatcherDeps } from './deps.js';
+import { timed } from './perf/recorder.js';
+import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
@@ -8,15 +10,18 @@ import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
+import { RegistryRowCache } from './registryRowCache.js';
+import { carriedUsage, changedRows, usageReadIds, listingNotice, planTick, rejectedListing, rowFactsOf, rowSignatures, verdictsOf, type TickFacts } from './tickPlan.js';
+import { readLimits } from './limits.js';
 import { mapBounded } from './bounded.js';
 import {
   accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
-  readProjectPools,
+  readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
 import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
+import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -52,7 +57,7 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
@@ -659,8 +664,8 @@ function failureDetail(res: CcdResult): string {
 
 export class FleetWatcher {
   private timer: NodeJS.Timeout | null = null;
-  private lastJson: string | null = null;
-  /** The fleet the last `fleet` broadcast carried — `lastJson`, unserialised. */
+  private readonly frameLatch = changeLatch<string>();   // the `fleet` frame's byte-equality guard
+  /** The fleet the last `fleet` broadcast carried — the JSON `frameLatch` last saw, unserialised. */
   private lastFleet: FleetSession[] | null = null;
   /** D-6436: whether the latest tick listed the registry, and when its read began; written by `tick()` alone. */
   private registryTick: { listed: boolean; at: number } | null = null;
@@ -787,6 +792,9 @@ export class FleetWatcher {
    *  local JSON read per session, cheap enough not to need its own slower
    *  clock the way task/PR sweeps do. */
   private hookStates = new Map<string, HookState>();
+  /** Console speed S1: the registry reader's row cache and the pane-listing log latch (`tickPlan.ts#listingNotice`). */
+  private readonly rowCache = new RegistryRowCache();
+  private listingFailed = false;
   /** The usage sidecar lane (routing slice 0) — rebuilt on its own
    *  `USAGE_SWEEP_MS` clock, not every tick; see `sweepUsage`. */
   private usage = new Map<string, SessionUsage>();
@@ -1177,6 +1185,7 @@ export class FleetWatcher {
    *  restart doesn't notify for every already-pending dialog / idle session. */
   private primed = false;
   private readonly cachePath: string;
+  private readonly snapshotWriter: SnapshotWriter;
   /** The sixth lane's transcript memo (§5.4) — ONE per watcher, shared across
    *  rows, keyed per `(configDir, uuid, dir)`. This lane resolves per eligible
    *  row on a 10 s clock; without the memo, every row with no transcript at its
@@ -1248,11 +1257,11 @@ export class FleetWatcher {
    *  off past a sweep is kept). IN MEMORY BY DESIGN, as
    *  `mailCooldown` is: a restart logs a still-held delivery once more. */
   private busyShadowLogged = new Set<number>();
-  /** `emitRuns`'s own byte-equality guard, the same idiom as `lastJson`
+  /** `emitRuns`'s own byte-equality guard, the same idiom as `frameLatch`
    *  above, over `RunSummary[]` instead of `FleetSession[]`. `null` (not
    *  `'[]'`) so the very first tick with a real `coord` always emits at
-   *  least once, even into an empty fleet — mirroring `lastJson`'s own
-   *  initial value. */
+   *  least once, even into an empty fleet — mirroring `frameLatch`'s own
+   *  first-key rule. */
   private lastRunsJson: string | null = null;
   /** D-7334: the stall watch's quiet time the last runs frame carried, for `/ws/fleet`'s frames (`currentStallQuietMs`).
    *  `null` until `emitRuns` first emits. */
@@ -1427,6 +1436,7 @@ export class FleetWatcher {
       projectOf: (childId) => this.lastFleet?.find((f) => f.id === childId)?.project ?? '',
     } });
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
+    this.snapshotWriter = new SnapshotWriter(this.cachePath);
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
     // The collector lane's start (spec §5.10): its act hold-off counts from here, on the lane's monotonic clock.
@@ -1445,6 +1455,7 @@ export class FleetWatcher {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.deps.perf?.stop();
   }
 
   /**
@@ -2400,6 +2411,15 @@ export class FleetWatcher {
     return row === null ? { ok: false } : { ok: true, row };
   }
 
+  /** What the latest LISTED tick measured, or null before the first and after an unlistable one (console speed S1). */
+  private tickFacts: TickFacts | null = null;
+  /** The latest pools read with ITS tick's listing time: kept across ticks (a tick's read is slow and lands after its frame), cleared only by an unlistable tick. */
+  private poolsFact: { read: ProjectPoolsRead; listedAt: number } | null = null;
+  private rowSigs = new Map<string, string>();
+  currentLimits(): { limits: TickFacts['limits']; listedAt: number } | null { const f = this.tickFacts; return f === null ? null : structuredClone({ limits: f.limits, listedAt: f.listedAt }); }
+  currentProjectPoolsRead(): { read: ProjectPoolsRead; listedAt: number } | null { return this.poolsFact === null ? null : structuredClone(this.poolsFact); }
+  currentRowFacts(id: string): ReturnType<typeof rowFactsOf> { return this.tickFacts === null ? null : rowFactsOf(this.tickFacts, id); }
+
   /** The last measured project-pool sweep, or null if none has been taken yet
    *  — same reasoning as `currentCoord()`'s null. */
   currentPools(): ProjectPoolsWire | null {
@@ -2422,6 +2442,7 @@ export class FleetWatcher {
     // `SessionStream.tick` (`sessionws.ts`) verbatim.
     if (this.ticking) return;
     this.ticking = true;
+    const tickStart = performance.now();
     try {
       // The catalogue lane (design 2026-09-20 §7) is gated HERE, above the
       // registry read and its fail-shut return (`if (!registryRead.listed)`
@@ -2519,10 +2540,11 @@ export class FleetWatcher {
       // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
       // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
       // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
+      const listingP = timed(this.deps.perf, 'listing', this.deps.tmux.listPanes().catch((err: unknown) => rejectedListing(listedAt, err)));   // beside the registry read: one tmux ask a tick, timed from its start (console speed S1)
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
       // handed it below, so they do not list again.
-      const registryRead = buildFleetReadModel(await readRegistryMeasured(this.deps.io, this.deps.cfg));
+      const registryRead = buildFleetReadModel(await timed(this.deps.perf, 'registry', readRegistryMeasured(this.deps.io, this.deps.cfg, { cache: this.rowCache, verdicts: listingP.then(verdictsOf), nowMs: listedAt })));
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
       // `dispatchRun` FAILS SHUT on (`dispatch.ts:106-109`), so it must reach
@@ -2532,13 +2554,6 @@ export class FleetWatcher {
       // every dispatch, which is the precise lie spec §4.2 mints
       // `unmeasurable` to prevent.
       this.emitCoord(registryRead.listed ? registryRead.names : null);
-      // BEFORE the fail-shut return: an unlistable registry is exactly the
-      // state in which nobody may decide a pool, so `listed:false` must reach
-      // the wire now rather than leave the last pool snapshot frozen. That arm
-      // is free: `readProjectPools` returns before touching io when names is
-      // null. The listed arm's bounded cost and why it stays awaited are stated
-      // on `emitPools`; `project-pools-read.test.ts` pins both cost arms.
-      await this.emitPools(registryRead.listed ? registryRead.names : null);
       // PR landing in ccrc, stage 1: the checks lane, BEFORE the fail-shut return below, because an unlistable registry
       // still owes a live episode its stuck bound (spec §3.8). NEVER awaited, and its own beat (`LANE_SCHEDULE`), never
       // inside `sweepPr`: its reads are `ccd pr-landing` calls over the network.
@@ -2550,10 +2565,12 @@ export class FleetWatcher {
         ?.catch(() => { /* one bad sweep must not kill the poll */ });
       this.noteDelegationRegistry(registryRead.listed);
       if (!registryRead.listed) {
+        this.tickFacts = null; this.poolsFact = null; // every getter is null after an unlistable tick
+        await this.emitPools(null, listedAt); // an unlistable registry: nobody may decide a pool, so `listed:false` reaches the wire now (free: no io)
         this.registryTick = { listed: false, at: listedAt };            // D-6436: `lastFleet` is kept, but not as a listing
         this.withdrawDelegation();                                      // wave 4: no lane runs below, so the frame is withdrawn here
         // Retain, don't erase, at fleet scale: `this.hookStates`/
-        // `this.taskProgress`/`this.prevStatus`/`this.lastJson` are all left
+        // `this.taskProgress`/`this.prevStatus`/`this.frameLatch` are all left
         // exactly as the prior successful tick set them. Nothing is broadcast
         // this tick — a stale-but-real fleet on the connected client's screen
         // is honest; an empty one is a lie. `registry.ts`'s own
@@ -2578,6 +2595,11 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      const paneListing = await listingP;
+      const notice = listingNotice(this.listingFailed, paneListing);
+      this.listingFailed = notice.failed;
+      if (notice.warn !== null) console.warn(notice.warn);
+      const plan = planTick(records, registryRead.cold, paneListing);
       this.registryIds = new Set([...records.map((r) => r.id), ...registryRead.refused]);
       this.listedIds = registryRead.listedIds;
       // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
@@ -2609,10 +2631,10 @@ export class FleetWatcher {
       // yields a menu with no envelope, and therefore an action-less ask push.
       // What covers the residue is `actionlessAsks` in `detectDialogs` below:
       // the latch remembers that push and amends it when the envelope turns up.
-      await this.sweepHookStates(records);
-      await this.sweepUsage(records);
-      const pending = await this.detectDialogs(this.primed, registryRead.names, records);
-      await this.sweepTasks(registryRead);
+      await timed(this.deps.perf, 'hooks', this.sweepHookStates(records, plan.hookIds));
+      await timed(this.deps.perf, 'usage', this.sweepUsage(records, plan.usageIds));
+      const pending = await timed(this.deps.perf, 'dialogs', this.detectDialogs(this.primed, registryRead.names, records, plan.captureIds));
+      await timed(this.deps.perf, 'tasks', this.sweepTasks(registryRead));
       // NEVER awaited: it shells out over the network and `gh` has no
       // --timeout, so awaiting it would stall the dialog detector and the
       // busy->idle push behind GitHub's reachability.
@@ -2721,7 +2743,21 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const sessions = await assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings);
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg));   // read once a tick: published by `currentLimits`, handed to assembleFleet
+      const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
+      // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
+      // the lanes, the state cache and the runs frame all wait behind it.
+      this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
+      const json = JSON.stringify(sessions);
+      if (this.frameLatch.changed(json)) {
+        this.lastFleet = sessions;
+        this.bus.emit('fleet', sessions);
+      }
+      this.tickFacts = { listedAt, limits, records: new Map(records.map((r) => [r.id, r])), listing: paneListing, panePids };
+      const sigs = rowSignatures(records, paneListing, this.rowSigs);
+      for (const id of changedRows(this.rowSigs, sigs)) this.bus.emit(`row:${id}`, { listedAt });
+      this.rowSigs = sigs;
+      await timed(this.deps.perf, 'pools', this.emitPools(registryRead.names, listedAt));
       // Blocking review finding 4: `FleetSession.unmeasured` (Task 2) now
       // carries the SAME evidence `measuredIdentity(records[i]) === null`
       // would, one hop from `records[i]` in `sessions[i]` — so this reads it
@@ -2758,6 +2794,7 @@ export class FleetWatcher {
       // Push on a busy→idle finish (a session completed a turn). Skip the priming
       // tick — otherwise a restart notifies for every currently-idle session.
       if (this.primed) {
+        await timed(this.deps.perf, 'finished', (async (): Promise<void> => {   // one phase for the loop (console speed S1)
         for (const s of sessions) {
           // Blocking review finding 2: never assert a turn completed on a row
           // this tick could not measure — `status` for a degraded row is a
@@ -2779,6 +2816,7 @@ export class FleetWatcher {
             }
           }
         }
+        })());
         // Build 7's two new notify kinds ride the SAME primed gate as the
         // `done` push above, for the identical restart reason. EACH WRAPPED
         // (review finding 1): both walk straight into `node:sqlite`, which
@@ -2878,111 +2916,28 @@ export class FleetWatcher {
       void this.sweepDelegation(sessions, records).catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
-        // C0.4: `connected` alone is not "this read was complete" — a
-        // wedged-yet-connected agent, a socket hiccup mid-sweep, or a handful of
-        // sessions timing out inside `readRegistry`'s 24-generation loop all
-        // still leave `fleetState.connected` true while `sessions` comes back
-        // short. Without a size check, THAT partial assembly overwrites the
-        // fuller last-known-good snapshot on disk — and `/api/fleet`
-        // (server.ts) serves exactly this file, unconditionally, as `stale:
-        // true` for the whole REST of a subsequent real outage. So a single bad
-        // tick during an otherwise-healthy stretch degrades every request after
-        // it, not just its own. Guard: never let a smaller (or empty) assembly
-        // clobber a fuller one already on disk — implementing the intent this
-        // class's own docstring already states above ("a stretch of
-        // empty/partial reads never clobbers the last known good snapshot").
-        //
-        // C0.4-FOLLOWUP (blocking review findings 1/2): a bare length
-        // comparison cannot tell "this tick's read was partial" apart from
-        // "the fleet is genuinely smaller now" — and the second one is the
-        // ROUTINE case, not the rare one: `ccd`'s `_reg_purge` unlinks a
-        // session's whole registry entry from `cmd_ws_rm` (session rm),
-        // `ws-reap`, and `ws-gc --prune` alike. Comparing lengths ALONE turns
-        // every purge into a permanent high-water mark: once the fleet drops
-        // below it, `sessions.length < prior.sessions.length` stays true on
-        // every later tick FOREVER, even fully healthy ones, and the cache —
-        // every field of every surviving session included — freezes at the
-        // instant of the purge and never updates again. Silently: nothing
-        // failed loudly enough to log.
-        //
-        // The escape hatch is the same evidence `readRegistry`'s own
-        // hold-reconfirm already trusts (registry.ts): `_reg_purge` removes
-        // the id's `.uuid` too, so a GENUINE purge is a directory listing that
-        // no longer names `<id>.uuid` at all. A FAILED field read, by
-        // contrast, leaves `.uuid` (and the id's other files) sitting right
-        // there in the listing — only the bytes behind one of them came back
-        // null. So: when this tick assembled fewer sessions than the prior
-        // snapshot, list the registry directory fresh and check every id that
-        // dropped out against it. The write is allowed only when EVERY
-        // missing id is confirmed gone from that listing — one still-listed
-        // id is enough to treat the whole tick as a partial read and keep the
-        // prior snapshot, exactly as the original guard intended for that
-        // case. A failed (or absent) confirmation listing itself proves
-        // nothing either way, so it fails shut the same way.
+        // `connected` alone is not "this read was complete"; the snapshot decision and its rationale live in
+        // `persistFleetSnapshot` (fleetstate.ts).
         try {
-          // Task 2: the shrink guard above keys ONLY on `sessions.length`,
-          // and a degraded row survives length unchanged — `assembleFleet`
-          // still emits one `FleetSession` per readable-or-degraded record,
-          // it just carries a non-empty `unmeasured`. So a 24-row assembly
-          // with 3 degraded rows sails straight through
-          // `sessions.length >= prior.sessions.length` and would be
-          // persisted as last-known-good: `status` frozen at a guessed
-          // default, `branch`/`workdir` reading stale or empty for reasons
-          // that have nothing to do with the session's real state. The
-          // snapshot's whole purpose is degraded-mode serving (`/api/fleet`
-          // ships it, unconditionally `stale: true`, through a REAL
-          // fleet-host outage) — persisting a guess as THAT snapshot defeats
-          // the one thing it exists for at the exact moment it matters.
-          // Same warn-once-per-episode discipline as the shrink guard below,
-          // on its own flag (`snapshotWriteSkippedDegradedWarned`) so the two
-          // episodes can each report once without silencing the other.
-          const degraded = sessions.filter((s) => s.unmeasured.length > 0);
-          if (degraded.length > 0) {
-            if (!this.snapshotWriteSkippedDegradedWarned) {
-              this.snapshotWriteSkippedDegradedWarned = true;
-              console.warn(`ccrc-server: snapshot write skipped — ${degraded.length}/${sessions.length} assembled sessions carry an unmeasured identity field this tick (${degraded.map((s) => s.id).join(', ')}); the cache would otherwise persist a guess as last-known-good`);
-            }
-          } else {
-            this.snapshotWriteSkippedDegradedWarned = false;
-            const prior = await loadSnapshot(this.cachePath);
-            if (prior === null || sessions.length >= prior.sessions.length) {
-              await saveSnapshot(sessions, this.cachePath);
-              this.snapshotWriteSkippedWarned = false;
-            } else {
-              const survivingIds = new Set(sessions.map((s) => s.id));
-              const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
-              const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-              // Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
-              // snapshot an older build wrote may still carry it while its `.uuid`
-              // stays listed. Its absence from `sessions` is not a partial read and
-              // never heals, so it counts as purged — or one stray file would freeze
-              // every snapshot write for as long as it stands.
-              const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
-              if (allGenuinelyPurged) {
-                await saveSnapshot(sessions, this.cachePath);
-                this.snapshotWriteSkippedWarned = false;
-              } else if (!this.snapshotWriteSkippedWarned) {
-                this.snapshotWriteSkippedWarned = true;
-                console.warn(`ccrc-server: snapshot write skipped — this tick assembled ${sessions.length}/${prior.sessions.length} of the prior snapshot's sessions and at least one missing id is still listed in the registry (a read failure, not a confirmed purge); cache stays at the prior size until that clears`);
-              }
-            }
-          }
-        } catch { /* best-effort cache — never blocks the poll */ }
+          const outcome = await timed(this.deps.perf, 'snapshot', persistFleetSnapshot(this.snapshotWriter, sessions, () => this.deps.io.readdir(this.deps.cfg.registryDir), json));
+          const note = snapshotNotice({ degraded: this.snapshotWriteSkippedDegradedWarned, skipped: this.snapshotWriteSkippedWarned }, outcome);
+          this.snapshotWriteSkippedDegradedWarned = note.latches.degraded;
+          this.snapshotWriteSkippedWarned = note.latches.skipped;
+          if (note.warn !== null) console.warn(note.warn);
+        } catch { this.snapshotWriteSkippedDegradedWarned = false; /* best-effort cache — never blocks the poll; main's latch reset ran before the load/save */ }
       }
       // Independent of the `fleet` diff below: runs change on a different
       // clock from sessions, and an unchanged session snapshot must not
       // suppress a run transition from reaching an already-connected client.
       this.emitRuns(sessions);
-      const json = JSON.stringify(sessions);
-      this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
-      if (json === this.lastJson) return;
-      this.lastJson = json;
-      this.lastFleet = sessions;
-      this.bus.emit('fleet', sessions);
     } finally {
       this.ticking = false;
+      this.deps.perf?.tickDone(performance.now() - tickStart, this.intervalMs);   // listed or not (console speed S1)
     }
   }
+
+  /** The console's own timings, or undefined without a recorder (console speed S1). */
+  perfHealth(): PerfHealth | undefined { return this.deps.perf?.health(Date.now()); }
 
   /**
    * The `{type:'runs'}` WS frame emitter (Task 10, spec:222-224). Runs every
@@ -3119,12 +3074,13 @@ export class FleetWatcher {
    *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
    *  overlap and deadline behavior; `fleetws.test.ts` pins this cadence-derived
    *  budget at the consumer. */
-  private async emitPools(names: readonly string[] | null): Promise<void> {
+  private async emitPools(names: readonly string[] | null, listedAt: number): Promise<void> {
     const budgetMs = Math.max(1, Math.floor(this.intervalMs / 2));
     const [read, observedEpoch] = await Promise.all([
       readProjectPools(this.deps.io, this.deps.cfg, names, budgetMs),
       readObservedEpochFromRegistry(this.deps.io, this.deps.cfg, budgetMs),
     ]);
+    if (names !== null) this.poolsFact = { read, listedAt };   // published by `currentProjectPoolsRead`; an unlistable tick clears it instead
     // T9-R2: the epoch/observedEpoch producer, the SAME two reads `/api/fleet`
     // (server.ts) makes for its own `poolsWire` call — `readPoolEpoch`
     // (`pools.ts`) leaves `epoch` off the wire whether `deps.coord` is
@@ -3558,7 +3514,7 @@ export class FleetWatcher {
    * read) so this stays independently callable, same shape as
    * `detectDialogs` below.
    */
-  private async sweepHookStates(records?: SessionRecord[]): Promise<void> {
+  private async sweepHookStates(records?: SessionRecord[], readIds?: ReadonlySet<string>): Promise<void> {
     const now = Date.now();
     let recs: SessionRecord[];
     if (records) {
@@ -3595,7 +3551,7 @@ export class FleetWatcher {
         // very sweep, exactly as it always has (verified: this map has no
         // OTHER pruning mechanism, so the full-rebuild-from-current-listing
         // shape is load-bearing and is preserved here unchanged).
-        if (measuredIdentity(r) === null) {
+        if (measuredIdentity(r) === null || readIds?.has(r.id) === false) {   // a cold row (console speed S1) keeps its entry too
           const prev = this.hookStates.get(r.id);
           if (prev) next.set(r.id, prev);
           return;
@@ -3623,24 +3579,42 @@ export class FleetWatcher {
    *  freshness call nobody measured this sweep, unbounded — controller
    *  ruling R5 — `readUsageMeasured` tells unreadable from absent, which
    *  drops the row). */
-  private async sweepUsage(records: SessionRecord[]): Promise<void> {
-    await this.runLane('usage', () => this.usagePass(records));
+  private async sweepUsage(records: SessionRecord[], readIds?: ReadonlySet<string>): Promise<void> {
+    await this.runLane('usage', () => this.usagePass(records, readIds));
   }
 
-  private async usagePass(records: SessionRecord[]): Promise<void> {
+  private async usagePass(records: SessionRecord[], hotIds?: ReadonlySet<string>): Promise<void> {
     const now = Date.now();
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
+    const readAt = new Map<string, number>();   // the lane's own wall clock; rebuilt, so a purged row ages out
+    // A cold row (console speed S1) carries its entry, but only while that was read within the re-read bound.
+    const readIds = hotIds === undefined ? undefined : usageReadIds(records, hotIds, this.usageReadAt, now);
     await Promise.all(records.map(async (r) => {
+      if (readIds?.has(r.id) === false) {
+        const kept = this.usage.get(r.id);
+        if (kept) next.set(r.id, carriedUsage(kept, nowS));
+        const at = this.usageReadAt.get(r.id);
+        if (at !== undefined) readAt.set(r.id, at);
+        return;
+      }
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
       if (read.kind === 'reading') next.set(r.id, read.usage);
       else if (read.kind === 'unreadable') {
         const prev = this.usage.get(r.id);
         if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S });
+        const at = this.usageReadAt.get(r.id);   // a failed read is no read: the row stays due
+        if (at !== undefined) readAt.set(r.id, at);
+        return;
       }
+      readAt.set(r.id, now);
     }));
     this.usage = next;
+    this.usageReadAt = readAt;
   }
+
+  /** When each row's usage sidecar was last read (ms, `Date.now`), by `usagePass` alone. */
+  private usageReadAt = new Map<string, number>();
 
   currentUsage(): Map<string, SessionUsage> { return this.usage; }
 
@@ -9065,7 +9039,7 @@ export class FleetWatcher {
    * always has, needing no retain-don't-erase logic of its own — the code
    * makes that visible by NOT mentioning `measuredIdentity` anywhere below.
    */
-  private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[]): Promise<Set<string>> {
+  private async detectDialogs(notify: boolean, listing?: readonly string[], records?: SessionRecord[], captureIds?: ReadonlySet<string>): Promise<Set<string>> {
     const pending = new Set<string>();
     // The hold's answer, sent here: `raise` answers what to send now and never pushes (W3 Q3d, D-7028).
     const pushRaised = (v: RaiseVerdict): RaiseVerdict => {
@@ -9086,7 +9060,7 @@ export class FleetWatcher {
     // reconciles.
     const caps = await mapBounded(recs, DIALOG_CAPTURE_CONCURRENCY, async (r) => {
       const at = Date.now();
-      try { return { at, pane: await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
+      try { return { at, pane: captureIds?.has(r.id) === false ? null : await this.deps.tmux.capture(r.id), doneAt: Date.now() }; } catch (err) { return { at, err }; }
     });
     for (const [i, r] of recs.entries()) {
       const cap = caps[i]!;
@@ -11003,8 +10977,9 @@ class DelegationLane {
    *  event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is not a fresh death
    *  either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there is no stamp) is not counted,
    *  and a death already recorded for it is erased, when that instant is no later than the recorded death plus `DELEGATION_CLOCK_SKEW_MS` (this
-   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the torn tick (`assembleFleet` reads the registry
-   *  before it probes tmux) lets a stop read as a crash for one pass and show its stamp on the next. A stop stamped later than that leaves the
+   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the tick's field reads wait for its tmux listing while a stop writes its
+   *  stamp before it kills the pane, so a fresh read sees the stamp of a pane the listing shows gone; but a reused record's key comes from the readdir
+   *  taken before the listing answered, so a stop landing between the two can still read as a stamp-less death for one pass; a stamp that shows only on a later pass (the box's clock, or a read that raced the write) can still follow a counted death. A stop stamped later than that leaves the
    *  death counted (an operator cleaning up after a crash). Residual: a crash followed by a stop or an archive within one pass, or within the skew
    *  of its recorded death, is not counted; the 60 s cadence and the clocks' sync bound it. The bound is from above only, so a stop stamp or an
    *  archive marker that outlived its pane (a kill that failed after `_ws_unsupervise`) also hides that pane's later crash; a lower bound would be

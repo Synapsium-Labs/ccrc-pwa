@@ -436,13 +436,15 @@ describe('fleet REST + WS', () => {
       expect(snap!.savedAt).toBeGreaterThan(firstSavedAt);
       const secondSavedAt = snap!.savedAt;
 
-      // Not a one-tick exception — the survivor keeps getting a fresh
-      // snapshot on every subsequent healthy tick, exactly as an unshrunk
-      // fleet would.
+      // Not a one-tick exception — the survivor's cache stays live exactly as an unshrunk fleet's: it is rewritten when
+      // the survivor changes and, since console speed S1 (the cache is written only on change), left alone when it does not.
       await new Promise((r) => setTimeout(r, 3));
       await watcher.tick();
-      const laterSnap = await loadSnapshot(cachePath);
-      expect(laterSnap!.savedAt).toBeGreaterThan(secondSavedAt);
+      expect((await loadSnapshot(cachePath))!.savedAt).toBe(secondSavedAt);
+      writeFileSync(path.join(home, '.cc-sessions', 'claude-a-project-f.branch'), 'ws/changed');
+      await new Promise((r) => setTimeout(r, 3));
+      await watcher.tick();
+      expect((await loadSnapshot(cachePath))!.savedAt).toBeGreaterThan(secondSavedAt);
 
       rmSync(cacheDir, { recursive: true, force: true });
     });
