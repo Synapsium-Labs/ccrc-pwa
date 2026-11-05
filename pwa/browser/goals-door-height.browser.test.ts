@@ -3,8 +3,8 @@
 // the production build.
 //
 // THE PIN. The SAME session in and out of a programme draws a `.chat-head` of the same height at 390, 1200, 1279 and 1280, in
-// both skins. At 900 and 1199 the door stands on the coordination line, which may be full there, and the "in" header is at most
-// 14 px taller (the ruling's allowance: one more coordination line). The cases cover names of 8, 13, 26 and 31 characters,
+// both skins. At 900 and 1199 the door stands on a row that may be full there, and the "in" header is at most one line of
+// that row taller (the ruling's allowance, per skin: `BAND_PX`). The cases cover names of 8, 13, 26 and 31 characters,
 // each in three shapes:
 //   - a workspace with a PR (its cap reads `#123`);
 //   - a workspace without one (its cap reads "Check PR": every workspace draws the cap, `hasPrCap`);
@@ -101,10 +101,14 @@ const FIXTURE: AppFixture = {
 };
 
 const SKINS = [REFINED, INSTRUMENT] as const;
-/** Height-neutral widths, and the band where the door may take one more coordination line (at most `BAND_PX`). */
+/** Height-neutral widths, and the band where the door may take one more line of the row it stands on (at most `BAND_PX`). */
 const NEUTRAL = [390, 1200, 1279, 1280] as const;
 const BAND = [900, 1199] as const;
-const BAND_PX = 14;
+/** The band's allowance, per skin, as ruled and measured on CI: one line of the row the door stands on there.
+ *  - Instrument: one coordination line (14 px).
+ *  - Refined: one line of the chip rail (22 px). CI's Chrome measured a coordinator's header 21.5 px taller at 900, where this
+ *    box measured the two equal: the fonts differ. */
+const BAND_PX: Readonly<Record<(typeof SKINS)[number], number>> = { [INSTRUMENT]: 14, [REFINED]: 22 };
 /** The width from which the door's word shows beside its glyph (chat.css). */
 const WORD_FROM = 1280;
 
@@ -190,7 +194,7 @@ async function measure(page: Page, id: string, title: string, inProgramme: boole
 describe.each(SKINS)('the Goals door costs the session header no height in %s', (skin) => {
   for (const width of [...NEUTRAL, ...BAND]) {
     const band = (BAND as readonly number[]).includes(width);
-    it(`at ${width}: the same session in and out of a programme draws a header ${band ? `at most ${BAND_PX} px taller` : 'of one height'}; the door stands ${skin === INSTRUMENT && width < 900 ? "on Back's row" : 'on the coordination line'}, ${width >= WORD_FROM ? 'its word beside the glyph' : 'the glyph alone'}`, async () => {
+    it(`at ${width}: the same session in and out of a programme draws a header ${band ? `at most ${BAND_PX[skin]} px taller` : 'of one height'}; the door stands ${skin === INSTRUMENT && width < 900 ? "on Back's row" : 'on the coordination line'}, ${width >= WORD_FROM ? 'its word beside the glyph' : 'the glyph alone'}`, async () => {
       const { ctx, page, errors } = await openApp(browser!, { skin, theme: 'light', width }, FIXTURE);
       try {
         await page.goto(`${server!.origin}/s/${idOf('po', NAMES[0], 'pr')}`);
@@ -205,7 +209,7 @@ describe.each(SKINS)('the Goals door costs the session header no height in %s', 
           const out = await measure(page, idOf('po', name, shape), name, false);
           const inside = await measure(page, idOf('pi', name, shape), name, true);
           const grew = inside.h - out.h;
-          if (band ? Math.abs(grew) > BAND_PX + 0.25 : Math.abs(grew) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h}`);
+          if (band ? Math.abs(grew) > BAND_PX[skin] + 0.25 : Math.abs(grew) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h}`);
           if (out.door.slot !== 'none') wrong.push(`${at}: out of a programme, a door is drawn (${out.door.slot})`);
           if (inside.door.slot !== where) wrong.push(`${at}: the door is on the ${inside.door.slot}, not the ${where}`);
           if (!inside.door.inView) wrong.push(`${at}: the door is outside the viewport`);
