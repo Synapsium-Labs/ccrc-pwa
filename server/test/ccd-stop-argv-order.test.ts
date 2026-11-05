@@ -75,6 +75,8 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
       // process, so `_lc_obs`'s once-per-process pane probe comes first.
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       `systemctl --user disable --now claude-session@${ID}`,
+      // D-7902: the pane's scope is read after the unit is stopped, so a wedged tmux holds no stop, and before the pane is killed.
+      `tmux list-panes -t =cc-${ID}: -F #{pane_pid}`,
       `tmux kill-session -t =cc-${ID}:`,
     ]);
     expect(h.reg(ID, 'stopped')).toMatch(/^\d{10} pwa$/);
@@ -93,6 +95,7 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
     expect(asManagerCalls(h.calls())).toEqual([
       `tmux list-panes -a -F #{session_name} #{pane_pid}`,
       'systemctl --user disable --now claude-session@claude-a-demo',
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',
       'tmux kill-session -t =cc-claude-a-demo:',
     ]);
     expect(h.reg('claude-a-demo', 'stopped')).toMatch(/^\d{10} pwa$/);

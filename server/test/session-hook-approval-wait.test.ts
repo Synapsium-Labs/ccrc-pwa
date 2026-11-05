@@ -417,12 +417,15 @@ describe('a TERM ends the hook at once, exit 0, printing nothing', () => {
     for (let i = 0; i < 200 && !readCalls().some((c) => c.startsWith('approvals ruling ')); i++) await new Promise((r) => setTimeout(r, 25));
     expect(readCalls().some((c) => c.startsWith('approvals ruling ')), 'it reached the wait').toBe(true);
     const t0 = Date.now();
+    // "At once" is the shell's own end, timed at `exit`: the tick's orphaned `sleep` holds the pipe a little longer.
+    let ms = Infinity;
+    child.once('exit', () => { ms = Date.now() - t0; });
     child.kill('SIGTERM');
-    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res) => child.on('exit', (c, s) => res([c, s])));
+    const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res) => child.on('close', (c, s) => res([c, s])));
     expect(signal).toBeNull();
     expect(code).toBe(0);
     expect(out).toBe('');
-    expect(Date.now() - t0).toBeLessThan(1500);
+    expect(ms).toBeLessThan(1500);
   });
 });
 

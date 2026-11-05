@@ -120,6 +120,7 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('expire', 'archived', 'tree-unreadable', 'ccd', 'the worktree could not be read'),
   e('expire', 'archived', 'containment-unproven', 'ccd', 'the tree at the path is not proven the workspace’s own'),
   e('expire', 'archived', 'no-worktree-record', 'ccd', 'git has no worktree record for the directory'),
+  e('expire', 'archived', 'branch-gone-checked-out', 'ccd', 'HEAD is still on a branch that no longer exists'),
   e('expire', 'archived', 'paused', 'ccd', 'reclamation is paused fleet-wide'),
   e('expire', 'archived', 'held', 'ccd', 'a program holds the workspace'),
   e('expire', 'archived', 'attached', 'ccd', 'a terminal is attached'),
@@ -142,6 +143,7 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('reclaim', 'live|asleep', 'branch-elsewhere', 'ccd', 'the branch is checked out somewhere else'),
   e('reclaim', 'live|asleep', 'tree-unreadable', 'ccd', 'the worktree could not be read'),
   e('reclaim', 'live|asleep', 'no-worktree-record', 'ccd', 'git has no worktree record for the directory'),
+  e('reclaim', 'live|asleep', 'branch-gone-checked-out', 'ccd', 'HEAD is still on a branch that no longer exists'),
   e('reclaim', 'live|asleep', 'state-changed', 'ccd', 'the child changed since the audit the token fingerprints'),
   // collect (ws-collect): a rowless, witnessed temp root -> quarantined.
   e('collect', 'rowless', 'not-witnessed', 'ccd', 'no witness and no quarantine record names the id'),
@@ -169,8 +171,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   it('pins the per-verb edge counts exactly (a verb gaining or losing a refusal is a decision, not drift)', () => {
     const counts: Record<string, number> = {};
     for (const x of WORKSPACE_REFUSAL_CENSUS) counts[x.verb] = (counts[x.verb] ?? 0) + 1;
-    expect(counts).toEqual({ archive: 7, restore: 4, forget: 6, reap: 43, expire: 19, reclaim: 15, collect: 10 });
-    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(104);
+    expect(counts).toEqual({ archive: 7, restore: 4, forget: 6, reap: 43, expire: 20, reclaim: 16, collect: 10 });
+    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(106);
   });
 
   it('every edge’s code is read by a client: an archive wire word, a SENTENCES key or an LC_REFUSAL_WORD key', () => {
@@ -377,7 +379,7 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
   const EXPIRE_KINDS = {
     'no-such-session': 'gone', 'not-archived': 'gone', 'not-a-workspace': 'terminal', 'branch-elsewhere': 'terminal',
     'tree-unreadable': 'terminal', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
-    'not-expired': 'retry', child: 'retry', paused: 'retry', held: 'retry', attached: 'retry', live: 'retry',
+    'branch-gone-checked-out': 'terminal', 'not-expired': 'retry', child: 'retry', paused: 'retry', held: 'retry', attached: 'retry', live: 'retry',
     'in-use': 'retry', 'tree-busy': 'retry', 'state-changed': 'retry', 'in-progress': 'retry',
     'reap-in-progress': 'retry', 'reclaim-in-progress': 'retry', 'nested-rescue-too-large': 'terminal',
     'nested-rescue-failed': 'retry',
@@ -387,7 +389,7 @@ describe('the expire, reclaim and collect lanes read refusals as they do today (
     // `tree-unreadable` is a retry word for reclaim (an errored read is transient), and the ONE retry word the executor
     // answers as a failure (`CHILD_RECLAIM_TRANSIENT_WORD`), so the sweep's failure backoff paces it; pinned below.
     'tree-unreadable': 'retry', 'containment-unproven': 'terminal', 'no-worktree-record': 'terminal',
-    paused: 'retry', held: 'retry', attached: 'retry', 'tree-busy': 'retry', 'state-changed': 'retry',
+    'branch-gone-checked-out': 'terminal', paused: 'retry', held: 'retry', attached: 'retry', 'tree-busy': 'retry', 'state-changed': 'retry',
     'in-progress': 'retry', 'reap-in-progress': 'retry', 'nested-rescue-too-large': 'terminal',
     'nested-rescue-failed': 'retry', 'not-idle': 'retry',
   };

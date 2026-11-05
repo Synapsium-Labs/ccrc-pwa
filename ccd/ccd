@@ -7503,7 +7503,7 @@ _ws_wrapper_why() {   # project wrapper class -> WS_LANE_WHY = why the NAMED lan
   _ws_lane_why "$w" "$WS_PPS" "$cls"
 }
 
-cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
+cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
   # PER-WORKER RC and the DECLARED ACTOR, both stripped before any positional
   # binds — `cmd_ws_hold`'s shape (ccd:3891) and its reason: a run like
   # `ws-add --no-rc <project> --surface agent --actor '…'` must not bind
@@ -7538,6 +7538,11 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # non-blank, no control character, `_lc_dec_ok` — and for the same reasons. `lc_gt`/`lc_gw` are GIVENNESS, as
   # `lc_gs`/`lc_ga` are: `--title ''` is a declared blank, and refusing it is not the same act as never being asked.
   local lc_title='' lc_gt=0 lc_wrapper='' lc_gw=0
+  # THE START POINT OF A CHILD (`--base`, delegation broker wave 5 PR3, D-7827): a full commit id `git worktree add`
+  # checks the workspace out at, and NOTHING ELSE. `base` below stays the origin ref and is what `$REG/<id>.base`
+  # records, because `cmd_pr_open`, the archive, `_pr_bind_facts`, the reap, `ws-audit` and the server all read that
+  # file as a ref name; the start point is journalled only, as `meas.startpoint`. `lc_gb` is givenness, as `lc_gt` is.
+  local lc_base='' lc_gb=0 lc_sp=() lc_start=''
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -7551,27 +7556,27 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       # `--title` is the display title an operator gave the workspace; `--wrapper` is the account they chose for it.
       # BOTH BEFORE THE PROJECT, AT THE CALLER: an older ccd binds an unknown `--` token as a POSITIONAL (D-6164), so
       # a flag it does not know leads into the project or slug slot and is refused there — and one placed AFTER
       # `project slug` would be dropped unread and the workspace created on the least-loaded lane with exit 0. The
       # caller gates each on `ccd caps` (`ws-title-v1`, `ws-wrapper-v1`); this loop parses either position.
-      --title)     [[ $# -ge 2 ]] && (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --title)     [[ $# -ge 2 ]] && (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gt=1; lc_title="$2"; shift 2 ;;
-      --title=*)   (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gt=1; lc_title="${1#--title=}"; shift ;;
-      --wrapper)   [[ $# -ge 2 ]] && (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --title=*)   (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gt=1; lc_title="${1#--title=}"; shift ;;
+      --wrapper)   [[ $# -ge 2 ]] && (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gw=1; lc_wrapper="$2"; shift 2 ;;
-      --wrapper=*) (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gw=1; lc_wrapper="${1#--wrapper=}"; shift ;;
+      --wrapper=*) (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gw=1; lc_wrapper="${1#--wrapper=}"; shift ;;
       # REPEATABLE, one field per flag — the shape `cmd_route --set` already
       # has, so a dispatcher composing one argv for both verbs writes the same
       # pairs. Validated below, before anything on disk is touched.
-      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_route+=("$2"); shift 2 ;;
       --route=*)   lc_route+=("${1#--route=}"); shift ;;
       # D-6794: the --route pairs on this argv are the SERVER'S DEFAULT row for the run kind, not a class anybody
@@ -7579,9 +7584,14 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # seven-day ceiling still places; the pairs are recorded all the same.
       --route-default) lc_rdef=1; shift ;;
       # The minting run (spec §5.1) — what makes this workspace a CHILD; see `_child_runid_valid`.
-      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gc=1; lc_child="$2"; shift 2 ;;
       --child=*)   lc_gc=1; lc_child="${1#--child=}"; shift ;;
+      # ONE LINE EACH, and only these two lines spell the arm: `ccd-ws-add-base.test.ts`'s W5-B8 strips exactly them to
+      # build an older ccd, which binds a leading `--base` as the project and refuses (D-6164). A flag taken as the value is
+      # refused by the value check below, so this arm checks arity only.
+      --base)      [[ $# -ge 2 ]] && (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="$2"; shift 2 ;;
+      --base=*)    (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="${1#--base=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -7638,15 +7648,38 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # the box exactly as it found it (spec §5.3).
   (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
   (( lc_gc )) && ! _child_runid_valid "$lc_child" && die "--child needs a run id (a positive integer), got: $lc_child"
+  # `--base` IS A CHILD'S ONLY, and 40 or 64 lowercase hex: the SHAPE of a full id of either object format. Which length
+  # this repository's ids have, and that the value names a commit object itself, are asked of git below. The class is
+  # spelled out, not a range, so no locale's collation can widen it (D-2522's shape). Above the project.
+  (( lc_gb )) && { (( lc_gc )) && [[ $lc_base =~ ^([0123456789abcdef]{40}|[0123456789abcdef]{64})$ ]] \
+    || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; }
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
   # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
   # caught it, unedited, which is what that gate is for.
-  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
+  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (a dot-leading id aliases ccd's own hidden registry files, a dash-leading one spells a flag — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
+  # A FULL COMMIT ID OF THIS REPOSITORY, asked of the main checkout (a linked worktree shares its object store) with every
+  # git call hook-free and config-pinned (`_ws_reclaim_contained`) and no lazy fetch from a promisor remote, BEFORE the disk
+  # floor, the placement read, the add lock, the worktree and the row. Two facts, so `meas.startpoint` names exactly the
+  # commit the tree starts at (D-7981, D-7982). The value's length is this repository's id length (`--show-object-format`):
+  # a 40-hex PREFIX in a sha256 repository, or a 64-hex REF NAME in a sha1 one, refuses, and an unreadable format refuses.
+  # And the object's own type is `commit`: the check never peels (`^{commit}` would take an annotated tag's id), so a blob,
+  # a tree, a tag or a missing id refuses. Together they prove an object id of this repository's format. The ACT then
+  # starts at that object: `worktree add -b` hands its start point to `git branch`, which looks a NAME up as a ref first,
+  # so a branch or tag named exactly the id would divert it (review 1457 F1); the start point is `<id>^{commit}`, which no
+  # ref can be named (`^` is not allowed in one), and on a commit the peel is a no-op. Git never prompts (no credentials).
+  if (( lc_gb )); then
+    local lc_fmt lc_len=0
+    lc_fmt=$(GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 _ws_reclaim_contained git -C "$main" rev-parse --show-object-format 2>/dev/null) || lc_fmt=''
+    case "$lc_fmt" in sha1) lc_len=40 ;; sha256) lc_len=64 ;; *) die "ws-add: --base: the object format of $project could not be read (${lc_fmt:-no answer}), so a full commit id cannot be told from a prefix or a ref name — nothing was touched" ;; esac
+    (( ${#lc_base} == lc_len )) && [[ $(GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 _ws_reclaim_contained git -C "$main" cat-file -t "$lc_base" 2>/dev/null) == commit ]] \
+      || die "ws-add: --base $lc_base is not a full $lc_fmt commit id of $project"
+    lc_sp=(meas.startpoint "$lc_base"); lc_start="$lc_base^{commit}"
+  fi
 
   # Before anything is created: no worktree, no branch, no registry entry, no
   # session. A refusal here must leave the box exactly as it found it.
@@ -7790,7 +7823,9 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # so git's branch.autoSetupMerge default would otherwise make origin/main this
   # branch's upstream, and `git pull` in the workspace would merge main into it.
   local branch="ws/$slug"
-  git -C "$main" worktree add -b "$branch" --no-track "$wt" "$base" --quiet \
+  # The START POINT is `--base`'s commit, peeled so no ref of that name can divert it, when one was given, else `$base`;
+  # `$base` is what the row records either way.
+  git -C "$main" worktree add -b "$branch" --no-track "$wt" "${lc_start:-$base}" --quiet \
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.
@@ -8087,7 +8122,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   (( lc_gs )) && lc_dec+=(dec.surface "$lc_surface")
   (( lc_ga )) && lc_dec+=(dec.actor "$lc_actor")
   _lc_done create "$id" "" "${lc_dec[@]}" meas.project "$project" meas.workspace "$slug" \
-    meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw"
+    meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw" "${lc_sp[@]}"
   _spawn_start "$id" new || return $?
   _reg_claim "$id"
   _ws_supervise "$id"
@@ -9257,6 +9292,15 @@ EOF
   # token, not a dispatchable verb, so `PoolsEnforcement.accountPools` can
   # answer `enforced` only against a box that actually took this deploy.
   echo account-pools
+  # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
+  # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
+  # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
+  # `_pool_sync_installed` is its reader. Printing neither is what an older ccd does, and the server reads that as `unknown`.
+  if _pool_sync_installed; then
+    echo pool-sync-installed
+  else
+    echo pool-sync-absent
+  fi
   # The capability token for wave 2 of the terminal-drawer program, and it is
   # the proof of BOTH halves of that wave rather than of the verb alone: the
   # `win-size` verb and `_pane_measurable`'s stand-down at every typing site
@@ -9279,9 +9323,11 @@ EOF
   echo docs-show
   echo docs-fetch
   echo testbox-remote   # D-7411: the test box switch's writer, behind POST /api/testbox/switch
+  echo pane-scope-stop   # D-7902: the pane-scope stop's switch writer, behind POST /api/coord/pane-scope-stop
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit   # delegation broker wave 5: the lease carrier's one writer (PR1) and its read-only audit (PR2), ccd/lib/delegation-lease.sh
+  echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
@@ -14485,7 +14531,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     else
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       case "$REAP_VERDICT" in
-        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record|branch-gone-checked-out)
           _lc_emit reclaim refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
       esac
     fi
@@ -23876,23 +23922,162 @@ SPAWN_FROMSWAP=0
 RESUME_CAUSE_GENERIC="an account swap or a supervisor revival"
 RESUME_CAUSE_MAX_AGE_S=600
 _panescope_proc_root() { printf '%s' /proc; }   # THE SEAM: a test names a planted tree
+_pane_cgroup_of() {   # pid -> that process's unified cgroup path (the `0::` line of /proc/<pid>/cgroup), or empty. Always rc 0.
+  # One `/proc` read through the seam. A pid that is not a number, a process gone, or a box with no `/proc` (macOS)
+  # answers empty.
+  [[ "$1" =~ ^[0-9]+$ ]] || return 0
+  { sed -n 's/^0:://p' "$(_panescope_proc_root)/$1/cgroup" | head -1; } 2>/dev/null
+  return 0
+}
+# THE PANE AND ITS SCOPE, as one live read (D-7902): `_pane_scope_of <id>` sets these three. They are read from the
+# pane, never from `$REG/<id>.panescope`, so that marker keeps its one writer (`_panescope_record`, which calls this)
+# and its one reader (`_end_cause`); the K16 census (`server/test/census-w5/paneScopes.ts`) pins both. Declared and
+# initialised at file scope for `SPAWN_FROMSWAP`'s reason: `set -u` reads them before any call has run.
+# PANE_SCOPE_WEDGED is the fourth fact: a read that ran out of time found nothing, and that is not the same as no pane.
+PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT="" PANE_SCOPE_WEDGED=""
+_pane_scope_tmux() {   # tmux args… — one tmux call, bounded the `_end_cause` way (SUBSTRATE_PROBE_DEADLINE_S), because a wedged server must not hold a stop. rc of the call, 124 past the deadline.
+  # `_plat_timeout` runs a program, so a tmux that is a shell function (a test's) is called as one.
+  if declare -F tmux >/dev/null; then tmux "$@"
+  else _plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux "$@"
+  fi
+}
+_pane_scope_of() {   # id — the session's live pane: PANE_SCOPE_PID, its cgroup PANE_SCOPE_CG and its unit PANE_SCOPE_UNIT (all empty when none), and PANE_SCOPE_WEDGED (1 when tmux did not answer in time). Always rc 0.
+  # One `list-panes` and one `/proc` read. Linux only, by construction: macOS has no `/proc` (and no cgroups,
+  # `_plat_cgroup`'s argument), so the read finds nothing there.
+  PANE_SCOPE_PID="" PANE_SCOPE_CG="" PANE_SCOPE_UNIT="" PANE_SCOPE_WEDGED=""
+  local pid rc=0
+  pid=$(_pane_scope_tmux list-panes -t "$(_tmux_t "$1")" -F '#{pane_pid}' 2>/dev/null) || rc=$?
+  (( rc != 124 )) || PANE_SCOPE_WEDGED=1
+  pid="${pid%%$'\n'*}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  PANE_SCOPE_PID=$pid
+  PANE_SCOPE_CG=$(_pane_cgroup_of "$pid")
+  [[ -n "$PANE_SCOPE_CG" ]] && PANE_SCOPE_UNIT="${PANE_SCOPE_CG##*/}"
+  return 0
+}
 _panescope_record() {   # id — once per spawn, after the pane exists: its scope unit -> $REG/<id>.panescope. Always rc 0.
-  # Linux only, by construction: macOS has no `/proc` (and no cgroups,
-  # `_plat_cgroup`'s argument), so the read finds nothing there. One
-  # `list-panes` and one `/proc` read. A pane whose cgroup names no `.scope`
+  # The pane and its scope are `_pane_scope_of`'s one read (D-7902). A pane whose cgroup names no `.scope`
   # (tmux built without systemd, a pid gone already) leaves NO panescope, and a
   # stale one from an earlier spawn is removed, so `_end_cause` never reads the
   # journal of a scope this process never ran in.
-  local id="$1" pid cg unit
-  pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
-  if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    cg=$({ sed -n 's/^0:://p' "$(_panescope_proc_root)/$pid/cgroup" | head -1; } 2>/dev/null)
-    unit="${cg##*/}"
-    if [[ "$unit" == *.scope && "$unit" =~ ^[A-Za-z0-9@._:-]+$ ]]; then
-      _reg_set "$id" panescope "$unit" && return 0
-    fi
+  local id="$1" unit
+  _pane_scope_of "$id"
+  unit="$PANE_SCOPE_UNIT"
+  if [[ -n "$PANE_SCOPE_PID" && "$unit" == *.scope && "$unit" =~ ^[A-Za-z0-9@._:-]+$ ]]; then
+    _reg_set "$id" panescope "$unit" && return 0
   fi
   rm -f -- "$REG/$id.panescope"
+  return 0
+}
+
+# ── A DELIBERATE STOP TAKES ITS PANE SCOPE DOWN (D-7902) ─────────────────────
+# `claude-session@.service` runs with `KillMode=process` (never changed here), so stopping a session signals its main
+# process only, and everything the agent started in the background keeps running in the pane's transient scope until
+# the scope sweep (`ccd-scope-sweep`) finds it dead for six hours. The verbs that stop a session ON PURPOSE —
+# `cmd_stop`, and `cmd_hibernate`, which the stop-done lane and the roll compose — read the pane's scope before the
+# kill (`_pane_scope_of`) and, after it, call `_pane_scope_stop`. The auto-swap's restart is not a stop and never
+# reaches it.
+#
+# THE INTENT DOES NOT WAIT FOR TMUX. The read comes after `_ws_unsupervise`, not before it: the stop's stamp and the
+# unit's disable are what a wedged tmux server must not hold, and the pane stands until `kill-session` because
+# `KillMode=process` ends the supervisor alone. The read itself is bounded (`_pane_scope_tmux`); one that runs out of
+# time reads no scope, the stop goes on, and `_pane_scope_stop` logs it `held` for the scope sweep to collect.
+#
+# THE WAIT IS NOT THE VERB'S. A plain hibernate is called with the coordination serialiser held
+# (`server/src/remote/runner.ts`, D-7541), so a verb that waited out the main process and a grace would hold every
+# coordination write for as long. `_pane_scope_stop` checks what it can at once and hands the rest to
+# `_pane_scope_reap` in its own transient unit (`_pane_scope_detach`, through `_svc_run_detached`, the swap's own
+# detach): it outlives the verb, inherits none of its descriptors or locks, and runs outside every cgroup it might stop.
+# The scope is stopped only when every one of these holds, in this order, and each outcome is one
+# `pane-scope <id>: …` line in swap.log:
+#   1. the unit's parent is the session slice (outside it, nothing is logged: it is no ccd pane scope), and the unit is
+#      a tmux pane scope (`tmux-spawn-*.scope`) — never the tmux server's own scope;
+#   2. the main process (the pane's pid) has exited, within PANE_SCOPE_EXIT_WAIT_S; then PANE_SCOPE_STOP_GRACE_S more
+#      passes, so a process that exits on the hang-up has the time to;
+#   3. something is still in the scope (`cgroup.procs`, read through `_panescope_cgroup_root`);
+#   4. no live tmux pane but this one has its process in the scope or below it: a stop takes the whole subtree.
+#      tmux answering "no server running" is measured (no pane is live); any other failure to list is unmeasured
+#      and holds;
+#   5. `$REG/pane-scope-stop-live` stands — its one reader here; its one writer is `ccd pane-scope-stop`, behind
+#      Settings › Automation. Absent, the line says `would stop` and nothing is stopped (shadow).
+# The act is `systemctl --user stop --no-block <unit>`, the scope sweep's own spelling.
+PANE_SCOPE_STOP_GRACE_S=10   # after the main process exits, before the stop
+PANE_SCOPE_EXIT_WAIT_S=10    # how long the main process has to exit after the kill; past it the scope is held
+PANE_SCOPE_SLICE='app-claude\x2dsession.slice'   # the session slice, as its cgroup directory is named
+_panescope_cgroup_root() { printf '%s' /sys/fs/cgroup; }   # THE SEAM: a test names a planted tree
+_pane_scope_sleep() { sleep "$1"; }   # THE SEAM: a test logs the wait instead of waiting it
+_pane_scope_note() {   # id text — one `pane-scope` line in swap.log. Always rc 0.
+  echo "$(date '+%F %T') pane-scope $1: $2" >> "$REG/swap.log" 2>/dev/null || true
+  return 0
+}
+_pane_scope_detach() {   # fn args… — run a function of this file in its own transient unit, after the verb returns. rc of the dispatch.
+  # THE SEAM: a test runs it inline. Every word is checked against a charset with no quote, no space and no `$` before
+  # it is placed, single-quoted, in the `bash -c` string, so neither bash nor the service manager expands anything in
+  # it (`_dispatch_swap`'s string, the same way). This file is sourced by its own absolute path.
+  local self="${BASH_SOURCE[0]}" w script
+  [[ "$self" == /* ]] || self="$PWD/$self"
+  [[ "$self" =~ ^[A-Za-z0-9@._:/+-]+$ ]] || return 1
+  script="source '$self' &&"
+  for w in "$@"; do
+    [[ "$w" =~ ^[A-Za-z0-9@._:/\\-]+$ ]] || return 1
+    script+=" '$w'"
+  done
+  _svc_run_detached bash -c "$script"
+}
+_pane_scope_stop() {   # id — after a deliberate stop's kill: check the scope `_pane_scope_of` read before it, and hand the wait and the act to `_pane_scope_reap`. Always rc 0.
+  local id="$1" pid="$PANE_SCOPE_PID" cg="$PANE_SCOPE_CG" unit="$PANE_SCOPE_UNIT" parent rc=0
+  if [[ -n "$PANE_SCOPE_WEDGED" ]]; then
+    _pane_scope_note "$id" "held: tmux did not answer within ${SUBSTRATE_PROBE_DEADLINE_S}s, so no scope was read"; return 0
+  fi
+  [[ -n "$pid" && -n "$cg" ]] || return 0   # no live pane, or no cgroup to read (macOS, a tmux without systemd)
+  # Outside the session slice is not a ccd pane scope at all (a tmux without systemd, a test's planted pid): silent,
+  # as `_panescope_record` is silent for a cgroup that names no scope. Inside it, only a tmux pane scope is ever stopped.
+  parent="${cg%/*}"; parent="${parent##*/}"
+  [[ "$parent" == "$PANE_SCOPE_SLICE" ]] || return 0
+  if ! [[ "$unit" =~ ^tmux-spawn-[A-Za-z0-9_-]+\.scope$ ]]; then
+    _pane_scope_note "$id" "held $unit: not a tmux pane scope"; return 0
+  fi
+  _pane_scope_detach _pane_scope_reap "$id" "$pid" "$cg" || rc=$?
+  (( rc == 0 )) || _pane_scope_note "$id" "held $unit: its delayed stop could not be started (rc $rc)"
+  return 0
+}
+_pane_scope_reap() {   # id pid cg — in its own unit: wait for the main process, the grace, then stop the scope or say why not. Always rc 0.
+  local id="$1" pid="$2" cg="$3" unit="${3##*/}" i n=0 p out rc=0 sname ppid pcg cgdir proc
+  proc="$(_panescope_proc_root)"
+  for (( i = 0; i < PANE_SCOPE_EXIT_WAIT_S * 2; i++ )); do
+    [[ -e "$proc/$pid" ]] || break
+    _pane_scope_sleep 0.5
+  done
+  if [[ -e "$proc/$pid" ]]; then
+    _pane_scope_note "$id" "held $unit: its main process $pid did not exit within ${PANE_SCOPE_EXIT_WAIT_S}s"; return 0
+  fi
+  _pane_scope_sleep "$PANE_SCOPE_STOP_GRACE_S"
+  cgdir="$(_panescope_cgroup_root)$cg"
+  if [[ ! -d "$cgdir" ]]; then _pane_scope_note "$id" "nothing left in $unit (the scope is gone)"; return 0; fi
+  if [[ ! -r "$cgdir/cgroup.procs" ]]; then _pane_scope_note "$id" "held $unit: its cgroup.procs is not readable"; return 0; fi
+  while IFS= read -r p || [[ -n "$p" ]]; do [[ "$p" =~ ^[0-9]+$ ]] && n=$((n + 1)); done < "$cgdir/cgroup.procs"
+  if (( n == 0 )); then _pane_scope_note "$id" "nothing left in $unit"; return 0; fi
+  out=$(_pane_scope_tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>&1) || rc=$?
+  if (( rc != 0 )); then
+    if [[ "$out" == "no server running"* ]]; then out=""
+    else _pane_scope_note "$id" "held $unit: tmux did not list its panes (exit $rc)"; return 0
+    fi
+  fi
+  while read -r sname ppid; do
+    [[ "$ppid" =~ ^[0-9]+$ && "$ppid" != "$pid" ]] || continue
+    pcg=$(_pane_cgroup_of "$ppid")
+    if [[ -n "$pcg" && ( "$pcg" == "$cg" || "$pcg" == "$cg"/* ) ]]; then
+      _pane_scope_note "$id" "held $unit: it holds the live pane $ppid of $sname"; return 0
+    fi
+  done <<< "$out"
+  if [[ ! -e "$REG/pane-scope-stop-live" ]]; then
+    _pane_scope_note "$id" "would stop $unit ($n processes)"; return 0
+  fi
+  rc=0
+  systemctl --user stop --no-block "$unit" 2>/dev/null || rc=$?
+  if (( rc == 0 )); then _pane_scope_note "$id" "stopped $unit ($n processes)"
+  else _pane_scope_note "$id" "stop failed $unit ($n processes, rc $rc)"
+  fi
   return 0
 }
 _end_cause() {   # id -> the cause word of the end just seen: oom | tmux-server | exited | unknown. Always rc 0.
@@ -30143,7 +30328,9 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   rm -f -- "$REG/$id.hibernated"   # a stop ENDS a hibernation (D-5242): an ordinary stopped row, which mail never wakes
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # `ccd start`/`enable` respawn from the record: the operator's own /model and /effort reach it first; a session already stopped and read is not read again (§5.7)
   _ws_unsupervise "$id" "$surface" "$declared"
+  _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
+  _pane_scope_stop "$id"   # D-7902: what the session left running in its pane scope goes too (shadow until armed)
   echo "stopped $id"
 }
 
@@ -30319,6 +30506,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   #    sleeping one nobody knows to wake.
   _reg_set "$id" hibernated "$now $hours" || die "could not write $REG/$id.hibernated — nothing was stopped"
   _ws_unsupervise "$id" ccd
+  _pane_scope_of "$id"   # D-7902: the pane's scope, read while the pane still stands, and after the stop's intent, which no tmux may hold
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
   # A roll whose pane is still live after the kill did not stop it, so nothing is rolled and no wake is tried: its own
   # exit (6) and phrase, never `rolled`. The marker and the stopped unit the act wrote stand, so the line says so.
@@ -30327,6 +30515,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     echo "ccd: roll-kill-failed — $id's pane could not be killed and is still live, so it was not rolled: it still runs the release it started on, with $REG/$id.hibernated written and its unit stopped; check it" >&2
     exit 6
   fi
+  _pane_scope_stop "$id"   # D-7902: after the kill, before a roll's wake: the delayed stop is of the scope read before the kill, never the wake's new one
   local lc_tag=''; (( lc_roll )) && lc_tag=' (roll)'
   echo "$(date '+%F %T') hibernate $id: idle ${hours}h$lc_tag" >> "$REG/swap.log"
   echo "hibernated $id"
@@ -30653,6 +30842,30 @@ cmd_testbox_remote() {   # ccd testbox-remote --state on|off — raise or lower 
       rm -f -- "$marker" || die "could not lower the test box switch — remote runs are STILL on"
     fi
     echo "off"
+  fi
+}
+
+cmd_pane_scope_stop() {   # ccd pane-scope-stop --state live|shadow — arm or disarm the deliberate stop's pane-scope stop
+  # (D-7902). While `$REG/pane-scope-stop-live` exists, `ccd stop` and `ccd hibernate` stop the stopped session's own
+  # pane scope (`_pane_scope_stop`, its one reader); absent, they only log what they would stop. This verb is the
+  # marker's ONE writer, reached from `POST /api/coord/pane-scope-stop` (session-only, Settings › Automation) through
+  # the agent's two-token grant. `cmd_reclaim_pause`'s shape: a registry-file write or unlink that deletes nothing,
+  # CHECKED on both arms, journalling nothing. The echoed word is for a human; the server learns the state by listing
+  # $REG (the coord frame's `paneScopeStop`).
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd pane-scope-stop --state live|shadow"
+  local state=$2 marker
+  [[ $state == live || $state == shadow ]] || die "bad state: $state (want live|shadow)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  marker="$REG/pane-scope-stop-live"
+  if [[ $state == live ]]; then
+    [[ -L $marker ]] && { rm -f -- "$marker" || die "could not replace a link at $marker — the stop is NOT armed"; }
+    touch -- "$marker" || die "could not raise $marker — the stop is NOT armed"
+    echo "live"
+  else
+    if [[ -e $marker || -L $marker ]]; then   # -L: a dangling link is lowered too, so no stale name stays
+      rm -f -- "$marker" || die "could not lower $marker — the stop is STILL armed"
+    fi
+    echo "shadow"
   fi
 }
 
@@ -32807,6 +33020,30 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
   return 1
 }
 
+_WS_HEAD_UNBORN_WHY=''
+_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC to that branch and the last
+  #                                `_ws_reclaim_tip_read` PROVED the branch absent; 1 when it is not so; 2 when
+  #                                HEAD could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
+  # THE ONE PREDICATE OF THE LADDER AND THE PIN (D-5944), so the audit never
+  # promises what the pin refuses. An `update-ref -d` under a checkout leaves
+  # HEAD naming nothing, and no WIP commit can stand on it. A DETACHED HEAD on a
+  # gone branch is not this shape: it names a commit, and the pin keeps it.
+  # `symbolic-ref` answers 1 for a detached HEAD; any other failure is a read
+  # that did not run, which is never "not so".
+  local ref rc
+  _WS_HEAD_UNBORN_WHY=''
+  [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
+  ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
+  if (( rc == 0 )); then
+    [[ "$ref" == "refs/heads/$2" ]] || return 1
+    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+    return 0
+  fi
+  (( rc == 1 )) && return 1
+  _WS_HEAD_UNBORN_WHY="could not read which branch $1 has checked out"
+  return 2
+}
+
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
 _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
   #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
@@ -33316,6 +33553,12 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # PROVEN absent (no tip to pin, no branch to delete), or a read that did not
   # run — unmeasured, and no token is minted over it.
   _ws_reclaim_tip_read "$main" "$branch" || { _ws_reclaim_unmeasured "$_WS_BRANCH_WHY"; return 1; }
+  # ... and a HEAD still symbolic to a branch PROVEN absent is what the pin
+  # refuses, so it is refused here, before any token: a token over it would be
+  # spent on a pin that fails on every pass. TERMINAL: waiting changes nothing.
+  _ws_reclaim_head_unborn "$workdir" "$branch"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_HEAD_UNBORN_WHY"; return 1; }
+  (( rc != 0 )) || { _ws_refuse branch-gone-checked-out "$_WS_HEAD_UNBORN_WHY"; return 1; }
   RECLAIM_HEAD=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || RECLAIM_HEAD=""
   RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
@@ -34563,12 +34806,12 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   # to delete it at, and HEAD, the WIP commit and every reflog below are pinned
   # as ever — unless HEAD is still SYMBOLIC to that branch (an `update-ref -d`
   # under a checkout): HEAD then names no commit, the WIP commit has no parent
-  # to stand on, and the pin fails with nothing written.
+  # to stand on, and the pin fails with nothing written. The ladder refuses that
+  # shape by the same predicate (`_ws_reclaim_head_unborn`), so only a branch
+  # deleted after its read, or a settle with no ladder in front of it, gets here.
   _ws_reclaim_tip_read "$main" "$branch" || { RECLAIM_PIN_WHY="$_WS_BRANCH_WHY"; return 1; }
-  if [[ "$RECLAIM_BRANCHSTATE" == absent && "$headref" == "refs/heads/$branch" ]]; then
-    RECLAIM_PIN_WHY="$workdir still has $branch checked out, but $branch is gone from $main — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
-    return 1
-  fi
+  _ws_reclaim_head_unborn "$workdir" "$branch"; rc=$?
+  (( rc == 1 )) || { RECLAIM_PIN_WHY="$_WS_HEAD_UNBORN_WHY"; return 1; }
   # (0) The in-progress operation heads, pinned by sha: `commit-tree` concludes
   # nothing, and a head a later git command clears is kept all the same.
   oph=$(_ws_reclaim_opheads "$workdir")
@@ -37935,9 +38178,9 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # gives it: GONE — `no-such-session`, `not-archived` (the row left the
 # population: returned, or never archived); TERMINAL — `not-a-workspace`,
 # `branch-elsewhere`, `tree-unreadable`, `containment-unproven`,
-# `no-worktree-record`; RETRY — `not-expired`, `child`, `paused`, `held`,
-# `attached`, `live`, `in-use`, `tree-busy`, `state-changed`, `in-progress`,
-# `reap-in-progress`, `reclaim-in-progress`. Nineteen. The ones the RECLAIM
+# `no-worktree-record`, `branch-gone-checked-out`; RETRY — `not-expired`, `child`,
+# `paused`, `held`, `attached`, `live`, `in-use`, `tree-busy`, `state-changed`,
+# `in-progress`, `reap-in-progress`, `reclaim-in-progress`. Twenty. The ones the RECLAIM
 # region spells stay spelled there; this region spells only its own
 # (`not-archived`, `not-expired`, `child`, `live`, `in-use`, and the two flavour
 # refusals). `unmeasured` is no word, exactly as there: a probe that could not
@@ -38461,7 +38704,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     # the one place it reaches the lifecycle mirror; a retryable word a pass
     # would bury the journal.
     case "$REAP_VERDICT" in
-      not-a-workspace|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+      not-a-workspace|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record|branch-gone-checked-out)
         _lc_emit expire refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
     esac
   fi
@@ -45369,6 +45612,7 @@ case "${1:-}" in
   coord-pause) shift; cmd_coord_pause "$@" ;;
   reclaim-pause) shift; cmd_reclaim_pause "$@" ;;
   testbox-remote) shift; cmd_testbox_remote "$@" ;;
+  pane-scope-stop) shift; cmd_pane_scope_stop "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -45383,6 +45627,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

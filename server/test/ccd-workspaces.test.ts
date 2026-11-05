@@ -807,6 +807,7 @@ describe('cmd_stop', () => {
       // before the disable/kill pair.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@project-j-quiet-mesa',
+      'tmux list-panes -t =cc-project-j-quiet-mesa: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
       'tmux kill-session -t =cc-project-j-quiet-mesa:',
     ]);
   });
@@ -816,6 +817,7 @@ describe('cmd_stop', () => {
     expect(calls()).toEqual([
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@claude-a-demo',
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
       'tmux kill-session -t =cc-claude-a-demo:',
     ]);
   });
