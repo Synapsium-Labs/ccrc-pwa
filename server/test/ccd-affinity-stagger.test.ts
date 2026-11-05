@@ -157,6 +157,14 @@ describe('D-6181: the per-account slot and the fleet-wide slot', () => {
     expect(swapLog().match(/stand-down s-aaaa: stagger-unwritable/g)).toHaveLength(1);
   });
 
+  it('a slot write that fails after the lock is won: the move dispatches and one stagger-unwritable line is written', () => {
+    seed('s-aaaa'); sessionJson();
+    fs.mkdirSync(reg('.affslot/claude'), { recursive: true });
+    ticks(['s-aaaa']);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(swapLog().match(/stand-down s-aaaa: stagger-unwritable/g)).toHaveLength(1);
+  });
+
   it('a lock held past HOME_RETURN_SPACING is broken: the move fails open', () => {
     const dir = reg('.affslot');
     fs.mkdirSync(dir, { recursive: true });
