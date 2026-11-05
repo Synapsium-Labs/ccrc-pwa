@@ -108,11 +108,11 @@ describe('Box settings card: a full snapshot (D-6917)', () => {
     expect(screen.getByText(/this view reads ccrc\.env alone for every other setting/)).toBeInTheDocument();
   });
 
-  it('the how line says what this view reads, and names the settings a shell can still change at an update (review 1487 F2)', () => {
+  it('the how line says what this view reads, and says what an update installs from its shell and what a ccrc test run reads (review 1487 F2, review 1496 F3)', () => {
     renderCard([fleet(ok())]);
     const how = screen.getByText(/changed in the box's ccrc\.env/).textContent!;
     expect(how).toContain('this view reads ccrc.env alone for every other setting.');
-    expect(how).toContain('A shell that sets one of the two session-slice limits, a graph-unit setting or the test-pressure bound when it runs an update gets that value used instead of the file\'s, and this view does not show it.');
+    expect(how).toContain('An update installs the session-slice limits and the graph-unit settings from its shell\'s environment when that shell sets one, and this view does not show it. A ccrc test run reads the test-pressure bound from its own shell.');
     // The old sentence made a claim about the box, which the installer does not keep.
     expect(how).not.toContain('is read from ccrc.env alone');
   });
