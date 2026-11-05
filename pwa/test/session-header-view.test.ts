@@ -319,28 +319,52 @@ describe('the header names the session (desktop polish T3c, D-6333)', () => {
 describe('the Goals door (PL11)', () => {
   const base = { session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin' }),
     status: 'idle' as SessionStatus, statusUpdatedAt: null, now: 0, finePointer: true };
-  it('a session in a programme has a door to that programme\'s Goals page; one in none has none', () => {
-    expect(sessionHeaderView({ ...base, programme: 'prog-a' }).goals).toEqual({ href: '/programmes/prog-a' });
+  const PROG_A = { slug: 'prog-a', title: 'Programme A' };
+  it('a session in a programme has a door to that programme\'s Goals page, named by it; one in none has none', () => {
+    // Its name begins with the word it shows and names the programme, as the chip's does (review 1537 A10).
+    expect(sessionHeaderView({ ...base, programme: PROG_A }).goals)
+      .toEqual({ href: '/programmes/prog-a', label: 'Goals: Programme A' });
     expect(sessionHeaderView({ ...base, programme: null }).goals).toBeNull();
     expect(sessionHeaderView(base).goals).toBeNull();
   });
   it('a programme whose page would refuse its slug has no door, never a dead one', () => {
-    expect(sessionHeaderView({ ...base, programme: 'old.name' }).goals).toBeNull();
+    expect(sessionHeaderView({ ...base, programme: { slug: 'old.name', title: 'Old' } }).goals).toBeNull();
   });
-  it('the header draws the door the view decides, and nothing else changes in the header', () => {
-    stubPointer(false);
-    const p = hostProps(allChips(), 'idle');
-    const without = render(createElement(SessionHeaderHost, p));
-    const before = Array.from(without.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
-    expect(screen.queryByRole('button', { name: 'Goals' })).toBeNull();
-    cleanup();
-    const withGoals = render(createElement(SessionHeaderHost, { ...p, programme: 'prog-a' }));
-    const after = Array.from(withGoals.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
-    const door = screen.getByRole('button', { name: 'Goals' });
-    expect(after.filter((c) => !c.includes('keycap--goals'))).toEqual(before);
-    history.replaceState(null, '', '/');
-    fireEvent.click(door);
-    expect(location.pathname).toBe('/programmes/prog-a');
-    history.replaceState(null, '', '/');
-  });
+  // ONE door, in the slot that costs the header no height (review 1537 F1, ruled in fix round 1): on Back's row below 900, on
+  // the coordination line from 900. Nothing else in the header changes: its own children are the same, but for the key.
+  for (const desk of [false, true]) {
+    it(`${desk ? 'at a desk' : 'on a phone'}: the header draws the one door the view decides, ${desk ? 'on the coordination line' : "on Back's row"}, and nothing else changes`, () => {
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: desk && q.includes('min-width: 900px'),
+        media: q, addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false,
+      }));
+      const p = hostProps(allChips(), 'idle');
+      const without = render(createElement(SessionHeaderHost, p));
+      const before = Array.from(without.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
+      const coordBefore = without.container.querySelector('.chat-coord')?.children.length;
+      expect(screen.queryByRole('button', { name: /^Goals/ })).toBeNull();
+      cleanup();
+      const withGoals = render(createElement(SessionHeaderHost, { ...p, programme: PROG_A }));
+      const after = Array.from(withGoals.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
+      const doors = screen.getAllByRole('button', { name: 'Goals: Programme A' });
+      expect(doors).toHaveLength(1);
+      const door = doors[0]!;
+      if (desk) {
+        expect(after).toEqual(before);
+        expect(door.closest('.chat-coord')).not.toBeNull();
+        // Last on the line: the clauses before it keep their places.
+        expect(withGoals.container.querySelector('.chat-coord')!.lastElementChild).toBe(door);
+        expect(withGoals.container.querySelector('.chat-coord')!.children.length).toBe(coordBefore! + 1);
+      } else {
+        expect(after.filter((c) => !c.includes('keycap--goals'))).toEqual(before);
+        expect(door.parentElement?.classList.contains('chat-head')).toBe(true);
+      }
+      history.replaceState(null, '', '/');
+      fireEvent.click(door);
+      expect(location.pathname).toBe('/programmes/prog-a');
+      history.replaceState(null, '', '/');
+    });
+  }
+
 });

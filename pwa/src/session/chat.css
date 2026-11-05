@@ -362,7 +362,6 @@ button.metachip:active {
     white-space: nowrap;
     font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   }
-  .chat-head .keycap--goals,
   .chat-head .keycap--term,
   .chat-head .keycap--more,
   .chat-head .keycap--inspector,
@@ -2148,4 +2147,24 @@ button.metachip:active {
   font: var(--weight-regular) var(--fs-sm) / var(--lh-normal) var(--family-ui);
   color: var(--ink-secondary);
   background: var(--bg-page);
+}
+
+/* GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1, ruled in fix round 1): the Goals door
+   on the coordination line (`SessionCoordination`, `HeaderGoalsKey`). Its glyph is the line's own height, so it adds none to
+   the line, and its word shows from 1200, where the line has room for it; below that the glyph stands alone, with the door's
+   `title` and accessible name, as the header's doors do below 900. Layout and type only: its ink is `.chat-coord-link`'s. */
+.chat-coord-goals svg { width: 1em; height: 1em; }
+/* On a fine pointer it is the line's height, as the line's links are (above); after the last chip too, where no `.chat-coord`
+   holds it. */
+@media (pointer: fine) {
+  .chat-coord-goals { min-height: 0; }
+}
+/* On a touch screen the glyph alone is narrower than a finger: it takes the tap floor's width too, as every door there does.
+   That is Refined's phone rail, which scrolls sideways, so the width costs no height. */
+@media (pointer: coarse) {
+  .chat-coord-goals { min-width: var(--tap-min); justify-content: center; }
+}
+.chat-coord-goals-word { display: none; }
+@media (min-width: 1280px) {
+  .chat-coord-goals-word { display: inline; }
 }

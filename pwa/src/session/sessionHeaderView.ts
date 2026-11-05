@@ -41,8 +41,9 @@ export interface SessionHeaderViewInput {
   now: number;
   /** `(pointer: fine)`: where a physical Escape key exists the Stop cap is absent. */
   finePointer: boolean;
-  /** The session's programme (`sessionProgramme`, read off its fleet row and the runs), or `null`/absent: in none. */
-  programme?: string | null;
+  /** The session's programme, its slug (`sessionProgramme`, read off its fleet row and the runs) and its title
+   *  (`programmeTitle`), or `null`/absent: in none. */
+  programme?: { readonly slug: string; readonly title: string } | null;
 }
 
 /** The status strip's four tints (chat.css's `status-line--*`). */
@@ -88,8 +89,9 @@ export interface SessionHeaderView {
   stop: { shown: boolean; enabled: boolean };
   /** GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30): the door to the Goals page of the programme this
    *  session is in, through the one programme-path builder (`programmePath`), or `null`: a session in no programme, or one whose
-   *  programme's slug the page would refuse (never a dead door). */
-  goals: { href: string } | null;
+   *  programme's slug the page would refuse (never a dead door). `label` is its accessible name and title, "Goals: <the
+   *  programme's title>", which begins with the word the door shows (review 1537 A10). */
+  goals: { href: string; label: string } | null;
 }
 
 // THE bucket — the server's, never this header's. It used to OR `dialogPending`/`hookState` into an `attention` of its
@@ -243,6 +245,8 @@ export function sessionHeaderView({
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
   if (hasPrCap(session)) chips.push({ kind: 'pr', pr: session.pr });
 
-  const goals = programme !== null && programmeIsOpenable(programme) ? { href: programmePath(programme) } : null;
+  const goals = programme !== null && programmeIsOpenable(programme.slug)
+    ? { href: programmePath(programme.slug), label: `Goals: ${programme.title}` }
+    : null;
   return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
 }

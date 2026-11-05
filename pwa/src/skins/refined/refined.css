@@ -50,6 +50,12 @@
   .chat-head .ref-chip-rail .chat-coord {
     flex-wrap: nowrap;
   }
+  /* The Goals door (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1): last on the coordination line at a desk, so the
+     clauses keep their places there; in this sideways rail, first on it, beside the status, so the phone shows it without a
+     swipe. The rail does not wrap, so its place costs no height either way. */
+  .chat-head .ref-chip-rail .chat-coord-goals {
+    order: -1;
+  }
   /* D-7784 (review 1424 F2): the session's recorded entries, once opened. `.chat-facts` is `display: contents` here, so
      the list is an item of this one sideways row, and the only one that may shrink: beside a full rail it shrank to
      nothing. While it is open the rail wraps, as the desk's rail always does, so the list's own `flex-basis: 100%`
