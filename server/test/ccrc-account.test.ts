@@ -1438,9 +1438,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     ['a suffix another account already holds', { '--suffix': '.claude-a' },
       'suffix-collision', 1],
     ['a provider nothing knows', { '--provider': 'orchard' }, 'unknown-provider', 2],
-    // `add` makes this lane now (accounts plan Task A24), from three facts bash measures: a hand caller who brings
-    // none of them is refused, and `ccrc-account-codex-add.test.ts` drives the verb.
-    ['a codex lane with nothing measured for it', { '--provider': 'openai', '--base-url': null }, 'bad-argv', 2],
+    // `add` makes this lane now (accounts plan Task A24), on a box with the Codex runtime, which this fixture's has
+    // not: `ccrc-account-codex-add.test.ts` drives the verb where it has.
+    ['a codex lane on a box with no Codex runtime', { '--provider': 'openai', '--base-url': null }, 'codex-runtime-absent', 1],
     ['a compatible lane with no endpoint', { '--base-url': null }, 'base-url-required', 2],
     // THE OTHER SIDE OF THE SAME GATE, and the row that keeps `base-url-required`
     // from being read as "every provider without a default". An `anthropic` lane

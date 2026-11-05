@@ -20,7 +20,7 @@
 **Tests:**
 - New: `server/test/ccrc-account-codex-add.test.ts` (the add, its refusals, the removal, and Sign in again end to end through `fakeAuthServer`).
 - Extended: `server/test/codex-auth-cli.test.ts` (`install`), `server/test/ccdCapTokens.ts`.
-- Changed: `server/test/ccrc-account.test.ts`. The `check-add` row that pinned `external-provider-use-declare` now pins `bad-argv`, and the two removal cases that kept the OAuth pass `--keep-codex-auth`. Both follow from the plan's ruling that the folder goes by default; no assertion was dropped.
+- Changed: `server/test/ccrc-account.test.ts`. The refusal row that pinned `external-provider-use-declare` now pins `codex-runtime-absent`, the same input's answer on that fixture, and the two removal cases that kept the OAuth pass `--keep-codex-auth`. Both follow from the plan's ruling that the folder goes by default; no assertion was dropped.
 
 **Mutation table (run):**
 
