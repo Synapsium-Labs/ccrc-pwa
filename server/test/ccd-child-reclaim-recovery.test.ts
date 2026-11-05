@@ -114,6 +114,29 @@ const removedByTail = (wt: string, main: string): void => {
   expect(fs.existsSync(wt)).toBe(false);
 };
 
+/** `ws-archive` reaches the unit and the pane; these stub exactly those, as `ccd-archive.test.ts` does. */
+const ARCHIVE_STUBS = '_ws_unsupervise() { :; }; _ws_supervise() { :; }; tmux() { return 1; }; _session_verdict() { echo gone; };';
+/** A git on PATH that logs and fails `worktree prune` and runs the real git for everything else (D-7999's case). */
+const pruneShim = (): { pre: string; calls: () => string } => {
+  const dir = path.join(h.home, 'prune-shim-archive');
+  fs.mkdirSync(dir);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8', env: inheritedEnv() }).trim();
+  fs.writeFileSync(path.join(dir, 'git'), [
+    '#!/bin/sh',
+    'prev=',
+    'for a in "$@"; do',
+    '  if [ "$prev" = worktree ] && [ "$a" = prune ]; then printf \'%s\\n\' "$*" >> "$HOME/prune-calls"; exit 97; fi',
+    '  prev=$a',
+    'done',
+    `exec '${realGit}' "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+  const pre = `PATH="${dir}:$PATH";`;
+  expect(h.sh(`${pre} command -v git`), 'the CONTROL: the shim is the git ccd finds').toBe(path.join(dir, 'git'));
+  const calls = path.join(h.home, 'prune-calls');
+  return { pre, calls: () => (fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '') };
+};
+
 describe('the git-record arm', () => {
   it('a hand-deleted workspace no longer holds a present child, and the verb reclaims the child', () => {
     const c = makeChild(h);
@@ -483,7 +506,29 @@ describe('what the recovery never does', () => {
     expect(stanza(c.main, s.wt)).toContain('\nprunable');
   }, 120_000);
 
-  it('its four bodies never create, prune or remove anything, never read process, pane or unit state, and never read the journal', () => {
+  it('git worktree prune never runs on the archive arm: an archive-placed sibling’s audit, verb and tail make no prune call', () => {
+    // D-7999: the third arm reads ccd's archive record where git's is gone; it never takes a record itself.
+    const c = makeChild(h);
+    const shim = pruneShim();
+    // The CONTROL: the shim catches what it claims to, running nothing.
+    expect(h.run(`${shim.pre} git -C "${c.main}" worktree prune`).code).toBe(97);
+    expect(shim.calls()).toContain('worktree prune');
+    fs.rmSync(path.join(h.home, 'prune-calls'));
+    h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add demo`);
+    const wt = path.join(h.home, 'worktrees', 'demo', 'still-harbor');
+    h.sh(`${ARCHIVE_STUBS} cmd_ws_archive --session demo-still-harbor`);
+    expect(h.reg('demo-still-harbor', 'archived'), 'the CONTROL: archived').toMatch(/^[0-9]+$/);
+    fs.rmSync(wt, { recursive: true, force: true });
+    h.git(c.main, 'worktree', 'prune');   // the FIXTURE removes git's record, with the real git; ccd never runs this
+    expect(stanza(c.main, wt), 'the CONTROL: git records nothing').toBe('');
+    const r = evalOf(h, { pre: shim.pre });
+    placed(r, 'the archive record places the gone sibling, under the shim');
+    const v = childReclaimVerb(h, r.token, { pre: shim.pre });
+    expect(v.code, v.stdout + v.stderr).toBe(0);
+    expect(shim.calls(), 'git worktree prune never ran').toBe('');
+  }, 120_000);
+
+  it('its five bodies never create, prune or remove anything, never read process, pane or unit state, and never read the journal', () => {
     const src = ccdSource();
     const FORBIDDEN: readonly [string, RegExp][] = [
       ['creates a directory', /\bmkdir\b/],
@@ -494,7 +539,7 @@ describe('what the recovery never does', () => {
     ];
     const hits: string[] = [];
     for (const name of ['_ws_reclaim_recorded', '_ws_reclaim_recorded_git', '_ws_reclaim_recorded_crumb',
-      '_ws_reclaim_moved_check']) {
+      '_ws_reclaim_recorded_archive', '_ws_reclaim_moved_check']) {
       const from = src.indexOf(`\n${name}() {`);
       expect(from, `${name} is defined`).toBeGreaterThan(-1);
       const code = src.slice(from, src.indexOf('\n}\n', from)).split('\n').filter((l) => !/^\s*#/.test(l));
