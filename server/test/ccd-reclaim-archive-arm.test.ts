@@ -336,6 +336,30 @@ describe('the moved-tree hole, for an archive-placed row', () => {
     placed(evalOf(h), 'the CONTROL: nothing inside the child, the record places the sibling');
     expect(ownedOf(CHILD_ID, c.wt, c.main).rc).toBe('0');
   }, 120_000);
+
+  it('a row with no entry field: the archive flag alone makes the moved check and the tail read the moved tree', () => {
+    // The case above also records where the row's session entered (`.workdirid`), which forces the same scan by
+    // itself. An older row has no such field, so here only `_WS_RECORDED_ARCH` makes `_ws_reclaim_owned` scan the
+    // child and `_ws_reclaim_moved_check` read each nested checkout's git directory (D5).
+    const c = makeChild(h);
+    const s = archivedSibling();
+    const field = reg(s.id, 'workdirid');
+    expect(fs.existsSync(field), 'the CONTROL: ws-add recorded where the session entered').toBe(true);
+    fs.rmSync(field);
+    const moved = path.join(c.wt, 'inner-moved');
+    fs.renameSync(s.wt, moved);
+    h.git(s.main, 'worktree', 'prune');
+    expect(stanza(s.main, s.wt), 'the CONTROL: git records nothing of the moved tree').toBe('');
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('unmeasured');
+    expect(r.detail).toContain(moved);
+    const owned = ownedOf(CHILD_ID, c.wt, c.main);
+    expect(owned.rc, `the tail asks it again: ${owned.why}`).toBe('2');
+    expect(owned.why).toContain(`could not read the git directory of the checkout at ${moved}`);
+    fs.rmSync(moved, { recursive: true, force: true });
+    placed(evalOf(h), 'the CONTROL: nothing inside the child, the record places the sibling');
+    expect(ownedOf(CHILD_ID, c.wt, c.main).rc).toBe('0');
+  }, 120_000);
 });
 
 // The stubs every verb call above carries come from `childReclaimFixture.ts`; named here so a reader of this file sees
