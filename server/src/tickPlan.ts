@@ -42,7 +42,8 @@ export function verdictsOf(l: PaneListing): (id: string) => SessionVerdict | nul
 
 export type TickPlan = { hookIds: ReadonlySet<string>; usageIds: ReadonlySet<string>; captureIds: ReadonlySet<string> };
 
-/** Hook states and usage read the hot rows (a cold row carries its previous entry); the dialog sweep captures the
+/** Hook states read the hot rows (a cold row carries its previous entry); usage reads the hot rows too, and `usageReadIds`
+ *  widens that set by age at the lane run; the dialog sweep captures the
  *  rows the listing names live, or every row when the listing failed. */
 export function planTick(records: readonly SessionRecord[], cold: ReadonlySet<string>, listing: PaneListing): TickPlan {
   const hot = new Set(records.filter((r) => !cold.has(r.id)).map((r) => r.id));

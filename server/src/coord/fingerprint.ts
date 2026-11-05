@@ -182,7 +182,7 @@ export async function resolveDoneBranch(
   // sentence covering all three would be a lie about two of them.
   //
   // The empty rung arrived a wave later than the other two (review finding).
-  // `field()` trims, so a zero-byte `.branch` used to read as `branch: ''`,
+  // `listedField` trims, so a zero-byte `.branch` used to read as `branch: ''`,
   // sail past the null check below, and be handed to `readBranchTip` as a
   // branch NAME — the refusal a coordinator then read was `tip-unmeasurable`
   // with an empty name in it ("no readable ref for  under demo"), which points

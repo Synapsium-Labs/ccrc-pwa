@@ -62,7 +62,7 @@ export interface SessionRecord {
    *  and `branch === null` exactly when this is not `'named'`.
    *
    *  It was `branchUnmeasured: boolean` for three commits of Wave 3 and that
-   *  was one condition short (review finding): `field()` returns
+   *  was one condition short (review finding): `listedField` returns
    *  `content.trim()`, so a zero-byte or whitespace-only `.branch` comes back
    *  as `''`,
    *  which is neither of a boolean's two answers. It read as `branch: ''` with
@@ -78,7 +78,7 @@ export interface SessionRecord {
    *                     4 [registry-read-census:fields] unconditional reads and
    *                     one read per other listed field a session's read fires — so
    *                     it asks to be retried.
-   *                     `field()` cannot see this on its own (`io.readFile`
+   *                     `listedField` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
    *                     null); the directory listing is the evidence, the same
    *                     rule the identity triple and `held` already use.
@@ -154,7 +154,7 @@ export interface SessionRecord {
    *  the display, and `held: ''` renders as nothing on every surface while
    *  every consumer still enforces it — a hold visible nowhere is exactly what
    *  the no-expiry design cannot afford. `ccd ws-hold` refuses to write one
-   *  (whitespace included, since `field()` trims), so reaching it takes
+   *  (whitespace included, since `listedField` trims), so reaching it takes
    *  `touch $REG/<id>.hold` or one of the other residual empty-field routes
    *  `branchEvidence`'s `'empty'` rung sets out — an older build's leftover
    *  file, a power loss with no fsync. A torn write is no longer among them:
@@ -181,7 +181,7 @@ export interface SessionRecord {
   /**
    * `$REG/<id>.title` — the sentence the operator gave (`ws-add --title`, `ws-title`), null when absent, unreadable or
    * blank. Collapsing those is deliberate and costs only a plainer label: unlike `named` this field has no
-   * fail-shut direction to argue about, so it is a plain `field()` read and not a measured one. S6 carries it to the
+   * fail-shut direction to argue about, so it is a plain `listedField` read and not a measured one. S6 carries it to the
    * wire; until then it has no consumer.
    */
   title: string | null;
@@ -322,7 +322,7 @@ export interface SessionRecord {
    * `Promise.all` so a routing read never costs a second round trip.
    *
    * MEASURED per controller ruling S6-R5 (fix round 2): every one of the
-   * seven reads through `fieldMeasured`, never the collapsing `field()`, so
+   * seven reads through `fieldMeasured`, never the collapsing `listedField`, so
    * a transient agent-link failure on one or all seven is told apart from
    * the file genuinely never having been written. `null` ONLY when all
    * seven measure ABSENT — the ordinary state of a session ccd has never
@@ -565,19 +565,17 @@ export const SUBSTRATE_NO_REASON = '<substrate marker empty — reason lost>';
  * so a caller gets `absent`/`unreadable` apart rather than collapsed to one
  * `null`. The fields that have not migrated to the measured ladder (`home`/
  * `pool`/`lastswap`/`workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/
- * `archived`/`archivemanifest`/`swapblocked`/`spawn`) still fold a failure
+ * `archived`/`archivemanifest`/`swapblocked`/`spawn`/`lastend`/`hibernated`/`title`) still fold a failure
  * to null, in `buildRecord`'s `listedField`, which also marks the record
  * (`plainFieldUnreadable`) when the read was `unreadable`.
  *
  * Trims INSIDE the `ok` arm, deliberately, so `r.content` on a hit is
- * ALREADY what `field()`'s callers have always received: `field()`'s own
- * `.trim()` is load-bearing for `branchEvidence`'s `'empty'` rung (a
+ * ALREADY what `listedField`'s callers receive: this trim is load-bearing for `branchEvidence`'s `'empty'` rung (a
  * zero-byte or whitespace-only `.branch` must read as `''`) and for
  * `HOLD_NO_REASON`/`SUBSTRATE_NO_REASON` (an all-whitespace `.hold`/
  * `.substrate` must collapse to the same empty-content branch a zero-byte
- * one does). Trimming here, once, is also the one-parser reason `field()`
- * itself trims rather than leaving it to each of the ladder's ~9 call
- * sites to remember. A `reason` (`absent`/`unreadable`) carries no content
+ * one does). Trimming here, once, is also the one-parser reason `listedField`
+ * does not trim again: none of the ladder's ~9 call sites has to remember to. A `reason` (`absent`/`unreadable`) carries no content
  * to trim and passes through unchanged.
  *
  * EXPORTED for exactly one out-of-file caller: `coord/dispatch.ts`'s
@@ -829,7 +827,7 @@ async function buildRecord(
   // the listing alone and costs no agent request: a measured read answers `absent` (a synthesized absence, presence
   // as of the listing), a plain read answers `null`. A LISTED field is read exactly as before, so a listed read that
   // fails stays `unreadable` (never folded to `absent`), and a listed read that answers `absent` is a raced removal.
-  // A failed plain-field read still answers null (as on main, and as `field()` does), but it is remembered: the record
+  // A failed plain-field read still answers null (as on main, and as `listedField` does), but it is remembered: the record
   // then carries `plainFieldUnreadable` and is not cacheable (`isCleanRecord`), so the row cache cannot stretch a
   // one-tick read glitch to its 30 s bound. Measured and plain reads are one request each, so the count is unchanged.
   let plainUnreadable = false;
@@ -971,7 +969,7 @@ async function buildRecord(
   // §4.3's three-valued read, over the three fields the lifecycle classifier
   // consumes. Same evidence as the identity ladder above: `names` is the
   // listing this function opened with, so it proves PRESENCE independently of
-  // whether the bytes came back — the one thing `field()` alone cannot tell
+  // whether the bytes came back — the one thing `listedField` alone cannot tell
   // you. Without it a stop that WAS recorded but could not be read looks like
   // no stop at all, and the classifier prints `orphan` about a session nobody
   // managed to look at. That is rule (b)'s exact prohibition, and it is why the
@@ -1017,7 +1015,7 @@ async function buildRecord(
   // what each rung means.
   //
   // THE `'empty'` RUNG WAS THE ONE MISSING (review finding, Wave 3), and it is
-  // also where `branch` gets normalised. `field()` returns `content.trim()`, so
+  // also where `branch` gets normalised. `listedField` returns `content.trim()`, so
   // a zero-byte or whitespace-only `.branch` arrives here as `''` — not null
   // — and the
   // boolean this replaced could not see it: the record carried a MEASURED
@@ -1138,7 +1136,7 @@ async function buildRecord(
     // listing at all. A measured `unreadable` falls back to EXACTLY today's
     // rung: `names` is the directory listing this function opened with, so
     // it proves PRESENCE independently of whether the read succeeded — the
-    // one piece of evidence `field()` alone does not have. See
+    // one piece of evidence `listedField` alone does not have. See
     // `HOLD_UNREADABLE`. An empty read is a hold with nothing to show, which
     // is not the same fact as an unreadable one — see `HOLD_NO_REASON`.
     held: holdRead.ok
@@ -1410,7 +1408,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: 
   // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
   // `ccd ws-release` landing anywhere inside the 30-field-read window left
   // the name in the listing and no bytes behind it, indistinguishable at
-  // `field()` alone from a read that failed — a perfectly ordinary release
+  // `listedField` alone from a read that failed — a perfectly ordinary release
   // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
   // `sweepMerged` fired a held-merged push announcing corruption seconds
   // after the operator tapped Release.
@@ -1425,7 +1423,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig, opts?: 
   // host's agent is redeployed — the fail-shut collapse that cannot tell a
   // race from a fault at all (THE GOVERNING RULE). Re-listing still
   // distinguishes those two, because a directory read is exactly the
-  // evidence `field()` lacks: gone from the second listing = deleted on
+  // evidence `listedField` lacks: gone from the second listing = deleted on
   // purpose (absence IS release, and — for a degraded row — it is now
   // TWICE-observed absence, not an absent read: the row is RETIRED, dropped
   // from `out`, rather than kept degraded forever). Still listed = genuinely

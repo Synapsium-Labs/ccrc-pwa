@@ -36,7 +36,7 @@ export class OrphanTreeBeat {
       isWorkspace: async (id) => {
         const r = await readSessionRecord(d.io, d.cfg, id);
         if (r.kind !== 'found' || r.record.unmeasured.length > 0) return null;
-        // MEASURED: field() collapses an unreadable marker to null, which would read as 'plain session' and audit a worker's tree.
+        // MEASURED: `listedField` collapses an unreadable marker to null, which would read as 'plain session' and audit a worker's tree.
         const w = await fieldMeasured(d.io, d.cfg.registryDir, id, 'workspace');
         return w.ok ? true : w.reason === 'absent' ? false : null;
       },
