@@ -66,6 +66,8 @@ const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r)
 const loadColdRunsPage: PagedLoader = (limit, before) => api.runsPage(limit, before ?? null);
 /** How many closed runs one read of the archive asks for (console speed S2). */
 const ARCHIVE_PAGE = 50;
+/** Finished's own failure sentence: its one source, the archive read, did not answer, so newer closes may be missing. */
+const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
 import { useColdRuns, type PagedLoader } from './useColdRuns';
@@ -424,9 +426,11 @@ export function RunsScreen({
                     : 'Show older'}
                 </Button>
               )}
-              {hasOlder && shownFinished >= finished.length && olderFailed && (
+              {/* One failure line under Finished: a failed "Show older" says its own; else a failed re-read (a remount's
+                  background read included) says Finished may be missing newer closes, beside the stored rows (Step 6). */}
+              {hasOlder && shownFinished >= finished.length && olderFailed ? (
                 <EmptyState data-state="error">Could not load older runs.</EmptyState>
-              )}
+              ) : coldFailed ? <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState> : null}
             </div>
           ) : coldFailed ? (
             // I6, second half: at least one run is active (this branch is
@@ -439,9 +443,7 @@ export function RunsScreen({
             // finished", which the board has no standing to claim.
             <div className="runs-group" role="group" aria-label="finished, unknown">
               <p className="runs-group-head"><span className="runs-program">Finished</span></p>
-              <EmptyState data-state="error">
-                Could not reach the server — finished runs may exist that are not shown.
-              </EmptyState>
+              <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState>
             </div>
           ) : null}
         </>

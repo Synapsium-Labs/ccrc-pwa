@@ -161,6 +161,31 @@ describe('the run archive in pages', () => {
     expect(screen.queryByText('Could not load older runs.')).toBeNull();
   });
 
+  it('a failed background re-read with stored pages shows the error beside them (Step 6; fix round 1)', async () => {
+    const REREAD_FAILED = 'Could not reach the server — finished runs may exist that are not shown.';
+    const a = archive(range(120, 1));
+    const store = makeStore();
+    const first = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    first.unmount();
+    a.load.mockRejectedValueOnce(new Error('down'));                 // the remount's background re-read fails
+    const { container } = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    const rows = (): number => container.querySelectorAll('.runs-list > li').length;
+    const drawn = rows();
+    expect(drawn, 'the stored pages draw at once').toBeGreaterThan(0);
+    expect(screen.queryByText(REREAD_FAILED)).toBeNull();
+    await flush();
+    expect(screen.getByText(REREAD_FAILED)).toBeInTheDocument();
+    expect(rows(), 'the stored rows stay').toBe(drawn);
+    // A failed Show older says only its own line, never both.
+    unfold();
+    a.load.mockRejectedValueOnce(new Error('down'));
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
+    expect(screen.queryByText(REREAD_FAILED)).toBeNull();
+  });
+
   it('a re-read during Show older shows no failure line', async () => {
     const a = archive(range(120, 1), [130]);
     const store = makeStore();
@@ -416,6 +441,25 @@ describe('the run archive in pages', () => {
     expect(ids(result.current.cold).sort((x, y) => y - x)).toEqual(range(120, 21));
     expect(result.current.cold?.find((r) => r.id === 60)?.state).toBe('done');
     expect(result.current.hasOlder).toBe(false);
+  });
+
+  it('one normaliser reads nextBefore, the first page included: a value that is not a number is no next page (F9)', async () => {
+    const bad = vi.fn<PagedLoader>(async () => ({ runs: [closed(3), closed(2)], nextBefore: '2' as unknown as number }));
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, bad, { page: 2 }));
+    await flush();
+    expect(ids(result.current.cold)).toEqual([2, 3]);
+    expect(result.current.hasOlder, 'the first page').toBe(false);
+    expect(store.getState().runPages?.nextBefore).toBeNull();
+    // An older page goes through the same reader.
+    const good = archive(range(5, 1));
+    const store2 = makeStore();
+    const { result: r2 } = renderHook(() => useColdRuns(store2, good.load, { page: 2 }));
+    await flush();
+    expect(r2.current.hasOlder).toBe(true);
+    good.load.mockResolvedValueOnce({ runs: [closed(3), closed(2)], nextBefore: '2' as unknown as number });
+    await act(async () => { await r2.current.loadOlder(); });
+    expect(r2.current.hasOlder, 'an older page').toBe(false);
   });
 
   it('a failed re-read stays visible after Show older succeeds', async () => {

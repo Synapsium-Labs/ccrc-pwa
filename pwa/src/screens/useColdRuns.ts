@@ -40,6 +40,11 @@ export type ColdLoader = () => Promise<{ runs: RunSummary[] }>;
  *  when `before` is absent is NOT promised here; `limit` is always given), and `nextBefore` while older ones remain. */
 export type PagedLoader = (limit: number, before?: number) => Promise<RunsPageAnswer>;
 
+/** A page of the archive as the board keeps it: the ONE reader of the wire's `nextBefore` (fix round 1, F9), for the
+ *  first page and every older one. Only a number asks a next page; anything else on the wire is none. */
+const runsPageOf = (r: RunsPageAnswer): RunsPageAnswer =>
+  ({ runs: r.runs, ...(typeof r.nextBefore === 'number' ? { nextBefore: r.nextBefore } : {}) });
+
 /** What one `loadOlder()` came to (console speed S2): `appended` the page joined the rows; `dropped` an answer that
  *  arrived but was refused as stale (a re-read was issued after it began, or the cursor it was asked from had moved), so
  *  nothing failed and the next ask goes again; `failed` the read did not answer; `idle` there was nothing to ask (no
@@ -171,7 +176,7 @@ export function useColdRuns(
           // replaces the rows that page covers and every active run, and keeps the stored closed rows below it and
           // the stored `nextBefore` that reaches them (`mergeFirstRunPage`). Folded against the store AS IT STANDS
           // when the answer lands, so an older page that arrived meanwhile is kept too.
-          const next = mergeFirstRunPage(store.getState().runPages, r as RunsPageAnswer);
+          const next = mergeFirstRunPage(store.getState().runPages, runsPageOf(r as RunsPageAnswer));
           store.getState().setRunPages({ ...next, at: Date.now() });
           setCold(next.runs);
         }
@@ -195,7 +200,7 @@ export function useColdRuns(
     const asked = held.nextBefore;
     const reading = (loadRunsRef.current as PagedLoader)(limit, asked)
       .then((r): OlderOutcome => {
-        const answer: RunsPageAnswer = { runs: r.runs, ...(r.nextBefore === undefined ? {} : { nextBefore: r.nextBefore }) };
+        const answer = runsPageOf(r);
         if (!aliveRef.current || issued.current !== askedAt) return 'dropped';
         const current = store.getState().runPages;
         if (current === null) return 'dropped';
