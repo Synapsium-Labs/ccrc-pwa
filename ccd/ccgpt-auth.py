@@ -194,6 +194,12 @@ class LoginFailed(AuthError):
     word = "login-failed"
 
 
+class SigninUnusable(AuthError):
+    """A sign-in that `install_signin` was handed and will not install: it fails its check."""
+
+    word = "signin-unusable"
+
+
 class HeldReentry(RuntimeError):
     """A programming error, NOT an AuthError: entering the lock for a path this thread already holds."""
 
@@ -1805,6 +1811,13 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     stream.flush()
     code, verifier = _poll_device(base, device_auth_id, user_code, interval, wait, lane)
     record, rid = _exchange(base, code, verifier, lane)
+    _commit_signin(auth_dir, record, rid, lane)
+    return "signed-in"
+
+
+def _commit_signin(auth_dir: str, record: dict, rid: Optional[str], lane: str) -> None:
+    """`sign_in_device`'s step 5, and `install_signin`'s last: the sign-in's record written over `auth_dir`, or
+    LoginFailed with the old file unchanged."""
     key = _key(auth_dir)
     fields = dict(lastRefreshAt=time.time(), lastRequestId=rid)  # kept with an unsaved record, as a refresh's are
     with held(auth_dir) as p:
@@ -1841,7 +1854,28 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
             _UNSAVED.pop(key, None)
         write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastErrorCode=None,
                      identity=_current_identity(p.credential), unsaved=False, **fields)
-    return "signed-in"
+
+
+def install_signin(auth_dir: str, *, source: str, lane: str) -> str:
+    """Move the sign-in held at `source` over the lane's credential at `auth_dir` (accounts spec §9 row 5). A Sign in
+    again signs in to a scratch authDir, so the lane's credential stands until this runs, and this is its one writer:
+    the record goes through `_commit_signin`, under the lane's own lock, as a device sign-in's does.
+
+    THE CHECK, MADE BEFORE THE LANE IS TOUCHED. `source` must read `present`, unexpired and not barred, and its file
+    must be mode 0600 or tighter and this user's. That is every check a credential allows offline. It asks the provider
+    nothing: the exchange that wrote it answered moments ago, the lane's gateway reads only `auth_dir`, and the check
+    the sheet runs next is the first request on the new credential. Anything else is SigninUnusable, with `auth_dir`
+    untouched. `source` is left in place for the caller to delete. Answers `"installed"`."""
+    report = status_report(source)
+    r, raw = _read_raw(source)
+    if r.credential != "present" or not isinstance(raw, dict):
+        raise SigninUnusable("the sign-in at " + source + " reads " + r.credential + ", so it was not installed; "
+                             + _again(lane))
+    if expired(r) or _bars(read_status(source)) or report["modeOk"] is not True or report["ownerOk"] is not True:
+        raise SigninUnusable("the sign-in at " + source + " is expired, barred, or not private to this user, so it was "
+                             "not installed; " + _again(lane))
+    _commit_signin(auth_dir, dict(raw), None, lane)
+    return "installed"
 
 
 # ── the status report ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1910,12 +1944,13 @@ def status_report(auth_dir: str) -> dict:
 
 
 # ── the command line ─────────────────────────────────────────────────────────────────────────────────────────────
-USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> | paths | secret-files, each with --auth-dir "
-         "<absolute>")
+USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> | install --from <absolute> --lane <id> | paths "
+         "| secret-files, each with --auth-dir <absolute>")
 # Each verb's options: (required, optional). Every option takes one value.
 _VERBS = {
     "status": (frozenset({"--auth-dir"}), frozenset({"--lane"})),
     "signin": (frozenset({"--auth-dir", "--lane"}), frozenset()),
+    "install": (frozenset({"--auth-dir", "--from", "--lane"}), frozenset()),
     "paths": (frozenset({"--auth-dir"}), frozenset()),
     "secret-files": (frozenset({"--auth-dir"}), frozenset()),
 }
@@ -1934,6 +1969,8 @@ def main(argv: List[str]) -> int:
       signin --lane <id>    the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
                             `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
                             `ccgpt-auth: <word>: <sentence>` on stderr, rc 1
+      install --from <absolute> --lane <id>
+                            `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; or the refusal line above, rc 1
       paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
       secret-files          the credential and checkpoint paths, one per line, rc 0"""
     if not argv or argv[0] not in _VERBS:
@@ -1952,7 +1989,7 @@ def main(argv: List[str]) -> int:
     if not required <= set(opts):
         return _usage()
     auth_dir = opts["--auth-dir"]
-    if not os.path.isabs(auth_dir):
+    if not os.path.isabs(auth_dir) or not os.path.isabs(opts.get("--from", auth_dir)):
         return _usage()
     out = sys.stdout
     if verb == "status":
@@ -1969,7 +2006,10 @@ def main(argv: List[str]) -> int:
         return 0
     lane = opts["--lane"]
     try:
-        result = sign_in_device(auth_dir, lane=lane, out=out)
+        if verb == "install":
+            result = install_signin(auth_dir, source=opts["--from"], lane=lane)
+        else:
+            result = sign_in_device(auth_dir, lane=lane, out=out)
     except AuthError as e:
         out.flush()
         sys.stderr.write("ccgpt-auth: " + e.word + ": " + str(e) + "\n")

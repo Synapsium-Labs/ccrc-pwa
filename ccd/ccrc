@@ -7766,10 +7766,50 @@ _acct_switch_write() {   # <id> off|on|on-any -> rc, see above
 # and the cure is to converge again. Un-writing an operator's roster entry to tidy up
 # a failed chmod would be the destructive act, on the one file this CLI calls theirs.
 ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
+# ── THE CODEX ARM OF `add` (spec §7.2 step 3, G2, G20; accounts plan Task A24; D-5519) ─────────────────────────────
+# ccrc owns this lane, so `add` makes it where a roster edit used to. `_acct_codex_pick` measures what `check-add`
+# judges: the runtime `ccrc install` built, two ports neither the roster nor a listener holds, and a folder name no
+# earlier lane used. The caller holds the placement lock, so two adds never draw one pair. The folder is a name only:
+# the auth library makes it at the first sign-in, so an abandoned add leaves none. The six random hex digits are what
+# keep a re-added id from ever meeting an old lane's sign-in.
+#
+# NO RUNTIME IS BUILT HERE: a build takes minutes of pip under a verb a sheet is waiting on. `ccrc install` builds it.
+: "${CCRC_ACCOUNT_CODEX_PORT_BASE:=14100}"   # the harness's knob; below every kernel's ephemeral range
+ACCT_CODEX_PORT_SPAN=200
+ACCT_CODEX_ARGS=()
+_acct_codex_pick() {   # <id> -> ACCT_CODEX_ARGS, or refuses
+  local id="$1" base="$CCRC_ACCOUNT_CODEX_PORT_BASE" p=0 rc=0 rand="" held=""
+  local -a free=()
+  ACCT_CODEX_ARGS=()
+  "$(_codex_runtime_cli)" python >/dev/null 2>&1 \
+    || _acct_refuse 1 codex-runtime-absent "this box has no Codex runtime, so a ChatGPT lane has nothing to run on. 'ccrc install' builds it once the roster names a codex lane, and no build runs under this verb. Nothing was written."
+  [[ "$base" =~ ^[0-9]{4,5}$ ]] \
+    || _acct_refuse 2 bad-port-base "CCRC_ACCOUNT_CODEX_PORT_BASE must be a TCP port of four or five digits. Nothing was written."
+  held="$(jq -r '[.accounts[]? | .exec? | objects | (.proxyPort?, .litellmPort?) | numbers] | map(tostring) | join(" ")' "$(_acct_roster_path)" 2>/dev/null)" \
+    || _acct_refuse 1 roster-invalid "\$HOME/.ccrc/accounts.json could not be read for the ports its lanes hold, so no free pair can be told. 'ccrc wrappers' prints the validator's sentence. Nothing was written."
+  for (( p = 10#$base; p < 10#$base + ACCT_CODEX_PORT_SPAN && p <= 65535 && ${#free[@]} < 2; p++ )); do
+    [[ " $held " != *" $p "* ]] || continue
+    rc=0; _codex_port_listening "$p" || rc=$?
+    # 1 is the one free answer: a port that timed out holds something, and one that cannot be asked is not known free.
+    [ "$rc" -ne 1 ] || free+=("$p")
+  done
+  [ "${#free[@]}" -eq 2 ] \
+    || _acct_refuse 1 no-free-port "no two free ports were found from $base, so this lane's gateway has nowhere to listen. Nothing was written."
+  rand="$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  [[ "$rand" =~ ^[0-9a-f]{6}$ ]] \
+    || _acct_refuse 1 authdir-unnamed "six random hex digits could not be read from /dev/urandom, so this lane has no fresh sign-in folder. Nothing was written."
+  ACCT_CODEX_ARGS=(--proxy-port "${free[0]}" --litellm-port "${free[1]}" --auth-dir ".local/share/ccrc/codex/$id-$rand")
+}
+
 _acct_add() {
   _acct_add_parse "$@"
   _acct_lane_lock "$ACCT_ID" "Nothing was written."
   _acct_sweep_secret_temps "$ACCT_ID"
+  ACCT_CODEX_ARGS=()
+  if [ "$ACCT_PROVIDER" = openai ]; then
+    _acct_marker_lock "Nothing was written."
+    _acct_codex_pick "$ACCT_ID"
+  fi
 
   # The check is side-effect-free and its `plan` is what every later step
   # writes from, so no step re-derives a decision this one already made. It runs
@@ -7788,7 +7828,8 @@ _acct_add() {
     ${ACCT_ADOPT:+--adopt true} \
     ${ACCT_BASE_URL:+--base-url "$ACCT_BASE_URL"} \
     ${ACCT_MODELS:+--models "$ACCT_MODELS"} \
-    ${ACCT_METHOD:+--method "$ACCT_METHOD"})" || rc=$?
+    ${ACCT_METHOD:+--method "$ACCT_METHOD"} \
+    ${ACCT_CODEX_ARGS[@]+"${ACCT_CODEX_ARGS[@]}"})" || rc=$?
   if [ "$rc" -ne 0 ]; then
     # check-add ALREADY PRINTED the envelope on ITS stdout — which this command
     # substitution captured, unless it printed NOTHING: the half-updated box, not
@@ -7866,6 +7907,9 @@ _acct_add() {
     # PASTE VALIDATES FIRST (spec §6.3): an Anthropic token is probed before any byte of the lane is written.
     [ "$envvar" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$ACCT_ID" "Nothing was written."
     _acct_write_secret "$ACCT_ID" "$ACCT_PROVIDER" "$envvar"
+  elif [ "$ACCT_PROVIDER" = openai ]; then
+    [ -z "$ACCT_CRED_SPELLING" ] \
+      || _acct_refuse 2 credential-not-managed "a ChatGPT lane's credential is its sign-in, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method openai-login' after this. Nothing was written."
   else
     [ -z "$ACCT_CRED_SPELLING" ] \
       || _acct_refuse 2 credential-not-managed "provider \"$ACCT_PROVIDER\" with method \"${planmethod:-login}\" keeps its credential in the config directory Claude Code writes, so there is no file for --credential to fill. Run 'ccrc account auth-start --id $ACCT_ID --method login' after this. Nothing was written."
@@ -7933,6 +7977,16 @@ _acct_add() {
   # THE LANE STATE, FRESH (accounts plan Task A11): a new lane's state starts
   # over, so a stale file under a re-used id lends it nothing.
   _acct_lane_state "$ACCT_ID" --mode fresh --added-at now
+  if [ "$ACCT_PROVIDER" = openai ]; then
+    # The class registry, seeded from the codex probe's own table. Its stdout goes to stderr, `_acct_converge`'s rule,
+    # and the subshell contains a `_models_refuse`'s exit. NOT `ccrc models litellm`: it renders from the lane's
+    # catalogue, which only a signed-in lane can fetch, so here it can only answer `never-probed`. The first sign-in's
+    # install renders it (`_acct_install_codex`).
+    ( cmd_models "$ACCT_ID" init codex ) >&2 \
+      || _acct_refuse 1 codex-models "'ccrc models $ACCT_ID init codex' refused: read the lines above. The lane's roster entry, launcher, config directory and off marker stand, and nothing rolls back: run it again once the cause is fixed."
+    # `_inst_codex_usage` is the one converger of these timers, and it runs on every install and update.
+    ACCT_OPERATOR_STEPS+=("ccrc-codex-usage@$ACCT_ID.timer: the next 'ccrc install' or 'ccrc update' enables it. Until then this lane's weekly window is not measured.")
+  fi
 
   # ── 7. THE ANSWER ───────────────────────────────────────────────────────
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`
@@ -8401,9 +8455,9 @@ _acct_set() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
-      --method=setup-token|--method=login) method="${1#*=}" ;;
-      --method) { [ "${2:-}" = setup-token ] || [ "${2:-}" = login ]; } || _acct_refuse 2 bad-value "the flag --method takes setup-token or login. Nothing was written."; method="$2"; shift ;;
-      --method=*) _acct_refuse 2 bad-value "the flag --method takes setup-token or login. Nothing was written." ;;
+      --method=setup-token|--method=login|--method=openai-login) method="${1#*=}" ;;
+      --method) { [ "${2:-}" = setup-token ] || [ "${2:-}" = login ] || [ "${2:-}" = openai-login ]; } || _acct_refuse 2 bad-value "the flag --method takes setup-token, login or openai-login. Nothing was written."; method="$2"; shift ;;
+      --method=*) _acct_refuse 2 bad-value "the flag --method takes setup-token, login or openai-login. Nothing was written." ;;
       --attempt=*) attempt="${1#*=}" ;;
       --attempt) [ $# -ge 2 ] || _acct_refuse 2 missing-value "the flag --attempt takes a value. Nothing was written."; attempt="$2"; shift ;;
       --id=*) id="${1#*=}" ;;
@@ -8413,7 +8467,7 @@ _acct_set() {
       --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
       --placement=overflow|--placement=full) placement="${1#*=}" ;;
       --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login --attempt <attemptId>" ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login|openai-login --attempt <attemptId>" ;;
     esac
     shift
   done
@@ -9488,6 +9542,7 @@ _acct_remove_gate() {   # <id> <remove|discard> <rehome-sleeping 0|1> — refuse
 _acct_remove() {
   local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
   local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0 mode=remove dry=0 rehome_sleeping=0
+  local keep_codex=0 delete_codex=0 codex_auth=""
   local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
@@ -9515,7 +9570,11 @@ _acct_remove() {
         mode="$2"; shift 2; continue ;;
       --dry-run) dry=1; shift; continue ;;
       --rehome-sleeping) rehome_sleeping=1; shift; continue ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --mode remove|discard, --dry-run, --rehome-sleeping and --keep-credential" ;;
+      # Accounts plan Task A24 (spec §11 step 4, Q11): a codex lane's sign-in folder goes unless the CLI keeps it.
+      # `--delete-codex-auth` is the agent's spelling of that default (`shared/account-argv.ts`).
+      --keep-codex-auth) keep_codex=1; shift; continue ;;
+      --delete-codex-auth) delete_codex=1; shift; continue ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account remove has no argument \"$1\" - it takes --id and optional --mode remove|discard, --dry-run, --rehome-sleeping, --keep-credential, --keep-codex-auth and --delete-codex-auth" ;;
     esac
     [ -n "$v" ] \
       || _acct_refuse 2 missing-value "the flag --id was given an empty value. Give it an account id. Nothing was written."
@@ -9524,6 +9583,9 @@ _acct_remove() {
   done
 
   _acct_id_or_refuse "$id"
+  [ "$keep_codex" -eq 0 ] || [ "$delete_codex" -eq 0 ] \
+    || _acct_refuse 2 bad-argument "the flags --keep-codex-auth and --delete-codex-auth ask for opposite things. Nothing was written."
+  [ "$keepcred" -eq 0 ] || keep_codex=1
   [ "$dry" -eq 0 ] || _acct_remove_precheck "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_sweep_secret_temps "$id"
@@ -9648,6 +9710,7 @@ _acct_remove() {
     # removed; the exit releases both locks.
     _codex_auth_hold "$id" >&2 \
       || _acct_refuse 1 codex-reap-failed "codex lane $id's credential lock (the auth library's) could not be taken, so its tiers cannot be stopped without cutting a token refresh short - the reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once the lane's refresh or sign-in has ended."
+    codex_auth="$CX_AUTH"   # `_codex_auth_hold` just read the row, and after the drop nothing can
     _codex_stop_lane "$id" >&2 || :
     _codex_auth_release
     # `_codex_stop_order`'s walk (the whole-wave addendum, LB-2 part a): the
@@ -9748,8 +9811,8 @@ _acct_remove() {
   #
   # KEPT, and each is out of the reap's reach by construction:
   #   * the logs (`~/.ccrc/logs/codex/<id>/`, reported as kept);
-  #   * `exec.authDir`, which the roster refuses under `~/.ccrc` (see the OAuth
-  #     paragraph below).
+  #   * `exec.authDir`, which the roster refuses under `~/.ccrc` (the arm below
+  #     decides it).
   # A FAILURE HERE IS `artifact-remove`, the refusal every removal after the
   # drop uses, and it says what is already true: no row names the lane.
   if [ "$ACCT_KIND" = codex ]; then
@@ -9760,6 +9823,27 @@ _acct_remove() {
     done
     f="$HOME/.ccrc/logs/codex/$id"
     { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f")
+    # THE LANE'S SIGN-IN FOLDER (spec §11 step 4, G20, Q11; accounts plan Task A24). It goes by default, so a removed
+    # lane's ChatGPT sign-in is not left on the box. The stops above ended every tier that reads it, and a sign-in in
+    # flight refused this removal. Two folders stay whatever was asked: one outside the home `add` makes them in, which
+    # a hand-written row may name and ccrc did not make, and one another lane's row still names. Each is named as a
+    # step. `rm` removes a symlink there, never what it points at. The sign-in stays authorised at the provider, which
+    # the answer's `atProvider` says.
+    f="$HOME/$codex_auth"
+    if [ -n "$codex_auth" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
+      if [ "$keep_codex" -eq 1 ]; then
+        kept+=("$f")
+      elif [[ "$codex_auth" != .local/share/ccrc/codex/* ]]; then
+        kept+=("$f")
+        operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: ccrc did not make it there. Delete it by hand if nothing else uses it.")
+      elif jq -e --arg d "$codex_auth" 'any(.accounts[]?; .exec?.authDir? == $d)' "$(_acct_roster_path)" >/dev/null 2>&1; then
+        kept+=("$f")
+        operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: another lane still names it.")
+      else
+        rm -rf -- "${f:?}" 2>/dev/null
+        if [ -e "$f" ] || [ -L "$f" ]; then kept+=("$f"); else removed+=("$f"); fi
+      fi
+    fi
   fi
 
   # THREE answers, not two, and each is stated rather than inherited from an
@@ -9801,12 +9885,6 @@ _acct_remove() {
     removed+=("$f")
   done
 
-  # `exec.authDir` IS NOT TOUCHED HERE, deliberately. Removing an account
-  # removes what ccrc put on the box; a ChatGPT OAuth directory is not that,
-  # and destroying it would end a subscription session ccrc never started.
-  # The roster refuses an authDir under ~/.ccrc (shared/roster.ts) so that
-  # `uninstall --purge` cannot reach one either.
-  #
   # `ACCT_SECRET_ENV` already decides optional secrets: a Codex/OpenAI lane has
   # none, so a declared secretsFile is kept without a redundant kind predicate.
   if [ -n "$ACCT_SECRETS" ]; then
@@ -11059,7 +11137,41 @@ _acct_install_sign_in() {   # <id> <scratch dir> <what-still-stands>
   rm -rf -- "${2:?}/config"
 }
 
-_acct_set_method() {   # <id> <setup-token|login> <attempt>
+# THE CODEX INSTALL (spec §9 row 5; accounts plan Task A24), in three steps:
+#  1. THE CHECK: the lane's catalogue fetched with the scratch credential, a real answer from the backend. It is the
+#     model probe's own fetch, told the scratch folder by this verb alone (`_models_probe_codex_env` keeps every other
+#     caller on the row's folder), and its answer stays in scratch, so a refusal changes nothing of the lane's.
+#  2. THE MOVE: the auth library is the one writer of a lane's credential, so it commits it, under the credential's own
+#     lock, and answers with a word this verb turns into a code. The lane's gateway reads the new file at its next
+#     request, so no session restarts. The old check went with the old credential.
+#  3. A FIRST SIGN-IN'S RENDER: `check` starts the gateway, which needs `litellm.yaml`, and only now can a catalogue be
+#     fetched for it. A lane that has one keeps it, so a Sign in again restarts no tier. A refresh that fails refuses
+#     nothing: the credential is in, the hourly refresh renders it, and `check` says `litellm-unrendered` until then.
+_acct_install_codex() {   # <id> <what-still-stands>
+  local id="$1" stands="$2" src="" said="" rc=0 re='^ccgpt-auth: ([a-z][a-z-]*): '
+  src="$(_codex_scratch_dir "$id")"
+  { [ -d "$src" ] && [ ! -L "$src" ]; } \
+    || _acct_refuse 1 no-credential "the sign-in left no folder at $src, so there is nothing to install. $stands"
+  _codex_row "$id" >&2 \
+    || _acct_refuse 1 lane-unreadable "lane $id's codex row could not be read, so the sign-in has nowhere to go. $stands"
+  ( export CHATGPT_TOKEN_DIR="$src" CCRC_MODELS_AUTH_LIB="$(_codex_auth_lib)"
+    CCRC_CODEX_PYTHON="$("$(_codex_runtime_cli)" python 2>/dev/null)" || CCRC_CODEX_PYTHON=''
+    export CCRC_CODEX_PYTHON
+    exec "$CCRC_HERE/ccrc-models-probe" "$id" codex --out "$src/catalogue.json" ) >&2 \
+    || _acct_refuse 1 token-unverified "the provider did not accept or did not answer a request with the new sign-in, so it was not installed. $stands"
+  said="$(_codex_auth install --from "$src" --auth-dir "$HOME/$CX_AUTH" --lane "$id" 2>&1 >/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$said" >&2
+    [[ "$said" =~ $re ]] && [ "${BASH_REMATCH[1]}" = signin-unusable ] \
+      && _acct_refuse 1 no-credential "the sign-in in $src failed its check, so it was not installed. $stands"
+    _acct_refuse 1 credential-write "the auth library could not install the sign-in into \$HOME/$CX_AUTH (exit $rc; its line is on stderr). $stands"
+  fi
+  rm -rf -- "${src:?}"
+  _acct_lane_state "$id" --clear check
+  [ -f "$(_codex_litellm_yaml "$id")" ] || ( cmd_models refresh "$id" ) >&2 || :
+}
+
+_acct_set_method() {   # <id> <setup-token|login|openai-login> <attempt>
   local id="$1" method="$2" a="$3" stands="Nothing was written: lane $1 is as it was."
   [[ "$a" =~ ^[0-9a-f]{32}$ ]] \
     || _acct_refuse 2 bad-attempt "the flag --attempt takes 32 lowercase hex characters. $stands"
@@ -11067,14 +11179,20 @@ _acct_set_method() {   # <id> <setup-token|login> <attempt>
   _acct_lane_lock "$id" "$stands"
   _acct_sweep_secret_temps "$id"
   _acct_lane "$id"
-  { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
-    || _acct_refuse 1 method-not-supported "lane $id is not a ccrc-generated Anthropic lane, so it has no method to set. $stands"
+  if [ "$method" = openai-login ]; then
+    [ "$ACCT_KIND" = codex ] \
+      || _acct_refuse 1 method-not-supported "lane $id is not a Codex lane, so it has no ChatGPT sign-in to install. $stands"
+  else
+    { [ "$ACCT_KIND" = generated ] && [ "$ACCT_PROVIDER" = anthropic ]; } \
+      || _acct_refuse 1 method-not-supported "lane $id is not a ccrc-generated Anthropic lane, so it has no method to set. $stands"
+  fi
   _acct_auth_read "$id"
   [ "$ACCT_AUTH_FOR" = "$a" ] \
     || _acct_refuse 1 no-auth-attempt "set --method installs what sign-in attempt $a captured, and lane $id's sign-in status names ${ACCT_AUTH_FOR:-no attempt}. $stands"
   case "$method" in
     setup-token) _acct_install_minted "$id" "$ACCT_SCRATCH_ROOT/$id" "$stands" ;;
     login) _acct_install_sign_in "$id" "$ACCT_SCRATCH_ROOT/$id" "$stands" ;;
+    openai-login) _acct_install_codex "$id" "$stands" ;;
   esac
   _acct_read_op "Lane $id's new credential was installed; only this report failed." \
     set-done --file "$(_acct_roster_path)" --id "$id"
@@ -13117,6 +13235,7 @@ _codex_shim_file()   { printf '%s' "$HOME/.local/bin/ccgpt-proxy.py"; }
 _codex_auth_lib()    { printf '%s' "$HOME/.local/bin/ccgpt-auth.py"; }
 _codex_runtime_cli() { printf '%s' "$HOME/.local/bin/ccgpt-runtime"; }
 _codex_litellm_yaml() { printf '%s' "$(_codex_lane_dir "$1")/litellm.yaml"; }
+_codex_scratch_dir() { printf '%s' "$ACCT_SCRATCH_ROOT/$1/codex"; }
 # The bridge package (codex-bridge Stage 2): the installed tree's, beside this
 # file, which the shim's direct entry imports (CCGPT_BRIDGE_DIR, D-6419).
 _codex_bridge_dir()  { printf '%s' "$CCRC_HERE/codexbridge"; }
@@ -15577,10 +15696,16 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # two here would narrow a distinction this function was handed. It takes no
 # lane lock: it starts and stops no tier (ruling R11's list is the paths that
 # do); the credential's own lock is the library's.
-_codex_login() {   # <id> (one, parsed by cmd_codex) — rc 0 iff the auth library's sign-in exited 0
+#
+# `--scratch` (accounts plan Task A24) IS AN ATTEMPT'S: the sign-in goes to the
+# lane's scratch folder, and `ccrc account set --method openai-login` moves it
+# in once it passes its check. The row is still read, so no folder is ever made
+# for a lane the roster does not name as a codex lane.
+_codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff the auth library's sign-in exited 0
   local id="$1" dir res rc word re='^ccgpt-auth: ([a-z][a-z-]*): '
   _codex_row "$id" || return $?
   dir="$HOME/$CX_AUTH"
+  [ "${2:-}" != --scratch ] || dir="$(_codex_scratch_dir "$id")"
   # stdout straight through (fd 3, this function's stdout). stderr goes down
   # the pipe to the relay, which prints each line to stderr as it arrives and,
   # once the library has closed it, the last refusal word to the capture; the
@@ -15615,7 +15740,7 @@ cmd_codex() {
   case "${1:-}" in
     -h|--help) usage; exit 0 ;;
   esac
-  local sub="${1:-}" id json=0 mode=''
+  local sub="${1:-}" id json=0 mode='' scratch=''
   case "$sub" in
     start|stop|status|login|switch) shift ;;
     '') _codex_say usage "ccrc codex needs a subcommand: ccrc codex {start|stop|status|login|switch} <id> (status also takes --json; a switch names the mode to move the lane to: ccrc codex switch <id> litellm|direct)."; exit 2 ;;
@@ -15627,6 +15752,7 @@ cmd_codex() {
   esac
   shift
   if [ "$sub" = status ] && [ "${1:-}" = --json ]; then json=1; shift; fi
+  if [ "$sub" = login ] && [ "${1:-}" = --scratch ]; then scratch=--scratch; shift; fi
   # A SWITCH'S MODE (codex-bridge Stage 2, Task 12) is checked here, before any
   # lane is read, against the one bash vocabulary of modes, `_codex_mode_tiers`
   # (rc 2 for any other word, the empty one included): never a default.
@@ -15657,7 +15783,7 @@ cmd_codex() {
     start)  _codex_cmd_start "$id" ;;
     stop)   _codex_cmd_stop "$id" ;;
     status) _codex_cmd_status "$id" "$json" ;;
-    login)  _codex_login "$id" ;;
+    login)  _codex_login "$id" "$scratch" ;;
     switch) _codex_cmd_switch "$id" "$mode" ;;
   esac
 }

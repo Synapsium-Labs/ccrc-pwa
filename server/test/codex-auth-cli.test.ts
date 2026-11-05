@@ -662,6 +662,82 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
   });
 });
 
+describe.skipIf(!PY)('install: a checked sign-in moves over the lane\'s credential (accounts spec §9 row 5)', () => {
+  const lanes = (prefix: string): { home: string; dir: string; from: string } => {
+    const home = mkTmp(prefix);
+    return { home, dir: laneDir(home), from: join(home, 'scratch', 'codex') };
+  };
+  const install = (home: string, dir: string, from: string): ReturnType<typeof runCli> =>
+    runCli(home, ['install', '--from', from, '--auth-dir', dir, '--lane', 'codex-a']);
+
+  it('commits the sign-in through the lane\'s lock, writes an ok status bound to it, and leaves the source', async () => {
+    const { home, dir, from } = lanes('codex-install-');
+    plantBackendCredential(dir);
+    const fresh = plantBackendCredential(from);
+    const r = await install(home, dir, from);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('ccgpt-auth: codex-a: installed');
+    expect(r.stdout + r.stderr).not.toContain(fresh.refresh);
+    expect(JSON.parse(readFileSync(credPath(dir), 'utf8'))['refresh_token']).toBe(fresh.refresh);
+    expect((lstatSync(credPath(dir)).mode & 0o777).toString(8)).toBe('600');
+    expect(existsSync(pendingPath(dir))).toBe(false);
+    expect(existsSync(credPath(from))).toBe(true);
+    const report = JSON.parse((await runCli(home, ['status', '--auth-dir', dir])).stdout);
+    expect(report).toMatchObject({ source: 'file', state: 'ok', credential: 'present' });
+  });
+
+  it('makes a lane\'s first folder at 0700', async () => {
+    const { home, dir, from } = lanes('codex-install-first-');
+    plantBackendCredential(from);
+    expect((await install(home, dir, from)).status).toBe(0);
+    expect((lstatSync(dir).mode & 0o777).toString(8)).toBe('700');
+  });
+
+  it.each([
+    ['absent', (_from: string) => undefined],
+    ['expired', (from: string) => { plantBackendCredential(from, { expiresIn: -60 }); }],
+    ['readable by others', (from: string) => { plantBackendCredential(from, { mode: 0o644 }); }],
+    ['a symlink', (from: string) => {
+      plantBackendCredential(`${from}-real`);
+      mkdirSync(from, { recursive: true });
+      symlinkSync(credPath(`${from}-real`), credPath(from));
+    }],
+    ['another family', (from: string) => {
+      mkdirSync(from, { recursive: true });
+      writeFileSync(credPath(from), JSON.stringify({ tokens: { access_token: 'x' } }), { mode: 0o600 });
+    }],
+  ])('refuses a source that is %s, signin-unusable, with the lane as it was', async (_name, plant) => {
+    const { home, dir, from } = lanes('codex-install-refused-');
+    plantBackendCredential(dir);
+    const before = lstatKey(credPath(dir));
+    plant(from);
+    const r = await install(home, dir, from);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^ccgpt-auth: signin-unusable: /);
+    expect(lstatKey(credPath(dir))).toBe(before);
+    expect(readdirSync(dir)).toEqual(['auth.json']);
+  });
+
+  it('never writes over a lane file of another family', async () => {
+    const { home, dir, from } = lanes('codex-install-foreign-');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(credPath(dir), JSON.stringify({ tokens: { access_token: 'x' } }), { mode: 0o600 });
+    const before = lstatKey(credPath(dir));
+    plantBackendCredential(from);
+    const r = await install(home, dir, from);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/^ccgpt-auth: foreign-family: /);
+    expect(lstatKey(credPath(dir))).toBe(before);
+  });
+
+  it('a relative --from is usage', async () => {
+    const { home, dir } = lanes('codex-install-usage-');
+    const r = await install(home, dir, 'relative/dir');
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/^usage: /);
+  });
+});
+
 describe.skipIf(!PY)('the command line (codex-bridge spec §2.6)', () => {
   it('status: computed when no status file exists; file once one does; modeOk false for 0640 and 0000', async () => {
     const home = mkTmp('codex-auth-status-');

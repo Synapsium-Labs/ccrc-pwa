@@ -2282,7 +2282,8 @@ and answers the old `502` (which a client that only half-closed still reads). A 
 queued behind this one (HTTP pipelining) cannot be seen to leave, so its old request is still sent when the gateway
 returns; the shim's one real client does not pipeline.
 
-**Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
+**Adding one** is `ccrc account add --provider openai` ("Connecting an account"), then `auth-start --method
+openai-login`, `check` and `enable`. A lane can also be a roster edit. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;
 the two ports are examples — any two free ports above 1023 that no other `codex` lane uses):
 
@@ -2332,9 +2333,10 @@ credential the library keeps `auth.json.lock`,
 the checkpoint `auth.pending.json` and the non-secret `auth.status.json`, each 0600; a refresh token the token
 endpoint refuses is the state `needs-signin` there, which the tier answers with a 401 at once and `ccrc codex
 start` and doctor name with `ccrc codex login <id>` as the remedy. History's redaction loads the credential as a
-secret source. ccrc never moves or removes the authDir — not on `ccrc account remove`, not on `ccrc uninstall`
-(which stops the lane's proven tiers, removes the runtime, and keeps the lane directory and logs), and not on
-`--purge`, because the parser refuses an `authDir` under `~/.ccrc`.
+secret source. `ccrc account remove` deletes the authDir of a lane it made, unless told to keep it ("Connecting an
+account"). Nothing else moves or removes one: not `ccrc uninstall` (which stops the lane's proven tiers, removes the
+runtime, and keeps the lane directory and logs), and not `--purge`, because the parser refuses an `authDir` under
+`~/.ccrc`.
 
 **Usage.** `ccgpt-usage.py` publishes a lane's Codex usage into `~/.cc-limits/<id>.json` — the weekly window
 as `seven`, a 5h-style window as `five` only while it is active — so the swapper and the accounts screen see

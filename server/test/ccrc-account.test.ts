@@ -1438,8 +1438,9 @@ describe('ccrc account add: every identity refusal, before the first byte', () =
     ['a suffix another account already holds', { '--suffix': '.claude-a' },
       'suffix-collision', 1],
     ['a provider nothing knows', { '--provider': 'orchard' }, 'unknown-provider', 2],
-    ['a provider whose lane is somebody else\'s launcher',
-      { '--provider': 'openai', '--base-url': null }, 'external-provider-use-declare', 2],
+    // `add` makes this lane now (accounts plan Task A24), from three facts bash measures: a hand caller who brings
+    // none of them is refused, and `ccrc-account-codex-add.test.ts` drives the verb.
+    ['a codex lane with nothing measured for it', { '--provider': 'openai', '--base-url': null }, 'bad-argv', 2],
     ['a compatible lane with no endpoint', { '--base-url': null }, 'base-url-required', 2],
     // THE OTHER SIDE OF THE SAME GATE, and the row that keeps `base-url-required`
     // from being read as "every provider without a default". An `anthropic` lane
@@ -5712,7 +5713,7 @@ describe('ccrc account remove', () => {
     expect(ej['kept']).toContain(join(external, externalSecret));
   });
 
-  it('removes a codex launcher but preserves its OAuth and optional secrets', async () => {
+  it('removes a codex launcher but keeps its OAuth when told to, and its optional secrets', async () => {
     // FREE PORTS, NOT CODEX_LANE'S (Plan 2b-2 Task 8): removal now stops and
     // reaps the lane, and the stop PROBES both ports before it decides a tier
     // is down.
@@ -5732,7 +5733,7 @@ describe('ccrc account remove', () => {
     writeFileSync(secret, secretBytes);
     plantTmux(home, []);
 
-    const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+    const r = run(home, ['account', 'remove', '--id', 'codex-a', '--keep-codex-auth']);
     expect(r.code, r.stderr).toBe(0);
     const j = oneObject(r);
     expect(existsSync(launcher)).toBe(false);
@@ -5748,7 +5749,7 @@ describe('ccrc account remove', () => {
     expect(j['removed'] as string[]).not.toContain(join(laneDir, '.lock'));
   });
 
-  it('C1: reaps a codex lane\'s generated state and reports it, keeping its logs and its OAuth', async () => {
+  it('C1: reaps a codex lane\'s generated state and reports it, keeping its logs, and its OAuth when told to', async () => {
     const home = box('ccrc-account-remove-codex-reap-');
     const lane = await codexLaneOnFreePorts();
     seedRosterJson(home, [UPSTREAM, lane, HOMEABLE('team-shared', 'blue')]);
@@ -5762,7 +5763,7 @@ describe('ccrc account remove', () => {
     const state = plantLaneState(home, lane);
     plantTmux(home, []);
 
-    const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+    const r = run(home, ['account', 'remove', '--id', 'codex-a', '--keep-codex-auth']);
     expect(r.code, r.stderr).toBe(0);
     const j = oneObject(r);
     for (const f of state.reaped) expect(existsSync(f), `${f} survived the reap`).toBe(false);

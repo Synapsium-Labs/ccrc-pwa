@@ -144,8 +144,8 @@ const PROVIDER_CONNECT = {
   openai: ['openai-login'],
 };
 
-/** The providers `add` may create a lane for. `openai` is not one: its launcher
- *  is somebody else's program and `declare` is the verb for it (§4.2, §5). */
+/** The providers `add` may create a GENERATED lane for. `openai` is not one: `add` makes it the other kind ccrc
+ *  owns, a Codex lane (`exec.kind: 'codex'`, accounts plan Task A24, D-5519), whose launcher is `ccrc-codex`. */
 const PROVIDER_GENERATABLE = new Set(['anthropic', 'openrouter', 'compatible']);
 
 /** The per-provider view every caller in this file reads, composed at load time
@@ -543,6 +543,15 @@ function suffixFreeClass(accounts, suffix, file) {
  *  validated it (Task 23) so that no JSON parse lands in the writer, where a
  *  throw would exit with a stack trace and an empty stdout. */
 function addedEntry(plan) {
+  // A CODEX LANE (D-5519): ccrc's own launcher, its two ports and its authDir, and the telemetry its usage poller
+  // publishes. It has no endpoint, no secrets file and no model map; `parseRoster` holds the row either way.
+  if (plan.codex !== undefined && plan.codex !== null) {
+    return {
+      id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix,
+      exec: { kind: 'codex', provider: plan.provider, ...plan.codex },
+      homeAble: true, hue: plan.hue, telemetry: 'codex',
+    };
+  }
   const exec = { kind: 'generated', provider: plan.provider };
   if (plan.baseUrl !== null) exec.baseUrl = plan.baseUrl;
   if (plan.secretsFile !== null) exec.secretsFile = plan.secretsFile;
@@ -617,7 +626,8 @@ const OPS = {
   // own.
   candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
   'check-add': {
-    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt'],
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt',
+      'proxy-port', 'litellm-port', 'auth-dir'],
     repeat: [],
   },
   // ONE key carries the whole request, because `check-add` already resolved it:
@@ -2304,15 +2314,22 @@ function main(argv) {
     const known = providerKnownClass(provider);
     if (known !== 0) return known;
     const P = PROVIDER_DEPLOY[provider];
-    if (!P.generatable) {
-      // §4.2: this lane is somebody else's launcher. `add` WRITES a wrapper;
-      // `declare` records one it must never touch. Two verbs, because the two
-      // acts differ in what ccrc is allowed to overwrite.
-      refuse('external-provider-use-declare',
-        `provider "${provider}" is an external launcher: ccrc records it and never writes it. `
-        + `Use 'ccrc account declare --id ${id} --provider ${provider} …' once its executable is `
-        + 'in ~/.local/bin.');
-      return 2;
+    // A PROVIDER `add` CANNOT GENERATE IS A CODEX LANE (D-5519), and bash measured its three facts: the two ports it
+    // found free and the fresh folder it named. They are refused here if absent, for a hand caller of this op, and the
+    // folder is the one bash could not settle: nothing may already stand there (G20).
+    const codexLane = !P.generatable;
+    if (codexLane) {
+      for (const k of ['proxy-port', 'litellm-port', 'auth-dir', 'home']) {
+        if (a[k] === undefined) { refuse('bad-argv', `check-add for provider "${provider}" needs --${k}`); return 2; }
+      }
+      let taken = true;
+      try { lstatSync(join(a['home'], a['auth-dir'])); } catch (e) { taken = e.code !== 'ENOENT'; }
+      if (taken) {
+        refuse('authdir-occupied',
+          `$HOME/${a['auth-dir']} already exists, and a new lane's ChatGPT sign-in folder is always a fresh one, so `
+          + "this lane could inherit somebody else's sign-in. Try again, which draws another name. Nothing was written.");
+        return 1;
+      }
     }
 
     // ── THE METHOD ──────────────────────────────────────────────────────────
@@ -2450,8 +2467,8 @@ function main(argv) {
     // — the three keys the spec MEASURED on the fleet box (spec:310-311) — and
     // Task 25 writes that block from `plan.baseUrl`. A lane exporting
     // `CLAUDE_CODE_OAUTH_TOKEN` writes no `ANTHROPIC_BASE_URL` at all, and one
-    // exporting nothing (`openai`) never got here — `!P.generatable` refused it
-    // above. Read the predicate as "this lane names its own endpoint", not as
+    // exporting nothing (`openai`) has its own gateway, on the ports above.
+    // Read the predicate as "this lane names its own endpoint", not as
     // "this string equals that string": the day a fifth provider needs a
     // different answer, the honest fix is a column in `PROVIDERS` and its
     // mirror here, not a second clause bolted on below.
@@ -2466,8 +2483,9 @@ function main(argv) {
       // anything for this provider, saying so is the answer.
       if (given !== undefined) {
         refuse('base-url-not-supported',
-          `provider "${provider}" has no endpoint of its own: its lane talks to Claude Code's own `
-          + 'default, so --base-url would be recorded in the roster and never used by anything. '
+          `provider "${provider}" has no endpoint of its own: its lane talks to `
+          + `${codexLane ? 'its own gateway' : "Claude Code's own default"}, `
+          + 'so --base-url would be recorded in the roster and never used by anything. '
           + 'Drop the flag, or use --provider compatible with that endpoint.');
         return 2;
       }
@@ -2608,6 +2626,9 @@ function main(argv) {
       // writes it into the roster and Task 25 hands it to jq with
       // `--argjson`, and neither should be the place a parse failure lands.
       models,
+      // Numbers, as the roster keeps them: `rosterAdmits` below judges what bash measured.
+      codex: codexLane
+        ? { proxyPort: Number(a['proxy-port']), litellmPort: Number(a['litellm-port']), authDir: a['auth-dir'] } : null,
     };
 
     // ── THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT IT WRITES ────
