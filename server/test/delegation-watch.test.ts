@@ -1439,8 +1439,10 @@ describe('the pairs and the census the policy is handed (hand-offs 12 and 14)', 
     await censusPass(w, at(5), { demo: [OLD] });
     await censusPass(w, at(6), { demo: [OLD] });
     expect(w.watcher.delegationReport().absences).toEqual([{ project: 'demo', adminRecord: 'raw-tree', observedAt: iso(at(4)) }]);
-    // report-only: absence closes nothing and releases nothing
-    expect(leasesOf(w.home)[0]).toMatchObject({ releasedAt: null, workspaceState: 'unmeasured' });
+    // report-only: the absence record closes nothing and releases nothing. The lease is released by PR5b's native-removed release (the
+    // `leaseActs` phase, W5-J18) at the second absent listing, at(4), with its own reason; the absence leaves the workspace state alone.
+    expect(leasesOf(w.home)[0]).toMatchObject({ releasedAt: iso(at(4)), generation: 1, workspaceState: 'unmeasured' });
+    expect(disk(w.home).checkpoint?.leaseCarriers?.[0]).toMatchObject({ releaseReason: 'native-removed' });
   });
 
   it('hand-off 9: a Workflow RUN is its own activity row and is never a worker or an owner in the counts', async () => {
