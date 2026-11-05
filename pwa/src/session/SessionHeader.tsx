@@ -17,6 +17,7 @@ import {
   BackButton, Chip, Icon, Keycap, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { commandDoor, doorMark } from '../command/door';
+import { navigate } from '../lib/router';
 import { useMediaQuery } from '../lib/useMediaQuery';
 // main's TypedLabel import is dropped, not lost: the component lives in
 // @ccrc/ui now and the line above already carries it.
@@ -68,6 +69,8 @@ export interface SessionHeaderProps {
   /** D-5545: the session's facts, from the same model the fleet card reads (`sessionFacts`), so the header
    *  holds every fact the card shows and the rest beside it. `null` before the first fleet frame. */
   facts?: SessionFactSet | null;
+  /** PL11 (D-7986): the session's programme (`sessionProgramme`), for the Goals door. `null`/absent: in none, no door. */
+  programme?: string | null;
 }
 
 /** The chrome's inputs, handed to a skin's `SessionChrome` part (W2 Task S7c, D-5471): a part takes no props (D-5678),
@@ -88,7 +91,7 @@ export function useSessionChromeInputs(): SessionHeaderProps {
 /** The header's view with the part's hooks (the clock, the pointer query): what every session chrome renders from. */
 export function useSessionHeaderView({
   session, status, statusUpdatedAt, fallback, roster = [], queuedField = null, repo = null, coordination = null,
-  facts = null,
+  facts = null, programme = null,
 }: SessionHeaderProps): SessionHeaderView {
   // The clock ticks every second while `working` (the live elapsed clock), else every 30s.
   const now = useNow(headerTickMs(status, session));
@@ -98,7 +101,7 @@ export function useSessionHeaderView({
   // same query, so the cap hides exactly where the key takes over.
   const finePointer = useMediaQuery('(pointer: fine)');
   return sessionHeaderView({
-    session, status, statusUpdatedAt, queuedField, fallback, roster, repo, coordination, facts, now, finePointer,
+    session, status, statusUpdatedAt, queuedField, fallback, roster, repo, coordination, facts, now, finePointer, programme,
   });
 }
 
@@ -240,15 +243,25 @@ export function HeaderChips({ view, afterStatus = null }: { view: SessionHeaderV
   );
 }
 
-/** The doors on the header's edge: the terminal, ⋯ and the PR cap. `esc` is the shared header's alone. */
+/** The doors on the header's edge: Goals (a session in a programme), the terminal, ⋯ and the PR cap. `esc` is the shared
+ *  header's alone. Both skins' chrome draw these, so the Goals door is in both, at every width (PL11, D-7986; spec §2, D30). */
 export function HeaderDoors({ view, openMenu }: { view: SessionHeaderView; openMenu: () => void }): ReactNode {
   // The PR cap runs `session-pr` (D-5469's door rule), which opens `SessionFlows`' PR sheet.
   const prDoor = commandDoor('session-pr');
   const pr = chipOf(view, 'pr');
   // The doors carry a visible word from 900 (`.keycap-word`, chat.css), and a `title` at every width; below 900 they
-  // stay glyphs at 44px and the More sheet lists each door with its word (`sessionMenu`).
+  // stay glyphs at 44px and the More sheet lists each door with its word (`sessionMenu`), all but Goals, which is a way out of
+  // the session, not an act on it, and is not in the sheet: the spec's one change inside a session is this icon (D30).
+  const goals = view.goals;
   return (
     <>
+      {/* Goals, first of the doors: the programme's own glyph, the one its box's kicker wears. */}
+      {goals !== null && (
+        <Keycap className="keycap--goals" aria-label="Goals" title="Goals" onClick={() => navigate(goals.href)}>
+          <span aria-hidden="true"><Icon name="workflow" /></span>
+          <span className="keycap-word" aria-hidden="true">Goals</span>
+        </Keycap>
+      )}
       <Keycap className="keycap--term" aria-label="Terminal" title="Terminal" {...commandDoor('open-terminal')}>
         <span aria-hidden="true">&gt;_</span>
         <span className="keycap-word" aria-hidden="true">Terminal</span>

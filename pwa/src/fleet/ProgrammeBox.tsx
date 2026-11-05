@@ -8,12 +8,12 @@
 // no far-worker line, and its kicker names the project, which no card is there to say.
 //
 // The waiting chip (desktop-polish PL5b, D-7713) sits after the title: "N waiting on you", only above zero, a `Door` to the
-// programme's view. It reads its programme's count off the fleet store's one `waiting` list, on a leaf of its own as the
+// one Waiting on you list filtered to the programme (PL11, D-7986; spec §2, D29: one Waiting on you page). It reads its programme's count off the fleet store's one `waiting` list, on a leaf of its own as the
 // movement readout does (the selector returns the NUMBER, so a frame that changes no count renders nothing), and it takes
 // no prop: the card's memo holds, and neither skin's list passes it anything.
 //
-// EVERY BOX IS A DOOR INTO ITS PROGRAMME VIEW (desktop-polish PL10, D26 amended, D-7952; the operator's steer of 2026-11-04):
-// its title opens the view whatever the count, and a box whose programme has a pinned spec links it ("Spec", the Docs reader
+// EVERY BOX IS A DOOR INTO ITS PROGRAMME'S GOALS PAGE (desktop-polish PL10, D26 amended, D-7952; the operator's steer of
+// 2026-11-04): its title opens the page whatever the count, and a box whose programme has a pinned spec links it ("Spec", the Docs reader
 // address `programmeSpecHref` builds from the waiting frame's Goals and the heard runs, the programme view's own source), on a
 // leaf of its own that selects the address string, so the card's memo holds. A slug the view refuses keeps a plain title.
 //
@@ -27,7 +27,7 @@ import { SpecLink } from '../ledgers/GoalsPanel';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
 import { programmeWaitingCount } from '../ledgers/ledgerWords';
 import { navigate } from '../lib/router';
-import { programmeIsOpenable, programmePath } from '../lib/routes';
+import { programmeIsOpenable, programmePath, waitingPath } from '../lib/routes';
 import { useFleetStore } from '../stores/fleet';
 import { WAITING_BADGE_UNIT, badgePrint } from './navBadges';
 import { inAppClick } from './settingsText';
@@ -65,7 +65,8 @@ function Title({ slug, title }: { slug: string; title: string }): ReactNode {
   return <TextLink className="pg-title-door" href={href} onClick={inAppClick(href)}><span className="pg-title">{title}</span></TextLink>;
 }
 
-/** The chip: nothing at zero (and while no list has been heard), else the count in words, and a way into the programme. */
+/** The chip: nothing at zero (and while no list has been heard), else the count in words, and a way into the one list, filtered
+ *  to the programme. */
 function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNode {
   // The same number the programme view's heading reads (`waitingTotal`): open items plus its sessions' questions. The
   // fleet's rows and runs count only once their frames have landed, as the navigation badge reads them.
@@ -74,8 +75,9 @@ function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNod
   if (count === null || count === 0) return null;
   const drawn = waitingChipWords(badgePrint(count));
   const spoken = waitingChipWords(String(count));
-  // A slug the programme view would refuse (a name the route cannot carry) is told as a plain count, never a dead door. A
-  // screen reader hears the real count there too: the capped figure is hidden from it, and the real one is said in its place.
+  // A slug the programme view would refuse (a name the route cannot carry) is told as a plain count, as before PL11: an item
+  // opened from a list filtered to it could not carry that filter in its link (`listOfFromWord` reads slugs only). A screen
+  // reader hears the real count there too: the capped figure is hidden from it, and the real one is said in its place.
   if (!programmeIsOpenable(slug)) {
     return (
       <span className="pg-waiting-plain">
@@ -86,8 +88,8 @@ function WaitingChip({ slug, title }: { slug: string; title: string }): ReactNod
   }
   return (
     <Door
-      className="pg-waiting" glyph="›" aria-label={`${spoken}: open ${title}`}
-      onClick={() => navigate(programmePath(slug))}
+      className="pg-waiting" glyph="›" aria-label={`${spoken} in ${title}`}
+      onClick={() => navigate(waitingPath(slug))}
     >
       {drawn}
     </Door>

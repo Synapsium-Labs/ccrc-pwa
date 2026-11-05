@@ -306,7 +306,7 @@ describe('the programme view: Goals', () => {
     vi.spyOn(api, 'goals').mockRejectedValue(new ApiError(500, { ok: false, error: 'boom' }));
     render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items: [itemView({ id: 4, title: 'Pick the order' })] }) })} />);
     expect((await screen.findByRole('alert')).textContent).toBe('Goals could not be read.');
-    expect(screen.getByRole('button', { name: /Pick the order/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '1 waiting on you' })).toBeTruthy();
   });
 
   it('a failed read leaves the list\'s copy on screen', async () => {
@@ -329,15 +329,18 @@ describe('the programme view: Goals', () => {
     await screen.findByText('Dropped the old flag');
     const links = screen.getAllByRole('link', { name: 'Open the item' });
     expect(links).toHaveLength(1); // item 8 is no longer on the list: no link to a page that says so
-    // The link carries the list it was opened from, so the item's way back returns here (plan PL9).
-    expect(links[0]!.getAttribute('href')).toBe(itemPath(7, { at: 'programme', programme: 'prog-a' }));
+    // The link names the one Waiting on you list, filtered to this programme, so the item steps along it and goes back to it
+    // (plan PL9; PL11, D-7986: the programme page draws no list of its own).
+    expect(links[0]!.getAttribute('href')).toBe(itemPath(7, { at: 'waiting', programme: 'prog-a' }));
     fireEvent.click(links[0]!);
     expect(location.pathname).toBe(itemPath(7));
-    expect(new URLSearchParams(location.search).get('from')).toBe('programme:prog-a');
+    expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-a');
   });
 });
 
-describe('the programme view: its share of the list', () => {
+// ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme page is the programme's Goals page. It
+// draws no list of its own; it says how many things wait on the operator as a link to the one list, filtered to the programme.
+describe('the Goals page: no list of its own, a link to the filtered list', () => {
   const items = [
     itemView({ id: 1, program: 'prog-a', title: 'Pick the order', neededBy: 'blocking' }),
     itemView({ id: 2, program: 'prog-a', title: 'Switch it on' }),
@@ -345,54 +348,33 @@ describe('the programme view: its share of the list', () => {
     itemView({ id: 4, program: 'prog-b', title: 'Another programme\'s item' }),
   ];
 
-  it('lists this programme\'s items and no other\'s, with the count of what waits on the operator', () => {
-    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items }) })} />);
+  it('the programme page draws no list of its own and links the filtered list', () => {
+    const cleared = [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN })];
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items, cleared }) })} />);
     const card = screen.getByRole('region', { name: 'Waiting on you' });
-    expect(within(card).getByRole('heading', { name: 'Waiting on you · 2' })).toBeTruthy();
-    expect(within(card).getAllByRole('listitem').map((r) => within(r).getByText(/Pick|Switch|checked/).textContent))
-      .toEqual(['Pick the order', 'Switch it on', 'Being checked']);
-    expect(screen.queryByText('Another programme\'s item')).toBeNull();
+    expect(within(card).queryAllByRole('listitem')).toEqual([]);
+    expect(view.container.querySelectorAll('.wl-item')).toHaveLength(0);
+    for (const t of ['Pick the order', 'Switch it on', 'Being checked', 'Another programme\'s item', 'Approve v6']) expect(screen.queryByText(t)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+    const link = within(card).getByRole('link', { name: '2 waiting on you' });
+    expect(link.getAttribute('href')).toBe('/waiting?programme=prog-a');
+    fireEvent.click(link);
+    expect(location.pathname + location.search).toBe('/waiting?programme=prog-a');
   });
 
-  it('a programme that leads the combined list (a blocking item) does not take this view\'s rows', () => {
-    const lead = [itemView({ id: 30, program: 'prog-a', title: 'Mine', neededBy: 'later' }),
-      itemView({ id: 31, program: 'prog-b', title: 'Blocks another programme', neededBy: 'blocking' })];
-    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items: lead }) })} />);
-    expect(screen.getByRole('button', { name: /Mine/ })).toBeTruthy();
-    expect(screen.queryByText('Blocks another programme')).toBeNull();
-    expect(screen.getByRole('heading', { name: 'Waiting on you · 1' })).toBeTruthy();
-  });
-
-  it('counts a session\'s question of this programme beside the items, and lists it', () => {
+  it('counts a session\'s question of this programme beside the items: the chip\'s number', () => {
     const asker = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Keep the old flag?', bucketSince: NOW - 6 * MIN });
     const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 'project-a-ask', claimedBy: 'project-a-coord' })];
     const store = heard({ sessions: withRunBinding([asker], runs), runs, waiting: waitingView({ items: [items[0]!] }) });
     render(<ProgrammeScreen slug="prog-a" store={store} />);
-    expect(screen.getByRole('heading', { name: 'Waiting on you · 2' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Keep the old flag/ })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '2 waiting on you' })).toBeTruthy();
+    expect(screen.queryByText('Keep the old flag?')).toBeNull();
   });
 
-  it('opening an item goes to its page, naming this programme\'s view as the list it came from (plan PL9)', () => {
-    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items }) })} />);
-    fireEvent.click(screen.getByRole('button', { name: /Pick the order/ }));
-    expect(location.pathname).toBe('/waiting/1');
-    expect(new URLSearchParams(location.search).get('from')).toBe('programme:prog-a');
-  });
-
-  it('lists what was recently cleared for this programme only', () => {
-    const cleared = [
-      itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN }),
-      itemView({ id: 21, program: 'prog-b', state: 'done', title: 'Lift the cap', closedAt: NOW - 60 * MIN }),
-    ];
-    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ cleared }) })} />);
-    const trail = screen.getByRole('region', { name: 'Recently cleared' });
-    expect(within(trail).getByText('Approve v6')).toBeTruthy();
-    expect(within(trail).queryByText('Lift the cap')).toBeNull();
-  });
-
-  it('with nothing cleared it draws no trail', () => {
-    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
-    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+  it('draws no link while nothing waits on the operator: the waits-on sentence says why instead', () => {
+    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items: [items[2]!, items[3]!] }) })} />);
+    expect(screen.queryByRole('link', { name: /waiting on you/ })).toBeNull();
+    expect(screen.getByText(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS.work}`)).toBeTruthy();
   });
 });
 
@@ -425,12 +407,12 @@ describe('the programme view: when nothing needs the operator', () => {
     expect(says(store)).toContain('Nothing needs you. The programme has no open run.');
   });
 
-  it('an item the coordinator is checking is not the operator\'s: the sentence stands and the item is still listed', () => {
+  it('an item the coordinator is checking is not the operator\'s: the sentence stands, and the page lists no item', () => {
     const checking = itemView({ id: 3, program: 'prog-a', title: 'Being checked', state: 'checking', tickedAt: NOW - MIN });
     const store = heard({ waiting: waitingView({ items: [checking] }) });
     const text = says(store);
     expect(text).toContain(`Nothing needs you. Waiting on: ${WAITS_ON_WORDS.work}`);
-    expect(text).toContain('Being checked');
+    expect(text).not.toContain('Being checked');
   });
 
   it('says nothing of what the programme waits on while an item waits on the operator', () => {

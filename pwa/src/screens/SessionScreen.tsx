@@ -46,7 +46,7 @@ import { sessionFacts } from '../fleet/sessionFacts';
 import { coordinatorPresence } from '../fleet/presence';
 import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
-import { isRunClosed } from '../fleet/runWords';
+import { isRunClosed, sessionProgramme } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
@@ -542,6 +542,8 @@ export function SessionScreen({
     onInterrupt: (source) => void interrupt(source),
     onBack: () => navigate('/'),
     queuedField,
+    // PL11 (D-7986; spec §2, D30): the Goals door, for a session in a programme, read off its row and the runs it already holds.
+    programme: live === null ? null : sessionProgramme(live, fleetRuns),
     fallback: deepLinkFallback(id, roster, projects, { title: project, wrapper }),
   };
 

@@ -10,6 +10,7 @@ import {
   type FleetSession, type PrState, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import { restartWords, type RestartWords } from '../lib/restart';
+import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { hibernatedSince } from '../fleet/hibernated';
@@ -40,6 +41,8 @@ export interface SessionHeaderViewInput {
   now: number;
   /** `(pointer: fine)`: where a physical Escape key exists the Stop cap is absent. */
   finePointer: boolean;
+  /** The session's programme (`sessionProgramme`, read off its fleet row and the runs), or `null`/absent: in none. */
+  programme?: string | null;
 }
 
 /** The status strip's four tints (chat.css's `status-line--*`). */
@@ -83,6 +86,10 @@ export interface SessionHeaderView {
   menu: SessionMenuEntry[];
   /** The interrupt: shown where no Escape key exists, enabled only while the LIVE status is busy. */
   stop: { shown: boolean; enabled: boolean };
+  /** GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30): the door to the Goals page of the programme this
+   *  session is in, through the one programme-path builder (`programmePath`), or `null`: a session in no programme, or one whose
+   *  programme's slug the page would refuse (never a dead door). */
+  goals: { href: string } | null;
 }
 
 // THE bucket — the server's, never this header's. It used to OR `dialogPending`/`hookState` into an `attention` of its
@@ -153,7 +160,7 @@ export function deepLinkFallback(
 
 export function sessionHeaderView({
   session, status, statusUpdatedAt, queuedField = null, fallback, roster = [], repo = null, coordination = null,
-  facts = null, now, finePointer,
+  facts = null, now, finePointer, programme = null,
 }: SessionHeaderViewInput): SessionHeaderView {
   // Live stream status wins; the fleet snapshot fills in before it connects (`liveStatus`, the screen's one derivation).
   const st: SessionStatus | null = liveStatus(status, session);
@@ -236,5 +243,6 @@ export function sessionHeaderView({
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
   if (hasPrCap(session)) chips.push({ kind: 'pr', pr: session.pr });
 
-  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy } };
+  const goals = programme !== null && programmeIsOpenable(programme) ? { href: programmePath(programme) } : null;
+  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
 }

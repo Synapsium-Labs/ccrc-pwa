@@ -49,6 +49,8 @@ import type { ChatEvent, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { askFixture } from './askFixtures';
 import { pairedFrames } from './wirePairing';
+import { runRow } from './ledgersFixture';
+import { withRunBinding } from './runBindingFixture';
 
 const made = vi.hoisted(() => ({
   terms: [] as unknown[],
@@ -568,6 +570,47 @@ describe("the session screen mounts the skin's chrome", () => {
       // The crumb comes before the title in the document.
       expect(got.order & Node.DOCUMENT_POSITION_FOLLOWING, skin).toBeTruthy();
       toInstrument();
+    }
+  });
+});
+
+// GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30): a session in a programme shows a Goals icon in its
+// chrome, in both skins, and it opens that programme's Goals page. The session's programme is read off its fleet row and the
+// runs the store holds (`sessionProgramme`), never a field of its own. A session in no programme shows none. The widths are the
+// browser file's (one-waiting-page.browser.test.ts): the markup does not depend on the width.
+describe('the Goals icon in a session\'s chrome', () => {
+  const RUNS = [runRow({ id: 7, program: 'prog-a', sessionId: WS.id, claimedBy: 'lane-a-project-a', homeProject: 'project-a' } as never)];
+  const openIn = (session: FleetSession, runs: typeof RUNS): void => {
+    act(() => useFleetStore.setState({ conn: 'open', runs, runsFrameSeen: true }));
+    act(() => useFleetStore.setState({ sessions: withRunBinding([{ ...session, status: 'idle' }], runs) }));
+    navigate(`/s/${session.id}`);
+    render(<App />);
+    act(() => getSessionStore(session.id).setState({ uuid: 'u1', status: 'idle', events: EVENTS }));
+  };
+  afterEach(() => { act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false })); });
+
+  it('a session in a programme shows the Goals icon in both skins, and it opens that programme\'s Goals page', () => {
+    stubPointer(false);
+    for (const skin of ['Refined', 'Instrument']) {
+      if (skin === 'Instrument') toInstrument();
+      openIn(WS, RUNS);
+      const head = document.querySelector('.chat-head')!;
+      const goals = within(head as HTMLElement).getByRole('button', { name: 'Goals' });
+      fireEvent.click(goals);
+      expect(location.pathname, skin).toBe('/programmes/prog-a');
+      cleanup();
+      navigate('/');
+    }
+  });
+
+  it('a session in no programme shows no Goals icon', () => {
+    stubPointer(false);
+    for (const skin of ['Refined', 'Instrument']) {
+      if (skin === 'Instrument') toInstrument();
+      openIn(WS, []);
+      expect(within(document.querySelector('.chat-head') as HTMLElement).queryByRole('button', { name: 'Goals' }), skin).toBeNull();
+      cleanup();
+      navigate('/');
     }
   });
 });

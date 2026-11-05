@@ -10,7 +10,7 @@ import { shapeProgramSlug, type FleetSession, type RunSummary } from '../../../s
 import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { boundOpenRun, claimedRunsOf, isRunClosed } from '../fleet/runWords';
+import { isRunClosed, sessionProgramme } from '../fleet/runWords';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -72,13 +72,14 @@ export function itemPills(item: ItemView): Pill[] {
 /** A session asking the operator something: one row, never tickable (it is answered in its own session). */
 export interface QuestionRow { readonly sessionId: string; readonly program: string | null; readonly title: string; readonly at: number }
 
-/** The sessions waiting on the operator (`operatorAsk`, the same attention bucket the Inbox door counts), each with the
- *  programme of its OPEN bound run (a worker) or of the run it claims (a coordinator); `null` when it is in none, which the
- *  screen files under "Not in a programme". `at` is when it entered the bucket (0 when the row carries none). */
+/** The sessions waiting on the operator (`operatorAsk`, the same attention bucket the Inbox door counts), each with its
+ *  programme (`sessionProgramme`, the one reader the session's Goals door asks too: its OPEN bound run's, a worker's, or the
+ *  run it claims, a coordinator's); `null` when it is in none, which the screen files under "Not in a programme". `at` is
+ *  when it entered the bucket (0 when the row carries none). */
 export function questionRows(sessions: readonly FleetSession[], runs: readonly RunSummary[]): QuestionRow[] {
   return sessions.filter(operatorAsk).map((s) => ({
     sessionId: s.id,
-    program: boundOpenRun(runs, s)?.program ?? claimedRunsOf(runs, s.id)[0]?.program ?? null,
+    program: sessionProgramme(s, runs),
     title: sessionLabel(s),
     at: s.bucketSince ?? 0,
   }));
@@ -191,15 +192,17 @@ export function ageWords(at: number, now: number): string {
 // ── moving between items (plan PL9; spec §2 "Moving between items", D23) ───────────────────────────────────────────
 //
 // An opened item steps to the previous and next item OF THE LIST IT WAS OPENED FROM, in that list's own order and filter. There
-// is ONE ORDER: `groupByProgramme`'s groups, which the combined list, its side rail's filter and the programme view all draw, read
-// through `listGroups`; the neighbours are read off those same groups, so no second ordering exists to drift from the drawn one.
-// A session's question is a row of the list but not an item (it opens its session), so the steps go from item to item.
+// is ONE ORDER: `groupByProgramme`'s groups, which the combined list and its side rail's filter draw, read through `listGroups`;
+// the neighbours are read off those same groups, so no second ordering exists to drift from the drawn one. A session's question
+// is a row of the list but not an item (it opens its session), so the steps go from item to item.
+//
+// THERE IS ONE LIST (desktop-polish PL11, D-7986; spec §2, D29). The programme view drew its own share of the list until PL11;
+// that identity folded into the combined list's programme filter, so the navigation, a programme box's chip and the
+// programme's Goals page all open the one list, the last two filtered, and an old `programme:<slug>` link reads as that filter.
 
 /** The list an item was opened from: the combined list, unfiltered (`programme: null`) or filtered by its side rail to one
- *  programme, or one programme's own view. */
-export type ItemList =
-  | { readonly at: 'waiting'; readonly programme: string | null }
-  | { readonly at: 'programme'; readonly programme: string };
+ *  programme. One arm: `at` is kept so the word in the URL and every caller read as before. */
+export type ItemList = { readonly at: 'waiting'; readonly programme: string | null };
 
 /** The combined list, unfiltered: where an item opened with no list, or with one this page cannot read, steps and goes back. */
 export const COMBINED_LIST: ItemList = { at: 'waiting', programme: null };
@@ -224,48 +227,31 @@ export const backLabel = (listName: string): string => `Back to ${listName}`;
 
 const isSlug = (s: string): boolean => { const shaped = shapeProgramSlug(s); return shaped.ok && shaped.slug === s; };
 
-/** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting`, `waiting:<slug>`,
- *  `programme:<slug>`. A slug never holds `:` (`shapeProgramSlug`), so the word reads back unambiguously. */
+/** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting` or `waiting:<slug>`. A
+ *  slug never holds `:` (`shapeProgramSlug`), so the word reads back unambiguously. */
 export function fromWord(list: ItemList): string {
-  if (list.at === 'programme') return `programme:${list.programme}`;
   return list.programme === null ? 'waiting' : `waiting:${list.programme}`;
 }
 
-/** The list a `from` word names, or the combined list for a word that names none (absent, unknown or malformed). */
+/** The list a `from` word names, or the combined list for a word that names none (absent, unknown or malformed). An older page's
+ *  `programme:<slug>` (its programme view's share of the list, before PL11) names the combined list filtered to that programme. */
 export function listOfFromWord(word: string | null): ItemList {
   if (word === 'waiting') return COMBINED_LIST;
   const m = word === null ? null : /^(waiting|programme):([^:]+)$/.exec(word);
   if (m === null || !isSlug(m[2]!)) return COMBINED_LIST;
-  return m[1] === 'programme' ? { at: 'programme', programme: m[2]! } : { at: 'waiting', programme: m[2]! };
+  return { at: 'waiting', programme: m[2]! };
 }
 
-/** No programme known beyond the groups: `resolveList`'s default, for a caller that settles only the side rail's filter. */
-const NONE_KNOWN: ReadonlySet<string> = new Set();
-
-/** THE ONE STALE-LIST RULE: a list naming a programme no group holds (an old link, a programme with nothing waiting now, a
+/** THE ONE STALE-LIST RULE: a filter naming a programme no group holds (an old link, a programme with nothing waiting now, a
  *  well-formed slug nobody uses) is the combined list. The filter, the way back, the column beside an item and the steps all
- *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers.
- *  ONE EXCEPTION (follow-up F3, as ruled after review 1402): a programme's VIEW whose slug is real (`known`, from
- *  `knownProgrammes`: the runs, the Goals or the cleared trail name it) stays that view with no group, because the view is a
- *  page of its own ("Nothing needs you. Waiting on: …", its Goals, its cleared trail), so the way back goes to it. A filter to
- *  such a programme is still stale (the side rail offers no filter to a programme with nothing on the list), and a slug
- *  nothing knows is the combined list either way. */
-export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[], known: ReadonlySet<string> = NONE_KNOWN): ItemList {
-  if (list.programme === null || groups.some((g) => g.program === list.programme)) return list;
-  return list.at === 'programme' && known.has(list.programme) ? list : COMBINED_LIST;
-}
-
-/** The programmes this page knows besides the list's groups (follow-up F3): every slug the runs, the Goals or the recently
- *  cleared items name. `runs` is `null` before the runs frame lands, and then names none. */
-export function knownProgrammes(view: WaitingView, runs: readonly RunSummary[] | null): ReadonlySet<string> {
-  return new Set([...(runs ?? []).map((r) => r.program), ...view.goals.map((g) => g.program), ...view.cleared.map((i) => i.program)]);
+ *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers. */
+export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[]): ItemList {
+  return list.programme === null || groups.some((g) => g.program === list.programme) ? list : COMBINED_LIST;
 }
 
 /** THE GROUPS A LIST DRAWS, in its order, from `groupByProgramme`'s: every group for the combined list; the programme's own group
- *  for its filter or its view. A filter to a programme with no group is stale (`resolveList`) and draws every group; a programme's
- *  own view draws none, and says what the programme waits on instead. */
+ *  for its filter. A filter to a programme with no group is stale (`resolveList`) and draws every group. */
 export function listGroups(list: ItemList, groups: readonly ProgrammeGroup[]): readonly ProgrammeGroup[] {
-  if (list.at === 'programme') return groups.filter((g) => g.program === list.programme);
   const settled = resolveList(list, groups);
   return settled.programme === null ? groups : groups.filter((g) => g.program === settled.programme);
 }

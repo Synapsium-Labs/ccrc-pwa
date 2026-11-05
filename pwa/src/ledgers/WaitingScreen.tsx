@@ -1,4 +1,5 @@
-// The combined "Waiting on you" list (desktop-polish PL5a, D-7712; spec §2; the prototype's view 1). Pure over what the shell
+// The combined "Waiting on you" list (desktop-polish PL5a, D-7712; spec §2; the prototype's view 1), the ONE Waiting on you
+// page since PL11 (D-7986, D29): a programme's chip and Goals page open it filtered to that programme. Pure over what the shell
 // holds: the waiting view (`null` until the first frame or read), the fleet's sessions (their questions join the list from
 // the `attention` bucket, so nothing new is stored for them) and runs, and the page clock. It routes nowhere itself: the
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
@@ -224,7 +225,11 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
             </div>
           </>
         )}
-      <ClearedTrail items={view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />
+      {/* The trail follows the filter (PL11, D-7986): the programme's page lost its own trail, so the list filtered to one
+          programme holds that programme's, without naming it on every row, and the sessions in no programme have none. */}
+      {list.programme !== null
+        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} />
+        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />}
     </div>
   );
 }

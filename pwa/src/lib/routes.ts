@@ -61,7 +61,8 @@ export const ROUTES: readonly Route[] = [
   // Waiting on you (desktop-polish PL5a, D-7712): the combined list, and one item under it by its numeric id.
   { id: 'waiting', pattern: /^\/waiting\/?$/, title: 'Waiting on you', top: true, path: '/waiting' },
   { id: 'item', pattern: /^\/waiting\/(\d+)\/?$/, title: 'Item', top: false, path: null },
-  // The programme view (desktop-polish PL5b, D-7713): one programme by slug, opened from the chip on its box. It takes one path
+  // The programme view (desktop-polish PL5b, D-7713), its Goals page since PL11 (D-7986): one programme by slug, opened from the
+  // title of its box and from a session in it. It takes one path
   // segment, as the session row does, and the slug's GRAMMAR is the owner's (`shapeProgramSlug`, asked by `isProgrammeSlug`
   // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). A segment the
   // owner refuses is no match (`accepts`), so it is a path outside the table: the fleet on a phone, the placeholder on a desk,
@@ -81,6 +82,18 @@ export function sessionPath(id: string): string {
  *  and over the owner's grammar (letters, digits, `_` and `-`) `encodeURIComponent` is the identity. */
 export function programmePath(slug: string): string {
   return `/programmes/${encodeURIComponent(slug)}`;
+}
+
+/** The Waiting on you list's one query, its side rail's filter (`?programme=`): a programme's slug, empty for the sessions in
+ *  no programme, or absent for every programme. It rides the URL, so a reload, a shared link and the way back from an item keep it. */
+export const PROGRAMME_FILTER_QUERY = 'programme';
+
+/** The one builder of the Waiting on you list's path, `/waiting`, read off the `waiting` row above, with its side rail's filter
+ *  as its query (`null`: every programme). THERE IS ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the
+ *  navigation, a programme box's chip and the programme's Goals page all open it, the last two filtered to the programme. */
+export function waitingPath(programme: string | null = null): string {
+  const path = ROUTES.find((r) => r.id === 'waiting')?.path ?? '/';
+  return programme === null ? path : `${path}?${new URLSearchParams({ [PROGRAMME_FILTER_QUERY]: programme })}`;
 }
 
 /** Whether a string is a programme slug the server accepts: `shapeProgramSlug`'s grammar and length, the one owner of both,

@@ -324,6 +324,16 @@ export function claimedRunsOf<R extends { readonly claimedBy: string | null; rea
   return runs.filter((r) => r.claimedBy === sessionId && !isRunClosed(r));
 }
 
+/** THE SESSION'S PROGRAMME, one reader (desktop-polish PL11, D-7986): the programme of its OPEN bound run (a worker), else of
+ *  the first open run it claims (a coordinator), else `null`, a session in no programme. Read off the fleet row's binding and the
+ *  runs the store holds, never a field of its own: the Waiting on you list files a session's question under it
+ *  (`questionRows`), and the session's chrome opens its Goals page with it, so the two never name different programmes. */
+export function sessionProgramme<R extends { readonly id: number; readonly program: string; readonly claimedBy: string | null; readonly state: RunState }>(
+  session: BoundSession & { readonly id: string }, runs: readonly R[],
+): string | null {
+  return boundOpenRun(runs, session)?.program ?? claimedRunsOf(runs, session.id)[0]?.program ?? null;
+}
+
 /** THE WORKER READER (D-7182, D-7205): the listed session that is this run's worker, or `null`.
  *
  *  OPEN RUN: the session carrying the run's `sessionId` counts only when its own wire binding names this run

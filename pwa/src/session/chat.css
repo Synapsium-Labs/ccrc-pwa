@@ -362,6 +362,7 @@ button.metachip:active {
     white-space: nowrap;
     font: var(--weight-medium) var(--fs-2xs) / 1 var(--family-mono);
   }
+  .chat-head .keycap--goals,
   .chat-head .keycap--term,
   .chat-head .keycap--more,
   .chat-head .keycap--inspector,

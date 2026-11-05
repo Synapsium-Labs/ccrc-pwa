@@ -97,6 +97,25 @@ describe('the Waiting on you list', () => {
     expect(within(trail).getByText('Approve the prototype')).toBeTruthy();
   });
 
+  // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme page lost its cleared trail, so the list
+  // filtered to a programme is where that programme's recently cleared items show, and only those; clearing the filter shows all.
+  it('filtered to a programme, Recently cleared holds that programme\'s items only; unfiltered, every programme\'s', () => {
+    const view = waitingView({
+      items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })],
+      cleared: [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN }),
+        itemView({ id: 21, program: 'prog-b', state: 'done', title: 'Lift the cap', closedAt: NOW - 60 * MIN })],
+    });
+    open({ view, programme: 'prog-a' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText('Approve v6')).toBeTruthy();
+    expect(within(trail).queryByText('Lift the cap')).toBeNull();
+    cleanup();
+    open({ view, programme: null });
+    const all = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(all).getByText('Approve v6')).toBeTruthy();
+    expect(within(all).getByText('Lift the cap')).toBeTruthy();
+  });
+
   it('a question row links to its session and is never tickable', () => {
     const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Status flag question', bucketSince: NOW - 6 * MIN });
     const runs = [runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-ask' })];

@@ -313,3 +313,34 @@ describe('the header names the session (desktop polish T3c, D-6333)', () => {
       .toEqual({ title: 'project-a', crumb: null, wrapper: 'lane' });
   });
 });
+
+// GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30): the view decides the Goals door once, from the
+// session's programme, through the one programme-path builder; the header and Refined's chrome draw what it says.
+describe('the Goals door (PL11)', () => {
+  const base = { session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin' }),
+    status: 'idle' as SessionStatus, statusUpdatedAt: null, now: 0, finePointer: true };
+  it('a session in a programme has a door to that programme\'s Goals page; one in none has none', () => {
+    expect(sessionHeaderView({ ...base, programme: 'prog-a' }).goals).toEqual({ href: '/programmes/prog-a' });
+    expect(sessionHeaderView({ ...base, programme: null }).goals).toBeNull();
+    expect(sessionHeaderView(base).goals).toBeNull();
+  });
+  it('a programme whose page would refuse its slug has no door, never a dead one', () => {
+    expect(sessionHeaderView({ ...base, programme: 'old.name' }).goals).toBeNull();
+  });
+  it('the header draws the door the view decides, and nothing else changes in the header', () => {
+    stubPointer(false);
+    const p = hostProps(allChips(), 'idle');
+    const without = render(createElement(SessionHeaderHost, p));
+    const before = Array.from(without.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
+    expect(screen.queryByRole('button', { name: 'Goals' })).toBeNull();
+    cleanup();
+    const withGoals = render(createElement(SessionHeaderHost, { ...p, programme: 'prog-a' }));
+    const after = Array.from(withGoals.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
+    const door = screen.getByRole('button', { name: 'Goals' });
+    expect(after.filter((c) => !c.includes('keycap--goals'))).toEqual(before);
+    history.replaceState(null, '', '/');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/programmes/prog-a');
+    history.replaceState(null, '', '/');
+  });
+});

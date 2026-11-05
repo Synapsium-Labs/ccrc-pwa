@@ -1,11 +1,16 @@
-// The programme view (desktop-polish PL5b, D-7713; spec section 3; the prototype's view 2): Goals on one side, this
-// programme's share of the Waiting on you list on the other. The chip on the programme's box opens it (`/programmes/<slug>`).
+// The programme's Goals page (desktop-polish PL5b, D-7713; spec section 3; the prototype's view 2), at `/programmes/<slug>`:
+// Goals on one side; on the other, how many things wait on the operator as a link to the one Waiting on you list filtered to
+// this programme, or what the programme waits on when nothing does, and its Stored secrets. The title of the programme's box
+// opens it, and so does the Goals icon in the chrome of a session in the programme.
+//
+// IT DRAWS NO LIST OF ITS OWN (PL11, D-7986; spec §2, D29). Until PL11 this card drew the programme's share of the list, a second
+// Waiting on you page with its own way into each item; there is one page now, and this one links it (`waitingPath`, the one
+// builder), so the navigation, the box's chip and this link all land on it.
 //
 // A screen of the ladder, ring L4: it reads the fleet store (the list, the fleet's sessions and runs, each only once its frame
-// has landed, `useHeard`), asks the server for the programme's Goals, and navigates. It decides nothing: the rows, their order
-// and the count are `ledgerWords.ts`'s (`groupByProgramme`, the one grouping the combined list uses too), what the programme
-// waits on is `programmeWaitsOn`'s, and the two panels' own words are the combined list's (`ItemRow`, `QuestionButton`) and
-// `GoalsPanel`'s.
+// has landed, `useHeard`), asks the server for the programme's Goals, and navigates. It decides nothing: the count is
+// `programmeWaitingCount`'s (the chip's own number), what the programme waits on is `programmeWaitsOn`'s, and the Goals panel's
+// words are `GoalsPanel`'s.
 //
 // GOALS COME FROM TWO PLACES AND NEITHER IS "NOT PINNED". The `waiting` frame carries Goals for each programme that has an item
 // or a pin, and it is re-sent whenever they change, so its entry for THIS programme is drawn whenever there is one;
@@ -23,6 +28,7 @@
 // not read says so; it is never drawn as a programme with no secrets.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { TextLink } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
   WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
@@ -32,15 +38,15 @@ import type { StepUpDeps } from '../accounts/useStepUp';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programWave, programmeTitle, waveOfWords } from '../fleet/runWords';
 import { api } from '../lib/api';
-import { navigate } from '../lib/router';
-import { ROUTES, sessionPath } from '../lib/routes';
+import { WAITING_BADGE_UNIT } from '../fleet/navBadges';
+import { inAppClick } from '../fleet/settingsText';
+import { ROUTES, waitingPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel, SpecLink } from './GoalsPanel';
 import { homeProjectOf, specHref } from './ledgerLinks';
-import { EMPTY_WORD, NO_FRAME_WORD, ageWords, groupByProgramme, listGroups, openRunsOf, questionRows, type ItemList } from './ledgerWords';
+import { EMPTY_WORD, NO_FRAME_WORD, ageWords, openRunsOf, programmeWaitingCount, type ItemList } from './ledgerWords';
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
 import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
-import { ClearedTrail, ItemRows } from './WaitingScreen';
 import { isGoalsFor } from './waitingView';
 import './ledgers.css';
 
@@ -172,10 +178,11 @@ function GoalsCard({ read, held, homeProject, heldItems, list }: {
   return <GoalsPanel goals={goals} homeProject={homeProject} itemHref={(id) => (heldItems.has(id) ? itemPath(id, list) : null)} />;
 }
 
-/** The right column: this programme's open items and its sessions' questions, or what the programme waits on instead. */
-function WaitingCard({ slug, view, sessions, runs, unavailable, now, list, stored }: {
+/** The right column: how many things wait on the operator, as a link to the one list filtered to this programme, or what the
+ *  programme waits on when nothing does; then its Stored secrets. */
+function WaitingCard({ slug, view, sessions, runs, unavailable, stored }: {
   slug: string; view: WaitingView | null; sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null;
-  unavailable: string | null; now: number; list: ItemList; stored: ReactNode;
+  unavailable: string | null; stored: ReactNode;
 }): ReactNode {
   if (view === null || sessions === null) {
     return (
@@ -188,23 +195,21 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, now, list, store
       </section>
     );
   }
-  const heard = runs ?? NO_RUNS;
-  // This programme's group as its view draws it (`listGroups`), the one reader the item's previous and next read too.
-  const group = listGroups(list, groupByProgramme(view.items, questionRows(sessions, heard)))[0] ?? null;
-  const waiting = group?.waiting ?? 0;
-  const cleared = view.cleared.filter((c) => c.program === slug);
+  // The chip's own number (`programmeWaitingCount`): the programme's open items plus its sessions' questions.
+  const waiting = programmeWaitingCount(view, sessions, runs, slug) ?? 0;
   // What the programme waits on, over ALL its runs: `programmeWaitsOn` leaves the finished ones out itself.
   const waitsOn = runs === null ? null : programmeWaitsOn(runs.filter((r) => r.program === slug));
+  const href = waitingPath(slug);
   return (
     <section className="pv-card" aria-label="Waiting on you">
-      <h2 className="pv-h">{`Waiting on you · ${waiting}`}</h2>
-      {waiting === 0 && (
-        <p className="pv-none">{waitsOnSentence(waitsOn)}</p>
-      )}
-      {group !== null && group.rows.length > 0 && (
-        <ItemRows rows={group.rows} now={now} onOpenItem={(id) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
-      )}
-      <ClearedTrail items={cleared} now={now} />
+      <h2 className="pv-h">Waiting on you</h2>
+      {waiting === 0
+        ? <p className="pv-none">{waitsOnSentence(waitsOn)}</p>
+        : (
+          <p className="pv-waiting">
+            <TextLink className="pv-waiting-link" href={href} onClick={inAppClick(href)}>{`${waiting} ${WAITING_BADGE_UNIT}`}</TextLink>
+          </p>
+        )}
       {stored}
     </section>
   );
@@ -228,8 +233,9 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
   const held = isGoalsFor(entry, slug) ? entry : null;
   const heldItems = new Set<number>([...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)].map((i) => i.id));
   const hue = fleetHues(heard).get(slug) ?? 'none';
-  // The list an item opened here names, so its way back and its steps stay in this programme (plan PL9).
-  const list: ItemList = { at: 'programme', programme: slug };
+  // The list an item opened from Goals names: the one list, filtered to this programme, so its steps stay in this programme and
+  // its way back is that list (plan PL9; PL11, D-7986).
+  const list: ItemList = { at: 'waiting', programme: slug };
   const stored = useStoredSecrets(slug, secretItemsKey(slug, view), secrets?.read ?? readStoredSecrets);
   const now = Date.now();
   const home = homeProjectOf(slug, heard);
@@ -249,7 +255,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
         <div className="pv-card">
           <GoalsCard read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
         </div>
-        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable} now={now} list={list}
+        <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable}
                      stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}
                                                    removeSecret={secrets?.remove ?? removeStoredSecret}
                                                    {...(secrets?.stepUpDeps === undefined ? {} : { stepUpDeps: secrets.stepUpDeps })} />} />
