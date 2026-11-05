@@ -100,11 +100,11 @@ written. That is the whole DDD argument, measured rather than asserted.
    inventory (`update/inventory.ts`) for which nodes exist. Its type import of `server.ts`
    is an outward edge ARCH-03 drains.
 9. **Docs** (ARCH-02a) — `server/src/docs/` and `shared/docs.ts`: a project's docs read
-   through ccd's docs verbs. Language: **ref** (bare or qualified), **section**, **leaf**,
+   through ccd's docs verbs; and the reader lab's door, `server/src/readerLab/` (`runs.ts`, the run store; `routes.ts`, the counter hook and its five routes) with `shared/readerLab.ts`, its vocabulary (amended 2026-11-05; review 1468). Language: **ref** (bare or qualified), **section**, **leaf**,
    **draft branch**, **fingerprint**. Allowed dependencies: L0 `shared/docs.ts`; context
    2's `ccdargv.ts`, `lifecycle.ts` and `exec.ts` for the verbs; context 1's
    `fleetstate.ts`; `node:crypto`; `fastify` in its L4 files (single-definition's "the docs
-   ring" pin holds the L3 import list).
+   ring" pin holds the L3 import list). The door's: L0 `shared/readerLab.ts`; context 8's `auth/cookie.ts` (the session cookie's name and parser); `node:crypto` and `fastify` in `routes.ts`.
 
 Every non-test file under `server/src` and `pwa/src` maps to exactly one of these nine
 contexts, or to **K**, the shared kernels and platform files (the composition root,
