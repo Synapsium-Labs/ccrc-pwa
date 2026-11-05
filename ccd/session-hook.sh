@@ -4885,8 +4885,8 @@ fi
 # (the verbs and the surface); `install`, `update`, `upgrade` and `respawn`, each on its own (a Claude Code verb under
 # any head, `$CLAUDE_CODE_EXECPATH` and a runner included); `anthropic-ai/claude-code` (a global install by `add`);
 # `downloads.claude.ai` and `claude.ai/install` in any case (`${apf,,}`; an upper-case installer path names no `install`);
-# `.local` (a write, in any spelling, after a `cd` too); and `.cc-sessions` (a trusted file;
-# `~/.ccrc`'s are admitted by `ccrc`). Every pattern needs one
+# `.local` (a write, in any spelling, after a `cd` too); `.cc-sessions` (a trusted file;
+# `~/.ccrc`'s are admitted by `ccrc`); and `prune` (the prune row, in this arm and the account arm). Every pattern needs one
 # of those words literally (JSON escaping never touches ASCII letters). A real payload's `transcript_path` names
 # `.claude…`, so every child call naming `install` or `update` already forked one jq. A deny already set is
 # never replaced. FAIL-OPEN as every gate here: a jq that cannot run (no Oniguruma, say) denies nothing, and
@@ -4905,6 +4905,38 @@ fi
 # It NEVER refuses a swap path (the operator's Q8 ruling of 2026-10-19): no `ccd` verb but `account-pane`, no bare
 # `ccrc account`, no registry path (`PATHF` is not reused), no `/api/` pattern; `must-allow.json` holds it. An accident
 # guard: `bash -c` with an assembled string, another interpreter or a script file runs past it.
+# THE PRUNE ROW ON EVERY SESSION (cleanup un-wedge, Task R3; spec 2026-11-04 §5, D9 to D11). A repository-wide
+# `git worktree prune` deletes git's record of every gone worktree of the repository at once, and ccd's cleanup reads
+# those records, so one session's prune holds the cleanup of every lane on the box. `pmatch` answers the category
+# `prune`, asked after `fmatch` in all three modes once the command names `prune` and `worktree` (`PANC`, `WANC`): `deny` (a child), `account` (every other session) and `class` (the
+# classifier's `FORBIDDEN_PATTERNS` hold the same row, `server/test/fixtures/prune-deny/` both lists). It is not a row
+# of `fmatch` because deny and account modes also run `fmatch` over `norm`'s form, which removes quotes and so reads
+# quoted prose as code (review 1479, F6). The plain/raw and quote-stripped readings decide first; `qmodel` and the
+# proof reading may relax a denial only for a complete, modeled text-only mention. An unquoted comment, unsupported
+# shell -c head, indirect heredoc-to-shell route, complex substitution in double quotes, CRLF or multiple heredocs
+# on a line keeps the plain refusal (review 1493). `qread` is a bounded text reader, not a shell parser. `hdocs` walks the lines with `qscan`, which
+# carries an open quote from line to line and takes a heredoc operator only where it stands in code (never inside
+# quotes or after a comment's `#`, but inside a `$(` within double quotes); it reads the operator's whole delimiter
+# word, quotes removed (`HDW`: letters, digits, `_`, `.`, `-` and quotes around them), drops a quoted heredoc's body,
+# reads an unquoted one's as text but for its substitutions, and keeps it as code when a shell (or `ssh`) is named
+# anywhere on the operator's line (`SHANY`); an unreadable delimiter, an unclosed heredoc or more than 16 operator
+# lines read the whole command as code. `QTOK` cuts the rest into quoted spans, escapes and
+# plain text; a quoted span becomes one word of text, its whitespace and separators `_`, an empty one standing alone a
+# word (`git -C '' …`), but for a `$(…)` or a backtick inside double quotes (`DQC`); and the string a `bash -c` runs
+# (`SHC`) is read as code, one level deep. Then the command is split into simple commands on `;`, `&`, `|` and newlines,
+# and `GITWT` matches one whose program (at its head or after `$(`, `(`, a backtick or `{`, a shell keyword,
+# assignments and a few wrappers such as `sudo`, `nice` and `bash -c`: `GITPRE`) is `git`, bare or path-qualified, then
+# git's global options (`GOPT`: `-C`, `-c`, `--git-dir`, `--work-tree`, `--no-pager`, `--bare` and their kin), `worktree`,
+# any flags and `prune`. Git option and assignment operands may hold spaces inside complete substitutions or quotes
+# (`GVAL`). After `prune`, cut only at `#`: the last `-n`, `--dry-run` or unique `--no-d...` decides (`GLAST`), but any
+# `$`, `<`, `>` or backtick voids the exemption. `TEXTB` consumes escapes before collecting live heredoc substitutions.
+# Candidate segments are checked before quote parsing; the timing suite compares actual historical and current
+# forbidden programs in single invocations. Existing norm passes outside this row remain quadratic on quote-dense input. An accident guard, not a wall: an assembled string, a script
+# file, an alias, `eval`, a `$VAR` program (no `xmatch` row), a wrapper or redirection the grammar does not read, and
+# `git gc` (which prunes records older than `gc.worktreePruneExpire`) run past it, and so do `pr$'u'ne` (the prefilter
+# keeps the `$`) and a top-level payload over APF_ACCT_STRIP_MAX that spells `prune` with quotes (the prefilter reads it
+# as written). Text bash would run (a backticked or `$(…)` mention in double quotes or an unquoted heredoc) is refused,
+# and the reason names the file workaround. The scoped act stays open: `git -C <main> worktree remove <path>`.
 APPROVAL_FORBIDDEN_JQ='def WS: "\t\n\u000b\f\r " + ([160, 5760, 8192, 45, 8202, 8232, 8233, 8239, 8287, 12288, 65279] | implode);
 def SP: "[" + WS + "]"; def NS: "[^" + WS + "]";
 def WB: "(?:^|" + SP + "|[;&|()`" + $q + "\"=/])";
@@ -4940,6 +4972,92 @@ def fmatch:
   (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
   (select(hbt("[\n;&|]"; WB + "(?:cat|head|tail|less|more|base64|xxd|strings|od|nl|bat)" + NW; CRED)) | "other\tprinting a secret");
 def norm: gsub("\\\\\n"; "") | gsub("\\$(?=[" + $q + "\"])"; "") | gsub("\\\\(?<c>[\\s\\S])"; .c) | gsub("[" + $q + "\"]"; "");
+def GVAL: "(?:\\$\\([^()\n]*\\)|`[^`\n]*`|" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"|\\\\[\\s\\S]|[^" + WS + "`$" + $q + "\"\\\\;|&]|\\$(?!\\())+";
+def GITPRE: "(?:^|\\$\\(|[(`{])" + SP + "*(?:(?:then|do|else|elif|if|while|until|!)" + SP + "+){0,4}(?:[A-Za-z_][A-Za-z0-9_]*=(?:" + GVAL + ")?" + SP + "+){0,8}(?:(?:" + NS + "{0,256}/)?(?:sudo|env|command|exec|nohup|nice|time|timeout|bash|sh|zsh|dash)" + SP + "+(?:(?:-[A-Za-z]*[oO]" + SP + "+" + GVAL + "|-" + NS + "*|[A-Za-z_][A-Za-z0-9_]*=(?:" + GVAL + ")?|[0-9][0-9.]*[smhd]?)" + SP + "+){0,8}){0,4}(?:" + NS + "{0,256}/)?git" + SP + "+";
+def GOPT: "(?:-[Cc]" + SP + "+" + GVAL + "|--(?:git-dir|work-tree|namespace|config-env|attr-source)(?:=(?:" + GVAL + ")?|" + SP + "+" + GVAL + ")|--exec-path(?:=(?:" + GVAL + ")?)?|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice)|-[pP])" + SP + "+";
+def GITWT: GITPRE + "(?:" + GOPT + "){0,8}worktree" + SP + "+" + FLAGS + "prune" + NW + "(?<rest>[^#]*)";
+def GLAST: "^[\\s\\S]*(?:^|" + SP + ")(?<f>-n|--dry-run|--no-d(?:r(?:y(?:-(?:r(?:u(?:n)?)?)?)?)?)?)(?=$|" + SP + "|[)])";
+def QCH: "[" + $q + "\"\\\\$\n]*";
+def WANC: "w" + QCH + "o" + QCH + "r" + QCH + "k" + QCH + "t" + QCH + "r" + QCH + "e" + QCH + "e";
+def PANC: "p[" + $q + "\"\\\\$\n]*r[" + $q + "\"\\\\$\n]*u[" + $q + "\"\\\\$\n]*n[" + $q + "\"\\\\$\n]*e";
+def QSEP: "[" + WS + ";&|()<>`$" + $q + "\"\\\\]";
+def QSEPQ: "[" + WS + ";&|()<>" + $q + "\"\\\\]";
+def SHN: "(?:" + NS + "{0,256}/)?(?:ba|z|da|k)?sh";
+def SHANY: "(?:^|[" + WS + ";&|(])(?:" + NS + "{0,256}/)?(?:ba|z|da|k|s)?sh(?=$|[" + WS + ";&|)])";
+def SHC: "(?:^|[" + WS + ";&|(])" + SHN + "(?:" + SP + "+-[A-Za-z]+){0,4}" + SP + "+-[A-Za-z]*c[A-Za-z]*" + SP + "+$";
+def SHCH: "(?:^|[" + WS + ";&|(])" + SHN + SP + "+[^\n;&|]*-[A-Za-z]*c[A-Za-z]*(?=$|" + SP + ")";
+def SHCD: "(?:^|[" + WS + ";&|(])" + SHN + SP + "+-[A-Za-z]*c[A-Za-z]*" + SP + "+$";
+def HDOP: "(?<![<])<<(?<dash>-?)(?![<])[ \t]*(?<w>(?:" + $q + "[^" + $q + "]*" + $q + "|\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"|\\\\[\\s\\S]|[^" + WS + ";&|()<>" + $q + "\"\\\\])+)";
+def HDW: "^(?:" + $q + "[A-Za-z0-9_.-]*" + $q + "|\"[A-Za-z0-9_.-]*\"|\\\\[A-Za-z0-9_.-]|[A-Za-z0-9_.-])+$";
+def TEXTB: [match("\\\\[\\s\\S]|(?<s>\\$\\([^()\n]*\\)|`[^`\n]*`)|[^\\\\$`]+|[$`]"; "g") | .captures[] | select(.name == "s" and .string != null) | .string] | join(" ");
+def DQC: gsub("(?<s>\\$\\([^()]*\\)|`[^`]*`)|\\\\(?<c>[\\s\\S])|(?<w>" + QSEPQ + ")"; if .s then .s elif .c then (if .c == "\n" then "" elif (.c | test(QSEPQ)) then "_" else .c end) else "_" end);
+def QTOK: "\\$" + $q + "(?:[^" + $q + "\\\\]|\\\\[\\s\\S])*" + $q + "?|\\$?\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"?|" + $q + "[^" + $q + "]*" + $q + "?|\\\\[\\s\\S]?|[^\"" + $q + "\\\\$]+|\\$";
+def qkind: if startswith("$" + $q) then "a" elif startswith("\"") or startswith("$\"") then "h" elif startswith($q) then "s" elif startswith("\\") then "e" else "p" end;
+def qscan($q0): . as $l
+  | (if $q0 == "s" then ([$l | match("^[^" + $q + "]*" + $q)] | .[0].length) elif $q0 == "d" then ([$l | match("^(?:[^\"\\\\]|\\\\[\\s\\S])*\"")] | .[0].length) else 0 end) as $st
+  | if $st == null then {q: $q0, h: null} else ($l[$st:]) as $c
+    | [$c | match(QTOK; "g") | {o: .offset, n: .length, s: .string, k: (.string | qkind)}] as $t
+    | ([$t[] | select(.k == "p") | .o as $o | (.s | [match("(?:^|[" + WS + ";&|(])#")] | .[0].offset) as $x | select($x != null) | $o + $x] | .[0]) as $cm
+    | ([$c | match(HDOP)] | .[0]) as $h | ([$t[] | select($cm == null or .o < $cm)] | .[-1]) as $z
+    | {q: (if $z == null then "" elif ($z.k == "s" and ($z.s | test("^" + $q + "[^" + $q + "]*" + $q + "$") | not))
+             or ($z.k == "a" and ($z.s | test("^\\$" + $q + "(?:[^" + $q + "\\\\]|\\\\[\\s\\S])*" + $q + "$") | not)) then "s"
+           elif $z.k == "h" and ($z.s | test("^\\$?\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"$") | not) then "d" else "" end),
+       h: (if $h != null and ($cm == null or $h.offset < $cm) and any($t[]; .o <= $h.offset and $h.offset < .o + .n
+             and (.k == "p" or (.k == "h" and (.s[0:$h.offset - .o] | test("\\$\\([^)]*$"))))) then ($h | .offset += $st) else null end)}
+  end;
+def hdocs: if test("<<") | not then {s: ., ok: true} else . as $all | split("\n") as $ls
+  | if ([$ls[] | select(test(HDOP))] | length) > 16 then {s: $all, ok: false} else
+    [foreach ($ls[], null) as $l ({m: "code", d: "", t: false, q: "", o: "", bad: false, ok: true};
+      if $l == null then .o = null | .bad = (.bad or .m != "code")
+      elif .m == "code" then .q as $qq | ($l | qscan($qq)) as $r | .q = $r.q | .o = $l
+        | if $r.h == null then . else
+          .ok = (.ok and ($l | test("\\\\$") or ([match(HDOP; "g")] | length) > 1 or test("(?:^|[" + WS + ";&|(])(?:source|\\.)" + SP + "+") | not))
+          | ([$r.h.captures[] | select(.string != null) | {key: .name, value: .string}] | from_entries) as $c
+          | if ($c.w | test(HDW) | not) then .bad = true
+            else .d = ($c.w | gsub("[" + $q + "\"\\\\]"; "")) | .t = ($c.dash == "-")
+              | .m = (if (($l[0:$r.h.offset] + " " + $l[$r.h.offset + $r.h.length:]) | test(SHANY)) then "fed"
+                  elif ($c.w | test("[" + $q + "\"\\\\]")) then "drop" else "text" end) end end
+      elif (if .t then ($l | sub("^\t+"; "")) else $l end) == .d then .o = $l | .m = "code"
+      elif .m == "fed" then .o = $l
+      elif .m == "text" then .o = ($l | TEXTB)
+      else .o = "" end;
+      [.o, .bad, .ok])] as $r
+    | (if $r[-1][1] then $all else [$r[] | .[0] | select(. != null)] | join("\n") end) as $s
+    | {s: $s, ok: ($r[-1][2] and ($r[-1][1] | not) and ($s | test("\r\n|\\\\\n|\\|[^\\S\n]*\n|\n[^\\S\n]*\\||}[\\s]*\\|") | not))} end end;
+def qread($d; $proof): hdocs | .s | [match(QTOK; "g") | .string | [., qkind]] as $t | ($t | length) as $n
+  | [range(0; $n) as $i | $t[$i] as [$s, $k]
+    | if $k == "p" then $s
+      elif $k == "e" then ($s[1:] | if . == "" or . == "\n" then "" elif test(QSEPQ) then "_" else . end)
+      else
+        (if $k == "a" then ($s | if length >= 3 and endswith($q) then .[2:-1] else .[2:] end)
+         elif $k == "s" then ($s | .[1:] | if endswith($q) then .[0:-1] else . end)
+         else ($s | if startswith("$") then .[1:] else . end | .[1:] | if endswith("\"") then .[0:-1] else . end) end) as $c
+        | if $d > 0 and $i > 0 and $t[$i - 1][1] == "p" and ($t[$i - 1][0] | test(SHC)) then ($c | qread($d - 1; $proof))
+          elif $c == "" then (if ($i == 0 or ($t[$i - 1][0] | test("[" + WS + "]$"))) and ($i == $n - 1 or ($t[$i + 1][0] | test("^[" + WS + ";&|)]"))) then "_" else "" end)
+          elif $proof then (if $k == "h" then ($c | TEXTB) else "_" end)
+          elif $k == "h" then ($c | DQC)
+          else ($c | gsub(QSEP; "_")) end
+      end] | join("");
+def qmodel: if test("\r\n") then false else hdocs as $h | if $h.ok | not then false else
+  [$h.s | match(QTOK; "g") | .string | [., qkind]] as $t | ($t | length) as $n
+  | all(range(0; $n); . as $i | $t[$i] as [$s, $k]
+    | if $k == "p" then ($s | test("(?:^|[" + WS + ";&|(])#") | not)
+        and (if $s | test(SHCH) then ($s | test(SHCD)) and $i + 1 < $n and ($t[$i + 1][1] == "s" or $t[$i + 1][1] == "h")
+          and ($i + 2 == $n or ($t[$i + 2][1] == "p" and ($t[$i + 2][0] | test("^(?:[^\\S\n]*$|[^\\S\n]*[\n;&|])"))))
+          and ($t[$i + 1][0][1:-1] | qmodel) else true end)
+      elif $k == "s" then ($s | test("^" + $q + "[^" + $q + "]*" + $q + "$"))
+      elif $k == "a" then ($s | test("^\\$" + $q + "(?:[^" + $q + "\\\\]|\\\\[\\s\\S])*" + $q + "$"))
+      elif $k == "h" then ($s | test("^\\$?\"(?:[^\"\\\\]|\\\\[\\s\\S])*\"$"))
+        and ($s | gsub(HDOP; "<<_") | test("\\$\\([^)]*[(" + $q + "]|`[^`]*[()" + $q + "]") | not)
+      else true end) end end;
+def gprune: any(split("[\n;&|]"; null)[]; test("prune") and test("worktree")
+  and (([match(GITWT)] | .[0]) as $m | $m != null
+    and (([$m.captures[] | select(.name == "rest") | .string // ""] | .[0] | norm) as $r | ($r | [match(GLAST)] | .[0].captures[0].string) as $f
+      | ($r | test("[$<>`]")) or $f == null or ($f | startswith("--no-d")))));
+def pplain: gsub("\\\\\n"; "") | any(split("[\n;&|]"; null)[]; test(PANC) and test(WANC) and (norm | gprune));
+def pmatch: select(any(split("[;&|]"; null)[]; test(PANC) and test(WANC))) | select(gprune or pplain)
+  | select((qmodel | not) or (qread(1; true) | test(PANC)) or (qread(1; false) | gprune))
+  | "prune\tgit worktree prune";
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
@@ -5074,15 +5192,15 @@ def pathwhy($t):
 (.tool_name | if type == "string" then . else "" end) as $t
 | (.tool_input | if type == "object" then . else {} end) as $i
 | if $mode == "deny" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("verb\t") or startswith("surface\t") or startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // first((., norm) | bmatch) // "" else "" end)
      elif ($t | edittool) then (first(($i.file_path, $i.notebook_path) | select(type == "string" and test("approval-signing|approval-verify\\.mjs")) | "surface\ta write to the approval surface") // acctpath($t; $i) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(BUILDX)) | BW) // first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(TRUST)) | BTR) // "")
      elif $t == "Read" or $t == "Grep" or $t == "Glob" then (first(($i.file_path, $i.path, (if $t == "Glob" then $i.pattern else empty end)) | select(type == "string" and test("approval-signing")) | "surface\ta read of a signing key") // acctpath($t; $i) // "")
      else "" end)
   elif $mode == "account" then
-    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first((., norm) | apmatch) // "" else "" end)
+    (if $t == "Bash" then ($i.command | if type == "string" then first((., norm) | (fmatch, xmatch) | select(startswith("account\t"))) // first(pmatch) // first((., norm) | apmatch) // "" else "" end)
      else acctpath($t; $i) // "" end)
-  elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch) // "" else "" end)
-  elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch) != null) then "other\tan MCP call naming a forbidden act"
+  elif $t == "Bash" then ($i.command | if type == "string" then first(fmatch, pmatch) // "" else "" end)
+  elif ($t | startswith("mcp__")) and any($i | .. | strings; first(fmatch, pmatch) != null) then "other\tan MCP call naming a forbidden act"
   else ($i | pathwhy($t)) // ""
   end'
 # The prefilter reads a Bash payload with its quotes and backslashes removed (`apf`), and a JSON-escaped backslash-newline
@@ -5105,13 +5223,13 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
        || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
        || "$apf" == *anthropic-ai/claude-code* || "${apf,,}" == *downloads.claude.ai* || "${apf,,}" == *claude.ai/install* || "$apf" == *.local* \
        || "$apf" == *.cc-sessions* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
-       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *runtime.env* || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   else
     # THE ACCOUNT ARM ON EVERY OTHER SESSION (D-6202): the account verbs, paths and bare `env`/`printenv` only.
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
-       || "$apf" == *printenv* || "$apf" =~ $APF_ENV_RE ]] || apf=""
+       || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
 # The deny file is read once here, by a bounded builtin read, and its text passed as `--arg deny` (D-6066). Read by jq's
@@ -5149,6 +5267,10 @@ if [[ -n "$apf" ]]; then
           areason+=" Carry on with your task; a prompt you raise reaches them by itself." ;;
         account$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}: an account-management act no fleet session runs, in any form (CLAUDE.md's SAFETY section; spec 2026-10-18 §3.1; D-6202). Adding, signing in, checking, enabling, disabling or removing a fleet account, and reading its secrets, are the operator's, from the PWA's Accounts screen or their own shell. Switching accounts is never refused: \`ccd swap-self <lane>\`, \`ccd prefer\` and \`ccd swap\` stay open." ;;
+        prune$'\t'*)
+          areason="ccrc: this call runs \`git worktree prune\`, which deletes git's records of every gone worktree of the repository at once, and ccd's cleanup reads those records: one prune holds the cleanup of every lane on this box (the cleanup un-wedge spec, section 5)."
+          areason+=" To remove one stale record, use \`git -C <main> worktree remove <path>\`; a dry run (\`-n\`) is allowed."
+          areason+=" If this is text you meant to pass, such as a commit message or a PR body, bash would still run a backticked or \`\$(...)\` mention inside double quotes or an unquoted heredoc: put the text in a file and pass the file (\`git commit -F <file>\`, \`gh pr create --body-file <file>\`)." ;;
         build$'\t'*)
           areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
           areason+=" Report what you need to your coordinator instead." ;;

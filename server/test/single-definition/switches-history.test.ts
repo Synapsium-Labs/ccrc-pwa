@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { SWITCHES, TESTBOX_REMOTE_LIVE_MARKER } from '../../../shared/switches.js';
+import { PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, bashRoots, ccrcRoot, codeLines, here, holdersOf, isBashComment, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -12,13 +12,34 @@ import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, bashRoots, ccrcRoot, code
 describe('the pane-scope sweep: its arming file has no writer in the tree', () => {
   // `scope-sweep-live` arms `ccd-scope-sweep`'s stop: without it every inert scope is only recorded `would-stop`.
   // Like `stall-watch-live` the operator touches and removes it by hand, so the ONE line of shell that may name
-  // it is the sweep's own read, no TypeScript names it at all, and no other file under ccd/ or deploy/ does on a
-  // code line. KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
-  it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; no TS holder', () => {
+  // it is the sweep's own read, and no other file under ccd/ or deploy/ does on a code line. D-7994 gives it its one TS
+  // holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it cannot write the marker), so its
+  // door can read it; the nested rescue's pin below is the shape.
+  // KNOWN WIDTH: a name assembled from pieces is not seen; the bar is the ordinary copy.
+  it('scope-sweep-live: one shell holder, ccd/ccd-scope-sweep, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
     expect(holdersOf('scope-sweep-live'), 'a line of shell other than the sweep names it — a writer in waiting').toEqual(['ccd/ccd-scope-sweep']);
     expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-scope-sweep')).filter((l) => l.includes('scope-sweep-live')))
       .toEqual(['[ -e "$REG/scope-sweep-live" ] && MODE=live']);
-    expect(ALL.filter((f) => stallCode(f).includes('scope-sweep-live')).map(rel)).toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes('scope-sweep-live')).map(rel), 'spelled on a code line outside shared/switches.ts').toEqual(['shared/switches.ts']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/switches.ts')), 'the definer reaches a node: module or require: it could write the marker')
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // D-7994. The busy arm's switch: ONE shell reader, the sweep, whose one line needs the sweep armed too, and ONE shell
+  // writer, `ccd scope-sweep-busy`, behind its route. The one TS holder is the definer; the files that name its
+  // constant are it and the L0 view, which read through `readSwitches` and write nothing.
+  it('scope-sweep-busy-live: the sweep\'s one read, the verb\'s two lines, one TS holder that reaches no write', () => {
+    const NAME = 'scope-sweep-busy-live';
+    expect(holdersOf(NAME), 'a line of shell other than the sweep and the verb names it').toEqual(['ccd/ccd', 'ccd/ccd-scope-sweep']);
+    expect(codeLines(path.join(ccrcRoot, 'ccd', 'ccd-scope-sweep')).filter((l) => l.includes(NAME)))
+      .toEqual(['[[ "$MODE" == live ]] && [ -e "$REG/scope-sweep-busy-live" ] && BUSY_MODE=live']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes(NAME)))
+      .toEqual(['  marker="$REG/scope-sweep-busy-live"', '    tmp="$REG/.scope-sweep-busy-live.$$.tmp"']);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel), 'spelled on a code line outside shared/switches.ts').toEqual(['shared/switches.ts']);
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('SCOPE_SWEEP_BUSY_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual(['shared/scope-sweep.ts', 'shared/switches.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 
   // A writer need not be shell: every OTHER file under ccd/ and deploy/ — Python, .mjs, a unit file's
@@ -801,6 +822,44 @@ describe('the carry dedupe sweep: its arming file has one reader and no writer i
     });
     const others = bashRoots.flatMap(nonShell);
     expect(others.map(rel), 'the walk reached the sweep\'s unit file').toContain('deploy/systemd/ccd-carry-dedupe.service');
+    expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
+      .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
+  });
+});
+
+// D-7902. `$REG/pane-scope-stop-live` arms a deliberate stop's stop of the stopped session's own pane scope. APPENDED for
+// the reason the stall-watch blocks above state. Its holders are ONE shell writer, the `ccd pane-scope-stop` verb in
+// ccd/ccd (behind POST /api/coord/pane-scope-stop), ONE shell reader that acts, `_pane_scope_stop` in the same file, and
+// ONE shell reader that only reports, the doctor's `pane-scope-stop` check; the one TypeScript reader beside the definer
+// is the coord frame's (`server/src/watch.ts`), which reads it through `readSwitches` and writes nothing.
+describe('the pane-scope stop switch: its definer, the verb\'s one write, the act\'s one read and the doctor\'s (D-7902)', () => {
+  const NAME = PANE_SCOPE_STOP_LIVE_MARKER;
+  const DEFINER = 'shared/switches.ts';
+
+  it('two shell files name it: ccd/ccd, whose two lines are the act\'s read and the verb\'s marker, and the doctor, whose one line is a read', () => {
+    expect(NAME).toBe('pane-scope-stop-live');
+    expect(holdersOf(NAME), 'a line of shell other than the verb, the act and the doctor names it — a second writer').toEqual(['ccd/ccd', 'ccd/ccrc-doctor-checks']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes(NAME)))
+      .toEqual(['  if [[ ! -e "$REG/pane-scope-stop-live" ]]; then', '  marker="$REG/pane-scope-stop-live"']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccrc-doctor-checks') ?? '').filter((l) => l.includes(NAME)))
+      .toEqual(['  if [ -e "$reg/pane-scope-stop-live" ] || [ -L "$reg/pane-scope-stop-live" ]; then']);
+  });
+
+  it('its TS holders are its definer and the coord frame, and no file that names its constant reaches a write', () => {
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    const holders = ALL.filter((f) => stallCode(f).includes('PANE_SCOPE_STOP_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/watch.ts'].sort());
+    for (const f of holders.filter((h) => h === DEFINER)) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('no non-shell file under ccd/ or deploy/ names it on a code line', () => {
+    const nonShell = (dir: string): string[] => readdirSync(dir).flatMap((e) => {
+      const p = path.join(dir, e);
+      return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+    });
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
     expect(others.filter((f) => readFileSync(f, 'utf8').split('\n')
       .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
   });

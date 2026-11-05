@@ -464,7 +464,7 @@ export function AccountsScreen(): ReactNode {
           const lines = cardLines(answer, a?.ts ?? null, nowSec);
           const kindWords = kindChipWords(entry);
           const identity = identityLine(laneWire, answer.word, nowSec);
-          const also = offAlso(answer, a);
+          const also = offAlso(answer, a, laneWire);
           // "Sessions on this account" means LIVE sessions (Rider A §4): a
           // workspace that is archived, mid-cleanup, or that the server does
           // not read alive is not load on this account, even though it still

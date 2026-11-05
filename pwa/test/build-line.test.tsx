@@ -4,7 +4,7 @@
 // unknown, and — since W3 — an amber ` → vX` affix on a side whose node the
 // inventory says should move up. It reads the node inventory (`NodeWire[]`,
 // FleetScreen's one GET /api/updates poll), NOT the health route's stamp
-// pair, which stays on the wire unread (§14). Nothing at all for local mode
+// pair, which #2079 retired from the wire (§14). Nothing at all for local mode
 // or for no health answer; with no inventory answer, both sides unmeasured.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -255,8 +255,8 @@ describe('the move onto NodeWire[] is whole (centralised-update §14)', () => {
     // A LITERAL-absence pin, deliberately: the two readers were BuildLine and
     // FleetHostBanner's skew arm, and a partial move would show two skew
     // opinions on one screen (the stamp pair's, the inventory's). The field
-    // stays on the wire (§14 retires it later, under wire discipline); what is
-    // pinned is that nothing in this bundle reads it.
+    // left the wire in #2079 (§14); what stays pinned is that nothing in this
+    // bundle reads it.
     const root = path.join(import.meta.dirname, '..', 'src');
     const files = readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((f) => /\.tsx?$/.test(f));
     expect(files.length, 'the walk stopped seeing the tree').toBeGreaterThan(50);

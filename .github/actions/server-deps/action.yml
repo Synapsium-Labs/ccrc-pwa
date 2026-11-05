@@ -52,7 +52,7 @@ runs:
     # tmux, git and jq are real dependencies of the server suite: the ccd and
     # statusline tests execute the real bash scripts against fixture HOMEs.
     # They are contained, never reaching a real tmux server or a real remote,
-    # but the binaries must exist. jq ships in the ubuntu-latest image today
+    # but the binaries must exist. jq ships in the ubuntu-24.04 image today
     # and is named here anyway — `statusline-command.sh` degrades to a bare
     # `claude-code` line WITHOUT it, which is a pass for some assertions and
     # a silent hole for the ones that matter.
@@ -132,6 +132,15 @@ runs:
         mkdir -p "$RUNNER_TEMP/ccrc-debs"
         cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/ccrc-debs/" 2>/dev/null || true
         if compgen -G "$RUNNER_TEMP/ccrc-debs/*.deb" > /dev/null; then echo "have=true" >> "$GITHUB_OUTPUT"; fi
+
+    # The shellcheck the ratchet pins (D-7995; server/test/shellcheck-ratchet.test.ts can land on any Linux server job,
+    # and the image's own is older). A failure here warns and goes on: the ratchet then fails on the one shard that
+    # holds it, naming the version, instead of every job failing over a download only that shard needs. Linux only:
+    # the macOS legs skip the ratchet. After the step above, because the script reads the pin with jq.
+    - name: Install the pinned shellcheck (linux)
+      if: inputs.platform == 'linux'
+      shell: bash
+      run: .github/ci/bounded.sh 60 .github/ci/shellcheck-install.sh || echo "::warning::the pinned shellcheck did not install"
 
     - name: Keep the system packages (linux)
       if: inputs.platform == 'linux' && inputs.save == 'true' && steps.debs.outputs.cache-hit != 'true' && steps.apt.outputs.have == 'true'

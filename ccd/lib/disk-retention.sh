@@ -198,7 +198,7 @@ _ws_orphan_tail() {   # tree sp -> rungs 10 to 14, in order; 0 all pass, else _w
 _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDICT=token); 1 with _WS_ORPHAN_WORD, _WS_ORPHAN_WHY
   #   and _WS_ORPHAN_VERDICT refused|unmeasured. A tree whose ONLY refusal is rung 9 also gets _WS_ORPHAN_RESCUE.
   local p="${1-}" m mr wsroot pj sp='' sh sb sl spr smain line n slug cls ahead errf err rc r9=0 r9why='' tail_rc=0
-  local tid mid aid gd stat_sha ign
+  local tid mid aid gd stat_sha ign hl hg hs
   _WS_ORPHAN_WORD=''; _WS_ORPHAN_WHY=''; _WS_ORPHAN_VERDICT=''; _WS_ORPHAN_TOKEN=''; _WS_ORPHAN_RESCUE=''
   _WS_ORPHAN_CLASS=''; _WS_ORPHAN_MAIN=''; _WS_ORPHAN_BRANCH=''; _WS_ORPHAN_HEAD=''
   _WS_ORPHAN_NEWEST=''; _WS_ORPHAN_ENTRIES=''; _WS_ORPHAN_FLOOR=''
@@ -230,6 +230,10 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   _ws_orphan_registered "$p" "$sp" "$cls" "$pj" "$slug"; rc=$?
   (( rc == 0 )) || { if (( rc == 1 )); then _ws_orphan_refuse registered "$_WS_ORPHAN_WHY"; else _ws_orphan_refuse unmeasured "$_WS_ORPHAN_WHY"; fi; return 1; }
   _WS_ORPHAN_INSIDE=$(_ws_orphan_inside "$sp")   # a row whose workdir CONTAINS the tree passes rung 4 and is named (G4)
+  # 4b: no delegation carrier holds it (D-7002, D-7828): `leased`, or `unmeasured` on anything it cannot read; the token binds it
+  _dl_orphan_rung "$_WS_ORPHAN_MAIN" "$sp"; rc=$?
+  case "$rc" in 0) ;; 1) _ws_orphan_refuse leased "$DL_WHY"; return 1 ;; *) _ws_orphan_refuse unmeasured "$DL_WHY"; return 1 ;; esac
+  hl="$DL_HOLD_LEASE"; hg="$DL_HOLD_GEN"; hs="$DL_HOLD_STATE"
   # 5: not locked in git
   [[ "$sl" != 1 ]] || { _ws_orphan_refuse locked "$sp is locked in git"; return 1; }
   # 6: clean and readable
@@ -268,7 +272,7 @@ _ws_orphan_ladder() {   # path -> 0 with _WS_ORPHAN_TOKEN (and _WS_ORPHAN_VERDIC
   ign="$REAP_IGNDIGEST"
   local -a inp=("pathhex=$(printf '%s' "$p" | _ws_orphan_hex)" "tree=$tid" "main=$mid" "admin=$aid" "head=$_WS_ORPHAN_HEAD"
                 "branch=$_WS_ORPHAN_BRANCH" "status=$stat_sha" "ignored=$ign" "newestctimens=$_WS_ORPHAN_NEWEST"
-                "entries=$_WS_ORPHAN_ENTRIES" "floor=$_WS_ORPHAN_FLOOR")
+                "entries=$_WS_ORPHAN_ENTRIES" "floor=$_WS_ORPHAN_FLOOR" "lease=$hl" "leasegen=$hg" "leasestate=$hs")
   if (( r9 || _WS_ORPHAN_R11 )); then
     _WS_ORPHAN_RESCUE=$(_ws_reclaim_fingerprint mode=orphan-rescue "${inp[@]}" ${_WS_ORPHAN_NBIND[@]+"${_WS_ORPHAN_NBIND[@]}"})
     return 1   # _ws_orphan_refuse above already named head-not-on-remote

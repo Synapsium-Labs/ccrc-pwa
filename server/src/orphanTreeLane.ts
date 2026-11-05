@@ -173,6 +173,7 @@ export const ORPHAN_LEFT_SENTENCE: Readonly<Record<string, string>> = {
   'worktree-remove-failed': 'git refused to remove it without force',
   'probe-unmeasured': 'who holds it could not be measured',
   'no-rescue-token': 'it needs no rescue',
+  leased: 'a delegation lease holds it',
 };
 
 const oneLine = (s: string): string => s.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 300);
@@ -303,7 +304,7 @@ export function orphanGoesWithRow(hex: string, cls: OrphanClass): { readonly tit
 
 /** Counts by class (every census row) and by outcome (every audited tree). `removed` is the lane's running count. */
 export function orphanTreesHealth(
-  rows: readonly OrphanRow[], memory: OrphanMemory, removed: number,
+  rows: readonly OrphanRow[], memory: OrphanMemory, removed: number, leaseUnready: number,
 ): DiskOrphanTrees {
   const byClass = { 'ccd-root': 0, claude: 0, superpowers: 0, other: 0, 'not-a-worktree': 0 };
   for (const r of rows) byClass[r.cls] += 1;
@@ -312,7 +313,7 @@ export function orphanTreesHealth(
     if (m.outcome === null) byOutcome.pending += 1;
     else if (m.outcome.kind !== 'removed') byOutcome[m.outcome.kind] += 1;
   }
-  return { byClass, byOutcome };
+  return leaseUnready > 0 ? { byClass, byOutcome, leaseUnready } : { byClass, byOutcome };
 }
 
 export interface OrphanOffers { readonly act: string | null; readonly learn: readonly string[] }
@@ -333,9 +334,13 @@ export function orphanOffers(
 
 // ── folding an answer into the memory ────────────────────────────────────────
 
-/** What the L3 job reports for a tree, which the lane folds. `stopped` composed nothing and says nothing. */
+/** The `stopped` word for each answer of the delegation hold that composes nothing (PR4): the executor reads it, never re-spells it. */
+export const ORPHAN_LEASE_STOPS = { held: 'leased', 'not-ready': 'lease-unready' } as const;
+
+/** What the L3 job reports for a tree, which the lane folds. `stopped` composed nothing and says nothing. `leased` and
+ *  `lease-unready` are the delegation hold's (PR4): the checkpoint holds the tree, or is not ready to say. */
 export type OrphanJobOutcome =
-  | { readonly kind: 'stopped'; readonly why: 'caps' | 'paused' | 'epoch' | 'switch' }
+  | { readonly kind: 'stopped'; readonly why: 'caps' | 'paused' | 'epoch' | 'switch' | 'leased' | 'lease-unready' }
   | { readonly kind: 'audited'; readonly audit: OrphanAudit }
   | { readonly kind: 'would'; readonly rescued: boolean }
   | { readonly kind: 'result'; readonly result: OrphanResult; readonly rescued: boolean };
@@ -363,6 +368,13 @@ export function orphanFoldAudit(m: OrphanTreeMemory, audit: OrphanAudit, nowMono
     case 'unmeasured': case 'unreadable': return keep({ ...m, obs: null, nextMono: nowMono + ORPHAN_RETRY_MS }, null);
   }
 }
+
+/** Whether a learning audit's answer ends a tree's `lease-unready` count (delegation PR4, D-8010; the coordinator's fix-round-2
+ *  ruling). Only the act job asks the delegation hold, so only an answer after which no act follows may clear it: a refusal (the
+ *  box's own `leased` among them) or a `rescuable` while the rescue arm is not armed. A `token`, an armed `rescuable`, an
+ *  `unmeasured` or an `unreadable` answer leaves the count, because the act that follows asks the hold again. */
+export const orphanAuditEndsHoldWait = (audit: OrphanAudit, rescueArmed: boolean): boolean =>
+  audit.kind === 'refused' || (audit.kind === 'rescuable' && !rescueArmed);
 
 function observe(m: OrphanTreeMemory, token: string, rescue: boolean, nowMono: number): OrphanTreeMemory {
   const lic = orphanLicence(m.obs, token, nowMono);

@@ -239,6 +239,9 @@ describe('ReconnectingSocket', () => {
     sock.drop(); // the close that trails a browser error must not double-schedule
     vi.advanceTimersByTime(500);
     expect(instances()).toHaveLength(2);
+    // The retry opens: one left connecting would be given up at the watchdog's 10 s connect limit (console speed C1)
+    // and retried, which is a third attempt for another reason than the duplicate this case is about.
+    last().open();
     vi.advanceTimersByTime(60_000);
     expect(instances()).toHaveLength(2); // one retry, no duplicate from the trailing close
   });

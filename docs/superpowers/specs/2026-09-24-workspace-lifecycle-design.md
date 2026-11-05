@@ -925,7 +925,7 @@ collects them.
   is minted expires with its work in the attic, where `main` stopped at `pin-failed`, and its ignored and secret-shaped
   files go with the tree, as the standing policy says. A branch deleted between the fresh pin and the tail's settle has
   its tip pinned at the fresh pin. With HEAD still symbolic to a deleted branch the pin fails before the breadcrumb, and
-  the lane audits it afresh each time, counted and listed after the hour.
+  the next audit refuses it with the terminal `branch-gone-checked-out`, reported once and not asked again (D-5944).
 - **A branch deleted or made inside the lock stops the act** before the breadcrumb, in both directions (question (j)).
 - **An archive whose admin `gitdir` names no path** is unmeasured and retried, never `no-worktree-record` (#166
   wave 7, rung 8); a record that is truly absent stays terminal.

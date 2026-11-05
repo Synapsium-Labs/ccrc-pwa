@@ -1,8 +1,9 @@
 # Program: box-settings-view
 
 Spec: `docs/superpowers/specs/2026-10-25-box-settings-view-design.md` (#1417).
-Plan: `docs/superpowers/plans/2026-10-25-box-settings-view.md` (wave 1). The wave's worker committed it, with the spec,
-as its PR's first commit. Wave 2's plan is not written yet.
+Plans: `docs/superpowers/plans/2026-10-25-box-settings-view.md` (wave 1) and
+`docs/superpowers/plans/2026-11-04-box-settings-view-w2.md` (wave 2). Each wave's worker committed its plan as its PR's
+first commit.
 Workspace: each wave's child workspace, minted by its dispatch.
 
 On 2026-10-25 the operator asked why `CCRC_BACKUP_KEEP` is not shown in the console if it is an important setting. Only
@@ -16,7 +17,7 @@ ones, so this is now a two-wave programme.
 | # | scope | PRs | state |
 |---|---|---|---|
 | 1 | A read-only `ccrc settings` verb and its snapshot; a five-minute timer on every Linux box; the snapshot as an eleventh node file on `NodeWire.settings`; a Box settings card under Settings › Updates. | #2193 | **MERGED** 2026-11-04 01:28 UTC as `98ade6885`, at head `4035979d8` (run 1369, dispatched 2026-11-03 06:56 UTC; four review rounds). |
-| 2 | The 82 other names in `CCRC_SETTINGS`, each with a display class. | — | **PLANNED** 2026-11-04 (run 1409). Spec revision 5 (section 5, D11 to D22) approved 2026-11-04; the plan and the dispatch follow. |
+| 2 | The 82 other names in `CCRC_SETTINGS`, each with a display class: 54 shown, 28 omitted; a version-2 snapshot read beside version 1. | #2295 | **MERGED** 2026-11-05 08:44 UTC as `42f57f9ef`, at head `b0cf9a36e` (run 1409, dispatched 2026-11-04 08:32 UTC; three review rounds). |
 
 ## Decisions & deviations
 
@@ -196,32 +197,117 @@ ones, so this is now a two-wave programme.
   and the spec were measured from, with the same 89 names in `CCRC_SETTINGS`. The spec's decisions now read Agreed,
   D19 among them: the test box's address shows only whether it is set. The plan is written next, from section 5.
 
+- **2026-11-04: D19's own item answered.** The operator ticked "Hide it: show only whether it is set (proposed)". That
+  is D19 (a), already Agreed above, so nothing changed.
+- **2026-11-04: wave 2's plan.**
+  - Opus drafters wrote it from section 5, and an Opus critic read the drafts: 19 findings, 5 of them blocking.
+  - After the coordinator's rulings, three Opus lenses (leaks, facts, executability) read the assembled plan, each
+    finding with Sonnet refuters, and all 43 findings were folded in.
+  - The plan has eight tasks in commit order. Deviation numbers 7906 to 7919 were assigned, and 7920 to 7925 kept
+    spare.
+- **Leaves under other programmes' claims.** Each was measured disjoint before it was asked for. The worker took no
+  claim, edited only the named hunks, and named each leave in the PR body.
+  - The delegation broker granted these:
+    - `ccd/ccrc`'s settings hunks;
+    - the box-settings block of `shared/api.ts`;
+    - one usage pin in `install-census.test.ts`;
+    - `pwa/src/fleet/fleet.css`.
+  - Desktop polish granted `ccd/ccrc-doctor-checks`, under two claims in turn. Its condition: `_check_snapshot-posture`,
+    its closing brace and the blank line after it stay untouched.
+  - Landing order granted README's box-settings sentences, the timer row and the node-file lines, but not the
+    session-gate paragraph.
+  - On 2026-11-05, for fix round 1, the delegation broker granted README's box-settings sentences and
+    `BOX_SETTING_ORIGIN_SHAPE` in `shared/api.ts`.
+- **2026-11-04 08:32 UTC: wave 2 dispatched as run 1409.** Routing: Opus high, Sonnet high subagents, workflows off,
+  compaction at 40. The plan's eight tasks are the run's eight items.
+- **Rulings during the build:**
+  - **D-7920 (Task 3).** The settings census refuses any line that holds a setting beside `BOX_ENV_FILE`, so the plan's
+    one-line masks failed it. The mask now stands on its own line, as the first statement of one subshell. The
+    census was not edited.
+  - **D-7921 (gate sweep).** The census holds TypeScript's `presence` words at 20, because in TypeScript `presence`
+    names a session's presence only (#1371). So the class token is `is-set` in the code and its data. The census was
+    not edited, and spec revision 6 records the name.
+- **Merges of `main` into the wave branch: two, and no rebase.**
+  - `89f7883ae`, the worker's own clause-16 absorb: main's spawn-group pin (#2238) was red on the PR and green on
+    `main`. Six timed spawns moved to `spawnSyncGroup`.
+  - `891d74e3e`, on the coordinator's word: main's new shellcheck ratchet (#2291) counted five new findings in
+    `ccd/ccrc`. Two assignments were quoted, and three directives carry their reasons. The baseline is untouched, and
+    `ccd/ccrc` stays at its pin of 178.
+  - Review 1487 measured both merge commits as equal to Git's automatic merge tree.
+- **macOS.** macOS gates nothing.
+  - Two commits changed tests only (`fa4bd00df`, `3231cb2b5`), so they expect `main`'s launchd reading rule on macOS.
+    Every leak assertion still runs on both platforms (review 1487).
+  - `box-settings-table.test.ts` has never run on macOS. Its leg hit the 55-minute limit in both runs, and
+    `macos.yml`'s `workflow_dispatch` takes no file list. Review 1487 read its bash regexes as POSIX ERE that macOS
+    reads as glibc does.
+  - The full run's other macOS red, in `ledgers-secrets.test.ts`, came from #2260: two names that differ only by case,
+    on a file system that folds case. It is fixed in #2286 and is not this programme's.
+- **Review 1487 (round 1, at `891d74e3e`): sent back.**
+  - **F1:** the sentence "every commit green" was false. The census red from Task 3 to the rename, and the slice-limits
+    row red from Task 5 to its fix. The record now says so.
+  - **F2:** the card's how line claimed more than the view does. It now says what this view reads.
+  - **F3 → D-7922:** an existing slice-limits assertion was rewritten as set equality over every literal read, with a
+    control row. Both of its mutants were measured.
+  - **Also fixed:**
+    - the shellcheck reasons;
+    - a sweep's message when its settings library lacks a words function;
+    - an unreachable resolver arm, which now returns "could not be checked";
+    - three plan wordings.
+  - **V10:** the plan's check of each consumer's read counts as met, because each consumer reads its key with the same
+    call as the verb.
+  - **A residual it measured:** a token pasted as the release base without a scheme showed as `custom <token>`. `main`
+    already did the same. Hiding the host of a scheme-less base would change wave 1's agreed behaviour, so it went
+    to the operator as item 41.
+- **2026-11-05: the operator answered item 41:** "Show `custom` alone without a scheme: a scheme-less mirror loses its
+  host in the view, and nothing pasted there can show". It was folded into fix round 1 as **D-7923**.
+  - The verb and doctor test the raw value's scheme at their callers, and `_upd_url_origin` is unchanged.
+  - The envelope requires the scheme, byte-equal in bash and L0.
+  - A version-1 row of that shape reads `unmeasured`.
+- **Review 1496 (round 2, at `b313d2b7c`): sent back.**
+  - **F1:** doctor's scheme gate had no row that went red without it, because the envelope backed it up for every
+    value planted. Plants with userinfo before a scheme now pin it.
+  - **F2:** the mutation table now records D-7923's three mutants.
+  - **F3, the coordinator's error:** round 1's ruling listed `CCRC_TEST_PRESSURE_MAX` among the settings an update
+    installs. In fact `ccrc test` reads it on every run. The card now says so.
+  - **F4:** scheme-ful twins guard the port arm and the host class again.
+  - **F5 and F6:** stale records and wording.
+  - **Accepted:** a scheme-less version-2 origin drops the whole document. That is the server's existing treatment
+    of any version-2 row outside its class (D-7913), not the `unmeasured` the addendum expected.
+- **Review 1500 (round 3, the cap, at `b0cf9a36e`): accepted.**
+  - Six minor, advisory findings, none critical or important. The reviewer reproduced each mutant at the tip: verb
+    gate 8 rows red, doctor gate 3, scheme 5.
+  - The reviewer ran the three Opus lenses without a separate Sonnet refute pass, and re-measured each minor finding
+    by hand instead. A minor finding never fails a wave on its own, so this did not change the outcome.
+  - F1, F2, F3 and F5, which are plan records, are corrected on this ledger PR. F4 and F6 go under Later.
+- **2026-11-05: landed.** Landing verdict ROUTE Q.
+  - CodeQL alert 264 (`js/redos`) flagged a test regex in `box-settings-table.test.ts`, and the unresolved thread
+    blocked the queue. The regex parses the repository's own `ccd/testbox-knobs` inside a unit test, so it was
+    dismissed as used in tests. A rewrite without the ambiguity goes under Later.
+  - Enqueued with `--match-head-commit b0cf9a36e`. MERGED 08:44 UTC as `42f57f9ef`. Run 1409 closed as the final wave.
+  - Deviation numbers 7906 to 7923 are used, each defined once. 7924 and 7925 are spare and unused.
+  - **Rollout:** `ccrc rollout --server-first`, because the server must read version 2 before a node writes it.
+  - **Still to measure:** both boxes' snapshots on the card, once a release with `42f57f9ef` reaches the fleet.
+
 ## Carried constraints
 
 - No default, range, reader, validator or refusal of any setting changes. No act reads the snapshot.
 - No route, agent op, exec-whitelist entry or box-token door is added.
 - The snapshot never holds a host, a home path, a credential or an unredacted URL.
+- A release base with no `http://` or `https://` scheme shows `custom` alone (item 41, D-7923).
 
 ## Next-wave brief
 
-Wave 2: the remaining settings (run 1409, deviation numbers 7906 to 7925). The design is the spec's section 5
-(revision 5, approved 2026-11-04), and where it differs from the points below, section 5 governs. The points it
-settled from the census:
+None: wave 2 was the last wave. The programme closes once a release with `42f57f9ef` reaches the fleet and both
+boxes' snapshots show on the card, measured from the console. Roll it out with `ccrc rollout --server-first`.
 
-- **One display class per name** (`value`, `origin`, `presence` or `omit`). Free text, names, paths, globs, lists,
-  user names and token or key files are `presence`.
-- **Refused values.** A refused value records only its verdict and its source, never its raw text. This retires the
-  A13 residual for all keys, wave 1's seven included.
-- **Validated values only.** The card takes each value from its owner's own check, by calling it: `_tshape`,
-  `_gr_knobs` and `_tb_load`. It never copies a regex.
-- **File mode.** Every read uses `ccrc.env` alone, because an environment-first read reports the reader's own
-  environment.
-- **The test box.** The host table goes on the card. The box table, read only on the test box itself, is omitted on a
-  console node.
-- **The test-box URL.** `presence`, approved as D19: its host, a private address, never shows.
-- **Settings applied at install.** Slice and graph-unit settings take effect at the next update. Either the card says
-  so, or it reads the installed drop-in.
-- **Doctor.** Doctor's `box-settings` check uses the same display table as the card.
+## Later
 
-Task 1 also carries review 1403's F1, F3 and F4. Wave 2 adds keys to the snapshot, so its rollout is `--server-first`
-(review 1385's ruling above). The programme closes when wave 2 lands and both boxes' snapshots show on the card.
+- The verb's absence list for the userinfo-before-a-scheme plants gains `u:pw` (review 1500 F4).
+- The card's how line names the four graph settings the installer renders, not every graph setting. It scopes its
+  word "only", and its pin asserts that the old clause is gone (review 1500 F6).
+- The CodeQL-flagged test regex in `box-settings-table.test.ts` gets the unambiguous form
+  `CCRC_[A-Z0-9_]+(?:\|CCRC_[A-Z0-9_]+)*`.
+- A macOS run of `box-settings-table.test.ts`, once its macOS leg fits the job's time limit.
+- The wave's own list, in the plan's Later section: doctor's rc 2 remedy for an unloadable library, the human form's
+  480 against the JSON's 240 cut, V10 re-running the verb's own reads, and `rowOfV2`'s whole-set why check.
+- The spec's Later list stands.

@@ -83,8 +83,11 @@ export const SENTENCES: Record<string, string> = {
   // this is a stale REGISTRATION rather than a live checkout ccd does not
   // own. `nested-checkouts-present`'s sentence ("Checkouts of their own
   // live…") would be actively wrong here: there is no checkout to move or
-  // finish, only a record to prune.
-  'child-record-stale': 'git still records a nested worktree whose directory is gone. Run `git worktree prune` in the project checkout, then re-check.',
+  // finish, only a record to remove. The remedy names the scoped removal of
+  // that one record, never a repository-wide prune, which deletes the record
+  // of every gone worktree at once and holds ccd's cleanup (cleanup un-wedge,
+  // Task R3; the session hook refuses it).
+  'child-record-stale': 'git still records a nested worktree whose directory is gone. Remove that one record with `git -C <main> worktree remove <path>`, then re-check.',
   'stashes-present': 'This branch has stashed changes, which are in no commit.',
   // A stash read that FAILED, and it gets its own sentence for the same reason
   // `tree-unreadable` does: `git stash list` answers rc 0 with empty output for
@@ -233,8 +236,11 @@ export const SENTENCES: Record<string, string> = {
   // in wave 3 (reclaim's rung 6 alone; ws-reap has no emitter of this token at
   // all), and its sentence covers a held `index.lock` FILE standing in the
   // child's own tree (possibly left by a crash — no command need be holding
-  // it), never only an in-progress git operation.
+  // it), never only an in-progress git operation. `branch-gone-checked-out`
+  // (D-5944) is the ladder's and the pin's one predicate: the sentence says what
+  // was proven, and no retry changes it.
   'not-a-child': 'ccrc did not create this workspace for a run, or its record of which run did is missing or disagrees — so it is never reclaimed automatically. Nothing was removed.',
+  'branch-gone-checked-out': 'This worktree is still on a branch that no longer exists, so its HEAD names no commit and its work cannot be kept. Nothing was removed.',
   'paused': 'Reclamation is paused fleet-wide. Nothing was removed; it resumes when the pause is lifted.',
   'attached': 'A terminal is attached to this session, so nothing was removed. Reclamation tries again later.',
   'tree-busy': 'A git operation — a rebase, merge, cherry-pick or revert — is in progress in this worktree, or its index is locked (an `index.lock` file is present, possibly left by a crash), so nothing was removed. Reclamation tries again later.',

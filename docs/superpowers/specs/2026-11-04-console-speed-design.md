@@ -4,7 +4,7 @@
 
 ## In short
 
-The console feels stuck because the server does too much work on every 2-second watcher tick, and the app has no way to notice a dead connection or a hung request. This spec fixes both, as the operator ruled on 2026-11-04: fixes first, then a measurement pass, with no day of measuring beforehand. On the server, stopped rows are read rarely, tmux is asked once per tick, the fleet frame goes out as soon as the list is assembled, and the per-request routes serve what the last tick already measured, with an age. In the app, a silent socket is noticed within about 30 seconds, reads have a time limit, screens keep their last view while they reload, and the big screens load only when opened. Four tasks build this in parallel, in disjoint files. Please check the eleven points in §6 where main's code differs from the brief, and the decisions in §3.
+The console feels stuck because the server does too much work on every 2-second watcher tick, and the app has no way to notice a dead connection or a hung request. This spec fixes both, as the operator ruled on 2026-11-04: fixes first, then a measurement pass, with no day of measuring beforehand. On the server, stopped rows are read rarely, tmux is asked once per tick, the fleet frame goes out as soon as the list is assembled, and the per-request routes serve what the last tick already measured, with an age. In the app, a silent socket is noticed within about 30 seconds, reads have a time limit, screens keep their last view while they reload, and the big screens load only when opened. After a release, the open console reloads when you next move between screens, never in the first seconds back (item 33). On a cold start, Waiting on you and an opened item draw the list last saved on the device, marked as not current, until live data replaces it (item 34). Six tasks build this, in files that overlap only where §4 says. Please check the fourteen points in §6 where main's code differs from the brief, and the decisions in §3.
 
 ## 1. Context
 
@@ -160,15 +160,16 @@ stateDiagram-v2
   Connecting --> Down: not open after 10 s
   Open --> Armed: first beat
   Armed --> Down: no message for 30 s
+  Armed --> Down: back in view, last message older than 30 s
   Open --> Down: closed or error
   Armed --> Down: closed or error
-  Down --> Connecting: backoff, or visible with an old last message
+  Down --> Connecting: backoff, or back in view
 ```
-*Figure 6. The socket's states. Thirty seconds is three missed beats, and any message counts, so a busy but live link does not flap.*
+*Figure 6. The socket's states. Thirty seconds is three missed beats, and any message counts, so a busy but live link does not flap. A return to the page closes only an armed socket: an open socket that has seen no beat is never closed by it.*
 
-On becoming visible or online, `nudge()` now also acts while a socket exists: if the last message is older than 30 s, it closes the socket and reconnects at once.
+On becoming visible or online, `nudge()` now also acts on an open socket, but only once that socket is armed, meaning a beat has been seen: if its last message is older than 30 s, it closes the socket and reconnects at once. Before the first beat, a return to the page never closes an open socket. Today's server sends no timer frames, so without this condition a quiet, healthy socket would reconnect on every return until the beat ships. A socket that is down reconnects at once on a return, as today.
 
-**Read time limits.** `request` in `pwa/src/lib/api.ts` gives every GET a 20 s limit, merged with any caller signal. A POST never gets a default limit, because a write's outcome must not be guessed. A timeout raises a distinct `ApiTimeout` error, so a screen can say "the server is slow" rather than "failed". Reads known to take longer (the worker lists them by reading the server bounds) pass their own limit. `usePoll` aborts its read in flight on unmount and when a newer read supersedes it.
+**Read time limits.** `request` in `pwa/src/lib/api.ts` gives every GET a 20 s limit, merged with any caller signal. A POST never gets a default limit, because a write's outcome must not be guessed. A timeout raises a distinct `ApiTimeout` error, so a screen can say "the server is slow" rather than "failed". Reads known to take longer (the worker lists them by reading the server bounds) pass their own limit. `usePoll` aborts its read in flight on unmount, and when `supersede()` replaces it.
 
 **Big screens load on demand.** `SessionScreen` (with xterm), Settings and its data provider, Accounts, Runs, the Digest and `HighlightMeasure` become `React.lazy` imports under the existing detail-pane boundary. The fleet list, the shell, Mail, Archive and the Waiting routes stay eager. The cascade-layer order is already declared first in `index.html` (D-7891) and pinned by `pwa/test/layer-order.test.ts`, so a lazy chunk that shares entry modules cannot reorder the layers. The service worker precaches every `.js` file (`vite.config.ts:195`), so a lazy screen still opens offline. The Docs screen and the programme screen stay as they are (§5).
 
@@ -178,9 +179,72 @@ On becoming visible or online, `nudge()` now also acts while a socket exists: if
 
 Settings' six polls (`useUpdatesView`, `useStallWatchView`, `useCollectLaneView`, `useDispatchAbandonView`, `useTestboxView`, `useLinearWorkspaces`, all under `pwa/src/fleet/`), its sign-in status and passkey reads, and the Digest adopt it. The run archive does not: run rows already have one owner, the fleet store (§2.2), and a second copy would be a second writer.
 
+### 2.5 Reloading after a release (task C3)
+
+This section says when the open console moves onto a new release. The operator ruled on item 33: "Reload when you next move between screens, never in the first seconds back." What changes is only the moment of the reload; how a release is found and installed stays as it is.
+
+**What happens today.** `vite.config.ts:150` sets `registerType: 'autoUpdate'`. A new service worker skips waiting and takes over the page. The plugin's register script (vite-plugin-pwa 2.0.0) then calls `window.location.reload()` on the worker's `activated` event, because `main.tsx:47-61` passes no `onNeedReload`. `main.tsx:52-54` asks for an update check every time the page becomes visible. So a phone that comes back to the app checks, downloads the new build and reloads, a few seconds after the operator starts reading. With five releases in a day, that is most returns.
+
+**The new moment.** `main.tsx` passes `onNeedReload`, so the plugin no longer reloads by itself. The worker still takes over at once, and the check on a return stays. The activation only marks a reload as pending. A pending reload runs at the next move between screens, when the page has been visible for at least `RELOAD_QUIET_MS` (15 s):
+
+- **A move between screens** is a navigation whose screen changes: the route `matchRoute` (`lib/routes.ts:152`) names, and its parameter (a session id, an item id). A Docs page turn, a filter or another search-only change is not a move, because the screen stays the one the operator is reading. A move made through `navigate` (`lib/router.ts:24`) loads the new path as a full page, in place of the in-page swap, so the old build never draws the new screen first. Back and forward reload on `popstate` the same way.
+- **The first seconds back** start when the page becomes visible, or when it loads visible. `lib/pageClock.ts`'s `onPageVisible` and `onPageHidden` are the one subscription (the census holds one `visibilitychange`). A hidden page holds the reload, and each return starts the 15 s again.
+- **Why 15 s.** On a return, the page catches up: the update check runs, and C1's socket either answers or, if its last message is old, reconnects, giving a connect 10 s (`CONNECT_MS`) and checking every 5 s. By 15 s the link is live or being retried, and the operator has read what they came back for. A move inside that window is the first tap after unlocking, which is exactly the restart the operator wants gone. A move after it is a moment the operator chose to change screens.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Current
+  Current --> Pending: a new worker took over
+  Pending --> Pending: a move in the first 15 s back, or a hidden page
+  Pending --> Reloading: a move after 15 s back
+  Pending --> Reloading: the block screen is up, or a lazy screen fails to load
+  Reloading --> [*]
+```
+*Figure 7. When a pending reload runs. Only a move between screens after the first 15 s back reloads, except for the two cases where the old build cannot go on.*
+
+**Two cases reload at once.** Both are moments where the old build cannot be used anyway:
+
+- **The block screen.** An incompatible `hello` raises the block screen and calls `requestUpdate()` (`stores/fleet.ts:650-655`, its only caller). That call now also means "reload as soon as a new worker is in". Nothing can be read behind the block screen, so waiting gains nothing.
+- **A lazy screen that fails to load.** Once the new worker is in, the old build's chunks are gone from its cache (vite-plugin-pwa sets workbox's `cleanupOutdatedCaches`), and the server answers a missing `/assets` file with `index.html` (`server.ts:4087-4090`). With C1's lazy screens, a chunk the old build asks for later fails. Vite fires `vite:preloadError` for a failed dynamic import. While a reload is pending, that event reloads at once. With nothing pending, the failure goes to C1's boundary, as C1 already tests.
+
+**What stays the same.** The 15-minute check (`main.tsx:45`), the check on a return, the block screen's own Reload button, and a notification tap: `push-sw.js:130-143` navigates the client to the push's URL, which is a full load and so already lands on the new build.
+
+**Where it lives.** The decision is a pure reducer in a new `lib/reloadGate.ts` (L1): given the pending flag, the urgent flag and the visible-since time, an event answers "reload" or "hold". `lib/swupdate.ts` (L4) holds that state, already sits between the store and the registration, and acts. `router.ts`'s `navigate` asks it before it pushes. No new storage, no new `visibilitychange` listener, and no change to `vite.config.ts` beyond its comment.
+
+### 2.6 A saved copy on a cold start (task C4)
+
+This section says what Waiting on you and an opened item draw before live data arrives. The operator ruled on item 34: "Show it, marked as not current until live data replaces it." Acting stays blocked until live data lands, so no tick or answer goes out on stale data.
+
+**What happens today.** The Waiting page draws `NO_FRAME_WORD`, "Waiting for the first update from the server…" (`ledgerWords.ts:31`), until both the list and the fleet's rows have landed (`WaitingScreen.tsx:160-168`; the rows count only after the first fleet frame, `useHeard`, `WaitingRoutes.tsx:61-67`). An opened item does the same until the list lands (`WaitingRoutes.tsx:316-319`). The list is never saved: the store's `waiting` field says "items from an earlier page load are not a fact this page has heard" (`stores/fleet.ts:225-231`), which applies the pools rule at `stores/fleet.ts:180-186` ("A cached tag rendered as live policy would lie"). That is the earlier ruling item 34 refers to, written in PL5a and kept by its review carries.
+
+**How D16 keeps that ruling.** The ruling's point is that a saved copy must never be read, or acted on, as live. D16 keeps the point and changes only what is drawn:
+
+- `waiting` keeps its meaning. It is null until this page hears a frame or a read, and the saved copy never goes into it. The copy is a separate store field, `waitingSaved`, so every reader that asks "has this page heard the list?" (the Waiting badge, `navBadges.ts:63`, the programme page, the item steps) answers as today.
+- The page says so. A saved draw carries a line in words, "Saved on this device 4m ago, not current. Waiting for live data…", in the place the waiting line holds today, and the item's acts say why they are off.
+- Acting is blocked. On an item drawn from the saved copy, Mark done, Dismiss, Give a secret and Remove are disabled until the live list lands. A typed answer stays in the panel, so it can be sent once live data arrives.
+
+**Where the copy lives.** The device already keeps one copy for a cold start: `lib/offline.ts` saves the fleet's rows and roster (`ccrc.fleet-snapshot.v1`), and the fleet list draws them at once as "Last known state — connecting…" (`FleetScreen.tsx:446-455`). C4 extends that owner with a second key, `ccrc.waiting-snapshot.v1`, holding the last list and when it was saved. It reads and writes only through the storage port's `readKey` and `writeKey` (`lib/storage.ts:56-79`), which swallow a store that is absent, full or throws: a page with no storage simply draws today's waiting line. A saved value is checked by the one list reader, `isWaitingView` (`ledgers/waitingView.ts:12`), so a value from an older build that is not a list draws nothing. The two writers of `waiting`, the frame (`stores/fleet.ts:687`) and `setWaiting` (`:728`), save the copy after each accepted list. No new storage owner file is added, so census-w7's `storageOwners` (none outside the port) is unchanged; `pwa/test/w7-storage-keys.test.ts` gains the new key.
+
+C2's `screenCache.ts` is not used. It is memory only, by its own rule, so a reload empties it, and a cold start is exactly a fresh memory. The list's one owner is the fleet store, as the run rows' is (D13).
+
+```mermaid
+flowchart TD
+  A["Waiting page or item opens"] --> B{"Live list heard,<br/>and for the page the live rows too?"}
+  B -- "yes" --> L["Draw live. Acts open"]
+  B -- "no" --> C{"Box says it has no coordination database?"}
+  C -- "yes" --> U["Say so"]
+  C -- "no" --> D{"A list heard, or saved on this device?"}
+  D -- "no" --> W["Waiting for the first update from the server…"]
+  D -- "yes" --> S["Draw it, marked not current.<br/>Acts on an item blocked"]
+  S -- "live data lands" --> L
+```
+*Figure 8. What the Waiting page and an item draw before live data. A saved copy is drawn only where today's page would draw nothing, and it is replaced as soon as live data lands.*
+
+**The parts of a not-current page.** The list page needs the list and the fleet's rows (its question rows come from sessions). Either can be the device's: the list from `waitingSaved`, the rows from the fleet snapshot the store already hydrates (`stores/fleet.ts:509-513`). A pure decider, in a new `ledgers/savedCopy.ts` (L1), names which, as one of four answers: live, the list saved, the rows saved, or nothing. The words differ only in what they name. An item needs only the list, so it is live, saved or nothing. A box that answers that it has no coordination database (`useUnavailable`) says so in place of a saved copy, as today.
+
 ## 3. Decisions
 
-The operator ruled the scope on 2026-11-04. The decisions below are how this spec carries it out. They are the coordinator's calls inside the operator's scope, and they are agreed.
+The operator ruled the scope on 2026-11-04. The decisions below are how this spec carries it out. D1 to D14 are the coordinator's calls inside the operator's scope. D15 and D16 are the operator's own answers to items 33 and 34, with the coordinator's details inside them. All are agreed.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -198,10 +262,12 @@ The operator ruled the scope on 2026-11-04. The decisions below are how this spe
 | D12 | Read time limit | 10 s; 20 s; none | 20 s on GETs only, with an override per call | Agreed |
 | D13 | Where kept answers live | Each screen's own state; the fleet store; one cache module | One module for query answers. Run rows stay in the fleet store, their one owner | Agreed |
 | D14 | Heartbeats | WebSocket ping; an app frame; the watcher's tick | An app frame from a per-socket timer. A browser cannot see pings, and a tick-driven beat would stop exactly when the tick is slow | Agreed |
+| D15 | When the open console reloads after a release (item 33) | Reload at once, as today; a "New version, reload" button; reload at the next move between screens | The operator: "Reload when you next move between screens, never in the first seconds back." A move is a change of route or its parameter; "the first seconds back" is 15 s from a return or a visible load; the block screen and a lazy screen that fails to load reload at once (§2.5) | Agreed |
+| D16 | What a cold start draws before live data (item 34) | Nothing, as today; the last list saved on the device | The operator: "Show it, marked as not current until live data replaces it." The copy is a separate store field, never `waiting`; the page says it is not current; acts on an item stay blocked until the live list lands (§2.6) | Agreed |
 
-## 4. The four tasks
+## 4. The six tasks
 
-This section shows how the work splits so that four workers can build at once. Each task owns its files outright. Two small hand-offs order the landings.
+This section shows how the work splits so that the workers can build at once. Each task owns its files outright. A few small hand-offs order the landings.
 
 | Task | Deviation | What | Owns |
 |---|---|---|---|
@@ -209,6 +275,8 @@ This section shows how the work splits so that four workers can build at once. E
 | S2 | D-7988 | Per-request reads, heartbeats, the timers' wiring | `sessionws.ts`, `server.ts`, `coord/routes.ts`, `coord/store.ts`, `coord/attribution.ts`, `update/routes.ts`, new `update/releaseWindow.ts`, `shared/api.ts`, PWA `useColdRuns.ts`, `RunsScreen.tsx`, `stores/fleet.ts` |
 | C1 | D-7989 | Socket watchdog, read limits, lazy screens | `pwa/src/lib/ws.ts`, `api.ts`, `usePoll.ts`, `app.tsx`, `vite.config.ts` if needed |
 | C2 | D-7990 | The client cache | new `pwa/src/lib/screenCache.ts`, the six Settings hooks, `SettingsDataProvider.tsx`, `DigestScreen.tsx` |
+| C3 | D-7997 | Reloading after a release at the next move between screens | new `pwa/src/lib/reloadGate.ts`, `pwa/src/lib/swupdate.ts`, `pwa/src/lib/router.ts`, `pwa/src/main.tsx`, the comment in `pwa/vite.config.ts` |
+| C4 | D-7998 | A saved Waiting on you list on a cold start | `pwa/src/lib/offline.ts`, new `pwa/src/ledgers/savedCopy.ts`, `pwa/src/ledgers/WaitingRoutes.tsx`, `WaitingScreen.tsx`, `ItemView.tsx`, `ledgerWords.ts`; a field and two save calls in `pwa/src/stores/fleet.ts`, which S2 also edits |
 
 ```mermaid
 flowchart LR
@@ -220,8 +288,12 @@ flowchart LR
   C2["C2: client cache"] --> C2W
   S2W --> M["Measurement pass"]
   C2W --> M
+  C3["C3: reload after a release"] --> M
+  PL10["Ledgers PL10 merged"] --> C4["C4: saved copy,<br/>store and decider"]
+  PL11["Ledgers PL11 merged"] --> C4S["C4's screen steps"]
+  C4 --> C4S
 ```
-*Figure 7. Landing order. All four build at once. S2 finishes after S1 lands, because it reads S1's getters and recorder, and its Runs board calls the one read C1 adds to `api.ts`; C2 finishes after C1 lands, because it passes C1's abort signal. The measurement pass reads the timers once all four are live.*
+*Figure 9. Landing order. S1, S2, C1, C2 and C3 build at once. S2 finishes after S1 lands, because it reads S1's getters and recorder, and its Runs board calls the one read C1 adds to `api.ts`; C2 finishes after C1 lands, because it passes C1's abort signal. C3 shares no file with any of them. C4 starts after PL10 merges and draws its screens after PL11 merges, because both rework the Waiting page's files. The measurement pass reads the timers once S1, S2, C1 and C2 are live.*
 
 ## 5. Testing and proof
 
@@ -231,7 +303,9 @@ This section says how each change is proved, and what is measured afterwards. Ev
 - **The frame:** an ordering test proves the fleet frame is emitted before the state cache is touched and before pools are read.
 - **Served reads:** each route has a pair of tests: fresh watcher state answers with `ageMs` and no agent request; stale or missing state answers as today.
 - **The app:** fake timers prove the watchdog closes after 30 s of silence once armed, never before the first beat, and that a beat every 10 s keeps it open for ten minutes. The whole browser suite and a `full-ci` run prove the lazy screens and the layers.
-- **Measurement pass:** once all four tasks are live, read the `perf` block and the journal for a day: tick length and phases, round trip per op, event-loop delay and slow routes. Anything still slow becomes a new item, measured first.
+- **The reload (C3):** a pure table proves the gate holds on an activation, holds a move in the first 15 s back and on a hidden page, reloads a move after it, and reloads at once for the block screen and a failed chunk. Over a fake clock and fake acts, one move reloads exactly once, onto the new path, and a Docs page turn or a search-only change never reloads. The bootstrap test proves `registerSW` gets `onNeedReload`, so the plugin no longer reloads by itself.
+- **The saved copy (C4):** the copy round-trips through the storage port, and a store that throws or holds a value that is not a list draws today's waiting line. A cold store has `waitingSaved` set and `waiting` null. The Waiting page and an item draw the copy at once with the not-current line, an item's acts are disabled and send nothing, and the live list replaces the copy and opens the acts. The census-w7 storage owners stay at none outside the port.
+- **Measurement pass:** once S1, S2, C1 and C2 are live, read the `perf` block and the journal for a day: tick length and phases, round trip per op, event-loop delay and slow routes. Anything still slow becomes a new item, measured first.
 
 ## 6. Where main differs from the brief
 
@@ -248,6 +322,9 @@ This section lists what the code on main showed that the brief did not expect, a
 9. **`releases()` has four other callers** that need the whole catalogue (§2.2), so only the wire is limited.
 10. **Dialogs read this tick's hook states**, so the hook-state sweep stays on the frame's path, limited to hot rows.
 11. **Attribution's single-row read changes one edge** (D10), tested as its own commit.
+12. **The client cache cannot serve a cold start.** `screenCache.ts` (C2) is memory only by its own rule, so a reload empties it. C4 therefore does not build on it: it extends `lib/offline.ts`, the device's one cold-start copy, which already saves the fleet's rows. C4 does not wait for C2.
+13. **A deferred reload runs the old build under the new worker.** The new worker drops the old build's cached chunks, and the server answers a missing `/assets` file with `index.html` (`server.ts:4087-4090`). With C1's lazy screens, an old chunk asked for later fails, so C3 reloads at once on `vite:preloadError` while a reload is pending, and a move loads the new path as a full page rather than drawing it in the old build first.
+14. **The Waiting page's files are being reworked.** PL10 (in review) edits `WaitingRoutes.tsx`, `WaitingScreen.tsx`, `ItemView.tsx` and `ledgerWords.ts`; PL11 folds the programme page's own list into the one Waiting page. Before PL11, the programme page also draws "Waiting for the first update from the server…" (`ProgrammeScreen.tsx:186-192`). After it, C4 covers one list page and the item, not two list pages.
 
 ## Where things stand
 
@@ -256,11 +333,12 @@ This section lists what the code on main showed that the brief did not expect, a
 - The scope, the order (fixes first, then measure) and the four timers, ruled by the operator on 2026-11-04.
 - Caching on the server (the last tick's answers, with an age; rows re-read only on change; the state cache written only on change) and in the app (a screen's last answer), asked for by the operator on 2026-11-04.
 - D1 to D14, the coordinator's calls inside the operator's scope (2026-11-04), D10 included: a sender whose row is seen absent twice is gone, as D-113 already says.
+- Item 33, ruled by the operator on 2026-11-04: "Reload when you next move between screens, never in the first seconds back." Built by C3 (§2.5, D15). The coordinator set "the first seconds back" at 15 s.
+- Item 34, ruled by the operator on 2026-11-04: "Show it, marked as not current until live data replaces it." Built by C4 (§2.6, D16). The saved copy is never read as live, and acting stays blocked until live data lands, so the earlier ruling's point is kept.
 
 ### Waiting on you
 
-- Item 33: when the app reloads after a release. Open, and not in this spec.
-- Item 34: drawing a saved list on a cold start. Open, and not in this spec; it needs a ruling on showing a snapshot as not current.
+- Nothing.
 
 ### Later
 
@@ -271,6 +349,9 @@ This section lists what the code on main showed that the brief did not expect, a
 - **Priority for interactive agent requests**, or a cap on background requests in flight: after the round-trip timers show queueing.
 - **coord.db's 5 s busy wait** (`coord/db.ts:181`): after the event-loop timer shows a stall.
 - **Paging a chat's backlog** (up to 1 MB today): if session-open timing still shows it.
+- **A reload while the page is hidden**: not chosen for item 33. If the operator stays on one screen for a long time, the old build keeps running until the next move or the block screen.
+- **The Waiting on you badge from the saved copy**: it still counts nothing until live data lands (`navBadges.ts:63`). A count drawn from a saved copy is a separate question for the operator, if wanted.
+- **Saved copies for other screens** (Runs, Mail) on a cold start: after C4 shows how the Waiting page reads.
 - **Lane states on `/api/accounts`** for a signed-in viewer: still read per request; served from the watcher if the route timer shows it slow.
 
 ---

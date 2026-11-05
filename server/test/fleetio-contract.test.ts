@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { localIO } from '../src/io.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
 
@@ -22,17 +23,17 @@ const fleetIoBody = (): string => {
 };
 
 /** Each member's name, in declaration order: a line indented two spaces that opens a call signature. */
-const members = (body: string): string[] => [...body.matchAll(/^ {2}(\w+)\(/gm)].map((m) => m[1]!);
+const members = (body: string): string[] => [...body.matchAll(/^ {2}(\w+)\??\(/gm)].map((m) => m[1]!);
 
 /** Each member's docstring: the `/** … *\/` block that ends right above its signature, whitespace only between. */
 const docs = (body: string): Map<string, string> =>
-  new Map([...body.matchAll(/\/\*\*((?:(?!\*\/)[\s\S])*)\*\/[ \t]*\n {2}(\w+)\(/g)].map((m) => [m[2]!, m[1]!]));
+  new Map([...body.matchAll(/\/\*\*((?:(?!\*\/)[\s\S])*)\*\/[ \t]*\n {2}(\w+)\??\(/g)].map((m) => [m[2]!, m[1]!]));
 
 describe('FleetIO — every member states its failure contract (D-5969)', () => {
   it('reads the members it is meant to read', () => {
     expect(members(fleetIoBody())).toEqual([
       'readFileMeasured', 'readFile', 'readFileFromMeasured', 'readFileFrom', 'readFileFromBytesMeasured',
-      'readFileB64Measured', 'readdirMeasured', 'readdir', 'statMeasured', 'stat', 'lstatMeasured', 'realpath',
+      'readFileB64Measured', 'readdirMeasured', 'readdir', 'readdirWithTimesMeasured', 'statMeasured', 'stat', 'lstatMeasured', 'realpath',
       'writeFileB64', 'tailFile', 'statfsMeasured', 'pressureMeasured',
       // The backup state files (D-7858).
       'backupMeasured',
@@ -75,5 +76,13 @@ describe('the plain io.readdir ratchet (D-5969)', () => {
     for (const f of ['collectTempRoot.ts', 'endDeadCoordinator.ts', 'expireArchived.ts']) {
       expect(readFileSync(path.join(SRC, 'coord', f), 'utf8'), f).not.toMatch(/\bio\.readdir\(/);
     }
+  });
+});
+
+describe('localIO lists names only', () => {
+  it('does not implement readdirWithTimesMeasured', () => {
+    // Test fakes spread `...localIO` and override `readdir`; an inherited times reader would make the cached registry
+    // read list the REAL filesystem and bypass the fake's listing. Local mode keeps names-only keys.
+    expect(localIO.readdirWithTimesMeasured).toBeUndefined();
   });
 });

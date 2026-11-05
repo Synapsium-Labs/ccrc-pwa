@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseFile, parseSource, retireFacts, wireFacts, type ParsedFile } from './scan/parse.js';
+import { expressionShape, nameWrites, parseFile, parseSource, retireFacts, wireFacts, type ParsedFile } from './scan/parse.js';
 
 const FIXTURE = [
   "import { readFileSync, type Stats } from 'node:fs';",
@@ -302,5 +302,53 @@ describe('scan/parse.ts reads the retire facts: literals, signatures, aliases (D
 
   it('leaves ParsedFile as it was: no field is added to the shared walk', () => {
     expect(Object.keys(parsed).sort()).toEqual(['bindings', 'calls', 'comparisons', 'exportedTypeAliases', 'imports', 'path', 'symbols', 'text']);
+  });
+});
+
+describe('scan/parse.ts reads an expression by its syntax (#896)', () => {
+  it('an object literal: every member name, each spread operand, and whether a name is open', () => {
+    expect(expressionShape("{ a: 1, 'b': 2, ['c']: 3, d, e() {}, ...f, ...(g ? {} : { h }) }")).toEqual({ kind: 'object',
+      keys: ['a', 'b', 'c', 'd', 'e'], spreads: ['f', '(g ? {} : { h })'], open: false });
+    expect(expressionShape('{ [k]: 1 }')).toEqual({ kind: 'object', keys: [], spreads: [], open: true });
+  });
+
+  it('a comment or a line break inside the source changes nothing, and a nested key is not the object\'s', () => {
+    expect(expressionShape("{\n  a: 1, // b: 2\n  c: { d: 1 },\n}")).toEqual({ kind: 'object', keys: ['a', 'c'], spreads: [], open: false });
+    expect(expressionShape('opts // why')).toEqual({ kind: 'name', name: 'opts' });
+  });
+
+  it('parentheses, `!`, `as`, `satisfies` and a `<T>` assertion are looked through', () => {
+    for (const t of ['(opts)', 'opts!', 'opts as never', 'opts as unknown as T', 'opts satisfies T', '<T>opts', '((opts as T)!)']) {
+      expect(expressionShape(t), t).toEqual({ kind: 'name', name: 'opts' });
+    }
+  });
+
+  it('a conditional and a logical expression list what they can evaluate to', () => {
+    expect(expressionShape('c ? a : b')).toEqual({ kind: 'either', branches: ['a', 'b'] });
+    expect(expressionShape('a || b')).toEqual({ kind: 'either', branches: ['a', 'b'] });
+    expect(expressionShape('a ?? b')).toEqual({ kind: 'either', branches: ['a', 'b'] });
+    expect(expressionShape('c && a')).toEqual({ kind: 'either', branches: ['a'] });
+  });
+
+  it('`undefined`, `null` and a boolean are absent; anything else, or text that is not one expression, is other', () => {
+    for (const t of ['undefined', 'null', 'false', 'true']) expect(expressionShape(t), t).toEqual({ kind: 'absent' });
+    for (const t of ['f()', 'a.b', '[1]', "'s'", '1', '...args', 'a; b']) expect(expressionShape(t), t).toEqual({ kind: 'other' });
+  });
+});
+
+describe('scan/parse.ts lists assignments to a name or its member, and the spans of a call\'s arguments (#896)', () => {
+  it('a name, a dotted member and a literal element are listed; a dynamic element, a deeper member and a compound are not', () => {
+    const t = parseSource("x = 1;\ny.a = f();\nz['b'] = 2;\nz[k] = 3;\nw.a.b = 4;\nv += 5;\n", 't.ts');
+    expect(nameWrites(t).map(({ name, member, value }) => [name, member, value])).toEqual([
+      ['x', null, '1'], ['y', 'a', 'f()'], ['z', 'b', '2'],
+    ]);
+    expect(t.text.slice(nameWrites(t)[1]!.start).startsWith('y.a')).toBe(true);
+  });
+
+  it('argSpans give each argument\'s source as written, comments and line breaks included', () => {
+    const src = "f('a', {\n  b: 1, // why\n  c: 2,\n});";
+    const t = parseSource(src, 't.ts');
+    const c = t.calls[0]!;
+    expect(c.argSpans.map((a) => src.slice(a.start, a.end))).toEqual(["'a'", '{\n  b: 1, // why\n  c: 2,\n}']);
   });
 });

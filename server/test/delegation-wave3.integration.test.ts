@@ -956,7 +956,7 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
   ['ws-lease-audit', /\bws-lease-audit\b|\bcmd_ws_lease_audit\b|\blease-audit-v1\b/, [
     'ccd/ccd', 'ccd/lib/delegation-lease.sh', 'ccd/ccd-entry.py', 'agent/src/whitelist.ts', 'server/src/ccdargv.ts',
     'server/src/remote/runner.ts', 'shared/api.ts']],
-  ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, []],
+  ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, ['ccd/ccd', 'server/src/ccdargv.ts']],
   ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh']],
   ['delegation-adopt', /delegation-adopt/, []],
   ['promotesLease', /\bpromotesLease\b/, []],

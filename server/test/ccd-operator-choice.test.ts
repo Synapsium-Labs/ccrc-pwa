@@ -15,7 +15,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { fileURLToPath } from 'node:url';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
@@ -845,19 +846,21 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       if (fn === 'cmd_stop') {
         expect(src[i]).toMatch(GUARD);
         expect(src[i + 1]).toMatch(/^ {2}_ws_unsupervise "\$id" "\$surface" "\$declared"$/);
-        expect(src[i + 2]).toMatch(UNMARK);
+        expect(src[i + 2]).toMatch(/^ {2}_pane_scope_of "\$id" /);   // D-7902: the pane's scope, read while the pane still stands
+        expect(src[i + 3]).toMatch(UNMARK);
       }
       if (fn === '_spawn_start') {   // BEFORE the journal's floor line, then the marker's removal
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id" /);
         expect(src[i + 1]).toMatch(/^ {2}_typed_note "\$id" since /);
         expect(src[i + 2]).toMatch(/^ {2}rm -f "\$REG\/\$id\.choicekept" /);
       }
-      if (fn === 'cmd_hibernate') {   // the keep, then (past the comment) the marker, the unsupervise and the kill
+      if (fn === 'cmd_hibernate') {   // the keep, then (past the comment) the marker, the unsupervise, the pane's scope (D-7902) and the kill
         expect(src[i]).toMatch(GUARD);
-        const next = src.slice(i + 1).filter(live).slice(0, 3);
+        const next = src.slice(i + 1).filter(live).slice(0, 4);
         expect(next[0]).toMatch(/^ {2}_reg_set "\$id" hibernated /);
         expect(next[1]).toMatch(/^ {2}_ws_unsupervise "\$id" ccd$/);
-        expect(next[2]).toMatch(UNMARK);
+        expect(next[2]).toMatch(/^ {2}_pane_scope_of "\$id" /);
+        expect(next[3]).toMatch(UNMARK);
       }
       if (fn === 'cmd_ws_archive') {
         expect(src[i]).toMatch(/^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"; _ws_unsupervise "\$id" /);
@@ -1225,7 +1228,7 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       h.sh(`mkfifo ${JSON.stringify(file)}`);
       const snippet = `source ${JSON.stringify(CCD)}; ${fn} ${ID}; printf 'rc=%s' "$?"`;
-      const r = spawnSync('bash', ['-c', `${BOUNDED} 5 bash -c "$1"`, '_', snippet], {
+      const r = spawnSyncGroup('bash', ['-c', `${BOUNDED} 5 bash -c "$1"`, '_', snippet], {
         encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL',
         env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
       });
