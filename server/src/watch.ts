@@ -10944,18 +10944,21 @@ class DelegationLane {
         // PR5b (Task 5.5.4): native-removed release, once per census: `planNativeRemoved` decides, `releaseLease` writes.
         const endActs = this.phase(pass, 'leaseActs');
         try {
-          const { censused, flat } = laneFlatCensus(pass.census, new Set());
+          const st = durable.state(), { censused, flat } = laneFlatCensus(pass.census, new Set());
           const keyOf = (r: DelegationCensusRecord): string => laneTreeKey(r.project, r.adminRecord);
-          const plan = planNativeRemoved({ checkpoint: durable.state().checkpoint as DelegationCheckpointV1, censused: new Set(censused),
+          // Review 1498 F1: a not-ready applier is not a census to count, so the memory stays as it was; a candidate stays in it until
+          // its door answers applied or unchanged, and one release's throw is warned like a refusal, never abandoning the next.
+          const plan = st.phase !== 'ready' ? null : planNativeRemoved({ checkpoint: st.checkpoint as DelegationCheckpointV1, censused: new Set(censused),
             listed: new Set(flat.map(keyOf)), absent: new Set(flat.filter((r) => r.state === 'absent').map(keyOf)),
             unreadable: new Set(flat.filter((r) => r.state === 'unreadable').map(keyOf)),
             heads: new Map(flat.flatMap((r) => (r.state === 'present' && r.headSha !== null ? [[keyOf(r), r.headSha] as const] : []))),
             absentListings: this.absentListings.counts, lastHeads: this.absentListings.heads });
-          this.absentListings = { counts: plan.absentListings, heads: plan.lastHeads, uncensused: plan.uncensused };
-          for (const r of plan.release) {
+          if (plan !== null) this.absentListings = { counts: plan.absentListings, heads: plan.lastHeads, uncensused: plan.uncensused };
+          for (const r of plan?.release ?? []) {
             if (pass.signal.aborted || durable.state().phase !== 'ready') break;
-            const out = await durable.releaseLease({ ...r, at: formatDelegationInstant(pass.now), resolvesThrough: null });
-            if (out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release refused: ${out.refusal}: ${out.detail}`);
+            const out = await durable.releaseLease({ ...r, at: formatDelegationInstant(pass.now), resolvesThrough: null }).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
+            if (out instanceof Error || out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release ${out instanceof Error ? `failed: ${out.message}` : `refused: ${out.refusal}: ${out.detail}`}`);
+            else { this.absentListings.counts.delete(r.leaseId); this.absentListings.heads.delete(r.leaseId); }
           }
         } catch (err) { console.warn(`ccrc-server: delegation lease acts failed: ${err instanceof Error ? err.message : String(err)}`); } finally { endActs(); }
       }

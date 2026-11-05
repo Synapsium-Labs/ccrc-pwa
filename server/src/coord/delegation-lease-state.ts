@@ -305,12 +305,14 @@ export interface NativeRemovedRelease {
 
 /**
  * Which unreleased leases' trees are gone (spec §5.5, D-7795, D-7852). For each unreleased lease that is not `transferring`: a lease
- * whose project this pass did not census keeps its count and is counted `uncensused`, never absent; a censused one whose key is missing
- * from the listing, or listed `absent`, counts one more listing absent; any other listed record (present, unreadable, or an admin record
- * that stands while its tree directory is gone) resets the count to 0. At `DELEGATION_NATIVE_REMOVED_LISTINGS` the lease is released:
- * `transferred` for a `promoted` lease (D-7797), else `native-removed`, with the last head a census saw for its record (D-7796, D-8025).
- * A `transferring` lease never releases and keeps its count. The returned memory holds only unreleased leases: a count above 0, and the
- * last head seen. `uncensused` is the lane's health count (D-8025: decided here, so the lane only stores it).
+ * whose project this pass did not census keeps its count and is counted `uncensused`, never absent; a censused one whose record is
+ * listed `unreadable` resets the count to 0 (unmeasured, never absence); one whose key is missing from the listing, or listed `absent`,
+ * counts one more listing absent; any other listed record (present, or an admin record that stands while its tree directory is gone)
+ * resets the count to 0. At `DELEGATION_NATIVE_REMOVED_LISTINGS` the lease is released: `transferred` for a `promoted` lease (D-7797),
+ * else `native-removed`, with the last head a census saw for its record (D-7796, D-8025). A `transferring` lease never releases and keeps
+ * its count. The returned memory holds every unreleased lease with a count above 0, and the last head seen, a release candidate included:
+ * the lane forgets a candidate only once its door answers `applied` or `unchanged` (D-8025, review 1498 F1), so a release that does
+ * not land is planned again at the next listing with the same head. `uncensused` is the lane's health count (decided here, D-8025).
  */
 export function planNativeRemoved(input: NativeRemovedInput): {
   release: readonly NativeRemovedRelease[];
@@ -334,9 +336,11 @@ export function planNativeRemoved(input: NativeRemovedInput): {
     };
     if (delegationCarrierStateOf(lease, carriers.get(lease.leaseId)) === 'transferring') { keep(prior); continue; }
     if (!input.censused.has(lease.project)) { uncensused += 1; keep(prior); continue; }
-    if (input.listed.has(key) && !input.absent.has(key)) { keep(0); continue; }   // present, unreadable, or a record whose tree is gone
+    if (input.unreadable.has(key)) { keep(0); continue; }                           // unmeasured: it resets, never counts (W5-JM7)
+    if (input.listed.has(key) && !input.absent.has(key)) { keep(0); continue; }   // present, or a record whose tree is gone
     const count = prior + 1;
-    if (count < DELEGATION_NATIVE_REMOVED_LISTINGS) { keep(count); continue; }
+    keep(count);                                                    // a candidate too, until its release lands (review 1498 F1)
+    if (count < DELEGATION_NATIVE_REMOVED_LISTINGS) continue;
     release.push({ leaseId: lease.leaseId, expectGeneration: lease.generation,
       releaseReason: lease.disposition === 'promoted' ? 'transferred' : 'native-removed', lastHeadSha: head ?? null });
   }

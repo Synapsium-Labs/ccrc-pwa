@@ -140,7 +140,7 @@ describe('planNativeRemoved: a lease whose tree is gone from two successful list
     expect(one!.release).toEqual([]);
     expect(one!.absentListings.get('lease-a')).toBe(1);
     expect(two!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: null }]);
-    expect(two!.absentListings.has('lease-a')).toBe(false);
+    expect(two!.absentListings.get('lease-a'), 'a release candidate keeps its count until its release lands (review 1498 F1)').toBe(2);
     expect(run([A], [{ censused: ['project-a'], records: [['project-a', 'wt-1', 'absent']] }, gone])[1]!.release, 'listed absent counts as absent').toHaveLength(1);
     expect(run([A], [gone, present, gone]).map((o) => o.release.length), 'a present listing resets the count').toEqual([0, 0, 0]);
   });
@@ -151,6 +151,10 @@ describe('planNativeRemoved: a lease whose tree is gone from two successful list
     const outs = run([A], [gone, unread, gone]);
     expect(outs.map((o) => o.release.length)).toEqual([0, 0, 0]);
     expect(outs[1]!.absentListings.has('lease-a'), 'unreadable is never absence: the count is 0').toBe(false);
+    // The planner reads `unreadable` itself: a record unreadable but not in `listed` resets too, and is never missing (review 1498 F6).
+    const memory: Memory = { absentListings: new Map([['lease-a', 1]]), lastHeads: new Map() };
+    const out = planNativeRemoved({ ...inputOf([A], gone, memory), unreadable: new Set([key('project-a', 'wt-1')]) });
+    expect([out.release.length, out.absentListings.has('lease-a')], 'an unreadable record resets even when unlisted').toEqual([0, false]);
   });
 
   it('W5-J16b: an admin record that stays listed while its tree directory is gone never releases; missing from two listings it does', () => {
@@ -185,7 +189,15 @@ describe('planNativeRemoved: a lease whose tree is gone from two successful list
     const outs = run([A], [seen, later, gone, { censused: [] }, gone]);
     expect(outs[1]!.lastHeads.get('lease-a')).toBe('b'.repeat(40));
     expect(outs[4]!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: 'b'.repeat(40) }]);
-    expect(outs[4]!.lastHeads.has('lease-a'), 'a released lease leaves the memory').toBe(false);
+    expect(outs[4]!.lastHeads.get('lease-a'), 'a release candidate keeps its head until its release lands').toBe('b'.repeat(40));
+  });
+
+  it('review 1498 F1: a release that did not land is planned again at the next absent listing, with the head kept', () => {
+    const seen: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'present', 'c'.repeat(40)]] };
+    const outs = run([A], [seen, gone, gone, gone]);                 // the lease stays unreleased: its door never answered applied
+    expect(outs.map((o) => o.release.length)).toEqual([0, 0, 1, 1]);
+    expect(outs[3]!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: 'c'.repeat(40) }]);
+    expect(outs[3]!.absentListings.get('lease-a')).toBe(3);
   });
 
   it('W5-J17: a promoted lease releases transferred; a transferring lease never releases; a released lease is not planned', () => {

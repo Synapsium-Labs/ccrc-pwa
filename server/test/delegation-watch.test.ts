@@ -1200,10 +1200,13 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
 // ── PR5b (Task 5.5.4): native-removed release through the lane's `leaseActs` phase ────────────────────────────────────
 
 describe('PR5b: a lease whose tree is gone from two successful listings is released by the lane', () => {
+  // Each record its own head (review 1498 F6), so a pin on `lastHeadSha` tells the lease's own record from any other.
+  const RAW_H = record('demo', 'raw-tree', { headSha: '1'.repeat(40) });
+  const OLD_H = record('demo', 'old-tree', { headSha: '2'.repeat(40) });
   /** The rung-4 world, three passes on, with `raw-tree` leased (generation 0) and present at the third census. */
   async function leasedRaw(): Promise<{ w: World; leaseId: string }> {
     const w = await rawTreeWorld();
-    for (const n of [0, 1, 2]) await censusPass(w, at(n), { demo: [OLD, RAW] });
+    for (const n of [0, 1, 2]) await censusPass(w, at(n), { demo: [OLD_H, RAW_H] });
     const [lease] = leasesOf(w.home);
     expect(lease).toMatchObject({ adminRecord: 'raw-tree', releasedAt: null, generation: 0 });
     return { w, leaseId: lease!.leaseId };
@@ -1212,7 +1215,7 @@ describe('PR5b: a lease whose tree is gone from two successful listings is relea
   it('W5-J18: two passes with the record gone release the lease through releaseLease, and the leaseActs key is on the pass\'s slow line', async () => {
     const { w, leaseId } = await leasedRaw();
     const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
-    await censusPass(w, at(3), { demo: [OLD] });
+    await censusPass(w, at(3), { demo: [OLD_H] });
     expect(release, 'one listing absent releases nothing').not.toHaveBeenCalled();
     setNow(at(4));
     await pass(w);                                                     // a pass over the census already reconciled: no new listing
@@ -1221,15 +1224,15 @@ describe('PR5b: a lease whose tree is gone from two successful listings is relea
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     let slowed = false;     // a block phase made slow, so the pass writes its slow line
     w.watcher.setDelegationSeams({ onPassPhase: (k: string): void => { if (k === 'noteSessions' && !slowed) { slowed = true; setNow(Date.now() + 1500); } } } as never);
-    await censusPass(w, at(5), { demo: [OLD] });
+    await censusPass(w, at(5), { demo: [OLD_H] });
     expect(release).toHaveBeenCalledTimes(1);
-    expect(release.mock.calls[0]![0]).toMatchObject({ leaseId, expectGeneration: 0, releaseReason: 'native-removed', lastHeadSha: 'a'.repeat(40), resolvesThrough: null });
+    expect(release.mock.calls[0]![0]).toMatchObject({ leaseId, expectGeneration: 0, releaseReason: 'native-removed', lastHeadSha: '1'.repeat(40), resolvesThrough: null });
     expect(leasesOf(w.home)[0]).toMatchObject({ leaseId, generation: 1, releasedAt: expect.any(String) });
     expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8')).toContain('"kind":"lease-released"');
     const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('ccrc-server: delegation pass slow:'));
     expect(line, 'the pass wrote its slow line').toBeDefined();
     expect(line).toMatch(/ leaseActs=\d+/);
-    await censusPass(w, at(6), { demo: [OLD] });
+    await censusPass(w, at(6), { demo: [OLD_H] });
     expect(release, 'a released lease is not planned again').toHaveBeenCalledTimes(1);
   });
 
@@ -1247,8 +1250,69 @@ describe('PR5b: a lease whose tree is gone from two successful listings is relea
     }
     expect(release).not.toHaveBeenCalled();
     expect(leasesOf(w.home)[0]!.releasedAt).toBeNull();
-    await censusPass(w, at(9), { demo: [OLD, RAW] });
+    await censusPass(w, at(9), { demo: [OLD_H, RAW_H] });
     expect(w.watcher.currentDelegationHealth()).not.toHaveProperty('uncensusedLeases');
+  });
+
+  it('review 1498 F1: a refused release keeps the lease\'s count and head, and the next listing releases it with that head', async () => {
+    const { w, leaseId } = await leasedRaw();
+    const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
+    release.mockResolvedValueOnce({ kind: 'refused', refusal: 'stale-generation', detail: 'a fixture refusal' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await censusPass(w, at(3), { demo: [OLD_H] });
+    await censusPass(w, at(4), { demo: [OLD_H] });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes(`${leaseId} native-removed release refused: stale-generation`))).toBe(true);
+    expect(leasesOf(w.home)[0]!.releasedAt).toBeNull();
+    await censusPass(w, at(5), { demo: [OLD_H] });                    // one more absent listing: still a candidate, so planned again
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(release.mock.calls[1]![0]).toMatchObject({ leaseId, expectGeneration: 0, releaseReason: 'native-removed', lastHeadSha: '1'.repeat(40) });
+    expect(leasesOf(w.home)[0]).toMatchObject({ leaseId, generation: 1, releasedAt: expect.any(String) });
+  });
+
+  it('review 1498 F1: a pass whose applier is not ready counts no listing and calls no door', async () => {
+    const { w } = await leasedRaw();
+    const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
+    const real = DelegationDurability.prototype.state;
+    const box = { armed: true, notReady: false };
+    vi.spyOn(DelegationDurability.prototype, 'state').mockImplementation(function (this: DelegationDurability) {
+      const st = real.call(this);
+      return box.notReady ? ({ ...st, phase: 'reconstructing' } as unknown as ReturnType<typeof real>) : st;
+    });
+    w.watcher.setDelegationSeams({ onPassPhase: (k: string): void => { box.notReady = box.armed && k === 'leaseActs'; } } as never);
+    await censusPass(w, at(3), { demo: [OLD_H] });                    // absent, but the applier reads not ready in leaseActs
+    box.armed = false; box.notReady = false;
+    expect(release).not.toHaveBeenCalled();
+    await censusPass(w, at(4), { demo: [OLD_H] });
+    expect(release, 'the not-ready pass counted no listing: this is the first').not.toHaveBeenCalled();
+    await censusPass(w, at(5), { demo: [OLD_H] });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('review 1498 F1: a release that throws is warned, and the plan\'s next release is still tried', async () => {
+    const w = world();
+    writeBucket(w, 'demo-a', BUCKET10,
+      startLine('demo-a', '2026-10-15T10:01:00.000Z'),
+      bashPre('demo-a', 'toolu_wt1', ['old-tree'], '2026-10-15T10:05:00.000Z'),
+      bashPost('demo-a', 'toolu_wt1', ['old-tree', 'raw-tree'], '2026-10-15T10:05:03.000Z'),
+      bashPre('demo-a', 'toolu_wt2', ['old-tree', 'raw-tree'], '2026-10-15T10:07:00.000Z'),
+      bashPost('demo-a', 'toolu_wt2', ['old-tree', 'raw-tree', 'raw-two'], '2026-10-15T10:07:03.000Z'));
+    await primed(w);
+    const TWO = record('demo', 'raw-two', { headSha: '3'.repeat(40) });
+    for (const n of [0, 1, 2]) await censusPass(w, at(n), { demo: [OLD_H, RAW_H, TWO] });
+    expect(leasesOf(w.home).map((l) => l.adminRecord).sort()).toEqual(['raw-tree', 'raw-two']);
+    const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
+    release.mockRejectedValueOnce(new Error('a fixture throw'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await censusPass(w, at(3), { demo: [OLD_H] });
+    await censusPass(w, at(4), { demo: [OLD_H] });
+    expect(release, 'the throw did not abandon the second release').toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('native-removed release failed: a fixture throw'))).toBe(true);
+    const thrown = release.mock.calls[0]![0].leaseId;
+    expect(leasesOf(w.home).filter((l) => l.releasedAt !== null).map((l) => l.leaseId)).toHaveLength(1);
+    await censusPass(w, at(5), { demo: [OLD_H] });
+    expect(release.mock.calls[2]![0]).toMatchObject({ leaseId: thrown });
+    expect(leasesOf(w.home).every((l) => l.releasedAt !== null), 'the thrown one is released at the next listing').toBe(true);
   });
 });
 
