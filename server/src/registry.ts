@@ -1306,9 +1306,8 @@ export const REGISTRY_ROW_CONCURRENCY = 8;
 /** The optional row cache of `readRegistryMeasured` (console speed S1). Absent = today's read, request for request. */
 export type RegistryReadOpts = {
   cache?: RegistryRowCache;
-  /** This tick's tmux verdict for a row, or null when there is no (clean) listing: doubt reads hot. */
-  /** May be a Promise: it is awaited after the registry's own listing, so the caller's tmux listing and this
-   *  listing run together. */
+  /** This tick's tmux verdict for a row, or null when there is no (clean) listing: doubt reads hot. May be a Promise:
+   *  it is awaited after the registry's own listing, so the caller's tmux listing and this listing run together. */
   verdicts?: ((id: string) => SessionVerdict | null) | Promise<(id: string) => SessionVerdict | null>;
   nowMs?: number;
 };
