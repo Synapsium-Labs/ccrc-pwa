@@ -43,8 +43,8 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const ok = (stdout: string): CcdResult => ({ ran: true, ok: true, stdout, stderr: '', killed: false, signal: null });
   let pressure = false;
   // The delegation hold (PR4): free unless a case sets it; every ask is recorded with the path and class it was handed.
-  let leaseHold: (p: string, cls: string) => Promise<OrphanLeaseHold> = async () => ({ kind: 'free' });
-  const holdAsks: Array<{ path: string; cls: string }> = [];
+  let leaseHold: (p: string, cls: string | null) => Promise<OrphanLeaseHold> = async () => ({ kind: 'free' });
+  const holdAsks: Array<{ path: string; cls: string | null }> = [];
   const deps: OrphanSweepDeps = {
     io: { readdirMeasured: async () => ({ ok: true, entries: [...markers] }) } as unknown as OrphanSweepDeps['io'],
     registryDir: '/reg',
@@ -88,7 +88,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     pressured: (v: boolean): void => { pressure = v; },
     censusTakes: (ms: number): void => { censusTakesMs = ms; },
     coordinators, wsKinds, unreadable: (v: boolean): void => { coordsReadable = !v; },
-    holdAsks, hold: (f: (p: string, cls: string) => Promise<OrphanLeaseHold>): void => { leaseHold = f; },
+    holdAsks, hold: (f: (p: string, cls: string | null) => Promise<OrphanLeaseHold>): void => { leaseHold = f; },
     addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
   };
 }
