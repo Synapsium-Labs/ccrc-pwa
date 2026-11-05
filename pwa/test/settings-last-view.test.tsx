@@ -289,6 +289,10 @@ describe('Settings keeps its last view across visits (console speed C2)', () => 
     expect(v.dispatchAbandon.view).toEqual(ABANDON);
     expect(v.testbox.view).toEqual({ block: null });
     expect(v.linear.view).toEqual(LINEAR);
+    // a transient failure is not a gone view: every key is still kept for the next visit (fix round 2, F1)
+    for (const name of ['updates', 'stall-watch', 'collect-lane', 'dispatch-abandon', 'testbox', 'linear-workspaces'] as const) {
+      expect(peek(settingsKey(name)), name).toBeDefined();
+    }
   });
 
   it('an answer that drops the view forgets the key too', async () => {

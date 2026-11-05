@@ -135,9 +135,10 @@ export function useTestboxView(pollMs: number = TESTBOX_POLL_MS): TestboxPoll {
       }
     },
   });
-  // Every caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed branch, an ack or a move;
-  // console speed C2 fix round 1). The kept answer is from before that write, so it goes first: leaving Settings
-  // before the re-read lands (which aborts it) must not bring the pre-write view back on the next visit.
+  // A caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed or failed branch, an ack or a
+  // move; console speed C2 fix rounds 1 and 2), with a few re-reads that follow no write (the collector's
+  // marker-still-controls answer, Linear's legacy act), which cost only a Loading on the next visit. The kept answer
+  // goes first: leaving Settings before the re-read lands (which aborts it) must not bring a pre-write view back.
   const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   return { view: state.view, failure: state.failure, reload };
 }
