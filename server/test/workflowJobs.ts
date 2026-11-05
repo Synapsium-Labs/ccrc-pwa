@@ -349,7 +349,7 @@ export function boundaryFindings(
 
     // ── classification (D-6655, D-6660) ──
     if (job.permissions === undefined) out.push(`${J} declares no permissions of its own`);
-    if (job.uses === null && job.runsOn !== 'ubuntu-latest') out.push(`${J} runs on ${shown(job.runsOn)}, not ubuntu-latest`);
+    if (job.uses === null && job.runsOn !== 'ubuntu-24.04') out.push(`${J} runs on ${shown(job.runsOn)}, not ubuntu-24.04`);
     if (job.uses !== null && outputsOfCalled(job.uses) === null) out.push(`${J} calls ${job.uses}, which this guard cannot read`);
 
     if (isBuildJob(job)) {

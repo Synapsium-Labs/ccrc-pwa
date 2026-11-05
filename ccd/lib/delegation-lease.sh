@@ -12,6 +12,8 @@
 #   5. `ccd ws-lease-audit` (`cmd_ws_lease_audit`), the read-only measure of a leased tree (PR2). A stated blind spot
 #      (review 1461 F6): its `changed: false` does not cover a commit reachable only from the tree's HEAD reflog, which no
 #      branch and no tip holds; the removal paths pin reflogs (`_ws_reclaim_keep_reflogs`).
+#   6. `_dl_orphan_rung`, the orphan ladder's lease rung (PR4): a tree its carrier holds is refused `leased`, and anything it
+#      cannot read refuses `unmeasured`.
 #
 # THE TRUST CHAIN is ccd/lib/disk-retention.sh's: installed beside ccd's body (`~/.local/libexec/ccrc/lib/delegation-lease.sh`)
 # by `ccd/ccd-entry-install.py`, pinned by the body (`__CCD_LIB_LEASE_SHA256`, near the foot of ccd/ccd, written at install
@@ -703,4 +705,83 @@ _dl_audit_ladder() {   # cmd_ws_lease_audit's ladder, inside _ws_reclaim_contain
   printf '{"ok":true,"lease":"%s","generation":%s,"tip":"%s","dirty":%s,"aheadOfBase":%s,"branchAheadOfBase":%s,"changed":%s%s%s,"token":"%s"}\n' \
     "$lease" "$((10#$gen))" "$tip" "$dirty" "$ahead" "$bahead" "$changed" "$dl" "$hl" "$tok"
   return "$rc"
+}
+
+# 6. The orphan ladder's lease rung (PR4, D-7002, D-7828): the orphan-tree lane is the only removal path for a leased tree, so
+#    `_ws_orphan_ladder` asks this after its registry rung. It reads, never writes; the ladder's token binds what it read.
+__DL_HOLD_MARGIN_S=3600     # the box keeps skipping for one hour past expiresAt (clock skew; D-7794)
+
+_dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leased`); rc 4 unmeasured (refusal `unmeasured`);
+                      #    DL_WHY says why. Sets DL_HOLD_LEASE DL_HOLD_GEN DL_HOLD_STATE for the token: the carrier the by-tree
+                      #    entry names, or `none` when no entry names one. Inert (rc 0, `none`, the tree's key never derived) while
+                      #    no carrier and no index entry can stand: no $REG/delegation, no leases/ under it (wave 3's spool makes
+                      #    $REG/delegation at every spawn), or a leases/ holding neither a carrier nor a by-tree entry.
+  local LC_ALL=C main="${1-}" tree="${2-}" common ci l gf adm rec key now d f bt until carriers=0 entries=0
+  DL_HOLD_LEASE=none; DL_HOLD_GEN=none; DL_HOLD_STATE=none; DL_WHY=''
+  d="$REG/delegation/leases"; bt="$d/by-tree"
+  _dl_dirs_measured "$REG/delegation" "$d"
+  case $? in 0) ;; 3) return 0 ;; *) return 4 ;; esac
+  [[ -r "$d" ]] || { DL_WHY="$d cannot be listed, so no carrier can be ruled out"; return 4; }
+  for f in "$d"/*.json; do [[ -e "$f" || -L "$f" ]] && { carriers=1; break; }; done
+  _dl_dirs_measured "$REG/delegation" "$d" "$bt"
+  case $? in
+    0) [[ -r "$bt" ]] || { DL_WHY="the lease index $bt cannot be listed"; return 4; }
+       for f in "$bt"/* "$bt"/.[!.]* "$bt"/..?*; do [[ -e "$f" || -L "$f" ]] && { entries=1; break; }; done ;;
+    3) # A-e: no by-tree index. Not held when no carrier stands; while one does, the index's absence cannot be trusted
+       (( carriers )) || return 0
+       DL_WHY="the lease index is missing while carriers exist ($d holds ${f##*/})"; return 4 ;;
+    *) return 4 ;;
+  esac
+  (( carriers || entries )) || return 0   # rule 1: leases/ proven empty, no key needed
+  # the tree's by-tree key, as the mark computes it: the common git directory's identity and the admin record's name
+  common=$(_ws_common_dir "$main") && _ws_dir_physical "$common" \
+    || { DL_WHY="the common git directory of $main could not be resolved"; return 4; }
+  common="$_WS_PHYS"
+  _ws_path_ident "$common" || { DL_WHY="the identity of $common could not be read${_WS_IDENT_WHY:+ ($_WS_IDENT_WHY)}"; return 4; }
+  ci="$_WS_IDENT"
+  [[ -f "$tree/.git" && ! -L "$tree/.git" && -r "$tree/.git" ]] && { IFS= read -r l < "$tree/.git"; } 2>/dev/null && [[ "$l" == "gitdir: "?* ]] \
+    || { DL_WHY="$tree/.git is not a readable gitfile, so the tree's admin record cannot be named"; return 4; }
+  gf="${l#gitdir: }"; [[ "$gf" == /* ]] || gf="$tree/$gf"
+  _ws_dir_physical "$gf" || { DL_WHY="the admin record $gf could not be resolved ($_WS_PHYS_WHY)"; return 4; }
+  adm="$_WS_PHYS"; rec="${adm##*/}"
+  [[ "${adm%/*}" == "$common/worktrees" ]] || { DL_WHY="$tree/.git names $gf, which is not an admin record of $common"; return 4; }
+  key=$(_dl_tree_key "$ci" "$rec") && [[ "$key" =~ ^[0-9a-f]{64}$ ]] || { DL_WHY="the tree key of $rec could not be computed"; return 4; }
+  _dl_tree_owner "$key"
+  case $? in
+    0) ;;
+    3) # rule 1: proven absent. The entry alone is "no lease" only while the index still stands (it stood above)
+       _dl_dirs_measured "$REG/delegation" "$d" "$bt" && return 0
+       DL_WHY="the lease index $bt vanished while the tree's entry was read"; return 4 ;;
+    *) return 4 ;;   # rule 2: the entry could not be read
+  esac
+  # rule 3: an index entry without a readable carrier is never free (the half-write ends through the mark's heal)
+  _dl_carrier_read "$DL_OWNER"
+  case $? in
+    0) ;;
+    3) DL_WHY="the by-tree entry names lease $DL_OWNER, whose carrier is absent"; return 4 ;;
+    *) DL_WHY="the by-tree entry names lease $DL_OWNER, whose carrier cannot be read: $DL_WHY"; return 4 ;;
+  esac
+  # the three are read by the orphan ladder (_ws_orphan_ladder, ccd/lib/disk-retention.sh) for its token
+  # shellcheck disable=SC2034  # read by _ws_orphan_ladder in ccd/lib/disk-retention.sh
+  DL_HOLD_LEASE="$DL_OWNER"
+  # shellcheck disable=SC2034  # read by _ws_orphan_ladder in ccd/lib/disk-retention.sh
+  DL_HOLD_GEN="$DL_C_generation"
+  # shellcheck disable=SC2034  # read by _ws_orphan_ladder in ccd/lib/disk-retention.sh
+  DL_HOLD_STATE="$DL_C_state"
+  _dl_in "$DL_C_state" "$__DL_HOLDING" || return 0   # the state first, then the path (D-7804): a reused record is not held
+  _ws_dir_physical "$tree" || { DL_WHY="the tree $tree could not be resolved ($_WS_PHYS_WHY)"; return 4; }
+  [[ "$DL_C_canonicalPath" == "$_WS_PHYS" ]] \
+    || { DL_WHY="lease $DL_OWNER holds ($DL_C_state) the tree $DL_C_canonicalPath on this admin record, not $_WS_PHYS: it may be this tree, moved"; return 4; }
+  [[ "$DL_C_state" != transferring ]] || { DL_WHY="lease $DL_OWNER holds this tree (transferring)"; return 1; }
+  # shellcheck disable=SC2154  # DL_C_expiresAt is set by _dl_carrier_read through printf -v
+  [[ "$DL_C_expiresAt" =~ ^[1-9][0-9]{0,15}$ ]] || { DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) with no expiry"; return 4; }
+  _now_s_to now
+  # no leading zero: bash would read `08` in base 8 and the compare would fail, which reads as not held
+  [[ "$now" =~ ^[1-9][0-9]*$ ]] || { DL_WHY="the clock answered '$now', not a whole number of seconds, so the hold's expiry cannot be compared"; return 4; }
+  if (( now * 1000 <= DL_C_expiresAt + __DL_HOLD_MARGIN_S * 1000 )); then
+    TZ=UTC0 printf -v until '%(%Y-%m-%dT%H:%M:%S)T' "$(( DL_C_expiresAt / 1000 ))"
+    printf -v until '%s.%03dZ' "$until" "$(( DL_C_expiresAt % 1000 ))"   # the ISO instant, as the server's feed says every time
+    DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) until $until, and for ${__DL_HOLD_MARGIN_S} s after"; return 1
+  fi
+  return 0   # O5-1 (a): past its expiry and the margin, the ladder's own rungs decide
 }

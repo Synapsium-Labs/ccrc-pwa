@@ -8,8 +8,10 @@ import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, Dig
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
+import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
+import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
@@ -788,6 +790,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  response and waits for the next `{type:'coord'}` frame's `reclaim` to
      *  confirm. No box token: an operator's same-origin write. */
     childReclaimPause: (state: 'on' | 'off') => post('/api/coord/reclaim-pause', { state }),
+    /** `POST /api/coord/pane-scope-stop` (D-7902): Settings › Automation › Stop leftovers, `{state}`. `requested`, never
+     *  the switch: the next `{type:'coord'}` frame's `paneScopeStop` is the answer, and the card settles on that.
+     *  `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setPaneScopeStop: (state: PaneScopeStopState) =>
+      postJsonOr<{ readonly ok: true; readonly requested: PaneScopeStopState } | 'unreadable'>('/api/coord/pane-scope-stop', 'unreadable', { state }),
     /** `GET /api/coord/caps` — the two limits AND the two derived counts, in one
      *  shape and one round trip. They travel together because a cap without its
      *  usage is a number an operator cannot act on. 501 `not-configured` on a
@@ -852,6 +859,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  Settings' Automation card reads it through `useDispatchAbandonView`, whose `asDispatchAbandonView` is the wire
      *  guard. 501 `not-configured` and an older server's 404 read as not available. Session-gated when armed. */
     dispatchAbandon: (opts?: ReadOpts) => getJson<DispatchAbandonView>('/api/coord/dispatch-abandon', opts),
+    /** `GET /api/coord/scope-sweep` (D-7994): the sweep's two switches, as the registry reads them. Settings' Automation
+     *  card reads it through `useScopeSweepView`, whose `asScopeSweepView` is the wire guard. */
+    scopeSweep: (opts?: ReadOpts) => getJson<ScopeSweepView>('/api/coord/scope-sweep', opts),
+    /** `POST /api/coord/scope-sweep` (D-7994): the busy arm's switch. The reply is the same view, read after the verb
+     *  ran. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
+    setScopeSweepBusy: (body: ScopeSweepBusyRequest) =>
+      postJsonOr<ScopeSweepView | 'unreadable'>('/api/coord/scope-sweep', 'unreadable', body),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>

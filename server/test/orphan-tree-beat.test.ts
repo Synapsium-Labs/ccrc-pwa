@@ -28,7 +28,7 @@ function harness(initial: Block) {
       throw new Error(`unexpected ccd call ${argv.join(' ')}`);
     },
   } as unknown as Deps;
-  const beat = new OrphanTreeBeat(() => deps, () => mono, () => block);
+  const beat = new OrphanTreeBeat(() => deps, () => mono, () => null, () => block);
   return { beat, censuses: () => censuses, advance: (ms: number) => { mono += ms; }, set: (b: Block) => { block = b; } };
 }
 
@@ -56,7 +56,7 @@ describe('the orphan-tree beat and the disk alarm', () => {
     expect(p.text.indexOf('new OrphanTreeBeat(', at + 1), 'only one construction').toBe(-1);
     const end = p.text.indexOf(';', at);
     const block = p.calls.find((c) => c.start > at && c.end < end && c.callee === 'this.diskAlarm.block');
-    expect(block, 'the third thunk calls this.diskAlarm.block()').toBeDefined();
+    expect(block, 'the fourth thunk calls this.diskAlarm.block()').toBeDefined();
     expect(p.text.slice(block!.end, end).replace(/\s/g, ''), 'it is the last argument').toBe(')');
   });
 });

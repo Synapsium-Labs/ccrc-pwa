@@ -513,7 +513,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 | `ccd-telemetry-keepalive.timer` | fleet, both | 15 min | one minimal turn on an idle measured account (below) | `~/.ccrc/keepalive-paused` |
 | `ccrc-models.timer` | fleet, both | 1 h | `ccrc models refresh --all`: every lane's model catalogue, and on a Codex lane the advance step ("Model classes per lane") | — |
 | `ccd-tmp-sweep.timer` | fleet, both | 1 h | reaps Claude Code's per-uid temp dir | `~/.ccrc/tmp-sweep-paused` |
-| `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed (below) | `~/.cc-sessions/scope-sweep-paused` |
+| `ccd-scope-sweep.timer` | fleet, both | 60 s | records every dead ccd pane scope; stops an inert one only when armed, and a busy one of a provably dead session only when its own switch is on too (below) | `~/.cc-sessions/scope-sweep-paused` |
 | `ccd-usage-sweep.timer` | fleet, both | 4 h | per-account usage totals from transcripts | `~/.ccrc/usage-sweep-paused` |
 | `ccd-carry-dedupe.timer` | fleet, both | 24 h | runs `ccd carry-dedupe --identical-only` and records what it would reclaim in `~/.cc-sessions/carry-dedupe-record`; a dry run until the operator arms it ("Swap-carry copies and the dedupe sweep", below) | — |
 | `ccd-testbox-times.timer` | fleet, both | 24 h | fetches CI's per-file test durations into `CCRC_TESTBOX_TIMES` with the box's `gh`, for the test box's budget estimate; fetches nothing with no test box configured ("The test box", below) | — |
@@ -1228,7 +1228,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `settings [--json] [--write]` | what seven of ccrc's settings resolve to on this box, with the backups and free disk; read-only ("Seeing a box's settings", below) |
+| `settings [--json] [--write]` | what each of the 61 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
@@ -1329,7 +1329,9 @@ does not name may still read its default. The thinning's time bound takes the sm
 `CCRC_UPDATE_DEADLINE_MS` the server may hold (the environment, `ccrc.env`, and `~/.ccrc/exposure.env`, which the server
 reads too), and the watchdog the largest (D-6591, D-6602). On macOS a file the box's model of systemd cannot decide
 refuses only the settings it names, and `CCRC_BACKUP_DATA_KEEP` always (D-6587). `ccrc doctor`'s `box-settings` check
-reads `ccrc.env` alone and names a line the reader refuses (D-6599). Eight more are `ccrc test`'s (see **Test
+reads `ccrc.env` alone and names a line the reader refuses (D-6599); it prints a setting's value only when the setting's check passes
+and the value fits the Box settings view's envelope, and otherwise `KEY (refused: <words>)` or `KEY (wider than this view
+records)` (D-7909, D-7918). Eight more are `ccrc test`'s (see **Test
 containment**): `CCRC_TEST_SLICE_MEMORY_MAX`, `CCRC_TEST_SLICE_SWAP_MAX`, `CCRC_TEST_SLICE_CPU_WEIGHT`,
 `CCRC_TEST_SLICE_CPU_QUOTA`, `CCRC_TEST_SLICE_IO_WEIGHT`, `CCRC_TEST_HEAVY_SLOTS` and `CCRC_TEST_WIDE_FILES` hold for
 the whole box, so they are read from `ccrc.env` alone (the reader's `file` mode), and `CCRC_TEST_PRESSURE_MAX` the same
@@ -1364,24 +1366,36 @@ line per key, and is how every other reader (the fleet agent's `testbox` op, the
 One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
 bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
 
-**Seeing a box's settings.** `ccrc settings` prints what seven of them resolve to on this box — the three keeps, the
-health window, the deadline (with the smallest and largest reading the server may hold), the release base (shown only
-as `default`, or `custom` with its scheme and host, so an ordinary userinfo URL shows its host, or `custom` alone when an `@` is
-left after the redaction, the value holds whitespace or another byte that starts a token for the redactor, a `/` stands inside the
-userinfo, or the scheme is not http or https) and the models budget — with where each came from (the
-environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and whether the act that reads it would use it,
-refuse it or could not decide (D-6914, D-7861). It also counts the timestamped backups, those that still hold a
+**Seeing a box's settings.** `ccrc settings` prints what each of the 61 settings a fleet or server node reads resolves to on this
+box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and
+whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
+are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
+URL's scheme and host only (the release base shows as `default`, or `custom <scheme://host>`, or `custom` alone when the
+value does not reduce to one or its text has no `http://` or `https://` scheme, D-7923), `is-set` (the spec's `presence`, D12) prints only that it is set (the test-box URL, D19), and `omit` is not shown. A
+refused row records its source and its check's words and never the value, wave 1's seven included (D14, D22). Every wave-2
+setting is read from `ccrc.env` alone; only the backups and the updates settings keep the environment-first read (D20). The
+session slice's two limits and the four graph settings that the installed units render take effect at the next
+update, and that update installs a value from its own shell's environment when the shell sets one, so the card shows what ccrc.env says, which can differ from what is installed. A value that passes its check but is wider than
+the view records reads as not measured (D-7909). It also counts the timestamped backups, those that still hold a
 `coord.db`, their size, and the home filesystem's free space. It is read-only: it never prunes, takes no lock and
 changes no setting. `--json` prints the record, and `--write` writes it to `~/.ccrc/box-settings.json` (0600), every
-string redacted of userinfo and `$HOME` and cut to 480 printable-ASCII characters. On every Linux box
+string redacted of userinfo and `$HOME` and cut to 480 printable-ASCII characters, a not-measured sentence in the JSON record to 240. The record is version 2; the server
+also reads version 1, checks its values and origin against the same envelope (one outside it reads as not measured), drops a refused
+version-1 row's value and its sentence, and bounds a not-measured sentence at 240 (D-7911). On every Linux box
 `ccrc-settings.timer` runs `ccrc settings --write --from timer` every five minutes under the user manager (D-6915), so
 the record shows the environment a console-driven update's detached child reads, not your shell's: a value you export
 only in a shell shows in that shell's `ccrc settings` and not on the card, which says which environment it read. The
 server reads the record inside the inventory sweep, as an eleventh node file, and Settings › Updates shows it per node
 in a read-only **Box settings** card (D-6916, D-6917): a node whose build has no `settings` cap word says so, and a
-record older than 15 minutes shows its age in the warning tone. Nothing acts on the record; every act re-reads its
-setting when it runs. `ccrc doctor`'s `box-settings` check still names a `ccrc.env` line the reader refuses, and its
-`services` check names a stopped `ccrc-settings.timer`.
+record older than 15 minutes shows its age in the warning tone. The card groups the rows by family, folds a family whose rows
+are all `ok` and keeps one with a refused or not-measured row open (D17); a server-role node shows one line per fleet family,
+"not used on this role", with its refused and not-measured counts (D21, D-7916). A console tab open on an older build shows a
+version-2 node, or a version-1 node with a refused row, as a form it does not read until it reloads (D15, D-7912). Nothing acts on the record; every act re-reads its
+setting when it runs. `ccrc doctor`'s `box-settings` check still names a `ccrc.env` line the reader refuses, prints a value only when its check
+passes and it fits the view's envelope (otherwise `KEY (refused: <words>)` or `KEY (wider than this view records)`), prints a
+`is-set` setting as set, reads the test box's own settings without printing them, prints the release base as its origin, and
+its carry-copies warning no longer quotes the value (D18, D-7918, D-7919). Its `services` check names a stopped
+`ccrc-settings.timer`.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -3750,7 +3764,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause` and `reclaim-pause` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
+  `coord-pause`, `reclaim-pause` and `scope-sweep-busy` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3762,7 +3776,7 @@ general remote-shell:
   can either come back, or a gated verb lose its flag, by accident:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
-  (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`,
+  (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`,
   `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
@@ -3782,7 +3796,7 @@ general remote-shell:
   fleet's projects root, and exactly the eleven `$HOME/.ccrc` node files by
   name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
   `box-token-generation`, holds a generation id, never a token; the tenth, `tmp-sweep.json`, is the tmp sweep's
-  census, which the server's census lane reads and mails from, D-6624; the eleventh, `box-settings.json`, is the box settings record, redacted and ASCII by its writer, which the server's box-settings lane reads inside the inventory run, D-6916) — a live symlink inside
+  census, which the server's census lane reads and mails from, D-6624; the eleventh, `box-settings.json`, is the box settings record, redacted and ASCII by its writer; the server's parse checks each value and origin against its setting's display class and each refused row's words against the closed set, and bounds a not-measured sentence (printable ASCII, at most 240 bytes) without checking its words; the server's box-settings lane reads it inside the inventory run, D-6916) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -6570,13 +6584,34 @@ is issued only while `~/.cc-sessions/scope-sweep-live` exists — nothing writes
 touches it after reading the shadow verdicts. Armed, one tick stops at most three scopes and records the
 rest `held`. `~/.cc-sessions/scope-sweep-paused` stops everything, the shadow record included.
 
+**The busy arm** (D-7993). A dead session's busy orphans (a `while true` monitor, a mock server, a `tail -f`) move
+CPU, start children or hold a socket, so the inert path only reports them. A dead scope that fails on those reasons
+is judged a second way, beside its `dead` line and never in its place: is its SESSION provably dead? A dead scope
+alone does not say so, because an account swap kills a pane while the session goes on in a new one. The sweep
+reads each process's own `CCRC_SESSION_GENERATION` (never `$REG/<id>.panescope`, which names only a session's last
+pane) and looks that generation up in `$REG/*.generation`: no row, or a row with `$REG/<id>.stopped`, is dead, a row
+with `$REG/<id>.hibernated` is `session-asleep` (every sleeping row reads stopped too, and it wakes expecting its scope:
+asleep is not dead, D-5242), and any other row is `session-live`. Beside that, no live pane may carry the generation, no process in the scope may be
+Claude Code (by `argv[0]` or `comm`: a build's `comm` is its version number), the `Description`'s pane must be gone,
+no process may be the parent of one in another cgroup, and nothing outside may be connected to it (`peer`: a loopback
+TCP connection whose far end is no socket of this scope, or an accepted connection on a named Unix socket). The grace
+is the session's: six hours from when the sweep first saw it provably dead, so a stop and a restart cost nothing and a
+session seen live or asleep drops the clock. Any of those it cannot measure is a `verdict=carry`, never a stop, and the clock
+survives a carry. **It ships shadowed behind its own switch:** a collectable scope reads `would-stop (busy)` with its
+process list until BOTH `scope-sweep-live` and `~/.cc-sessions/scope-sweep-busy-live` stand, and an armed busy stop spends
+the same three a tick as an inert one. **Settings › Automation › Leftover processes** shows both switches and sets the busy one (D-7994), through
+`GET`/`POST /api/coord/scope-sweep` and `ccd scope-sweep-busy --state on|off`, its one writer: a door for signed-in operators only. Limits: a connection between two dead scopes holds both, and a client
+of a Unix socket a process did not accept on a named path is not seen.
+
 Its verdicts live in `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten every tick (a reboot empties it,
 which restarts every clock): one `dead` line per dead ccd scope, one `carry` line per scope the tick could not
-measure, and one `old` line per process older than a day in a live pane scope, other than the pane's own and
-its Claude Code's MCP servers. `ccrc doctor`'s
+measure, one `old` line per process older than a day in a live pane scope, other than the pane's own and
+its Claude Code's MCP servers, one `busy` line per busy scope the arm judged, and `busy-mode live` under the header
+while both switches stand. `ccrc doctor`'s
 `scope-sweep` check reads that record and never re-derives it: it lists every dead scope — how long dead,
 the scope's own age and its oldest process's, its pids, memory, sockets and verdict — and every such
-long-lived process, warns when the record is stale, and SKIPs while the sweep is paused.
+long-lived process, says the busy-orphan count and the busy mode (each orphan with its process list), warns when the
+record is stale, and SKIPs while the sweep is paused.
 
 Doctor validates the whole body before giving ordinary scope advice. Malformed, future or stale records
 warn and ask for a new measurement, not a stop. Dead/unknown carries warn without destructive advice;
@@ -7089,7 +7124,8 @@ you need to reason about one.*
   body pins and loads at its foot, `lib/disk-retention.sh` (the fleet
   disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
-  `lib/delegation-lease.sh` (the delegation broker's lease carrier and `ws-lease-mark`, beside them); `ccrc`, the box
+  `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
+  `ws-lease-audit`, beside them); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that

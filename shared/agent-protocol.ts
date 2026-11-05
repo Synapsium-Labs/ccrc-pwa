@@ -173,14 +173,14 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * reader, and its size (a thousand `moved` rows) is past the inventory's 64 KiB file cap.
  *
  * `boxSettings` (`box-settings.json`, box settings view, D-6916) is the eleventh: what `ccrc settings --write` records every five
- * minutes, the seven named settings as the box resolves them. The verb's strings pass through `_upd_redact` (a URL's userinfo goes,
- * the home prefix becomes `~/`), print as ASCII and stop at 480 bytes, and the release base shows only its scheme and host, or
- * `custom` alone. The seven settings are counts, seconds, milliseconds and that URL, so an accepted value holds no key or token. One
- * residual (review 1396 F4, the verb header's): a REFUSED numeric key records its raw value through `_upd_redact` alone, so a path,
- * a query string, a userinfo holding '/', '?' or '#', or the part of a userinfo before whitespace or another token start
- * (`https://u:p w@h/r` is recorded as `https://u:p h/r`) written there by mistake can reach the file; ARCH-67 folds it. The server's
- * box-settings lane reads it on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's
- * `MEASURED_FILE_KEYS` leaves it out too: it has its own reader and its own parse.
+ * minutes. Version 1 holds the seven named settings; the server checks each version-1 `ok` value or origin against the same envelope
+ * as version 2, drops a version-1 refused row's value and why, rewrites an `ok` row outside the envelope as `unmeasured`, and cuts an
+ * unmeasured why to 240 before any console sees it (D-7911). Version 2 holds the 61 a fleet or server node reads, by display class,
+ * where only an `ok` row of class `value` or `origin` carries a value, and the server checks that value or origin against the
+ * setting's class and a refused row's `why` against the closed set (D-7913). An `unmeasured` row's `why` in either version is bounded
+ * text the box wrote (printable ASCII, at most 240), never checked against a closed set. The server's box-settings lane reads the
+ * file on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's `MEASURED_FILE_KEYS` leaves it out too: it
+ * has its own reader and its own parse.
  */
 export const CCRC_DIR_NAME = '.ccrc';
 export const NODE_FILES = {

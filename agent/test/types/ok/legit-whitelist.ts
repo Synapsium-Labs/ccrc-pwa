@@ -86,6 +86,11 @@ export type ChildReclaimPauseNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FL
  *  `g24-testbox-remote-without-state.ts` is the other side. */
 export type TestboxRemoteNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['testbox-remote'], '--state'>>;
 
+/** The sweep's busy arm switch (D-7994). Deleting this ENROLMENT turns `['scope-sweep-busy','--state']` into a bare
+ *  `['scope-sweep-busy']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g27-scope-sweep-busy-without-state.ts` is the other side. */
+export type ScopeSweepBusyNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['scope-sweep-busy'], '--state'>>;
+
 /** The project create (add-project spec 2026-11-04 §4). Deleting this ENROLMENT turns `['project-add','--name']` into a
  *  bare `['project-add']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g26-project-add-without-name.ts` is the other side. */

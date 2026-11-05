@@ -27,6 +27,9 @@ export interface ServiceabilityCase {
   figurePct?: number;
 }
 
+/** The statusline's row for a payload with no 5h figure. */
+const fiveNull = (seven: number) => (now: number): string =>
+  JSON.stringify({ five: null, seven, ts: now, fiveResetAt: null, sevenResetAt: now + 400_000 });
 const fresh = (five: number, seven: number) => (now: number): string =>
   JSON.stringify({ five, seven, ts: now, fiveResetAt: now + 10_000, sevenResetAt: now + 400_000 });
 const rolled = (now: number): string =>
@@ -54,6 +57,8 @@ export const SERVICEABILITY_CASES: readonly ServiceabilityCase[] = [
   { name: 'fable on a codex lane is unservable by backend before any figure', cls: 'fable', lane: 'gpt', limits: fresh(0, 0), sweep: { ageS: 1, estimate: 0 }, expect: 'unservable', why: 'backend' },
   { name: 'opus under the seven-day ceiling is servable', cls: 'opus', lane: 'claude', limits: fresh(50, 97), expect: 'servable', figurePct: 97 },
   { name: 'opus at the seven-day ceiling is unservable', cls: 'opus', lane: 'claude', limits: fresh(0, 98), expect: 'unservable', why: 'ceiling', figurePct: 98 },
+  { name: 'opus reads the weekly figure of a row whose 5h figure is unknown', cls: 'opus', lane: 'claude', limits: fiveNull(40), expect: 'servable', figurePct: 40 },
+  { name: 'opus at the seven-day ceiling is unservable on a row whose 5h figure is unknown', cls: 'opus', lane: 'claude', limits: fiveNull(98), expect: 'unservable', why: 'ceiling', figurePct: 98 },
   { name: 'sonnet with no limits file is unmeasured', cls: 'sonnet', lane: 'claude', expect: 'unmeasured', why: 'no-figure' },
   { name: 'haiku with a rolled-over seven-day window is unmeasured, not its inferred 0', cls: 'haiku', lane: 'claude', limits: rolled, expect: 'unmeasured', why: 'no-figure' },
   { name: 'opus on a codex lane reads its own seven-day figure (the backend refusal is fable only)', cls: 'opus', lane: 'gpt', limits: fresh(0, 12), expect: 'servable', figurePct: 12 },
