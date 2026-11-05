@@ -1307,7 +1307,7 @@ describe('PR5b: a lease whose tree is gone from two successful listings is relea
     await censusPass(w, at(3), { demo: [OLD_H] });
     await censusPass(w, at(4), { demo: [OLD_H] });
     expect(release, 'the throw did not abandon the second release').toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls.some((c) => String(c[0]).includes('native-removed release failed: a fixture throw'))).toBe(true);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('native-removed release threw: a fixture throw'))).toBe(true);
     const thrown = release.mock.calls[0]![0].leaseId;
     expect(leasesOf(w.home).filter((l) => l.releasedAt !== null).map((l) => l.leaseId)).toHaveLength(1);
     await censusPass(w, at(5), { demo: [OLD_H] });

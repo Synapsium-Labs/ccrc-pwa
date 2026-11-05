@@ -10957,7 +10957,7 @@ class DelegationLane {
           for (const r of plan?.release ?? []) {
             if (pass.signal.aborted || durable.state().phase !== 'ready') break;
             const out = await durable.releaseLease({ ...r, at: formatDelegationInstant(pass.now), resolvesThrough: null }).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
-            if (out instanceof Error || out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release ${out instanceof Error ? `failed: ${out.message}` : `refused: ${out.refusal}: ${out.detail}`}`);
+            if (out instanceof Error || out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release ${out instanceof Error ? `threw: ${out.message}` : `refused: ${out.refusal}: ${out.detail}`}`);
             else { this.absentListings.counts.delete(r.leaseId); this.absentListings.heads.delete(r.leaseId); }
           }
         } catch (err) { console.warn(`ccrc-server: delegation lease acts failed: ${err instanceof Error ? err.message : String(err)}`); } finally { endActs(); }
