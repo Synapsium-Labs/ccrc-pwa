@@ -12,6 +12,7 @@ import {
   decideLeaseTransition,
   delegationCarrierStateOf,
   planNativeRemoved,
+  DELEGATION_LEASE_RELEASES_PER_PASS,
   type NativeRemovedInput,
 } from '../src/coord/delegation-lease-state.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
@@ -173,6 +174,45 @@ describe('planNativeRemoved: a lease whose tree is gone from two successful list
     // Listed but unmeasured (`delegation: null`): the lane leaves it out of `censused` too, so the same three answers.
     const unmeasured = run([A], [{ censused: [] }, { censused: [] }, { censused: [] }]);
     expect(unmeasured.map((o) => [o.release.length, o.uncensused, o.absentListings.has('lease-a')])).toEqual([[0, 1, false], [0, 1, false], [0, 1, false]]);
+  });
+
+  // PR6 ruling 2 (review 1498 F4): at most DELEGATION_LEASE_RELEASES_PER_PASS releases a pass, oldest lease first. `lane` stands in for
+  // the lane: a released lease is released in the next checkpoint and leaves the memory, as `releaseLease`'s `applied` makes it.
+  const ten = Array.from({ length: 10 }, (_, i) => leaseRow({ leaseId: `lease-${i}`, project: 'project-a', adminRecord: `wt-${i}`,
+    generation: 1, creatingJournalSequence: 100 - i, currentJournalSequence: 100 - i }));        // the array's LAST is the oldest
+  const lane = () => {
+    let leases = ten;
+    let memory: Memory = { absentListings: new Map(), lastHeads: new Map() };
+    return (pass: Pass) => {
+      const out = planNativeRemoved(inputOf(leases, pass, memory));
+      const done = new Set(out.release.map((r) => r.leaseId));
+      leases = leases.map((l) => (done.has(l.leaseId) ? { ...l, generation: l.generation + 1, releasedAt: '2026-11-10T00:00:00.000Z' } : l));
+      memory = { absentListings: new Map([...out.absentListings].filter(([id]) => !done.has(id))), lastHeads: new Map([...out.lastHeads].filter(([id]) => !done.has(id))) };
+      return { out, memory };
+    };
+  };
+  const listing = (state: 'present' | 'unreadable', ids: number[]): Pass =>
+    ({ censused: ['project-a'], records: [['project-a', 'wt-other', 'present'], ...ids.map((i) => ['project-a', `wt-${i}`, state, 'c'.repeat(40)] as [string, string, 'present' | 'unreadable', string])] });
+
+  it('ruling 2: ten candidates release eight in one pass, oldest lease first, and the other two in the next', () => {
+    expect(DELEGATION_LEASE_RELEASES_PER_PASS).toBe(8);
+    const step = lane();
+    expect(step(gone).out.release).toEqual([]);
+    const second = step(gone);
+    expect(second.out.release.map((r) => r.leaseId)).toEqual(['lease-9', 'lease-8', 'lease-7', 'lease-6', 'lease-5', 'lease-4', 'lease-3', 'lease-2']);
+    expect([...second.memory.absentListings], 'a capped-out candidate keeps its count').toEqual([['lease-1', 2], ['lease-0', 2]]);
+    expect(step(gone).out.release.map((r) => r.leaseId), 'and releases on the next pass that still misses it').toEqual(['lease-1', 'lease-0']);
+  });
+
+  it('ruling 2: a capped-out candidate whose tree is listed present, or unreadable, on the next pass is not released, and its count resets', () => {
+    for (const state of ['present', 'unreadable'] as const) {
+      const step = lane();
+      step(gone);
+      expect(step(gone).out.release).toHaveLength(8);
+      const third = step(listing(state, [0, 1]));
+      expect(third.out.release, state).toEqual([]);
+      expect(third.memory.absentListings.size, state).toBe(0);
+    }
   });
 
   it('W5-J16d: two leases on one admin record name in two projects: missing from A\'s listing while B lists it counts only A\'s lease', () => {
