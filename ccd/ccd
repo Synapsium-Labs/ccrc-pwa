@@ -33529,7 +33529,7 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
     _ws_reclaim_no_record "$mainreal" "$workdir" \
       || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
     # WHY git has no record, read-only and capped (Task R4, spec §6.2): the word does not change.
-    _ws_reclaim_norecord_why "$workdir"
+    _ws_reclaim_norecord_why "$workdir" "$mainreal"
     _ws_refuse no-worktree-record "$main has no worktree record for $workdir${_WS_NOREC_DIAG:+ — $_WS_NOREC_DIAG}"; return 1
   fi
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
@@ -34691,10 +34691,11 @@ _ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the rep
 }
 
 _WS_NOREC_DIAG=''
-_ws_reclaim_norecord_why() {   # workdir -> rc 0 with _WS_NOREC_DIAG = ONE capped line saying why git keeps no record of
-  #                                 the standing tree at workdir: it has no .git; its .git names an admin directory
-  #                                 that is absent; that directory stands and records another path; or its .git could
-  #                                 not be read. '' when the admin directory records workdir itself (nothing to say)
+_ws_reclaim_norecord_why() {   # workdir common -> rc 0 with _WS_NOREC_DIAG = ONE capped line saying why git keeps no
+  #                                 record of the standing tree at workdir: it has no .git; its .git names an admin
+  #                                 directory that is absent; that directory, one of common's worktree records, stands
+  #                                 and records another path; or its .git (or what it names) could not be read. '' when
+  #                                 the admin directory records workdir itself (nothing to say)
   # RUNG 8'S `no-worktree-record` SAYS WHY (cleanup un-wedge, Task R4; spec
   # §6.2). The word does not change and stays TERMINAL: this only reads the
   # tree's `.git` file and the admin directory it names, both as files
@@ -34702,8 +34703,13 @@ _ws_reclaim_norecord_why() {   # workdir -> rc 0 with _WS_NOREC_DIAG = ONE cappe
   # which re-links a copied or moved tree and is the operator's act (spec D13).
   # The refusal's detail already names the main checkout and the tree, so a
   # sentence names at most one more path, and the line is capped
-  # (`_ws_leaf_why_line`): a path is a name a session chose.
-  local w="${1%/}" g ad line back rc s=''
+  # (`_ws_leaf_why_line`): a path is a name a session chose. Whether the admin
+  # directory records this tree is the ONE matcher's answer
+  # (`_ws_reclaim_admin_entries`, both spellings of the tree), asked of common's
+  # own `worktrees/`, never a comparison of this function's.
+  local w="${1%/}" common="${2-}" g ad line rc s='' e hit=0 adreal
+  local -a _WS_LOGS=()
+  local _WS_KEEP_WHY=''
   _WS_NOREC_DIAG=''
   g="$w/.git"
   if [[ -L "$g" ]]; then
@@ -34728,12 +34734,18 @@ _ws_reclaim_norecord_why() {   # workdir -> rc 0 with _WS_NOREC_DIAG = ONE cappe
         _ws_reclaim_absent "$ad"; rc=$?
         if (( rc == 0 )); then
           s="its .git names the admin directory $ad, which is absent: git keeps no record of the tree"
-        elif (( rc == 2 )) || [[ -L "$ad" || ! -d "$ad" ]] || ! _ws_leaf_read_small "$ad/gitdir" \
-             || [[ "$_WS_SMALL_NUL" == inner ]]; then
+        elif (( rc == 2 )) || [[ -L "$ad" || ! -d "$ad" ]] \
+             || ! adreal=$(_ws_realpath "$ad" 2>/dev/null) || [[ -z "$adreal" ]]; then
+          s="its .git names the admin directory $ad, which could not be read"
+        elif [[ -z "$common" || "${adreal%/*}" != "$(_ws_realpath "$common/worktrees" 2>/dev/null)" ]]; then
+          s="its .git names the admin directory $ad, which is not one of this repository's worktree records"
+        elif ! _ws_reclaim_admin_entries "$common" "$w" 0; then
           s="its .git names the admin directory $ad, which could not be read"
         else
-          back="${_WS_SMALL%%$'\n'*}"; back="${back%$'\r'}"
-          [[ "$back" == "$g" ]] \
+          for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
+            [[ "$e" == gitdir:* && "$(_ws_realpath "${e#gitdir:}" 2>/dev/null)" == "$adreal" ]] && hit=1
+          done
+          (( hit )) \
             || s="its admin directory stands but records another path, so the tree was copied or moved: git -C <main> worktree repair <tree>, with the two named above, re-links it, and that is the operator's act, never ccd's"
         fi
       fi
@@ -39997,6 +40009,7 @@ _ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on dev
   return 1
 }
 
+_ws_collect_leaf_owned() { [[ -O "${1-}" ]]; }   # path -> 0 when this user owns it (M3's owner half): a seam a test can answer
 _WS_MOVED_HOST_WHY=''
 _ws_collect_moved_host() {   # id leaf -> 0 the leaf at the id is released BY PATH after a box move (_WS_COLLECT_LDEV,
   #                                _WS_COLLECT_LINO, _WS_COLLECT_LBTIME = its own identity); 1 one condition is PROVEN
@@ -40019,7 +40032,11 @@ _ws_collect_moved_host() {   # id leaf -> 0 the leaf at the id is released BY PA
   #       mounted";
   #   M3  the leaf is a real directory at the id (an lstat, never followed),
   #       owned by this user;
-  #   M4  it is on the device of the physical `~/.cc-tmp`, so it is no mount;
+  #   M4  it is on the device of the physical `~/.cc-tmp`, so it is no mount
+  #       of another file system. A bind mount of the same one keeps the
+  #       device and passes M4; what holds it is later: rename(2) refuses a
+  #       mount point, so the verb's move fails and nothing is taken, and
+  #       re-prove (e) puts back a leaf with a mount nested in it;
   #   M5  its birth time is readable and not earlier than the witnessed one: a
   #       copy is born after its original.
   # Every later rung runs unchanged (M6), and the token binds the leaf's own
@@ -40032,7 +40049,7 @@ _ws_collect_moved_host() {   # id leaf -> 0 the leaf at the id is released BY PA
     || { _WS_MOVED_HOST_WHY="this box keeps no mount table, so a moved host is never told from a moved leaf"; return 1; }
   [[ "${_WS_WIT_DEV-}" =~ ^[1-9][0-9]{0,18}$ && "${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
     || { _WS_MOVED_HOST_WHY="the witness of $id carries no device or birth time to release"; return 1; }
-  [[ -d "$leaf" && ! -L "$leaf" && -O "$leaf" ]] \
+  [[ -d "$leaf" && ! -L "$leaf" ]] && _ws_collect_leaf_owned "$leaf" \
     || { _WS_MOVED_HOST_WHY="$leaf is not a real directory of this user"; return 1; }
   mi=$(_ws_collect_mountinfo)
   [[ -n "$mi" ]] \
@@ -40054,7 +40071,7 @@ _ws_collect_moved_host() {   # id leaf -> 0 the leaf at the id is released BY PA
   (( hbt > 0 )) || { _WS_MOVED_HOST_WHY="the birth time of $leaf could not be read (this file system keeps none)"; return 2; }
   _ws_collect_root_dev "${have%%:*}" "$leaf"; rc=$?
   (( rc != 2 )) || { _WS_MOVED_HOST_WHY="$_WS_ROOTDEV_WHY"; return 2; }
-  (( rc == 0 )) || { _WS_MOVED_HOST_WHY="$leaf is not on the device of the physical $HOME/.cc-tmp, so it may be a mount: $_WS_ROOTDEV_WHY"; return 1; }
+  (( rc == 0 )) || { _WS_MOVED_HOST_WHY="$leaf is not on the device of the physical $HOME/.cc-tmp, so it may be a mount of another file system: $_WS_ROOTDEV_WHY"; return 1; }
   (( 10#$hbt >= 10#$_WS_WIT_BTIME )) \
     || { _WS_MOVED_HOST_WHY="$leaf was born before the witnessed birth time $_WS_WIT_BTIME (born $hbt), so it is no copy of it"; return 1; }
   _WS_COLLECT_LDEV="${have%%:*}"; _WS_COLLECT_LINO="${have#*:}"; _WS_COLLECT_LBTIME="$hbt"

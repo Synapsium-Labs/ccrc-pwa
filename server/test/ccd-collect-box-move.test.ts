@@ -7,7 +7,9 @@
 //   M2  no line of this host's mount table carries that device (`_ws_collect_mountinfo`, the rows rung's `D`
 //       parser); an unreadable or empty table is unmeasured;
 //   M3  the leaf is a real directory at `~/.cc-tmp/<id>`, owned by this user;
-//   M4  the leaf is on the device of the physical `~/.cc-tmp`, so it is no mount;
+//   M4  the leaf is on the device of the physical `~/.cc-tmp`, so it is no mount of another file system (a bind
+//       mount of the same one keeps the device: rename(2) refuses a mount point, and re-prove puts back a leaf with a
+//       mount nested in it);
 //   M5  the leaf's birth time is readable and not earlier than the witnessed one;
 //   M6  every later rung runs unchanged.
 // Its token is `mode=collect-moved`, binding the witness AND the leaf's own identity (and the walk, as today's), so
@@ -231,6 +233,35 @@ describe.runIf(LINUX)('the release holds: each condition kept, or unmeasured, ne
     expectMismatch(audit());
   }, 60_000);
 
+  it('a leaf another uid owns keeps witness-mismatch: M3’s owner read, answered no, runs as any user', () => {
+    moved();
+    expect(verdict(audit()), 'the CONTROL: owned by this user, the leaf is released').toBe('collectable');
+    const r = audit('_ws_collect_leaf_owned() { return 1; };');
+    expectMismatch(r);
+    expect(detail(r)).toContain('not a real directory of this user');
+  }, 60_000);
+
+  it('a leaf on a file system that keeps no birth time (it prints 0) is unmeasured, never witness-mismatch', () => {
+    // The identity check reads the same 0, which is no match for the witness, so the release is asked, and M5 cannot
+    // read a birth time it could compare.
+    moved();
+    const seam = 'eval "_orig_btime() $(declare -f _plat_btime | tail -n +2)";'
+      + ` _plat_btime() { if [[ "$1" == */${COL_ID} ]]; then echo 0; return 0; fi; _orig_btime "$@"; };`;
+    expectUnmeasured(audit(seam), 'identity', 'keeps none');
+  }, 60_000);
+
+  it.each([
+    ['a device of 0', '_WS_WIT_DEV=0;'],
+    ['a birth time of -', '_WS_WIT_BTIME=-;'],
+  ])('M1 refuses a witness with %s before any table is asked (rc 1)', (_label, set) => {
+    moved();
+    const r = h.run(`_ws_collect_mountinfo() { : > "$HOME/table-asked"; printf '%s' "$HOME/mountinfo"; };`
+      + ` _ws_tmproot_witness_read ${COL_ID} >/dev/null; ${set} _ws_collect_moved_host ${COL_ID} '${leafOf(h)}';`
+      + ' echo "rc=$? $_WS_MOVED_HOST_WHY"');
+    expect(r.stdout.trim()).toMatch(/^rc=1 the witness of .* carries no device or birth time to release$/);
+    expect(fs.existsSync(path.join(h.home, 'table-asked'))).toBe(false);
+  }, 60_000);
+
   it('on Darwin the release is never asked: the table is never read, and the answer is rc 1', () => {
     moved();
     const r = h.run(`${MOUNTS_SEAM} _ws_collect_mountinfo() { : > "$HOME/table-asked"; printf '%s' "$HOME/mountinfo"; };`
@@ -272,7 +303,7 @@ describe.runIf(LINUX)('a crash inside a released collection: the record names th
   /** The record a released collection writes: today's line, and the leaf's own identity after it. */
   const recordBody = (): string => fs.readFileSync(path.join(recordsDir(h), records(h)[0]!), 'utf8');
 
-  it.each(['recorded', 'slotted', 'moved'])('a crash at `%s`: the record carries leaf=, and the next audit and verb finish it', (point) => {
+  it.each(['recorded', 'slotted', 'moved', 'removed', 'emptied', 'witnessed'])('a crash at `%s`: the record carries leaf=, and the next audit and verb finish it', (point) => {
     const o = moved();
     const st = fs.lstatSync(o.leaf, { bigint: true });
     const token = String(auditDoc(audit())['token']);
@@ -283,7 +314,7 @@ describe.runIf(LINUX)('a crash inside a released collection: the record names th
     expect(verdict(r), r.stdout).toBe('collectable');
     expect(auditDoc(r)['witness'], 'the resume reads the record’s leaf=').toBe('moved-host');
     let v = collectVerb(h, String(auditDoc(r)['token']), { pre: MOUNTS_SEAM });
-    if (point !== 'moved') {
+    if (point === 'recorded' || point === 'slotted') {
       // Before the move the leaf never left: the resume clears the slot and the record, keeps the witness, and the
       // leaf is audited afresh, where the release is asked again.
       expect(docOf(v.stdout)['refused'], `${v.stdout}${v.stderr}`).toBe('state-changed');
@@ -294,10 +325,31 @@ describe.runIf(LINUX)('a crash inside a released collection: the record names th
     }
     expect(v.code, `${v.stdout}${v.stderr}`).toBe(0);
     expect(docOf(v.stdout)['collected']).toBe(COL_ID);
-    expect(docOf(v.stdout)['witness']).toBe('dropped');
+    // Past `witnessed` the crashed run had already compared and dropped the witness: the resume finds none.
+    expect(docOf(v.stdout)['witness']).toBe(point === 'witnessed' ? 'absent' : 'dropped');
     expect(fs.existsSync(o.leaf)).toBe(false);
+    expect(fs.existsSync(witnessOf(h))).toBe(false);
     expect(records(h)).toEqual([]);
     expect(slots(h)).toEqual([]);
+  }, 120_000);
+
+  it('the resume token binds the record’s leaf=: the same record with another leaf= mints another token', () => {
+    // Every proof reads leaf=, so a record edited there is refused by its identity checks first; with those checks
+    // answered "the same" here, only the token tells the two records apart (defence in depth).
+    moved();
+    expect(collectVerb(h, String(auditDoc(audit())['token']), { pre: `${MOUNTS_SEAM} ${crashAt('moved')}` }).code).toBe(137);
+    const SAME = '_ws_collect_ident() { [[ "$1" == */leaf ]] && return 0; return 1; };';
+    const forkToken = (): string => h.sh(`${MOUNTS_SEAM} ${SAME} exec {l}>>"$REG/.reap-${COL_ID}.lock"; flock -n "$l" || exit 99;`
+      + ` _t() { _ws_collect_fork ${COL_ID} >/dev/null; printf '%s|%s' "$REAP_VERDICT" "$REAP_TOKEN"; }; _ws_reclaim_contained _t`);
+    const before = forkToken();
+    expect(before).toMatch(/^collectable\|[0-9a-f]{64}$/);
+    const rec = path.join(recordsDir(h), records(h)[0]!);
+    const body = fs.readFileSync(rec, 'utf8');
+    fs.writeFileSync(rec, body.replace(/ leaf=(\d+):(\d+):(\d+)\n$/, (_m, d: string, i: string, b: string) => ` leaf=${d}:${BigInt(i) + 1n}:${b}\n`));
+    expect(fs.readFileSync(rec, 'utf8'), 'the CONTROL: leaf= was edited').not.toBe(body);
+    const after = forkToken();
+    expect(after).toMatch(/^collectable\|[0-9a-f]{64}$/);
+    expect(after).not.toBe(before);
   }, 120_000);
 
   it('a crash after the move, then another directory in the slot: kept for the operator, never removed', () => {

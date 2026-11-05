@@ -680,6 +680,7 @@ _ws_collect_slug_askable	C4
 _ws_collect_registered	C4
 _ws_collect_slots_of	C4
 _ws_collect_root_dev	C4
+_ws_collect_leaf_owned	C4
 _ws_collect_moved_host	C4
 _ws_collect_eval	C4
 _ws_collect_resume_eval	C4

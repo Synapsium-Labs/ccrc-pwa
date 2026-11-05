@@ -118,14 +118,32 @@ describe('rung 8 says why git has no record, and the word stays no-worktree-reco
     expect(eventsOf(h.home, 'reclaim').map((e) => e['refusal'])).toContain('no-worktree-record');
   }, 60_000);
 
-  it('the diagnosis is one capped line: a tree path holding a newline reaches the detail as one line', () => {
+  it('the diagnosis is one capped line: an absent admin directory named through a path over 300 bytes holding a newline', () => {
+    // The cut is `_ws_leaf_why_line`'s: 300 bytes, then its own "…" (3 bytes), every control byte read as "?".
     const c = makeChild(h);
-    SHAPES[1]!.make(c);
-    const out = h.sh(`_ws_reclaim_norecord_why '${c.wt}'; printf '%s' "$_WS_NOREC_DIAG"`);
-    expect(out).toContain('which is absent');
-    const odd = h.sh(`_ws_reclaim_norecord_why $'${h.home}/no\\nsuch'; printf '%s' "$_WS_NOREC_DIAG"`);
-    expect(odd).not.toContain('\n');
-    expect(odd).toContain('the tree has no .git');
+    const common = h.sh(`_ws_common_dir '${c.main}'`);
+    const odd = path.join(h.home, 'odd\nname');
+    fs.mkdirSync(odd);
+    const rel = `${'a'.repeat(320)}/worktrees/quiet-basin`;
+    fs.writeFileSync(path.join(odd, '.git'), `gitdir: ${rel}\n`);
+    const out = h.sh(`_ws_reclaim_norecord_why $'${h.home}/odd\\nname' '${common}'; printf '%s' "$_WS_NOREC_DIAG"`);
+    expect(out).toContain('its .git names the admin directory');
+    expect(out).not.toContain('\n');
+    expect(out).toContain('odd?name');
+    expect(out.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(out.slice(0, -1))).toBeLessThanOrEqual(300);
+  }, 60_000);
+
+  it('an admin directory outside this repository’s worktree records is named so, never the repair', () => {
+    const c = makeChild(h);
+    const common = h.sh(`_ws_common_dir '${c.main}'`);
+    const stray = path.join(h.home, 'stray-admin');
+    fs.mkdirSync(stray);
+    fs.writeFileSync(path.join(stray, 'gitdir'), `${path.join(h.home, 'elsewhere')}/.git\n`);
+    fs.writeFileSync(path.join(c.wt, '.git'), `gitdir: ${stray}\n`);
+    const out = h.sh(`_ws_reclaim_norecord_why '${c.wt}' '${common}'; printf '%s' "$_WS_NOREC_DIAG"`);
+    expect(out).toContain('which is not one of this repository');
+    expect(out).not.toContain('worktree repair');
   }, 60_000);
 });
 
