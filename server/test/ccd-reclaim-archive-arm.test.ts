@@ -87,6 +87,12 @@ const armed = (): { c: ReturnType<typeof makeChild>; s: Sib } => {
 };
 /** Each hold below is measured against this CONTROL: put back, the same record places the row again. */
 const placesAgain = (label: string): void => { placed(evalOf(h), `the CONTROL: ${label}`); };
+/** The rows rung's globals after one ask for the child: which recorded evidence placed the gone rows. */
+const rowsRung = (wt: string): { ids: string; gdirs: string; arch: string } => {
+  const [ids = '', gdirs = '', arch = ''] = h.sh(`_ws_reclaim_workdir_shared ${CHILD_ID} "${wt}" >/dev/null;`
+    + ' printf \'%s\\x1f%s\\x1f%s\' "$_WS_RECORDED_IDS" "$_WS_RECORDED_GDIRS" "$_WS_RECORDED_ARCH"').split('\x1f');
+  return { ids, gdirs, arch };
+};
 const ownedOf = (id: string, wt: string, main: string): { rc: string; why: string } => {
   const [rc = '', why = ''] = h.sh(`_ws_reclaim_owned ${id} "${wt}" "${main}"; printf '%s\\x1f%s' "$?" "$_WS_OWNED_WHY"`)
     .split('\x1f');
@@ -402,7 +408,7 @@ describe('the review’s probes, each pinning a guard no case reached (review 15
 });
 
 describe('the moved-tree hole, for an archive-placed row', () => {
-  it('an archived sibling’s tree moved inside the child keeps the child, at the ladder and in _ws_reclaim_owned', () => {
+  it('an archived sibling’s tree moved inside the child by a plain mv keeps the child: rung 9’s repository read at the ladder, _ws_reclaim_owned at the tail', () => {
     const c = makeChild(h);
     const s = archivedSibling();
     const moved = path.join(c.wt, 'inner-moved');
@@ -413,7 +419,9 @@ describe('the moved-tree hole, for an archive-placed row', () => {
       .toContain(s.admin);
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
-    expect(r.detail).toContain(moved);
+    // What holds at the ladder is rung 9's own read of the moved tree's repository, which fails on its pruned admin
+    // directory before `_ws_reclaim_moved_check` is asked (review 1516, F9); the flag's own hold is the tail's.
+    expect(r.detail).toContain(`could not resolve the repository of the checkout at ${moved}`);
     expect(r.token).toBe('');
     const owned = ownedOf(CHILD_ID, c.wt, c.main);
     expect(owned.rc, `the tail asks it again: ${owned.why}`).toBe('2');
@@ -440,7 +448,10 @@ describe('the moved-tree hole, for an archive-placed row', () => {
     expect(stanza(s.main, s.wt), 'the CONTROL: git records nothing of the moved tree').toBe('');
     const r = evalOf(h);
     expect(r.verdict, r.detail).toBe('unmeasured');
-    expect(r.detail).toContain(moved);
+    expect(r.detail).toContain(`could not resolve the repository of the checkout at ${moved}`);
+    const rung = rowsRung(c.wt);
+    expect(rung, 'the CONTROL: the row placed by its archive record with no entry identity, so only the flag drives the tail')
+      .toEqual({ ids: '', gdirs: '', arch: '1' });
     const owned = ownedOf(CHILD_ID, c.wt, c.main);
     expect(owned.rc, `the tail asks it again: ${owned.why}`).toBe('2');
     expect(owned.why).toContain(`could not read the git directory of the checkout at ${moved}`);
