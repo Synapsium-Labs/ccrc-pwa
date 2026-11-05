@@ -80,7 +80,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const sweep = new OrphanTreeSweep(deps);
   const acts = (): string[][] => calls.filter((c) => c[0] === 'ws-orphan');
   return {
-    sweep, trees, markers, calls, feed, acts,
+    deps, sweep, trees, markers, calls, feed, acts,
     add: (p: string, cls: string, audit: Record<string, unknown>): string => { const h = hexOf(p); trees.set(h, { cls, audit }); return h; },
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
@@ -744,8 +744,7 @@ describe('the delegation hold', () => {
     const free = rig(); free.markers.add(ORPHAN_TREE_LIVE_MARKER);
     const f = free.add('/p/.claude/worktrees/a', 'claude', clean('a'));
     await settle(free);
-    expect(free.acts()).toHaveLength(1);
-    expect(free.acts()[0]!.slice(0, 5)).toEqual(['ws-orphan', '--expect', tok('a'), '--tree-hex', f]);
+    expect(free.acts()).toEqual([['ws-orphan', '--expect', tok('a'), '--tree-hex', f, '--surface', 'agent', '--actor', 'orphan-tree sweep']]);
   });
 
   it('W5-O13: the real hold over a ready checkpoint matches a long path, and one holding a tab, byte for byte', async () => {
@@ -775,5 +774,64 @@ describe('the delegation hold', () => {
     expect(r.holdAsks.map((a) => a.cls).sort()).toEqual(['ccd-root', 'claude']);
     expect(r.sweep.health()!.leaseUnready).toBe(1);
     expect(r.feed.map((x) => x.title)).toEqual(['orphan worktree removed']);   // the stop says nothing
+  });
+
+  it('W5-O13c: a tree the lane holds no row for has an unknown class, which an unready checkpoint stops, never frees', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const h = r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    const obs = { token: tok('a'), rescue: false, atMono: 0 };
+    const deps = { ...r.deps, leaseHold: beatLeaseHold(() => null) };
+    expect(await collectOrphanTree(deps, h, null, obs, () => 10 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'lease-unready' });
+    expect(r.acts()).toEqual([]);
+    const cp = checkpointWithLease({ canonicalPath: '/p/other', disposition: 'retained', cleanupDueAt: '2099-01-01T00:00:00.000Z' });
+    expect(await collectOrphanTree({ ...r.deps, leaseHold: beatLeaseHold(() => cp) }, h, null, obs, () => 10 * HOUR, 1))
+      .toMatchObject({ kind: 'result', result: { kind: 'removed' } });                  // CONTROL: a ready checkpoint reads any class
+  });
+
+  it('W5-O13d: the lease-unready count clears on any later outcome and when the census drops the tree, and counts a returning tree once', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const p = '/p/.claude/worktrees/a';
+    const h = r.add(p, 'claude', clean('a'));
+    r.hold(beatLeaseHold(() => null));
+    await settle(r);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    // the box's own `leased` answers the next learning audit: the tree is no longer unready, the count goes
+    r.trees.set(h, { cls: 'claude', audit: refused('leased', 'lease l-1 holds this tree (adopted) until 2099-01-01T00:00:00.000Z, and for 3600 s after') });
+    r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();
+    expect(r.calls.filter((c) => c[1] === '--orphan-hex').length).toBeGreaterThan(1);
+    expect(r.sweep.health()!.leaseUnready).toBeUndefined();
+    // stopped again, then the census no longer lists it, then lists it again
+    r.trees.set(h, { cls: 'claude', audit: clean('a') });
+    r.advance(ORPHAN_CENSUS_MS); await settle(r);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    r.trees.delete(h);
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.sweep.health()!.leaseUnready).toBeUndefined();
+    r.add(p, 'claude', clean('a'));
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.sweep.health()!.leaseUnready, 'a returning tree is not counted before it is stopped again').toBeUndefined();
+    r.advance(1); await settle(r);
+    expect(r.sweep.health()!.leaseUnready, 'and once after').toBe(1);
+  });
+
+  it('W5-O13e: the box\'s `leased` refusal is said as a sentence, its expiry an ISO instant', async () => {
+    const r = rig();
+    const detail = 'lease l-1 holds this tree (adopted) until 2099-01-01T00:00:00.000Z, and for 3600 s after';
+    r.add('/p/.claude/worktrees/a', 'claude', refused('leased', detail));
+    await r.sweep.pass();
+    const left = r.feed.filter((x) => x.title === 'orphan worktree left');
+    expect(left).toHaveLength(1);
+    expect(left[0]!.body).toBe(`/p/.claude/worktrees/a (claude): a delegation lease holds it (${detail})`);
+    expect(left[0]!.body).not.toMatch(/ccd answered|epoch ms/);
+  });
+
+  it('W5-O13f: readDiskHealth reads leaseUnready above zero and leaves it out when absent or malformed', () => {
+    const counts = { byClass: { 'ccd-root': 0, claude: 1, superpowers: 0, other: 0, 'not-a-worktree': 0 }, byOutcome: { pending: 1, would: 0, left: 0, removed: 0 } };
+    const block = (orphanTrees: unknown) => ({ disk: { at: 1, level: 'ok', pressure: false, filesystems: [], expectedMounts: [], holders: [], orphanTrees } });
+    expect(readDiskHealth(block({ ...counts, leaseUnready: 2 }))!.orphanTrees).toEqual({ ...counts, leaseUnready: 2 });
+    expect(readDiskHealth(block(counts))!.orphanTrees).toEqual(counts);
+    for (const bad of [-1, 1.5, '2', null]) {
+      expect(readDiskHealth(block({ ...counts, leaseUnready: bad }))!.orphanTrees, String(bad)).toEqual(counts);
+    }
   });
 });

@@ -26,8 +26,9 @@ export interface CollectOrphanDeps {
    *  composes nothing. */
   readonly epochNow: () => number;
   /** The server skip (delegation PR4, D-7828): whether the delegation checkpoint holds the tree at `path` (its exact decoded
-   *  path, D-7850), for the census row's class. Asked after the audit and before the licence; `held` and `not-ready` compose nothing. */
-  readonly leaseHold: (path: string, orphanClass: string) => Promise<OrphanLeaseHold>;
+   *  path, D-7850), for the census row's class (null: unknown). Asked after the audit and before the licence; `held` and `not-ready`
+   *  compose nothing. */
+  readonly leaseHold: (path: string, orphanClass: OrphanClass | null) => Promise<OrphanLeaseHold>;
 }
 
 /** A capability the box does not advertise: nothing was asked. */
@@ -61,9 +62,9 @@ export async function auditOrphan(deps: CollectOrphanDeps, hex: string): Promise
 /** The act job for one tree. `obs` is the lane's standing first sighting; `nowMono` is the monotonic clock, read when
  *  the audit's answer arrives. In SHADOW (`orphan-tree-live` absent) the job composes no verb and reports `would`. A
  *  tree whose only refusal was rung 9 is spent with its rescue token and `--rescue`, and only when both markers stand. `cls` is
- *  the census row's class, which the lease hold reads (D-7850). */
+ *  the census row's class, which the lease hold reads (D-7850), or null when the lane holds no row for the tree. */
 export async function collectOrphanTree(
-  deps: CollectOrphanDeps, hex: string, cls: OrphanClass, obs: OrphanObservation | null, nowMono: () => number, epoch: number,
+  deps: CollectOrphanDeps, hex: string, cls: OrphanClass | null, obs: OrphanObservation | null, nowMono: () => number, epoch: number,
 ): Promise<OrphanJobOutcome> {
   if (!ccdCan(deps.fleetState, 'wsOrphanAudit') || !ccdCan(deps.fleetState, 'wsOrphan')) return { kind: 'stopped', why: 'caps' };
   const first = await orphanSwitches(deps.io, deps.registryDir);

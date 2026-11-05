@@ -29,11 +29,13 @@ export function orphanLeaseHold(input: {
   /** null: no applier, or one not `ready`. */
   checkpoint: DeepReadonly<DelegationCheckpointV1> | null;
   heldStateOf: (lease: DeepReadonly<DelegationLeaseRow>, cp: DeepReadonly<DelegationCheckpointV1>) => DelegationCarrierState;
-  /** The tree's exact path, compared byte for byte with `canonicalPath` (D-7850); `orphanClass` is the census row's `cls`. */
-  path: string; orphanClass: string; nowMs: number;
+  /** The tree's exact path, compared byte for byte with `canonicalPath` (D-7850); `orphanClass` is the census row's `cls`, or null
+   *  when the lane holds no row for the tree, which waits as an unready class does (never a class this frees). */
+  path: string; orphanClass: string | null; nowMs: number;
 }): OrphanLeaseHold {
   const { checkpoint: cp, path, orphanClass, nowMs } = input;
   if (cp === null) {
+    if (orphanClass === null) return { kind: 'not-ready', detail: 'the delegation checkpoint is not ready, and this tree\'s class is unknown' };
     return UNREADY.includes(orphanClass)
       ? { kind: 'not-ready', detail: `the delegation checkpoint is not ready, so whether a lease holds this ${orphanClass} tree is unknown` }
       : { kind: 'free' };

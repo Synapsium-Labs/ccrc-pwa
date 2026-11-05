@@ -18,7 +18,7 @@ import type { DeepReadonly, DelegationCheckpointV1 } from './coord/delegation-mo
 /** The orphan lane's delegation hold (PR4, D-7828): the L1 decision over the applier's checkpoint while it is `ready` (null
  *  otherwise). A lease's state is its carrier state (PR5a's `delegationCarrierStateOf`), so a transfer holds the tree too. */
 export const beatLeaseHold = (checkpointIfReady: () => DeepReadonly<DelegationCheckpointV1> | null, nowMs: () => number = Date.now) =>
-  async (path: string, orphanClass: string): Promise<OrphanLeaseHold> => orphanLeaseHold({
+  async (path: string, orphanClass: string | null): Promise<OrphanLeaseHold> => orphanLeaseHold({
     checkpoint: checkpointIfReady(), path, orphanClass, nowMs: nowMs(),
     heldStateOf: (l, cp) => delegationCarrierStateOf(l, cp.leaseCarriers?.find((c) => c.leaseId === l.leaseId)),
   });

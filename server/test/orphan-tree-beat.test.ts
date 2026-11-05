@@ -56,7 +56,7 @@ describe('the orphan-tree beat and the disk alarm', () => {
     expect(p.text.indexOf('new OrphanTreeBeat(', at + 1), 'only one construction').toBe(-1);
     const end = p.text.indexOf(';', at);
     const block = p.calls.find((c) => c.start > at && c.end < end && c.callee === 'this.diskAlarm.block');
-    expect(block, 'the third thunk calls this.diskAlarm.block()').toBeDefined();
+    expect(block, 'the fourth thunk calls this.diskAlarm.block()').toBeDefined();
     expect(p.text.slice(block!.end, end).replace(/\s/g, ''), 'it is the last argument').toBe(')');
   });
 });

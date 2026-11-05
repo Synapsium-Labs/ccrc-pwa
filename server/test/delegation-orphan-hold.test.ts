@@ -50,6 +50,12 @@ describe('orphanLeaseHold', () => {
     expect(orphanLeaseHold({ checkpoint: cp, heldStateOf: byDisposition, orphanClass: 'ccd-root', path: '/w/demo/x', nowMs: NOW }))
       .toMatchObject({ kind: 'held', state: 'retained' });
   });
+  it('W5-O12d: an unknown class (no lane row) is not-ready on no checkpoint, and read like any class on a ready one', () => {
+    expect(orphanLeaseHold({ checkpoint: null, heldStateOf: byDisposition, orphanClass: null, path: '/p/t', nowMs: NOW }).kind).toBe('not-ready');
+    const cp = checkpointWithLease({ canonicalPath: '/p/t', disposition: 'retained', cleanupDueAt: '2026-11-17T12:00:00.000Z' });
+    expect(orphanLeaseHold({ checkpoint: cp, heldStateOf: byDisposition, orphanClass: null, path: '/p/t', nowMs: NOW }).kind).toBe('held');
+    expect(orphanLeaseHold({ checkpoint: cp, heldStateOf: byDisposition, orphanClass: null, path: '/p/u', nowMs: NOW }).kind).toBe('free');
+  });
   it('W5-O14: a lease with a transferringSince carrier row is held with until null (the carrier-state rule, as the beat wires it)', async () => {
     const lease = leaseRow({ canonicalPath: '/p/t', disposition: 'adopted', cleanupDueAt: '2026-11-01T00:00:00.000Z', generation: 3 });
     const cp = checkpointWithLease(lease, { leaseCarriers: [{ leaseId: lease.leaseId, transferringSince: '2026-11-09T00:00:00.000Z', transferRun: 41,

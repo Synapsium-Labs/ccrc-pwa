@@ -716,7 +716,7 @@ _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leas
                       #    entry names, or `none` when no entry names one. Inert (rc 0, `none`, the tree's key never derived) while
                       #    no carrier and no index entry can stand: no $REG/delegation, no leases/ under it (wave 3's spool makes
                       #    $REG/delegation at every spawn), or a leases/ holding neither a carrier nor a by-tree entry.
-  local LC_ALL=C main="${1-}" tree="${2-}" common ci l gf adm rec key now d f bt carriers=0 entries=0
+  local LC_ALL=C main="${1-}" tree="${2-}" common ci l gf adm rec key now d f bt until carriers=0 entries=0
   DL_HOLD_LEASE=none; DL_HOLD_GEN=none; DL_HOLD_STATE=none; DL_WHY=''
   d="$REG/delegation/leases"; bt="$d/by-tree"
   _dl_dirs_measured "$REG/delegation" "$d"
@@ -771,7 +771,9 @@ _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leas
   _now_s_to now
   [[ "$now" =~ ^[0-9]+$ ]] || { DL_WHY="the clock answered '$now', not a whole number of seconds, so the hold's expiry cannot be compared"; return 4; }
   if (( now * 1000 <= DL_C_expiresAt + __DL_HOLD_MARGIN_S * 1000 )); then
-    DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) until $DL_C_expiresAt (epoch ms), and for ${__DL_HOLD_MARGIN_S} s after"; return 1
+    TZ=UTC0 printf -v until '%(%Y-%m-%dT%H:%M:%S)T' "$(( DL_C_expiresAt / 1000 ))"
+    printf -v until '%s.%03dZ' "$until" "$(( DL_C_expiresAt % 1000 ))"   # the ISO instant, as the server's feed says every time
+    DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) until $until, and for ${__DL_HOLD_MARGIN_S} s after"; return 1
   fi
   return 0   # O5-1 (a): past its expiry and the margin, the ladder's own rungs decide
 }

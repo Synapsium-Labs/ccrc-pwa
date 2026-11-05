@@ -60,9 +60,12 @@ const adopted = (gen: string, expiresAt: number): Flags => ({ generation: gen, s
 describe('the lease rung refuses a held tree', () => {
   it('W5-O1: a tree whose carrier is adopted and unexpired is refused `leased`, and the act removes nothing', () => {
     const t = agentTree(h); mark();
-    mark(adopted('2', Date.now() + 7 * DAY));
+    const until = Date.now() + 7 * DAY;
+    mark(adopted('2', until));
     const a = audit(t);
     expect(a).toMatchObject({ verdict: 'refused', refusal: 'leased' });
+    expect(a.detail).toContain(`until ${new Date(until).toISOString()},`);   // the expiry as an ISO instant, never epoch ms (F7)
+    expect(a.detail).not.toMatch(/epoch ms|until \d/);
     expect(a.token).toBeNull();
     expect(a.rescueToken).toBeNull();
     expect(fs.existsSync(t)).toBe(true);
