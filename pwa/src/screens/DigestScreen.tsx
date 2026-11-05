@@ -140,18 +140,39 @@ function DigestRow({ line, correct, onCorrected }: {
   );
 }
 
-export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
+/** A correction changed `day`'s lines on the server, so every kept answer for that day is from before it: its own key,
+ *  and the default key when the default answer is for that day (console speed C2 fix round 1). */
+function forgetDay(day: string): void {
+  forget(digestKey(day));
+  if (asDigestAnswer(peek(digestKey(null))?.raw)?.day === day) forget(digestKey(null));
+}
+
+export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT }: {
   day: string | null; load?: Load; correct?: Correct;
 }): ReactNode {
+  // An empty `?day=` reads as the default day, as no `?day=` does.
+  const day = asked === '' ? null : asked;
   // The day's last answer, kept from an earlier visit (console speed C2), drawn at once through the wire guard while
   // the screen re-reads; a failed re-read keeps it and says the error beside it.
   const [digest, setDigest] = useState<DigestAnswer | null>(() => asDigestAnswer(peek(digestKey(day))?.raw));
   const [state, setState] = useState<'loading' | 'ok' | 'error'>(digest === null ? 'loading' : 'ok');
   const [error, setError] = useState<string | null>(null);
   const [gen, setGen] = useState(0);
+  // Previous and Next change `day` without a remount, so the kept answer is consulted on every day change, not only on
+  // mount: a return to a day already read this page load draws it at once (fix round 1).
+  const [seededFor, setSeededFor] = useState(day);
+  if (seededFor !== day) {
+    setSeededFor(day);
+    const kept = asDigestAnswer(peek(digestKey(day))?.raw);
+    if (kept !== null) { setDigest(kept); setState('ok'); setError(null); }
+  }
   const reload = useCallback(() => setGen((g) => g + 1), []);
-  // A correction changes the day's lines on the server, so the kept answer is from before it: forget it, then re-read.
-  const corrected = useCallback(() => { forget(digestKey(day)); reload(); }, [day, reload]);
+  // A correction changes the day's lines on the server: forget every kept answer for that day, then re-read.
+  const corrected = useCallback(() => {
+    if (digest !== null) forgetDay(digest.day);
+    forget(digestKey(day));
+    reload();
+  }, [digest, day, reload]);
   useEffect(() => {
     let live = true;
     setState((s) => (s === 'ok' ? s : 'loading'));

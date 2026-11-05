@@ -60,6 +60,7 @@ export type SettingsCacheName =
 /** The key of one Settings read. */
 export const settingsKey = (name: SettingsCacheName): string => `settings:${name}`;
 
-/** The key of one digest day; `null` is the server's default day (the screen opened with no `?day=`), kept apart from
- *  every named day. */
+/** The key of one digest day. `null` is the server's default day (the screen opened with no `?day=`; an empty one
+ *  gives the same key, and the screen reads it as `null`), kept apart from every named day: the default answer is for
+ *  whichever day the server picks, so a correction forgets it by the day its answer names (`DigestScreen`). */
 export const digestKey = (day: string | null): string => (day === null ? 'digest:' : `digest:${day}`);

@@ -104,3 +104,51 @@ describe('the digest keeps its last view (console speed C2)', () => {
     expect(peek(digestKey(DAY))).toBeUndefined();
   });
 });
+
+// Fix round 1 (review of the C2 tip).
+describe('the digest keeps its last view: fix round 1', () => {
+  it('a correction forgets every kept answer for the corrected day, the default key included', async () => {
+    await firstVisit(null, digest(DAY, 'Which colour?'));
+    await firstVisit(DAY, digest(DAY, 'Which colour?'));
+    await firstVisit('2026-10-17', digest('2026-10-17', 'Another day'));
+    const load = vi.fn(never);
+    const correct = vi.fn().mockResolvedValue({ ok: true, mailId: 9, deliveryId: 11 });
+    // corrected from the named day (a push opens `?day=D`), while the default view's kept answer is for the same day
+    render(<DigestScreen day={DAY} load={load} correct={correct} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Correct ask 1' }));
+    const form = screen.getByRole('form', { name: 'Correction for ask 1' });
+    fireEvent.change(within(form).getByRole('textbox'), { target: { value: 'Blue.' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Send correction' }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    expect(peek(digestKey(null))).toBeUndefined();
+    expect(peek(digestKey(DAY))).toBeUndefined();
+    expect(peek(digestKey('2026-10-17'))).toBeDefined();   // another day's answer stays
+  });
+
+  it('an empty ?day= reads as the default day', async () => {
+    expect(digestKey('')).toBe(digestKey(null));
+    await firstVisit(null, digest(DAY, 'Default day'));
+    const load = vi.fn(never);
+    render(<DigestScreen day="" load={load} />);
+    expect(rowTexts()).toEqual(['questionDefault day']);
+    expect(load).toHaveBeenCalledWith(undefined);
+  });
+
+  it('a return to a kept day draws it at once (Previous and Next change the day without a remount)', async () => {
+    await firstVisit(DAY, digest(DAY, 'Which colour?'));
+    const load = vi.fn(never);
+    const r = render(<DigestScreen day="2026-10-19" load={load} />);
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    r.rerender(<DigestScreen day={DAY} load={load} />);
+    expect(rowTexts()).toEqual(['questionWhich colour?']);
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('a refused answer after a good one keeps the earlier kept answer', async () => {
+    await firstVisit(DAY, digest(DAY, 'Which colour?'));
+    render(<DigestScreen day={DAY} load={vi.fn().mockResolvedValue({ v: 2, junk: true })} />);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    expect((peek(digestKey(DAY))?.raw as DigestAnswer).lines[0]!.text).toBe('Which colour?');
+    expect(rowTexts()).toEqual(['questionWhich colour?']);
+  });
+});
