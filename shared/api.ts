@@ -12137,6 +12137,20 @@ export interface DelegationObservationHealth {
    * from an older server: absence says none was counted, never that every lease was reached by an older lane.
    */
   uncensusedLeases?: number;
+  /**
+   * Wave 5 (PR6): the lane's carrier step over the last pass, counted, never acted on beyond its own marks. Absent until the lane has
+   * planned a carrier pass on a ready applier, and from an older server: absence says nothing was counted, never that every carrier is marked.
+   */
+  carriers?: DelegationCarrierHealth;
+}
+
+/** Wave 5 (PR6): what the lane's carrier step counted in its last pass (`server/src/coord/delegation-carrier.ts#planCarrierSteps`).
+ *  `marked`: carriers read back at their lease's generation. `pending`: marks the per-pass bound left for a later pass. `unsupported`: leases
+ *  lacking an up-to-date carrier on a box that does not report `lease-mark-v1`. `mismatched`: a carrier ahead of its lease or naming another
+ *  sequence, state or identity, never overwritten. `unmeasured`: a carrier or listing that did not read. `unowned`: an unreleased carrier no
+ *  journal lease owns. `refused`: leases whose last mark the box refused in a word that stands until their generation or tree changes. */
+export interface DelegationCarrierHealth {
+  marked: number; pending: number; unsupported: number; mismatched: number; unmeasured: number; unowned: number; refused: number;
 }
 
 /** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every
