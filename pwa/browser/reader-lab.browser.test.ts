@@ -34,7 +34,7 @@ import { openApp, sharedDist, type OpenedApp } from './app';
 import { resolveChrome } from './harness';
 
 const NONCE = 'BBBBBBBBBBBBBBBBBBBBBB';
-const TTL_MS = 1_176_000;
+const TTL_MS = 1_176_000; // The fake's value; the page ignores it.
 const SESSION_COOKIE = 'ccrc_session';
 
 let server: Server;
@@ -164,6 +164,7 @@ describe('the reader lab in Chrome (reader lab plan, Task 11)', () => {
 
     const lines = text.split('\n');
     expect(lines[0]).toMatch(/^reader-lab 1 · Blink \d+ · .* · worker yes · frame sandbox yes · csp attribute yes · library [0-9a-f]{12}$/);
+    // Under fixture interception the tried image beacon is cancelled by its own navigation, so the wall holds on the second load.
     expect(lines[1]).toBe('E18 walls: 7 of 7 hold; teardown signal holds');
     for (const k of LAB_WALLS) {
       expect(lines.some((l) => new RegExp(`^\\s+${k}\\s+holds( \\(.+\\))?$`).test(l)), `${k} holds`).toBe(true);

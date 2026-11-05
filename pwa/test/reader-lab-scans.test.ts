@@ -134,6 +134,63 @@ function labDrawFindings(source: string, file: string): string[] {
 
 const planted = (file: string, text: string, f: (s: string, file: string) => string[]): string[] => f(`${read(file)}\n${text}\n`, file);
 
+const GAP_CALLERS = ['src/screens/highlightMeasureRun.tsx', 'src/readerLab/run.ts'] as const;
+/** The two callers share one imported measure. A loop that awaits, subtracts and takes a maximum is a second measure.
+ * This is a structural tripwire, not a proof against computed or deliberately disguised alternatives. */
+function gapFindings(source: string, file: string): string[] {
+  let imported = false;
+  let called = false;
+  let inline = false;
+  walk(parse(source, file), (n) => {
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier) && n.moduleSpecifier.text === '../lib/frameGap'
+      && n.importClause !== undefined && !n.importClause.isTypeOnly && n.importClause.namedBindings !== undefined
+      && ts.isNamedImports(n.importClause.namedBindings)) {
+      imported ||= n.importClause.namedBindings.elements.some((e) => !e.isTypeOnly && e.name.text === 'longestFrameGap'
+        && (e.propertyName === undefined || e.propertyName.text === 'longestFrameGap'));
+    }
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'longestFrameGap') called = true;
+    if (ts.isWhileStatement(n) || ts.isDoStatement(n) || ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n)) {
+      let awaits = false;
+      let subtracts = false;
+      let maximum = false;
+      const visit = (child: ts.Node): void => {
+        if (ts.isAwaitExpression(child)) awaits = true;
+        if (ts.isBinaryExpression(child) && child.operatorToken.kind === ts.SyntaxKind.MinusToken) subtracts = true;
+        if (ts.isCallExpression(child) && ts.isPropertyAccessExpression(child.expression)
+          && ts.isIdentifier(child.expression.expression) && child.expression.expression.text === 'Math' && child.expression.name.text === 'max') maximum = true;
+        ts.forEachChild(child, visit);
+      };
+      visit(n.statement);
+      if (awaits && subtracts && maximum) inline = true;
+    }
+  });
+  return [...(!imported ? [`${file} missing import`] : []), ...(!called ? [`${file} missing call`] : []),
+    ...(inline ? [`${file} inline frame-gap loop`] : [])];
+}
+const DUPLICATE_GAP = `async function duplicate(frame: () => Promise<number>, done: () => boolean) {
+  let last = await frame(), gap = 0;
+  while (!done()) { const t = await frame(); gap = Math.max(gap, t - last); last = t; }
+  return gap;
+}`;
+
+describe('the shared frame-gap measure', () => {
+  it.each(GAP_CALLERS)('%s imports and calls the shared measure without an inline loop', (file) => {
+    expect(gapFindings(read(file), file)).toEqual([]);
+  });
+  it.each(GAP_CALLERS)('%s planted missing import and call are detected', (file) => {
+    const source = read(file);
+    const withoutImport = source.replace("import { longestFrameGap } from '../lib/frameGap';", '');
+    expect(withoutImport).not.toBe(source);
+    expect(gapFindings(withoutImport, file)).toContain(`${file} missing import`);
+    const withoutCalls = source.replaceAll('longestFrameGap(', 'otherGap(');
+    expect(withoutCalls).not.toBe(source);
+    expect(gapFindings(withoutCalls, file)).toContain(`${file} missing call`);
+  });
+  it.each(GAP_CALLERS)('%s planted duplicate gap loop is detected with import retained', (file) => {
+    expect(gapFindings(`${read(file)}\n${DUPLICATE_GAP}`, file)).toContain(`${file} inline frame-gap loop`);
+  });
+});
+
 describe('what the reader lab never does (reader lab plan, Task 11)', () => {
   it('the lab modules exist and are read', () => {
     const files = LAB_MODULES();

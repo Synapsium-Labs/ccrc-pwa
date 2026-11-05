@@ -32,6 +32,6 @@ describe('longestFrameGap (reader lab plan, Task 7)', () => {
     let n = 0;
     const frame = (): Promise<number> => Promise.resolve((n += 10));
     const during = Promise.reject(new Error('stopped'));
-    expect(await longestFrameGap(frame, during)).toBeGreaterThanOrEqual(0);
+    expect(await longestFrameGap(frame, during)).toBe(0);
   });
 });
