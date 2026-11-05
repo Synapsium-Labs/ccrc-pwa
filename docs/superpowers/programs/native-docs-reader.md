@@ -1,7 +1,7 @@
 # Program: native-docs-reader
 
 Spec: `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` (approved 2026-10-01)
-Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`; W5 Export `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`; W5h-b `docs/superpowers/plans/2026-11-03-native-docs-reader-w5h-b-measured-values.md`; first-load compression `docs/superpowers/plans/2026-11-03-native-docs-reader-first-load-compression.md`; phone header `docs/superpowers/plans/2026-11-03-native-docs-reader-phone-header.md`; reader lab `docs/superpowers/plans/2026-11-03-native-docs-reader-reader-lab.md` (design `docs/superpowers/specs/2026-11-03-reader-lab-design.md`)
+Plans: W1 `docs/superpowers/plans/2026-10-01-native-docs-reader-w1-ccd-reads-docs.md`; W2 `docs/superpowers/plans/2026-10-06-native-docs-reader-w2-grants-and-adapter.md`; W8a `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`; W5 Export `docs/superpowers/plans/2026-11-03-native-docs-reader-w5-part2-export.md`; W5h-b `docs/superpowers/plans/2026-11-03-native-docs-reader-w5h-b-measured-values.md`; first-load compression `docs/superpowers/plans/2026-11-03-native-docs-reader-first-load-compression.md`; phone header `docs/superpowers/plans/2026-11-03-native-docs-reader-phone-header.md`; reader lab `docs/superpowers/plans/2026-11-03-native-docs-reader-reader-lab.md` (design `docs/superpowers/specs/2026-11-03-reader-lab-design.md`); library 1.1 take-up `docs/superpowers/plans/2026-11-05-native-docs-reader-library-1-1-take-up.md`
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-canyon`   Workspace: a fresh child per wave
 
 **What this program is.** ccrc gains its own session-gated Docs reader for each install's own project docs:
@@ -585,7 +585,7 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 - **Run:** 1532 (wave 17), opened at `planned` on 2026-11-05, before RL-b's run closed.
 - **Gate:** the operator signs and pushes the library's v1.1.0 tag on `50cef012a` and approves its npm release (console item 42). Before writing the brief, the coordinator checks the published package and the GitHub release.
-- **Plan (written next, then reviewed):**
+- **Plan:** `docs/superpowers/plans/2026-11-05-native-docs-reader-library-1-1-take-up.md`, written and reviewed on 2026-11-05 (three Opus lenses with a Sonnet refute pass: sixteen findings kept and applied, four refuted). It waits for the operator's approval and its three questions (when Mermaid draws on open, Aa on the one bar, where Share and Export go). In outline:
   - ccrc pins the library at 1.1.0;
   - it mounts with Mermaid drawn after `ready` and the Mermaid build handed over;
   - inside the frame, the bar is off, with the library's progress reports and the host's commands, the outline among them;
