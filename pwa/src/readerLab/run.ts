@@ -129,11 +129,17 @@ function mountInput(out: Extract<ReaderRenderOutcome, { kind: 'rendered' }>, byt
   };
 }
 
-/** A host element for one mount, at the end of the stage. */
+/** A host element for one mount, at the end of the stage, scrolled into view before the mount starts. The mount is a
+ *  frame of an opaque origin, and Chrome throttles a cross-origin frame that is off screen: no animation frame runs in
+ *  it, so the library's draw never starts and `ready`, which waits for the figures under `lab-draw`, never comes before
+ *  the watchdog. The stage sits below the lists, and the rows' details push it down as the run goes. The limit: this is
+ *  one scroll before the mount, not a hold. If the operator scrolls the stage away mid-mount, that mount reads "not
+ *  measured" (a fallback or the cap), never a false "holds". */
 function hostIn(stage: HTMLElement): HTMLElement {
   const host = document.createElement('div');
   host.className = 'reader-lab-mount';
   stage.append(host);
+  host.scrollIntoView({ block: 'nearest' });
   return host;
 }
 

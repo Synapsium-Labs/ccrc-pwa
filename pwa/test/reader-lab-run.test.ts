@@ -173,6 +173,26 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     }
   });
 
+  it('every mount host is scrolled into view before its reader mounts (a frame off screen draws nothing, so ready never comes)', async () => {
+    const calls: string[] = [];
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function scrolled(this: HTMLElement): void {
+      calls.push(`scroll:${this.className}`);
+    });
+    try {
+      const r = rig();
+      await runReaderLab({
+        ...r.deps,
+        mountReader: (el, input) => { calls.push(`mount:${el.className}`); return r.deps.mountReader(el, input); },
+      }, () => undefined);
+      expect(calls.filter((c) => c.startsWith('mount:'))).toHaveLength(LAB_MOUNTS);
+      for (let i = 0; i < calls.length; i += 2) {
+        expect([calls[i], calls[i + 1]], 'a scroll comes right before each mount').toEqual(['scroll:reader-lab-mount', 'mount:reader-lab-mount']);
+      }
+    } finally {
+      scroll.mockRestore();
+    }
+  });
+
   it('the tap wait ends at the tap: one read while it waits, not thirty', async () => {
     let reads = 0;
     let readsAtAmbient = -1;
