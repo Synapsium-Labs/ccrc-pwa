@@ -728,6 +728,7 @@ const OPS = {
     keys: [
       'id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear',
       'identity', 'identity-source', 'last-run-at', 'seed-verified-at', 'added-at', 'enabled-at', 'minted-at',
+      'signed-out-at', 'file',
     ],
     // `--clear` repeats (accounts plan Task A20): a paste over a minted token drops `check` and `mintedAt` at once.
     repeat: ['clear'],
@@ -1271,7 +1272,7 @@ function readNodeIdentity(home) {
  *  name for a key ccrc minted, it never enters `accounts.json`, so it never
  *  reaches the roster mirror or the offline snapshot. The mint verbs (A32)
  *  pass it; this task ships the setter and the merge that keeps it. */
-const LANE_STATE_MODES = ['merge', 'fresh', 'if-absent', 'delete'];
+const LANE_STATE_MODES = ['merge', 'fresh', 'if-absent', 'delete', 'credential'];
 const CHECK_VERDICT_RE = /^[a-z][a-z-]{0,31}$/;
 const ISO_SECONDS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const KEY_HASH_RE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -1280,6 +1281,8 @@ const LANE_STATE_FIELDS = [
   'check', 'identity', 'identitySource', 'keyHint', 'keySource', 'keyHash', 'keyLimit', 'limitReset',
   'keyExpiresAt', 'retiredKeyHash', 'validatedAt', 'credit', 'mintedAt', 'seedVerifiedAt', 'lastRunAt',
   'fleetIdentity',
+  // A lane the box signed out, and whether it holds a credential (D-7992): `laneCredentialOf` below states the second.
+  'signedOutAt', 'credential',
   // The box's own two (accounts plan Task A16, D-7735 (5)): when `add` made the lane and when `enable` last switched
   // it on, which is what Discard's "never enabled" reads. The server's reader names neither and drops both.
   'addedAt', 'enabledAt',
@@ -1311,10 +1314,55 @@ function laneStateDir(home) {
   return join(home, '.cc-sessions', '.accounts');
 }
 
+/** A lane's provider: the roster's word, or Anthropic for any lane that is not a declared launcher or a codex lane. */
+const laneProviderOf = (e) => e['provider'] ?? (e['kind'] === 'external' || e['kind'] === 'codex' ? null : 'anthropic');
+/** A secrets file named by the roster holds a credential when it is a regular file with bytes in it. */
+function secretsFileHeld(home, name) {
+  let st = null;
+  try { st = statSync(join(home, name)); } catch { st = null; }
+  return st !== null && st.isFile() && st.size > 0;
+}
+
+/** Whether a missing `.credentials.json` means a sign-in lane has no sign-in. It does on Linux. Claude Code on macOS keeps
+ *  a sign-in in the keychain, which ccrc does not read, so there only a file that exists says anything. `OSTYPE` first,
+ *  as `ccd/ccrc`'s `CCD_OS` reads it. */
+const signInLivesInItsFile = () => !(process.env.OSTYPE ?? process.platform).startsWith('darwin');
+
+/** WHETHER THE LANE HOLDS A CREDENTIAL, MEASURED ON THE BOX (D-7992): `held`, `none`, or `null` when ccrc cannot say (a
+ *  lane whose credential it does not read, a lane off the roster, a roster it cannot read, a sign-in it cannot see on
+ *  macOS), which leaves the lane with no word, so a screen falls back on what the lane shows. It stats and never reads
+ *  the credential, and it always looks: a passing check is no measure of the file, which a logout outside ccrc removes
+ *  without a word to the lane. A lane that names a secrets file holds that file. A sign-in lane holds its
+ *  `.credentials.json`, and a sign-in lane is what `credential --sign-out` says it is: a generated Anthropic lane. Only a
+ *  file confirmed missing is `none`: an entry there that is no regular file (a link, a directory) and any stat failure but
+ *  ENOENT (a config dir it cannot read) measure nothing, so they answer `null`, and `lstat` keeps a link from passing. Any
+ *  other lane with no secrets file answers `null`, whatever provider it names: an upstream lane can run on the token its
+ *  launcher sources (`_ah_subjects`) and a declared launcher keeps its credential where ccrc does not read it, so no file
+ *  of theirs says nothing, and `none` would read as signed out on a working lane. Every `lane-state` write that names the
+ *  roster carries it, which is how a screen tells a box that measured from one too old to: `credential` absent. */
+function laneCredentialOf(home, rosterFile, id) {
+  let accounts = null;
+  try { accounts = JSON.parse(readFileSync(rosterFile, 'utf8'))['accounts']; } catch { return null; }
+  const acct = Array.isArray(accounts) ? accounts.find((x) => isPlainObject(x) && x['id'] === id) : undefined;
+  if (acct === undefined) return null;
+  const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
+  if (typeof e['secretsFile'] === 'string' && e['secretsFile'] !== '') return secretsFileHeld(home, e['secretsFile']) ? 'held' : 'none';
+  const suffix = acct['configDirSuffix'];
+  if (e['kind'] !== 'generated' || laneProviderOf(e) !== 'anthropic') return null;
+  if (typeof suffix !== 'string' || suffix === '' || suffix !== basename(suffix)) return null;
+  let st = null;
+  try { st = lstatSync(join(home, suffix, '.credentials.json')); } catch (e) { if (e?.code !== 'ENOENT') return null; }
+  if (st === null) return signInLivesInItsFile() ? 'none' : null;
+  return st.isFile() ? 'held' : null;
+}
+
 /** THE WRITE ITSELF, shared by the `lane-state` op and the `seed` op's record of `seedVerifiedAt` (accounts plan Task
  *  A13, D-7731), so the file keeps one writer. `set` holds the fields this call changes, `clear` the one it drops.
+ *  `rosterFile`, when given, has this write measure `credential` (D-7992).
+ *  WHAT ENDS A SIGN-OUT IS ONE RULE, HERE: a passing check, or a credential measured on the lane. So every install ends
+ *  it by the lane-state write it already makes after the credential is in, and an install that refuses does not.
  *  Answers `null`, or `[code, detail]` for the caller to refuse with. */
-function laneStateWrite(home, id, mode, set, clear) {
+function laneStateWrite(home, id, mode, set, clear, rosterFile) {
   const dir = laneStateDir(home);
   const file = join(dir, `${id}.json`);
   process.umask(0o077);
@@ -1358,6 +1406,10 @@ function laneStateWrite(home, id, mode, set, clear) {
   }
   for (const c of [].concat(clear ?? [])) delete next[c];
   Object.assign(next, set);
+  const credential = rosterFile === undefined ? undefined : laneCredentialOf(home, rosterFile, id);
+  if (credential === null) delete next.credential;
+  else if (credential !== undefined) next.credential = credential;
+  if (set.signedOutAt === undefined && (credential === 'held' || set.check?.verdict === 'ok')) delete next.signedOutAt;
   next.fleetIdentity = readNodeIdentity(home);
 
   const tmp = join(dir, `.${id}.json.tmp.${process.pid}.${randomBytes(6).toString('hex')}`);
@@ -1438,7 +1490,7 @@ function opLaneState(a) {
   }
   const times = {};
   for (const [k, field] of [['last-run-at', 'lastRunAt'], ['seed-verified-at', 'seedVerifiedAt'],
-    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt'], ['minted-at', 'mintedAt']]) {
+    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt'], ['minted-at', 'mintedAt'], ['signed-out-at', 'signedOutAt']]) {
     if (a[k] === undefined) continue;
     const t = laneTimeOf(a[k]);
     if (t === null || (k === 'seed-verified-at' && a[k] === 'now')) {
@@ -1447,8 +1499,12 @@ function opLaneState(a) {
     }
     times[field] = t;
   }
-  if (mode === 'delete' && Object.keys(a).some((k) => k !== 'id' && k !== 'mode')) {
+  if (mode === 'delete' && Object.keys(a).some((k) => k !== 'id' && k !== 'mode' && k !== 'file')) {
     refuse('bad-argv', 'lane-state --mode delete takes no field');
+    return 2;
+  }
+  if (mode === 'credential' && (a['file'] === undefined || Object.keys(a).some((k) => k !== 'id' && k !== 'mode' && k !== 'file'))) {
+    refuse('bad-argv', 'lane-state --mode credential takes --file and no field');
     return 2;
   }
   const home = process.env.HOME ?? '';
@@ -1468,6 +1524,18 @@ function opLaneState(a) {
     return 0;
   }
 
+  // THE UPDATE'S SWEEP (D-7992): a file from before `credential`, or one a credential changed under, gets the measured
+  // word, and every other field stands. No file makes none, a file that cannot be read is left to the next verb, and a
+  // word that stands rewrites nothing. A word the box can no longer measure goes. `_inst_lane_state` runs it.
+  if (mode === 'credential') {
+    const st = laneStateOf(home, id);
+    if (st === null) return 0;
+    if (laneCredentialOf(home, a['file'], id) === (st['credential'] ?? null)) return 0;
+    const refused = laneStateWrite(home, id, 'merge', {}, [], a['file']);
+    if (refused !== null) { refuse(refused[0], refused[1]); return 1; }
+    return 0;
+  }
+
   const set = { ...times };
   if (verdict !== undefined) set.check = { verdict, at };
   if (a['key-hash'] !== undefined) set.keyHash = a['key-hash'];
@@ -1476,7 +1544,7 @@ function opLaneState(a) {
     set.identity = a['identity'];
     set.identitySource = a['identity-source'];
   }
-  const failed = laneStateWrite(home, id, mode, set, clears);
+  const failed = laneStateWrite(home, id, mode, set, clears, a['file']);
   if (failed !== null) { refuse(failed[0], failed[1]); return 1; }
   return 0;
 }
@@ -1661,6 +1729,7 @@ function opSeed(a) {
  *  Read-only. `enable` asks this before it touches the marker, and answers `not-ready` unless the lane-state file
  *  records all three of spec §10's conditions. The first that fails is the reason, in this order:
  *   - `no-lane-state`: no readable file (a lane from before the backfill, or a file moved aside);
+ *   - `no-credential`, ahead of the check: the lane records a sign-out (D-7992), which cleared that check;
  *   - `not-checked`: no check recorded (a backfilled legacy lane): "Check it once to turn it on";
  *   - `check-failed`: the last check's verdict is not `ok`;
  *   - `no-credential`: the roster names a secrets file and it is missing or empty, or, for a sign-in lane (an
@@ -1684,13 +1753,10 @@ function opReady(a) {
   // none is a sign-in lane, whose record is the identity `check` read off its own `auth status`; any other lane
   // (codex, a declared launcher) keeps its credential where ccrc does not read it, and its passing check is the record.
   const e = isPlainObject(acct['exec']) ? acct['exec'] : {};
-  const provider = e['provider'] ?? (e['kind'] === 'external' || e['kind'] === 'codex' ? null : 'anthropic');
   let cred = 'held-elsewhere';
   if (typeof e['secretsFile'] === 'string' && e['secretsFile'] !== '') {
-    let st = null;
-    try { st = statSync(join(home, e['secretsFile'])); } catch { st = null; }
-    cred = st !== null && st.isFile() && st.size > 0 ? 'present' : 'absent';
-  } else if (provider === 'anthropic') {
+    cred = secretsFileHeld(home, e['secretsFile']) ? 'present' : 'absent';
+  } else if (laneProviderOf(e) === 'anthropic') {
     cred = 'recorded';
   }
   const notReady = (reason, detail) => {
@@ -1707,6 +1773,9 @@ function opReady(a) {
   } catch { st = null; }
   if (!isPlainObject(st)) {
     return notReady('no-lane-state', `lane ${id} has no lane-state file this box can read, so nothing records that it is signed in, set up and checked. ${again}`);
+  }
+  if (typeof st.signedOutAt === 'string') {
+    return notReady('no-credential', `Not ready: lane ${id} was signed out on this box. Sign it in again, then check it. Nothing was written.`);
   }
   const check = isPlainObject(st.check) ? st.check : null;
   if (check === null || typeof check.verdict !== 'string') {

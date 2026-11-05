@@ -4,10 +4,10 @@
 // sheet runs Mint on the existing lane (`auth/start {method: 'setup-token'}`): the box mints into scratch, probes the
 // token and, only once it passes, switches the lane under its lock (A20); the poll's `done` means it did. A refused,
 // cancelled or expired attempt changes nothing, and each terminal state says so; that the lane still uses its old
-// credential is said only where `oldCredentialOf` allows it (D-7872 (10), the operator's option-1 ruling: a passing
-// check newer than any sign-out this app knows of), read when each sentence is written (`useOldCredential`), and the
-// neutral words are said everywhere else, the intro, the both-held line, the restart lead, the danger confirm and the
-// revoke item included. Then a fresh check; the stated
+// credential is said only where `oldCredentialOf` allows it (D-7872 (10), D-7992: the lane has one), read when each
+// sentence is written (`useOldCredential`), and the lane's other words are said everywhere else, the intro, the both-held
+// line, the restart lead, the danger confirm and the revoke item included. A lane signed out before the switch has no
+// old sign-in left, so the sheet offers none to sign out. Then a fresh check; the stated
 // identity, with the sign-in's readable email as its default text; the lane's sessions with one-tap Restart, since a
 // running session started without the token; and last, **Sign the old sign-in out** (N5): a plain button once no
 // listed session predates the switch, and before then the danger confirm, because the OA1 record did not measure what
@@ -256,7 +256,7 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
               ids={onOld} lead={toToken ? switchRestartLead(onOld.length, was) : restartLead(onOld.length, was)} sessions={sessions}
               restarts={restarts} blocked={offline} onRestart={(sid) => { void restart(sid); }}
             />
-            {toToken ? (
+            {toToken ? was !== 'signed-out' && (
               <section className="acct-remove-block" data-sign-old-out={signedOut !== null ? 'done' : predating > 0 ? 'danger' : 'plain'}>
                 {signedOut === null ? (
                   <>

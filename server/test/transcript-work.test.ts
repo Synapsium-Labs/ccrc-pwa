@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { BASH, CCRC_SRC, CHECKS_SRC, REPO, anyVerdictFor, doctorEnv, healthy, installDoctorHooks, linkReal, runDoctor, shq, stub } from './ccrc-doctorFixture.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
 import {
@@ -77,7 +78,7 @@ function box(prefix: string, sizer: 'real' | 'hangs' = 'real'): string {
 
 /** The check alone, sourced: its verdict line and its remedy. */
 function check(home: string, env: NodeJS.ProcessEnv = {}): { line: string; remedy: string; code: number } {
-  const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_check_transcript_work`],
+  const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_check_transcript_work`],
     { env: { ...doctorEnv(home), ...env }, encoding: 'utf8', timeout: 60_000 });
   const lines = (r.stdout ?? '').split('\n');
   const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) transcript_work: /.test(l));

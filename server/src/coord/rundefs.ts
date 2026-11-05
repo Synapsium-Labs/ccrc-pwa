@@ -1,4 +1,4 @@
-import type { OpenSibling } from './store.js';
+import type { OpenSibling, PrLineageEntry } from './store.js';
 import {
   HOLD_REASON_MAX_CHARS,
   holdReason as serializeHoldReason,
@@ -22,6 +22,15 @@ import {
  * transaction, so a policy file that wants a marker loads nothing else.
  * `coord-policy-rings.test.ts` walks its runtime imports.
  */
+
+/**
+ * Whether a `.prhistory` row is evidence about `branch` (D-5941, spec 2026-10-20 §2.8). The one rule, for both readers:
+ * `childSpent`'s ledger rung and the close's lineage fold. A row that carries `prbranch` is placed, and speaks only for
+ * that branch. A row without it was written before ccd recorded the field, so it is unplaced and counts as it always did.
+ * A null `branch` matches no placed row; `decideLedger` answers a null-branch run itself, before it asks this.
+ */
+export const prRowCounts = (row: PrLineageEntry, branch: string | null): boolean =>
+  row.prbranch === undefined || row.prbranch === branch;
 
 /** The 40-hex `SHA` shape check `fingerprint.ts`'s `verifyDone` runs on a
  *  done claim — mirrored here (fix, review findings 6/18), NOT imported,

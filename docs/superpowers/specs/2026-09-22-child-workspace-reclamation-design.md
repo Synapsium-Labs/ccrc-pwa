@@ -539,7 +539,9 @@ Refusing keeps one rule at one rung instead of a conditional two places must agr
    branch's state in both directions: a branch the pin reads in a different state (present or absent) from
    the one the in-lock recomputation read stops the act before the tombstone as `state-changed`, journaled
    as a `failed` line, with nothing destroyed. A worktree that stands with its HEAD still
-   symbolic to a branch proven gone stays `pin-failed`, because the WIP commit needs a HEAD. On the vanished arm no
+   symbolic to a branch proven gone is refused by the ladder with the terminal `branch-gone-checked-out`, before any
+   token (D-5944), because the WIP commit needs a HEAD; a branch deleted after the ladder's read stays `pin-failed`, by
+   the same predicate. On the vanished arm no
    tree stands to need one, and git's record of the vanished worktree lists the all-zero id as its head in two
    shapes: an admin `HEAD` git cannot read, which prints no `branch` line, and a `HEAD` symbolic to a branch that no
    longer exists, which keeps it. A record whose head is all-zero in either shape answers unmeasured at the audit,

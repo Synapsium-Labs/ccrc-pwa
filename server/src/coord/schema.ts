@@ -1407,7 +1407,7 @@ export const MIGRATIONS: readonly string[] = [
   //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. An ordinary
   //     application that only adds rows and updates some does less: `CoordStore.projectDelegationCheckpointChanges` writes
   //     just the changed rows (a compare-and-swap UPDATE each, a plain INSERT for each new row) and holds the five tables to
-  //     the new checkpoint's row counts, falling back to the full projection for anything else; it never writes a lease. The checkpoint
+  //     the new checkpoint's row counts, falling back to the full projection for anything else; a lease row only ever UPDATEs there (a new lease takes the full projection). The checkpoint
   //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` and its batch
   //     `insertDelegationEvents` write it, a
   //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
@@ -1418,8 +1418,8 @@ export const MIGRATIONS: readonly string[] = [
   //   - WAVE 3 WRITES A LEASE ROW ONLY BY REPLAYING A DURABLE `lease-created` ENTRY, and fixes generation 0, equal creating
   //     and current journal sequences, `ephemeral` disposition, `not-due` cleanup and every transition clock, evidence and
   //     carrier field to NULL. The DDL deliberately allows more (adoption, retention, promotion, cleanup, a carrier
-  //     generation, a release) because later waves fill those in; the WAVE-3 guard is `assertWave3Lease` in code, so the
-  //     schema never has to change to loosen it.
+  //     generation, a release) because later waves fill those in; the guard is `assertLease` in code (wave 3's, loosened by
+  //     wave 5's transitions), so the schema never has to change to loosen it.
   //   - THE TWO PARTIAL IDENTITY INDEXES on `delegation_leases` are one idea in two halves. SQLite treats NULLs in a UNIQUE
   //     index as distinct, so a single UNIQUE (project, adminRecord, creationBase, canonicalPath) would admit unlimited
   //     duplicates whose `creationBase` is NULL; one index per nullness avoids that, and both cover UNRELEASED rows only

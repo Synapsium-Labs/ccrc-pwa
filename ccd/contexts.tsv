@@ -539,6 +539,7 @@ _ws_reclaim_main_branch	C4
 _ws_reclaim_main_line_refuse	C4
 _ws_reclaim_branch_state	C4
 _ws_reclaim_tip_read	C4
+_ws_reclaim_head_unborn	C4
 _ws_reclaim_gitdir_own	C4
 _ws_reclaim_foreign_clean	C4
 _ws_reclaim_logs_readable	C4
@@ -834,5 +835,9 @@ _dl_fingerprint	C4
 _dl_fingerprint_to	C4
 _dl_mark_refuse	C4
 _dl_in	C4
+_dl_count_ok	C4
 cmd_ws_lease_mark	C4
 _dl_mark_locked	C4
+cmd_ws_lease_audit	C4
+_dl_audit_heads	C4
+_dl_audit_ladder	C4

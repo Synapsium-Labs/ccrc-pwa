@@ -8677,6 +8677,9 @@ export interface LifecycleMeas {
   /** The `--child` run marker a `ws-shed-deps` line was judged against (D-7278), beside its class in `mode`: the
    *  decimal run id as ccd wrote it. Null: the session carries no marker (a coordinator, or a row with none), or another act. */
   readonly childRun: string | null;
+  /** A child `create` row's start point, its `--base` (D-7827): the full commit id the worktree was checked out at, of the
+   *  repository's own object format (D-7982); `base` stays the origin ref. Null: no `--base`, an older ccd, or another act. */
+  readonly startpoint: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8700,6 +8703,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
   unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
   childRun: true,
+  startpoint: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -11765,6 +11769,24 @@ export const LEASE_MARK_REFUSALS = ['usage', 'unmeasured', 'busy', 'bad-carrier'
   'not-under-projects-root', 'no-tree', 'symlink', 'main-worktree', 'locked', 'registered', 'nested', 'tree-held',
   'fingerprint-mismatch'] as const;
 export type LeaseMarkRefusal = (typeof LEASE_MARK_REFUSALS)[number];
+/** `ws-lease-audit`'s refusal words (delegation broker wave 5, PR2), the server's one reader of them. */
+export const LEASE_AUDIT_REFUSALS = ['usage', 'unmeasured', 'no-carrier', 'bad-carrier', 'stale-generation', 'no-tree',
+  'fingerprint-mismatch'] as const;
+export type LeaseAuditRefusal = (typeof LEASE_AUDIT_REFUSALS)[number];
+/** `ccd ws-lease-audit`'s one JSON document: the read-only measure of a leased tree (`ccd/lib/delegation-lease.sh#cmd_ws_lease_audit`).
+ *  A fact that did not read is `'unmeasured'`, never `false` or 0. `dirty` counts an edit to an assume-unchanged or
+ *  skip-worktree path (D-7975). `aheadOfBase` counts the creation base to the tip; `branchAheadOfBase` counts it to the
+ *  branch the carrier records (D-7976): `'no-branch'` when the carrier records none, `'branch-gone'` when the recorded branch
+ *  is PROVEN no longer to exist, never 0 for either. `changed` is `true` when any one fact proves a change, `'unmeasured'`
+ *  when none does and one did not read (a gone branch included), `false` only when every fact is proven clean or zero; and
+ *  `'unmeasured'`, with `detail`, when the tree moved while it was read (the only time `detail` is present). `holders` is
+ *  present only when the audit was asked `--holders`. `token` binds every fact here, `holders` and whether it was asked
+ *  included (D-7977), and whether the tree moved; it is evidence the promotion records, spent by no verb (D-7826). */
+export type LeaseAuditAnswer =
+  | { ok: true; lease: string; generation: number; tip: string; dirty: boolean | 'unmeasured';
+      aheadOfBase: number | 'unmeasured'; branchAheadOfBase: number | 'unmeasured' | 'no-branch' | 'branch-gone';
+      changed: boolean | 'unmeasured'; detail?: string; holders?: readonly number[] | 'unmeasured'; token: string }
+  | { ok: false; refusal: LeaseAuditRefusal; detail: string };
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
@@ -12502,12 +12524,21 @@ export interface LaneWire {
   validatedAt?: number;
   credit?: { limit: number | null; remaining: number | null };
   mintedAt?: number;
+  /** When the box signed the lane out, while no credential has gone in and no check has passed since (D-7992). */
+  signedOutAt?: number;
+  /** Whether the lane holds a credential, measured on the box (D-7992). Absent is a box too old to say, or one that cannot
+   *  (`LaneState.credential`): `oldCredentialOf` (`pwa/src/accounts/connectFlow.ts`) is what reads the difference. */
+  credential?: LaneState['credential'];
+  /** `add` made this lane and `enable` has never switched it on (`neverEnabled`, D-7992): a sign-out on it is the connect
+   *  sheet's own, and says nothing about the lane having been in use. */
+  adding?: true;
   ready: boolean;
   notReadyReason?: LaneNotReadyReason;
 }
 
-/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, no check, a last check
- *  not `ok`, no credential the box can find (the box's word alone, D-7732), or no seed verified after the last run. */
+/** Why `LaneWire.ready` is false, the first that applies: the lane state is absent or unreadable, a sign-out it records
+ *  (`no-credential`, D-7992), no check, a last check not `ok`, no credential the box can find (the box's word alone,
+ *  D-7732), or no seed verified after the last run. */
 export const LANE_NOT_READY_REASONS = ['no-lane-state', 'not-checked', 'check-failed', 'no-credential', 'seed-unverified'] as const;
 export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 

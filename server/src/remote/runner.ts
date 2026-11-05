@@ -83,6 +83,14 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // `deps-shed-budget.test.ts` reads both sides from source and holds the sum under this row. A kill here would leave no
   // stamp and no journal row, so the row is ws-reap's, not the flat 90 s.
   'ws-shed-deps': 240_000,
+  // The lease audit (delegation broker wave 5, PR2; O5-2 (b), D-7841). What this row buys is a TIGHTER bound than the
+  // flat 90 s an unlisted verb gets: 60 s. With `--holders` the audit asks both holder probes, each a 10 s walk
+  // (`WS_PATH_USERS_SCAN_S`, `WS_CWD_USERS_SCAN_S`) under `_plat_timeout`, whose TERM-to-KILL grace is 3 s by default and
+  // 2 to 8 s at the widest: about 26 s for the two, 36 s at the widest. The git reads of one tree (a `git status` that lists
+  // untracked files, the hidden-edit read, two `rev-list --count`) and one carrier read have no bound of their own and take
+  // the rest. The key is the verb, so an audit without `--holders` has the same bound. It writes nothing durable, so a kill
+  // here loses only the answer. W5-G15 pins the row below the flat default.
+  'ws-lease-audit': 60_000,
   // The project create (add-project spec 2026-11-04 §4) is one whole `git clone` of a repository the operator named, of
   // any size, under a batch-mode ssh and no prompt, so a credential failure ends at once; a large repository is the
   // wait. ws-reap's row, under the agent's 300 s clamp (`MAX_EXEC_TIMEOUT_MS`) with the client's 5 s margin.
@@ -191,7 +199,9 @@ const CCD_DRY_RUN_TIMEOUT_MS: Record<string, number> = {
  *  of the verb, so `--roll` in its argv is the flag itself. */
 const CCD_ROLL_TIMEOUT_MS = 300_000;
 
-function timeoutMsFor(cmd: string, args: string[]): number {
+/** The bound one runner call gets. Exported for the lease audit's budget row (delegation broker wave 5, W5-G15), the one
+ *  lookup that reads `CCD_VERB_TIMEOUT_MS` from outside; unchanged otherwise. */
+export function timeoutMsFor(cmd: string, args: string[]): number {
   if (cmd !== 'ccd') return TMUX_TIMEOUT_MS;
   const dry = CCD_DRY_RUN_TIMEOUT_MS[args[0] ?? ''];
   if (dry !== undefined && args.includes('--dry-run')) return dry;

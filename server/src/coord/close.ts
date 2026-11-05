@@ -383,7 +383,8 @@ async function closeWorkRun(
   const act = await decideClose({ step: 'close', run, siblings: sibRead, final, state, archive: plan.archive,
     gate: () => childGateAtClose(deps, run, sessionId, sibRead, final, state, line) });
   if (act.kind !== 'go') return stopped(deps, act);
-  const ledger = decideClose({ step: 'ledger', history: await readPrHistory(deps.io, deps.cfg.registryDir, sessionId) });
+  const ledger = decideClose({ step: 'ledger', history: await readPrHistory(deps.io, deps.cfg.registryDir, sessionId),
+    branch: run.branch });
   if (ledger.kind !== 'go') return stopped(deps, ledger);
   coord.foldPrLineage(id, ledger.plan.entries);
   const halt = await actOnFleet(deps, id, sessionId, act.plan.fleet);

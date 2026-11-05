@@ -15,7 +15,7 @@
 // read from the child's own HEAD and branch reflogs only. Every case builds
 // its child in a fixture HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
@@ -39,7 +39,7 @@ const spawnCcd = (snippet: string, timeout: number): {
   code: number | null; stdout: string; stderr: string; ms: number; error: string;
 } => {
   const t0 = Date.now();
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
   });
@@ -731,7 +731,7 @@ describe('the hidden read’s memo is a GLOBAL table — ccd sourced inside a fu
       + ` && git -C "${wt}" ls-files -z -- gone1 gone2 | xargs -0 git -C "${wt}" update-index --skip-worktree`);
     fs.writeFileSync(path.join(wt, 'f1.txt'), 'a hidden edit\n');
     h.git(wt, 'update-index', '--skip-worktree', 'f1.txt');
-    const r = spawnSync('bash', ['-c', `load() { source "${CCD}"; }; load;`
+    const r = spawnSyncGroup('bash', ['-c', `load() { source "${CCD}"; }; load;`
       + ` _ws_reclaim_hidden "${wt}"; rc=$?; printf '%s\\n' "$rc" "\${_WS_HIDDEN_PATHS[*]}";`
       + ` declare -p _WS_HIDDEN_STAND | cut -c1-10; printf '%s\\n' "\${!_WS_HIDDEN_STAND[@]}" | sort`], {
       encoding: 'utf8', cwd: h.home, timeout: 60_000,

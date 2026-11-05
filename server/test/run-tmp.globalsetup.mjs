@@ -48,6 +48,13 @@
 // under `timeout` were clean, and so were double SIGTERM, SIGTERM to main only, and SIGINT and SIGHUP to the
 // group, exiting 143, 130 and 129.
 //
+// THE ARM EXITS INSIDE ITS HANDLER, AND TEARDOWN DISARMS LAST. A signal to the group kills the workers too, and a
+// worker's death is a run vitest ends by itself: exit code 1, reporters, teardown. When main is busy as the signal lands,
+// the signal and the worker's exit reach its loop together, and vitest's ending fits in one turn. Signal first, a 1 ms
+// exit timer lost to it (measured in CI, T5d): the run exited 1, and teardown blamed another actor for the run the arm
+// had just collected. Worker first, teardown disarmed with the signal still unread, which drops it: the run exited 1 as
+// if never signalled. Nothing leaked either way, but a killed run must read as killed. T5d2, T4h and T6e pin it.
+//
 // A RUN THAT CANNOT HAVE ITS OWN PARENT SAYS SO AND CARRIES ON AS BEFORE (D-4497). When `realpath`, `mkdtemp`,
 // `listen` or the `owner.json` write fails — a TMPDIR too long for `sun_path` (a base over about 74 characters
 // on macOS, 78 on Linux; the macOS default is 56, CI's is 4) or a sandbox — what was made is removed, TMPDIR is
@@ -249,17 +256,16 @@ export function removeOwnedDir(dir, uid = process.getuid?.() ?? -1) {
 
 /** Arm the main process to collect `run` on SIGTERM, SIGINT, SIGHUP and `exit` (D-4498). Persistent `on`, never
  *  `once`: GNU timeout delivers SIGTERM to main twice, and a second delivery after the last listener is gone
- *  takes the default action mid-`rm` (measured). Each signal condemns the run, keeps an exit code already set
- *  (vitest's own listener sets the same one) or sets 128+n, and exits on a 1 ms timer — vitest's own exit,
- *  kept for when its `once` is spent. `extra` are further directories (vitest's own `tmpDir`, D-6623) removed by
- *  `removeOwnedDir` after the run. Returns the disarm, which teardown calls first.
+ *  takes the default action mid-`rm` (measured). Each signal condemns the run and exits 128+n there and then, whatever
+ *  exit code the run had reached (the header says why no timer); vitest's own listeners, `exit` among them, still
+ *  run. `extra` are further directories (vitest's own `tmpDir`, D-6623) removed by `removeOwnedDir` after the run.
+ *  Returns the disarm, which teardown calls last.
  *  @param {string} run @param {string[]} [extra] @returns {() => void} */
 export function armSignals(run, extra = []) {
   const collect = () => { condemn(run); for (const d of extra) removeOwnedDir(d); };
   const onSignal = (sig) => {
     collect();
-    process.exitCode ??= 128 + RUN_SIGNALS[sig];
-    setTimeout(() => process.exit(), 1);
+    process.exit(128 + RUN_SIGNALS[sig]);
   };
   for (const s of Object.keys(RUN_SIGNALS)) process.on(s, onSignal);
   process.on('exit', collect);
@@ -393,7 +399,6 @@ export default async function setup(project) {
   const vitestTmp = typeof project?.tmpDir === 'string' && path.isAbsolute(project.tmpDir) ? [project.tmpDir] : [];
   const disarm = armSignals(opened.run, vitestTmp);
   return async () => {
-    disarm();
     if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
     delete process.env[RUN_DIR_ENV];
     const r = condemn(opened.run);
@@ -409,10 +414,15 @@ export default async function setup(project) {
         warn(`could not drop ${RUN_OWNER} from ${opened.run} (${e.code ?? 'rm'}); no later run will collect it`);
       }
     }
-    // `gone` is never a race this run lost: nothing but this teardown and its own arm (disarmed above) condemns
-    // a run whose owner answers, so another actor removed this one while it was live (KNOWN LIMITATION, T6a).
+    // `gone` is never a race this run lost: nothing but this teardown and its own arm (which exits where it runs)
+    // condemns a run whose owner answers, so another actor removed this one while it was live (KNOWN LIMITATION, T6a).
     if (r === 'gone') warn(`${opened.run} was already gone at teardown: another actor removed this run while it was live`);
     opened.server.close();
     await reapAndReport(base, quietS);
+    // Last, not first: a signal libuv has caught but this loop has not read yet is dropped by a disarm, and the run
+    // would exit as if it had never been signalled. Two immediates are a whole turn of the loop, whichever phase this
+    // runs in, and the turn is what reads it: a quiet reap above has no I/O of its own to wait for.
+    for (let i = 0; i < 2; i += 1) await new Promise((r) => { setImmediate(r); });
+    disarm();
   };
 }

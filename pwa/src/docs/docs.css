@@ -332,6 +332,74 @@
 .docs-export-facts dt, .docs-export-facts dd { margin: 0; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .docs-export-note { margin: 0; font-size: var(--text-sm); line-height: var(--leading-normal); }
 
+/* — the compact head (the phone-header plan of 2026-11-03). A leaf page under 600 CSS px draws one row, `CompactHead` in
+   DocsHead.tsx, and the head's component alone decides when (`headLayoutFor`). So every rule here keys on the head's own
+   classes and none on a width: a tablet and a desktop never render them, and a phone's listings keep the rules above.
+   The row is back (`.docs-back`), two lines naming where and what, Share and Export as icons (`.docs-action`, as in the
+   full header, given a whole tap's width here), and Page details (`.docs-more`); the panel under it holds the crumbs,
+   the truth line and the link actions, closed until Page details opens it. While the tree slot is not `ok` the head is
+   back and the crumbs (`.docs-compact-crumbs`), as the full header's is. The row is one tap tall with the picked
+   mockup's 1 px divider inside that height (box-sizing is border-box everywhere, reset.css), so the row and the 4 px gap
+   under it are the console's whole part above the frame (the screen pads its top for the status bar of an installed iOS app, `--safe-top`, 0 everywhere else). The first line's draft badge sits beside its text, never
+   inside the part that ends in an ellipsis. That part is two spans, the parent crumb and the served ref, each cut at its
+   own end, the crumb giving way first (a flex-shrink a thousand times the ref's), so a long parent directory never hides
+   which ref is served; the ref's span holds the ` · ` separator, so it keeps its spaces (`white-space: pre`: a flex item
+   drops a leading space under `nowrap`). GROUNDS: the row, the label and the panel paint nothing, so everything here
+   sits on body's --bg-page as the full header does (design/audit.mjs registers `.docs-compact-where` and `.docs-more`
+   there); an open `.docs-more` paints its own pressed ground and ink and is measured on it; the dot paints a status fill
+   and sets no ink. A disabled icon is dimmed by opacity, registered in design/audit.mjs's OPACITY_REGISTRY beside the
+   `.bell:disabled` fade it follows, because every docs rule that sets a colour is measured and none is exempt. — */
+.docs-screen:has(> .docs-compact) { padding-top: var(--safe-top); gap: var(--sp-1); }
+.docs-compact-bar {
+  display: flex; align-items: center; min-width: 0;
+  block-size: var(--tap-min);
+  border-block-end: 1px solid var(--edge-subtle);
+}
+/* The row sits at the top of the page, so the global ring (2px offset 2px, base.css) would draw above the viewport: the
+   row's controls draw it inside their own boxes, and so do the controls of the crumbs state that stands in for the row
+   while the tree slot is not ok. */
+.docs-compact-crumbs :focus-visible,
+.docs-compact-bar :focus-visible { outline-offset: -2px; }
+.docs-compact-crumbs { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.docs-compact-label { flex: 1 1 auto; min-width: 0; margin: 0; }
+.docs-compact-where-text, .docs-compact-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-compact-where {
+  display: flex; align-items: center; gap: var(--sp-1); min-width: 0; white-space: nowrap;
+  font: var(--weight-regular) var(--text-2xs) / var(--leading-tight) var(--font-mono);
+  color: var(--ink-secondary);
+}
+.docs-compact-where-text { flex: 0 1 auto; min-width: 0; display: flex; }
+.docs-compact-where-crumb { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-compact-where-ref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.docs-compact-where .docs-badge { flex: none; }
+.docs-compact-name { display: block; font: var(--weight-medium) var(--text-md) / var(--leading-tight) var(--font-ui); }
+.docs-compact-bar .docs-action { justify-content: center; min-width: var(--tap-min); padding: 0; text-decoration: none; }
+.docs-compact-bar .docs-action:disabled { opacity: 0.35; }
+.docs-more {
+  position: relative; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--tap-min); min-width: var(--tap-min);
+  border: 0; border-radius: var(--r-md);
+  background: none; color: var(--ink-secondary);
+  cursor: pointer;
+}
+.docs-more[aria-expanded='true'] { background: var(--bg-pressed); color: var(--ink-primary); }
+.docs-more-dot {
+  position: absolute; inset-block-start: var(--sp-2); inset-inline-end: var(--sp-2);
+  inline-size: var(--sp-2); block-size: var(--sp-2); border-radius: var(--r-full);
+}
+.docs-more-dot[data-tone='ok'] { background: var(--status-done); }
+.docs-more-dot[data-tone='warn'], .docs-more-dot[data-tone='failed'] { background: var(--status-attention); }
+.docs-more-panel { display: grid; gap: var(--sp-2); min-width: 0; padding-block-end: var(--sp-2); }
+.docs-more-panel[hidden] { display: none; }
+/* "Formatting…" lies over the frame's host instead of taking a line above it, so the frame does not move when the
+   reader is ready. It paints the page's own ground, so its registered ink (.doc-formatting, on --bg-page) holds there. */
+.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) { position: relative; }
+.docs-screen:has(> .docs-compact) > .docs-leaf:has(> .docs-reader) > .doc-formatting {
+  position: absolute; inset-block-start: 0; inset-inline: 0; z-index: 1;
+  padding: var(--sp-2); background: var(--bg-page);
+}
+
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both
    halves). — */

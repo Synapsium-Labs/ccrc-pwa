@@ -903,7 +903,7 @@ describe('reclaimChild — the one executor', () => {
 
   it.each<[ChildReclaimToken, string]>([
     ['containment-unproven', 'refused'], ['not-a-child', 'refused'], ['no-worktree-record', 'refused'],
-    ['attached', 'deferred'], ['reap-in-progress', 'deferred'], ['no-such-session', 'gone'],
+    ['branch-gone-checked-out', 'refused'], ['attached', 'deferred'], ['reap-in-progress', 'deferred'], ['no-such-session', 'gone'],
   ])('an AUDIT refusal %s is %s, and the verb is never called', async (token, kind) => {
     const s = await rig({ script: (runId) => ({ audit: { ran: true as const, code: 0, stdout: auditDoc(runId, token, { detail: 'd' }) } }) });
     const out = await reclaimChild(s.deps, s.req());
@@ -916,8 +916,8 @@ describe('reclaimChild — the one executor', () => {
   it('the genuine refusals stay TERMINAL: every other terminal word is refused, never retried (characterization)', () => {
     const terminal = Object.entries(CHILD_RECLAIM_TOKEN_KIND).filter(([, kind]) => kind === 'terminal')
       .map(([token]) => token).filter((t) => t !== 'tree-unreadable').sort();
-    expect(terminal).toEqual(['branch-elsewhere', 'containment-unproven', 'nested-rescue-too-large', 'no-worktree-record',
-      'not-a-child', 'not-a-workspace']);
+    expect(terminal).toEqual(['branch-elsewhere', 'branch-gone-checked-out', 'containment-unproven', 'nested-rescue-too-large',
+      'no-worktree-record', 'not-a-child', 'not-a-workspace']);
   });
 
   // A read that failed is not a tree that was unsafe: one transient `find` error must not park a child forever. The

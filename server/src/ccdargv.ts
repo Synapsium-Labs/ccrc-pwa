@@ -80,6 +80,13 @@ const looseHex = (hex: string): string => {
   return hex;
 };
 
+/** `ws-add --base`'s start point (delegation broker wave 5 PR3, D-7827): a FULL commit id of either object format, lowercase,
+ *  the grammar `cmd_ws_add` refuses anything else with. Never a ref or an abbreviation; anything else fails toward not sending. */
+const commitId = (id: string): string => {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) throw new Error('CCD_ARGV.wsAddWorkerBase: --base is a full 40- or 64-hex commit id');
+  return id;
+};
+
 /** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
 const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
@@ -596,6 +603,15 @@ export const CCD_ARGV = {
                 slug: string | null = null, routeDefault = false) =>
                  argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), ...routeDefaultFlags(routeDefault, route), p,
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
+  /** A promoting dispatch's ws-add (delegation broker wave 5 PR3, spec §5.7): `wsAddWorker` with `--base <commit>`, the
+   *  `git worktree add` start point and nothing else (`$REG/<id>.base`, the branch and the PR target are unchanged, D-7827).
+   *  A NEW KEY, never a widened `wsAddWorker` (`wsAddNamed`'s rule). `--base` LEADS beside `--child`, which the verb requires,
+   *  so an older ccd binds it as the project and refuses (D-6164) instead of dropping it and starting at origin's base.
+   *  Behind `WS_ADD_BASE_CAP`; its one composer is PR9's dispatch arm. */
+  wsAddWorkerBase: (p: string, dec: ActorFlags | null, route: RouteFields | null, child: number, base: string,
+                    slug: string | null, routeDefault: boolean) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), '--base', commitId(base), ...routeFlags(route),
+                   ...routeDefaultFlags(routeDefault, route), p, ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   /** Landing order wave 5c (spec §5.5 "Landed state is PR-keyed"): one PR's state by number, with no workspace binding.
@@ -698,6 +714,15 @@ export const CCD_ARGV = {
    *  the server has journalled, on its own granted prefix (`['ws-lease-mark','--lease']`, enrolled in the agent's
    *  `REQUIRED_VERB_FLAG`). Behind `LEASE_MARK_CAP`. No server code composes it yet (PR6 does). */
   leaseMark: (a: LeaseMarkArgs) => leaseMarkArgv(a),
+  /** `ws-lease-audit --lease <uuid> --generation <n> [--holders]` (delegation broker wave 5, PR2): the read-only measure of
+   *  one leased tree at the carrier generation the server expects, on its own granted prefix (`['ws-lease-audit','--lease']`,
+   *  enrolled in the agent's `REQUIRED_VERB_FLAG`); `--holders` (the only `/proc` walk) only when asked. It writes nothing.
+   *  Behind `LEASE_AUDIT_CAP`. No server code composes it yet (PR7 and PR9 do). */
+  leaseAudit: (leaseId: string, generation: number, withHolders: boolean) => {
+    if (!LEASE_UUID_RE.test(leaseId)) throw new Error('CCD_ARGV.leaseAudit: leaseId is not a lease id');
+    if (!leaseCount(generation, 9_999_999_999)) throw new Error('CCD_ARGV.leaseAudit: generation is not a positive integer');
+    return argv(['ws-lease-audit', '--lease', leaseId, '--generation', String(generation), ...(withHolders ? ['--holders'] : [])]);
+  },
   /** `ws-audit --collect-census` (fleet disk retention spec 2026-10-23 section 2.4, D-6625/D-6626): the read-only census
    *  of the entries directly under `~/.cc-tmp`, classed, names as hex. Behind `COLLECT_LOOSE_CAP`. Granted by
    *  `['ws-audit','--collect-census']`; it destroys nothing. */
@@ -1235,6 +1260,15 @@ export const SHED_DEPS_CAP = 'shed-deps-v1';
  *  `ws-lease-mark --lease <id> ...`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
  *  `echo lease-mark-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence. */
 export const LEASE_MARK_CAP = 'lease-mark-v1';
+/** The `ccd caps` token that says this box's ccd has the lease audit (delegation broker wave 5, PR2): `ws-lease-audit
+ *  --lease <id> --generation <n> [--holders]`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
+ *  `echo lease-audit-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without
+ *  it makes every tree count as changed, and promotion refuses. */
+export const LEASE_AUDIT_CAP = 'lease-audit-v1';
+/** The `ccd caps` token that says this box's `ws-add` takes `--base <commit>` beside `--child` (delegation broker wave 5 PR3):
+ *  a child workspace started at a given commit, a start point only. Spelled ONCE in `server/src`; ccd's `echo ws-add-base-v1` is
+ *  the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without it must never be sent the flag. */
+export const WS_ADD_BASE_CAP = 'ws-add-base-v1';
 /** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
  *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
  *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
@@ -1389,6 +1423,8 @@ export const CCD_CAN = {
   hibernate: verbRow('hibernate'),
   swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
   wsAdd: 'none', wsAddWorker: 'none',
+  // `--base` is a new flag an older ccd binds as the project (D-6164): refuse on no evidence (delegation broker wave 5 PR3).
+  wsAddWorkerBase: capRow(WS_ADD_BASE_CAP),
   // Named workspaces: `wsAddNamed` is `ws-add` with FLAGS, so the row is ungated like `wsAdd` and `planCreate` asks the
   // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),
@@ -1406,6 +1442,8 @@ export const CCD_CAN = {
   wsShedDeps: capRow(SHED_DEPS_CAP),
   // The lease carrier's writer is new (delegation broker wave 5): an older ccd has none of it.
   leaseMark: capRow(LEASE_MARK_CAP),
+  // So is its read-only audit (PR2).
+  leaseAudit: capRow(LEASE_AUDIT_CAP),
   // The loose arm's three rows all refuse on no evidence: the audit and the census are new flags an older ccd rejects.
   wsCollectCensus: capRow(COLLECT_LOOSE_CAP), wsCollectLooseAudit: capRow(COLLECT_LOOSE_CAP), wsCollectLoose: capRow(COLLECT_LOOSE_CAP),
   wsAttic: verbRow('ws-attic'),
