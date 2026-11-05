@@ -7110,7 +7110,8 @@ you need to reason about one.*
   body pins and loads at its foot, `lib/disk-retention.sh` (the fleet
   disk-retention verbs; installed first, at `~/.local/libexec/ccrc/lib/`, #1279) and
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
-  `lib/delegation-lease.sh` (the delegation broker's lease carrier and `ws-lease-mark`, beside them); `ccrc`, the box
+  `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
+  `ws-lease-audit`, beside them); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
