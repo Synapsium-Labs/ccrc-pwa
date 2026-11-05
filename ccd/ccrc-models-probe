@@ -355,10 +355,10 @@ _fetch() {
         [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] \
           || { echo "$PROG: the endpoints question needs the lane's key: set ANTHROPIC_AUTH_TOKEN" >&2; return 1; }
         printf 'header = "Authorization: Bearer %s"\n' "$ANTHROPIC_AUTH_TOKEN" \
-          | curl -sS -K - --fail --max-time 30 --proto '=https' \
+          | curl -sS -K - --fail --max-time 30 --proto '=https' --max-redirs 0 \
               "https://openrouter.ai/api/v1/models/$ENDPOINTS/endpoints" > "$RAW"
       else
-        curl -sS --fail --max-time 30 --proto '=https' 'https://openrouter.ai/api/v1/models' > "$RAW"
+        curl -sS --fail --max-time 30 --proto '=https' --max-redirs 0 'https://openrouter.ai/api/v1/models' > "$RAW"
       fi
       ;;
     compatible)

@@ -7285,7 +7285,7 @@ _acct_write_secret() {   # <id> <provider> <envvar> — the 0600 file, then forg
 # shape library alone. Everything that needs the roster or the provider table is
 # `check-add`'s, in node, on the same exit-code table.
 ACCT_ID=""; ACCT_PROVIDER=""; ACCT_LABEL=""; ACCT_HUE=""; ACCT_SUFFIX=""
-ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""; ACCT_ADOPT=""
+ACCT_BASE_URL=""; ACCT_MODELS=""; ACCT_METHOD=""; ACCT_CRED_SPELLING=""; ACCT_ADOPT=""; ACCT_PLACEMENT=""
 _acct_add_parse() {
   _acct_shape
   local flag="" v=""
@@ -7295,11 +7295,11 @@ _acct_add_parse() {
       -h|--help) usage; exit 0 ;;
       # G20 (accounts plan Task A16): take over a config directory that already exists, as it is.
       --adopt) ACCT_ADOPT=1; shift; continue ;;
-      --id|--provider|--label|--hue|--suffix|--base-url|--models|--method|--credential)
+      --id|--provider|--label|--hue|--suffix|--base-url|--models|--method|--credential|--placement)
         [ $# -ge 2 ] \
           || _acct_refuse 2 missing-value "the flag $1 takes a value and nothing followed it on the command line. Nothing was written."
         v="$2"; shift ;;
-      --id=*|--provider=*|--label=*|--hue=*|--suffix=*|--base-url=*|--models=*|--method=*|--credential=*)
+      --id=*|--provider=*|--label=*|--hue=*|--suffix=*|--base-url=*|--models=*|--method=*|--credential=*|--placement=*)
         v="${1#*=}" ;;
       *) _acct_refuse 2 unknown-argument "ccrc account add has no argument \"$1\"" ;;
     esac
@@ -7333,6 +7333,7 @@ _acct_add_parse() {
       --models)     ACCT_MODELS="$v" ;;
       --method)     ACCT_METHOD="$v" ;;
       --credential) ACCT_CRED_SPELLING="$v" ;;
+      --placement)  ACCT_PLACEMENT="$v" ;;
     esac
     shift
   done
@@ -7766,6 +7767,21 @@ _acct_switch_write() {   # <id> off|on|on-any -> rc, see above
 # and the cure is to converge again. Un-writing an operator's roster entry to tidy up
 # a failed chmod would be the destructive act, on the one file this CLI calls theirs.
 ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
+# `check-add`'s plan, or its refusal re-emitted. Its own function because an OpenRouter add judges twice: the request
+# before anything else, and the request with the suggested models once they are known.
+ACCT_PLAN=""
+_acct_check_add() {   # <check-add's arguments> -> ACCT_PLAN, or exits
+  local rc=0
+  ACCT_PLAN="$(_acct_node check-add "$@")" || rc=$?
+  [ "$rc" -ne 0 ] || return 0
+  # check-add ALREADY PRINTED the envelope on ITS stdout — which this command
+  # substitution captured, unless it printed NOTHING: the half-updated box, not
+  # a refusal (D-2051). A body is re-emitted verbatim; one refusal, one owner.
+  [ -n "$ACCT_PLAN" ] || _acct_no_answer "$rc" check-add "Nothing was written."
+  printf '%s\n' "$ACCT_PLAN"
+  exit "$rc"
+}
+
 _acct_add() {
   _acct_add_parse "$@"
   _acct_lane_lock "$ACCT_ID" "Nothing was written."
@@ -7781,22 +7797,15 @@ _acct_add() {
   # alternate value, so `--base-url` and its value arrive as exactly two words
   # even when the value contains a space, and nothing at all when the variable
   # is empty.
-  local plan rc=0
-  plan="$(_acct_node check-add \
-    --file "$(_acct_roster_path)" --id "$ACCT_ID" --provider "$ACCT_PROVIDER" \
+  local plan
+  local -a request=(--file "$(_acct_roster_path)" --id "$ACCT_ID" --provider "$ACCT_PROVIDER" \
     --label "$ACCT_LABEL" --hue "$ACCT_HUE" --suffix "$ACCT_SUFFIX" --home "$HOME" \
     ${ACCT_ADOPT:+--adopt true} \
     ${ACCT_BASE_URL:+--base-url "$ACCT_BASE_URL"} \
-    ${ACCT_MODELS:+--models "$ACCT_MODELS"} \
-    ${ACCT_METHOD:+--method "$ACCT_METHOD"})" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    # check-add ALREADY PRINTED the envelope on ITS stdout — which this command
-    # substitution captured, unless it printed NOTHING: the half-updated box, not
-    # a refusal (D-2051). A body is re-emitted verbatim; one refusal, one owner.
-    [ -n "$plan" ] || _acct_no_answer "$rc" check-add "Nothing was written."
-    printf '%s\n' "$plan"
-    exit "$rc"
-  fi
+    ${ACCT_METHOD:+--method "$ACCT_METHOD"} \
+    ${ACCT_PLACEMENT:+--placement "$ACCT_PLACEMENT"})
+  _acct_check_add "${request[@]}" ${ACCT_MODELS:+--models "$ACCT_MODELS"}
+  plan="$ACCT_PLAN"
 
   # ── THE FOUR FIELDS BASH NEEDS OFF THE PLAN, IN ONE FORK ─────────────────
   # Read with node, not with a shell regex over JSON — `ccrc-doctor-checks`
@@ -7862,9 +7871,17 @@ _acct_add() {
   elif [ -n "$envvar" ]; then
     [ -n "$ACCT_CRED_SPELLING" ] \
       || _acct_refuse 2 credential-required "provider \"$ACCT_PROVIDER\" with method \"${planmethod:-paste}\" is a token lane and needs the key: pass --credential - and pipe it in. Nothing was written."
+    # THE SUGGESTED MODELS BEFORE THE KEY (spec §8.5; D-5556): `check-add` judges the map exactly as it judges a typed
+    # `--models`, and a catalogue that cannot be read refuses here, with nothing written and the key not yet read.
+    if [ "$ACCT_PROVIDER" = openrouter ] && [ -z "$ACCT_MODELS" ]; then
+      _acct_or_suggest "$ACCT_ID"
+      _acct_check_add "${request[@]}" --models "$ACCT_MODELS"
+      plan="$ACCT_PLAN"; ACCT_MODELS_RESOLVED="$ACCT_MODELS"
+    fi
     _acct_read_credential "$ACCT_CRED_SPELLING"
-    # PASTE VALIDATES FIRST (spec §6.3): an Anthropic token is probed before any byte of the lane is written.
+    # PASTE VALIDATES FIRST (spec §6.3, §8.3): a token or a key is checked before any byte of the lane is written.
     [ "$envvar" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$ACCT_ID" "Nothing was written."
+    [ "$ACCT_PROVIDER" != openrouter ] || _acct_or_validate "Nothing was written."
     _acct_write_secret "$ACCT_ID" "$ACCT_PROVIDER" "$envvar"
   else
     [ -z "$ACCT_CRED_SPELLING" ] \
@@ -7932,7 +7949,9 @@ _acct_add() {
   _acct_operator_steps "$ACCT_ID"
   # THE LANE STATE, FRESH (accounts plan Task A11): a new lane's state starts
   # over, so a stale file under a re-used id lends it nothing.
-  _acct_lane_state "$ACCT_ID" --mode fresh --added-at now
+  _acct_lane_state "$ACCT_ID" --mode fresh --added-at now ${ACCT_KEY_ARGS[@]+"${ACCT_KEY_ARGS[@]}"}
+  # THE CLASS REGISTRY, LAST: `init` needs the roster entry and the config directory (D-8023 (1)).
+  [ -z "$ACCT_OR_SCRATCH" ] || _acct_or_registry "$ACCT_ID"
 
   # ── 7. THE ANSWER ───────────────────────────────────────────────────────
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`
@@ -9327,6 +9346,7 @@ _acct_credential() {
   _acct_read_credential "$cred"                # -> ACCT_CREDENTIAL, or refuses
   # VALIDATE FIRST (accounts plan Task A16): the old file stands, and so does its check, until the new token passes.
   [ "$ACCT_SECRET_ENV" != CLAUDE_CODE_OAUTH_TOKEN ] || _acct_token_probe "$id" "Nothing was written: the old credential file stands."
+  [ "$ACCT_PROVIDER" != openrouter ] || _acct_or_validate "Nothing was written: the old credential file stands."
   # A verdict measured on the old secret says nothing about this one (D-5755
   # (12)), and it is dropped BEFORE the write, so a write that refuses or a TERM
   # after the rename fails safe: the lane reads Not checked either way. A PASTE CLEARS `mintedAt` too (accounts plan
@@ -9334,7 +9354,7 @@ _acct_credential() {
   # is gone.
   _acct_lane_state "$id" --clear check --clear mintedAt
   _acct_write_secret "$id" "$ACCT_PROVIDER" "$ACCT_SECRET_ENV"
-  _acct_lane_state "$id"   # the new secret is in: the writer measures it (D-7992)
+  _acct_lane_state "$id" ${ACCT_KEY_ARGS[@]+"${ACCT_KEY_ARGS[@]}"}   # the new secret is in: the writer measures it (D-7992)
   _acct_live "$id"
 
   # `${arr[@]+"${arr[@]}"}` — this tree's empty-array idiom under `set -u`.
@@ -10612,6 +10632,90 @@ _acct_token_probe() {   # <id> <what-still-stands> [<config dir holding a sign-i
   esac
 }
 
+# ── OPENROUTER BY PASTE: the key checked first, and its suggested models (accounts plan Task A26; spec §8.3, §8.5) ───
+# THE KEY RIDES curl's STDIN AS ONE HEADER LINE (D-5520): `-H @-` reads a header file, so a directive in the key has no
+# grammar to land in, and the key is on no argv. `printf` is a builtin, so it forks nothing that carries the key. curl's
+# stderr is dropped, and only its body and status go further: a refusal is built from the verdict, never from an answer.
+ACCT_OR_KEY_URL='https://openrouter.ai/api/v1/key'
+ACCT_KEY_VERDICT=""; ACCT_KEY_FACTS=""
+_acct_or_read_key() {   # ACCT_CREDENTIAL -> ACCT_KEY_VERDICT and ACCT_KEY_FACTS; anything but an answer is `key-unverified`
+  local -; set +x +a
+  local got="" rc=0 row=""
+  ACCT_KEY_VERDICT="key-unverified"; ACCT_KEY_FACTS=""
+  got="$(printf 'Authorization: Bearer %s\n' "$ACCT_CREDENTIAL" \
+    | curl -sS -H @- --proto '=https' --max-redirs 0 --max-time 10 -w '\n%{http_code}' "$ACCT_OR_KEY_URL" 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] || return 0
+  row="$(printf '%s' "${got%$'\n'*}" | _acct_node or-key --status "${got##*$'\n'}" 2>/dev/null)" || return 0
+  ACCT_KEY_VERDICT="$(jq -r '.verdict // "key-unverified"' <<<"$row" 2>/dev/null)" || ACCT_KEY_VERDICT="key-unverified"
+  ACCT_KEY_FACTS="$(jq -c '.facts // empty' <<<"$row" 2>/dev/null)" || ACCT_KEY_FACTS=""
+}
+
+# The lane-state arguments a validated key leaves. The hint is computed here, the one place that still holds the key.
+ACCT_KEY_ARGS=()
+_acct_or_validate() {   # <what-still-stands> -> ACCT_KEY_ARGS, or refuses
+  local -; set +x +a
+  local stands="$1" last=""
+  _acct_or_read_key
+  case "$ACCT_KEY_VERDICT" in
+    ok) ;;
+    wrong-key-kind) ACCT_CREDENTIAL=""; _acct_refuse 1 wrong-key-kind "That's a management key, which can't run models and must never sit in a session's environment. Add it as the management key instead. $stands" ;;
+    key-rejected) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That key was refused by OpenRouter (HTTP 401). $stands" ;;
+    *) ACCT_CREDENTIAL=""; _acct_refuse 1 key-unverified "OpenRouter didn't answer, so the key could not be checked: $stands Try again." ;;
+  esac
+  ACCT_KEY_ARGS=(--key-source pasted --validated-at now)
+  [ -z "$ACCT_KEY_FACTS" ] || ACCT_KEY_ARGS+=(--key-facts "$ACCT_KEY_FACTS")
+  last="${ACCT_CREDENTIAL: -4}"
+  [[ "$ACCT_CREDENTIAL" != sk-or-v1-* || ! "$last" =~ ^[A-Za-z0-9]{4}$ ]] || ACCT_KEY_ARGS+=(--key-hint "sk-or-v1-…$last")
+}
+
+# `check`'s reading of the key (D-5521, G8, G28), in a subshell so the sourced key dies with it. A failed read keeps the
+# last reading, whose time says how old it is. A management key found on a lane is said beside the verdict.
+_acct_or_refresh() {   # <id>
+  local -; set +x +a
+  local id="$1" got="" facts=""
+  [ -r "$HOME/$ACCT_SECRETS" ] || return 0
+  # shellcheck disable=SC1090  # the lane's own key file, named by its roster row: there is nothing to follow
+  got="$(unset ANTHROPIC_AUTH_TOKEN; . "$HOME/$ACCT_SECRETS" >/dev/null 2>&1 || exit 0
+    export -n ACCT_CREDENTIAL; ACCT_CREDENTIAL="${ANTHROPIC_AUTH_TOKEN:-}"; unset ANTHROPIC_AUTH_TOKEN
+    _acct_or_read_key; printf '%s %s' "$ACCT_KEY_VERDICT" "$ACCT_KEY_FACTS")"
+  facts="${got#* }"
+  case "$got" in
+    'ok '*) _acct_lane_state "$id" --validated-at now ${facts:+--key-facts "$facts"} ;;
+    wrong-key-kind*) ACCT_NOTES+=("OpenRouter says this lane's key is a management key, which must never sit in a session's environment. Replace it with an ordinary key.") ;;
+  esac
+}
+
+# The catalogue, read for the suggestion before anything is made. It needs no key. It lands in this lane's probe
+# directory, the sweep's and the TERM trap's as `_acct_token_probe`'s is, and the exit chain removes it on every refusal.
+ACCT_OR_SCRATCH=""
+_acct_or_suggest() {   # <id> -> ACCT_MODELS, and the catalogue under ACCT_OR_SCRATCH, or refuses
+  local id="$1" down="The OpenRouter catalogue couldn't be read, so no models could be suggested. Nothing was saved. Try again."
+  # shellcheck disable=SC2174  # -m on the deepest directory only is the intent: `_acct_token_probe`'s same root
+  mkdir -p -m 0700 "$ACCT_SCRATCH_ROOT" || _acct_refuse 1 catalogue-unreachable "$down"
+  _acct_backup_exclude "$ACCT_SCRATCH_ROOT"
+  rm -rf -- "$ACCT_SCRATCH_ROOT/.$id-probe."*   # one a SIGKILL left; this lane's lock is held, so none is running
+  ACCT_OR_SCRATCH="$(mktemp -d "$ACCT_SCRATCH_ROOT/.$id-probe.XXXXXX")" || _acct_refuse 1 catalogue-unreachable "$down"
+  _acct_own_temp "$ACCT_OR_SCRATCH"
+  _exit_add 'rm -rf -- "$ACCT_OR_SCRATCH"'
+  "$CCRC_HERE/ccrc-models-probe" "$id" openrouter --out "$ACCT_OR_SCRATCH/catalogue.json" >/dev/null 2>&1 \
+    || _acct_refuse 1 catalogue-unreachable "$down"
+  # A catalogue that parses and names no id for a class a lane needs suggests nothing, and the sentence is true of it too.
+  ACCT_MODELS="$(_models_node suggest --catalogue "$ACCT_OR_SCRATCH/catalogue.json" 2>/dev/null | jq -ce '.models')" \
+    || _acct_refuse 1 catalogue-unreachable "$down"
+}
+
+# The class registry, from the catalogue the suggestion read, so the registry and the roster's map are one answer. The
+# settings already carry the map, so a refusal here costs the lane only its registry, and says how to make it.
+_acct_or_registry() {   # <id>
+  local id="$1" rc=0 dir="$HOME/.ccrc/models"
+  local stands="The lane is written and nothing rolls back, and its settings carry the suggested models: only its class registry is missing. Run 'ccrc models $id init openrouter --suggested'."
+  mkdir -p "$dir" && _plat_mv_notdir "$ACCT_OR_SCRATCH/catalogue.json" "$dir/$id.json" \
+    || _acct_refuse 1 models-registry "The lane's catalogue could not be moved into $dir. $stands"
+  # A SUBSHELL, for `_models_refuse`'s `exit`: its refusal must end this step, not the verb with no answer.
+  ( _models_answer_locked "$id" init --file "$(_models_roster_path)" --id "$id" --probe openrouter --suggested true ) >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || _acct_refuse 1 models-registry "The lane's class registry could not be made (exit $rc). $stands"
+}
+
 _acct_check() {
   local id="" v="" flag=""
   while [ $# -gt 0 ]; do
@@ -10707,6 +10811,8 @@ _acct_check() {
   if [ -n "$verdict" ] && [ -n "$at" ]; then
     _acct_lane_state "$id" --check-verdict "$verdict" --check-at "$at"
   fi
+  # THE KEY'S CREDIT (D-5521): validation and `check` are its only two readers in v1.
+  [ "$ACCT_PROVIDER" != openrouter ] || [ "$ACCT_KIND" != generated ] || [ -z "$ACCT_SECRETS" ] || _acct_or_refresh "$id"
   # THE IDENTITY, READ OFF THE LANE'S OWN `auth status` (accounts plan Task A13;
   # spec §3.4): a sign-in lane only, the Anthropic lane whose roster entry names
   # no secrets file. A token lane's `auth status` cannot name the account the
@@ -11566,11 +11672,12 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       local probe="${1:-}"
       [ -n "$probe" ] || _models_refuse missing-argument 2 "ccrc models $id init needs a probe kind: one of ${MODELS_PROBES// /, }"
       shift
-      local base=""
+      local base="" suggested=""
       case "${1:-}" in
         --base-url) [ $# -ge 2 ] || _models_refuse missing-argument 2 "--base-url needs a value"; base="$2"; shift 2 ;;
+        --suggested) suggested=1; shift ;;
       esac
-      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id init takes a probe kind and an optional --base-url, and got \"$1\""
+      [ $# -eq 0 ] || _models_refuse unknown-argument 2 "ccrc models $id init takes a probe kind and an optional --base-url or --suggested, and got \"$1\""
       # A TYPO IS A USAGE ERROR AND IS ANSWERED HERE, at exit 2, before node is
       # asked to interpret it as a fact about the box. The two near-misses get
       # their own sentences, because each is a real name for something else and
@@ -11583,11 +11690,10 @@ _models_lane_sub() {   # <accountId> <subcommand> [args…]
       for p in $MODELS_PROBES; do [ "$p" = "$probe" ] && ok=1; done
       [ "$ok" -eq 1 ] \
         || _models_refuse unknown-probe 2 "\"$probe\" is not a probe kind this build knows: use one of ${MODELS_PROBES// /, }"
-      if [ -n "$base" ]; then
-        _models_answer_locked "$id" init --file "$file" --id "$id" --probe "$probe" --base-url "$base" || exit $?
-      else
-        _models_answer_locked "$id" init --file "$file" --id "$id" --probe "$probe" || exit $?
-      fi
+      # `refresh` serves only a lane with a registry, so `--suggested` reads the catalogue itself. A failed read leaves
+      # what is there, and node says when that suggests nothing.
+      if [ -n "$suggested" ] && [ "$probe" = openrouter ]; then _models_refresh_one "$id" openrouter "" || :; fi
+      _models_answer_locked "$id" init --file "$file" --id "$id" --probe "$probe" ${base:+--base-url "$base"} ${suggested:+--suggested true} || exit $?
       return 0
       ;;
     set-class)

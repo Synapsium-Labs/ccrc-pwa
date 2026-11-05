@@ -85,7 +85,7 @@ export function laneBox(prefix: string, roster: unknown = FIXTURE_ROSTER): strin
   const home = mkTmp(prefix);
   const ccd = join(home, 'ccrc', 'ccd');
   mkdirSync(ccd, { recursive: true });
-  for (const f of ['ccrc', 'ccrc-wrapper-shape', 'ccrc-doctor-checks', 'ccd-account-health']) {
+  for (const f of ['ccrc', 'ccrc-wrapper-shape', 'ccrc-doctor-checks', 'ccd-account-health', 'ccrc-models-probe']) {
     symlinkSync(join(REPO, 'ccd', f), join(ccd, f));
   }
   symlinkSync(join(REPO, 'deploy'), join(home, 'ccrc', 'deploy'));

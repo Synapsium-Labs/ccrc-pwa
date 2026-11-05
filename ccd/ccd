@@ -9211,6 +9211,9 @@ EOF
   # `account-auth-v1` (N4, D-7734; accounts plan Task A20): `ccrc account auth-start|auth-code|auth-cancel`, the
   # detached attempt on the lane's private tmux socket, `set --method` and `credential --sign-out` are on this box.
   echo account-auth-v1
+  # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
+  # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
+  echo account-openrouter-v2
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now

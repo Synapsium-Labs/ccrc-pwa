@@ -144,6 +144,10 @@ const PROVIDER_CONNECT = {
   openai: ['openai-login'],
 };
 
+/** What `add` writes as a lane's `telemetry` (D-5521). Anthropic's statusline writes `~/.cc-limits/<id>.json`. An
+ *  OpenRouter lane's meter is the key's credit, and a compatible endpoint reports nothing. */
+const PROVIDER_TELEMETRY = { anthropic: 'anthropic', openrouter: 'openrouter', compatible: 'none' };
+
 /** The providers `add` may create a lane for. `openai` is not one: its launcher
  *  is somebody else's program and `declare` is the verb for it (§4.2, §5). */
 const PROVIDER_GENERATABLE = new Set(['anthropic', 'openrouter', 'compatible']);
@@ -529,7 +533,9 @@ function suffixFreeClass(accounts, suffix, file) {
  *  `homeAble: true` AND `telemetry: 'anthropic'` are facts about a GENERATED
  *  wrapper, the mirror of `declaredEntry`'s two: it sets CLAUDE_CONFIG_DIR, so
  *  ccd can land a session on it, and the statusline writes
- *  ~/.cc-limits/<id>.json for it (statusline-command.sh:244-251). `homeAble` is
+ *  ~/.cc-limits/<id>.json for it (statusline-command.sh:244-251). An OpenRouter
+ *  lane takes its placement (spec §8.4: `overflow` is `homeAble: false`) and its
+ *  own telemetry, and a compatible lane reports none (D-5521). `homeAble` is
  *  what `_ws_least_loaded` reads and `$REG/<id>-disabled` is what holds the lane
  *  back until it has been measured (Task 26) — two different questions, and
  *  collapsing them into `homeAble: false` would make a working lane permanently
@@ -549,7 +555,7 @@ function addedEntry(plan) {
   if (plan.models !== null) exec.models = plan.models;
   return {
     id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix, exec,
-    homeAble: true, hue: plan.hue, telemetry: 'anthropic',
+    homeAble: plan.placement !== 'overflow', hue: plan.hue, telemetry: PROVIDER_TELEMETRY[plan.provider] ?? 'anthropic',
   };
 }
 
@@ -617,7 +623,7 @@ const OPS = {
   // own.
   candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
   'check-add': {
-    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt'],
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt', 'placement'],
     repeat: [],
   },
   // ONE key carries the whole request, because `check-add` already resolved it:
@@ -728,11 +734,13 @@ const OPS = {
     keys: [
       'id', 'mode', 'check-verdict', 'check-at', 'key-hash', 'retired-key-hash', 'clear',
       'identity', 'identity-source', 'last-run-at', 'seed-verified-at', 'added-at', 'enabled-at', 'minted-at',
-      'signed-out-at', 'file',
+      'signed-out-at', 'file', 'key-hint', 'key-source', 'key-facts', 'validated-at',
     ],
     // `--clear` repeats (accounts plan Task A20): a paste over a minted token drops `check` and `mintedAt` at once.
     repeat: ['clear'],
   },
+  // OPENROUTER'S ANSWER ABOUT A KEY, READ (accounts plan Task A26; spec §8.3; D-5520). `orKeyAnswerOf` below states it.
+  'or-key': { keys: ['status'], repeat: [] },
   // THE FIRST-RUN SEED (accounts plan Task A13; spec §6.2 step 9, G1; D-5518, D-7731). `opSeed` below states it.
   seed: { keys: ['file', 'id', 'when'], repeat: [] },
   // ENABLE'S READINESS (accounts plan Task A13; spec §10, G19; D-7731). `opReady` below states it. Read-only.
@@ -1278,7 +1286,7 @@ const ISO_SECONDS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const KEY_HASH_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** Spec §3.4's lane-state fields: the only ones a merge keeps (D-5755 (11)). */
 const LANE_STATE_FIELDS = [
-  'check', 'identity', 'identitySource', 'keyHint', 'keySource', 'keyHash', 'keyLimit', 'limitReset',
+  'check', 'identity', 'identitySource', 'keyHint', 'keySource', 'keyLabel', 'keyHash', 'keyLimit', 'limitReset',
   'keyExpiresAt', 'retiredKeyHash', 'validatedAt', 'credit', 'mintedAt', 'seedVerifiedAt', 'lastRunAt',
   'fleetIdentity',
   // A lane the box signed out, and whether it holds a credential (D-7992): `laneCredentialOf` below states the second.
@@ -1287,6 +1295,13 @@ const LANE_STATE_FIELDS = [
   // it on, which is what Discard's "never enabled" reads. The server's reader names neither and drops both.
   'addedAt', 'enabledAt',
 ];
+/** How a key came (`shared/accounts.ts`'s `LANE_KEY_SOURCES`) and its hint's grammar (its `KEY_HINT_RE`): a bare `node`
+ *  cannot import the `.ts`, so `ccrc-account-openrouter-v2.test.ts` pins each pair equal. */
+const LANE_KEY_SOURCES = ['pasted', 'pkce', 'minted'];
+const KEY_HINT_RE = /^[A-Za-z0-9_-]{1,16}…[A-Za-z0-9]{4}$/;
+/** The most of a key's own label the lane state keeps. */
+const KEY_LABEL_MAX = 128;
+
 /** The fields `--clear` may drop: a check that no longer measures the lane's credential, and a mint time that no
  *  longer names the token in its file (accounts plan Task A20). */
 const LANE_STATE_CLEARABLE = ['check', 'mintedAt'];
@@ -1488,9 +1503,23 @@ function opLaneState(a) {
       return 2;
     }
   }
+  if ((a['key-hint'] !== undefined && !KEY_HINT_RE.test(a['key-hint']))
+      || (a['key-source'] !== undefined && !LANE_KEY_SOURCES.includes(a['key-source']))) {
+    refuse('bad-argv', `--key-hint must read <prefix>…<last four>, and --key-source one of ${LANE_KEY_SOURCES.join(', ')}`);
+    return 2;
+  }
+  let keyFacts = {};
+  if (a['key-facts'] !== undefined) {
+    try { keyFacts = JSON.parse(a['key-facts']); } catch { keyFacts = null; }
+    if (!isPlainObject(keyFacts) || !Object.keys(keyFacts).every((k) => KEY_FACT_FIELDS.includes(k))) {
+      refuse('bad-argv', `--key-facts must be an object of ${KEY_FACT_FIELDS.join(', ')}`);
+      return 2;
+    }
+  }
   const times = {};
   for (const [k, field] of [['last-run-at', 'lastRunAt'], ['seed-verified-at', 'seedVerifiedAt'],
-    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt'], ['minted-at', 'mintedAt'], ['signed-out-at', 'signedOutAt']]) {
+    ['added-at', 'addedAt'], ['enabled-at', 'enabledAt'], ['minted-at', 'mintedAt'], ['signed-out-at', 'signedOutAt'],
+    ['validated-at', 'validatedAt']]) {
     if (a[k] === undefined) continue;
     const t = laneTimeOf(a[k]);
     if (t === null || (k === 'seed-verified-at' && a[k] === 'now')) {
@@ -1536,7 +1565,9 @@ function opLaneState(a) {
     return 0;
   }
 
-  const set = { ...times };
+  const set = { ...times, ...keyFacts };
+  if (a['key-hint'] !== undefined) set.keyHint = a['key-hint'];
+  if (a['key-source'] !== undefined) set.keySource = a['key-source'];
   if (verdict !== undefined) set.check = { verdict, at };
   if (a['key-hash'] !== undefined) set.keyHash = a['key-hash'];
   if (a['retired-key-hash'] !== undefined) set.retiredKeyHash = a['retired-key-hash'];
@@ -2076,6 +2107,48 @@ function opPreRemove(a) {
   return 0;
 }
 
+/** The lane-state fields OpenRouter's answer about a key fills (spec §3.4, §8.3). */
+const KEY_FACT_FIELDS = ['keyLabel', 'keyLimit', 'limitReset', 'credit'];
+const amountOrNull = (v) => (v === null || (typeof v === 'number' && Number.isFinite(v)) ? v : undefined);
+/** A printable word for the lane state: never a control byte, whatever the provider answers. */
+const printableLabel = (v) => typeof v === 'string' && v.length > 0 && v.length <= KEY_LABEL_MAX && !identityUnprintable(v);
+
+/** `(status, body) => {verdict, facts?}`: what `GET /api/v1/key` said about a key (spec §8.3; D-5520), bash handing the
+ *  HTTP status and the body it captured. The verdict is `ok`, `wrong-key-kind`, `key-rejected` or `key-unverified`. A
+ *  200 that is not the documented `{data: {…}}`, or whose flags are not booleans, proves nothing, so it is unverified.
+ *  A fact off its grammar is left out and the key stands: the 200 is what validates it, and the facts are display. */
+function orKeyAnswerOf(status, body) {
+  if (status === 401) return { verdict: 'key-rejected' };
+  if (status !== 200) return { verdict: 'key-unverified' };
+  let d = null;
+  try { d = JSON.parse(body)?.['data'] ?? null; } catch { d = null; }
+  if (!isPlainObject(d)) return { verdict: 'key-unverified' };
+  const flags = [d['is_management_key'], d['is_provisioning_key']];
+  if (flags.includes(true)) return { verdict: 'wrong-key-kind' };
+  if (flags.some((f) => f !== undefined && f !== null && f !== false)) return { verdict: 'key-unverified' };
+  const facts = {};
+  if (printableLabel(d['label'])) facts.keyLabel = d['label'];
+  const limit = amountOrNull(d['limit']);
+  const remaining = amountOrNull(d['limit_remaining']);
+  if (limit !== undefined) facts.keyLimit = limit;
+  if (d['limit_reset'] === null || (typeof d['limit_reset'] === 'string' && /^[a-z]{1,16}$/.test(d['limit_reset']))) facts.limitReset = d['limit_reset'];
+  if (limit !== undefined && remaining !== undefined) {
+    facts.credit = { limit, limit_remaining: remaining };
+    if (typeof amountOrNull(d['usage']) === 'number') facts.credit.usage = d['usage'];
+    if (typeof d['is_free_tier'] === 'boolean') facts.credit.is_free_tier = d['is_free_tier'];
+  }
+  return { verdict: 'ok', facts };
+}
+
+/** `or-key --status <n>`, the body on stdin. Always answers: bash reads the verdict, and refuses in its own words. */
+function opOrKey(a) {
+  if (a['status'] === undefined || !/^[0-9]{1,3}$/.test(a['status'])) { refuse('bad-argv', 'or-key needs --status <http code>'); return 2; }
+  let body = '';
+  try { body = readFileSync(0, 'utf8'); } catch { body = ''; }
+  out(orKeyAnswerOf(Number(a['status']), body));
+  return 0;
+}
+
 /** `set --placement` (G5): `full` makes the lane home-able, `overflow` takes it out of fresh placement. Silent. */
 function opSetPlacement(a) {
   const acct = rosterEntryOf(a, 'set-placement');
@@ -2187,6 +2260,7 @@ function main(argv) {
   if (op === 'lane-state') return opLaneState(a);
   if (op === 'pre-remove') return opPreRemove(a);
   if (op === 'set-placement') return opSetPlacement(a);
+  if (op === 'or-key') return opOrKey(a);
   if (op === 'set-method') return opSetMethod(a);
   if (op === 'auth-live') {
     if (a['id'] === undefined) { refuse('bad-argv', 'auth-live needs --id'); return 2; }
@@ -2574,6 +2648,13 @@ function main(argv) {
     // decider on the same question, and the two disagreed — the block above
     // refused the request the ternary was written to soften.
     const isToken = method !== 'login';
+    // SPEC §8.4: an OpenRouter lane is placed, and overflow is the default. No other provider's add takes it.
+    const placement = a['placement'] ?? (provider === 'openrouter' ? 'overflow' : null);
+    if (a['placement'] !== undefined && (provider !== 'openrouter' || !['overflow', 'full'].includes(placement))) {
+      refuse('placement-not-supported',
+        `--placement ${JSON.stringify(placement)} is not usable here: only an OpenRouter lane is placed, as overflow or full. Nothing was written.`);
+      return 2;
+    }
     // THE SECRETS FILE IS NAMED FOR WHAT IT CARRIES, not for who issued it, and
     // the spec says both things in different sections: §5:417 writes the general
     // shape `~/.cc-secrets/X-P.env`, §4.3:322 writes the api-key lane's real
@@ -2608,6 +2689,7 @@ function main(argv) {
       // writes it into the roster and Task 25 hands it to jq with
       // `--argjson`, and neither should be the place a parse failure lands.
       models,
+      placement,
     };
 
     // ── THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT IT WRITES ────

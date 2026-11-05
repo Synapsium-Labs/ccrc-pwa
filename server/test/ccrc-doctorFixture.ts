@@ -1466,7 +1466,7 @@ export const CODEX_TOOLS = ['bash', 'readlink', 'cat', 'cmp', 'ps', 'awk', 'od',
  *  reds on the check's "printed no answer" FAIL. */
 export const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/litellm-config.template.yaml',
   'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs',
-  'shared/model-advance.mjs'];
+  'shared/model-advance.mjs', 'shared/model-suggest.mjs'];
 
 export function installModelsOp(home: string): void {
   for (const rel of MODELS_OP_CLOSURE) {

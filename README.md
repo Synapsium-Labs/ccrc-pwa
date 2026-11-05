@@ -1922,7 +1922,8 @@ phrase as JSON. There is no PWA surface for it in this build: run it on the box 
 ccrc account roster                        # the roster, as JSON
 ccrc account candidates                    # launchers in ~/.local/bin that look like accounts and are not rostered
 ccrc account add --id <id> --provider <anthropic|openrouter|compatible> --label <text> --hue <hue> \
-    [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--credential -] [--adopt]
+    [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--placement overflow|full] \
+    [--credential -] [--adopt]
 ccrc account declare --id <id> --label <text> --hue <hue> [--provider <p>] [--base-url <url>] [--suffix <s>]
 ccrc account check --id <id>               # is this lane's credential alive? (may spend one minimal turn), then the seed
 ccrc account seed --id <id>                # the first-run seed on its own: onboarding, theme, trust flags; no turn
@@ -1933,8 +1934,8 @@ ccrc account set --id <id> [--stated -] [--placement overflow|full]   # a token 
 ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential]
 ```
 
-- **`add`** creates a ccrc-written lane (`exec.kind: "generated"`, `homeAble: true`, `telemetry: "anthropic"`)
-  in a fixed order: the credential (token lanes only), the `-disabled` marker, the roster entry, then the
+- **`add`** creates a ccrc-written lane (`exec.kind: "generated"`, `homeAble: true`, `telemetry: "anthropic"`; an
+  OpenRouter lane is `telemetry: "openrouter"` and a compatible lane `"none"`) in a fixed order: the credential (token lanes only), the `-disabled` marker, the roster entry, then the
   converge — `accounts.sh`, the wrapper, and the config dir `$HOME/<suffix>` (default `.claude-<id>`, or
   `.<id>` for an id that already starts `claude-`; it must start `.claude`, the only place the agent may read) with, for a key lane, an endpoint and model `env` block
   in its `settings.json`, then the session-hook and skill installers run against that one home. Nothing after
@@ -1945,7 +1946,16 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   setup-token`, or piped in at once with `--credential -` — and also takes `login` — no key file; the credential
   is the `.credentials.json` Claude Code writes in the config dir — or `paste`, a token piped in. `openrouter` and `compatible` are key lanes, the key kept in
   `~/.cc-secrets/<id>-<provider>.env`; `compatible` requires `--base-url`, and `openrouter` defaults to its own
-  endpoint. `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
+  endpoint. An `openrouter` key is validated before anything is written, by `add` and `credential` alike: the byte
+  check, then `GET https://openrouter.ai/api/v1/key` with `curl -H @-`, the bearer header on stdin as one line. A 401
+  refuses `key-rejected`, a key whose `is_management_key` or `is_provisioning_key` is true `wrong-key-kind`, and anything
+  else `key-unverified`; there is no "save anyway". The lane state keeps the key hint, how the key came, its label,
+  limit, reset and credit, and `check` reads the credit again. `--placement overflow` (the default) writes `homeAble:
+  false`, so the lane takes a session only when one is sent to it, and `full` writes `homeAble: true`; no other provider
+  takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
+  `anthropic/claude-<class>-<version>` of each class, refusing `catalogue-unreachable` with nothing written when the
+  catalogue cannot be read or names none for opus, sonnet or haiku; after the converge it writes the class registry from
+  the same catalogue (`ccrc models <id> init openrouter --suggested`). `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
   required, and refused on an `anthropic` lane. `add` refuses a `selectable` list: add the account first, then
   put `selectable` on its `exec.models` in `~/.ccrc/accounts.json` and run `ccrc install`. `--provider openai`
   is refused: `add` writes only `generated` lanes, and a ChatGPT/Codex lane ccrc runs is a `codex` roster row
@@ -2043,7 +2053,7 @@ subagent model, and a context-window key (below; set from `<id>.windows.json`) �
 a registry the lane's settings disagree with.
 
 ```bash
-ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]   # seed a registry
+ccrc models <id> init <codex|openrouter|compatible> [--base-url <url> | --suggested]   # seed a registry; --suggested is openrouter's, from its catalogue
 ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
 ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
 ccrc models <id> set-subagent <haiku|sonnet>

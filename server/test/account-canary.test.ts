@@ -94,6 +94,25 @@ function plantEchoingProbe(home: string): void {
   ].join('\n') + '\n', { mode: 0o755 });
 }
 
+/** Accounts plan Task A26: `curl` as a scripted OpenRouter that ECHOES ITS STDIN, the bearer header, on stderr. It
+ *  answers by the key: `GOOD` in it is a 200, anything else a 401. The catalogue route answers the three classes. */
+function plantEchoingCurl(home: string): void {
+  writeFileSync(path.join(home, '.local', 'bin', 'curl'), [
+    '#!/bin/bash',
+    'url=""; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done',
+    'case "$url" in',
+    '  */api/v1/models)',
+    `    echo '${JSON.stringify({ data: ['opus', 'sonnet', 'haiku'].map((c) => ({ id: `anthropic/claude-${c}-5`, name: c })) })}' ;;`,
+    '  *)',
+    '    line="$(cat)"; printf \'the header on my stdin is %s\\n\' "$line" >&2',
+    '    case "$line" in',
+    '      *GOOD*) printf \'{"data":{"label":"ccrc lane-p","limit":20,"limit_remaining":18,"usage":2}}\\n200\' ;;',
+    '      *) printf \'{"error":{"code":401}}\\n401\' ;;',
+    '    esac ;;',
+    'esac',
+  ].join('\n') + '\n', { mode: 0o755 });
+}
+
 /**
  * A STUB VERB, the server's own child, that echoes ON STDERR the secret it is handed and the one the lane already
  * holds (spec §16's stub child at the arm's seam): `add` and `credential` write the new one to the lane's secrets file
@@ -263,7 +282,7 @@ const addLane = (b: Box, credential: string) => ask(b, '/api/accounts', {
 
 /** What the canary must never be in: every answer, every captured write, every coord.db row; and among the HOME's
  *  files, only the lane's own secret file, at 0600. */
-function expectOnlyInTheSecretFile(b: Box, secret: string, where: 'secret-file' | 'nowhere'): void {
+function expectOnlyInTheSecretFile(b: Box, secret: string, where: 'secret-file' | 'nowhere', tag = 'oauth'): void {
   const answers = b.bodies.join('\n');
   expect(answers.includes(secret), 'an answer or refusal carried the canary').toBe(false);
   expect(answers.includes(Buffer.from(secret).toString('base64').replace(/=+$/, '')), 'an answer carried its base64').toBe(false);
@@ -274,7 +293,7 @@ function expectOnlyInTheSecretFile(b: Box, secret: string, where: 'secret-file' 
     const rows = JSON.stringify(b.coord.db.prepare(`SELECT * FROM "${t}"`).all());
     expect(rows.includes(secret), `coord.db table ${t} holds the canary`).toBe(false);
   }
-  const secretFile = path.join('.cc-secrets', `${LANE}-oauth.env`);
+  const secretFile = path.join('.cc-secrets', `${LANE}-${tag}.env`);
   expect(holders(b.home, secret)).toEqual(where === 'secret-file' ? [secretFile] : []);
   if (where === 'secret-file') expect((statSync(path.join(b.home, secretFile)).mode & 0o777).toString(8)).toBe('600');
 }
@@ -372,6 +391,35 @@ describe('the canary: a pasted token is found only in its 0600 secret file (spec
     expectOnlyInTheSecretFile(b, first, 'nowhere');
     expectOnlyInTheSecretFile(b, second, 'secret-file');
   }, 120_000);
+
+  it.each(['local', 'agent'] as const)('an OpenRouter paste-add and a Replace key, through the route and the %s arm with a stderr-echoing `curl`, leave the canary only in the 0600 key file', async (arm) => {
+    const b = await openBox(arm);
+    plantEchoingCurl(b.home);
+    const orCanary = (tag: string): string => ['sk', 'or', 'v1', canary(tag)].join('-');
+    const first = orCanary('or-add');
+    const add = await ask(b, '/api/accounts', {
+      provider: 'openrouter', id: LANE, label: 'lane·p', hue: 'amber', method: 'paste', credential: first, placement: 'overflow',
+    });
+    expect(add.status, JSON.stringify(add.json)).toBe(200);
+    expectOnlyInTheSecretFile(b, first, 'secret-file', 'openrouter');
+
+    const refused = ['sk', 'or', 'v1', refusedCanary()].join('-');
+    const no = await ask(b, `/api/accounts/${LANE}/credential`, { credential: refused });
+    expect(no.json['error']).toBe('key-rejected');
+    expectOnlyInTheSecretFile(b, refused, 'nowhere', 'openrouter');
+    expectOnlyInTheSecretFile(b, first, 'secret-file', 'openrouter');
+
+    const second = orCanary('or-credential');
+    const yes = await ask(b, `/api/accounts/${LANE}/credential`, { credential: second });
+    expect(yes.status, JSON.stringify(yes.json)).toBe(200);
+    expectOnlyInTheSecretFile(b, second, 'secret-file', 'openrouter');
+    expectOnlyInTheSecretFile(b, first, 'nowhere', 'openrouter');
+    // The hint is the one piece of a key the lane state keeps, and the screen's read carries it.
+    const read = await b.app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: b.cookie } });
+    b.bodies.push(read.body);
+    expect((read.json() as { lanes: Record<string, { keyHint?: string }> }).lanes[LANE]?.keyHint).toBe(`sk-or-v1-…${second.slice(-4)}`);
+    expectOnlyInTheSecretFile(b, second, 'secret-file', 'openrouter');
+  }, 400_000);
 
   it('a shapeless key pasted through the route and the real agent is masked end to end, through the real answer path', async () => {
     const b = await openBox('agent');
