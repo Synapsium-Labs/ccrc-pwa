@@ -139,7 +139,7 @@ async function rawTreeWorld(opts: { home?: string; ccdVerbs?: string[] | null } 
 }
 const leasesOf = (w: World): DelegationLeaseRow[] => {
   const cp = path.join(w.home, '.ccrc', DELEGATION_CHECKPOINT_FILE);
-  return existsSync(cp) ? decodeDelegationCheckpoint(new Uint8Array(readFileSync(cp))).leases : [];
+  return existsSync(cp) ? [...decodeDelegationCheckpoint(new Uint8Array(readFileSync(cp))).leases] : [];
 };
 const journal = (w: World): string => readFileSync(path.join(w.home, '.ccrc', DELEGATION_JOURNAL_FILE), 'utf8');
 /** Three census passes: the raw tree is linked and leased (generation 0) at the third, and its carrier is minted in the same pass. */
