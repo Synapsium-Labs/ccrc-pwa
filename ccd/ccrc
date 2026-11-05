@@ -26375,7 +26375,7 @@ _set_check() {
           CCRC_UPDATE_HEALTH_S) CCRC_UPDATE_HEALTH_S="$v" _upd_health_s ;;
           CCRC_UPDATE_DEADLINE_MS) CCRC_UPDATE_DEADLINE_MS="$v" _upd_deadline_ms ;;
           CCRC_MODELS_ADVANCE_BUDGET_S) CCRC_MODELS_ADVANCE_BUDGET_S="$v" _models_budget ;;
-          *) return 0 ;;
+          *) return 2 ;;
         esac
       ) >/dev/null 2>&1
       rc=$?

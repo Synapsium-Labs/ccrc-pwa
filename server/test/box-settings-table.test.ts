@@ -320,6 +320,21 @@ describe('C: _set_check answers 0, 1 or 2, prints nothing, and judges the value 
       if (c.why !== undefined) expect(why).toBe(c.why);
     });
 
+  // review 1487: an updates key with no resolver arm used to pass (`*) return 0`), so a key added to the table without an arm read
+  // `ok`. The arm now answers 2, and the fixed "could not be checked by its resolver" sentence reaches the caller. The table is not
+  // edited: the row replaces `_set_spec` in the fixture shell, for one key the table does not hold, so the family is `updates`
+  // and no arm names the key.
+  it('an updates key no resolver arm names is not checked: rc 2 and the resolver sentence, never a pass (review 1487)', () => {
+    const r = run('_set_spec() { SET_CLASS=value; SET_FAMILY=updates; SET_ROLES=fleet; SET_APPLIES=run; return 0; }; _set_check CCRC_PLANTED_UPDATES_KEY 5 >/dev/null 2>&1; rc=$?; printf "%s\\037%s" "$rc" "${SET_CHECK_WHY:-}"', { envFile: '' });
+    expect(r.status, r.err).toBe(0);
+    expect(r.out.split(US)).toEqual(['2', 'CCRC_PLANTED_UPDATES_KEY could not be checked by its resolver']);
+  });
+
+  it('the updates arm\'s default case answers 2 in the source, never 0 (the harness row above is the behaviour)', () => {
+    const m = /^ {6}\(\n {8}BOX_ENV_FILE="\$BOX_ENV_FILE\/\."\n {8}case "\$k" in\n([\s\S]*?)\n {8}esac\n {6}\) >\/dev\/null 2>&1$/m.exec(/^_set_check\(\) \{[\s\S]*?\n\}$/m.exec(SRC)?.[0] ?? '');
+    expect((m?.[1] ?? '').split('\n').at(-1)).toBe('          *) return 2 ;;');
+  });
+
   it('the mask is a source row: one mask assignment in _set_check, the first statement of the one subshell that holds all six resolver calls', () => {
     const body = /^_set_check\(\) \{[\s\S]*?\n\}$/m.exec(SRC)?.[0] ?? '';
     expect(body.match(/BOX_ENV_FILE="\$BOX_ENV_FILE\/\."/g), 'exactly one mask').toHaveLength(1);
