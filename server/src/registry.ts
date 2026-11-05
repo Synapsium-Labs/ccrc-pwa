@@ -1637,3 +1637,23 @@ export function parseHibernated(raw: string | null): number | null {
   const at = Number(m[1]);
   return Number.isSafeInteger(at * 1000) ? at * 1000 : null;
 }
+
+/** A record NO field of which is unmeasured or unreadable (spec §2.1: "no unmeasured or unreadable field"): nothing
+ *  unmeasured, no lifecycle field unmeasured, a project and a branch that did not read as `unreadable` (a MEASURED
+ *  absence, a main checkout's ordinary state, is clean), no unreadable route field, a readable hold,
+ *  substrate and strand marker, and no `unreadable` child, deny-settings or child-shell mark. The one predicate for "may be reused or cached" (the row cache uses this too).
+ *  `namedByOperator` is a boolean that is true for a readable AND an unreadable operator-name read, so the record
+ *  cannot tell them apart and no clause can be written for it. */
+export function isCleanRecord(rec: SessionRecord): boolean {
+  return rec.unmeasured.length === 0
+    && rec.lifecycleUnmeasured.length === 0
+    && rec.projectEvidence !== 'unreadable'
+    && rec.branchEvidence !== 'unreadable'
+    && rec.held !== HOLD_UNREADABLE
+    && rec.substrate?.text !== SUBSTRATE_UNREADABLE
+    && rec.stranded?.reason !== STRANDED_UNREADABLE
+    && (rec.route === null || rec.route.unreadable.length === 0)
+    && rec.child.kind !== 'unreadable'
+    && rec.denySettings?.kind !== 'unreadable'
+    && rec.childShell?.kind !== 'unreadable';
+}

@@ -2,13 +2,14 @@
  * L3 (console speed S1): the registry reader's memory of the last clean read of each row, so a cold row (see
  * `rowTemperature.ts`) costs no field reads on a quiet tick. Memory only; one instance lives with the watcher.
  *
- * Only a CLEAN record is ever stored (`isCleanRecord`, the one predicate, owned by `rowTemperature.ts`). `put` of
+ * Only a CLEAN record is ever stored (`isCleanRecord`, the one predicate, owned by `registry.ts`). `put` of
  * an unclean record stores nothing AND evicts the id's older entry: otherwise an older clean entry could make the
  * row cold right after a fresh unclean read. `get` answers copies, so a caller that changes a record cannot change
  * the cache.
  */
 import type { SessionRecord } from './registry.js';
-import { isCleanRecord, type RowKey } from './rowTemperature.js';
+import { isCleanRecord } from './registry.js';
+import type { RowKey } from './rowTemperature.js';
 
 export type CachedRow = { record: SessionRecord; key: RowKey; readAt: number };
 

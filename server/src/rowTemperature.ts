@@ -1,12 +1,14 @@
 /**
  * L1, pure (console speed S1): which registry rows a watcher tick must read in full (`hot`) and which it may take
- * from the previous tick (`cold`). Imports types and one constant only; no fs, no clock (the caller passes `nowMs`).
+ * from the previous tick (`cold`). Imports types and `isCleanRecord` (owned by `registry.ts`, the record's writer) only; no fs, no clock (the caller passes `nowMs`).
  *
  * The doctrine is the polarity of `classifyHasSession`: DOUBT READS HOT. A row is cold only when every condition
  * below is positively measured, so a missing previous read, an unclean record, an unknown verdict or no listing at
  * all each make the row hot, never cold.
  */
-import { HOLD_UNREADABLE, STRANDED_UNREADABLE, SUBSTRATE_UNREADABLE, type SessionRecord } from './registry.js';
+import { isCleanRecord, type SessionRecord } from './registry.js';
+
+export { isCleanRecord };
 import type { SessionVerdict } from './exec.js';
 
 /** A cold row is re-read in full at least this often, whatever its key says. */
@@ -26,26 +28,6 @@ export function rowKeyEqual(a: RowKey, b: RowKey): boolean {
   if (a.times.length !== b.times.length) return false;
   for (let i = 0; i < a.times.length; i++) if (a.times[i] !== b.times[i]) return false;
   return true;
-}
-
-/** A record NO field of which is unmeasured or unreadable (spec §2.1: "no unmeasured or unreadable field"): nothing
- *  unmeasured, no lifecycle field unmeasured, a project and a branch that did not read as `unreadable` (a MEASURED
- *  absence, a main checkout's ordinary state, is clean), no unreadable route field, a readable hold,
- *  substrate and strand marker, and no `unreadable` child, deny-settings or child-shell mark. The one predicate for "may be reused or cached" (the row cache uses this too).
- *  `namedByOperator` is a boolean that is true for a readable AND an unreadable operator-name read, so the record
- *  cannot tell them apart and no clause can be written for it. */
-export function isCleanRecord(rec: SessionRecord): boolean {
-  return rec.unmeasured.length === 0
-    && rec.lifecycleUnmeasured.length === 0
-    && rec.projectEvidence !== 'unreadable'
-    && rec.branchEvidence !== 'unreadable'
-    && rec.held !== HOLD_UNREADABLE
-    && rec.substrate?.text !== SUBSTRATE_UNREADABLE
-    && rec.stranded?.reason !== STRANDED_UNREADABLE
-    && (rec.route === null || rec.route.unreadable.length === 0)
-    && rec.child.kind !== 'unreadable'
-    && rec.denySettings?.kind !== 'unreadable'
-    && rec.childShell?.kind !== 'unreadable';
 }
 
 export type PrevRow = { record: SessionRecord; key: RowKey; readAt: number };
