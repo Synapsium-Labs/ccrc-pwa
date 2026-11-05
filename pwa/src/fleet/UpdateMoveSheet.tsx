@@ -51,6 +51,7 @@ import type { MoveRequestAnswer, ReleaseWire } from '../../../shared/api';
 import { compareReleaseTags } from '../../../shared/semver';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, RESET_LIST, Sheet, toast, useCancelFirst } from '@ccrc/ui';
 import { ApiError, api, moveSkipText, noBundleRollbackText, updateErrorText } from '../lib/api';
+import { writeOutcomeUnknown } from '../lib/apiError';
 import {
   moveEmptyText, moveHeadline, moveLabel, moveLines, moveRequests, rollbackBlockers, rollbackHowText,
   type MoveIntent, type PlannedMove, type RollbackBlocker,
@@ -332,7 +333,7 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
           // Same dismiss-vs-switch reasoning as the success arm: a MoveSendError's own `requested` is exactly
           // what already went out before the refusal, and a dismiss stopping the sequence never reaches this
           // branch with an empty one unless nothing was ever written.
-          if (err instanceof MoveSendError && err.requested.length > 0) onDone();
+          if (err instanceof MoveSendError && (err.requested.length > 0 || writeOutcomeUnknown(err.err))) onDone();
           // D-5612: the refusal still reaches the operator, as a toast, since the sheet that would say it is gone.
           if (onAnswered !== undefined) toast(moveErrorText(err, plan), 'error');
           return;
@@ -343,6 +344,10 @@ export function UpdateMoveSheet({ open, plan, onClose, onDone, onAnswered, tone 
           // Part-way (a fleet rollback): the requested node is pending now, and re-sending this plan would start
           // with it — its own 409 busy, never reaching the rest. So this sheet offers no second send.
           setAnswered(true);
+          onDone();
+        } else if (err instanceof MoveSendError && writeOutcomeUnknown(err.err)) {
+          // The first request's answer never arrived (or was a 5xx): it may have been written, so re-poll, which also
+          // forgets the kept update view (console speed C2). A route refusal proves nothing went out: no re-poll.
           onDone();
         }
       },
