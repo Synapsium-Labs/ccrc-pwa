@@ -141,10 +141,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* On the glyph's top-right corner, never its middle: the glyph is the door's only mark at a glance. A count too wide for the room
-   right of the glyph's centre ("99+" at 320, 360 and 390) moves left by what it would overhang, and no further, so it never
-   reaches into the next door, where a tap on it would land (review 1466 F18): the door is a size container (`.phone-bar-door`),
-   `50cqw` is half the door and `100%` in `translate` is the count's own width. It stays above the glyph's middle. */
+/* Above the glyph and clear of its centre point: the glyph is the door's only mark at a glance. A one- or two-digit count sits on
+   the glyph's top-right corner. A count too wide for the room right of the glyph's centre ("99+" at 320, 360 and 390) moves left
+   by what it would overhang, and no further, so it never reaches into the next door, where a tap on it would land (review 1466
+   F18), and then covers the glyph's top edge: all of its width at 320 (review 1481 F4, accepted). The door is a size container
+   (`.phone-bar-door`), `50cqw` is half the door and `100%` in `translate` is the count's own width. */
 .phone-bar-count {
   position: absolute;
   top: calc(-1 * var(--sp-1));

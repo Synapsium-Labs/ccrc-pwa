@@ -155,7 +155,7 @@ export function FleetScreen({
   const set = useFrameSet();
   const FleetList = set?.FleetList ?? null;
   // The skin's own head where this column holds the chrome (Refined's phone header, W2 Task S5), with the lanes strip
-  // under it (a group of lane cards, each a door to its lane on the Accounts screen, All accounts at the end), so the
+  // under it (a group of lane cards, each a door to its lane on the Accounts screen, All accounts at the end at the desk), so the
   // strip below steps aside: one readout of the lanes at any width. And its own New session door.
   const Head = headChrome ? set?.Head ?? null : null;
   const desk = useDesk();

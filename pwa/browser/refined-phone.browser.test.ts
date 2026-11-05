@@ -160,7 +160,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
             if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
             if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
           }
-          // The badges are the bottom bar's (PL10): on Inbox and Runs, inside the viewport, never over a glyph's middle.
+          // The badges are the bottom bar's (PL10): on Inbox and Runs, inside the viewport, never over a glyph's centre point.
           const badges = [...document.querySelectorAll<HTMLElement>('.shell-phone-nav .phone-bar-count')];
           if (badges.length !== 2) out.push(`${badges.length} badges, not Inbox's and Runs'`);
           for (const badge of badges) {
@@ -361,7 +361,7 @@ function cardFaults({ expected, cardSel, inside }: { expected: Array<{ label: st
 // Carry C (D-7951), review 1379 F6: the phone's Waiting door with its widest badge, "99+", drawn beside Inbox's and Runs'. The
 // header case above serves no list, so it asserts two badges; this one serves a hundred open items (with the one asking session,
 // the door counts 101), and holds that the third badge leaves the row's fit as it was: one row, every door whole and a
-// finger's square, each badge on its glyph's corner and never its middle, and nothing scrolls sideways.
+// finger's square, each badge clear of its glyph's centre point, and nothing scrolls sideways.
 const listItem = (id: number): object => ({
   id, program: 'p', runId: null, kind: 'do', title: `Item ${id} title`, why: 'Why.', how: ['Do it.'], options: null,
   neededBy: 'later', soonLabel: null, state: 'open', stale: false, raisedAt: Date.now() - 60_000, tickedAt: null, closedAt: null,

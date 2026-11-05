@@ -323,11 +323,11 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
     });
   }
 
-  // Review 1466 F18 (fix round 1): a cut word ends in an ellipsis, and the widest badge stays inside its own door, on its glyph's
-  // corner and never over the glyph's middle, at 320, 360 and 390. Each door's box can be written out so a
+  // Review 1466 F18 (fix round 1): a cut word ends in an ellipsis, and the widest badge stays inside its own door and clear of
+  // its glyph's centre point, at 320, 360 and 390; it may cover the glyph's top edge (review 1481 F4, accepted). Each door's box can be written out so a
   // change to the bar's rules can be measured against the boxes before it (the coordinator's condition on 15125): set
   // CCRC_BAR_BOXES to a file and each width's boxes are appended to it.
-  it('at 320, 360 and 390: "99+" badges stay inside their doors, off the glyph\'s middle, and a cut word ends in an ellipsis', async () => {
+  it('at 320, 360 and 390: "99+" badges stay inside their doors, clear of the glyph\'s centre point, and a cut word ends in an ellipsis', async () => {
     for (const width of [320, 360, 390]) {
       const { ctx, page, errors } = await open(skin, width, '/waiting', '.wl-group', undefined, FIXTURE_99);
       try {
@@ -358,7 +358,7 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           expect.soft(d.badge.left, `${say}: inside its door`).toBeGreaterThanOrEqual(d.left - 0.5);
           expect.soft(d.badge.right, `${say}: inside its door`).toBeLessThanOrEqual(d.right + 0.5);
           const coversMiddle = d.badge.left < d.cx && d.badge.right > d.cx && d.badge.top < d.cy && d.badge.bottom > d.cy;
-          expect.soft(coversMiddle, `${say}: off the glyph's middle`).toBe(false);
+          expect.soft(coversMiddle, `${say}: clear of the glyph's centre point`).toBe(false);
         }
         expect(errors).toEqual([]);
       } finally {

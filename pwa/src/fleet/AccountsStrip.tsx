@@ -8,8 +8,8 @@
 // measure), and the desk one line of the freest lanes that fit beside the end cell (the width is `useRowWidth`'s
 // measure, the count `rowFit`'s and `foldShown`'s). The lanes left out are not mounted at all, never hidden by CSS. A
 // folded strip never hides fewer than two lanes, so a short one shows every lane and no control. When it folds, the
-// end cell holds one control before All accounts, worded by `foldWords` alone ("+13 more" and a count of the hidden
-// lanes that need the operator, or "Show fewer"). The desk's choice is kept on the device (`useStripExpanded`); below
+// end cell holds one control (before All accounts, at the desk), worded by `foldWords` alone ("+13 more" and a count of
+// the hidden lanes that need the operator, or "Show fewer"). The desk's choice is kept on the device (`useStripExpanded`); below
 // 900 px the strip is always folded and that choice is neither read nor written. This component only renders what the
 // fold answers and reads no lane count of its own.
 //
@@ -59,8 +59,8 @@
 // THE PHONE'S PANEL (S5c, phone-strip-tap-panel). Below 900 px a folded strip has no hover and no stored choice, so its
 // control opens the SAME panel as the desk's flyout (`lanesPanel`: the lanes the line folds away, in `lanesByFree`'s
 // order, each card its lane's door) on a TAP, and on nothing else: not the pointer resting on the strip, not focus, not a tap on a line card
-// (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control and before All
-// accounts, so Tab goes the control, the panel's cards, All accounts; the stylesheet draws it over the content under
+// (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control (and, at the
+// desk, before All accounts), so Tab goes the control, the panel's cards, then All accounts at the desk; the stylesheet draws it over the content under
 // the strip, and `--panel-room` (the room left under the strip, measured when it opens and when the window resizes)
 // bounds its height. The control names its state: `aria-expanded` is whether the panel is open, `aria-controls` is its
 // id. It closes on a second tap of the control, a tap outside the strip and the panel (a document `pointerdown`),
