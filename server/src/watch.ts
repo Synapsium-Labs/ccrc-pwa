@@ -2592,7 +2592,7 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
-      const paneListing = await listingP;
+      const paneListing = await timed(this.deps.perf, 'listing', listingP);
       const notice = listingNotice(this.listingFailed, paneListing);
       this.listingFailed = notice.failed;
       if (notice.warn !== null) console.warn(notice.warn);
@@ -2791,6 +2791,7 @@ export class FleetWatcher {
       // Push on a busy→idle finish (a session completed a turn). Skip the priming
       // tick — otherwise a restart notifies for every currently-idle session.
       if (this.primed) {
+        await timed(this.deps.perf, 'finished', (async (): Promise<void> => {   // one phase for the loop (console speed S1)
         for (const s of sessions) {
           // Blocking review finding 2: never assert a turn completed on a row
           // this tick could not measure — `status` for a degraded row is a
@@ -2812,6 +2813,7 @@ export class FleetWatcher {
             }
           }
         }
+        })());
         // Build 7's two new notify kinds ride the SAME primed gate as the
         // `done` push above, for the identical restart reason. EACH WRAPPED
         // (review finding 1): both walk straight into `node:sqlite`, which
