@@ -2312,6 +2312,7 @@ takes the next spare and is named in the wave-done.
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.
 - **D-7921.** The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence. The census-w7 `persistedPresenceWords` red began at Task 3's `2606db945` (32 against 20), not only at the 33 the sweep last read.
+- **D-7922.** `c6d9c83a4` rewrote an existing consumer assertion, `slice-limits-config.test.ts`'s row "the defaults it reads with are the template's own values", from `toEqual(['24G'])` and `toEqual(['6G'])` to set equality over every literal `_ccrc_knob CCRC_SESSION_SLICE_*` read plus a non-empty check, with a CONTROL row beside it. That departs from the plan's global constraint that no existing consumer assertion is edited (the one exception was D-7919's carry sentence), so it is ledgered here (review 1487 F3). Measured red-first: see As built, "Task 5, the slice defaults row".
 
 | Number | Task | What it records |
 |---|---|---|
@@ -2331,7 +2332,7 @@ takes the next spare and is named in the wave-done.
 | D-7919 | 7 | Doctor's carry-copies WARN uses its words function and drops `got '<value>'`; Task 1's carry pins are rewritten in the same commit (C7) |
 | D-7920 | 3 | `_set_check`'s `updates` arm masks `ccrc.env` once, as the first statement of one subshell holding all six resolver calls, not six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver )` forms, which census C8(c) refuses; same behaviour (coordinator ruling, option A) |
 | D-7921 | gate sweep | The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence |
-| D-7922 | | Spare, unused. |
+| D-7922 | gate sweep (`c6d9c83a4`) | The slice-limits row "the defaults it reads with are the template's own values" is rewritten from `toEqual(['24G'])`/`toEqual(['6G'])` to set equality over every literal read plus a non-empty check, with a CONTROL row; a departure from the global constraint that no existing consumer assertion is edited |
 | D-7923 | | Spare, unused. |
 | D-7924 | | Spare, unused. |
 | D-7925 | | Spare, unused. |
@@ -2355,7 +2356,7 @@ the task that built it, or re-measured in Task 8. Commit SHAs are those after th
 
 ### Deviations: each one's use
 
-D-7906 to D-7921 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
+D-7906 to D-7922 are defined once, in the bullets of "Deviations found" above; the table there carries each one's task.
 
 | Number | Built in | Used by | State |
 |---|---|---|---|
@@ -2375,7 +2376,8 @@ D-7906 to D-7921 are defined once, in the bullets of "Deviations found" above; t
 | D-7919 | Task 7 (`e0a2e2b98`) | the carry-copies WARN built from its words function; Task 1's carry pins rewritten in the same commit | built |
 | D-7920 | Task 3 (`2606db945`, fix round 1) | `_set_check`'s `updates` arm, one masked subshell; C8(c) unedited | built |
 | D-7921 | gate sweep (the rename commit) | the class token `is-set` in the bash table, L0, the server parse, the card and the tests; the spec's name `presence` stays in prose | built |
-| D-7922 to D-7925 | none | none | Spare, unused. |
+| D-7922 | gate sweep (the slice defaults commit) | the slice-limits default row as set equality over every literal read, plus a CONTROL row | built; both mutants measured below |
+| D-7923 to D-7925 | none | none | Spare, unused. |
 
 D19 (`CCRC_TESTBOX_URL` is `presence`) was built by Task 3, D21 (a server node's fleet-only families as one line each) by
 Task 6, and D22 (a refused row's `why` is a member of a closed set) by Tasks 3 (the 33 words, `BOX_SETTING_REFUSAL_WORDS`
@@ -2499,7 +2501,7 @@ wrapper baseline for W2-M7 was measured on the unmutated file: 16 red rows, all 
 - Smaller: the plan's `9000` needle in V3 sits inside `900000` (the row uses `invalid:9000`); the bash-only table mutants are red in T2 and CONTROL, where T3 and T5 read L0 only until Task 3's fix round widened them to the bash rows too.
 
 - **Gate sweep, the class token (D-7921).** The D12 class `presence` is spelled `is-set` in code (the `is-set` class, the spec's `presence`, D12), because C7o (OA-C18 (a), #1371) reserves `presence` in TypeScript for session presence and `census-w7/pwa.test.ts#persistedPresenceWords` went red at 33 against its 20. Only the class TOKEN moved: the bash table rows and comparisons, `BoxSettingClass` and `BOX_SETTING_TABLE`, the server parse's arm, the card's comparison, and the tests that name it. The words the user reads do not change, `BOX_SETTING_PRESENCE_TEXT` keeps its name (the census names its own list of identifiers and none is this one), and the fixture file `malformed--v2-presence-with-value.json` keeps its name (`testbox-pins` names it).
-- **Task 5, the slice defaults row (gate sweep).** `slice-limits-config.test.ts`'s row "the defaults it reads with are the template's own values" was reworded (`c6d9c83a4`) to hold every literal `_ccrc_knob CCRC_SESSION_SLICE_*` read to the template's default (set equality plus a non-empty check), because `cmd_settings` now reads the same two keys in file mode. A CONTROL row beside it plants `_ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 25G file` in the ccd/ccrc text in memory and asserts the set is no longer `{'24G'}`, so a second read with another default reds the row above.
+- **Task 5, the slice defaults row (gate sweep).** `slice-limits-config.test.ts`'s row "the defaults it reads with are the template's own values" was reworded (`c6d9c83a4`) to hold every literal `_ccrc_knob CCRC_SESSION_SLICE_*` read to the template's default (set equality plus a non-empty check), because `cmd_settings` now reads the same two keys in file mode. A CONTROL row beside it plants `_ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 25G file` in the ccd/ccrc text in memory and asserts the set is no longer `{'24G'}`, so a second read with another default reds the row above. Measured on a saved copy of `ccd/ccrc` (sha256 `f2ae28406…`, restored and checked with `cmp`) and of the test (sha256 `56a53ba37…`, restored and checked with `cmp`), review 1487 F3 / D-7922: (1) the default of `cmd_settings`' read, `_ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 24G file`, changed to `23G`, reds the rewritten row ("the defaults it reads with are the template's own values") and the CONTROL row's last assertion (the real text is the template's set), 2 red of 74; (2) the CONTROL row's planted second read removed from the test, reds the CONTROL row alone, 1 red of 74.
 
 ### Later (the plan's list, unchanged, and what the build added)
 
