@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import type { RunsPageAnswer, RunSummary } from '../../shared/api';
-import { useColdRuns, type PagedLoader } from '../src/screens/useColdRuns';
+import { useColdRuns, type OlderOutcome, type PagedLoader } from '../src/screens/useColdRuns';
 import { appendOlderRunPage, mergeFirstRunPage } from '../src/fleet/runWords';
 import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
@@ -45,7 +45,13 @@ const NO_CAPS = (): Promise<never> => new Promise(() => {});
 const NO_SPEND = (): Promise<never> => new Promise(() => {});
 /** The Finished fold's door ("Show N more finished runs"), or null once every loaded row is shown. */
 const foldDoor = (): HTMLElement | null => screen.queryByRole('button', { name: /more finished run/i });
-const unfold = (): void => { for (let door = foldDoor(); door !== null; door = foldDoor()) fireEvent.click(door); };
+const unfold = (): void => {
+  // Bounded: a door that never goes away is a failing test, not a hang.
+  for (let n = 0, door = foldDoor(); door !== null; door = foldDoor(), n++) {
+    if (n >= 20) throw new Error('the Finished fold door is still there after 20 taps');
+    fireEvent.click(door);
+  }
+};
 const flush = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
 const ids = (rows: RunSummary[] | null): number[] => (rows ?? []).map((r) => r.id);
 const range = (hi: number, lo: number): number[] => Array.from({ length: hi - lo + 1 }, (_, i) => hi - i);
@@ -141,9 +147,58 @@ describe('the run archive in pages', () => {
     expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
     expect(rows()).toBe(before);
     expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
-    // The next tap succeeds and the line goes.
+    // A second failure keeps the line.
+    a.load.mockRejectedValueOnce(new Error('down'));
     fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
     await flush();
+    expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
+    // The retry succeeds: the line is gone while the Show older block is still mounted (20 runs remain older).
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    unfold();
+    expect(rows()).toBe(100);
+    expect(screen.getByRole('button', { name: 'Show older' })).toBeInTheDocument();
+    expect(screen.queryByText('Could not load older runs.')).toBeNull();
+  });
+
+  it('a re-read during Show older shows no failure line', async () => {
+    const a = archive(range(120, 1), [130]);
+    const store = makeStore();
+    store.setState({ runs: [run(130)], runsFrameSeen: true });
+    render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    unfold();
+    let release: () => void = () => {};
+    a.load.mockImplementationOnce((limit, before) => new Promise<RunsPageAnswer>((resolve) => {
+      release = () => { void archive(range(120, 1), [130]).load(limit, before).then(resolve); };
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    expect(a.load).toHaveBeenLastCalledWith(50, 71);
+    // Run 130 leaves the live frame: the board re-reads page one, issued AFTER the older page began.
+    act(() => { store.setState({ runs: [] }); });
+    await flush();
+    expect(a.load).toHaveBeenLastCalledWith(50);
+    await act(async () => { release(); await vi.advanceTimersByTimeAsync(0); });
+    // The late older page was dropped as stale: nothing failed, and the next tap asks again.
+    expect(store.getState().runPages?.nextBefore).toBe(71);
+    expect(screen.queryByText('Could not load older runs.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
+  });
+
+  it('a good re-read clears the failure line', async () => {
+    const a = archive(range(120, 1), [130]);
+    const store = makeStore();
+    store.setState({ runs: [run(130)], runsFrameSeen: true });
+    render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    unfold();
+    a.load.mockRejectedValueOnce(new Error('down'));
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
+    act(() => { store.setState({ runs: [] }); });                   // a re-read, which answers
+    await flush();
+    expect(screen.getByRole('button', { name: 'Show older' })).toBeInTheDocument();   // the block is still mounted
     expect(screen.queryByText('Could not load older runs.')).toBeNull();
   });
 
@@ -253,12 +308,13 @@ describe('the run archive in pages', () => {
     const stale = await a.load(50, 71);
     let release: () => void = () => {};
     a.load.mockImplementationOnce(() => new Promise<RunsPageAnswer>((resolve) => { release = () => resolve(stale); }));
-    let older: Promise<void> = Promise.resolve();
+    let older: Promise<OlderOutcome> = Promise.resolve('idle');
     act(() => { older = result.current.loadOlder(); });
     a.set(range(130, 1), []);                                       // run 130 closed since
     await act(async () => { await result.current.reload(); });      // the re-read lands first
     expect(store.getState().runPages?.nextBefore).toBe(71);
     await act(async () => { release(); await older; });
+    await expect(older).resolves.toBe('dropped');                   // late, not failed
     const rows = result.current.cold ?? [];
     expect(rows.find((r) => r.id === 130)?.state).toBe('done');     // not undone by the stale active copy
     expect(ids(rows).sort((x, y) => y - x)).toEqual(range(130, 81).concat(range(80, 71)));
@@ -316,13 +372,14 @@ describe('the run archive in pages', () => {
     const hold = (answer: RunsPageAnswer) => () => new Promise<RunsPageAnswer>((resolve) => { gates.push(() => resolve(answer)); });
     a.load.mockImplementationOnce(hold(fresh)).mockImplementationOnce(hold(stale));
     let reread: Promise<void> = Promise.resolve();
-    let older: Promise<void> = Promise.resolve();
+    let older: Promise<OlderOutcome> = Promise.resolve('idle');
     act(() => { reread = result.current.reload(); });               // issued BEFORE Show older begins
     act(() => { older = result.current.loadOlder(); });             // still asks from the stale 40
     expect(a.load).toHaveBeenLastCalledWith(40, 40);
     await act(async () => { gates[0]!(); await reread; });          // the re-read lands first: nextBefore 61
     expect(store.getState().runPages?.nextBefore).toBe(61);
     await act(async () => { gates[1]!(); await older; });           // the page asked from 40 is refused
+    await expect(older).resolves.toBe('dropped');
     expect(store.getState().runPages?.nextBefore).toBe(61);
     expect(result.current.hasOlder).toBe(true);
     await act(async () => { await result.current.loadOlder(); });   // and run 60 is fetched
@@ -352,7 +409,9 @@ describe('the run archive in pages', () => {
     const { result } = renderHook(() => useColdRuns(store, a.load, { page: 50 }));
     await flush();
     a.load.mockRejectedValueOnce(new Error('down'));
-    await act(async () => { await result.current.loadOlder(); });
+    let outcome: OlderOutcome = 'idle';
+    await act(async () => { outcome = await result.current.loadOlder(); });
+    expect(outcome).toBe('failed');
     expect(result.current.state).toBe('error');
     expect(result.current.cold).toHaveLength(50);
   });

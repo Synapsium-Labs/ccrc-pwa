@@ -121,16 +121,14 @@ export function RunsScreen({
   const { cold, state: coldState, reload: loadCold, loadOlder, hasOlder } = useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
-  // A page that did not advance the stored cursor failed (or was refused as stale): `loadOlder` itself never rejects, and
-  // `coldState` also carries a failed re-read, so the board says "older" only for the tap that measured no progress.
+  // Only a page that FAILED says so: a page `dropped` as stale (a re-read landed meanwhile) is not an error, and the next tap
+  // asks again. A good re-read (`coldState` back to `ok`) clears the line too.
   const [olderFailed, setOlderFailed] = useState(false);
+  useEffect(() => { if (coldState === 'ok') setOlderFailed(false); }, [coldState]);
   const showOlder = (): void => {
     setOlderBusy(true);
     setOlderFailed(false);
-    const asked = store.getState().runPages?.nextBefore ?? null;
-    void loadOlder().then(() => {
-      setOlderFailed((store.getState().runPages?.nextBefore ?? null) === asked);
-    }).finally(() => setOlderBusy(false));
+    void loadOlder().then((outcome) => setOlderFailed(outcome === 'failed')).finally(() => setOlderBusy(false));
   };
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));

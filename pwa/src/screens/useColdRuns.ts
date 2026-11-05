@@ -40,6 +40,12 @@ export type ColdLoader = () => Promise<{ runs: RunSummary[] }>;
  *  when `before` is absent is NOT promised here; `limit` is always given), and `nextBefore` while older ones remain. */
 export type PagedLoader = (limit: number, before?: number) => Promise<RunsPageAnswer>;
 
+/** What one `loadOlder()` came to (console speed S2): `appended` the page joined the rows; `dropped` an answer that
+ *  arrived but was refused as stale (a re-read was issued after it began, or the cursor it was asked from had moved), so
+ *  nothing failed and the next ask goes again; `failed` the read did not answer; `idle` there was nothing to ask (no
+ *  `page`, or no older runs remain). A caller that shows a failure shows it for `failed` alone. */
+export type OlderOutcome = 'appended' | 'dropped' | 'failed' | 'idle';
+
 export interface ColdRuns {
   /** The archive rows, or `null` for "no answer yet". Read `state` to tell
    *  which kind of no-answer this is. */
@@ -59,10 +65,11 @@ export interface ColdRuns {
   readonly reload: () => Promise<void>;
   /** Console speed S2, with `page` only. Asks the next older page (`before` = the stored `nextBefore`) and appends it
    *  to the rows held. Resolves at once when nothing older remains or a page is already on its way. A caller that
-   *  passes no `page` gets a function that does nothing. A failed page keeps every row and sets `state` to `error`;
+   *  passes no `page` gets a function that does nothing (`idle`). A call that joins a page already on its way shares that
+   *  page's outcome. A failed page keeps every row and sets `state` to `error`;
    *  a successful one leaves `state` alone, so only a successful re-read clears an error. An answer that lands after a
    *  re-read issued later is dropped. */
-  readonly loadOlder: () => Promise<void>;
+  readonly loadOlder: () => Promise<OlderOutcome>;
   /** Whether older closed runs remain to load: the stored `nextBefore` is set. Always `false` without `page`. */
   readonly hasOlder: boolean;
 }
@@ -176,31 +183,32 @@ export function useColdRuns(
 
   // The older page in flight, if any: a second tap on "Show older" while one is on its way joins it rather than
   // asking the same page twice.
-  const olderInflight = useRef<Promise<void> | null>(null);
-  const loadOlder = (): Promise<void> => {
+  const olderInflight = useRef<Promise<OlderOutcome> | null>(null);
+  const loadOlder = (): Promise<OlderOutcome> => {
     const limit = pageRef.current;
     const held = store.getState().runPages;
-    if (limit === undefined || held === null || held.nextBefore === null) return Promise.resolve();
+    if (limit === undefined || held === null || held.nextBefore === null) return Promise.resolve('idle');
     if (olderInflight.current !== null) return olderInflight.current;
     // A re-read ISSUED after this page was asked for has the fresher view of the first page and of `nextBefore`; this
     // answer, read of the older archive, is then dropped (the next "Show older" asks again).
     const askedAt = issued.current;
     const asked = held.nextBefore;
     const reading = (loadRunsRef.current as PagedLoader)(limit, asked)
-      .then((r) => {
+      .then((r): OlderOutcome => {
         const answer: RunsPageAnswer = { runs: r.runs, ...(r.nextBefore === undefined ? {} : { nextBefore: r.nextBefore }) };
-        if (!aliveRef.current || issued.current !== askedAt) return;
+        if (!aliveRef.current || issued.current !== askedAt) return 'dropped';
         const current = store.getState().runPages;
-        if (current === null) return;
+        if (current === null) return 'dropped';
         // A page answers only the `nextBefore` it was asked with: a re-read that landed meanwhile may have moved it,
         // and `appendOlderRunPage` then returns the held view itself, which leaves the store as it is.
         const next = appendOlderRunPage(current, answer, asked);
-        if (next === current) return;
+        if (next === current) return 'dropped';
         store.getState().setRunPages({ ...next, at: Date.now() });
         setCold(next.runs);
         // `state` is left as it is: only a successful RE-READ clears an error a failed re-read left.
+        return 'appended';
       })
-      .catch(() => { if (aliveRef.current) setColdState('error'); })
+      .catch((): OlderOutcome => { if (aliveRef.current) setColdState('error'); return 'failed'; })
       .finally(() => { olderInflight.current = null; });
     olderInflight.current = reading;
     return reading;
