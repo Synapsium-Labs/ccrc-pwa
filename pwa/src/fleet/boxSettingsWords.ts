@@ -85,7 +85,7 @@ export const BOX_SETTINGS_TEXT = {
   /** What a refused row shows where its value was: a refused value is never kept or shown (D-7911). */
   refused: 'refused',
   /** Under the card (spec §2.5): where a setting is changed, and what the source column is for. */
-  how: "A setting is changed in the box's ccrc.env, never here. The environment can override the file only for backups and updates, and the source says when it does; every other setting is read from ccrc.env alone.",
+  how: "A setting is changed in the box's ccrc.env, never here. The environment can override the file only for backups and updates, and the source says when it does; this view reads ccrc.env alone for every other setting. A shell that sets one of the two session-slice limits, a graph-unit setting or the test-pressure bound when it runs an update gets that value used instead of the file's, and this view does not show it.",
   /** The mark on a setting the installer renders: a changed value waits for the next update (the table's `applies`). */
   nextUpdate: 'takes effect at the next update',
 } as const;

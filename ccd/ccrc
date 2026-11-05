@@ -26233,7 +26233,9 @@ cmd_backup() {
 # `default`). Wave 1's seven read through the SAME resolver their act calls (`_bak_keep`, `_bak_data_keep`, `_ver_keep`, `_upd_health_s`,
 # `_upd_deadline_ms`, `_upd_release_base`, `_models_budget`), in their own mode; every other setting is read by its own literal
 # `_ccrc_knob <KEY> <default> file` call (or the owner's own literal reader, `_test_knobs` and `_graph_knobs file`), in file mode: the
-# environment of a shell does not change what a unit reads. A refused row records the check's closed words (`_set_says`), never the value: a
+# environment of a shell does not change what a unit reads. It can change what an update installs: the two session-slice limits and the graph
+# unit settings are rendered from the updating shell's environment when it sets one, and `ccrc test` reads `CCRC_TEST_PRESSURE_MAX` env-first,
+# so this view (ccrc.env alone) may differ from what is installed until the next update (review 1487 F2). A refused row records the check's closed words (`_set_says`), never the value: a
 # value that failed its check may be anything an operator typed. A setting a check cannot judge (a library that did not load, a reader that
 # could not decide) is `unmeasured`, with a sentence that names the file, a line and the key. An `ok` value or origin outside the envelope
 # (`_set_fits`), or a value holding a unit separator, is written `unmeasured` too, never cut (D-7909). The release base is shown as `default`,
