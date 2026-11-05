@@ -6918,6 +6918,14 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     for (const t of ['zz-leak', 'mirror.example', 'user:pw']) expect(r.stdout + r.stderr).not.toContain(t);
   });
 
+  // Review 1496 F1: userinfo BEFORE a scheme passes `_upd_url_origin` (it redacts, then tests the scheme again) and fits the envelope,
+  // so only the doctor check's own gate on the raw value keeps these at `custom` alone.
+  it.each(['tok@https://mirror.example.invalid', 'u:pw@https://mirror.example.invalid/r', 'u@HTTPS://mirror.example.invalid'])('W2-D7923: userinfo before a scheme (%s) prints custom alone', (v) => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-d7923u-', [`CCRC_RELEASE_BASE_URL=${v}`]));
+    expect(verdict(r), r.stdout + r.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');
+    for (const t of ['tok@', 'u:pw', 'u@HTTPS', 'mirror.example']) expect(r.stdout + r.stderr).not.toContain(t);
+  });
+
   it('W2-D7: the release base shows its origin only', () => {
     const base = (v: string): Result => runBs(settingsBox('ccrc-doctor-bs-d7-', [`CCRC_RELEASE_BASE_URL=${v}`]));
     const a = base('https://u:hunter2@mirror.example/releases');

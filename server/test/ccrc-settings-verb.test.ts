@@ -574,13 +574,15 @@ describe('ccrc settings: the release base shows its scheme and host, nothing els
 });
 
 describe('ccrc settings: a release base with no http(s) scheme shows custom alone (D-7923, operator item 41)', () => {
-  const PLANTS = ['zz-leak-tok-0123456789abcdef', 'mirror.example.invalid/r', 'user:pw@mirror.example.invalid/r'];
+  // Review 1496 F1: the last three put userinfo before a scheme; only the verb's gate on the raw value keeps them at `custom`.
+  const PLANTS = ['zz-leak-tok-0123456789abcdef', 'mirror.example.invalid/r', 'user:pw@mirror.example.invalid/r',
+    'tok@https://mirror.example.invalid', 'u:pw@https://mirror.example.invalid/r', 'u@HTTPS://mirror.example.invalid'];
   it.each(PLANTS)('%s reads exactly `custom`, and its text is on no surface', (url) => {
     const home = boxWith('ccrc-sv-url-noscheme-');
     const sf = surfaces(home, { CCRC_RELEASE_BASE_URL: url });
     expect(rowOf(docOf(sf.json), 'CCRC_RELEASE_BASE_URL')).toEqual({ key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom', from: 'environment' });
     expect(sf.human.stdout).toMatch(/^CCRC_RELEASE_BASE_URL {10}custom {2}\(/m);
-    expectAbsent(sf, ['zz-leak', 'mirror.example', 'user:pw'], 'release base');
+    expectAbsent(sf, ['zz-leak', 'mirror.example', 'user:pw', 'tok@', 'u@HTTPS'], 'release base');
   });
   it('CONTROL: a scheme-ful value keeps its scheme and host', () => {
     expect(rowOf(json(boxWith('ccrc-sv-url-scheme-'), { CCRC_RELEASE_BASE_URL: 'https://mirror.example.invalid:8443/r' }), 'CCRC_RELEASE_BASE_URL'))
