@@ -22,7 +22,7 @@ export const ORIGIN_SHAPE_FITS: readonly string[] = [
   'default', 'custom', 'custom https://mirror.example.invalid:8443', 'custom HTTPS://mirror.example.invalid', 'custom https://[::1]:8080',
 ];
 export const ORIGIN_SHAPE_MISSES: readonly string[] = [
-  'custom h:abc', 'custom h^x', 'custom https://u:p@h', 'custom https://h/r', 'custom https://h?x', 'custom ftp://h', 'custom https://',
+  'custom h:abc', 'custom h^x', 'custom https://h:abc', 'custom https://h^x', 'custom https://u:p@h', 'custom https://h/r', 'custom https://h?x', 'custom ftp://h', 'custom https://',
   'custom ', 'https://h', 'set',
   // D-7923: a scheme-less host does not fit (it read as fitting before)
   'custom mirror.example.invalid', 'custom mirror.example', 'custom zz-leak',

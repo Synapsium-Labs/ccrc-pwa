@@ -937,6 +937,7 @@ describe('parseBoxSettings, version 2: rows that are null, each alone on the bas
     'an origin with a query': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h?x', from: 'file' }),
     'an origin with a fragment': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h#x', from: 'file' }),
     'an origin with a colon that is not a port': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom h:abc', from: 'file' }),
+    'an origin with a colon that is not a port, with a scheme (review 1496 F4)': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom https://h:abc', from: 'file' }),
     'an origin with no scheme (D-7923)': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom zz-leak', from: 'file' }),
     'an origin that is a bare host (D-7923)': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom mirror.example.invalid', from: 'file' }),
     'an origin on another scheme': (d) => setRow(d, 'CCRC_RELEASE_BASE_URL', { key: 'CCRC_RELEASE_BASE_URL', state: 'ok', value: 'custom ftp://h', from: 'file' }),
