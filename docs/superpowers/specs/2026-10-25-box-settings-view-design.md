@@ -1,6 +1,6 @@
 # Box settings in the console
 
-**Spec** · 2026-10-25 · Status: wave 1 built (#2193); wave 2 agreed (revision 5) · Owner: the coordinator · Issue: #1417 · Related:
+**Spec** · 2026-10-25 · Status: wave 1 built (#2193); wave 2 built (#2295, revision 6) · Owner: the coordinator · Issue: #1417 · Related:
 `docs/superpowers/plans/2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md` (#1237),
 `docs/superpowers/specs/2026-09-20-centralised-update-management-design.md`,
 `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`,
@@ -29,7 +29,9 @@ on the fleet box, each with a display class. A checked number or choice shows as
 list or free text shows only whether it is set. The test box's own 28 settings are left out. A refused setting never
 records its raw text, which also retires wave 1's accepted residual, and the server checks every row against its
 class. The snapshot becomes version 2, which the server and an updated console read beside version 1, so the rollout
-goes server first. The operator approved D11 to D22 as proposed on 2026-11-04.
+goes server first. The operator approved D11 to D22 as proposed on 2026-11-04. Wave 2 was built to them and merged as #2295 on
+2026-11-05. Revision 6 records two things the build settled: the code's name for the `presence` class, and a release
+base with no scheme.
 
 **Revision history:**
 - Revision 2 folded in an adversarial design review: two critical findings, five important and seven minor.
@@ -42,6 +44,13 @@ goes server first. The operator approved D11 to D22 as proposed on 2026-11-04.
   remaining settings, from a read-only census of all 82 names and a measurement of wave 1's parser, wire and card at
   `724d7683a`. Three Opus lenses (leaks, facts, decisions) then checked the draft against the code; their findings are
   folded in, and sections 2.1 to 2.6 are marked where section 5 supersedes them. D1 to D10 now read Agreed: the operator approved revision 3 on 2026-10-26, and wave 1 was built to it. The operator approved D11 to D22 as proposed on 2026-11-04, so they read Agreed too.
+- Revision 6 (2026-11-05, after wave 2's build, plan D-7921 and D-7923): two amendments, both marked "(revision 6)".
+  - The `presence` class is spelled `is-set` in the code and its data: the bash table, L0, the server's parse, the card
+    and doctor. In TypeScript, `presence` names a session's presence only (#1371), so the class could not take that
+    word. This document keeps "presence" as the class's name in prose.
+  - A release base that does not begin with `http://` or `https://` shows `custom` alone (the operator, 2026-11-05,
+    item 41: "Show `custom` alone without a scheme: a scheme-less mirror loses its host in the view, and nothing
+    pasted there can show"). It supersedes the scheme-less sentence of 2.1 and the optional scheme of 5.4.
 
 Changes from either revision are marked "(review)" or "(refactor)".
 
@@ -105,7 +114,10 @@ the data.*
   query or userinfo. One named projection, `_upd_url_origin`, does this beside `_upd_redact`. It runs `_upd_redact`
   first and then keeps the scheme, if there is one, and the authority up to the first `/`, `?` or `#`. So a scheme-less
   base (`user:secret@host/r`, deviation 6748) and a repeated `u:p@x@host` lose their userinfo as well. Nothing writes
-  the userinfo rule a fifth time, and ARCH-67 folds the helper in with `_upd_redact`.
+  the userinfo rule a fifth time, and ARCH-67 folds the helper in with `_upd_redact`. (Revision 6, D-7923: in the view
+  and in doctor, a base that does not begin with `http://` or `https://` now shows `custom` alone, with no host, so
+  nothing pasted there without a scheme can show. `_upd_url_origin` itself is unchanged; its callers gate on the
+  raw value's scheme.)
 - **Every string is redacted, then clipped (review, refactor).**
   - Each `value` and `why` goes through `_upd_redact` first, which turns userinfo and any `$HOME` prefix, wherever it
     appears, into `~/`.
@@ -334,6 +346,10 @@ Each setting has one **display class**:
 | `presence` | Whether it is set, and where from. Never the value | Paths, key and token files, addresses, lists, globs, model names, free text |
 | `omit` | No row | The test box's own table |
 
+In the code and its data, the `presence` class is spelled `is-set` (revision 6, D-7921), because in TypeScript
+`presence` names a session's presence only (#1371). An `origin` row without an `http://` or `https://` scheme shows
+`custom` alone (revision 6, D-7923).
+
 The class decides what may leave the box, so it is a security decision, not a layout one. A `presence` row of a
 setting set to an empty line reads "set to empty, from ccrc.env", and, where its consumer treats empty as unset,
 says that the default applies.
@@ -474,7 +490,9 @@ Wave 1's server parse is strict: exactly seven rows, exactly three row shapes, a
   the roles that use it. It is mirrored in L0 (`shared/api.ts`) and held set-equal to the bash table by a test.
 - **The server's check.** `parseBoxSettings` (L1, `server/src/update/boxSettings.ts`) checks every row against its
   class. A `value` row's value must match a digits-and-unit pattern or one of its setting's fixed words; an `origin`
-  value must be `default`, or `custom` with an optional `http` or `https` scheme and host. A row of any other class or
+  value must be `default`, `custom` alone, or `custom` with an `http` or `https` scheme and its host (revision 6:
+  the scheme is required, D-7923; a version-2 row outside its class drops the whole document, and a version-1 row of
+  that shape reads `unmeasured`). A row of any other class or
   state that carries a value is `malformed`, as is a `why` outside D22's rule. The lane (L4) still only asks and
   stores. So the promise is a check the server makes, not only the writer's habit, which matters because the file
   is writable by the box's user.
@@ -542,6 +560,9 @@ relays `GK_WARN`, which quotes a refused value; that stays, under Later.
   - D15, a version-2 snapshot and a server-first rollout, with a reload for any open console tab;
   - D19, the test box's address shows only whether it is set;
   - D21, a server-role node shows one folded line per family of the fleet's settings.
+- Wave 2 was built to D11 to D22 and merged as #2295 on 2026-11-05.
+- A release base with no `http://` or `https://` scheme shows `custom` alone (the operator, 2026-11-05, item 41;
+  revision 6).
 
 **Waiting on you**
 - Nothing on this design. The wave-2 plan follows it.
