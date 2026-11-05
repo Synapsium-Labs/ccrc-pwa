@@ -9725,7 +9725,7 @@ const LANE_CPU_KEYS = [
 ] as const satisfies readonly (readonly [DelegationPassSlowKey, DelegationPassSlowKey])[];
 /** D-5692, D-5832: the phases `block` sums (the lane's own work and writes). */
 const LANE_BLOCK_KEYS = [
-  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
+  'noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'leaseActs', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
 ] as const satisfies readonly DelegationPassSlowKey[];
 /** D-5832: the three stretches of the pass the stall is read in, in order. */
 type LaneStretch = 'stallFlush' | 'stallMid' | 'stallRepair';
@@ -10397,7 +10397,7 @@ class DelegationLane {
       const whole = stall.pass();
       f.stallMax = whole.max; f.stallP99 = whole.p99;
       f.block = block; f.cut = pass.signal.aborted ? 1 : 0; f.total = total;
-      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile']) - (ms.get('yields') ?? 0));
+      f.other = Math.max(0, total - sum(['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile', 'leaseActs']) - (ms.get('yields') ?? 0));
       f.blockCpu = LANE_BLOCK_KEYS.reduce((n, k) => n + (t.cpu.get(k) ?? 0), 0) / 1000;
       if (t.cpuThread !== null) f.cpuThread = t.cpuThread ? 1 : 0;
       for (const [k, name] of LANE_CPU_KEYS) { const us = t.cpu.get(k); if (us !== undefined) f[name] = us / 1000; }

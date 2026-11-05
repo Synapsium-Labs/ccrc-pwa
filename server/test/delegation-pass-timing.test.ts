@@ -907,6 +907,17 @@ describe('D-5692 R2: strictly more than 1,000 ms of BLOCKING time writes the lin
 
 // ── R3 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+describe('PR6 ruling 2 (review 1498 F4): leaseActs is a blocking phase, so the slow line shows its own time', () => {
+  it('1,500 ms in leaseActs alone writes the line, counted in block and leaseActs, and none of it in other', async () => {
+    const sc = await scenario('std', { leaseActs: 1500 });
+    expect(sc.lines, 'leaseActs alone is slow enough to write the line').toHaveLength(1);
+    const m = parse(sc.lines[0]!);
+    expect(m.get('leaseActs')).toBe(1500);
+    expect(m.get('block'), 'block sums leaseActs').toBe(1500);
+    expect(m.get('other'), 'its time no longer sits in other').toBe(0);
+  });
+});
+
 describe('D-5692 R3: 1,500 ms inside a phase or part is that phase\'s, its enclosers\', and no other\'s', () => {
   interface Case { key: string; shape: Shape; rewriteAfter?: 'flush' | 'repair'; title: string }
   const cases: Case[] = [
