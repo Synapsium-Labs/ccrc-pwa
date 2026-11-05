@@ -9,9 +9,14 @@ import type { AttributionRead } from './openRun.js';
  * `deps.cfg`; those two are its first parameters now, and nothing else changed. Its callers: the routes'
  * `requireAttribution` and `POST /api/runs`' `attribute` gate in `coord/routes.ts`.
  *
- * The claim lanes' attribution gate — the mail ingress's checks 5/5.5/6 with
- * the SAME transient-vs-terminal split (D-37), factored because both claim
- * writes are new in this build and share it exactly. NOT `refuse()`: a claim
+ * The claim lanes' attribution gate — the mail ingress's checks 5/5.5/6, with
+ * a transient-vs-terminal split (D-37) that no longer matches the ingress's on
+ * one edge: since console speed S2 this gate reads the sender's one row, so a
+ * row retired between two listings mid-read answers `unknown-sender`, while
+ * `POST /api/mail` and its ack still read the whole registry and answer
+ * `registry-unmeasurable` there (spec D10; carrying it into the ingress is a
+ * follow-up). Factored because both claim writes are new in this build and
+ * share it. NOT `refuse()`: a claim
  * refusal is answered synchronously to a live caller and replayed by
  * nothing, so there is no delivery lane needing a recorded rejection to
  * explain itself — the claims table itself is the record of every
