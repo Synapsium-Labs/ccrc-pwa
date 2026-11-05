@@ -7,8 +7,8 @@ set +x   # FIRST LINE OF CODE, and it is a SECRETS control — see SECRETS below
 # Every refresh this script produces is paid for out of the same 5h/7d window
 # it refreshes, and that is inherent rather than sloppy. The ONLY writer of
 # ~/.cc-limits/<id>.json is ccd/statusline-command.sh, whose second gate
-# (`[ -n "${five_int:-}" ]`) requires a rendered payload carrying a real
-# rate_limits number — and a session that has made no API call renders
+# (a non-empty `five_int` or `seven_int`) requires a rendered payload carrying a
+# real rate_limits number — and a session that has made no API call renders
 # `rate_limits: null` (spec E6). So an idle account's usage cannot be learned
 # without spending some of it. Rather than argue the price down, every row
 # below carries fiveBefore/fiveAfter: the cost is a MEASUREMENT in the census,
