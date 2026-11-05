@@ -120,6 +120,19 @@ export function decideLeaseTransition(lease: DelegationLeaseRow | undefined, car
   return { ok: true, to: row.to === 'prior' ? lease.disposition : row.to, generation: lease.generation + 1 };
 }
 
+/**
+ * PR5b, the live `promote` door's own request check (coordinator ruling on W5-J9c, D-8024): a promotion names the run its transfer named, so the
+ * door refuses unless the carrier row exists with a non-null `transferRun` equal to `runId`; the answer is the refusal's detail, or null.
+ * It is NOT part of `decideLeaseTransition` and no fold calls it: replay keeps PR5a's looser reading (D-7971), so a stricter writer never
+ * makes the floor refuse a journal. PR9's promote door relies on it.
+ */
+export function promoteRunMismatch(carrier: DelegationLeaseCarrierRow | undefined, runId: number | null): string | null {
+  if (carrier === undefined) return 'promote: the lease has no carrier row, so no transfer names a run';
+  if (carrier.transferRun === null) return `promote: lease ${carrier.leaseId}'s carrier row names no transfer run`;
+  if (carrier.transferRun !== runId) return `promote: lease ${carrier.leaseId} is transferring to run ${carrier.transferRun}, not run ${String(runId)}`;
+  return null;
+}
+
 /** The release's decision (its own entry kind, the table's last row): any unreleased state but `transferring`. */
 export function decideLeaseRelease(lease: DelegationLeaseRow | undefined, carrier: DelegationLeaseCarrierRow | undefined,
   req: { expectGeneration: number }): DelegationLeaseDecision {
@@ -254,3 +267,4 @@ export function foldLeaseCarrierSeen(lease: DelegationLeaseRow | undefined,
   const seen = Math.max(lease.carrierGenerationSeen ?? 0, entry.generation);
   return { ok: true, lease: seen === lease.carrierGenerationSeen ? lease : { ...lease, carrierGenerationSeen: seen } };
 }
+

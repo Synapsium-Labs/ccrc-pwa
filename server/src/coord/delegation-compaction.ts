@@ -191,7 +191,7 @@ function inWindows(windows: readonly (readonly [number, number])[], t: number): 
  *   - S = min(F - 1, applied - 1); with no record inside the floor, F - 1 is the journal's last sequence;
  *   - K1 a record an `open-lease` or `open-lineage` hold names; K2 every record naming an `identity-candidate` hold's key; K3 the identity
  *     record of every activity that has not ended; K4 the launch response of every Workflow run that has not ended; K5 every evidence
- *     record observed within `DELEGATION_RAW_LEASE_WINDOW_MS` of a raw lease's call, inclusive, on every repository (the planner cannot
+ *     record observed within `DELEGATION_RAW_LEASE_WINDOW_MS` of an unreleased raw lease's call, inclusive, on every repository (the planner cannot
  *     see a window's repository, so it keeps a superset); K6 the records of a Bash call are kept together, so no PostToolUse is retained
  *     without its PreToolUse (the extensions of K6 are D-7011, at `noteBash`, and D-7012, at `callCarries`);
  *   - an old carried line is carried again only when a rule still selects it, from its old position.
@@ -260,7 +260,8 @@ export class DelegationCompactionPlanner {
     }
     const windows: Array<[number, number]> = [];
     for (const l of this.cp.leases) {
-      if (l.sourceKind !== 'raw') continue;
+      // An UNRELEASED raw lease only (W5-J10b): once released it holds nothing, so its window is no longer carried on its account.
+      if (l.sourceKind !== 'raw' || l.releasedAt !== null) continue;
       const a = byId.get(l.activityId);
       // With the activity row: its call, Pre to Post. Without one (shown with an `unmeasured` creator): the lease's own first observation.
       const start = parseDelegationInstant(a === undefined ? l.firstObservedAt : a.openedAt);
