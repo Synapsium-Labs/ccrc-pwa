@@ -300,6 +300,48 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(here()).toBe('/waiting?programme=prog-a');
   });
 
+  // REVIEW 1537 F2 (keeping review 1402's F3, as ruled in fix round 1): an item opened from its programme's Goals page steps along
+  // that programme's filtered list, and its way back and its Dismiss return to the Goals page, never to a list the operator did
+  // not open. The way back is named by the programme (no runs frame here, so by its slug).
+  it("an item opened from its programme's Goals page steps along that programme's list and goes back to the Goals page", () => {
+    routedAt(`/waiting/4?from=${encodeURIComponent('goals:prog-a')}`);
+    expect(within(strip()).getByText('1 of 2')).toBeTruthy();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Next item' }));
+    expect(location.pathname).toBe('/waiting/1');
+    expect(new URLSearchParams(location.search).get('from')).toBe('goals:prog-a');
+    expect(within(strip()).getByText('2 of 2')).toBeTruthy();
+    expect((within(strip()).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Previous item' }));
+    expect(location.pathname).toBe('/waiting/4');
+    expect(new URLSearchParams(location.search).get('from')).toBe('goals:prog-a');
+    expect(within(strip()).queryByRole('button', { name: 'Back to Waiting on you' })).toBeNull();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to prog-a' }));
+    expect(here()).toBe('/programmes/prog-a');
+  });
+
+  it("an item opened from Goals that the list does not hold (a modification's item, cleared) goes back to the Goals page", () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({
+      items: ITEMS.filter((i) => i.program === 'prog-b'), cleared: [itemView({ id: 9, program: 'prog-a', state: 'done', title: 'Nine' })],
+    }) }));
+    history.replaceState(null, '', `/waiting/9?from=${encodeURIComponent('goals:prog-a')}`);
+    render(<ItemRouteAt param="9" store={store} />);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to prog-a' }));
+    expect(here()).toBe('/programmes/prog-a');
+  });
+
+  it("Dismiss on an item opened from Goals returns to the Goals page", async () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], runsFrameSeen: true, runs: [],
+      waiting: waitingView({ items: ITEMS }) }));
+    vi.spyOn(api, 'dismissItem').mockResolvedValue({ ok: true, item: itemView({ id: 4, state: 'dismissed' }) });
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView() });
+    history.replaceState(null, '', `/waiting/4?from=${encodeURIComponent('goals:prog-a')}`);
+    render(<ItemRouteAt param="4" store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(here()).toBe('/programmes/prog-a'));
+  });
+
   /** The two arms of the ladder as the app mounts them, following the router: the list at `/waiting`, an item under it. */
   function Ladder({ store }: { store: ReturnType<typeof mk> }) {
     const { path } = useLocation();

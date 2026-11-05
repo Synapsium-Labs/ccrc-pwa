@@ -13,7 +13,7 @@ import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf,
-  programmeIsLive, questionRows, resolveList, summaryCounts, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
+  programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import { SpecLink } from './GoalsPanel';
 import { programmeSpecHref } from './ledgerLinks';
@@ -94,8 +94,8 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
   );
 }
 
-/** One programme's rows: its items and its sessions' questions, as the list and the programme view both draw them, and as
- *  the list beside an open item draws them, with that item marked current (plan PL9). */
+/** One programme's rows: its items and its sessions' questions, as the list draws them, and as the list beside an open item
+ *  draws them, with that item marked current (plan PL9). */
 export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
 }): ReactNode {
@@ -136,7 +136,8 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
 }
 
 /** "Recently cleared": what the coordinator confirmed in the last seven days, each struck through with when. `where` names the
- *  programme beside a row where the list holds several; a single programme's view leaves it out. Nothing is drawn for none. */
+ *  programme beside a row where the list holds several; the list filtered to one programme leaves it out. Nothing is drawn for
+ *  none. */
 export function ClearedTrail({ items, where, now }: {
   items: readonly ItemView[]; where?: (item: ItemView) => string; now: number;
 }): ReactNode {
@@ -185,7 +186,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   // What is drawn is that list's groups (`listGroups`, the one reader the item's steps use too).
   const shown = noProgramme ? groups.filter((g) => g.program === null) : listGroups(list, groups);
   const pressed = (program: string | null): boolean => (program === null ? noProgramme : list.programme === program);
-  const words = summaryWords(summaryCounts(view.items, questions));
+  // The pills count what is drawn (`shownSummary`, review 1537 F4): under a filter, that filter's share alone.
+  const words = summaryWords(shownSummary(shown));
   const empty = groups.length === 0;
   return (
     <div className="wl">

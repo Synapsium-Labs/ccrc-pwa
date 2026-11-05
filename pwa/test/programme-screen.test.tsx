@@ -329,12 +329,12 @@ describe('the programme view: Goals', () => {
     await screen.findByText('Dropped the old flag');
     const links = screen.getAllByRole('link', { name: 'Open the item' });
     expect(links).toHaveLength(1); // item 8 is no longer on the list: no link to a page that says so
-    // The link names the one Waiting on you list, filtered to this programme, so the item steps along it and goes back to it
-    // (plan PL9; PL11, D-7986: the programme page draws no list of its own).
-    expect(links[0]!.getAttribute('href')).toBe(itemPath(7, { at: 'waiting', programme: 'prog-a' }));
+    // The link names the one Waiting on you list, filtered to this programme, so the item steps along it, and its way back is
+    // this Goals page (plan PL9; PL11, D-7986: the programme page draws no list of its own; review 1537 F2, keeping 1402's F3).
+    expect(links[0]!.getAttribute('href')).toBe(itemPath(7, { at: 'waiting', programme: 'prog-a', back: 'goals' }));
     fireEvent.click(links[0]!);
     expect(location.pathname).toBe(itemPath(7));
-    expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-a');
+    expect(new URLSearchParams(location.search).get('from')).toBe('goals:prog-a');
   });
 });
 

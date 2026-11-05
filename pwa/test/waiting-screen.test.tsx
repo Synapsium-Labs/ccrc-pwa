@@ -232,6 +232,22 @@ describe('the Waiting on you list', () => {
     expect(words).toEqual(['1 blocking now', '1 question from a session', '2 needed soon', '1 being checked', '1 came back']);
   });
 
+  // REVIEW 1537 F4: under a filter the pills count only what the page draws, so prog-b's blocking item never reads on prog-a's
+  // page, where a programme chip lands.
+  it("filtered to a programme, the summary counts that programme's items alone: another's blocking item does not reach it", () => {
+    open({
+      programme: 'prog-a',
+      view: waitingView({
+        items: [
+          itemView({ id: 1, program: 'prog-b', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-b', neededBy: 'soon' }),
+          itemView({ id: 3, program: 'prog-a', neededBy: 'soon' }), itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
+        ],
+      }),
+    });
+    const words = within(screen.getByRole('list', { name: 'Summary' })).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['2 needed soon']);
+  });
+
   it('the rail filters to the programme its prop names, keeps no copy of its own, and tells the route of a pick', () => {
     const view = waitingView({
       items: [itemView({ id: 1, program: 'prog-a', title: 'In A' }), itemView({ id: 2, program: 'prog-b', title: 'In B' })],

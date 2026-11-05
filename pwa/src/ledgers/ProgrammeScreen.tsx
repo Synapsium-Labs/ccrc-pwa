@@ -233,9 +233,9 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
   const held = isGoalsFor(entry, slug) ? entry : null;
   const heldItems = new Set<number>([...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)].map((i) => i.id));
   const hue = fleetHues(heard).get(slug) ?? 'none';
-  // The list an item opened from Goals names: the one list, filtered to this programme, so its steps stay in this programme and
-  // its way back is that list (plan PL9; PL11, D-7986).
-  const list: ItemList = { at: 'waiting', programme: slug };
+  // The list an item opened from Goals names: the one list, filtered to this programme, so its steps stay in this programme, and
+  // its way back and its Dismiss return here, to this Goals page (plan PL9; PL11, D-7986; review 1537 F2, keeping review 1402's F3).
+  const list: ItemList = { at: 'waiting', programme: slug, back: 'goals' };
   const stored = useStoredSecrets(slug, secretItemsKey(slug, view), secrets?.read ?? readStoredSecrets);
   const now = Date.now();
   const home = homeProjectOf(slug, heard);

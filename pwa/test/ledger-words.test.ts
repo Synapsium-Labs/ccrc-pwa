@@ -2,8 +2,9 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  COMBINED_LIST, fromWord, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
-  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, waitingTotal, type ItemList, type QuestionRow,
+  COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
+  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, waitingTotal,
+  type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
@@ -181,6 +182,8 @@ describe('the list an item was opened from rides the URL as one word', () => {
   const LISTS: readonly (readonly [string, ItemList])[] = [
     ['waiting', { at: 'waiting', programme: null }],
     ['waiting:prog-a', { at: 'waiting', programme: 'prog-a' }],
+    // An item opened from its programme's Goals page (review 1537 F2): the same filtered list, its way back that Goals page.
+    ['goals:prog-a', { at: 'waiting', programme: 'prog-a', back: 'goals' }],
   ];
   it.each(LISTS)('%s reads back as the list it names, and that list writes it', (word, list) => {
     expect(listOfFromWord(word)).toEqual(list);
@@ -192,7 +195,22 @@ describe('the list an item was opened from rides the URL as one word', () => {
     expect(listOfFromWord('programme:prog-b')).toEqual({ at: 'waiting', programme: 'prog-b' });
     expect(fromWord(listOfFromWord('programme:prog-b'))).toBe('waiting:prog-b');
   });
-  it.each([null, '', 'fleet', 'waiting:', 'programme:', 'programme:../x', 'programme:a b', 'waiting:prog-a:x', 'PROGRAMME:prog-a'])(
+  // REVIEW 1537 F2 (keeping review 1402's F3): the way back of an item opened from Goals is read off the list its URL names.
+  it("an item opened from Goals goes back to that programme's Goals page; any other list goes back to the list", () => {
+    expect(goalsBack(listOfFromWord('goals:prog-a'))).toBe('prog-a');
+    expect(goalsBack(listOfFromWord('waiting:prog-a'))).toBeNull();
+    expect(goalsBack(listOfFromWord('programme:prog-a'))).toBeNull();
+    expect(goalsBack(COMBINED_LIST)).toBeNull();
+    // Its steps go along the programme's filtered list, as that list's own do, and keep the way back.
+    const groups = groupByProgramme([itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-a' }),
+      itemView({ id: 3, program: 'prog-b' })], []);
+    const place = itemPlace(1, listOfFromWord('goals:prog-a'), groups);
+    expect(place?.next).toBe(2);
+    expect(place?.total).toBe(2);
+    expect(fromWord(place!.list)).toBe('goals:prog-a');
+  });
+  it.each([null, '', 'fleet', 'waiting:', 'programme:', 'programme:../x', 'programme:a b', 'waiting:prog-a:x', 'PROGRAMME:prog-a',
+    'goals:', 'goals:../x', 'GOALS:prog-a'])(
     'an unknown or malformed word (%j) falls back to the combined list', (word) => {
       expect(listOfFromWord(word)).toEqual(COMBINED_LIST);
     });
@@ -256,5 +274,22 @@ describe('itemPlace: previous and next in the order and filter of the list the i
     expect(positionWords(null, 'Item 11')).toBe('');
     // No title (the item is gone and its place kept): the place alone (carry C, D-7951; review 1408 F3).
     expect(positionWords({ list: COMBINED_LIST, index: 1, total: 3, prev: 10, next: 12 }, '')).toBe('2 of 3');
+  });
+});
+
+// ── the summary counts what the page draws (review 1537 F4) ───────────────────────────────────────────────────────────
+describe('the summary pills count the groups the list draws', () => {
+  const ITEMS = [
+    itemView({ id: 1, program: 'prog-b', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-b', neededBy: 'soon' }),
+    itemView({ id: 3, program: 'prog-a', neededBy: 'soon' }), itemView({ id: 4, program: 'prog-a', state: 'checking' }),
+  ];
+  const QUESTIONS: QuestionRow[] = [{ sessionId: 's-b', program: 'prog-b', title: 'Ask', at: NOW }];
+  const groups = groupByProgramme(ITEMS, QUESTIONS);
+  it("unfiltered, every group's: the whole list's counts", () => {
+    expect(shownSummary(listGroups(COMBINED_LIST, groups))).toEqual(summaryCounts(ITEMS, QUESTIONS));
+  });
+  it("filtered to prog-a, prog-a's alone: prog-b's blocking item and question do not reach it", () => {
+    expect(shownSummary(listGroups({ at: 'waiting', programme: 'prog-a' }, groups)))
+      .toEqual({ blocking: 0, questions: 0, soon: 1, checking: 1, cameBack: 0 });
   });
 });

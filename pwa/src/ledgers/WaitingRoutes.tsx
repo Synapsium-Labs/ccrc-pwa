@@ -33,7 +33,7 @@ import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
 import {
   BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
   NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace,
-  listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
+  goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
 import { ListGroup, WaitingScreen } from './WaitingScreen';
@@ -57,6 +57,16 @@ export const itemPath = (id: number, list: ItemList = COMBINED_LIST): string =>
 /** A list's own path: the combined list, with its side rail's filter as its query (`waitingPath`, the one builder). One arm:
  *  there is one Waiting on you page (PL11, D-7986). */
 export const listPath = (list: ItemList): string => waitingPath(list.programme);
+
+/** An item's way back, and where its Dismiss lands, with the name the way back shows: the Goals page it was opened from
+ *  (`goalsBack`, review 1537 F2, keeping review 1402's F3), named by its programme's title; else the list it settled to
+ *  (`listPath`), named Waiting on you. `named` is the list the item's URL names, `settled` the one it settled to. */
+export function backWay(named: ItemList, settled: ItemList, runs: readonly RunSummary[] | null): { to: string; name: string } {
+  const goals = goalsBack(named);
+  return goals !== null && programmeIsOpenable(goals)
+    ? { to: programmePath(goals), name: programmeTitle(goals, runs ?? []) }
+    : { to: listPath(settled), name: WAITING_TITLE };
+}
 
 /** The rows and runs this page has heard, or `null` for each it has not: see the file's header. */
 export function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null } {
@@ -178,11 +188,12 @@ function useShownList(visit: string | null): ItemList | null {
 /** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with the list's
  *  name, and not the shell's back chevron, which a desk hides because the column beside the pane is the way out of a screen. A
  *  phone has no such column, and on a desk the column holds the list's rows but not its page (the filter's rail and summary),
- *  so this is the way to that page, with the filter it was opened under (PL11, D-7986). */
-function ListBack({ list, ref }: { list: ItemList; ref?: Ref<HTMLButtonElement> }): ReactNode {
+ *  so this is the way to that page, with the filter it was opened under (PL11, D-7986). An item opened from its programme's
+ *  Goals page goes back to that page instead, named by its programme (`backWay`, review 1537 F2). */
+function ListBack({ way, ref }: { way: { to: string; name: string }; ref?: Ref<HTMLButtonElement> }): ReactNode {
   return (
-    <Button ref={ref} variant="ghost" size="fit" className="wi-back" aria-label={backLabel(WAITING_TITLE)} onClick={() => navigate(listPath(list))}>
-      <span aria-hidden="true">‹</span><span className="wi-back-name">{WAITING_TITLE}</span>
+    <Button ref={ref} variant="ghost" size="fit" className="wi-back" aria-label={backLabel(way.name)} onClick={() => navigate(way.to)}>
+      <span aria-hidden="true">‹</span><span className="wi-back-name">{way.name}</span>
     </Button>
   );
 }
@@ -200,8 +211,8 @@ type StepWay = 'prev' | 'next';
  *  the step landed: drawn always, empty with no place, and carrying the open item's title beside "N of M" (follow-up A-3), so
  *  a step that lands on the same "N of M" still announces. The shown "N of M" is hidden from assistive technology, which
  *  hears the region instead. */
-function ItemNav({ id, list, place, left, title }: {
-  id: number | null; list: ItemList; place: ItemPlace | null; left: boolean; title: string;
+function ItemNav({ id, back, place, left, title }: {
+  id: number | null; back: { to: string; name: string }; place: ItemPlace | null; left: boolean; title: string;
 }): ReactNode {
   const pressed = useRef<StepWay | null>(null);
   const prevRef = useRef<HTMLButtonElement | null>(null);
@@ -224,7 +235,7 @@ function ItemNav({ id, list, place, left, title }: {
   };
   return (
     <nav className="wi-nav" aria-label={BETWEEN_ITEMS_LABEL}>
-      <ListBack list={place?.list ?? list} ref={backRef} />
+      <ListBack way={back} ref={backRef} />
       <span className="sr-only" role="status">{positionWords(place, title)}</span>
       {place !== null && (
         <span className="wi-steps-nav">
@@ -299,6 +310,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   const place = useKeptPlace(id, named, live);
   const item = id === null || view === null ? null : view.items.find((i) => i.id === id) ?? view.cleared.find((i) => i.id === id) ?? null;
   const back = place?.list ?? list;
+  const way = backWay(named, back, runs);
   // The list the strip names, for the column beside the item (`useShownList`), once a list has been heard.
   const visit = visitOf(id, named);
   const backWord = groups === null ? null : fromWord(back);
@@ -331,13 +343,13 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
                 onDismiss={async () => {
                   await api.dismissItem(item.id);
                   await refetchWaiting(store);
-                  navigate(listPath(back));
+                  navigate(way.to);
                 }} />
     );
   }
   return (
     <div className="wl-route">
-      <ItemNav id={id} list={list} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
+      <ItemNav id={id} back={way} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );

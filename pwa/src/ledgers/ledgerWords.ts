@@ -92,8 +92,8 @@ export const waitingTotal = (items: readonly ItemView[], questions: readonly Que
 
 /** The chip's number for `program`, off what the fleet store holds: "waiting on you" as spec §2 defines it once, the programme's
  *  open items (sent-back ones included, one being checked not) plus the questions its sessions ask, summed by `waitingTotal`,
- *  the one sum the combined list, the navigation badge and the programme view's heading (`groupByProgramme`'s `waiting`) read
- *  too, so a programme never reads one number on its box and another on its view (ruling 14290). Until the list AND the
+ *  the one sum the combined list's side rail (`groupByProgramme`'s `waiting`), the navigation badge and the Goals page's link
+ *  read too, so a programme never reads one number on its box and another on its page (ruling 14290). Until the list AND the
  *  fleet frame have landed (`sessions`, as the navigation badge gates them) it answers `null`, as its sibling
  *  `waitingItemsCount` does, because "not heard yet" is not zero; the chip draws nothing for either (carry C, D-7951; review 1386 F9). `runs`
  *  may be `null` (no runs frame yet): a question's programme is then unknown, so it counts for no programme. */
@@ -167,6 +167,17 @@ export function summaryCounts(items: readonly ItemView[], questions: readonly Qu
   };
 }
 
+/** THE SUMMARY OF WHAT A PAGE DRAWS (review 1537 F4): the counts over the rows of the groups the list draws (`listGroups`), so
+ *  under a programme filter the pills count that programme's items and questions only, and unfiltered, every group's, which
+ *  is every item and question (`groupByProgramme` files each in exactly one group). */
+export function shownSummary(groups: readonly ProgrammeGroup[]): SummaryCounts {
+  const rows = groups.flatMap((g) => g.rows);
+  return summaryCounts(
+    rows.flatMap((r) => (r.kind === 'item' ? [r.item] : [])),
+    rows.flatMap((r) => (r.kind === 'question' ? [r.question] : [])),
+  );
+}
+
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /** The summary pills as `{tone, text}`, zero counts left out. */
@@ -201,8 +212,12 @@ export function ageWords(at: number, now: number): string {
 // programme's Goals page all open the one list, the last two filtered, and an old `programme:<slug>` link reads as that filter.
 
 /** The list an item was opened from: the combined list, unfiltered (`programme: null`) or filtered by its side rail to one
- *  programme. One arm: `at` is kept so the word in the URL and every caller read as before. */
-export type ItemList = { readonly at: 'waiting'; readonly programme: string | null };
+ *  programme. One arm: `at` is kept so the word in the URL and every caller read as before.
+ *
+ *  `back: 'goals'` (review 1537 F2, keeping review 1402's F3): the item was opened from its programme's Goals page, so its way
+ *  back and its Dismiss return to that page, not to the list; its steps still go along the programme's filtered list. Absent:
+ *  the way back is the list. Only a filtered list carries it: the Goals page is a programme's. */
+export type ItemList = { readonly at: 'waiting'; readonly programme: string | null; readonly back?: 'goals' };
 
 /** The combined list, unfiltered: where an item opened with no list, or with one this page cannot read, steps and goes back. */
 export const COMBINED_LIST: ItemList = { at: 'waiting', programme: null };
@@ -227,20 +242,28 @@ export const backLabel = (listName: string): string => `Back to ${listName}`;
 
 const isSlug = (s: string): boolean => { const shaped = shapeProgramSlug(s); return shaped.ok && shaped.slug === s; };
 
-/** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting` or `waiting:<slug>`. A
- *  slug never holds `:` (`shapeProgramSlug`), so the word reads back unambiguously. */
+/** The list as one word for the item's URL (`?from=`), so a reload or a shared link keeps it: `waiting`, `waiting:<slug>`, or
+ *  `goals:<slug>` for an item opened from that programme's Goals page. A slug never holds `:` (`shapeProgramSlug`), so the word
+ *  reads back unambiguously. */
 export function fromWord(list: ItemList): string {
-  return list.programme === null ? 'waiting' : `waiting:${list.programme}`;
+  if (list.programme === null) return 'waiting';
+  return `${list.back === 'goals' ? 'goals' : 'waiting'}:${list.programme}`;
 }
 
 /** The list a `from` word names, or the combined list for a word that names none (absent, unknown or malformed). An older page's
- *  `programme:<slug>` (its programme view's share of the list, before PL11) names the combined list filtered to that programme. */
+ *  `programme:<slug>` (its programme view's share of the list, before PL11) names the combined list filtered to that programme;
+ *  `goals:<slug>` names the same filtered list, with its way back to that programme's Goals page. */
 export function listOfFromWord(word: string | null): ItemList {
   if (word === 'waiting') return COMBINED_LIST;
-  const m = word === null ? null : /^(waiting|programme):([^:]+)$/.exec(word);
+  const m = word === null ? null : /^(waiting|programme|goals):([^:]+)$/.exec(word);
   if (m === null || !isSlug(m[2]!)) return COMBINED_LIST;
-  return { at: 'waiting', programme: m[2]! };
+  return m[1] === 'goals' ? { at: 'waiting', programme: m[2]!, back: 'goals' } : { at: 'waiting', programme: m[2]! };
 }
+
+/** The programme whose Goals page an item's way back and its Dismiss return to (`back: 'goals'`, review 1537 F2), or `null`: they
+ *  return to the list. Read off the list the item's URL names, never the settled one: a programme with nothing on the list now
+ *  settles to the combined list, and its Goals page is still where the item was opened. */
+export const goalsBack = (list: ItemList): string | null => (list.back === 'goals' ? list.programme : null);
 
 /** THE ONE STALE-LIST RULE: a filter naming a programme no group holds (an old link, a programme with nothing waiting now, a
  *  well-formed slug nobody uses) is the combined list. The filter, the way back, the column beside an item and the steps all

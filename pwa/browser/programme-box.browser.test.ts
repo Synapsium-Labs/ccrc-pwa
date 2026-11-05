@@ -419,7 +419,7 @@ describe.each(SKINS)('the programme\'s Goals page, opened from the title in %s',
           expect(m.pending).toBe('spec update pending (PR #77)');
           expect(m.pendingRatio, 'a pending change on the attention tint').toBeGreaterThanOrEqual(4.5);
           expect(m.specLink).toBe('/docs/project-a/specs/2026-10-31-billing-design.md');
-          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3?from=waiting%3Abilling'); // naming the filtered list (plan PL9; PL11)
+          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3?from=goals%3Abilling'); // the filtered list, its way back this Goals page (plan PL9; PL11; review 1537 F2)
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();
