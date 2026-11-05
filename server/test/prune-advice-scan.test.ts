@@ -35,13 +35,18 @@ const sourceFiles = (dir: string): string[] => fs.readdirSync(dir, { withFileTyp
   return /\.(ts|tsx|mjs|js)$/.test(e.name) ? [p] : [];
 });
 
-/** Every line of server/src that names the prune outside a comment. */
+/** The one server/src line that names the prune and is no advice: the approval classifier's row that FORBIDS it
+ *  (cleanup un-wedge R3, D-8001), matched by its text so a moved line never reds. */
+const CLASSIFIER_ROW = { file: 'server/src/coord/approvalguard.ts', text: "{ why: 'git worktree prune', test: runsWorktreePrune }," };
+
+/** Every line of server/src that names the prune outside a comment, but the classifier's refusal row. */
 const serverHits = (): string[] => {
   const hits: string[] = [];
   for (const f of sourceFiles(path.join(ROOT, 'server', 'src'))) {
     for (const [i, line] of fs.readFileSync(f, 'utf8').split('\n').entries()) {
       const t = line.trim();
       if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || !PRUNE.test(line)) continue;
+      if (path.relative(ROOT, f) === CLASSIFIER_ROW.file && t === CLASSIFIER_ROW.text) continue;
       hits.push(`${path.relative(ROOT, f)}:${i + 1}: ${t.slice(0, 160)}`);
     }
   }
@@ -61,7 +66,12 @@ describe('no advice names a repository-wide git worktree prune', () => {
     expect(body.some((l) => PRUNE.test(l)), 'its call stands').toBe(true);
   });
 
-  it('server/src names it outside a comment nowhere', () => {
+  it('server/src names it outside a comment nowhere but the classifier row that forbids it', () => {
     expect(serverHits()).toEqual([]);
+  });
+
+  it('the CONTROL: the classifier row the scan allows stands, so the allowance names a real line', () => {
+    const lines = fs.readFileSync(path.join(ROOT, CLASSIFIER_ROW.file), 'utf8').split('\n').map((l) => l.trim());
+    expect(lines.filter((l) => l === CLASSIFIER_ROW.text)).toHaveLength(1);
   });
 });
