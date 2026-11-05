@@ -43,6 +43,9 @@ const makeStore = (): FleetStore => createFleetStore({
 });
 const NO_CAPS = (): Promise<never> => new Promise(() => {});
 const NO_SPEND = (): Promise<never> => new Promise(() => {});
+/** The Finished fold's door ("Show N more finished runs"), or null once every loaded row is shown. */
+const foldDoor = (): HTMLElement | null => screen.queryByRole('button', { name: /more finished run/i });
+const unfold = (): void => { for (let door = foldDoor(); door !== null; door = foldDoor()) fireEvent.click(door); };
 const flush = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
 const ids = (rows: RunSummary[] | null): number[] => (rows ?? []).map((r) => r.id);
 const range = (hi: number, lo: number): number[] => Array.from({ length: hi - lo + 1 }, (_, i) => hi - i);
@@ -83,6 +86,7 @@ describe('the run archive in pages', () => {
     const a = archive(range(120, 1), [130]);
     render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     await flush();
+    unfold();
     const button = screen.getByRole('button', { name: 'Show older' });
     expect(button).not.toBeDisabled();
     // One tap asks the next page (before = the oldest id of page one) and the control is disabled while it is on its way.
@@ -94,18 +98,60 @@ describe('the run archive in pages', () => {
     expect(a.load).toHaveBeenLastCalledWith(50, 71);
     expect(screen.getByRole('button', { name: 'Show older' })).toBeDisabled();
     await act(async () => { release(); await vi.advanceTimersByTimeAsync(0); });
+    // The second page (21..70) leaves 20 runs older: still offered once the fold shows the new rows. The third reaches the end: gone.
+    unfold();
     expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
-    // The second page (21..70) leaves 20 runs older: still offered. The third reaches the end: gone.
     fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
     await flush();
     expect(a.load).toHaveBeenLastCalledWith(50, 21);
+    unfold();
     expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
+  });
+
+  it('Show older appears only after the fold is exhausted', async () => {
+    const a = archive(range(120, 1));
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    // 50 rows are loaded, FINISHED_FOLD (20) are shown: the other 30 sit behind the fold door, and a tap that loaded 50 more
+    // below the fold would change nothing visible.
+    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
+    fireEvent.click(foldDoor()!);                                   // 40 shown of 50
+    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
+    fireEvent.click(foldDoor()!);                                   // all 50 shown: the fold is exhausted
+    expect(foldDoor()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    expect(a.load).toHaveBeenLastCalledWith(50, 71);
+    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();   // the new rows are folded again
+    expect(foldDoor()).not.toBeNull();
+  });
+
+  it('a failed Show older says so and keeps the rows', async () => {
+    const a = archive(range(120, 1));
+    const { container } = render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    unfold();
+    expect(screen.queryByText('Could not load older runs.')).toBeNull();
+    const rows = (): number => container.querySelectorAll('.runs-list > li').length;
+    const before = rows();
+    expect(before).toBe(50);
+    a.load.mockRejectedValueOnce(new Error('down'));
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    expect(screen.getByText('Could not load older runs.')).toBeInTheDocument();
+    expect(rows()).toBe(before);
+    expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
+    // The next tap succeeds and the line goes.
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    expect(screen.queryByText('Could not load older runs.')).toBeNull();
   });
 
   it('Show older is absent when the archive fits one page', async () => {
     const a = archive(range(30, 1));
     render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     await flush();
+    unfold();
     expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
   });
 

@@ -121,9 +121,16 @@ export function RunsScreen({
   const { cold, state: coldState, reload: loadCold, loadOlder, hasOlder } = useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
+  // A page that did not advance the stored cursor failed (or was refused as stale): `loadOlder` itself never rejects, and
+  // `coldState` also carries a failed re-read, so the board says "older" only for the tap that measured no progress.
+  const [olderFailed, setOlderFailed] = useState(false);
   const showOlder = (): void => {
     setOlderBusy(true);
-    void loadOlder().finally(() => setOlderBusy(false));
+    setOlderFailed(false);
+    const asked = store.getState().runPages?.nextBefore ?? null;
+    void loadOlder().then(() => {
+      setOlderFailed((store.getState().runPages?.nextBefore ?? null) === asked);
+    }).finally(() => setOlderBusy(false));
   };
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
@@ -216,7 +223,10 @@ export function RunsScreen({
   // active, `coldState === 'ok'` for finished (finished has no other
   // source). When NEITHER has ever answered, this screen knows nothing at
   // all, and must say so rather than rendering the ordinary empty state.
-  const noSignalYet = !runsFrameSeen && coldState !== 'ok';
+  //
+  // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now. A failed "Show older"
+  // sets `coldState` to `error` while the rows stay, and must not swap the board for "Could not reach the server".
+  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
   // composition is pinned at exactly two network calls
@@ -410,6 +420,21 @@ export function RunsScreen({
                     finished.length - shownFinished)}
                 </Button>
               )}
+              {/* Console speed S2: offered only once every loaded row is shown, so a tap that loads the next page
+                  changes something the operator can see. */}
+              {hasOlder && shownFinished >= finished.length && (
+                <>
+                  <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
+                    disabled={olderBusy} onClick={showOlder}>
+                    Show older
+                  </Button>
+                  {olderFailed && (
+                    <p role="status" className="m-0 font-ui text-meta leading-normal text-ink-secondary">
+                      Could not load older runs.
+                    </p>
+                  )}
+                </>
+              )}
             </div>
           ) : coldFailed ? (
             // I6, second half: at least one run is active (this branch is
@@ -427,13 +452,6 @@ export function RunsScreen({
               </EmptyState>
             </div>
           ) : null}
-
-          {hasOlder && (
-            <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
-              disabled={olderBusy} onClick={showOlder}>
-              Show older
-            </Button>
-          )}
         </>
       )}
 
