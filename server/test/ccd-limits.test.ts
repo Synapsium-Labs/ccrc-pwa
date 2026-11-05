@@ -343,3 +343,32 @@ describe('a rolled-over account is ELIGIBLE — _avail answers eligibility, not 
     expect(sh('_swap_target claude-demo claude-b claude-b || true')).toBe('claude');
   });
 });
+
+// The statusline's row for a payload with no 5h figure. `five: null` is one
+// known half: enough for eligibility, not enough for rank.
+describe('a row with a null five reads as unknown, never as room', () => {
+  const fiveNull = (w: string, seven: number): void => {
+    const t = now();
+    writeLimits(`${w}.json`, JSON.stringify({ five: null, seven, ts: t, fiveResetAt: null, sevenResetAt: t + 400000 }));
+  };
+
+  it('_limit_field keeps the weekly figure and answers empty for five, not 0', () => {
+    fiveNull('claude', 3);
+    expect(sh('_limit_field claude seven')).toBe('3');
+    expect(sh('_limit_field claude five')).toBe('');
+    expect(sh('_limit_score claude')).toBe('');
+  });
+
+  it('_avail refuses on the known weekly half at the ceiling', () => {
+    fiveNull('claude', 98);
+    expect(sh('_avail claude && echo AVAIL || echo NO')).toBe('NO');
+  });
+
+  it('_swap_target ranks it after a fuller measured lane, however low its weekly figure', () => {
+    fiveNull('claude', 3);
+    const t = now();
+    writeLimits('claude-a.json', json({ five: 60, seven: 60, ts: t, fiveResetAt: t + 3600, sevenResetAt: t + 400000 }));
+    writeLimits('claude-b.json', json({ five: 99, seven: 99, ts: t }));
+    expect(sh('_swap_target claude-demo claude-b claude-b || true')).toBe('claude-a');
+  });
+});

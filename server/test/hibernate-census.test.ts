@@ -14,9 +14,10 @@
 //   - `other-meaning` the word means something else there;
 //   - `true-of-pane`  it counts a sleeping session's pane as not running, which is true, and says so;
 //   - `definition`    the vocabulary's own definition.
-// THE CENSUS IS THE SERVER TREE'S. The box-side sweeps keyed on a live process were audited by hand; `ccd-tmp-sweep` is
-// the only one, and Task 16 gave it its stance (a hibernated row's uuid is live). The rows by NAME below are the readers
-// outside the scan's reach: ccd's verbs, the PWA's Forget and the kickoff route.
+// THE CENSUS IS THE SERVER TREE'S. The box-side sweeps keyed on a session being dead were audited by hand: `ccd-tmp-sweep`,
+// which Task 16 gave its stance (a hibernated row's uuid is live), and `ccd-scope-sweep`'s busy arm (D-7993: a hibernated
+// row is `session-asleep`). The rows by NAME below are the readers outside the scan's reach: ccd's verbs, the busy arm, the
+// PWA's Forget and the kickoff route.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -215,6 +216,9 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
       && /export async function claimantFacts[\s\S]*?hibernatedAt: read\.kind === 'found' \? read\.record\.hibernatedAt : null/.test(s),
     why: 'hands the `.hibernated` stamp to `readSession` (its adapter, `claimantFacts`) and answers a sleeping claimant '
       + '`alive`, why hibernated' },
+  { name: 'ccd-scope-sweep _ss_busy_judge', stances: ['consults'], file: 'ccd/ccd-scope-sweep',
+    holds: (s) => /\.hibernated[\s\S]*?\.stopped[\s\S]*?session-asleep/.test(bashFn(s, '_ss_busy_judge')),
+    why: 'reads `.hibernated` before `.stopped`, which every sleeping row also carries, and holds the row `session-asleep`' },
   { name: 'ccd cmd_forget', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernated/.test(bashFn(s, 'cmd_forget')),
     why: 'refuses a hibernated row (`_lc_refuse hibernated`): wake it or stop it first' },
   { name: 'ccd cmd_stop', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_stop')),

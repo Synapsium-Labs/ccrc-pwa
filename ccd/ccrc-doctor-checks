@@ -8701,6 +8701,14 @@ _check_model-default() {
 # A record dated in the future is no current measurement either. Nothing here
 # stops a unit.
 #
+# THE BUSY ARM (D-7993). A `busy` line sits beside a dead scope's own line and judges its
+# session; `busy-mode live`, under the header, says both switches stood, and a record
+# without it is shadow. Every sentence below says the busy-orphan count and that mode. An
+# orphan is a scope the arm found collectable (`would-stop`, `held`, `stopped`,
+# `stop-failed`) and each is listed, with its process list: the shadow week reads these
+# lines. A `busy` line that is `report` or `carry` is no orphan yet, and a live session's
+# is not one at all, so neither is counted; its scope's `dead` line already says it.
+#
 # TWO HALVES OF THE TIMER'S HEALTH. `_check_services` asks whether
 # `ccd-scope-sweep.timer` is active (it is in `known`); this check asks whether
 # its record is FRESH — a tick older than CCRC_SCOPE_SWEEP_STALE_S is a sweep
@@ -8711,7 +8719,7 @@ _check_model-default() {
 # it then rewrites nothing, so its record ages by design — never a stopped timer).
 # CCRC_SCOPE_SWEEP_STATE is the test seam, CCRC_CADDY_SYSTEM_FILE's shape.
 _check_scope-sweep() {
-  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0 bad=0 ln=0 stale nc_dead=0 nc_live=0 nc_unknown=0
+  local _srv_role="" reg rec hdr tick up mode now age line n nd=0 no=0 bad=0 ln=0 stale nc_dead=0 nc_live=0 nc_unknown=0 nb=0 bmode=shadow
   local -a found=() carry_detail=()
   # Every number this function does ARITHMETIC on is bounded here: a leading zero is an octal error that would abort the check
   # inside `$( … )` (doctor then FAILs it: no verdict line), and an unbounded digit run wraps. The writer re-reads `first=` with the
@@ -8787,6 +8795,15 @@ _check_scope-sweep() {
         *) bad=$((bad + 1)); continue ;;
       esac
       carry_detail+=("${c[1]} ${c[2]} (${c[5]})")
+    elif [[ "$line" =~ ^busy\ (tmux-spawn-[^[:space:]]+\.scope)\ first=${F}\ verdict=(report|carry|would-stop|held|stopped|stop-failed)\ why=([a-z0-9-]+(,[a-z0-9-]+)*)\ session=([^[:space:]]+)\ n=${N}\ procs=([^[:space:]]+)$ ]]; then
+      local -a b=("${BASH_REMATCH[@]}")   # 1 unit, 2 first, 3 verdict, 4 why, 5 final why suffix, 6 session, 7 n, 8 procs
+      case "${b[3]}" in
+        would-stop|held|stopped|stop-failed)
+          found+=("${b[1]} ${b[3]} (busy), its session dead $(( (up - b[2]) / 60 )) min: ${b[7]} process(es) (${b[8]})")
+          nb=$((nb + 1)) ;;
+      esac
+    elif [ "$line" = "busy-mode live" ]; then
+      bmode=live
     elif [ -n "$line" ]; then
       bad=$((bad + 1))   # a line under a good header that no shape reads: said, never PASSed over
     fi
@@ -8796,25 +8813,25 @@ _check_scope-sweep() {
       "let the sweep rewrite it: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
     return 2
   fi
-  local detail="" x carries="${carry_detail[*]}"
+  local detail="" x carries="${carry_detail[*]}" busyw="$nb busy orphan(s), busy mode $bmode"
   if (( nd || no )); then
     for x in "${found[@]}"; do detail="${detail}${detail:+; }$x"; done
     [[ -z "$carries" ]] || detail="$detail; carried unmeasured: $carries"
-    _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode): $detail" \
-      "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; stop advice applies only to the measured dead rows, never to a carry. A service a session still needs is moved into a unit of its own (systemd-run --user --unit ...); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed"
+    _dr_warn scope-sweep "$nd dead pane scope(s) and $no long-lived process(es) in live ones, from the sweep's record (mode $mode), $busyw: $detail" \
+      "read each before acting: \`systemctl --user stop <unit>\` ends EVERY process in a dead scope; stop advice applies only to the measured dead rows, never to a carry. A service a session still needs is moved into a unit of its own (systemd-run --user --unit ...); a forgotten process in a live pane is the session's to end. The sweep stops only scopes inert for six hours, and only when armed; a busy scope of a session provably dead for six hours only when its own switch is on too"
     return 2
   fi
   if (( nc_dead || nc_unknown )); then
-    _dr_warn scope-sweep "$nc_dead dead and $nc_unknown unknown pane scope(s) were carried unmeasured: $carries" \
+    _dr_warn scope-sweep "$nc_dead dead and $nc_unknown unknown pane scope(s) were carried unmeasured ($busyw): $carries" \
       "let the sweep rewrite the measurement: systemctl --user start ccd-scope-sweep.service; then re-run doctor"
     return 2
   fi
   if (( nc_live )); then
     # "the sweep could measure": a scope it could NEVER measure carries a clockless row, and a live scope carried at the
     # hop cap was not read, so an unqualified PASS would claim a reading the sweep did not make.
-    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in measured live ones, excluding $nc_live live pane scope(s) carried unmeasured ($carries) (the sweep's record, ${age}s old, mode $mode)"
+    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in measured live ones, excluding $nc_live live pane scope(s) carried unmeasured ($carries) (the sweep's record, ${age}s old, mode $mode; $busyw)"
   else
-    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode)"
+    _dr_pass scope-sweep "no dead pane scope the sweep could measure, and no process older than a day in a live one (the sweep's record, ${age}s old, mode $mode; $busyw)"
   fi
   return 0
 }
@@ -11146,15 +11163,20 @@ _check_snapshot-posture() {
   _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a secret was stored in $(_dr_join "${dirs[@]}") holds it, and the compromise steps apply to a leaked or restored one"
 }
 
-# `box-settings` (wave 24, D-6599): what the box's ccrc.env ALONE says of each of ccrc's settings (`CCRC_SETTINGS`), read
-# through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the environment hides today is seen
-# before the environment goes: once it does, the file is what every run reads. It reports what the reader reads, never
-# whether a value is valid (each act validates its own). It prints values for those names only, never another line of
-# the file, and through `_upd_redact`; a mirror base's userinfo is masked first, with a scheme or without one (curl
-# reads `user:password@host/...` as http; `_upd_redact` now masks it either way too, D-6748, and this check's own mask
-# runs first), so it never prints. A line
-# the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
-# that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
+# `box-settings` (wave 24, D-6599; box settings wave 2, D18, D-7918): what the box's ccrc.env ALONE says of each of ccrc's
+# settings (`CCRC_SETTINGS`), read through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the
+# environment hides today is seen before the environment goes: once it does, the file is what every run reads. It reads every
+# name, and what it prints of a name the file sets follows the setting's display class in ccrc's class table (`_set_spec`),
+# never a rule of its own: a `value` setting prints `KEY=value` when its check passes (`_set_check`) and the value fits the
+# view (`_set_fits`), `KEY (wider than this view records)` when it does not fit, and `KEY (refused: <words>)` when the check
+# refuses it (`_set_says`, the closed-set words, never the value); an `is-set` setting (the spec's `presence`, D12) prints `KEY (set)`, or the same
+# refusal; an `origin` setting (the release base) prints `custom` and its scheme and host from `_upd_url_origin`, never its
+# path or userinfo, and `custom` alone when its raw text has no http(s) scheme (D-7923); an `omit` setting prints nothing (its reader refusal still WARNs). A refused value stays a PASS, rc 0:
+# only what prints changes. A check that cannot run (`_set_check` rc 2, a library not loaded) is a WARN, `KEY cannot be
+# measured`, never a refusal. It prints values for those names only, never another line of the file, and through
+# `_upd_redact`. A line the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten,
+# the act that reads that setting refuses or falls back, as its own line says. No role skip: every role reads its own
+# settings.
 # A refusal whose cause is MODEL-WIDE (F15) — a line the model of the file (`_box_unit_env`, which the reader asks in this
 # shell) cannot decide, so every setting it is asked for refuses, the setting's own line plain: on Linux the rc-3 arms
 # that set BEW_CAUSE (a CR inside a line, a non-ASCII NAME=value line), on macOS every arm, since there the model refuses
@@ -11164,11 +11186,12 @@ _check_snapshot-posture() {
 # The fleet box's ccd-* sweeps read four of the settings through the same reader (wave 29, D-6981), and the check reports
 # them like the rest, on every role; on a box whose ccrc.env records CCRC_ROLE=server, where no sweep timer runs, a sweep
 # setting the file sets says so (ruling 4). `sweeps` names them; ccrc-settings-census.test.ts holds it equal to the
-# settings the sweeps' own `_ccrc_knob` calls take.
+# settings the sweeps' own `_ccrc_knob` calls take. The graph check still relays `GK_WARN` (`_check_graphify`).
 _check_box-settings() {
-  local k v pre set="" unset="" why="" fix="" other=0 none="none of ccrc's settings" role=""   # a `'` inside "${set:-…}" would open a quote in bash
+  local k v o rc cls shown set="" unset="" why="" fix="" other=0 none="none of ccrc's settings" role=""   # a `'` inside "${set:-…}" would open a quote in bash
   local sweeps=" CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS "
   [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  _set_libs
   local plain="rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned"
   for k in "${CCRC_SETTINGS[@]}"; do
     BUE_FIX=""; BEW_CAUSE=""
@@ -11177,14 +11200,28 @@ _check_box-settings() {
         case "$fix" in *"$BUE_FIX"*) ;; *) fix+="${fix:+; }$BUE_FIX" ;; esac
       else other=1; fi
     elif [ "$KNOB_FROM" = file ]; then
-      v="$KNOB"
-      if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
-        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:/+ ]] || pre="${BASH_REMATCH[0]}"
-        v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
-      fi
-      set+="${set:+, }$k=$v"
-    elif [ "$KNOB_FROM" = empty ]; then set+="${set:+, }$k= (empty: the default)"
-    else unset+="${unset:+,} $k"
+      v="$KNOB"; _set_spec "$k"; cls="$SET_CLASS"; shown=""
+      case "$cls" in
+        omit) ;;   # read above, so a reader refusal still WARNs; never printed, never listed as unset
+        origin)
+          shown="$k=custom"
+          case "$v" in   # D-7923: a RAW value with no http(s) scheme prints `custom` alone
+            [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*)
+              if o="$(_upd_url_origin "$v")" && _set_fits "$k" origin "custom $o"; then shown="$k=custom $o"; fi ;;
+          esac ;;
+        *)
+          _set_check "$k" "$v"; rc=$?
+          case "$rc" in
+            0) if [ "$cls" = is-set ]; then shown="$k (set)"
+               elif _set_fits "$k" value "$v"; then shown="$k=$v"
+               else shown="$k (wider than this view records)"; fi ;;
+            1) shown="$k (refused: $(_set_says "$k"))" ;;
+            *) why+="${why:+; }$k cannot be measured: $SET_CHECK_WHY"; other=1 ;;
+          esac ;;
+      esac
+      [ -z "$shown" ] || set+="${set:+, }$shown"
+    elif [ "$KNOB_FROM" = empty ]; then _set_spec "$k"; [ "$SET_CLASS" = omit ] || set+="${set:+, }$k= (empty: the default)"
+    else _set_spec "$k"; [ "$SET_CLASS" = omit ] || unset+="${unset:+,} $k"
     fi
     if [ "$role" = server ] && { [ "$KNOB_FROM" = file ] || [ "$KNOB_FROM" = empty ]; }; then
       case "$sweeps" in *" $k "*) set+=" (read by the ccd-* sweeps, which do not run on a server-role box)" ;; esac
@@ -11230,8 +11267,8 @@ _check_carry-copies() {
     return 2
   fi
   thr="$KNOB"
-  if ! [[ "$thr" =~ ^[123456789][0123456789]{0,17}$ ]]; then
-    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '$thr' in ~/.ccrc/ccrc.env, so neither figure is judged" \
+  if ! _carry_warn_bytes_ok "$thr"; then
+    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be $(_carry_warn_bytes_says) — the value in ~/.ccrc/ccrc.env is not, so neither figure is judged" \
       "set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line"
     return 2
   fi

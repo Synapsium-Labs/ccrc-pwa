@@ -19,7 +19,7 @@ const SELECTION = ['tick', 'tasksPass', 'namesPass', 'prPass', 'askPass'];
 describe('buildFleetReadModel', () => {
   it('a listed registry keeps its records, names and refused set, and its switches are readSwitches(names)', () => {
     const names = ['demo-a.uuid', RECLAIM_PAUSE_MARKER];
-    const read = { listed: true as const, records: [], names, refused: new Set<string>(), listedIds: new Set(['demo-a']) };
+    const read = { listed: true as const, records: [], names, refused: new Set<string>(), listedIds: new Set(['demo-a']), reused: new Set<string>(), cold: new Set<string>() };
     const model = buildFleetReadModel(read);
     expect(model.listed).toBe(true);
     if (model.listed) {

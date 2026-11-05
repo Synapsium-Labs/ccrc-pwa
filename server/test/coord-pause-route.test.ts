@@ -298,6 +298,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/testbox/switch',
     // D-7902: Settings › Automation › Stop leftovers, the reclaim-pause argument: the operator arms it, no machine lane.
     '/api/coord/pane-scope-stop',
+    // D-7994: the switch of the sweep busy arm and its read, an operator dial, session-gated like the stall-watch door.
+    '/api/coord/scope-sweep',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
   ]);

@@ -68,7 +68,7 @@ const ID_BUILDERS = {
   leaseAudit: 'no-id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
-  coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
+  coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
@@ -491,7 +491,10 @@ const CENSUS: readonly CensusRow[] = [
 
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
-  'server.ts', 'registry.ts', 'watch.ts',
+  'server.ts', 'registry.ts',
+  // fleetstate.ts (console speed S1): the snapshot decision moved out of watch.ts (which no longer names the predicate), and
+  // its purge test vets each missing id with the predicate before reading the registry listing.
+  'fleetstate.ts',
   'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.

@@ -221,6 +221,8 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-7296
     expect(r.code, r.stderr).toBe(0);
     expect(readFileSync(r.dest, 'utf8')).toBe(expected('24G', '8G'));
     expect(r.stderr).toMatch(/WARN: CCRC_SESSION_SLICE_MEMORY_MAX='24GiB' \(from the environment\)/);
+    // W2 characterization (box settings wave 2): the whole tail, before the words move.
+    expect(r.stderr).toContain("WARN: CCRC_SESSION_SLICE_MEMORY_MAX='24GiB' (from the environment) is not a size the session slice takes for MemoryMax (a whole number with an optional K, M, G, T, P or E suffix, at least 1G, or a whole percentage from 1% to 100%) — the session slice keeps MemoryMax=24G (the default)");
   });
 
   it('garbage from ccrc.env says the file, never the environment', () => {
@@ -228,6 +230,7 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-7296
     const r = runFunction(home);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stderr).toMatch(/WARN: CCRC_SESSION_SLICE_SWAP_MAX='6GB' \(from ~\/\.ccrc\/ccrc\.env\)/);
+    expect(r.stderr).toContain("WARN: CCRC_SESSION_SLICE_SWAP_MAX='6GB' (from ~/.ccrc/ccrc.env) is not a size the session slice takes for MemorySwapMax (a whole number with an optional K, M, G, T, P or E suffix, at least 1M, or 0) — the session slice keeps MemorySwapMax=6G (the default)");
   });
 
   it('a ccrc.env line the settings reader refuses keeps the default and warns with the reader\'s own reason', () => {
@@ -251,11 +254,28 @@ describe('_inst_slice_limits renders the template from the box\'s config (D-7296
     expect(readdirSync(home).filter((n) => n.startsWith('out.conf'))).toEqual([]);
   });
 
+  /** The default of every literal `_ccrc_knob <key> <default>` read in a ccd/ccrc text, comment lines left out. */
+  const knobDefaults = (text: string, k: string): string[] => {
+    const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    return [...code.matchAll(new RegExp(`_ccrc_knob ${k} ([^\\s;]+)`, 'g'))].map((m) => m[1]!);
+  };
+
   it('the defaults it reads with are the template\'s own values, so unset renders the template', () => {
-    const code = readFileSync(CCRC, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-    const knob = (k: string): string[] => [...code.matchAll(new RegExp(`_ccrc_knob ${k} ([^\\s;]+)`, 'g'))].map((m) => m[1]!);
-    expect(knob('CCRC_SESSION_SLICE_MEMORY_MAX')).toEqual(['24G']);
-    expect(knob('CCRC_SESSION_SLICE_SWAP_MAX')).toEqual(['6G']);
+    const text = readFileSync(CCRC, 'utf8');
+    // Every literal read takes the template's default: the installer's, and `ccrc settings`' own file-mode read of the
+    // same two keys (box settings wave 2, `cmd_settings`), which census C2 holds to one default per setting.
+    expect(knobDefaults(text, 'CCRC_SESSION_SLICE_MEMORY_MAX').length).toBeGreaterThan(0);
+    expect(new Set(knobDefaults(text, 'CCRC_SESSION_SLICE_MEMORY_MAX'))).toEqual(new Set(['24G']));
+    expect(knobDefaults(text, 'CCRC_SESSION_SLICE_SWAP_MAX').length).toBeGreaterThan(0);
+    expect(new Set(knobDefaults(text, 'CCRC_SESSION_SLICE_SWAP_MAX'))).toEqual(new Set(['6G']));
+  });
+
+  it('CONTROL: one more literal read of a slice key with another default (planted in memory) is not the template\'s set, so the row above would red', () => {
+    const planted = `${readFileSync(CCRC, 'utf8')}\n_ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 25G file\n`;
+    expect(new Set(knobDefaults(planted, 'CCRC_SESSION_SLICE_MEMORY_MAX'))).not.toEqual(new Set(['24G']));
+    expect(knobDefaults(planted, 'CCRC_SESSION_SLICE_MEMORY_MAX')).toContain('25G');
+    // The same extraction over the real text is the template's set: the planted line alone moved it.
+    expect(new Set(knobDefaults(readFileSync(CCRC, 'utf8'), 'CCRC_SESSION_SLICE_MEMORY_MAX'))).toEqual(new Set(['24G']));
   });
 });
 

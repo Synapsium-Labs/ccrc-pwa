@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import type { BoxSettingsRead, NodeWire } from '../../../shared/api';
 import {
-  BOX_SETTINGS_READ_TEXT, BOX_SETTINGS_TEXT, ageLine, backupsLine, boxSettingsOf, diskLine, settingLine,
+  BOX_SETTINGS_READ_TEXT, BOX_SETTINGS_TEXT, ageLine, backupsLine, boxSettingsOf, diskLine, familyGroups, familyLine, settingLine,
 } from './boxSettingsWords';
 import { SETTINGS_AMBER_NOTE } from './settingsText';
 import './fleet.css';
@@ -23,21 +23,29 @@ function Readout({ read, role }: { read: Extract<BoxSettingsRead, { state: 'ok' 
   return (
     <>
       <p className={age.warn ? SETTINGS_AMBER_NOTE : 'settings-note'}>{age.text}</p>
-      <dl className="box-settings-rows">
-        {read.doc.settings.map((row) => {
-          const line = settingLine(row, role);
-          return (
-            <div key={row.key} className="box-settings-row">
-              <dt className="box-settings-key">{line.key}</dt>
-              <dd className="box-settings-value">
-                <span>{line.value}</span>
-                {line.from !== null && <span className="settings-note">{line.from}</span>}
-              </dd>
-              {line.why !== null && <dd className={`box-settings-why ${DANGER}`}>{line.why}</dd>}
-            </div>
-          );
-        })}
-      </dl>
+      {familyGroups(read.doc.settings, role).map((g) => (g.used ? (
+        <details key={g.family} className="settings-release-fold box-settings-family" data-family={g.family} open={g.refused + g.unmeasured > 0 || g.family === 'other'}>
+          <summary><span>{familyLine(g)}</span></summary>
+          <dl className="box-settings-rows">
+            {g.rows.map((row) => {
+              const line = settingLine(row, role);
+              return (
+                <div key={row.key} className="box-settings-row">
+                  <dt className="box-settings-key">{line.key}</dt>
+                  <dd className="box-settings-value">
+                    <span>{line.value}</span>
+                    {line.from !== null && <span className="settings-note">{line.from}</span>}
+                    {line.mark !== null && <span className="settings-note">{line.mark}</span>}
+                  </dd>
+                  {line.why !== null && <dd className={`box-settings-why ${DANGER}`}>{line.why}</dd>}
+                </div>
+              );
+            })}
+          </dl>
+        </details>
+      ) : (
+        <p key={g.family} className="box-settings-line settings-note">{familyLine(g)}</p>
+      )))}
       <p className={backups.danger ? `box-settings-line ${DANGER}` : 'box-settings-line'}>{backups.text}</p>
       <p className={disk.danger ? `box-settings-line ${DANGER}` : 'box-settings-line'}>{disk.text}</p>
     </>

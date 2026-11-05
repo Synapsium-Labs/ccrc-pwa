@@ -8,6 +8,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import type { Runner } from '../src/exec.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -51,12 +52,20 @@ const monotonicMs = (): number => Date.now() - stepped;
 /** A wall-clock step by `ms` (negative: back): the wall clock moves, the monotonic clock does not. */
 function step(ms: number): void { vi.setSystemTime(Date.now() + ms); stepped += ms; }
 
+/** The default fake (every exec exits 1, no session live) except that the tick's ONE `tmux list-panes -a` answers like a
+ *  healthy tmux with one unrelated session: a failed listing warns by design (console speed S1), and these rows assert
+ *  the lanes are silent. */
+const healthyTmux: Runner = async (cmd, args) =>
+  cmd === 'tmux' && args[0] === 'list-panes' && args[1] === '-a'
+    ? { ran: true, code: 0, stdout: 'cc-other 1 0 1\n', stderr: '' }
+    : { ran: true, code: 1, stdout: '', stderr: '' };
+
 interface Opts { role?: NodeRole; coord?: boolean; catalogue?: CataloguePoller; refreshCaps?: () => Promise<void> }
 
 function fixture(o: Opts = {}) {
   if (mocks.writeServerCaps.getMockImplementation() === undefined) mocks.writeServerCaps.mockResolvedValue({ ok: true });
   const home = mkTmp('ccrc-lane-beats-');
-  const base = testDeps(home);
+  const base = testDeps(home, healthyTmux);
   seedRoster(home, ROSTER);                                    // after testDeps, which seeds the default; the tick's disk sweep re-reads it
   stepped = 0;
   mkdirSync(base.cfg.registryDir, { recursive: true });       // LISTABLE: the tick reaches every lane

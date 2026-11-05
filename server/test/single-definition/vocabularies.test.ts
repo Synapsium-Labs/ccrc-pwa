@@ -1420,3 +1420,27 @@ describe('W5-V3: the lease transition vocabularies, one definition each, in dele
     });
   }
 });
+
+// Delegation broker wave 5, PR4 (Task 5.4.3, W5-V4): the orphan hold's two vocabularies live beside their one L1 owner,
+// `server/src/coord/delegation-orphan-hold.ts`, and the box rung's held set and margin say the same thing in bash.
+describe('W5-V4: the orphan hold vocabularies, one definition each, in delegation-orphan-hold.ts, and the box rung agrees', () => {
+  const OWNER = 'server/src/coord/delegation-orphan-hold.ts';
+  const VOCABS = [
+    ['DELEGATION_ORPHAN_HELD_STATES', ['adopted', 'retained', 'transferring']],
+    ['DELEGATION_UNREADY_HOLD_CLASSES', ['claude', 'superpowers']],
+  ] as const;
+  const declaredIn = (decl: RegExp): string[] => ALL.filter((f) => decl.test(readFileSync(f, 'utf8'))).map(rel);
+  for (const [arr, members] of VOCABS) {
+    it(`${arr} is declared exactly once, in ${OWNER}, with the plan's members in the plan's order`, async () => {
+      expect(declaredIn(new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${arr}\\b`, 'm')), arr).toEqual([OWNER]);
+      const mod = (await import('../../src/coord/delegation-orphan-hold.js')) as unknown as Record<string, unknown>;
+      expect(mod[arr], `${arr} is exported`).toEqual(members);
+    });
+  }
+  it("the box rung's held states and margin equal the server's", async () => {
+    const mod = await import('../../src/coord/delegation-orphan-hold.js');
+    const lib = readFileSync(path.join(ccrcRoot, 'ccd', 'lib', 'delegation-lease.sh'), 'utf8');
+    expect(/^__DL_HOLDING='([a-z -]+)'$/m.exec(lib)?.[1]?.split(' ')).toEqual([...mod.DELEGATION_ORPHAN_HELD_STATES]);
+    expect(Number(/^__DL_HOLD_MARGIN_S=(\d+)\b/m.exec(lib)?.[1]) * 1000).toBe(mod.DELEGATION_ORPHAN_HOLD_MARGIN_MS);
+  });
+});

@@ -837,6 +837,62 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
     expect(turns()).toEqual([]);
   });
 
+  // W2 characterization (box settings wave 2): the whole-number check's exact sentences and the order of its tests, before it moves.
+  it.each([['-1'], ['+5']])('W2-pin: CCRC_KEEPALIVE_FRESH=%s from the environment refuses with the whole-number sentence', (value) => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ CCRC_KEEPALIVE_FRESH: value });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`keepalive: CCRC_KEEPALIVE_FRESH must be a whole number — got '${value}', as set in the environment; nothing was measured`);
+    expect(turns()).toEqual([]);
+  });
+
+  it('W2-pin: the whole-number loop runs before the representability test, so the first refusal names the timeout', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ CCRC_KEEPALIVE_FRESH: '99999999999999999999', CCRC_KEEPALIVE_TURN_TIMEOUT: '1h' });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr.split('\n').find((l) => l.includes('must be'))).toBe("keepalive: CCRC_KEEPALIVE_TURN_TIMEOUT must be a whole number — got '1h'; nothing was measured");
+    expect(r.stderr).not.toContain('representable');
+    expect(turns()).toEqual([]);
+  });
+
+  it('W2-pin: a freshness of 30m beside a timeout of 1h: the only `must be` line names the freshness', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    const r = run({ CCRC_KEEPALIVE_FRESH: '30m', CCRC_KEEPALIVE_TURN_TIMEOUT: '1h' });
+    expect(r.status, r.stderr).toBe(1);
+    const lines = r.stderr.split('\n').filter((l) => l.includes('must be'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('CCRC_KEEPALIVE_FRESH must be a whole number');
+    expect(turns()).toEqual([]);
+  });
+
+  // W2 (box settings wave 2): the freshness check is `_keepalive_fresh_ok`, carried by the generated library. A library that
+  // lacks it refuses before the check runs, with a sentence that says the library did not load: no value named, no claim
+  // that a valid value is wrong, and no command-not-found line (review 1487 F5).
+  it('W2: a library without _keepalive_fresh_ok fails closed: exit 1, the library-did-not-load sentence, no turn', () => {
+    plantWrapper('claude-a', renders('claude-a'));
+    plantLimits('claude-a', 9, 9999);
+    fs.mkdirSync(j('bin', 'lib'), { recursive: true });
+    fs.copyFileSync(KEEPALIVE, j('bin', 'ccd-telemetry-keepalive'));
+    const lib = fs.readFileSync(path.resolve(__dirname, '../../ccd/lib/ccrc-settings.sh'), 'utf8');
+    const cut = lib.replace(/^_keepalive_fresh_ok\(\) \{\n[\s\S]*?\n\}\n/m, '');
+    expect(cut, 'non-vacuity: the function was cut from the fixture copy').not.toBe(lib);
+    expect(cut).not.toContain('_keepalive_fresh_ok() {');
+    fs.writeFileSync(j('bin', 'lib', 'ccrc-settings.sh'), cut);
+    const r = spawnSync('bash', [j('bin', 'ccd-telemetry-keepalive')], {
+      encoding: 'utf8',
+      env: { ...inherited(), HOME: home, CCRC_KEEPALIVE_TURN_TIMEOUT: '20', CCRC_KEEPALIVE_FRESH: '1800', PATH: `${j('fixture-bin')}:${process.env.PATH}` },
+    });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain("the settings library this check needs did not load ('ccrc update --force' places it); nothing was measured");
+    expect(r.stderr).not.toContain('must be a whole number');
+    expect(r.stderr).not.toContain('1800');
+    expect(r.stderr).not.toMatch(/command not found/);
+    expect(turns()).toEqual([]);
+  });
+
   it.each([
     ['9223372036854775808', 'file'], ['9223372036854775808', 'environment'],
     ['99999999999999999999', 'file'], ['99999999999999999999', 'environment'],

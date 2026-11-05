@@ -451,6 +451,17 @@ function limitsPayload(five: number, seven: number, fiveReset: number | null = 1
   });
 }
 
+/** A payload carrying the weekly window and no `five_hour` block at all. */
+function weeklyOnlyPayload(seven: number, sevenReset: number | null = 1_800_600_000): string {
+  return JSON.stringify({
+    model: { display_name: 'Opus 5' },
+    workspace: { current_dir: '/nonexistent-for-this-test' },
+    rate_limits: { seven_day: { used_percentage: seven, resets_at: sevenReset } },
+  });
+}
+
+const nowS = (): number => Math.floor(Date.now() / 1000);
+
 /** Plants the row a previous session would have left. Written by hand rather
  *  than by a first run so `ts` is a value a test can assert stayed put — the
  *  point of the guard is that a dropped reading re-stamps nothing. */
@@ -550,6 +561,162 @@ describe('statusline-command.sh keeps the account row monotonic within a window 
     // one, so a wedged row is the more expensive silence.
     expect(runUsage(home, limitsPayload(41, 63)).code).toBe(0);
     expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
+  });
+
+  // A PAYLOAD WITH NO 5H READING, and the writer used to gate the whole row on
+  // one. Nothing here claims how often a real payload has this shape: it is the
+  // shape the code had no answer for. `five` is written as null, the spelling
+  // every reader already takes as unknown (`_limit_field` says "", `readLimits`
+  // keeps null), and never 0, which is a measurement.
+  it('a payload with no 5h window publishes the weekly figure and leaves five null, not 0', () => {
+    const home = seed('ccrc-statusline-sevenonly-');
+    const before = Math.floor(Date.now() / 1000);
+    expect(runUsage(home, weeklyOnlyPayload(63)).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Record<string, number | null>;
+    expect(row).toMatchObject({ five: null, seven: 63, fiveResetAt: null, sevenResetAt: 1_800_600_000 });
+    expect(row['ts']).toBeGreaterThanOrEqual(before);
+  });
+
+  // The defect itself: the row a five-less payload could never advance. Its 5h
+  // and 7d windows have both ended, so every reader calls it unmeasured until
+  // something publishes over it.
+  it('a five-less payload advances a row whose windows have ended, into the new weekly window', () => {
+    const home = seed('ccrc-statusline-sevenadvance-');
+    seedRow(home, { five: 30, seven: 98, ts: 1, fiveResetAt: 2, sevenResetAt: 3 });
+    expect(runUsage(home, weeklyOnlyPayload(4)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: null, seven: 4, fiveResetAt: 2, sevenResetAt: 1_800_600_000 });
+  });
+
+  it('a 5h reading replaces the null a five-less payload left', () => {
+    const home = seed('ccrc-statusline-fivereturns-');
+    seedRow(home, { five: null, seven: 63, ts: 1, fiveResetAt: null, sevenResetAt: 1_800_600_000 });
+    expect(runUsage(home, limitsPayload(41, 63)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63, fiveResetAt: 1_800_000_000 });
+  });
+
+  // The verdict's `jq` used to be handed `--argjson f ""` on this path, which is
+  // a jq error, which leaves the verdict empty, which PUBLISHES: every older-row
+  // check switched off for exactly the payloads that have no five.
+  it('a five-less reading BEHIND on the 7d window is dropped whole, like any other older reading', () => {
+    const home = seed('ccrc-statusline-sevenbehind-');
+    const row = { five: null, seven: 63, ts: 1, fiveResetAt: null, sevenResetAt: 1_800_600_000 };
+    seedRow(home, row);
+    expect(runUsage(home, weeklyOnlyPayload(60)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual(row);
+  });
+
+  it('a five-less reading whose 7d resets_at has gone BACKWARDS is dropped whole', () => {
+    const home = seed('ccrc-statusline-sevenrewound-');
+    const row = { five: null, seven: 2, ts: 1, fiveResetAt: null, sevenResetAt: 1_801_200_000 };
+    seedRow(home, row);
+    expect(runUsage(home, weeklyOnlyPayload(90)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual(row);
+  });
+
+  // `null < 41` is TRUE in jq, so a five-less payload that still names the 5h
+  // window would read as undercutting it on the value it does not have.
+  it('a 5h block with a resets_at and no percentage is not a reading of 0', () => {
+    const home = seed('ccrc-statusline-resetonly-');
+    seedRow(home, { five: 41, seven: 63, ts: 1, fiveResetAt: 2, sevenResetAt: 1_800_600_000 });
+    const payload = JSON.stringify({
+      model: { display_name: 'Opus 5' },
+      workspace: { current_dir: '/nonexistent-for-this-test' },
+      rate_limits: { five_hour: { resets_at: 2 }, seven_day: { used_percentage: 64, resets_at: 1_800_600_000 } },
+    });
+    expect(runUsage(home, payload).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: null, seven: 64 });
+  });
+
+  // A LIVE 5H READING OUTRANKS A PAYLOAD THAT HAS NONE. Sessions on one account
+  // are all writers of this row, so publishing here would turn a measured 5h
+  // figure back into unknown on every render, and `_avail` refuses only on a
+  // KNOWN half: a lane measured at the ceiling would read as free. These two rows
+  // are the two ways a five can be live, and the second is the row a payload with
+  // no `resets_at` leaves, which only its age can retract.
+  it.each([
+    ['a 5h window still open', () => ({ five: 99, seven: 63, ts: nowS() - 60, fiveResetAt: nowS() + 3600, sevenResetAt: 1_800_600_000 })],
+    ['no resets_at, inside its 5h', () => ({ five: 100, seven: 63, ts: nowS() - 60, fiveResetAt: null, sevenResetAt: null })],
+  ] as const)('a five-less payload never erases a live 5h reading: %s', (_label, make) => {
+    const home = seed('ccrc-statusline-fivelive-');
+    const row = make();
+    seedRow(home, row);
+    expect(runUsage(home, weeklyOnlyPayload(64)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual(row);
+  });
+
+  it.each([
+    ['its own resets_at has passed', () => ({ five: 99, seven: 63, ts: nowS() - 60, fiveResetAt: nowS() - 1, sevenResetAt: 1_800_600_000 })],
+    ['no resets_at, past its 5h', () => ({ five: 100, seven: 63, ts: nowS() - 18_001, fiveResetAt: null, sevenResetAt: null })],
+  ] as const)('a 5h reading the readers already retract does not hold the row: %s', (_label, make) => {
+    const home = seed('ccrc-statusline-fivedead-');
+    seedRow(home, make());
+    expect(runUsage(home, weeklyOnlyPayload(64)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: null, seven: 64 });
+  });
+
+  // THE NULL KEEPS THE WINDOW. `rewound` compares `resets_at` with the row's
+  // `fiveResetAt`, so a five-less publish that blanked it would let the next
+  // reading of an earlier window through with a fresh `ts`. Each sequence runs
+  // the real script twice: the five-less payload, then the idle session's.
+  describe('a five-less publish leaves the older-row checks their window', () => {
+    const sevenReset = 1_800_600_000;
+    /** The row after a five-less payload lands on a 5h figure that has lapsed. */
+    const afterFiveLess = (prefix: string, lapsedAt: number): { home: string; row: unknown } => {
+      const home = seed(prefix);
+      seedRow(home, { five: 30, seven: 51, ts: nowS() - 60, fiveResetAt: lapsedAt, sevenResetAt: sevenReset });
+      expect(runUsage(home, weeklyOnlyPayload(51, sevenReset)).code).toBe(0);
+      const row = limitsRow(home, 'zeta');
+      expect(row).toMatchObject({ five: null, seven: 51, fiveResetAt: lapsedAt, sevenResetAt: sevenReset });
+      return { home, row };
+    };
+
+    it('refuses a reading of an earlier 5h window', () => {
+      const t1 = nowS() - 60;
+      const { home, row } = afterFiveLess('ccrc-statusline-keptwindow-', t1);
+      expect(runUsage(home, limitsPayload(80, 51, t1 - 18_000, sevenReset)).code).toBe(0);
+      expect(limitsRow(home, 'zeta')).toEqual(row);
+    });
+
+    it('refuses a reading of the ended window itself, whose figure the row no longer has to compare', () => {
+      const t1 = nowS() - 60;
+      const { home, row } = afterFiveLess('ccrc-statusline-endedwindow-', t1);
+      expect(runUsage(home, limitsPayload(80, 51, t1, sevenReset)).code).toBe(0);
+      expect(limitsRow(home, 'zeta')).toEqual(row);
+    });
+
+    it('takes a reading of a newer 5h window', () => {
+      const t1 = nowS() - 60;
+      const { home } = afterFiveLess('ccrc-statusline-newwindow-', t1);
+      expect(runUsage(home, limitsPayload(5, 52, t1 + 18_000, sevenReset)).code).toBe(0);
+      expect(limitsRow(home, 'zeta')).toMatchObject({ five: 5, seven: 52, fiveResetAt: t1 + 18_000 });
+    });
+
+    it('takes a reading of a window still open, which a kept reset does not hold back', () => {
+      const open = nowS() + 3600;
+      const home = seed('ccrc-statusline-openwindow-');
+      seedRow(home, { five: null, seven: 51, ts: nowS() - 60, fiveResetAt: open, sevenResetAt: sevenReset });
+      expect(runUsage(home, limitsPayload(20, 51, open, sevenReset)).code).toBe(0);
+      expect(limitsRow(home, 'zeta')).toMatchObject({ five: 20, fiveResetAt: open });
+    });
+
+    it('stays null when the row has no window to keep', () => {
+      const home = seed('ccrc-statusline-nowindow-');
+      seedRow(home, { seven: 51, ts: 1, fiveResetAt: 'not a number', sevenResetAt: sevenReset });
+      expect(runUsage(home, weeklyOnlyPayload(52, sevenReset)).code).toBe(0);
+      expect(limitsRow(home, 'zeta')).toMatchObject({ five: null, seven: 52, fiveResetAt: null });
+    });
+  });
+
+  // E6 in the keepalive's spec: a render before any API call has neither window,
+  // and stamping a fresh `ts` over it would invent a report nobody made.
+  it.each([
+    ['rate_limits null', null],
+    ['rate_limits empty', {}],
+  ] as const)('a payload with neither window still writes nothing: %s', (_label, limits) => {
+    const home = seed('ccrc-statusline-noneither-');
+    const payload = JSON.stringify({ model: { display_name: 'Opus 5' }, rate_limits: limits });
+    expect(runUsage(home, payload).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toBeNull();
   });
 
   // The other half of "many writers, one row": the staging path used to be one

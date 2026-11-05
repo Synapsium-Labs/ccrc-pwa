@@ -4303,6 +4303,9 @@ button.proj-card-pool::before {
 .box-settings-why { font-size: var(--fs-meta); line-height: var(--lh-normal); }
 .box-settings-line { font-size: var(--fs-sm); line-height: var(--lh-normal); }
 .box-settings-danger { color: var(--status-dead-text); }
+/* D17: one fold per family. `.settings-release-fold` already gives the summary its tap floor; these two are layout only. */
+.box-settings-family { display: grid; gap: var(--sp-1); min-width: 0; }
+.box-settings-family > .box-settings-rows { padding-inline-start: var(--sp-3); }
 
 /* THE RESUME BANNER (accounts plan Task A23, D-7871 (3); spec §6.2): one line and Continue, in flow, never over the
    composer or the tab bar. The fleet's banner stack places it on a desk and on a phone's fleet view; on a phone's
