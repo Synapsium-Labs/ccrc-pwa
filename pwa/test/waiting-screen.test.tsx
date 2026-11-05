@@ -116,6 +116,14 @@ describe('the Waiting on you list', () => {
     expect(within(all).getByText('Lift the cap')).toBeTruthy();
   });
 
+  it('filtered to the sessions in no programme, Recently cleared is not drawn: every cleared item is a programme\'s', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+    const view = waitingView({ cleared: [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN })] });
+    open({ view, sessions: [asking], programme: '' });
+    expect(screen.getByText('A question')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+  });
+
   it('a question row links to its session and is never tickable', () => {
     const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Status flag question', bucketSince: NOW - 6 * MIN });
     const runs = [runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-ask' })];
