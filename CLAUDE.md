@@ -278,7 +278,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   recorded, not always, D-7780), the guard suites that scan the whole tree or the diff
   (censuses, single-definition, deviation-refs, growth-check, ownership, rings, ccd-contexts, dtbd, `typecheck-tests`,
   `oss-metadata`, the `*-pin` suites less `PIN_MAP_CARRIED`, and every test whose source runs `git ls-files`,
-  `git diff` or `git merge-base` itself: `TREE_READER`; and every test that lists a source tree itself — `server/src`,
+  `git diff` or `git merge-base` itself: `TREE_READER`, less `HEAVY_TREE_READERS`, the shellcheck ratchet, D-7995; and every test that lists a source tree itself — `server/src`,
   `shared`, `pwa/src`, `agent/src` or `ccd` — whose file took at most `SCANNER_MAX_MS` on the last full run, the heavier
   ones named in the summary and left to the queue: the full run RECORDS which tests list a root (a setup file wraps fs's
   listers, `.github/ci/tree-scanners.mjs`, published as the `tree-scanners` artifact beside `testtimes`), unioned with
@@ -504,6 +504,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   not on coordination state, are server-composed only, and are not covered by that rule (`ws-lease-audit` is read-only:
   it writes nothing to any durable path, so it is not on the SAFETY list; its residuals are its dirt readers' scratch
   files under `$TMPDIR` and a gitattributes clean filter that `git status` and `git hash-object --path` still run).
+  `ws-add --base` (a child workspace's start point) is a workspace-lifecycle flag too and not covered by it: the
+  server composes it, behind `ws-add-base-v1`, but nothing refuses a session that runs it itself.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`
   on missing — **except FOUR deliberately ungated operator doors: `POST /api/coord/pause`, `POST
   /api/runs/:id/abandon`, `POST /api/claims/:id/break` and `POST /api/runs/:id/reclaim`** (D-282 (was D-B4-9),

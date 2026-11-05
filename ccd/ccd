@@ -7503,7 +7503,7 @@ _ws_wrapper_why() {   # project wrapper class -> WS_LANE_WHY = why the NAMED lan
   _ws_lane_why "$w" "$WS_PPS" "$cls"
 }
 
-cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
+cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] project [slug] — new worktree + session for an existing project
   # PER-WORKER RC and the DECLARED ACTOR, both stripped before any positional
   # binds — `cmd_ws_hold`'s shape (ccd:3891) and its reason: a run like
   # `ws-add --no-rc <project> --surface agent --actor '…'` must not bind
@@ -7538,6 +7538,11 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # non-blank, no control character, `_lc_dec_ok` — and for the same reasons. `lc_gt`/`lc_gw` are GIVENNESS, as
   # `lc_gs`/`lc_ga` are: `--title ''` is a declared blank, and refusing it is not the same act as never being asked.
   local lc_title='' lc_gt=0 lc_wrapper='' lc_gw=0
+  # THE START POINT OF A CHILD (`--base`, delegation broker wave 5 PR3, D-7827): a full commit id `git worktree add`
+  # checks the workspace out at, and NOTHING ELSE. `base` below stays the origin ref and is what `$REG/<id>.base`
+  # records, because `cmd_pr_open`, the archive, `_pr_bind_facts`, the reap, `ws-audit` and the server all read that
+  # file as a ref name; the start point is journalled only, as `meas.startpoint`. `lc_gb` is givenness, as `lc_gt` is.
+  local lc_base='' lc_gb=0 lc_sp=() lc_start=''
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -7551,27 +7556,27 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       # `--title` is the display title an operator gave the workspace; `--wrapper` is the account they chose for it.
       # BOTH BEFORE THE PROJECT, AT THE CALLER: an older ccd binds an unknown `--` token as a POSITIONAL (D-6164), so
       # a flag it does not know leads into the project or slug slot and is refused there — and one placed AFTER
       # `project slug` would be dropped unread and the workspace created on the least-loaded lane with exit 0. The
       # caller gates each on `ccd caps` (`ws-title-v1`, `ws-wrapper-v1`); this loop parses either position.
-      --title)     [[ $# -ge 2 ]] && (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --title)     [[ $# -ge 2 ]] && (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gt=1; lc_title="$2"; shift 2 ;;
-      --title=*)   (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gt=1; lc_title="${1#--title=}"; shift ;;
-      --wrapper)   [[ $# -ge 2 ]] && (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --title=*)   (( ! lc_gt )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gt=1; lc_title="${1#--title=}"; shift ;;
+      --wrapper)   [[ $# -ge 2 ]] && (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gw=1; lc_wrapper="$2"; shift 2 ;;
-      --wrapper=*) (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gw=1; lc_wrapper="${1#--wrapper=}"; shift ;;
+      --wrapper=*) (( ! lc_gw )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gw=1; lc_wrapper="${1#--wrapper=}"; shift ;;
       # REPEATABLE, one field per flag — the shape `cmd_route --set` already
       # has, so a dispatcher composing one argv for both verbs writes the same
       # pairs. Validated below, before anything on disk is touched.
-      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_route+=("$2"); shift 2 ;;
       --route=*)   lc_route+=("${1#--route=}"); shift ;;
       # D-6794: the --route pairs on this argv are the SERVER'S DEFAULT row for the run kind, not a class anybody
@@ -7579,9 +7584,14 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # seven-day ceiling still places; the pairs are recorded all the same.
       --route-default) lc_rdef=1; shift ;;
       # The minting run (spec §5.1) — what makes this workspace a CHILD; see `_child_runid_valid`.
-      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
+      --child)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"
                    lc_gc=1; lc_child="$2"; shift 2 ;;
       --child=*)   lc_gc=1; lc_child="${1#--child=}"; shift ;;
+      # ONE LINE EACH, and only these two lines spell the arm: `ccd-ws-add-base.test.ts`'s W5-B8 strips exactly them to
+      # build an older ccd, which binds a leading `--base` as the project and refuses (D-6164). A flag taken as the value is
+      # refused by the value check below, so this arm checks arity only.
+      --base)      [[ $# -ge 2 ]] && (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="$2"; shift 2 ;;
+      --base=*)    (( ! lc_gb )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; lc_gb=1; lc_base="${1#--base=}"; shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -7638,15 +7648,38 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # the box exactly as it found it (spec §5.3).
   (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
   (( lc_gc )) && ! _child_runid_valid "$lc_child" && die "--child needs a run id (a positive integer), got: $lc_child"
+  # `--base` IS A CHILD'S ONLY, and 40 or 64 lowercase hex: the SHAPE of a full id of either object format. Which length
+  # this repository's ids have, and that the value names a commit object itself, are asked of git below. The class is
+  # spelled out, not a range, so no locale's collation can widen it (D-2522's shape). Above the project.
+  (( lc_gb )) && { (( lc_gc )) && [[ $lc_base =~ ^([0123456789abcdef]{40}|[0123456789abcdef]{64})$ ]] \
+    || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]"; }
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
   # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
   # caught it, unedited, which is what that gate is for.
-  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
+  local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--base <commit>] [--surface <word>] [--actor <text>] [--title <text>] [--wrapper <lane>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (a dot-leading id aliases ccd's own hidden registry files, a dash-leading one spells a flag — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
+  # A FULL COMMIT ID OF THIS REPOSITORY, asked of the main checkout (a linked worktree shares its object store) with every
+  # git call hook-free and config-pinned (`_ws_reclaim_contained`) and no lazy fetch from a promisor remote, BEFORE the disk
+  # floor, the placement read, the add lock, the worktree and the row. Two facts, so `meas.startpoint` names exactly the
+  # commit the tree starts at (D-7981, D-7982). The value's length is this repository's id length (`--show-object-format`):
+  # a 40-hex PREFIX in a sha256 repository, or a 64-hex REF NAME in a sha1 one, refuses, and an unreadable format refuses.
+  # And the object's own type is `commit`: the check never peels (`^{commit}` would take an annotated tag's id), so a blob,
+  # a tree, a tag or a missing id refuses. Together they prove an object id of this repository's format. The ACT then
+  # starts at that object: `worktree add -b` hands its start point to `git branch`, which looks a NAME up as a ref first,
+  # so a branch or tag named exactly the id would divert it (review 1457 F1); the start point is `<id>^{commit}`, which no
+  # ref can be named (`^` is not allowed in one), and on a commit the peel is a no-op. Git never prompts (no credentials).
+  if (( lc_gb )); then
+    local lc_fmt lc_len=0
+    lc_fmt=$(GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 _ws_reclaim_contained git -C "$main" rev-parse --show-object-format 2>/dev/null) || lc_fmt=''
+    case "$lc_fmt" in sha1) lc_len=40 ;; sha256) lc_len=64 ;; *) die "ws-add: --base: the object format of $project could not be read (${lc_fmt:-no answer}), so a full commit id cannot be told from a prefix or a ref name — nothing was touched" ;; esac
+    (( ${#lc_base} == lc_len )) && [[ $(GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 _ws_reclaim_contained git -C "$main" cat-file -t "$lc_base" 2>/dev/null) == commit ]] \
+      || die "ws-add: --base $lc_base is not a full $lc_fmt commit id of $project"
+    lc_sp=(meas.startpoint "$lc_base"); lc_start="$lc_base^{commit}"
+  fi
 
   # Before anything is created: no worktree, no branch, no registry entry, no
   # session. A refusal here must leave the box exactly as it found it.
@@ -7790,7 +7823,9 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # so git's branch.autoSetupMerge default would otherwise make origin/main this
   # branch's upstream, and `git pull` in the workspace would merge main into it.
   local branch="ws/$slug"
-  git -C "$main" worktree add -b "$branch" --no-track "$wt" "$base" --quiet \
+  # The START POINT is `--base`'s commit, peeled so no ref of that name can divert it, when one was given, else `$base`;
+  # `$base` is what the row records either way.
+  git -C "$main" worktree add -b "$branch" --no-track "$wt" "${lc_start:-$base}" --quiet \
     || die "git worktree add failed for $wt"
 
   # Shared across every worktree of this repo, local only, never committed.
@@ -8087,7 +8122,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   (( lc_gs )) && lc_dec+=(dec.surface "$lc_surface")
   (( lc_ga )) && lc_dec+=(dec.actor "$lc_actor")
   _lc_done create "$id" "" "${lc_dec[@]}" meas.project "$project" meas.workspace "$slug" \
-    meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw"
+    meas.branch "$branch" meas.base "$base" meas.workdir "$wt" meas.wrapper "$hw" "${lc_sp[@]}"
   _spawn_start "$id" new || return $?
   _reg_claim "$id"
   _ws_supervise "$id"
@@ -9282,6 +9317,7 @@ EOF
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit   # delegation broker wave 5: the lease carrier's one writer (PR1) and its read-only audit (PR2), ccd/lib/delegation-lease.sh
+  echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo orphan-lease-v1   # delegation broker wave 5 PR4: the orphan ladder's lease rung (`_dl_orphan_rung`, ccd/lib/delegation-lease.sh)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
@@ -14486,7 +14522,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     else
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       case "$REAP_VERDICT" in
-        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+        not-a-workspace|not-a-child|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record|branch-gone-checked-out)
           _lc_emit reclaim refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
       esac
     fi
@@ -32808,6 +32844,30 @@ _ws_reclaim_tip_read() {   # main branch -> 0 with REAP_TIP (the tip; '' when th
   return 1
 }
 
+_WS_HEAD_UNBORN_WHY=''
+_ws_reclaim_head_unborn() {   # workdir branch -> 0 when HEAD is still SYMBOLIC to that branch and the last
+  #                                `_ws_reclaim_tip_read` PROVED the branch absent; 1 when it is not so; 2 when
+  #                                HEAD could not be read. _WS_HEAD_UNBORN_WHY says why on 0 and on 2.
+  # THE ONE PREDICATE OF THE LADDER AND THE PIN (D-5944), so the audit never
+  # promises what the pin refuses. An `update-ref -d` under a checkout leaves
+  # HEAD naming nothing, and no WIP commit can stand on it. A DETACHED HEAD on a
+  # gone branch is not this shape: it names a commit, and the pin keeps it.
+  # `symbolic-ref` answers 1 for a detached HEAD; any other failure is a read
+  # that did not run, which is never "not so".
+  local ref rc
+  _WS_HEAD_UNBORN_WHY=''
+  [[ "$RECLAIM_BRANCHSTATE" == absent ]] || return 1
+  ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null); rc=$?
+  if (( rc == 0 )); then
+    [[ "$ref" == "refs/heads/$2" ]] || return 1
+    _WS_HEAD_UNBORN_WHY="$1 still has $2 checked out, but $2 is gone from its repository — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
+    return 0
+  fi
+  (( rc == 1 )) && return 1
+  _WS_HEAD_UNBORN_WHY="could not read which branch $1 has checked out"
+  return 2
+}
+
 _WS_GITDIR_WHY=''; _WS_GITDIR_DIR=''
 _ws_reclaim_gitdir_own() {   # tree common -> 0 when tree's git directory is git's OWN record of tree: an
   #                               admin directory `$common/worktrees/<n>` whose `gitdir` file names
@@ -33317,6 +33377,12 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   # PROVEN absent (no tip to pin, no branch to delete), or a read that did not
   # run — unmeasured, and no token is minted over it.
   _ws_reclaim_tip_read "$main" "$branch" || { _ws_reclaim_unmeasured "$_WS_BRANCH_WHY"; return 1; }
+  # ... and a HEAD still symbolic to a branch PROVEN absent is what the pin
+  # refuses, so it is refused here, before any token: a token over it would be
+  # spent on a pin that fails on every pass. TERMINAL: waiting changes nothing.
+  _ws_reclaim_head_unborn "$workdir" "$branch"; rc=$?
+  (( rc != 2 )) || { _ws_reclaim_unmeasured "$_WS_HEAD_UNBORN_WHY"; return 1; }
+  (( rc != 0 )) || { _ws_refuse branch-gone-checked-out "$_WS_HEAD_UNBORN_WHY"; return 1; }
   RECLAIM_HEAD=$(git -C "$workdir" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || RECLAIM_HEAD=""
   RECLAIM_STASHES=$(_ws_reclaim_stash_shas "$main" "$branch") \
     || { _ws_reclaim_unmeasured "could not read the stash list of $main"; return 1; }
@@ -34564,12 +34630,12 @@ _ws_reclaim_pin_contained() {   # `_ws_reclaim_pin`'s body, run under `_ws_recla
   # to delete it at, and HEAD, the WIP commit and every reflog below are pinned
   # as ever — unless HEAD is still SYMBOLIC to that branch (an `update-ref -d`
   # under a checkout): HEAD then names no commit, the WIP commit has no parent
-  # to stand on, and the pin fails with nothing written.
+  # to stand on, and the pin fails with nothing written. The ladder refuses that
+  # shape by the same predicate (`_ws_reclaim_head_unborn`), so only a branch
+  # deleted after its read, or a settle with no ladder in front of it, gets here.
   _ws_reclaim_tip_read "$main" "$branch" || { RECLAIM_PIN_WHY="$_WS_BRANCH_WHY"; return 1; }
-  if [[ "$RECLAIM_BRANCHSTATE" == absent && "$headref" == "refs/heads/$branch" ]]; then
-    RECLAIM_PIN_WHY="$workdir still has $branch checked out, but $branch is gone from $main — HEAD names no commit for the WIP commit to stand on, so nothing was pinned"
-    return 1
-  fi
+  _ws_reclaim_head_unborn "$workdir" "$branch"; rc=$?
+  (( rc == 1 )) || { RECLAIM_PIN_WHY="$_WS_HEAD_UNBORN_WHY"; return 1; }
   # (0) The in-progress operation heads, pinned by sha: `commit-tree` concludes
   # nothing, and a head a later git command clears is kept all the same.
   oph=$(_ws_reclaim_opheads "$workdir")
@@ -37936,9 +38002,9 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # gives it: GONE — `no-such-session`, `not-archived` (the row left the
 # population: returned, or never archived); TERMINAL — `not-a-workspace`,
 # `branch-elsewhere`, `tree-unreadable`, `containment-unproven`,
-# `no-worktree-record`; RETRY — `not-expired`, `child`, `paused`, `held`,
-# `attached`, `live`, `in-use`, `tree-busy`, `state-changed`, `in-progress`,
-# `reap-in-progress`, `reclaim-in-progress`. Nineteen. The ones the RECLAIM
+# `no-worktree-record`, `branch-gone-checked-out`; RETRY — `not-expired`, `child`,
+# `paused`, `held`, `attached`, `live`, `in-use`, `tree-busy`, `state-changed`,
+# `in-progress`, `reap-in-progress`, `reclaim-in-progress`. Twenty. The ones the RECLAIM
 # region spells stay spelled there; this region spells only its own
 # (`not-archived`, `not-expired`, `child`, `live`, `in-use`, and the two flavour
 # refusals). `unmeasured` is no word, exactly as there: a probe that could not
@@ -38462,7 +38528,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
     # the one place it reaches the lifecycle mirror; a retryable word a pass
     # would bury the journal.
     case "$REAP_VERDICT" in
-      not-a-workspace|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record)
+      not-a-workspace|branch-elsewhere|tree-unreadable|containment-unproven|no-worktree-record|branch-gone-checked-out)
         _lc_emit expire refused "$id" "" verb ws-audit refusal "$REAP_VERDICT" detail "$REAP_DETAIL" ;;
     esac
   fi

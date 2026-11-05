@@ -4573,22 +4573,22 @@ _check_transcripts() {
     # and that is all there is to say. One clause per kind present.
     remedy=""
     if [ -n "$stale" ]; then
-      # shellcheck disable=SC2086 -- registry basenames, ccd's `^[A-Za-z0-9._-]+$`
+      # shellcheck disable=SC2086  # registry basenames, ccd's `^[A-Za-z0-9._-]+$`
       remedy="$(_dr_join $stale): a session that forked in the last few seconds is a real transient and clears itself on the next supervise tick; if it persists, this box's ccd is not following the pointer — check ccrc version and roll the fleet box forward"
     fi
     if [ -n "$parked" ]; then
-      # shellcheck disable=SC2086 -- registry basenames, as above
+      # shellcheck disable=SC2086  # registry basenames, as above
       remedy="${remedy:+$remedy. }$(_dr_join $parked): stopped or archived, so no supervisor runs for them — ccd follows the pointer at the session's next resume, and nothing needs doing now unless this box's ccd predates that (ccrc version)"
     fi
     if [ -n "$pending" ]; then
-      # shellcheck disable=SC2086 -- registry basenames, as above
+      # shellcheck disable=SC2086  # registry basenames, as above
       remedy="${remedy:+$remedy. }$(_dr_join $pending): ccd keeps each on its own transcript and does not follow a pointer to a conversation that was never written. If that fork's background job is still starting (\`<wrapper> agents\` lists it, with the row's wrapper named beside it above — a job lives under its own account's config dir, so another wrapper's list does not show it — or read jobs/<the successor's first 8 characters>/state.json in that wrapper's config dir), wait: this clears when its first line lands. If the job failed or is gone, the session's own transcript is still the conversation — the first prompt it answers there cancels the stale pointer (a finished turn after the marker), and this clears"
     fi
     detail=""
-    # shellcheck disable=SC2086 -- the ids are registry basenames, matched by
+    # shellcheck disable=SC2086  # the ids are registry basenames, matched by
     # ccd's own `^[A-Za-z0-9._-]+$` shape, so the split is the interface.
     [ -n "$stale$parked" ] && detail="$(_dr_join $stale $parked) read a transcript Claude Code has superseded"
-    # shellcheck disable=SC2086 -- registry basenames, as above
+    # shellcheck disable=SC2086  # registry basenames, as above
     [ -n "$pending" ] && detail="${detail:+$detail; }$(_dr_join $pending) read a transcript whose continued-in marker names a successor never written here ($pendwhat)"
     _dr_warn transcripts "$detail ($scope)" "$remedy"
     return 2

@@ -7,7 +7,8 @@
 // (the page, or the sheet).
 //  - The trouble cards: Signed out on a sign-in lane holds Switch to a long-lived token (the primary) then Sign in
 //    again; Signed out on a token lane, Mint a new token then Paste a token; the Expiring (minted token) card, Replace
-//    token then Switch to sign-in, under its two sentences. Below 900 the two buttons stack, the primary first; at 900
+//    token then Switch to sign-in, under its two sentences; a lane the box signed out holds the sign-in lane's two under
+//    its own sentence, with no 401 (D-7992). Below 900 the two buttons stack, the primary first; at 900
 //    and up they share a row. Each is at the tap floor.
 //  - The re-auth run (the Expiring card's Replace token): the confirm frame (Mint a new token the primary, Paste a token
 //    instead beside it), the URL card, the code, `done`, and the ending: the fresh check's word, the stated identity with
@@ -39,18 +40,24 @@ const rostered = (id: string, hue: string, kind: string): Record<string, unknown
   id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind,
 });
 const OUT = { state: { word: 'signed-out', source: 'Signed out · HTTP 401 · checked 2h ago', at: now - 2 * 3_600_000 }, ready: false, notReadyReason: 'check-failed' };
+/** A lane the box signed out (D-7992): no 401, no check, and the box's own word for it. */
+const SIGNED_OUT_AT = now - 2 * 3_600_000;
+const BOX_OUT = {
+  state: { word: 'signed-out', source: 'signed out on the fleet host', at: SIGNED_OUT_AT }, ready: false, notReadyReason: 'no-credential',
+  signedOutAt: SIGNED_OUT_AT, credential: 'none', identity: 'someone@example.invalid', identitySource: 'measured',
+};
 const MINTED_AT = now - 335 * DAY;
 const EXPIRING = {
   state: { word: 'expiring', source: 'token minted 11 months ago · about 4 weeks left · estimated', at: MINTED_AT },
   ready: true, check: { verdict: 'ok', at: now - 60_000 }, mintedAt: MINTED_AT, identity: 'someone@example.invalid', identitySource: 'stated',
 };
 const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
-const ROSTER = [rostered('lane-a', 'cyan', 'sign-in'), rostered('lane-b', 'violet', 'token'), rostered('lane-c', 'blue', 'token')];
+const ROSTER = [rostered('lane-a', 'cyan', 'sign-in'), rostered('lane-b', 'violet', 'token'), rostered('lane-c', 'blue', 'token'), rostered('lane-d', 'green', 'sign-in')];
 const ACCOUNTS = {
-  accounts: [acct('lane-a', { authDead: true }), acct('lane-b', { authDead: true }), acct('lane-c')],
+  accounts: [acct('lane-a', { authDead: true }), acct('lane-b', { authDead: true }), acct('lane-c'), acct('lane-d')],
   projected: { wrapper: 'lane-c', score: 12 },
   roster: ROSTER,
-  lanes: { 'lane-a': { ...OUT, identity: 'someone@example.invalid', identitySource: 'measured' }, 'lane-b': OUT, 'lane-c': EXPIRING },
+  lanes: { 'lane-a': { ...OUT, identity: 'someone@example.invalid', identitySource: 'measured' }, 'lane-b': OUT, 'lane-c': EXPIRING, 'lane-d': BOX_OUT },
   connect: {
     accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2', 'account-auth-v1'], stepUpFreshUntil: now + 3_600_000,
   },
@@ -153,6 +160,7 @@ describe('Re-authenticate an existing lane at every width and skin (D-7872)', ()
           'lane-a': ['Switch to a long-lived token', 'Sign in again'],
           'lane-b': ['Mint a new token', 'Paste a token'],
           'lane-c': ['Replace token', 'Switch to sign-in'],
+          'lane-d': ['Switch to a long-lived token', 'Sign in again'],
         };
         for (const [lane, [first, second]] of Object.entries(want)) {
           const acts = await actsOf(page, lane);
@@ -164,6 +172,9 @@ describe('Re-authenticate an existing lane at every width and skin (D-7872)', ()
         const expiring = await page.evaluate(() => document.querySelector('.accounts-row[data-lane="lane-c"] .acct-trouble')?.textContent ?? '');
         expect(expiring).toContain("lane-c's token was minted about 11 months ago.");
         expect(expiring).toContain('Long-lived tokens last about a year. When it lapses the lane signs out.');
+        const signedOut = await page.evaluate(() => document.querySelector('.accounts-row[data-lane="lane-d"] .acct-trouble')?.textContent ?? '');
+        expect(signedOut).toContain('lane-d was signed out on the fleet host 2h ago.');
+        expect(signedOut).not.toContain('HTTP 401');
         await step(page, 'trouble cards');
 
         // The Expiring card's Replace token: the mint first, the paste its second way.

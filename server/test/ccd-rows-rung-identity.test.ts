@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import {
   CHILD_BRANCH, CHILD_ID, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
@@ -79,13 +79,15 @@ const collectRows = (leaf: string, pre = ''): string =>
   h.sh(`${pre} _ws_collect_rows_clear ${COL_ID} "${leaf}"; printf '[rc=%s] %s' "$?" "$_WS_COLLECT_ROWS_WHY"`);
 
 /** `snippet` in the harness's own shell and environment: `h.sh`'s `bash -c` text and `h.env()`, the contained
- *  environment with the gh, systemd and tmux poisons. It runs in a process group of its own, bounded at 20 s
+ *  environment, with the gh, systemd, tmux and net poisons named here too, as every bash spawn in a ccd suite must for
+ *  the containment scan to read it. It runs in a process group of its own, bounded at 20 s
  *  (`spawnSyncGroup`), so a subject that hangs under a mutation reds on the clock instead of hanging the suite. */
 const bounded = (snippet: string): { out: string; timedOut: boolean } => {
   const r = spawnSyncGroup('bash', ['-c', 'ccd_h_src=$CCD_HARNESS_SRC ccd_h_snippet=$CCD_HARNESS_SNIPPET; '
     + 'unset CCD_HARNESS_SRC CCD_HARNESS_SNIPPET; source "$ccd_h_src"; eval "$ccd_h_snippet"'],
   { encoding: 'utf8', cwd: h.home, timeout: 20_000,
-    env: { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet } });
+    env: ghContainedEnv(h.home, { ...h.env(), CCD_HARNESS_SRC: CCD, CCD_HARNESS_SNIPPET: snippet },
+      { systemd: true, tmux: true, net: true }) });
   return { out: String(r.stdout ?? '').trim(),
     timedOut: (r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' };
 };

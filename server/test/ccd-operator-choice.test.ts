@@ -15,7 +15,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { fileURLToPath } from 'node:url';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, WS_ADD, CCD, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
@@ -1225,7 +1226,7 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       h.sh(`mkfifo ${JSON.stringify(file)}`);
       const snippet = `source ${JSON.stringify(CCD)}; ${fn} ${ID}; printf 'rc=%s' "$?"`;
-      const r = spawnSync('bash', ['-c', `${BOUNDED} 5 bash -c "$1"`, '_', snippet], {
+      const r = spawnSyncGroup('bash', ['-c', `${BOUNDED} 5 bash -c "$1"`, '_', snippet], {
         encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL',
         env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
       });

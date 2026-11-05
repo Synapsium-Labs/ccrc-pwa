@@ -11,6 +11,7 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { functionSpan, lockDeclineSites, refuseWords } from './census-w5/ccdHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
+import { CHILD_RECLAIM_TOKEN_KIND } from '../src/coord/childReclaim.js';
 import {
   EXPIRE_FAILURE_CEILING_MS, EXPIRE_FAILURE_GIVE_UP_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
   EXPIRE_PERSISTENT_RETRY_MS,
@@ -73,6 +74,11 @@ describe('the nineteen words', () => {
   it('GONE is the row leaving the population, and nothing else', () => {
     expect(Object.entries(EXPIRE_TOKEN_KIND).filter(([, k]) => k === 'gone').map(([t]) => t).sort())
       .toEqual(['no-such-session', 'not-archived']);
+  });
+
+  it('`EXPIRE_TOKEN_KIND` and the reclaim kinds read branch-gone-checked-out terminal: waiting changes nothing, so a retry would rebuild the loop', () => {
+    expect(EXPIRE_TOKEN_KIND['branch-gone-checked-out']).toBe('terminal');
+    expect(CHILD_RECLAIM_TOKEN_KIND['branch-gone-checked-out']).toBe('terminal');
   });
 
   it('a word this build was never compiled to know has no kind — never terminal, never gone', () => {

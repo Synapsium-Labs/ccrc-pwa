@@ -137,6 +137,8 @@ const PROBE_ARGS: Partial<Record<string, readonly unknown[]>> = {
   wsOrphanAudit: ['00'],
   wsOrphan: ['x', '00', false, null],
   wsShedDeps: ['x', 'child', false, null],
+  // Delegation broker wave 5 PR3: `wsAddWorkerBase` refuses a --base that is not a full commit id; the probe passes one.
+  wsAddWorkerBase: ['x', null, null, 7, 'a'.repeat(40), null, false],
   // Delegation broker wave 5: `leaseMark` takes one object and refuses a value its verb would refuse as usage.
   leaseMark: [{ leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', generation: 2, project: 'demo', adminRecord: 'agent-a', parentId: 'lane-a-demo', parentIncarnation: '11111111-2222-4333-8444-555555555555', activityId: 'act-1', source: 'agent', state: 'adopted', journalSeq: 9, expiresAtMs: 1767225600000, releaseReason: null, promoted: null }],
   // `leaseAudit` refuses a lease id that is not one and a generation below 1; the probe passes a valid pair so the table loads.
@@ -552,8 +554,24 @@ describe('CCD_CAN agrees with the verb-gate vocabulary (D-5866)', () => {
     expect(rows.filter((r) => CAP_GATED_VERBS.has(VERB_OF[r]!)).length, 'CONTROL: the filter found rows').toBeGreaterThan(0);
   });
 
+  /** Rows of an ungated-by-decision verb that carry a FLAG an older ccd does not know, so the row is gated by that flag's
+   *  capability (refuse on no evidence) while the verb's other rows stay ungated. Delegation broker wave 5 PR3: `ws-add`'s
+   *  `--base`, which an older ccd binds as the project (D-6164). */
+  const FLAG_GATED_ROWS: ReadonlySet<string> = new Set(['wsAddWorkerBase']);
+
   it('a row is ungated (\'none\') exactly when its verb is in UNGATED_BY_DECISION', () => {
-    expect(rows.filter((r) => (CCD_CAN[r] === 'none') !== UNGATED_BY_DECISION.has(VERB_OF[r]!))).toEqual([]);
+    expect(rows.filter((r) => !FLAG_GATED_ROWS.has(r))
+      .filter((r) => (CCD_CAN[r] === 'none') !== UNGATED_BY_DECISION.has(VERB_OF[r]!))).toEqual([]);
+  });
+
+  it('W5-G17e: a flag-gated row of an ungated verb refuses on no evidence, and is the only exception', () => {
+    for (const r of FLAG_GATED_ROWS) {
+      expect(rows, r).toContain(r);
+      expect(UNGATED_BY_DECISION.has(VERB_OF[r]!), `${r}'s verb is ungated by decision`).toBe(true);
+      const c = CCD_CAN[r as keyof typeof CCD_CAN];
+      expect(c !== 'none' && c.default === 'refuse', `${r} refuses on no evidence`).toBe(true);
+    }
+    expect([...FLAG_GATED_ROWS]).toEqual(['wsAddWorkerBase']);
   });
 
   it('a permitting row is answered by its own verb name, spelled as the builder spells it', () => {

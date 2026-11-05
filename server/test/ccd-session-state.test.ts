@@ -15,7 +15,7 @@
  * the bash twin; the TypeScript twin and the shared fixture land later.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
@@ -31,7 +31,7 @@ const REGDIR = (): string => path.join(h.home, '.cc-sessions');
 /** Captures stderr on a SUCCESSFUL run too (the harness's `sh` pipes it to the
  *  parent), and times out so an argv-parse bug hangs one case, not the suite. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
   });

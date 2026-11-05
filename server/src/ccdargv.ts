@@ -80,6 +80,13 @@ const looseHex = (hex: string): string => {
   return hex;
 };
 
+/** `ws-add --base`'s start point (delegation broker wave 5 PR3, D-7827): a FULL commit id of either object format, lowercase,
+ *  the grammar `cmd_ws_add` refuses anything else with. Never a ref or an abbreviation; anything else fails toward not sending. */
+const commitId = (id: string): string => {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) throw new Error('CCD_ARGV.wsAddWorkerBase: --base is a full 40- or 64-hex commit id');
+  return id;
+};
+
 /** `ccd hibernate --hold-ok <text>` (D-6091): the programme hold the run-done policy passes, verbatim, or nothing. Sent
  *  only behind `HIBERNATE_HOLD_OK_CAP`; ccd refuses a dash-leading value, and a programme hold never begins with one. */
 const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['--hold-ok', text]);
@@ -596,6 +603,15 @@ export const CCD_ARGV = {
                 slug: string | null = null, routeDefault = false) =>
                  argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), ...routeDefaultFlags(routeDefault, route), p,
                    ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
+  /** A promoting dispatch's ws-add (delegation broker wave 5 PR3, spec §5.7): `wsAddWorker` with `--base <commit>`, the
+   *  `git worktree add` start point and nothing else (`$REG/<id>.base`, the branch and the PR target are unchanged, D-7827).
+   *  A NEW KEY, never a widened `wsAddWorker` (`wsAddNamed`'s rule). `--base` LEADS beside `--child`, which the verb requires,
+   *  so an older ccd binds it as the project and refuses (D-6164) instead of dropping it and starting at origin's base.
+   *  Behind `WS_ADD_BASE_CAP`; its one composer is PR9's dispatch arm. */
+  wsAddWorkerBase: (p: string, dec: ActorFlags | null, route: RouteFields | null, child: number, base: string,
+                    slug: string | null, routeDefault: boolean) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), '--base', commitId(base), ...routeFlags(route),
+                   ...routeDefaultFlags(routeDefault, route), p, ...(slug === null ? [] : [slug]), ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   /** Landing order wave 5c (spec §5.5 "Landed state is PR-keyed"): one PR's state by number, with no workspace binding.
@@ -1249,6 +1265,10 @@ export const LEASE_MARK_CAP = 'lease-mark-v1';
  *  `echo lease-audit-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without
  *  it makes every tree count as changed, and promotion refuses. */
 export const LEASE_AUDIT_CAP = 'lease-audit-v1';
+/** The `ccd caps` token that says this box's `ws-add` takes `--base <commit>` beside `--child` (delegation broker wave 5 PR3):
+ *  a child workspace started at a given commit, a start point only. Spelled ONCE in `server/src`; ccd's `echo ws-add-base-v1` is
+ *  the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without it must never be sent the flag. */
+export const WS_ADD_BASE_CAP = 'ws-add-base-v1';
 /** The `ccd caps` token that says this box's ccd has the collector's LOOSE arm (fleet disk retention spec 2026-10-23
  *  section 2.4, D-6625): `ws-audit --collect-census`, `ws-audit --loose-hex <hex> --collect` and
  *  `ws-collect --expect <token> --loose-hex <hex>` — one ccd inode. Distinct from `COLLECT_CAP`: a box with
@@ -1403,6 +1423,8 @@ export const CCD_CAN = {
   hibernate: verbRow('hibernate'),
   swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
   wsAdd: 'none', wsAddWorker: 'none',
+  // `--base` is a new flag an older ccd binds as the project (D-6164): refuse on no evidence (delegation broker wave 5 PR3).
+  wsAddWorkerBase: capRow(WS_ADD_BASE_CAP),
   // Named workspaces: `wsAddNamed` is `ws-add` with FLAGS, so the row is ungated like `wsAdd` and `planCreate` asks the
   // flag tokens (`WS_TITLE_CAP`, `WS_WRAPPER_CAP`) with `capSupported`. `ws-title` is a verb `ccd caps` lists by name.
   wsAddNamed: 'none', wsTitle: verbRow(WS_TITLE_VERB),

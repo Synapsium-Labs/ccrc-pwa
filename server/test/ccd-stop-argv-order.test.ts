@@ -24,7 +24,7 @@
 // planted legacy rows, through Task 2's `appFor` in its own `mkTmp` fixture
 // HOME, with a runner that records argv and never execs.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -56,7 +56,7 @@ const argsOf = (argv: CcdArgv): string =>
 
 /** Captures the exit status and stderr of a refusal, which `h.sh` would throw on. */
 const run = (snippet: string): { ran: true, code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
   });

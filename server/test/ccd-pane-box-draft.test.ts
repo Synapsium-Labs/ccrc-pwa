@@ -14,7 +14,7 @@
  * `'\x1b[39m❯\xa0AAA first line'`.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 // `server/package.json` is `"type":"module"`, so `require` is NOT defined in
 // this scope — a CommonJS read here throws ReferenceError and the mutation
 // guard at the bottom of this file asserts nothing at all.
@@ -38,7 +38,7 @@ const NBSP = '\u00a0';
 
 /** Runs one pane reader in a fixture HOME. */
 const paneRead = (command: string, pane: string): string => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${command}`, 'bash', pane], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${command}`, 'bash', pane], {
     encoding: 'utf8', cwd: h.home, timeout: 15000,
     // BOTH poisons. This snippet sources ccd, so it can reach
     // `_have_systemctl`/`_supervised_start`, and `ccd-workspaces.test.ts`'s

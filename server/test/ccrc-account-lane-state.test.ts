@@ -52,7 +52,7 @@ describe('every verb writes the lane-state file (G16)', () => {
     const add = addLane(home, 'lane-c');
     expect(add.code, add.stderr).toBe(0);
     expectPrivateAndClean(home, 'lane-c');
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String), credential: 'held' });
 
     for (const verb of ['disable', 'enable']) {
       rmSync(laneStatePath(home, 'lane-c'));
@@ -83,7 +83,7 @@ describe('every verb writes the lane-state file (G16)', () => {
     expectPrivateAndClean(home, 'lane-c', second);
     // `check`'s run and seed times (A13) stand too: they are about the lane's `.claude.json`, not its secret.
     expect(laneState(home, 'lane-c')).toEqual({
-      keyHash: 'kh0c11', fleetIdentity: NODE_ID, lastRunAt: expect.any(String), seedVerifiedAt: expect.any(String),
+      keyHash: 'kh0c11', fleetIdentity: NODE_ID, credential: 'held', lastRunAt: expect.any(String), seedVerifiedAt: expect.any(String),
     });
   });
 
@@ -93,7 +93,7 @@ describe('every verb writes the lane-state file (G16)', () => {
     rmSync(laneStatePath(home, 'lane-c'));
     const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${CANARY}-r\n`);
     expect(cred.code, cred.stderr).toBe(0);
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, credential: 'held' });
     expectPrivateAndClean(home, 'lane-c', `${CANARY}-r`);
   });
 
@@ -111,7 +111,7 @@ describe('every verb writes the lane-state file (G16)', () => {
       const cred = ccrcRun(home, ['account', 'credential', '--id', 'lane-c', '--credential', '-'], `${CANARY}-r\n`);
       expect(cred.code, 'the write into a 0500 directory refuses').not.toBe(0);
     } finally { chmodSync(secrets, 0o700); }
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String), credential: 'held' });
   });
 
   it('`declare` starts the lane\'s state over, as `add` does', () => {
@@ -141,7 +141,7 @@ describe('every verb writes the lane-state file (G16)', () => {
     mkdirSync(laneStateDir(home), { recursive: true, mode: 0o700 });
     writeFileSync(laneStatePath(home, 'lane-c'), JSON.stringify({ identity: 'someone@example.invalid', keyHash: 'h1' }));
     expect(addLane(home, 'lane-c').code).toBe(0);
-    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String) });
+    expect(laneState(home, 'lane-c')).toEqual({ fleetIdentity: NODE_ID, addedAt: expect.any(String), credential: 'held' });
   });
 
   it('a directory that exists wider than 0700 is tightened', () => {
@@ -184,6 +184,8 @@ describe('ccd-account-health writes the lane state (G16)', () => {
     const s = laneState(home, 'lane-b')!;
     expect((s['check'] as { verdict: string }).verdict).toBe('auth-dead');
     expect(s['fleetIdentity']).toBe(NODE_ID);
+    // A refused token is still a token the lane holds (D-7992): the timer measures that as it writes the verdict.
+    expect(s['credential']).toBe('held');
     expectPrivateAndClean(home, 'lane-b', `${CANARY}-b`);
   });
 });
