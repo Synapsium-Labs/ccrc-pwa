@@ -11003,9 +11003,7 @@ sys.stdout.write(out)
   local uuid wdreal=null _WS_RESOLVED='' _WS_RESOLVE_BASIS=''
   uuid=$(_reg_read "$id" uuid) && [[ -n "$uuid" ]] \
     || { echo "manifest: could not read the uuid of '$id'" >&2; return 1; }
-  if _ws_reclaim_resolve "$workdir" && [[ "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" != //* ]]; then
-    wdreal=$(_json_str "$_WS_RESOLVED")
-  fi
+  ! _ws_reclaim_resolve "$workdir" || [[ "$_WS_RESOLVE_BASIS" != complete || "$_WS_RESOLVED" == //* ]] || wdreal=$(_json_str "$_WS_RESOLVED")
   printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
@@ -32205,8 +32203,7 @@ _ws_reclaim_recorded() {   # id workdir -> rc 0 when the OTHER row id, whose wor
   # A third arm (D-7999), asked last: an archived row's own archive record
   # (`_ws_reclaim_recorded_archive`), which a repository-wide pruning of git's
   # records cannot take away.
-  if _ws_reclaim_recorded_git "$o" "$w" || _ws_reclaim_recorded_crumb "$o" "$w" \
-     || _ws_reclaim_recorded_archive "$o" "$w"; then
+  if _ws_reclaim_recorded_git "$o" "$w" || _ws_reclaim_recorded_crumb "$o" "$w" || _ws_reclaim_recorded_archive "$o" "$w"; then
     _WS_RECORDED_AT="$w"
     return 0
   fi
@@ -32361,12 +32358,10 @@ _ws_reclaim_recorded_archive() {   # id workdir -> rc 0 with _WS_RECORDED_ARCH=1
   local o="$1" w="$2" a f ruuid rbranch parent project rc e RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY=''
   local -a _WS_LOGS=()
   local _WS_KEEP_WHY='' _WS_RESOLVED='' _WS_RESOLVE_BASIS=''
-  f="$REG/$o.archived"
-  [[ -f "$f" && ! -L "$f" ]] || return 1
+  f="$REG/$o.archived"; [[ -f "$f" && ! -L "$f" ]] || return 1
   a=$(_reg_read "$o" archived) || return 1
   [[ -n "$a" && "$a" != *[!0123456789]* ]] || return 1
-  f="$REG/$o.archivemanifest"
-  [[ -f "$f" && ! -L "$f" ]] || return 1
+  f="$REG/$o.archivemanifest"; [[ -f "$f" && ! -L "$f" ]] || return 1
   ruuid=$(_reg_read "$o" uuid) && [[ -n "$ruuid" ]] || return 1
   rbranch=$(_reg_read "$o" branch) && [[ -n "$rbranch" ]] || return 1
   LC_ALL=C.UTF-8 python3 -c '
@@ -32374,26 +32369,21 @@ import json, sys
 f, rid, ruuid, rbranch, w = sys.argv[1:6]
 with open(f, "r", encoding="utf-8") as fh:
     doc = json.load(fh)
-ok = isinstance(doc, dict)
-ok = ok and doc.get("id") == rid
+ok = isinstance(doc, dict) and doc.get("id") == rid
 ok = ok and doc.get("uuid") == ruuid
 ok = ok and doc.get("branch") == rbranch
 ok = ok and doc.get("workdir") == w
 ok = ok and doc.get("workdirReal") == w
 sys.exit(0 if ok else 1)
 ' "$f" "$o" "$ruuid" "$rbranch" "$w" 2>/dev/null || return 1
-  parent="${w%/*}"
-  [[ -n "$parent" ]] || return 1
+  parent="${w%/*}"; [[ -n "$parent" ]] || return 1
   _ws_reclaim_resolve "$parent" || return 1
   [[ "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$parent" ]] || return 1
   project=$(_reg_read "$o" project) || return 1
   [[ -n "$project" && "$project" != */* && "$project" != . && "$project" != .. && "$project" != *[[:cntrl:]]* ]] || return 1
-  _ws_reclaim_record "$PROJECTS_ROOT/$project" "$w"; rc=$?
-  (( rc == 1 )) || return 1
+  _ws_reclaim_record "$PROJECTS_ROOT/$project" "$w"; rc=$?; (( rc == 1 )) || return 1
   _ws_reclaim_log_of "$PROJECTS_ROOT/$project" tree "$w" 0 || return 1
-  for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
-    [[ "$e" != gitdir:* ]] || return 1
-  done
+  for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do [[ "$e" != gitdir:* ]] || return 1; done
   _WS_RECORDED_ARCH=1
   return 0
 }

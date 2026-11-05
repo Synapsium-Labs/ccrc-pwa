@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PRUNE = /worktree\s+prune/;
@@ -19,7 +20,7 @@ const ALLOWED = new Set(['_ws_gc_prune_row']);
 const ccdHits = (): string[] => {
   const hits: string[] = [];
   let fn = '';
-  for (const [i, line] of fs.readFileSync(path.join(ROOT, 'ccd', 'ccd'), 'utf8').split('\n').entries()) {
+  for (const [i, line] of ccdSource().split('\n').entries()) {
     const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(line);
     if (def) fn = def[1]!;
     if (/^\s*#/.test(line) || !PRUNE.test(line)) continue;
@@ -53,7 +54,7 @@ describe('no advice names a repository-wide git worktree prune', () => {
   });
 
   it('the CONTROL: the scan sees the one call it allows, so a scan that matched nothing would red', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'ccd', 'ccd'), 'utf8');
+    const src = ccdSource();
     const from = src.indexOf('\n_ws_gc_prune_row() {');
     expect(from, '_ws_gc_prune_row is defined').toBeGreaterThan(-1);
     const body = src.slice(from, src.indexOf('\n}\n', from)).split('\n').filter((l) => !/^\s*#/.test(l));
