@@ -869,8 +869,9 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
   });
 
   // W2 (box settings wave 2): the freshness check is `_keepalive_fresh_ok`, carried by the generated library. A library that
-  // lacks it answers 127, which is neither 0 nor 2, so the pass refuses with the whole-number sentence and runs no turn.
-  it('W2: a library without _keepalive_fresh_ok fails closed: exit 1, the whole-number sentence, no turn', () => {
+  // lacks it refuses before the check runs, with a sentence that says the library did not load: no value named, no claim
+  // that a valid value is wrong, and no command-not-found line (review 1487 F5).
+  it('W2: a library without _keepalive_fresh_ok fails closed: exit 1, the library-did-not-load sentence, no turn', () => {
     plantWrapper('claude-a', renders('claude-a'));
     plantLimits('claude-a', 9, 9999);
     fs.mkdirSync(j('bin', 'lib'), { recursive: true });
@@ -885,7 +886,10 @@ describe('W29: the keepalive reads its settings from ~/.ccrc/ccrc.env through cc
       env: { ...inherited(), HOME: home, CCRC_KEEPALIVE_TURN_TIMEOUT: '20', CCRC_KEEPALIVE_FRESH: '1800', PATH: `${j('fixture-bin')}:${process.env.PATH}` },
     });
     expect(r.status, r.stderr).toBe(1);
-    expect(r.stderr).toContain('CCRC_KEEPALIVE_FRESH must be a whole number');
+    expect(r.stderr).toContain("the settings library this check needs did not load ('ccrc update --force' places it); nothing was measured");
+    expect(r.stderr).not.toContain('must be a whole number');
+    expect(r.stderr).not.toContain('1800');
+    expect(r.stderr).not.toMatch(/command not found/);
     expect(turns()).toEqual([]);
   });
 
