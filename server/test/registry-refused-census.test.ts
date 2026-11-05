@@ -258,13 +258,13 @@ describe('tick hands its records to the lanes that would otherwise read the regi
   it('tick() passes its records to sweepHookStates(', () => {
     const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
     expect(body, 'tick no longer hands sweepHookStates its records: that lane would read the registry itself')
-      .toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
+      .toMatch(/\bthis\.sweepHookStates\(\s*records\s*(?:,[^)]*)?\)/);
   });
 
   it('tick() passes its records to detectDialogs(', () => {
     const body = tickBodyOf(tickCode(tickSource()), TICK_HEAD);
     expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
-      .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\s*\)/);
+      .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\b[^)]*\)/);
   });
 });
 

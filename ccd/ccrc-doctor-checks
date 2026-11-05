@@ -11163,15 +11163,20 @@ _check_snapshot-posture() {
   _dr_pass snapshot-posture "stated: ${seen// /, }; every such image taken while a secret was stored in $(_dr_join "${dirs[@]}") holds it, and the compromise steps apply to a leaked or restored one"
 }
 
-# `box-settings` (wave 24, D-6599): what the box's ccrc.env ALONE says of each of ccrc's settings (`CCRC_SETTINGS`), read
-# through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the environment hides today is seen
-# before the environment goes: once it does, the file is what every run reads. It reports what the reader reads, never
-# whether a value is valid (each act validates its own). It prints values for those names only, never another line of
-# the file, and through `_upd_redact`; a mirror base's userinfo is masked first, with a scheme or without one (curl
-# reads `user:password@host/...` as http; `_upd_redact` now masks it either way too, D-6748, and this check's own mask
-# runs first), so it never prints. A line
-# the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten, the act that reads
-# that setting refuses or falls back, as its own line says. No role skip: every role reads its own settings.
+# `box-settings` (wave 24, D-6599; box settings wave 2, D18, D-7918): what the box's ccrc.env ALONE says of each of ccrc's
+# settings (`CCRC_SETTINGS`), read through ccrc's one reader in `file` mode (`_ccrc_knob <KEY> "" file`), so a line the
+# environment hides today is seen before the environment goes: once it does, the file is what every run reads. It reads every
+# name, and what it prints of a name the file sets follows the setting's display class in ccrc's class table (`_set_spec`),
+# never a rule of its own: a `value` setting prints `KEY=value` when its check passes (`_set_check`) and the value fits the
+# view (`_set_fits`), `KEY (wider than this view records)` when it does not fit, and `KEY (refused: <words>)` when the check
+# refuses it (`_set_says`, the closed-set words, never the value); an `is-set` setting (the spec's `presence`, D12) prints `KEY (set)`, or the same
+# refusal; an `origin` setting (the release base) prints `custom` and its scheme and host from `_upd_url_origin`, never its
+# path or userinfo, and `custom` alone when its raw text has no http(s) scheme (D-7923); an `omit` setting prints nothing (its reader refusal still WARNs). A refused value stays a PASS, rc 0:
+# only what prints changes. A check that cannot run (`_set_check` rc 2, a library not loaded) is a WARN, `KEY cannot be
+# measured`, never a refusal. It prints values for those names only, never another line of the file, and through
+# `_upd_redact`. A line the reader refuses, or a file it cannot read at all, WARNs with each reason; until it is rewritten,
+# the act that reads that setting refuses or falls back, as its own line says. No role skip: every role reads its own
+# settings.
 # A refusal whose cause is MODEL-WIDE (F15) — a line the model of the file (`_box_unit_env`, which the reader asks in this
 # shell) cannot decide, so every setting it is asked for refuses, the setting's own line plain: on Linux the rc-3 arms
 # that set BEW_CAUSE (a CR inside a line, a non-ASCII NAME=value line), on macOS every arm, since there the model refuses
@@ -11181,11 +11186,12 @@ _check_snapshot-posture() {
 # The fleet box's ccd-* sweeps read four of the settings through the same reader (wave 29, D-6981), and the check reports
 # them like the rest, on every role; on a box whose ccrc.env records CCRC_ROLE=server, where no sweep timer runs, a sweep
 # setting the file sets says so (ruling 4). `sweeps` names them; ccrc-settings-census.test.ts holds it equal to the
-# settings the sweeps' own `_ccrc_knob` calls take.
+# settings the sweeps' own `_ccrc_knob` calls take. The graph check still relays `GK_WARN` (`_check_graphify`).
 _check_box-settings() {
-  local k v pre set="" unset="" why="" fix="" other=0 none="none of ccrc's settings" role=""   # a `'` inside "${set:-…}" would open a quote in bash
+  local k v o rc cls shown set="" unset="" why="" fix="" other=0 none="none of ccrc's settings" role=""   # a `'` inside "${set:-…}" would open a quote in bash
   local sweeps=" CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS "
   [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  _set_libs
   local plain="rewrite each named line in the box's ccrc.env as a plain KEY=value line (deploy/ccrc.env.example shows each), or make the file itself readable when it cannot be read or scanned"
   for k in "${CCRC_SETTINGS[@]}"; do
     BUE_FIX=""; BEW_CAUSE=""
@@ -11194,14 +11200,28 @@ _check_box-settings() {
         case "$fix" in *"$BUE_FIX"*) ;; *) fix+="${fix:+; }$BUE_FIX" ;; esac
       else other=1; fi
     elif [ "$KNOB_FROM" = file ]; then
-      v="$KNOB"
-      if [ "$k" = CCRC_RELEASE_BASE_URL ]; then   # each `[^/@[:space:]]*@` before the authority's first `/` goes
-        pre=""; [[ ! "$v" =~ ^[A-Za-z][A-Za-z0-9+.-]*:/+ ]] || pre="${BASH_REMATCH[0]}"
-        v="${v#"$pre"}"; [[ ! "$v" =~ ^([^/@[:space:]]*@)+ ]] || v="${v#"${BASH_REMATCH[0]}"}"; v="$pre$v"
-      fi
-      set+="${set:+, }$k=$v"
-    elif [ "$KNOB_FROM" = empty ]; then set+="${set:+, }$k= (empty: the default)"
-    else unset+="${unset:+,} $k"
+      v="$KNOB"; _set_spec "$k"; cls="$SET_CLASS"; shown=""
+      case "$cls" in
+        omit) ;;   # read above, so a reader refusal still WARNs; never printed, never listed as unset
+        origin)
+          shown="$k=custom"
+          case "$v" in   # D-7923: a RAW value with no http(s) scheme prints `custom` alone
+            [Hh][Tt][Tt][Pp]://*|[Hh][Tt][Tt][Pp][Ss]://*)
+              if o="$(_upd_url_origin "$v")" && _set_fits "$k" origin "custom $o"; then shown="$k=custom $o"; fi ;;
+          esac ;;
+        *)
+          _set_check "$k" "$v"; rc=$?
+          case "$rc" in
+            0) if [ "$cls" = is-set ]; then shown="$k (set)"
+               elif _set_fits "$k" value "$v"; then shown="$k=$v"
+               else shown="$k (wider than this view records)"; fi ;;
+            1) shown="$k (refused: $(_set_says "$k"))" ;;
+            *) why+="${why:+; }$k cannot be measured: $SET_CHECK_WHY"; other=1 ;;
+          esac ;;
+      esac
+      [ -z "$shown" ] || set+="${set:+, }$shown"
+    elif [ "$KNOB_FROM" = empty ]; then _set_spec "$k"; [ "$SET_CLASS" = omit ] || set+="${set:+, }$k= (empty: the default)"
+    else _set_spec "$k"; [ "$SET_CLASS" = omit ] || unset+="${unset:+,} $k"
     fi
     if [ "$role" = server ] && { [ "$KNOB_FROM" = file ] || [ "$KNOB_FROM" = empty ]; }; then
       case "$sweeps" in *" $k "*) set+=" (read by the ccd-* sweeps, which do not run on a server-role box)" ;; esac
@@ -11247,8 +11267,8 @@ _check_carry-copies() {
     return 2
   fi
   thr="$KNOB"
-  if ! [[ "$thr" =~ ^[123456789][0123456789]{0,17}$ ]]; then
-    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be a whole number of bytes from 1 to 18 digits — got '$thr' in ~/.ccrc/ccrc.env, so neither figure is judged" \
+  if ! _carry_warn_bytes_ok "$thr"; then
+    _dr_warn carry-copies "CCRC_CARRY_COPY_WARN_BYTES must be $(_carry_warn_bytes_says) — the value in ~/.ccrc/ccrc.env is not, so neither figure is judged" \
       "set CCRC_CARRY_COPY_WARN_BYTES=<bytes> in ~/.ccrc/ccrc.env (default 10737418240, 10 GiB), or remove the line"
     return 2
   fi

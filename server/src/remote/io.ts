@@ -1,11 +1,11 @@
 import {
-  BACKUP_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange, readTestboxOpReply,
+  BACKUP_OP, DISK_OP, PRESSURE_OP, READDIR_MTIMES_OP, TESTBOX_OP, TESTBOX_OP_REQUEST_MS, TESTBOX_TOOLS_SYNC_OP, isReadFromRange, readTestboxOpReply,
   readTestboxToolsSyncReply, type TailData, type TailReset,
 } from '../../../shared/agent-protocol.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
 import { readHostPsi } from '../../../shared/pressure.js';
 import { readBackupRead } from '../../../shared/backup.js';
-import type { FleetIO, ReadFailure } from '../io.js';
+import type { FleetIO, MeasuredDirectoryRead, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
 
 /**
@@ -47,6 +47,34 @@ function isTailReset(msg: TailData | TailReset): msg is TailReset {
 function decodeCanonicalBase64(text: string): Uint8Array | null {
   const bytes = Buffer.from(text, 'base64');
   return bytes.toString('base64') === text ? new Uint8Array(bytes) : null;
+}
+
+/** The `readdir` answer's names, exactly as `readdirMeasured` has always read them (one reader; the times arm reuses it). */
+function readdirAnswer(res: unknown): { read: MeasuredDirectoryRead } {
+  const r = res as { names?: unknown; absent?: unknown } | null;
+  if (r !== null && typeof r === 'object') {
+    if (Array.isArray(r.names)) {
+      return { read: r.names.every((n) => typeof n === 'string')
+        ? { ok: true, entries: r.names as string[] }
+        : { ok: false, reason: 'unreadable' } };
+    }
+    if (r.names === null && r.absent === true) return { read: { ok: false, reason: 'absent' } };
+  }
+  return { read: { ok: false, reason: 'unreadable' } };
+}
+
+/** The ONE reader of the `readdir` op's `times`: a plain object whose every value is a finite number, keyed by a
+ *  listed name, becomes a Map; anything else (absent, malformed) is `undefined`, so the caller keys by names alone. */
+function readdirTimes(res: unknown, entries: readonly string[]): ReadonlyMap<string, number> | undefined {
+  const t = (res as { times?: unknown }).times;
+  if (t === null || typeof t !== 'object' || Array.isArray(t)) return undefined;
+  const listed = new Set(entries);
+  const out = new Map<string, number>();
+  for (const [k, v] of Object.entries(t)) {
+    if (!listed.has(k) || typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+    out.set(k, v);
+  }
+  return out;
 }
 
 export function createIo(client: FleetClient): FleetIO {
@@ -154,17 +182,23 @@ export function createIo(client: FleetClient): FleetIO {
      *  `names` holding anything but strings is malformed, not a listing. */
     async readdirMeasured(path, timeoutMs, signal) {
       try {
-        const res = await client.request({ t: 'req', op: 'readdir', path }, timeoutMs, signal);
-        const r = res as { names?: unknown; absent?: unknown } | null;
-        if (r !== null && typeof r === 'object') {
-          if (Array.isArray(r.names)) {
-            return r.names.every((n) => typeof n === 'string')
-              ? { ok: true, entries: r.names as string[] }
-              : { ok: false, reason: 'unreadable' };
-          }
-          if (r.names === null && r.absent === true) return { ok: false, reason: 'absent' };
-        }
+        return readdirAnswer(await client.request({ t: 'req', op: 'readdir', path }, timeoutMs, signal)).read;
+      } catch {
         return { ok: false, reason: 'unreadable' };
+      }
+    },
+
+    /** The same listing with each entry's modification time (console speed S1). The request carries `times: true`
+     *  ONLY when the agent lists `readdir-mtimes`; an older agent is sent the plain frame it always was. `times` is
+     *  read by ONE reader (`readdirTimes`): anything malformed is no times, never a failed listing. */
+    async readdirWithTimesMeasured(path, timeoutMs, signal) {
+      const asks = (client.state.agentOps ?? []).includes(READDIR_MTIMES_OP);
+      try {
+        const res = await client.request(asks ? { t: 'req', op: 'readdir', path, times: true } : { t: 'req', op: 'readdir', path }, timeoutMs, signal);
+        const a = readdirAnswer(res);
+        if (!asks || !a.read.ok) return a.read;
+        const times = readdirTimes(res, a.read.entries);
+        return times === undefined ? a.read : { ...a.read, times };
       } catch {
         return { ok: false, reason: 'unreadable' };
       }

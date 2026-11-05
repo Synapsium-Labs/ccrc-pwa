@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,7 +36,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import {
-  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP,
+  ACCOUNT_OP, CCRC_DIR_NAME, NODE_FILE_BASENAMES, NODE_FILES, parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME, TOKEN_SYNC_OP, DISK_OP, PRESSURE_OP, BACKUP_OP, READDIR_MTIMES_OP,
   TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, type TestboxReq, type TestboxToolsSyncReq,
   TOKEN_SYNC_SPAWN_TIMEOUT_MS, UPDATE_OP, UPDATE_SPAWN_DRAIN_MS, UPDATE_SPAWN_TIMEOUT_MS, decideKilledSpawn, firstStderrLine,
   inFlightBusyDetail, isClaimCode, isReadFromRange, isUpdateLockHeldLine, lockHeldBusyDetail, tokenSyncSpawnArgv, updateLauncherPath,
@@ -315,6 +316,17 @@ function readdirPayload(r: ListDirResult): { names: string[] } | { names: null; 
   return { names: null, ...(r.reason === 'absent' ? { absent: true as const } : {}) };
 }
 
+/** The `readdir` op's `times` answer (console speed S1): one `lstat` per listed name inside the directory `checkPath`
+ *  already contained (the names are basenames of that listing, never a client path). An entry whose `lstat` fails is
+ *  OMITTED, never a fake 0: the server reads a missing time as "unknown" and keys that row by names alone. */
+async function entryMtimes(dir: string, names: readonly string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  await Promise.all(names.map(async (n) => {
+    try { out[n] = (await lstat(path.join(dir, n))).mtimeMs; } catch { /* omitted */ }
+  }));
+  return out;
+}
+
 function clampTimeout(ms: number | undefined): number {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return DEFAULT_EXEC_TIMEOUT_MS;
   return Math.min(ms, MAX_EXEC_TIMEOUT_MS);
@@ -497,7 +509,10 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'readdir': {
       const p = await checkPath(req.path, ctx.cfg, 'read');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
-      send(ws, ok(req.id, readdirPayload(await listDirMeasured(p))));
+      const listed = await listDirMeasured(p);
+      send(ws, ok(req.id, req.times === true && listed.ok
+        ? { ...readdirPayload(listed), times: await entryMtimes(p, listed.names) }
+        : readdirPayload(listed)));
       return;
     }
     case 'stat': {
@@ -863,7 +878,7 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
     }
     case 'readdir': {
       if (typeof msg.path !== 'string') return null;
-      return { t: 'req', id, op: 'readdir', path: msg.path } satisfies ReaddirReq;
+      return { t: 'req', id, op: 'readdir', path: msg.path, ...(msg.times === true ? { times: true as const } : {}) } satisfies ReaddirReq;
     }
     case 'stat': {
       if (typeof msg.path !== 'string') return null;
@@ -1308,7 +1323,7 @@ function handleConnection(
       // D-7555: no field either) and `backup` (D-7858, no field). It is required in `ReadyFrame`, so it cannot
       // be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, BACKUP_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, BACKUP_OP, READDIR_MTIMES_OP],
       };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;

@@ -1638,12 +1638,12 @@ describe('the node-floor leg runs every history test file on the floor interpret
 // rules it shares with the required legs (pinned above). Here: its one name,
 // its runner and deadline, and exactly what it runs.
 describe('ci.yml: the browser leg (native Docs reader spec 2026-10-01 §5.7)', () => {
-  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-latest with a 20-minute deadline (D-7746)', () => {
+  it('is one job, `browser-pwa`, named `browser (pwa) i/n` over a shard matrix, on ubuntu-24.04 with a 20-minute deadline (D-7746)', () => {
     const b = job('browser-pwa');
     expect(jobKey(b, 'name')).toBe('browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}');
     const named = [...jobs(read(CI)).values()].map((x) => jobKey(x, 'name'));
     expect(named.filter((n) => n?.startsWith('browser (pwa)')), 'two jobs report `browser (pwa)`').toHaveLength(1);
-    expect(jobKey(b, 'runs-on')).toBe('ubuntu-latest');
+    expect(jobKey(b, 'runs-on')).toBe('ubuntu-24.04');
     expect(jobKey(b, 'timeout-minutes')).toBe('20');
     // The shards are exactly 1..total, so `--shard=i/n` covers the whole browser config.
     const total = /^ {8}total: \[(\d+)\]$/m.exec(b)?.[1];
@@ -2209,7 +2209,7 @@ describe('M8.16: build-pwa verifies the shared Markdown library before it builds
     expect(lines.filter((l) => /^\s*integrity=/.test(l)), 'integrity is only read from the lock').toHaveLength(0);
   });
 
-  // Linux only: the script runs only on ubuntu-latest in CI and uses GNU `base64 -w0`, which BSD base64 (the macOS legs'
+  // Linux only: the script runs only on ubuntu-24.04 in CI and uses GNU `base64 -w0`, which BSD base64 (the macOS legs'
   // userland, where no gnubin joins PATH) rejects; the real-script cases would go red there for a reason that is not a defect.
   describe.skipIf(process.platform !== 'linux')('the provenance script, run for real against fake npm, gh and timeout', () => {
     const real = (bin: string): string => execFileSync('sh', ['-c', `command -v ${bin}`], { encoding: 'utf8' }).trim();

@@ -279,16 +279,23 @@ _ka_flock_works \
 # turn, and then `--argjson fresh 30m` aborts the census so the pass cannot even
 # report what it did. The one input that decides the spend must refuse as loudly
 # as a missing tool, and before the lock, for the same reason.
-for knob in CCRC_KEEPALIVE_FRESH CCRC_KEEPALIVE_TURN_TIMEOUT \
+# The freshness is checked by `_keepalive_fresh_ok` (ccd/lib/ccrc-settings.sh, the one owner `ccrc settings` shares): rc 0 is a
+# whole number, rc 2 a whole number bash cannot represent, and anything else, a library lacking the function (127)
+# included, refuses here: fail closed. A library without the function refuses first, in its own words (review 1487 F5): it names no value. The representability refusal waits until the other knobs have been checked.
+declare -F _keepalive_fresh_ok >/dev/null 2>&1 \
+  || { _ka_say "the settings library this check needs did not load ('ccrc update --force' places it); nothing was measured"; exit 1; }
+_keepalive_fresh_ok "$CCRC_KEEPALIVE_FRESH"; KA_FRESH_RC=$?
+[ "$KA_FRESH_RC" -eq 0 ] || [ "$KA_FRESH_RC" -eq 2 ] \
+  || { _ka_say "CCRC_KEEPALIVE_FRESH must be a whole number — got '$CCRC_KEEPALIVE_FRESH'$KA_FRESH_FROM; nothing was measured"; exit 1; }
+for knob in CCRC_KEEPALIVE_TURN_TIMEOUT \
             CCRC_KEEPALIVE_BACKOFF_AFTER CCRC_KEEPALIVE_BACKOFF_BASE \
             CCRC_KEEPALIVE_BACKOFF_MAX; do
   [[ "${!knob}" =~ ^[0123456789]+$ ]] \
-    || { src=""; [ "$knob" != CCRC_KEEPALIVE_FRESH ] || src="$KA_FRESH_FROM"
-         _ka_say "$knob must be a whole number — got '${!knob}'$src; nothing was measured"; exit 1; }
+    || { _ka_say "$knob must be a whole number — got '${!knob}'; nothing was measured"; exit 1; }
 done
-# Use the freshness gates' own decimal comparison, not bash arithmetic (which
-# wraps overflow and treats leading zeros as octal), to prove representability.
-[ "$CCRC_KEEPALIVE_FRESH" -ge 0 ] 2>/dev/null \
+# A representable freshness is proved by `_keepalive_fresh_ok`'s own decimal comparison, not bash arithmetic (which
+# wraps overflow and treats leading zeros as octal).
+[ "$KA_FRESH_RC" -eq 0 ] \
   || { _ka_say "CCRC_KEEPALIVE_FRESH must be a representable whole number — got '$CCRC_KEEPALIVE_FRESH'$KA_FRESH_FROM; nothing was measured"; exit 1; }
 
 STARTED="$(date -u +%FT%TZ)"

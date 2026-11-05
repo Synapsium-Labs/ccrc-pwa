@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Checks out the module that judges the evidence, and reads the pushed
     # commit's workflow runs and their jobs; nothing else.
@@ -93,7 +93,7 @@ jobs:
     # read, not only its result, because a called run in which `full-suite`
     # never ran is a successful run that proved nothing.
     if: always() && needs.gate.result == 'success' && (needs.gate.outputs.found == 'true' || (needs.full.result == 'success' && needs.full.outputs.verdict == 'green'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The script's own `gh` call edits the release's flags; nothing else.
     permissions:

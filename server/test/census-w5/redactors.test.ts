@@ -4,9 +4,9 @@
 // (`reportRow.ts#expectReportRow`), because their tasks move them: `pythonRedactorTables()` 1 at base (C5h takes it to 0)
 // and `logLineRedactors()` 2 (C5i takes it to 1). Each prints its sites and holds only that every name is a base site or
 // the plan's target, each once, and that the query still finds one where the target keeps a site; the exact
-// may-only-shrink pin lands in that task's ratchet commit. `inlineUserinfoStrips()` 1 is at target, so it is pinned now by name with its reason and may only
-// shrink: `ccd/ccrc-doctor-checks#_check_box-settings` strips one setting's DISPLAYED value (CCRC_RELEASE_BASE_URL) before
-// `_upd_redact` runs over the whole doctor line, so it is not a log-line redactor (plan, item 10).
+// may-only-shrink pin lands in that task's ratchet commit. `inlineUserinfoStrips()` is 0 since D-7918: `ccd/ccrc-doctor-checks#_check_box-settings` no longer strips a
+// setting's displayed value inline (CCRC_RELEASE_BASE_URL shows its origin through `_upd_url_origin`), so it is pinned
+// empty and may only stay so.
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -121,10 +121,10 @@ describe('inlineUserinfoStrips: userinfo strips outside a counted function, in b
     expect(inlineUserinfoStrips(edited).map((s) => s.name)).toEqual(['ccd/sibling#fx_redact']);
   });
 
-  it('REAL: 1, `ccd/ccrc-doctor-checks#_check_box-settings`, pinned by name: it strips one setting\'s displayed value, may only shrink', () => {
+  it('REAL: 0, may only shrink: doctor\'s release base shows its origin through _upd_url_origin, no inline strip (D-7918)', () => {
     const sites = inlineUserinfoStrips();
     show('inlineUserinfoStrips', sites);
-    expect(sites.map((s) => s.name)).toEqual(['ccd/ccrc-doctor-checks#_check_box-settings']);
+    expect(sites.map((s) => s.name)).toEqual([]);
   });
 });
 

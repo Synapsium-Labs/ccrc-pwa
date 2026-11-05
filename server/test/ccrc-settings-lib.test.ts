@@ -2,9 +2,9 @@
 //
 // The sweeps never source ccd/ccrc, so to read ~/.ccrc/ccrc.env exactly as ccrc does they source a library file.
 // That file is never a second hand-kept copy of the reader: deploy/gen-settings-lib.mjs slices the CCD_OS detection
-// block, the BOX_ENV_FILE and CCRC_SETTINGS lines and the eight functions of the reader's closure whole out of
-// ccd/ccrc, and these rows hold the committed file equal to what it writes (L1), the slice closed over what it calls
-// (L2), the file inert when sourced (L3), the platform named as ccd/ccrc names it (L7), and the two readers' answers
+// block, the BOX_ENV_FILE and CCRC_SETTINGS lines, the eight functions of the reader's closure and the checks two sweeps
+// share with `ccrc settings` (L8) whole out of ccd/ccrc, and these rows hold the committed file equal to what it writes
+// (L1), the slice closed over what it calls (L2), the file inert when sourced (L3), the platform named as ccd/ccrc names it (L7), and the two readers' answers
 // equal over the fixture files wave 24's reader is argued against (L4).
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -76,7 +76,7 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     }
   });
 
-  it('W29-L3: sourcing it alone under set -u defines the eight functions and the two names, and runs nothing', () => {
+  it("W29-L3: sourcing it alone under set -u defines the library's functions and the two names, and runs nothing", () => {
     const home = freshHome();
     const r = bash(home, 'set -u; . "$1"; compgen -A function; printf "%s|%s\\n" "$BOX_ENV_FILE" "${CCRC_SETTINGS[*]}"', [LIB]);
     expect(r.stderr).toBe('');
@@ -101,6 +101,32 @@ describe('W29: ccd/lib/ccrc-settings.sh is ccd/ccrc\'s reader, generated, never 
     expect(viaLib.status).toBe(0);
     expect(viaLib.stdout).toBe(viaCcrc.stdout);
     expect(viaCcrc.stdout).toBe(process.platform === 'darwin' ? 'darwin\n' : 'linux\n');
+  });
+
+  // The two checks two sweeps share with `ccrc settings` ride in the library, so each sweep refuses a value the way the
+  // verb does. W29-L8 holds the library's answers to the same table `ccd/ccrc`'s own rows hold (ccrc-settings-carveouts).
+  const FRESH_TABLE: [string, number][] = [
+    ['0', 0], ['0800', 0], ['9223372036854775807', 0], ['30m', 1], ['-1', 1], ['', 1],
+    ['9223372036854775808', 2], ['99999999999999999999', 2],
+  ];
+  it.each(FRESH_TABLE)('W29-L8: the library alone answers _keepalive_fresh_ok %j with rc %d', (v, rc) => {
+    const r = bash(freshHome(), '. "$1"; _keepalive_fresh_ok "$2" 2>/dev/null; echo "rc $?"', [LIB, v]);
+    expect(r.stderr).toBe('');
+    expect(r.stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('W29-L8: the library alone words the freshness check', () => {
+    const r = bash(freshHome(), '. "$1"; _keepalive_fresh_says', [LIB]);
+    expect(r.stdout).toBe('a whole number of seconds from 0 to 9223372036854775807');
+  });
+
+  it.each([['1', 0], ['999', 0], ['0', 1], ['07', 1], ['1000', 1], ['', 1]] as [string, number][])(
+    'W29-L8: the library alone answers _usage_days_ok %j with rc %d', (v, rc) => {
+      const r = bash(freshHome(), '. "$1"; _usage_days_ok "$2"; echo "rc $?"', [LIB, v]);
+      expect(r.stderr).toBe('');
+      expect(r.stdout.trim()).toBe(`rc ${rc}`);
+    });
+  it('W29-L8: the library alone words the days check', () => {
+    expect(bash(freshHome(), '. "$1"; _usage_days_says', [LIB]).stdout).toBe('a whole number from 1 to 999');
   });
 
   type Case = [string, (home: string) => void, Record<string, string>?, string?, RegExp?];

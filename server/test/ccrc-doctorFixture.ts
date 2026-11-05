@@ -122,6 +122,8 @@ export function installCcrc(home: string): void {
   // GR7 (D-7353): `_check_graphify` sources the graph resolver beside ccrc and runs the engine wrapper's `--probe`.
   symlinkSync(join(REPO, 'ccd', 'graph-resolve'), join(ccd, 'graph-resolve'));
   symlinkSync(join(REPO, 'ccd', 'graph-build'), join(ccd, 'graph-build'));
+  // D18 (box settings wave 2): doctor's `_check_box-settings` calls `_set_libs`, which loads `testbox-knobs` beside ccrc.
+  symlinkSync(join(REPO, 'ccd', 'testbox-knobs'), join(ccd, 'testbox-knobs'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
