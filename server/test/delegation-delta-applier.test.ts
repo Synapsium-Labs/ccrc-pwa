@@ -811,11 +811,12 @@ describe('R23: the only server code that writes the five delegation tables is th
       'run(delegationInsertSql(delegationLineageCodec), delegationLineageCodec, lineage);',
     ]);
     // THE DELTA METHOD, structurally (the code task makes the lines concrete; this is what they must add up to): exactly one
-    // compare-and-swap UPDATE per table of sessions, activities, attempts and lineage, exactly one `delegationInsertSql` per codec of those
-    // four, and NOTHING else that writes the tables: no DELETE, no literal INSERT, no upsert, no lease (a lease never changes in a delta).
+    // compare-and-swap UPDATE per table of sessions, activities, attempts and lineage, and (wave 5, PR5a) one on leases, exactly one
+    // `delegationInsertSql` per codec of those four, and NOTHING else that writes the tables: no DELETE, no literal INSERT, no upsert, no lease
+    // INSERT (a lease changes in a delta, but a new lease never arrives in one).
     const delta = groups[`${STORE} ${DELTA}`]!;
     const updates = delta.filter((l) => /\bUPDATE\b/.test(l)).flatMap((l) => [...l.matchAll(/\bUPDATE\s+(delegation_\w+)/g)].map((m) => m[1]!)).sort();
-    expect(updates, 'the compare-and-swap UPDATEs, one per table, none on delegation_leases').toEqual(['delegation_activities', 'delegation_attempts', 'delegation_lineage', 'delegation_sessions']);
+    expect(updates, 'the compare-and-swap UPDATEs, one per table').toEqual(['delegation_activities', 'delegation_attempts', 'delegation_leases', 'delegation_lineage', 'delegation_sessions']);
     const inserts = delta.filter((l) => SQL_CALL.test(l)).flatMap((l) => [...l.matchAll(/delegation(Insert|Upsert)Sql\((delegation\w+Codec)/g)].map((m) => `${m[1]!} ${m[2]!}`)).sort();
     expect(inserts, 'the delta\'s statement builders: plain INSERTs for the four, never an upsert, never the lease codec').toEqual([
       'Insert delegationActivityCodec', 'Insert delegationAttemptCodec', 'Insert delegationLineageCodec', 'Insert delegationSessionCodec',

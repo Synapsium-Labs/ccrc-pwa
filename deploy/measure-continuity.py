@@ -595,30 +595,54 @@ def stage4(ctx):
 # spawning, removes a key or acts on anything.
 # Wave 4b adds a THIRD, DIFFERENT section, `direct_pressure_kills`, read from the
 # main transcripts (`transcripts`, the stage-1 discovery): a complete
-# user-message `<task-notification>` envelope with one task id, `status` killed,
-# and a summary whose whole reason is the verified "was stopped because the
+# `<task-notification>` envelope, read from three sources (D-7960): a user message,
+# a queued-command attachment row (`attachment.type` queued_command, its `prompt`)
+# and a queue enqueue row (its `content`), the dequeue and remove rows being no
+# sources. The envelope has one task id, `status` killed, and a summary whose whole
+# reason is the verified "was stopped because the
 # system is running low on memory". It counts unique (transcript uuid, task id)
 # pairs, so a repeated notification or another copy of one uuid is one task and
 # the same id in two uuids is two. The three sections are separate measurements
 # on separate time bases: `direct_pressure_kills` is Claude Code's own reap
-# notification, timed by the notification's delivery stamp (an observation, not
-# the kill instant; `--since` inclusive, `--until` exclusive; the shell may have
-# started earlier); `reap_class_oom` is the kernel pane-scope OOM stop, timed by
+# notification, timed by the stamp of the row that carries it: a delivered notice at
+# its delivery, an enqueued one at its queue time (an observation, not the kill
+# instant; `--since` inclusive, `--until` exclusive; the shell may have started
+# earlier). A notice enqueued before `--until` and delivered after it counts in both
+# adjacent windows: an over-count by design, the safe direction for a target of 0.
+# `notification_sources` counts, per source and before deduplication, the
+# notification texts and unreadable items of the rows that pass the stamp-type check
+# and the window (D-7963); `reap_class_oom` is the kernel pane-scope OOM stop, timed by
 # the journal; `inert_scopes` is NOW's sweep record, never windowed. Neither of
 # the first two substitutes for the other, and the comparison consumes only
 # `reap_class_oom`, never the direct count. Declared discovery limits: the
 # adapter skips stat failures silently and cannot enumerate unreadable roots,
 # the default largest-copy-per-uuid read can hide a divergent smaller copy
 # (`--all-copies` reads it; a task is still counted once), subagent transcripts
-# are outside its pattern, and a notification Claude Code delivers mid-turn as a
-# queued-command attachment row is never a user row, so it is not read (a kill
-# announced that way is outside this count). A KNOWN NON-EVENT is a well-formed
+# are outside its pattern, and the remove and dequeue rows are not read. A queued
+# `prompt` the scanner cannot read as text (a dict, or a list element that is no text
+# part) or an enqueue `content` that is no string (read only as a string: a list or dict
+# of any shape is ONE unreadable item, whole) whose JSON holds a `<task-notification>`
+# is one unreadable item, an unmeasured notification, never skipped. An unreadable item
+# is matched when the marker appears anywhere in its dump, broader than a readable text,
+# which must start with it: the fail-safe direction. A payload that cannot be dumped
+# cannot be searched, so the row's raw line decides: without the opener (plain or JSON-escaped)
+# it counts nothing; with it the row takes the usual order (stamp type, window) and then is
+# one malformed row, with no source count or classification. The unit of
+# `unmeasured_notifications` is the distinct (transcript uuid, text) pair, the text being
+# the stripped text of a readable notice and the sorted dump of an unreadable one, so a
+# notice seen again in the same shape is one, while the same notice in two payload shapes,
+# or with different trailing text, can count again, an over-count by design (D-7961).
+# A KNOWN NON-EVENT is a well-formed
 # envelope read as not this event, adding no unmeasured count: exactly one status
 # element whose readable value is a known non-killed one (`completed`, `failed`,
 # `stopped`: a workflow that did not finish before the previous session ended
 # carries `stopped`), whatever its task-id count (a batched envelope; the status is
 # read BEFORE the id count); or no status element, exactly one readable task-id
-# element and exactly one plain `<event>` element (an event-style notification).
+# element and exactly one plain `<event>` element (an event-style notification); or no
+# status element and a body that is, whole, one plain `<summary>` element (no other
+# element, stray closing tag or free text around it, and no task id: a security-review
+# notice) whose value does not contain `low on memory`, case-insensitively (D-7962). A
+# summary-only body that names low memory stays unmeasured, as does any other body.
 # An envelope is the whole `<task-notification>…</task-notification>` text once
 # trailing whitespace and whole trailing `<system-reminder>…</system-reminder>`
 # blocks (optional whitespace between them) are removed, but only the shapes above
@@ -640,8 +664,9 @@ def stage4(ctx):
 # unreadable stamp or ambiguous fields) and an absent roster are reported as such
 # and are never a clean zero; a row whose stamp is no string, or whose JSON nests
 # deeper than the parser can read, is a malformed row; a file's hits count only
-# once it was read to its end. The scanner and the comparison only read: neither
-# writes a marker or an environment assignment, or acts.
+# once it was read to its end, and so are its unmeasured keys and source counts. The
+# scanner and the comparison only read: neither writes a marker or an environment
+# assignment, or acts.
 S6_IDLE = 1800
 S6_SPAWN_SLOP = 10
 S6_DAY = 86400
@@ -671,6 +696,15 @@ S6_CARRY = re.compile(
     r"why=(?P<why>unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)",
     re.ASCII,
 )
+# The busy arm's two lines (D-7993): read so the record stays readable, and counted nowhere, because this instrument's
+# figures are the inert scopes'. `\S` in `session=` and `procs=` is the ASCII class above, a comm being folded the same way.
+S6_BUSY = re.compile(
+    rf"busy {S6_UNIT} first=(?:none|{S6_POS}) "
+    rf"verdict=(?:report|carry|would-stop|held|stopped|stop-failed) "
+    rf"why=[a-z0-9-]+(?:,[a-z0-9-]+)* session=\S+ n={S6_NUM} procs=\S+",
+    re.ASCII,
+)
+S6_BUSY_MODE = "busy-mode live"
 S6_UNKNOWN_REASONS = frozenset(("unit-show", "description", "control-group", "cpu", "scope-start", "procs", "cgroup-dir", "child-cgroup", "server-stat", "server-comm", "tmux-unknown"))
 
 
@@ -831,7 +865,7 @@ def s6_inert():
         if c and s6_carry_valid(c):
             carried[c.group("state")] += 1
             continue
-        if S6_OLD.fullmatch(line):
+        if S6_OLD.fullmatch(line) or S6_BUSY.fullmatch(line) or line == S6_BUSY_MODE:
             continue
         return {"record": "unreadable"}
     return {"mode": mode, "dead": dead, "inert": inert,
@@ -871,6 +905,9 @@ S6_TASK_ID_OPEN = re.compile(r"<task-id\b")
 S6_EVENT_TAGS = re.compile(r"</?event\b[^<>]*>?")
 S6_SUMMARY = re.compile(r"<summary>([^<>]*)</summary>", re.S)
 S6_SUMMARY_OPEN = re.compile(r"<summary\b")
+# A summary-only body (D-7962): the whole envelope body is one plain summary element, with no
+# other element, no stray closing tag and no free text around it.
+S6_SUMMARY_ONLY = re.compile(r"<summary>([^<>]*)</summary>")
 S6_PRESSURE_SUMMARY = re.compile(
     r'Background command ".*" was stopped because the system is running low on memory', re.S
 )
@@ -892,16 +929,68 @@ def s6_notification_texts(row):
     return []
 
 
+S6_MARKER = "<task-notification>"
+# The opener in a row's raw line, plain or JSON-escaped (`<` as a backslash-u003c escape, either hex case).
+S6_RAW_OPENER = re.compile(rb"(?:<|\\u003[cC])task-notification(?:>|\\u003[eE])")
+
+
+def s6_unreadable(value):
+    """One unreadable item when the value's JSON holds a notification, else nothing.
+
+    A value that cannot be dumped raises: the caller makes its whole row one malformed row,
+    never a silent skip of a payload that may hold a notification."""
+    dump = json.dumps(value, sort_keys=True)
+    return [(dump, False)] if S6_MARKER in dump else []
+
+
+def s6_queued_texts(value):
+    """(text, readable) pairs of a queued prompt or enqueued content."""
+    if isinstance(value, str):
+        return [(value, True)]
+    if isinstance(value, list):
+        out = []
+        for part in value:
+            if isinstance(part, dict) and part.get("type") == "text" \
+                    and isinstance(part.get("text"), str):
+                out.append((part["text"], True))
+            else:
+                out.extend(s6_unreadable(part))
+        return out
+    return s6_unreadable(value)
+
+
+def s6_notification_sources(row):
+    """(source, text, readable) for every place a row can carry a notification."""
+    out = [("user", text, True) for text in s6_notification_texts(row)]
+    if not isinstance(row, dict):
+        return out
+    if row.get("type") == "attachment":
+        att = row.get("attachment")
+        if isinstance(att, dict) and att.get("type") == "queued_command":
+            out.extend(("queued_command", t, r) for t, r in s6_queued_texts(att.get("prompt")))
+    elif row.get("type") == "queue-operation" and row.get("operation") == "enqueue":
+        content = row.get("content")
+        if isinstance(content, str):
+            out.append(("queue_enqueue", content, True))
+        else:
+            out.extend(("queue_enqueue", t, False) for t, _ in s6_unreadable(content))
+    return out
+
+
 def s6_pressure_kills(ctx):
     paths = transcripts(ctx)
     if not paths:
         return {"transcripts": "absent"}
     hits = set()
-    read = unreadable = malformed = unmeasured = 0
+    unmeasured_keys = set()
+    sources = {"user": 0, "queued_command": 0, "queue_enqueue": 0}
+    read = unreadable = malformed = 0
     for path in paths:
         uuid = os.path.basename(path)[:-len(".jsonl")]
         file_hits = set()
-        file_malformed = file_unmeasured = 0
+        file_malformed = 0
+        file_unmeasured = set()
+        file_sources = dict.fromkeys(sources, 0)
         try:
             with open(path, "rb") as fh:
                 for raw in fh:
@@ -910,23 +999,49 @@ def s6_pressure_kills(ctx):
                     except (ValueError, UnicodeError, RecursionError):
                         file_malformed += 1
                         continue
-                    for text in s6_notification_texts(row):
-                        text = text.strip()
-                        if not text.startswith("<task-notification>"):
+                    undumpable = False
+                    try:
+                        found = s6_notification_sources(row)
+                    except (TypeError, ValueError, RecursionError):
+                        # The payload cannot be searched, so the row's own raw bytes decide
+                        # whether it holds a notification (the opener, plain or JSON-escaped).
+                        # One that does not counts nothing; one that does goes through the
+                        # stamp check and the window below, then is one malformed row.
+                        if not S6_RAW_OPENER.search(raw):
                             continue
-                        stamp = row.get("timestamp")
-                        if stamp is not None and not isinstance(stamp, str):
-                            # A stamp that is no string (an object, a number) is a malformed
-                            # row, once per row however many notification texts it carries.
-                            file_malformed += 1
-                            break
-                        at = iso_epoch(stamp)
-                        # A readable timestamp outside the requested window is no event in it.
-                        if at is not None and not in_window(at, ctx):
+                        undumpable = True
+                        found = []
+                    candidates = []
+                    for source, text, readable in found:
+                        if readable:
+                            text = text.strip()
+                            if not text.startswith(S6_MARKER):
+                                continue
+                        candidates.append((source, text, readable))
+                    if not candidates and not undumpable:
+                        continue
+                    stamp = row.get("timestamp") if isinstance(row, dict) else None
+                    if stamp is not None and not isinstance(stamp, str):
+                        # A stamp that is no string (an object, a number) is a malformed
+                        # row, once per row however many notification texts it carries.
+                        file_malformed += 1
+                        continue
+                    at = iso_epoch(stamp)
+                    # A readable timestamp outside the requested window is no event in it.
+                    if at is not None and not in_window(at, ctx):
+                        continue
+                    if undumpable:
+                        # No source count, nothing classified for it.
+                        file_malformed += 1
+                        continue
+                    for source, text, readable in candidates:
+                        file_sources[source] += 1
+                        if not readable:
+                            file_unmeasured.add((uuid, text))
                             continue
                         envelope = S6_NOTIFICATION.fullmatch(text)
                         if not envelope:
-                            file_unmeasured += 1
+                            file_unmeasured.add((uuid, text))
                             continue
                         body = envelope.group(1)
                         ids = S6_TASK_ID.findall(body)
@@ -934,7 +1049,7 @@ def s6_pressure_kills(ctx):
                         id_openers = len(S6_TASK_ID_OPEN.findall(body))
                         status_openers = len(S6_STATUS_OPEN.findall(body))
                         if at is None:
-                            file_unmeasured += 1
+                            file_unmeasured.add((uuid, text))
                             continue
                         if status_openers == 0:
                             # Event-style: no status element, exactly one readable task id
@@ -942,12 +1057,17 @@ def s6_pressure_kills(ctx):
                             if id_openers == 1 and len(ids) == 1 \
                                     and S6_EVENT_TAGS.findall(body) == ["<event>", "</event>"]:
                                 continue
-                            file_unmeasured += 1
+                            # Summary-only (D-7962): the whole body is one plain summary that
+                            # does not name low memory, such as a security-review notice.
+                            summary_only = S6_SUMMARY_ONLY.fullmatch(body)
+                            if summary_only and "low on memory" not in summary_only.group(1).lower():
+                                continue
+                            file_unmeasured.add((uuid, text))
                             continue
                         status = statuses[0] if statuses else None
                         if status_openers != 1 or len(statuses) != 1 \
                                 or status not in ("completed", "failed", "killed", "stopped"):
-                            file_unmeasured += 1
+                            file_unmeasured.add((uuid, text))
                             continue
                         # A known non-killed status is read BEFORE the task-id count, so a
                         # batched envelope (several ids, one status) is a known non-event.
@@ -958,14 +1078,14 @@ def s6_pressure_kills(ctx):
                             # leave it unmeasured, whatever its summary (it only moves readings
                             # toward unmeasured). The lazy body match, which can run past the first
                             # closing tag to a stray later one, is the base's and is not asked more (O4).
-                            file_unmeasured += 1
+                            file_unmeasured.add((uuid, text))
                             continue
                         if id_openers != 1 or len(ids) != 1:
-                            file_unmeasured += 1
+                            file_unmeasured.add((uuid, text))
                             continue
                         summaries = S6_SUMMARY.findall(body)
                         if len(S6_SUMMARY_OPEN.findall(body)) != 1 or len(summaries) != 1:
-                            file_unmeasured += 1
+                            file_unmeasured.add((uuid, text))
                             continue
                         if S6_PRESSURE_SUMMARY.fullmatch(summaries[0]):
                             file_hits.add((uuid, ids[0]))
@@ -975,15 +1095,18 @@ def s6_pressure_kills(ctx):
             continue
         hits.update(file_hits)
         malformed += file_malformed
-        unmeasured += file_unmeasured
+        unmeasured_keys.update(file_unmeasured)
+        for name, n in file_sources.items():
+            sources[name] += n
     return {
-        "reading": "partial" if unreadable or malformed or unmeasured else "measured",
+        "reading": "partial" if unreadable or malformed or unmeasured_keys else "measured",
         "killed_background_tasks": len(hits),
         "transcript_uuids_with_kills": len({uuid for uuid, _ in hits}),
         "transcripts_read": read,
         "unreadable_transcripts": unreadable,
         "malformed_rows": malformed,
-        "unmeasured_notifications": unmeasured,
+        "unmeasured_notifications": len(unmeasured_keys),
+        "notification_sources": sources,
     }
 
 

@@ -64,6 +64,12 @@ export interface FleetState {
    *  `RosterWire` only (G15; accounts plan Task A12): `null` until an answer carries it, and again after one that
    *  does not (a signed-out session, a dark gate). */
   lanes: Readonly<Record<string, LaneWire>> | null;
+  /** The lanes a sign-out may have changed that this store has not read since (D-7992). `lanes` still holds each as it was,
+   *  so no sheet may take it at its word: `oldCredentialOf`. A mark goes with the first good read of the lanes that
+   *  started after it, and after `notBefore`; a failed read, or one already in flight, leaves it. Memory only. */
+  lanesUnread: Readonly<Record<string, { readonly afterRead: number; readonly notBefore: number }>>;
+  /** Marks a lane, `holdMs` being how long a read could still find it as it was. */
+  markLaneUnread(id: string, holdMs?: number): void;
   /** `GET /api/accounts`'s `connect`, on the same terms as `lanes`. */
   accountsConnect: AccountsConnect | null;
   /** `GET /api/accounts`'s `accounts`, the usage readings, from the same read (W2 Task S8, D-5474: the inspector's lane
@@ -477,11 +483,22 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     const fetchAccounts = deps.fetchAccounts ?? (() => api.accounts());
     // The last answer's arrival (D-7740): kept here, never in the state, so the time never counts as a write.
     let readAt: number | null = null;
-    const readAccounts = (): Promise<'ok' | 'error'> => fetchAccounts().then((r) => {
+    // Reads overlap: a 20 s poll can be in flight when a sheet asks for one. Each has its number, and an answer from a read
+    // older than the newest that landed is dropped, so a sign-out's read is never overwritten by the lanes from before it.
+    let readsStarted = 0;
+    let newestLanded = 0;
+    const landAccounts = (r: Awaited<ReturnType<typeof fetchAccounts>>, read: number, startedAt: number): 'ok' | 'error' => {
+      if (read < newestLanded) return 'ok';
+      newestLanded = read;
       const held = get();
       const next: Partial<FleetState> = {};
       const lanes = isRecord(r.lanes) ? r.lanes! : null;
       if (!sameJson(lanes, held.lanes)) next.lanes = lanes;
+      if (lanes !== null) {
+        const marks = Object.entries(held.lanesUnread);
+        const standing = marks.filter(([, m]) => read <= m.afterRead || startedAt < m.notBefore);
+        if (standing.length < marks.length) next.lanesUnread = Object.fromEntries(standing);
+      }
       const connect = isRecord(r.connect) ? r.connect! : null;
       if (!sameJson(connect, held.accountsConnect)) next.accountsConnect = connect;
       // `usage` and `projected` keep the last good value on a malformed answer, as `roster` does below. `projected`
@@ -503,8 +520,13 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       }
       readAt = Date.now();
       if (Object.keys(next).length > 0) set(next);
-      return Array.isArray(r.roster) ? 'ok' as const : 'error' as const;
-    }).catch(() => 'error' as const);
+      return Array.isArray(r.roster) ? 'ok' : 'error';
+    };
+    const readAccounts = (): Promise<'ok' | 'error'> => {
+      const read = ++readsStarted;
+      const startedAt = Date.now();
+      return fetchAccounts().then((r) => landAccounts(r, read, startedAt)).catch(() => 'error' as const);
+    };
 
     // THE ONE reader of `GET /api/feed` in the app (C7n, D-7192, D-7209): the connect-time durable read below and
     // `refreshFeed()` (the Inbox, on every open) both call it. Revived rather than trusted: a kind from a newer server
@@ -553,6 +575,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       roster: snapshot?.roster ?? [],
       // Never hydrated: the snapshot holds no lane, by design (G15).
       lanes: null,
+      lanesUnread: {},
+      markLaneUnread(id, holdMs = 0) {
+        set({ lanesUnread: { ...get().lanesUnread, [id]: { afterRead: readsStarted, notBefore: Date.now() + holdMs } } });
+      },
       accountsConnect: null,
       usage: null,
       projected: undefined,

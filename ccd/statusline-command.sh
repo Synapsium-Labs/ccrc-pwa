@@ -267,18 +267,44 @@ fi
 #    fake zero that `telemetry` was added to keep out of placement scoring.
 #    An account off either gate is left unmeasured, which `projectHome` ranks
 #    below every measured account rather than above them.
+#
+#    EITHER WINDOW IS A READING. A payload with no 5h figure still knows the
+#    weekly one, and gating the row on the 5h figure let a row whose weekly
+#    window had ended sit unmeasured for `_serviceable` until a payload carrying
+#    both came along. Such a row writes `"five":null`, the spelling every reader
+#    already takes as unknown: never 0, which is a measurement. A payload with
+#    NEITHER window (a render before any API call) still writes nothing.
+#
+#    A PAYLOAD WITH NO 5H FIGURE NEVER ERASES A LIVE ONE. The row has many
+#    writers, so publishing the null over a 5h reading still in force would flap
+#    it back to unknown on every render, and `_avail` refuses only on a KNOWN
+#    half: a lane measured at the ceiling would read as free. So that payload is
+#    dropped whole, like an older reading, until the 5h figure lapses by the
+#    rules `_limit_field` retracts it under: its `fiveResetAt` has passed, or its
+#    `ts` is more than a 5h window old. It is not merged instead, because a fresh
+#    `ts` over a kept 5h figure with no `fiveResetAt` would keep that figure
+#    alive for ever.
+#
+#    NOR DOES IT ERASE THE WINDOW THE ROW REMEMBERS. `"five":null` keeps the row's
+#    `fiveResetAt`, because that field is all the older-row check has to compare
+#    with: written as null, an idle session's reading of an earlier window would
+#    pass as new and go out with a fresh `ts`. No reader acts on a reset with no
+#    figure beside it. The figure itself is gone, so inside that window the
+#    values can no longer decide, and a reading that names the window once it
+#    has ended is dropped as well.
 measured=0
 if [ -n "$acct_id" ]; then
   for m in ${CCRC_MEASURED[@]+"${CCRC_MEASURED[@]}"}; do
     [ "$m" = "$acct_id" ] && { measured=1; break; }
   done
 fi
-if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
+if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }; then
   mkdir -p "$HOME/.cc-limits"
   # resets_at are unix-epoch seconds when each window rolls over (may be absent).
   five_reset=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at // "null"' 2>/dev/null)
   seven_reset=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // "null"' 2>/dev/null)
   acct_row="$HOME/.cc-limits/$acct_id.json"
+  acct_now=$(date +%s)
   # One `jq` against the row on disk, and only when there IS one — the verdict
   # is a word, never a number this shell then has to re-decide. Any failure
   # (absent row, unparseable row, a `resets_at` that is not a number and so
@@ -286,8 +312,9 @@ if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
   acct_verdict=""
   if [ -f "$acct_row" ]; then
     acct_verdict=$(jq -r \
-      --argjson f "$five_int" --argjson s "${seven_int:-0}" \
-      --argjson fr "${five_reset:-null}" --argjson sr "${seven_reset:-null}" '
+      --argjson f "${five_int:-null}" --argjson s "${seven_int:-0}" \
+      --argjson fr "${five_reset:-null}" --argjson sr "${seven_reset:-null}" \
+      --argjson now "$acct_now" '
         # TWO shapes of "this reading is older", and the row needs both. A
         # window that has ROLLED since the row was written leaves the two
         # readings incomparable by value — the stale one is the one whose
@@ -296,10 +323,15 @@ if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
         def rewound($newReset; $oldReset):
           $newReset != null and $oldReset != null and $newReset < $oldReset;
         def undercuts($new; $old; $newReset; $oldReset):
-          $newReset != null and $oldReset != null and $newReset == $oldReset and $new < $old;
+          $new != null and $newReset != null and $oldReset != null and $newReset == $oldReset and $new < $old;
+        def fiveLive:
+          (.five | type) == "number" and (.ts | type) == "number" and $now - .ts <= 18000
+          and ((.fiveResetAt | type) != "number" or $now < .fiveResetAt);
         if rewound($fr; .fiveResetAt) or rewound($sr; .sevenResetAt) then "behind"
         elif undercuts($f; (.five // 0); $fr; .fiveResetAt)
           or undercuts($s; (.seven // 0); $sr; .sevenResetAt) then "behind"
+        elif $f == null and fiveLive then "behind"
+        elif $f != null and $fr != null and .five == null and $fr == .fiveResetAt and $now >= $fr then "behind"
         else "publish" end' "$acct_row" 2>/dev/null) || acct_verdict=""
   fi
   if [ "$acct_verdict" != "behind" ]; then
@@ -307,8 +339,12 @@ if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
     # this replaces was ONE path shared by every session on the account, so two
     # renders landing together truncated and wrote the same file at once.
     acct_tmp="$HOME/.cc-limits/.$acct_id.$$.tmp"
+    acct_five_reset="${five_reset:-null}"
+    if [ -z "${five_int:-}" ] && [ "$acct_five_reset" = null ] && [ -f "$acct_row" ]; then
+      acct_five_reset=$(jq -r 'if (.fiveResetAt | type) == "number" then .fiveResetAt else "null" end' "$acct_row" 2>/dev/null) || acct_five_reset=null
+    fi
     printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s}\n' \
-      "$five_int" "${seven_int:-0}" "$(date +%s)" "${five_reset:-null}" "${seven_reset:-null}" \
+      "${five_int:-null}" "${seven_int:-0}" "$acct_now" "${acct_five_reset:-null}" "${seven_reset:-null}" \
       > "$acct_tmp" && mv -f "$acct_tmp" "$acct_row" || rm -f "$acct_tmp" 2>/dev/null
   fi
 fi

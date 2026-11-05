@@ -48,7 +48,7 @@ const ID_BUILDERS = {
   start: 'no-id', enable: 'no-id', startCross: 'no-id', enableCross: 'no-id',
   ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
-  wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id',
+  wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id', wsAddWorkerBase: 'no-id',
   prStateSession: 'id', prStateProject: 'no-id', prStatePr: 'no-id', prTrainProve: 'no-id',
   // D-6784: `prLanding`'s ids ride inside `<id>:<pr>` pairs the builder validates itself, never as a bare argv word.
   // The lane's ids come from the registry listing (the project's own sessions), never from a request body; the
@@ -63,9 +63,12 @@ const ID_BUILDERS = {
   // object the builder checks itself (`isRegistryId` and the lease-id grammar), so each is checked once, there, and never
   // reaches the argv unexamined; no server code composes it yet (PR6 does, and adds its row below).
   leaseMark: 'no-id',
+  // `leaseAudit` (W5-G13) leads with a lease id, which is a UUID the builder checks against the lease grammar, never a
+  // registry id; no server code composes it yet (PR7 and PR9 do).
+  leaseAudit: 'no-id',
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
-  coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
+  coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
@@ -488,7 +491,10 @@ const CENSUS: readonly CensusRow[] = [
 
 /** The files whose gates ask the predicate themselves. */
 const GATE_FILES = [
-  'server.ts', 'registry.ts', 'watch.ts',
+  'server.ts', 'registry.ts',
+  // fleetstate.ts (console speed S1): the snapshot decision moved out of watch.ts (which no longer names the predicate), and
+  // its purge test vets each missing id with the predicate before reading the registry listing.
+  'fleetstate.ts',
   'coord/routes.ts', 'coord/route.ts', 'coord/openRun.ts', 'coord/advance.ts', 'coord/dispatchDecide.ts', 'coord/closeDecide.ts', 'coord/reclaim.ts', 'coord/fingerprint.ts',
   'coord/expireArchived.ts', 'coord/childReclaimStale.ts',
   // orphanTreeLane.ts (D-6635): the orphan census's `inside` id is vetted by the predicate before the lane reads that row.

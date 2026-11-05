@@ -48,15 +48,15 @@ const otherShapes = (t: string): string[] => [
 const sorted = (xs: Iterable<string>): string[] => [...new Set(xs)].sort();
 
 describe('the token sets each scanner builds from the refusal helpers\' calls (D-7071): literal, both ways', () => {
-  it('wsaudit.test.ts, ccd-swap-refuse.test.ts and ccd-actor-flags.test.ts: the reap family over the whole source, 50 words', () => {
-    const WORDS = ['attached', 'base-missing', 'branch-elsewhere', 'branch-missing', 'child', 'child-branch-elsewhere', 'child-busy',
+  it('wsaudit.test.ts, ccd-swap-refuse.test.ts and ccd-actor-flags.test.ts: the reap family over the whole source, 51 words', () => {
+    const WORDS = ['attached', 'base-missing', 'branch-elsewhere', 'branch-gone-checked-out', 'branch-missing', 'child', 'child-branch-elsewhere', 'child-busy',
       'child-dirty', 'child-record-stale', 'child-unpushed', 'clips-unreadable', 'containment-unproven', 'detached-head', 'dirty-tree',
       'fetch-failed', 'foreign-worktree', 'gh-unreadable', 'held', 'in-use', 'incomplete-registry', 'live', 'merge-commit-missing',
       'nested-checkouts-present', 'no-bound-pr', 'no-remote', 'no-such-session', 'no-upstream', 'no-worktree-record', 'not-a-child',
       'not-a-workspace', 'not-archived', 'not-expired', 'not-idle', 'not-merged', 'paused', 'pr-fields-malformed', 'pr-head-not-ours',
       'reap-in-progress', 'reclaim-in-progress', 'sensitive-ignored', 'session-busy', 'stash-unreadable', 'stashes-present',
       'state-changed', 'status-unknown', 'tree-busy', 'tree-differs', 'tree-unreadable', 'unpushed-commits', 'worktree-missing'];
-    expect(WORDS).toHaveLength(50);
+    expect(WORDS).toHaveLength(51);
     expect(refuseWords('reap')).toEqual(WORDS);
   });
 
@@ -72,10 +72,10 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     expect(refuseWords('reap', { from, to, codeOnly: true })).toEqual(WORDS);
   });
 
-  it('child-reclaim.test.ts: the reap family in the RECLAIM region, comment lines dropped, 14 words', () => {
-    const WORDS = ['attached', 'branch-elsewhere', 'containment-unproven', 'held', 'no-such-session', 'no-worktree-record', 'not-a-child',
+  it('child-reclaim.test.ts: the reap family in the RECLAIM region, comment lines dropped, 15 words', () => {
+    const WORDS = ['attached', 'branch-elsewhere', 'branch-gone-checked-out', 'containment-unproven', 'held', 'no-such-session', 'no-worktree-record', 'not-a-child',
       'not-a-workspace', 'not-idle', 'paused', 'reap-in-progress', 'state-changed', 'tree-busy', 'tree-unreadable'];
-    expect(WORDS).toHaveLength(14);
+    expect(WORDS).toHaveLength(15);
     expect(refuseWords('reap', { from: marker('RECLAIM-BEGIN'), to: marker('RECLAIM-END'), codeOnly: true })).toEqual(WORDS);
   });
 
@@ -86,10 +86,10 @@ describe('the token sets each scanner builds from the refusal helpers\' calls (D
     expect(refuseWords('reap', { from: marker('EXPIRE-BEGIN'), to: marker('EXPIRE-END'), codeOnly: true })).toEqual(WORDS);
   });
 
-  it('archived-expiry-policy.test.ts: the reap family in `_ws_reclaim_ladder`, comment lines dropped, 9 words', () => {
-    const WORDS = ['attached', 'branch-elsewhere', 'containment-unproven', 'held', 'no-worktree-record', 'not-a-workspace', 'paused',
+  it('archived-expiry-policy.test.ts: the reap family in `_ws_reclaim_ladder`, comment lines dropped, 10 words', () => {
+    const WORDS = ['attached', 'branch-elsewhere', 'branch-gone-checked-out', 'containment-unproven', 'held', 'no-worktree-record', 'not-a-workspace', 'paused',
       'tree-busy', 'tree-unreadable'];
-    expect(WORDS).toHaveLength(9);
+    expect(WORDS).toHaveLength(10);
     const [from, to] = functionSpan(src, '_ws_reclaim_ladder');
     expect(refuseWords('reap', { from, to, codeOnly: true })).toEqual(WORDS);
   });

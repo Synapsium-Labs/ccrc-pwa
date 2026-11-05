@@ -17,6 +17,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { stubFn } from './ccdStub.js';
@@ -47,7 +48,7 @@ function sourced(home: string, script: string, extra: NodeJS.ProcessEnv = {}): R
   env['TMPDIR'] = join(home, 'tmp');
   Object.assign(env, extra);
   assertNoRealTool(env, home);
-  const r = spawnSync(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', CCRC], { env, encoding: 'utf8', input: '', timeout: 60_000 });
+  const r = spawnSyncGroup(BASH, ['-c', `. "$1"; ${script}`, 'ccrc-under-test', CCRC], { env, encoding: 'utf8', input: '', timeout: 60_000 });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
@@ -237,5 +238,134 @@ describe('the deadline and the release base answer as the verb will read them (D
     const why = 'CCRC_RELEASE_BASE_URL cannot be measured: ~/.ccrc/ccrc.env names it on a line this reader does not take '
       + '(it reads only a plain KEY=value line)';
     expect(r.stdout).toBe(`rc 1 from= knob= why=${why}\nstderr ccrc: ${why}\n`);
+  });
+});
+
+// ── W2 characterization (box settings wave 2): the pure slice-limit check, by direct calls ─────────────────────────────
+// `_slice_limit_ok <directive> <value>` is pure: rc 0 when the value is one the slice renderer writes. `sourced()` passes no
+// positional argument to the script, so each row hands the directive and the value in as exported variables.
+describe('_slice_limit_ok, by direct calls, before its words move (W2 characterization)', () => {
+  const rcOf = (dir: string, val: string): string =>
+    sourced(boxWith('ccrc-carve-sl-', null), '_slice_limit_ok "$SL_DIR" "$SL_VAL"; echo "rc $?"', { SL_DIR: dir, SL_VAL: val }).stdout.trim();
+  it.each([
+    ['MemoryMax', '1G', 0], ['MemoryMax', '1073741824', 0], ['MemoryMax', '1048576K', 0], ['MemoryMax', '24G', 0],
+    ['MemoryMax', '1%', 0], ['MemoryMax', '100%', 0], ['MemoryMax', '9999999999999999E', 0],
+    ['MemoryMax', '1073741823', 1], ['MemoryMax', '1023M', 1], ['MemoryMax', '0', 1], ['MemoryMax', '0%', 1],
+    ['MemoryMax', '101%', 1], ['MemoryMax', 'infinity', 1], ['MemoryMax', '1.5G', 1], ['MemoryMax', '01G', 1],
+    ['MemoryMax', '1g', 1], ['MemoryMax', '9'.repeat(17), 1],
+    ['MemorySwapMax', '0', 0], ['MemorySwapMax', '1M', 0], ['MemorySwapMax', '1048576', 0], ['MemorySwapMax', '6G', 0],
+    ['MemorySwapMax', '1048575', 1], ['MemorySwapMax', '1023K', 1], ['MemorySwapMax', '50%', 1],
+    ['MemoryHigh', '1G', 1],
+  ] as [string, string, number][])('%s %s answers rc %d', (dir, val, rc) => {
+    expect(rcOf(dir, val)).toBe(`rc ${rc}`);
+  });
+});
+
+// ── W2 characterization: wave 1's keep and health sentences, byte for byte, before their words move ───────────────────
+describe('the keep and health sentences, byte for byte, before their words move (W2 characterization)', () => {
+  const S = (home: string, script: string, extra: NodeJS.ProcessEnv = {}): string => {
+    const r = sourced(home, script, extra);
+    expect(r.stderr).toBe('');
+    return r.stdout;
+  };
+  it('K1: _keep_why names the key, the value and the bound', () => {
+    const h = boxWith('ccrc-carve-k1-', null);
+    expect(S(h, '_keep_why CCRC_BACKUP_KEEP "$KV"', { KV: 'abc' })).toBe("CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999");
+    expect(S(h, '_keep_why CCRC_BACKUP_DATA_KEEP "$KV" 2', { KV: '1' })).toBe("CCRC_BACKUP_DATA_KEEP='1' is not a whole number from 2 to 9999");
+    expect(S(h, '_keep_why CCRC_BACKUP_KEEP "$KV"', { KV: 'x'.repeat(40) })).toBe(`CCRC_BACKUP_KEEP='${'x'.repeat(32)}...' is not a whole number from 0 to 9999`);
+    expect(S(h, '_keep_why CCRC_BACKUP_KEEP "$KV"', { KV: 'a\tb' })).toBe("CCRC_BACKUP_KEEP='a?b' is not a whole number from 0 to 9999");
+  });
+  it('K2: _keep_knob refuses with K1\'s sentence and the source that won', () => {
+    const k1 = "CCRC_BACKUP_KEEP='abc' is not a whole number from 0 to 9999";
+    const script = '_keep_knob CCRC_BACKUP_KEEP 10; printf \'%s|%s\' "$?" "$KEEP_WHY"';
+    expect(S(boxWith('ccrc-carve-k2e-', null), script, { CCRC_BACKUP_KEEP: 'abc' })).toBe(`1|${k1}, as set in the environment`);
+    expect(S(boxWith('ccrc-carve-k2f-', 'CCRC_BACKUP_KEEP=abc\n'), script)).toBe(`1|${k1}, as set in the box's ccrc.env`);
+  });
+  it('H1: _upd_health_s refuses a non-number with its sentence and the default 90', () => {
+    const h = boxWith('ccrc-carve-h1-', null);
+    expect(S(h, '_upd_health_s; printf \'%s|%s\' "$?" "$UPD_HEALTH_WHY"', { CCRC_UPDATE_HEALTH_S: 'ninety' }))
+      .toBe("1|CCRC_UPDATE_HEALTH_S='ninety' is not a number of seconds (digits only, at most 18) — using 90");
+  });
+});
+
+// ── W2 (box settings wave 2): `ccrc test`'s shape check, called directly on a sourced ccd/ccrc ─────────────────────────
+describe('_tshape and _tshape_says live in ccd/ccrc (D-7906)', () => {
+  const rc = (script: string): string => sourced(boxWith('ccrc-carve-tshape-', null), `${script}; echo "rc $?"`).stdout.trim();
+  it.each([
+    ['_tshape CCRC_TEST_HEAVY_SLOTS 99', 'rc 0'],
+    ['_tshape CCRC_TEST_HEAVY_SLOTS 100', 'rc 1'],
+    ['_tshape OTHER 1', 'rc 1'],
+  ])('%s answers %s', (script, want) => {
+    expect(rc(script)).toBe(want);
+  });
+  it('the words, with their newline', () => {
+    const h = boxWith('ccrc-carve-tsays-', null);
+    expect(sourced(h, '_tshape_says CCRC_TEST_WIDE_FILES').stdout).toBe('a whole number from 0 to 999\n');
+    expect(sourced(h, '_tshape_says OTHER').stdout).toBe('a whole number from 1 to 10000\n');
+  });
+});
+
+// ── W2: the session slice's words, by direct calls (D-7906) ────────────────────────────────────────────────────────────
+describe('_slice_limit_says prints the slice limit words, with no newline', () => {
+  it.each([
+    ['MemoryMax', 'a whole number with an optional K, M, G, T, P or E suffix, at least 1G, or a whole percentage from 1% to 100%'],
+    ['MemorySwapMax', 'a whole number with an optional K, M, G, T, P or E suffix, at least 1M, or 0'],
+  ])('%s', (dir, words) => {
+    expect(sourced(boxWith('ccrc-carve-sls-', null), '_slice_limit_says "$SL_DIR"', { SL_DIR: dir }).stdout).toBe(words);
+  });
+});
+
+// ── W2: the keepalive's freshness check, by direct calls on a sourced ccd/ccrc (D-7906) ────────────────────────────────
+// The values arrive as exported variables, so the empty string and a leading zero reach the function as typed.
+const FRESH_ROWS: [string, number][] = [
+  ['0', 0], ['0800', 0], ['9223372036854775807', 0], ['30m', 1], ['-1', 1], ['', 1],
+  ['9223372036854775808', 2], ['99999999999999999999', 2],
+];
+describe('_keepalive_fresh_ok and _keepalive_fresh_says live in ccd/ccrc', () => {
+  it.each(FRESH_ROWS)('%j answers rc %d', (v, rc) => {
+    expect(sourced(boxWith('ccrc-carve-fresh-', null), '_keepalive_fresh_ok "$FV" 2>/dev/null; echo "rc $?"', { FV: v }).stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('the words, with no newline', () => {
+    expect(sourced(boxWith('ccrc-carve-freshs-', null), '_keepalive_fresh_says').stdout).toBe('a whole number of seconds from 0 to 9223372036854775807');
+  });
+});
+
+// ── W2: the usage sweep's days check, by direct calls on a sourced ccd/ccrc (D-7906) ───────────────────────────────────
+const DAYS_ROWS: [string, number][] = [['1', 0], ['999', 0], ['0', 1], ['07', 1], ['1000', 1], ['', 1]];
+describe('_usage_days_ok and _usage_days_says live in ccd/ccrc', () => {
+  it.each(DAYS_ROWS)('%j answers rc %d', (v, rc) => {
+    expect(sourced(boxWith('ccrc-carve-days-', null), '_usage_days_ok "$DV"; echo "rc $?"', { DV: v }).stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('the words, with no newline', () => {
+    expect(sourced(boxWith('ccrc-carve-days-s-', null), '_usage_days_says').stdout).toBe('a whole number from 1 to 999');
+  });
+});
+
+// ── W2: the carry-copies bound's check, by direct calls on a sourced ccd/ccrc (D-7906) ─────────────────────────────────
+const CARRY_ROWS: [string, number][] = [
+  ['1', 0], ['9'.repeat(18), 0], ['0', 1], ['0123', 1], ['9'.repeat(19), 1], ['10G', 1],
+];
+describe('_carry_warn_bytes_ok and _carry_warn_bytes_says live in ccd/ccrc', () => {
+  it.each(CARRY_ROWS)('%j answers rc %d', (v, rc) => {
+    expect(sourced(boxWith('ccrc-carve-carry-', null), '_carry_warn_bytes_ok "$CV"; echo "rc $?"', { CV: v }).stdout.trim()).toBe(`rc ${rc}`);
+  });
+  it('the words, with no newline', () => {
+    expect(sourced(boxWith('ccrc-carve-carry-s-', null), '_carry_warn_bytes_says').stdout).toBe('a whole number of bytes from 1 to 18 digits');
+  });
+});
+
+// ── W2: wave 1's resolvers' value-free words, by direct calls on a sourced ccd/ccrc (D-7908) ──────────────────────────
+// Each prints its words with no newline; the consumers' sentences (K1, K2, H1 above, the verb's pinned lines) are built from them.
+describe('the words of wave 1\'s resolvers (D-7908)', () => {
+  const says = (script: string): string => sourced(boxWith('ccrc-carve-says-', null), script).stdout;
+  it.each([
+    ['_keep_says 0', 'a whole number from 0 to 9999'],
+    ['_keep_says 2', 'a whole number from 2 to 9999'],
+    ['_keep_says', 'a whole number from 0 to 9999'],
+    ['_upd_health_says', 'a number of seconds (digits only, at most 18)'],
+    ['_upd_deadline_says', 'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)'],
+    ['_models_budget_says', 'a whole number of seconds from 0 to 3600'],
+  ])('%s prints its words', (script, words) => {
+    expect(says(script)).toBe(words);
   });
 });

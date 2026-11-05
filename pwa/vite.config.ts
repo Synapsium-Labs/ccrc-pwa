@@ -143,10 +143,12 @@ export default defineConfig({
     // Installable PWA. Updates apply themselves — main.tsx also drives periodic
     // update CHECKS, because a never-navigating SPA otherwise never asks.
     VitePWA({
-      // autoUpdate: a new deploy's worker skip-waits + claims clients and the
-      // page reloads onto it — no stuck-on-old-bundle (the 'prompt' default
-      // needed a full app close to swap). Right for a single-user control app
-      // that should always run the latest.
+      // autoUpdate: a new deploy's worker skip-waits + claims clients — no
+      // stuck-on-old-bundle (the 'prompt' default needed a full app close to
+      // swap). Right for a single-user control app that should always run the
+      // latest. The page's reload onto it waits for the next move between
+      // screens, never in the first 15 s back: main.tsx hands registerSW an
+      // onNeedReload that only marks it pending (console speed, Task C3).
       registerType: 'autoUpdate',
       manifest: {
         name: 'ccrc',

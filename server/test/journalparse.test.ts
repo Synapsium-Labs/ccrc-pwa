@@ -400,6 +400,17 @@ describe('parseJournalLine: the three families never merge', () => {
     expect(parseJournalLine(line({ verb: 'ws-shed-deps', meas: { mode: 'coordinator' } })).meas?.childRun).toBeNull();
   });
 
+  it('carries `meas.startpoint` (D-7827), and a create line from a ccd that does not write it reads null (the skew row)', () => {
+    const tip = 'e'.repeat(40);
+    // New ccd, this server: a `ws-add --base` create row keeps its start point beside the origin ref it records as base.
+    expect(parseJournalLine(line({ act: 'create', verb: 'ws-add', meas: { base: 'origin/main', startpoint: tip } })).meas)
+      .toMatchObject({ base: 'origin/main', startpoint: tip });
+    // Skew: a plain ws-add, or a ccd older than the key — absent reads null, and `base` is untouched.
+    const old = parseJournalLine(line({ act: 'create', verb: 'ws-add', meas: { base: 'origin/main' } })).meas;
+    expect(old?.startpoint).toBeNull();
+    expect(old?.base).toBe('origin/main');
+  });
+
   it('narrows `meas.atticsrc` to its three declared members, collapsing an unrecognised token to null', () => {
     expect(parseJournalLine(line({ meas: { atticsrc: 'worktree' } })).meas?.atticsrc).toBe('worktree');
     expect(parseJournalLine(line({ meas: { atticsrc: 'registry' } })).meas?.atticsrc).toBe('registry');

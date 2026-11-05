@@ -8,6 +8,7 @@ import {
   ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, KIND_CODES, MINTED_KEY_EXPIRING_MS, MINTED_TOKEN_EXPIRING_MS,
   MINTED_TOKEN_LIFETIME_MS, SIGNED_IN_WITHIN_MS, LANE_IDENTITY_MAX, kindCodeOf, laneStateOf, sourceAt, stateWordFor,
   type AccountStateWord, type LaneState, type StateWordInput,
+  laneNotReadyReason,
 } from '../../shared/accounts';
 import type { AccountUsage, RosterWire } from '../../shared/api';
 import {
@@ -72,6 +73,16 @@ describe('one state word per lane (D-5517)', () => {
     const a = stateWordFor(token(read({ check: { verdict: 'auth-dead', at: NOW - 30 * DAY } })));
     expect(a.word).toBe('signed-out');
     expect(a.source).toBe('HTTP 401 · checked 30d ago');
+  });
+
+  it('a sign-out the box records is Signed out, ahead of any 401, with the time it happened (D-7992)', () => {
+    const signedOutAt = NOW - 5 * 60_000;
+    const a = stateWordFor(token(read({ signedOutAt })));
+    expect(a).toEqual({ word: 'signed-out', source: 'signed out on the fleet host', at: signedOutAt });
+    expect(stateWordFor(token(read({ signedOutAt, check: { verdict: 'auth-dead', at: NOW } }), { authDead: true }))).toEqual(a);
+    expect(stateWordFor(token(read({ signedOutAt }), { disabled: true })).word).toBe('off');
+    expect(laneNotReadyReason({ kind: 'read', state: { signedOutAt } })).toBe('no-credential');
+    expect(laneNotReadyReason({ kind: 'read', state: { credential: 'none' } })).toBe('not-checked');
   });
 
   it('Off outranks everything', () => {
@@ -218,6 +229,7 @@ describe('the Accounts card says the one word it was given (D-7718)', () => {
     // And Off still names the 401 it outranks.
     const off = laneAnswerOf(undefined, usage({ disabled: true, authDead: true }), undefined, NOW);
     expect(offAlso(off, usage({ disabled: true, authDead: true }))).toBe('also signed out (HTTP 401)');
+    expect(offAlso(off, usage({ disabled: true }), { state: off, ready: false, signedOutAt: NOW })).toBe('also signed out on the fleet host');
     expect(offAlso(off, usage({ disabled: true }))).toBeNull();
   });
 
@@ -317,6 +329,14 @@ describe('the Accounts card says the one word it was given (D-7718)', () => {
     expect(tok?.wrong).toBe("lane-b's token was refused (HTTP 401).");
     expect(tok?.effect).toBe('New sessions are not placed here.');
     expect(tok?.commands[0]).toMatch(/^ccrc account credential --id lane-b --credential - < /);
+    // Signed out on the box (D-7992): no provider refused anything, and placement does not read the sign-out.
+    const signedOutAt = now - 2 * 3_600_000;
+    const answer = stateWordFor(token(read({ signedOutAt })));
+    const lane = { state: answer, ready: false, notReadyReason: 'no-credential' as const, signedOutAt, credential: 'none' as const };
+    const gone = troubleCopy({ id: 'lane-b', answer, entry: { provider: 'anthropic', kind: 'sign-in' }, lane, usage: null, sessions: 2, now });
+    expect(gone?.wrong).toBe('lane-b was signed out on the fleet host 2h ago.');
+    expect(gone?.effect).toBe('New sessions on it fail until it has a sign-in or a token again. 2 sessions on it may fail their next turn.');
+    expect(gone?.commands).toEqual(['ccrc account check --id lane-b']);
     const limited = troubleCopy({
       id: 'lane-c', answer: stateWordFor(token(undefined, { five: 100 })), entry: undefined, lane: undefined,
       usage: usage({ wrapper: 'lane-c', five: 100, fiveResetAt: Math.floor(now / 1000) + 72 * 60 }), sessions: 4, now,

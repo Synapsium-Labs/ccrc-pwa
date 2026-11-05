@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, makeCcdHarness, ghContainedEnv, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock,
@@ -1472,7 +1473,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     const START = `${WS_ADD} _alive() { return 1; }; _have_systemctl() { return 1; };`;
     const gen = (id: string): string => path.join(h.home, '.cc-sessions', `${id}.generation`);
 
-    const r = spawnSync('bash', ['-c', `source "${CCD}"; ${NOFLOCK} ${START} cmd_start claude demo`], {
+    const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${NOFLOCK} ${START} cmd_start claude demo`], {
       encoding: 'utf8', cwd: h.home, timeout: 30_000,
       env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
     });
@@ -1490,7 +1491,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     h.cleanup();
     h = makeCcdHarness('ccrc-lc-purge-');
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
-    const r2 = spawnSync('bash', ['-c', `source "${CCD}"; ${START} cmd_start claude demo`], {
+    const r2 = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${START} cmd_start claude demo`], {
       encoding: 'utf8', cwd: h.home, timeout: 30_000,
       env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
     });
@@ -2214,7 +2215,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
         setup: (): void => { fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true }); } },
     ] as const;
     const runVerb = (snippet: string): { status: number | null; stderr: string } => {
-      const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+      const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
         encoding: 'utf8', cwd: h.home, timeout: 60_000,
         env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
       });

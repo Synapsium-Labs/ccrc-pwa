@@ -18,8 +18,8 @@
 // rail, the session header, the strips and the command layer are the real ones.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import type { FleetSession, MailSummary, TaskItem } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
@@ -118,6 +118,29 @@ function open(width: number, path = `/s/${ID}`): void {
 }
 
 const press = (key: string, target: Element = document.body): boolean => fireEvent.keyDown(target, { key });
+
+// THE LAZY SCREENS, LOADED ONCE (console speed C1): the session screen and Runs load on demand (`app.tsx`), and a
+// chunk resolves some time after the first render that asks for it, which this file's synchronous cases cannot wait
+// for. So each lazy route this file opens is opened once here, through the real `React.lazy` path, and awaited; every
+// later render in the file draws it at once.
+beforeAll(async () => {
+  vi.stubGlobal('WebSocket', QuietSocket);
+  stubWidth(1920);
+  const quiet = [vi.spyOn(console, 'error').mockImplementation(() => {}), vi.spyOn(console, 'warn').mockImplementation(() => {})];
+  for (const path of [`/s/${ID}`, '/runs']) {
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [ROW] }));
+    navigate(path);
+    render(<App />);
+    await waitFor(() => expect(document.querySelector('.shell-detail p.shell-placeholder-copy[role="status"]')).toBeNull(),
+      { timeout: 15_000 });
+    expect(document.querySelector('.shell-detail .render-fallback'), `${path} drew its screen, not the fallback`).toBeNull();
+    cleanup();
+  }
+  navigate('/');
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
+  for (const q of quiet) q.mockRestore();
+  vi.unstubAllGlobals();
+}, 60_000);
 
 beforeEach(() => {
   localStorage.clear();

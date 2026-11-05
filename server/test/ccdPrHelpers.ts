@@ -6,7 +6,7 @@
 // in it and the stub must not be bypassed.
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 
 /** gh prints $HOME/gh-rows.json, exits with $HOME/gh-rc (default 0), echoes
  *  $HOME/gh-err to stderr — except that `gh pr view <n>` prints
@@ -128,6 +128,35 @@ export const mergedRow = (over: Record<string, unknown> = {}): Record<string, un
   mergeCommit: { oid: '7a68ca0' }, url: 'https://github.com/o/r/pull/42',
   title: 'the work', isDraft: false, statusCheckRollup: null, ...over,
 });
+
+/** The branch-reset fixture (spec 2026-10-20 §1.3), driven through the real chokepoint: `bindOnResetB1` binds PR 7 on b1,
+ *  and `resetToB2` moves the worktree and the registry to b2 together, so nothing drifts, while gh knows no PR on b2. The
+ *  next sweep retires PR 7 while the registry says b2. Shared because a reader's test must build its row from this
+ *  output, never from a hand-written copy of the shape it expects. */
+export const RESET_ID = 'demo-quiet-basin';
+export const RESET_B1 = 'ws/quiet-basin';
+export const RESET_B2 = 'ws/next-wave';
+export const resetLedgerPath = (h: PrHarness): string => path.join(h.home, '.cc-sessions', `${RESET_ID}.prhistory`);
+
+export function bindOnResetB1(h: PrHarness): { wt: string; tip: string } {
+  h.makeGhRepo('demo');
+  h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-basin cmd_ws_add demo`);
+  const wt = path.join(h.home, 'worktrees', 'demo', 'quiet-basin');
+  fs.writeFileSync(path.join(wt, 'f.txt'), 'work\n');
+  h.git(wt, 'add', 'f.txt');
+  h.git(wt, 'commit', '-m', 'the work');
+  const tip = h.git(wt, 'rev-parse', 'HEAD');
+  h.ghRows([mergedRow({ number: 7, headRefName: RESET_B1, headRefOid: tip })]);
+  h.sh(`${GH_STUB} cmd_pr_state --session ${RESET_ID}`);
+  return { wt, tip };
+}
+
+export function resetToB2(h: PrHarness, wt: string): void {
+  h.sh(`cd "${wt}" && git checkout -q -b ${RESET_B2}`);
+  h.sh(`_reg_set ${RESET_ID} branch ${RESET_B2}`);
+  h.ghRows([]);
+  h.sh(`${GH_STUB} cmd_pr_state --session ${RESET_ID}`);
+}
 
 /** A member PR a merge train landed and closed: CLOSED with the train label,
  *  no merge commit, head `headOid`. */

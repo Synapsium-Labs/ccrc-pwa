@@ -20,9 +20,10 @@
 //     read back from a file or a listing (D-3533), which is why it lives here and not in the case.
 // Converted so far: every timed spawn in `ccrc-account.test.ts`, and the runners whose leaks the run-level check
 // found on its first CI run (`ccd-account-auth.test.ts`'s `drive`, `ccgpt-runtime.test.ts`'s `runOpts`,
-// `platform-hazards.test.ts`'s `bash`). The suite's other timed spawns move here as their
-// files are next touched, not in one sweep (D-5895); until then the run-level check in `proc-leak.globalsetup.mjs`
-// still reds a grandchild one of them leaves in the suite's group.
+// `platform-hazards.test.ts`'s `bash`). The suite's other timed spawns of a shell or a script move here one file
+// at a time (#896; D-5895 had left them until their files were next touched): `spawn-group-pin.test.ts` reds a new
+// one, and `spawnGroupAllowlist.ts` lists those not yet moved and may only shrink. Until a file moves, the run-level
+// check in `proc-leak.globalsetup.mjs` still reds a grandchild one of its spawns leaves in the suite's group.
 // A detached child also leaves the suite's controlling terminal, so a Ctrl-C to vitest no longer reaches it; the
 // timeout is what bounds it, and every call here should carry one.
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'node:child_process';

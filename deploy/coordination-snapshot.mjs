@@ -219,6 +219,54 @@ function exactKeys(o, keys, what, codes = ['unknown-key', 'bad-field']) {
 const nonEmpty = (v, what) => (typeof v === 'string' && v !== '' ? v : refuse('bad-field', `${what} is not a non-empty string`));
 const hex64 = (v, what) => (isHex64(v) ? v : refuse('bad-field', `${what} is not a lowercase 64-hex SHA-256`));
 
+// Wave 5, PR5a (D-7809): the three lease kinds, by SHAPE alone, in the server's order (`validateLeaseKind` in
+// `server/src/coord/delegation-journal.ts`). Their words (`reason`, `to`, `releaseReason`, `lineageClose`) are vocabularies, so here they
+// are only non-empty strings, as `sourceKind` is above; whether a kind applies is the server's recovery.
+const LEASE_TRANSITION_KEYS = [
+  'kind', 'leaseId', 'generation', 'reason', 'to', 'at', 'expiresAt', 'terminalEvidenceAt', 'runId', 'promotedSession', 'auditEvidence',
+  'lineageClose', 'lineageOpenRun', 'resolvesThrough',
+];
+const LEASE_RELEASED_KEYS = ['kind', 'leaseId', 'generation', 'releaseReason', 'at', 'lastHeadSha', 'resolvesThrough'];
+const LEASE_CARRIER_SEEN_KEYS = ['kind', 'leaseId', 'generation', 'at'];
+const positiveInt = (v, what) => (isSeq(v) ? v : refuse('bad-field', `${what} is not a positive safe integer`));
+const positiveIntOrNull = (v, what) => (v === null ? null : positiveInt(v, what));
+const nonEmptyOrNull = (v, what) => (v === null ? null : nonEmpty(v, what));
+const instant = (v, what) => (isInstant(v) ? v : refuse('bad-field', `${what} is not a canonical UTC millisecond instant`));
+const instantOrNull = (v, what) => (v === null ? null : instant(v, what));
+function attemptMarkOrNull(v) {
+  if (v === null) return null;
+  if (!isRecord(v)) return refuse('bad-field', 'resolvesThrough is neither null nor an object');
+  exactKeys(v, ['attemptedAt', 'attemptId'], 'resolvesThrough');
+  return { attemptedAt: instant(v.attemptedAt, 'resolvesThrough.attemptedAt'), attemptId: nonEmpty(v.attemptId, 'resolvesThrough.attemptId') };
+}
+function validateLeaseKind(entry) {
+  switch (entry.kind) {
+    case 'lease-transition':
+      exactKeys(entry, LEASE_TRANSITION_KEYS, 'a lease-transition entry');
+      return {
+        kind: 'lease-transition', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'),
+        reason: nonEmpty(entry.reason, 'reason'), to: nonEmpty(entry.to, 'to'), at: instant(entry.at, 'at'),
+        expiresAt: instantOrNull(entry.expiresAt, 'expiresAt'), terminalEvidenceAt: instantOrNull(entry.terminalEvidenceAt, 'terminalEvidenceAt'),
+        runId: positiveIntOrNull(entry.runId, 'runId'), promotedSession: nonEmptyOrNull(entry.promotedSession, 'promotedSession'),
+        auditEvidence: entry.auditEvidence === null || typeof entry.auditEvidence === 'string' ? entry.auditEvidence : refuse('bad-field', 'auditEvidence is neither null nor a string'),
+        lineageClose: nonEmptyOrNull(entry.lineageClose, 'lineageClose'), lineageOpenRun: positiveIntOrNull(entry.lineageOpenRun, 'lineageOpenRun'),
+        resolvesThrough: attemptMarkOrNull(entry.resolvesThrough),
+      };
+    case 'lease-released':
+      exactKeys(entry, LEASE_RELEASED_KEYS, 'a lease-released entry');
+      return {
+        kind: 'lease-released', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'),
+        releaseReason: nonEmpty(entry.releaseReason, 'releaseReason'), at: instant(entry.at, 'at'),
+        lastHeadSha: nonEmptyOrNull(entry.lastHeadSha, 'lastHeadSha'), resolvesThrough: attemptMarkOrNull(entry.resolvesThrough),
+      };
+    case 'lease-carrier-seen':
+      exactKeys(entry, LEASE_CARRIER_SEEN_KEYS, 'a lease-carrier-seen entry');
+      return { kind: 'lease-carrier-seen', leaseId: nonEmpty(entry.leaseId, 'leaseId'), generation: positiveInt(entry.generation, 'generation'), at: instant(entry.at, 'at') };
+    default:
+      return null;
+  }
+}
+
 function isEventEnvelope(v) {
   if (!isRecord(v) || v.v !== 1 || typeof v.eventKind !== 'string' || v.eventKind === '') return false;
   for (const k of ['sessionId', 'parentIncarnation', 'claudeSessionId', 'eventId', 'bucket']) if (typeof v[k] !== 'string' || v[k] === '') return false;
@@ -229,8 +277,13 @@ function isEventEnvelope(v) {
   return v.agentId === undefined || typeof v.agentId === 'string';
 }
 
+/** The closed grammar's kinds, the server's `DELEGATION_JOURNAL_ENTRY_KINDS` restated (this file imports nothing): the differential holds
+ *  the two lists equal in both directions, and every kind here has its reader below (review 1451 F11). */
+export const JOURNAL_ENTRY_KINDS = ['evidence-accepted', 'lease-created', 'lease-transition', 'lease-released', 'lease-carrier-seen'];
+
 function validateEntry(entry) {
   if (!isRecord(entry)) return refuse('bad-field', 'entry is not an object');
+  if (!JOURNAL_ENTRY_KINDS.includes(entry.kind)) return refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} is not in the closed grammar`);
   if (entry.kind === 'evidence-accepted') {
     exactKeys(entry, ['kind', 'event'], 'an evidence-accepted entry');
     if (!isEventEnvelope(entry.event)) return refuse('bad-field', 'an evidence-accepted entry\'s event is not an envelope with the keys the journal reads');
@@ -254,7 +307,7 @@ function validateEntry(entry) {
       correlationJournalIds: [...ids], firstObservedAt: entry.firstObservedAt, lineageId: hex64(entry.lineageId, 'lineageId'),
     };
   }
-  return refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} is not in the closed grammar`);
+  return validateLeaseKind(entry) ?? refuse('bad-field', `entry kind ${JSON.stringify(entry.kind)} has no reader`);
 }
 
 /** `journalId = SHA256(canon({v, sequence, acceptedAt, previousDigest, entry}))`: nonrecursive. */
@@ -416,6 +469,30 @@ const CHECKPOINT_KEYS = [
   'sessions', 'attempts', 'activities', 'leases', 'lineage', 'bucketCursors', 'observationIntervals', 'pruningHolds',
 ];
 const CHECKPOINT_LISTS = ['sessions', 'attempts', 'activities', 'leases', 'lineage', 'bucketCursors', 'observationIntervals', 'pruningHolds'];
+// Wave 5, PR5a (D-7969): the one OPTIONAL top-level member, absent when empty (so a checkpoint with no carrier row keeps wave 4's
+// bytes). Each row is read by SHAPE, in the server's order (`readLeaseCarrier` in `server/src/coord/delegation-checkpoint.ts`):
+// `releaseReason` is a vocabulary, so here it is only a non-empty string.
+const CHECKPOINT_OPTIONAL_KEYS = ['leaseCarriers'];
+const LEASE_CARRIER_KEYS = ['leaseId', 'transferringSince', 'transferRun', 'promotedRun', 'promotedSession', 'releaseReason', 'resolvedThrough'];
+function readLeaseCarriers(list) {
+  // A list, as the server's decoder reads it; that an empty member is absent is the server's recovery (`assertLeases`), not the shape.
+  if (!Array.isArray(list)) refuse('bad-shape', 'checkpoint.leaseCarriers is not a list');
+  const shape = (ok, what) => { if (!ok) refuse('bad-shape', `a lease carrier row's ${what}`); };
+  for (const c of list) {
+    if (!isRecord(c)) refuse('bad-shape', 'a lease carrier row is not an object');
+    exactKeys(c, LEASE_CARRIER_KEYS, 'a lease carrier row', ['bad-shape', 'bad-shape']);
+    shape(typeof c.leaseId === 'string' && c.leaseId !== '', 'leaseId is not a non-empty string');
+    shape(c.transferringSince === null || isInstant(c.transferringSince), 'transferringSince is neither null nor an instant');
+    for (const k of ['transferRun', 'promotedRun']) shape(c[k] === null || isSeq(c[k]), `${k} is neither null nor a positive safe integer`);
+    for (const k of ['promotedSession', 'releaseReason']) shape(c[k] === null || (typeof c[k] === 'string' && c[k] !== ''), `${k} is neither null nor a non-empty string`);
+    const m = c.resolvedThrough;
+    if (m !== null) {
+      shape(isRecord(m), 'resolvedThrough is neither null nor an object');
+      exactKeys(m, ['attemptedAt', 'attemptId'], 'a lease carrier row\'s resolvedThrough', ['bad-shape', 'bad-shape']);
+      shape(isInstant(m.attemptedAt) && typeof m.attemptId === 'string' && m.attemptId !== '', 'resolvedThrough is not {attemptedAt, attemptId}');
+    }
+  }
+}
 
 /**
  * The checkpoint file's bytes, strictly, as far as a snapshot needs: canonical JSON plus one LF, the closed top-level key set, its
@@ -432,7 +509,7 @@ export function readCheckpointHeader(bytes) {
   let parsed;
   try { parsed = JSON.parse(body); } catch { return refuse('malformed-json', 'not JSON'); }
   if (!isRecord(parsed)) return refuse('bad-shape', 'checkpoint is not an object');
-  exactKeys(parsed, CHECKPOINT_KEYS, 'checkpoint', ['bad-shape', 'bad-shape']);
+  exactKeys(parsed, [...CHECKPOINT_KEYS, ...CHECKPOINT_OPTIONAL_KEYS.filter((k) => Object.hasOwn(parsed, k))], 'checkpoint', ['bad-shape', 'bad-shape']);
   if (parsed.v !== 1) refuse('bad-version', 'checkpoint v is not 1');
   const int0 = (v, what) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : refuse('bad-shape', `${what} is not a safe integer >= 0`));
   const revision = int0(parsed.revision, 'revision');
@@ -443,6 +520,7 @@ export function readCheckpointHeader(bytes) {
   if ((applied === 0) !== (id === null) || (id === null) !== (dg === null)) refuse('bad-anchor', 'the applied position, journalId and digest are all zero/null or all set');
   for (const k of CHECKPOINT_LISTS) if (!Array.isArray(parsed[k])) refuse('bad-shape', `checkpoint.${k} is not a list`);
   for (const k of ['activityIdsByNaturalKey', 'coordinatorIntentByParent']) if (!isRecord(parsed[k])) refuse('bad-shape', `checkpoint.${k} is not an object`);
+  if (Object.hasOwn(parsed, 'leaseCarriers')) readLeaseCarriers(parsed.leaseCarriers);
   const held = [];
   for (const h of parsed.pruningHolds) {
     if (!isRecord(h) || !isHex64(h.journalId) || typeof h.reason !== 'string') refuse('bad-shape', 'a pruning hold is not {journalId, reason, ownerId}');

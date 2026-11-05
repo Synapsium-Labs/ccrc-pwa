@@ -205,6 +205,14 @@ export interface FleetIO {
    *  Failure contract: never rejects; `null` on ANY failure — absent and unreadable both collapse here; use
    *  `readdirMeasured` to tell them apart. */
   readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
+  /** `readdirMeasured` plus each entry's modification time (ms), when this io can report them (console speed S1).
+   *  OPTIONAL: an io without it answers names only, and a caller falls back to `readdir`. `localIO` deliberately
+   *  does NOT implement it: a test fake that spreads `...localIO` and overrides `readdir` would otherwise have the
+   *  cached registry read list the real filesystem through the inherited member. Local mode keeps names-only keys. A missing `times` is
+   *  "names only", never an error, and an entry missing from `times` has an unknown time (never 0).
+   *  Failure contract: never rejects; `absent` only for a proven ENOENT, every other failure `unreadable`; an agent
+   *  without the `readdir-mtimes` word, or one whose `times` answer is malformed, still answers the listing, without `times`. */
+  readdirWithTimesMeasured?(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredDirectoryRead & { times?: ReadonlyMap<string, number> }>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
    *  own absence marker could not be trusted before this existed.

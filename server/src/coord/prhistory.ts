@@ -38,9 +38,10 @@ export type PrHistoryRead =
  * shape), this reader and ccd's OWN `ws-archive` fold can disagree — for the
  * same file, at the same moment — about whether a workspace retired any PRs.
  * ccd also performs no shape validation at all; a line that parses as JSON but
- * fails the four field guards below (`pr`/`branch`/`phase`/`recordedAt` typed
- * wrong) is dropped here exactly like an unparseable one, silently, with
- * nothing on `PrHistoryRead` distinguishing "this ledger is genuinely empty"
+ * fails the five field guards below (`pr`/`branch`/`phase`/`recordedAt` typed
+ * wrong, or an optional `prbranch` that is not a string) is dropped here
+ * exactly like an unparseable one, silently, with nothing on `PrHistoryRead`
+ * distinguishing "this ledger is genuinely empty"
  * from "a line was rejected" — a second, narrower divergence in the same
  * direction. Left unsignalled deliberately for now: the one prospective reader
  * of that signal is the run-close route, which does not exist in this tree yet
@@ -120,7 +121,10 @@ function parseLedger(raw: string): PrHistoryRead {
       if (typeof o['pr'] !== 'number' || !Number.isInteger(o['pr'])) continue;
       if (typeof o['branch'] !== 'string' || typeof o['phase'] !== 'string') continue;
       if (typeof o['recordedAt'] !== 'number') continue;
-      entries.push({ pr: o['pr'], branch: o['branch'], phase: o['phase'], recordedAt: o['recordedAt'] });
+      const prbranch = o['prbranch'];
+      if (prbranch !== undefined && typeof prbranch !== 'string') continue;
+      entries.push({ pr: o['pr'], branch: o['branch'], ...(prbranch === undefined ? {} : { prbranch }),
+        phase: o['phase'], recordedAt: o['recordedAt'] });
     } catch { /* a torn or hand-edited line is one lost record, never a lost history */ }
   }
   return { ok: true, entries };

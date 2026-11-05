@@ -158,4 +158,56 @@ describe('W29: the usage sweep reads its days from ~/.ccrc/ccrc.env through ccrc
     expect(r.err).toContain("usage-sweep: CCRC_USAGE_SWEEP_DAYS must be a whole number from 1 to 999 — got '0', as set in ~/.ccrc/ccrc.env; nothing was swept");
     expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
   });
+
+  // W2 characterization (box settings wave 2): the days check's exact sentence and what it cuts, before it moves.
+  const REFUSE = 'usage-sweep: CCRC_USAGE_SWEEP_DAYS must be a whole number from 1 to 999 — got ';
+  it.each([
+    ['1000', '1000'],
+    ['9'.repeat(40), '9'.repeat(32)],
+    ['7\t', '7?'],
+  ])('W2-pin: %j from the environment refuses, shown as %j, with no mark past 32 bytes', (value, shown) => {
+    const h = rebootHome();
+    const r = run(h, { CCRC_USAGE_SWEEP_DAYS: value });
+    expect(r.code, r.err).toBe(1);
+    expect(r.err).toContain(`${REFUSE}'${shown}', as set in the environment; nothing was swept`);
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
+
+  it('W2-pin: 07 from the file refuses, naming the file', () => {
+    const h = rebootHome();
+    ccrcEnv(h, 'CCRC_USAGE_SWEEP_DAYS=07\n');
+    const r = reboot(h);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`${REFUSE}'07', as set in ~/.ccrc/ccrc.env; nothing was swept`);
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
+
+  it.each(['999', '1'])('W2-pin: %s from the file reaches the scanner as --days %s', (value) => {
+    const h = rebootHome();
+    ccrcEnv(h, `CCRC_USAGE_SWEEP_DAYS=${value}\n`);
+    const r = reboot(h);
+    expect(r.code, r.err).toBe(0);
+    expect(daysHanded(h)).toBe(value);
+  });
+
+  // W2 (box settings wave 2): the days check is `_usage_days_ok`, carried by the generated library. A library that lacks it
+  // is not defined, so the pass refuses before the check, with a sentence that says the library did not load: no value
+  // named, no claim that a valid value is wrong, no command-not-found line, and the scanner never runs (review 1487 F5).
+  it('W2: a library without _usage_days_ok fails closed: exit 1, the library-did-not-load sentence, no scanner-argv', () => {
+    const h = rebootHome();
+    mkdirSync(path.join(h, 'bin', 'lib'), { recursive: true });
+    writeFileSync(path.join(h, 'bin', 'ccd-usage-sweep'), readFileSync(RUNNER));
+    const lib = readFileSync(path.join(REPO, 'ccd', 'lib', 'ccrc-settings.sh'), 'utf8');
+    const cut = lib.replace(/^_usage_days_ok\(\) \{\n[\s\S]*?\n\}\n/m, '');
+    expect(cut, 'non-vacuity: the function was cut from the fixture copy').not.toBe(lib);
+    expect(cut).not.toContain('_usage_days_ok() {');
+    writeFileSync(path.join(h, 'bin', 'lib', 'ccrc-settings.sh'), cut);
+    const r = spawnSync('bash', [path.join(h, 'bin', 'ccd-usage-sweep')], { encoding: 'utf8',
+      env: { HOME: h, CCRC_USAGE_SWEEP_DAYS: '7', PATH: `${path.join(h, '.local', 'bin')}:${process.env['PATH'] ?? ''}`, TMPDIR: path.join(h, 'tmp') } });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain("usage-sweep: the settings library this check needs did not load ('ccrc update --force' places it) — nothing was swept");
+    expect(r.stderr).not.toContain('must be');
+    expect(r.stderr).not.toMatch(/command not found/);
+    expect(existsSync(path.join(h, 'scanner-argv'))).toBe(false);
+  });
 });

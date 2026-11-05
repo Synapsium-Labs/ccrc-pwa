@@ -173,14 +173,14 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * reader, and its size (a thousand `moved` rows) is past the inventory's 64 KiB file cap.
  *
  * `boxSettings` (`box-settings.json`, box settings view, D-6916) is the eleventh: what `ccrc settings --write` records every five
- * minutes, the seven named settings as the box resolves them. The verb's strings pass through `_upd_redact` (a URL's userinfo goes,
- * the home prefix becomes `~/`), print as ASCII and stop at 480 bytes, and the release base shows only its scheme and host, or
- * `custom` alone. The seven settings are counts, seconds, milliseconds and that URL, so an accepted value holds no key or token. One
- * residual (review 1396 F4, the verb header's): a REFUSED numeric key records its raw value through `_upd_redact` alone, so a path,
- * a query string, a userinfo holding '/', '?' or '#', or the part of a userinfo before whitespace or another token start
- * (`https://u:p w@h/r` is recorded as `https://u:p h/r`) written there by mistake can reach the file; ARCH-67 folds it. The server's
- * box-settings lane reads it on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's
- * `MEASURED_FILE_KEYS` leaves it out too: it has its own reader and its own parse.
+ * minutes. Version 1 holds the seven named settings; the server checks each version-1 `ok` value or origin against the same envelope
+ * as version 2, drops a version-1 refused row's value and why, rewrites an `ok` row outside the envelope as `unmeasured`, and cuts an
+ * unmeasured why to 240 before any console sees it (D-7911). Version 2 holds the 61 a fleet or server node reads, by display class,
+ * where only an `ok` row of class `value` or `origin` carries a value, and the server checks that value or origin against the
+ * setting's class and a refused row's `why` against the closed set (D-7913). An `unmeasured` row's `why` in either version is bounded
+ * text the box wrote (printable ASCII, at most 240), never checked against a closed set. The server's box-settings lane reads the
+ * file on the inventory's own run (`server/src/update/boxSettingsLane.ts`), so the sweep's `MEASURED_FILE_KEYS` leaves it out too: it
+ * has its own reader and its own parse.
  */
 export const CCRC_DIR_NAME = '.ccrc';
 export const NODE_FILES = {
@@ -368,7 +368,9 @@ export interface ReadReq   { t: 'req'; id: number; op: 'read'; path: string }
  *  optional field — no new op, no ready-frame word, no `FLEET_PROTO` bump. */
 export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: string; offset: number; maxBytes?: number }
 export interface ReadB64Req { t: 'req'; id: number; op: 'readB64'; path: string }
-export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string }
+/** `times` is ADDITIVE (console speed S1): an agent that lists `READDIR_MTIMES_OP` in `ready.ops` answers
+ *  `times: Record<name, mtimeMs>` beside `names`; an older caller omits it and gets the answer it always got. */
+export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string; times?: true }
 export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
 /** The PATH's own type, never its target's — the one question `stat` cannot
  *  answer because it follows. Its own op rather than a field on `stat` for
@@ -422,7 +424,7 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string; detail?:
 //   readFrom WITH `maxBytes` → {data: string, dataB64: string, size: number}|{data: null, absent?: true}: `data` is the old lossy UTF-8
 //   decode of the bounded bytes, `dataB64` their canonical base64, and a reader that needs the BYTES reads `dataB64` alone — an older agent
 //   ignores `maxBytes` and sends no `dataB64`, which a byte reader must take as unmeasured, never as text to re-encode;
-// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]}|{names: null, absent?: true}
+// readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[], times?: Record<string, number>}|{names: null, absent?: true}
 //   (`absent` only on a proven ENOENT; an older agent sends a bare {names: null} for every failure, which is unmeasured, never absent);
 //   stat → {mtimeMs, size}|{missing: true, absent?: true};
 // lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
@@ -904,6 +906,10 @@ export function readAccountOpAnswer(raw: unknown): AccountOpAnswer | null {
 
 /** The op's name, and the word an agent that answers it lists in `ready.ops`. */
 export const DISK_OP = 'disk';
+
+/** The word an agent lists in `ready.ops` when its `readdir` op answers modification times on request (console speed
+ *  S1). Not an op of its own: it names a field of `readdir`. It matches `CAP_WORD` in shared/api.ts. */
+export const READDIR_MTIMES_OP = 'readdir-mtimes';
 
 /** The deadline for ONE `statfs`/`stat` of a work root on the agent. A root that does not answer in this time is
  *  reported `missing` with `why: 'timeout'` (unknown, never zero): a full or stalled volume is exactly when its

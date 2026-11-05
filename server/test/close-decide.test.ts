@@ -264,9 +264,20 @@ describe('decideClose, the sweep, ledger, verb, fleet and re-measure steps', () 
     expect(decideClose({ step: 'recheck', stop: null, release: true }).kind).toBe('go');
   });
   it('ledger: an unreadable ledger refuses, a read one goes with its entries', () => {
-    expect(outcomeOf(decideClose({ step: 'ledger', history: { ok: false, error: 'unreadable' } })))
+    expect(outcomeOf(decideClose({ step: 'ledger', history: { ok: false, error: 'unreadable' }, branch: 'ws/a' })))
       .toEqual({ ok: false, kind: 'refused', code: 'prhistory-unreadable' });
-    expect(decideClose({ step: 'ledger', history: { ok: true, entries: [] } })).toEqual({ kind: 'go', plan: { entries: [] } });
+    expect(outcomeOf(decideClose({ step: 'ledger', history: { ok: false, error: 'unreadable' }, branch: null })))
+      .toEqual({ ok: false, kind: 'refused', code: 'prhistory-unreadable' });
+    expect(decideClose({ step: 'ledger', history: { ok: true, entries: [] }, branch: 'ws/a' })).toEqual({ kind: 'go', plan: { entries: [] } });
+  });
+  it('ledger: a placed row goes only for its own branch, an unplaced row always, and a null branch takes every row', () => {
+    const row = (pr: number, prbranch?: string) =>
+      ({ pr, branch: 'ws/a', phase: 'merged', recordedAt: pr, ...(prbranch === undefined ? {} : { prbranch }) });
+    const entries = [row(1, 'ws/a'), row(2, 'ws/b'), row(3)];
+    expect(decideClose({ step: 'ledger', history: { ok: true, entries }, branch: 'ws/a' }))
+      .toEqual({ kind: 'go', plan: { entries: [row(1, 'ws/a'), row(3)] } });
+    expect(decideClose({ step: 'ledger', history: { ok: true, entries }, branch: null }))
+      .toEqual({ kind: 'go', plan: { entries } });
   });
   it('verb: a verb the box does not list is unsupported', () => {
     expect(outcomeOf(decideClose({ step: 'verb', verb: 'wsRelease', can: false }))).toEqual({ ok: false, kind: 'unsupported' });

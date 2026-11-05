@@ -107,6 +107,7 @@ export const CHILD_RECLAIM_TOKEN_KIND: Readonly<Record<ChildReclaimToken, 'gone'
   'tree-unreadable': 'retry',
   'containment-unproven': 'terminal',
   'no-worktree-record': 'terminal',
+  'branch-gone-checked-out': 'terminal',
   paused: 'retry',
   held: 'retry',
   attached: 'retry',

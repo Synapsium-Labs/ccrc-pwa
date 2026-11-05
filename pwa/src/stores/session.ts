@@ -1061,3 +1061,10 @@ export function getSessionStore(id: string): SessionStore {
   }
   return s;
 }
+
+/** True while any session's send is unresolved: in flight, or failed and showing Retry (console speed, Task C3:
+ *  a release's full-page reload waits for it). A queued send was accepted, so it does not hold. */
+export function anySendUnresolved(): boolean {
+  for (const s of stores.values()) if (s.getState().pending.some((p) => p.state === 'failed' || !p.queued)) return true;
+  return false;
+}

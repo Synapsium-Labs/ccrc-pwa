@@ -29,7 +29,9 @@ get wrong when editing `src/whitelist.ts`.
   workspace's operator title and nothing else, and the flag is its whole argument surface), `ws-shed-deps` requires `--session` (the
   deps-shed arm's act on one sleeping session's ignored dependency directories; only the server composes it, D-7278),
   `ws-lease-mark` requires `--lease` (the write of one delegation lease's carrier; only the server composes it, delegation
-  broker wave 5). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  broker wave 5), `ws-lease-audit` requires `--lease` (the read-only measure of one leased tree; it writes nothing to any
+  durable path, its residuals named in `ccd/lib/delegation-lease.sh`, and only the server composes it, delegation broker
+  wave 5). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail

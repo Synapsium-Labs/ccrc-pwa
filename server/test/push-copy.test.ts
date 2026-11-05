@@ -88,6 +88,9 @@ function seedSessions(home: string, specs: string[]): Map<string, Seeded> {
 function runnerFor(info: Map<string, Seeded>, pane = 'ready\n❯ \n'): Runner {
   return async (_cmd, args) => {
     if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
+    if (args[0] === 'list-panes' && args.includes('-a')) {   // the tick's one listing (console speed S1): every seeded session, active window, pane 0
+      return { ran: true, code: 0, stdout: [...info].map(([id, v]) => `cc-${id} 1 0 ${v.pid}\n`).join(''), stderr: '' };
+    }
     if (args[0] === 'list-panes') {
       const target = args[2] ?? '';
       const id = /^=cc-(.*):$/.exec(target)?.[1] ?? '';   // the exact target `=cc-<id>:` (D-3525)

@@ -73,6 +73,8 @@ import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
+import { createReaderLabRuns } from './readerLab/runs.js';
+import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
@@ -521,6 +523,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     authStore.startSweep();
     app.addHook('onClose', async () => { authStore.stopSweep(); await authStore.flush(); });
   }
+  // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
+  // gate's, so a probe the gate refuses (a sandboxed frame's WebSocket upgrade on an armed box) is still counted. It only
+  // counts, for a run a session opened, and never answers: the gate below still decides every request. Its routes are
+  // registered after the docs plugin.
+  const readerLab = createReaderLabRuns();
+  installReaderLabCounter(app, readerLab);
   // Unconditional — the flag is decided INSIDE the hook (`authVerdict`'s first
   // line), so there is exactly one place in the tree that answers "is this
   // request allowed", and the sweep in `auth-gate.test.ts` measures the same
@@ -2109,6 +2117,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerDocsReadRoutes(app, docs.readers, docs.lanes);
     registerDocsRefreshRoute(app, docs.readers, docs.fetchers, docs.lanes);
   });
+  registerReaderLabRoutes(app, readerLab);
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
