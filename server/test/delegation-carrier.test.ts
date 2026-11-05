@@ -184,13 +184,15 @@ describe('planCarrierSteps', () => {
   });
 
   it('the census row says the tree state, head, lock and the registry workdirs at or inside it, and nothing else', () => {
-    const rec = { canonicalPath: '/w/demo/.claude/worktrees/a', state: 'present', headSha: 'a'.repeat(40), locked: true } as const;
-    const base = delegationCarrierCensusRow(rec, []);
-    expect(delegationCarrierCensusRow({ ...rec, locked: false }, [])).not.toBe(base);
-    expect(delegationCarrierCensusRow({ ...rec, headSha: 'c'.repeat(40) }, [])).not.toBe(base);
-    expect(delegationCarrierCensusRow(rec, ['/w/demo/.claude/worktrees/a/sub'])).not.toBe(base);
-    expect(delegationCarrierCensusRow(rec, ['/w/demo', '/w/demo/.claude/worktrees/ab'])).toBe(base);
-    expect(delegationCarrierCensusRow(undefined, [])).toBe(delegationCarrierCensusRow(undefined, []));
+    const t = '/w/demo/.claude/worktrees/a';
+    const rec = { state: 'present', headSha: 'a'.repeat(40), locked: true } as const;
+    const base = delegationCarrierCensusRow(t, rec, []);
+    expect(delegationCarrierCensusRow(t, { ...rec, locked: false }, [])).not.toBe(base);
+    expect(delegationCarrierCensusRow(t, { ...rec, headSha: 'c'.repeat(40) }, [])).not.toBe(base);
+    expect(delegationCarrierCensusRow(t, rec, [`${t}/sub`])).not.toBe(base);
+    expect(delegationCarrierCensusRow(t, rec, [t])).not.toBe(base);
+    expect(delegationCarrierCensusRow(t, rec, ['/w/demo', `${t}b`])).toBe(base);
+    expect(delegationCarrierCensusRow(t, undefined, [])).not.toBe(base);
   });
 
   it('the mark arguments carry the lease as journalled, with an expiry only on a kept lease and the promoted run on a promoted one', () => {

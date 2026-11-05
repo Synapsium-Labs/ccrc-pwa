@@ -95,6 +95,8 @@ import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
+import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
+import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
 import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
 import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import { nodeDelegationFilePort } from './coord/delegation-file-port.js';
@@ -9862,7 +9864,7 @@ export interface DelegationLaneStall {
  *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
  *  reason: absent reads as no stop evidence (D-5433). */
 type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>>;
-type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'>;
+type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'> & Partial<Pick<SessionRecord, 'workdir'>>;   // PR6: workdirs key a standing refusal
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
 type LanePointMeta = DelegationCorrelationInput['pointMetas'][number];
@@ -10253,6 +10255,8 @@ class DelegationLane {
   /** PR5b: native-removed's memory, the planner's last answer (counters, not clocks): each lease's consecutive absent listings and the
    *  last head a census saw for it, and how many unreleased leases the last census did not reach (health's `uncensusedLeases`). */
   private absentListings = { counts: new Map<string, number>(), heads: new Map<string, string>(), uncensused: 0 };
+  /** PR6: the carrier step's memory (standing refusals, logged refusals, known-released unowned carriers) and its last counts. */
+  private readonly carrierMemory = emptyCarrierLaneMemory();
   private verdicts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
   private reconciled = false;
   /** When (the pass's clock) the last reconcile completed: the breaker vouches for the counts only while it is recent (M-1). */
@@ -10723,9 +10727,9 @@ class DelegationLane {
     // MUST 1: a quarantine that could not be listed is said, never read as "no heal".
     const unlisted = this.durable !== null && this.durable.tailQuarantineUnmeasured();
     // PR5b (D-7852): unreleased leases whose project the last census did not reach; absent while none, so an older reader sees no change.
-    const uncensused = this.absentListings.uncensused;
+    const uncensused = this.absentListings.uncensused, carriers = delegationCarrierHealthShown(this.carrierMemory.health);   // PR6
     return { ...health, ...(healed === null ? {} : { lastTailHeal: healed }), ...(unlisted ? { tailQuarantineUnmeasured: true as const } : {}),
-      ...(uncensused > 0 ? { uncensusedLeases: uncensused } : {}) };
+      ...(uncensused > 0 ? { uncensusedLeases: uncensused } : {}), ...(carriers === null ? {} : { carriers }) };
   }
 
   /** Wave 4: the projection as of the last pass, decided in L1 (`projectDelegation`); null while there is nothing measured to
@@ -10933,6 +10937,20 @@ class DelegationLane {
             const out = await durable.releaseLease({ ...r, at: formatDelegationInstant(pass.now), resolvesThrough: null }).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
             if (out instanceof Error || out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release ${out instanceof Error ? `threw: ${out.message}` : `refused: ${out.refusal}: ${out.detail}`}`);
             else { this.absentListings.counts.delete(r.leaseId); this.absentListings.heads.delete(r.leaseId); }
+          }
+          // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
+          const cs = durable.state();
+          if (cs.phase === 'ready' && !pass.signal.aborted) {
+            const d = { io: this.deps.io, registryDir: this.deps.cfg.registryDir, signal: pass.signal, runCcd: this.deps.runCcd, durable, nowMs: () => Date.now() };
+            const { steps, censusRow } = await planCarrierPass(d, cs.checkpoint as DelegationCheckpointV1, this.carrierMemory, { supported: ccdCan(this.deps.fleetState, 'leaseMark'),
+              nowMs: pass.now, census: flat, workdirs: pass.records.flatMap((r) => (typeof r.workdir === 'string' ? [r.workdir] : [])) });
+            for (const step of steps) {
+              const now = durable.state();
+              if (pass.signal.aborted || now.phase !== 'ready') break;
+              if (step.kind !== 'mark') { await applyCarrierJournalStep(durable, step, Date.now()); continue; }
+              const lease = now.checkpoint.leases.find((l) => l.leaseId === step.args.leaseId);
+              if (lease !== undefined) noteCarrierMark(this.carrierMemory, lease, await markLeaseCarrier(d, lease, now.checkpoint as DelegationCheckpointV1), censusRow);
+            }
           }
         } catch (err) { console.warn(`ccrc-server: delegation lease acts failed: ${err instanceof Error ? err.message : String(err)}`); } finally { endActs(); }
       }

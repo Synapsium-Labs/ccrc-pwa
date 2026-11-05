@@ -1,8 +1,8 @@
 // Delegation broker wave 5, PR6 (Task 5.6.1): a carrier for every linked lease. L1 policy: the mark planner, the carrier parser
 // and the read-back comparison. Pure: no I/O, no clock (it is fed `nowMs`), no capability read (it is fed `supported`).
 //
-// The journal is the one source of a lease's generation; the box's carrier (`$REG/delegation/leases/<id>.json`, written only by
-// `ccd ws-lease-mark`) corroborates it. The planner never invents a generation: it marks at the lease's own, and `ws-lease-mark`
+// The journal is the one source of a lease's generation; the box's carrier (one file per lease under the registry, written only by
+// the verb `CCD_ARGV.leaseMark` composes) corroborates it. The planner never invents a generation: it marks at the lease's own, and the verb
 // writes any generation above the stored one (D-7802), so a carrier that missed generations catches up in one write. A carrier
 // it cannot read, one ahead of the journal, and one no journal lease owns are counted, never acted on. A mark the box refused in a
 // word that will stand (every word but `busy` and `unmeasured`) is not composed again until its generation or its tree's census
@@ -24,7 +24,7 @@ export const DELEGATION_CARRIER_MARKS_PER_PASS = 8;
 /** The box's own bound on a carrier (`ccd/lib/delegation-lease.sh#__DL_CARRIER_MAX`): a larger one is malformed, never read. */
 export const DELEGATION_CARRIER_MAX_BYTES = 16384;
 
-/** One carrier, as `ws-lease-mark` writes it (rule 12 of the verb), `markedAt` included. */
+/** One carrier, as the box's carrier writer writes it (rule 12 of the verb), `markedAt` included. */
 export interface DelegationCarrierBody {
   v: 1; leaseId: string; generation: number; state: DelegationCarrierState; journalSeq: number;
   parentId: string; parentIncarnation: string; activityId: string; source: DelegationLeaseSourceKind; project: string;
@@ -112,14 +112,19 @@ export function carrierReadBackVersus(lease: DelegationLeaseRow, carrier: Delega
   return same && body.state === delegationCarrierStateOf(lease, carrier) && body.journalSeq === lease.currentJournalSequence ? 'equal' : 'foreign';
 }
 
-/** Rule 6's census row of one tree: its census state, head and lock, and the registry workdirs at or inside it, so a `locked`,
- *  `registered` or `nested` refusal is composed again once the lock goes, the row goes, or the head moves. `record` undefined: the
- *  pass's census does not list the tree. A canonical string, compared and never parsed. */
-export function delegationCarrierCensusRow(record: { canonicalPath: string; state: string; headSha: string | null; locked: boolean } | undefined,
+/** Rule 6's census row of one tree: its census state, head and lock, and the registry workdirs at or inside `treePath` (the lease's
+ *  journalled path), so a `locked`, `registered` or `nested` refusal is composed again once the lock goes, the row goes, or the head
+ *  moves. `record` undefined: the pass's census does not list the tree. A canonical string, compared and never parsed. */
+export function delegationCarrierCensusRow(treePath: string, record: { state: string; headSha: string | null; locked: boolean } | undefined,
   workdirs: readonly string[]): string {
-  if (record === undefined) return JSON.stringify(['unlisted', ...[...workdirs].sort()]);
-  const at = workdirs.filter((w) => w === record.canonicalPath || w.startsWith(`${record.canonicalPath}/`)).sort();
-  return JSON.stringify([record.state, record.headSha, record.locked, ...at]);
+  const at = workdirs.filter((w) => w === treePath || w.startsWith(`${treePath}/`)).sort();
+  return JSON.stringify(record === undefined ? ['unlisted', ...at] : [record.state, record.headSha, record.locked, ...at]);
+}
+
+/** Whether the health block carries `carriers`: only when a count is above zero, so a lane that counted nothing (no lease, or an
+ *  applier not ready) leaves the block's shape exactly as an older server's, and absence says nothing was counted. */
+export function delegationCarrierHealthShown(h: DelegationCarrierHealth | null): DelegationCarrierHealth | null {
+  return h !== null && Object.values(h).some((n) => n > 0) ? { ...h } : null;
 }
 
 const order = (a: DelegationLeaseRow, b: DelegationLeaseRow): number =>

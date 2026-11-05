@@ -438,6 +438,21 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
     });
   }
 
+  it('W5-K14: the delegation block carries the lane\'s carrier counts as the lane reports them, and nothing else moves', async () => {
+    const { app, watcher, runLane } = await lane();
+    try {
+      await runLane();
+      const before = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect('carriers' in before.delegation!, 'a lane that counted nothing writes no member').toBe(false);
+      const counts = { marked: 2, pending: 0, unsupported: 0, mismatched: 1, unmeasured: 0, unowned: 0, refused: 3 };
+      (watcher as unknown as { delegationLane(): { carrierMemory: { health: unknown } } }).delegationLane().carrierMemory.health = counts;
+      const after = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect(after.delegation!['carriers']).toEqual(counts);
+      const { carriers: _c, ...rest } = after.delegation!;
+      expect(rest).toEqual(before.delegation);
+    } finally { await app.close(); }
+  });
+
   it('an old fleet (a `ccd caps` list without the token) is unmeasured on the wire, never a zero or an eligible', async () => {
     const { app, runLane } = await lane({}, ['caps', 'ws-rm']);
     try {
