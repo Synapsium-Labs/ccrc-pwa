@@ -5,15 +5,12 @@
  * The polarity is `classifyHasSession`'s: DOUBT READS MORE. A failed listing makes every row hot, every pane
  * captured and every verdict asked the old way, never every session gone.
  */
-import type { ExecResult, SessionVerdict } from './exec.js';
+import type { SessionVerdict } from './exec.js';
 import { tmuxName } from '../../shared/tmux-target.js';
 import type { SessionRecord } from './registry.js';
 import type { AccountLimits } from './limits.js';
 import type { SessionUsage } from '../../shared/api.js';
 import { USAGE_FRESH_S } from './usage.js';
-
-/** The name is greedy and anchored on the three numeric fields, so a session named with a space still parses. */
-const PANE_LISTING_ROW = /^(.+) ([01]) (\d+) (\d+)$/;
 
 /** One whole-server pane listing. `panes` is keyed by the tmux SESSION NAME (`tmuxName(id)`), never by id: the name
  *  replaces `.` and `:`, so the map is read id to name (`verdictFromListing`) and never name to id.
@@ -25,37 +22,6 @@ const PANE_LISTING_ROW = /^(.+) ([01]) (\d+) (\d+)$/;
 export type PaneListing =
   | { ok: true; at: number; panes: ReadonlyMap<string, { pid: number | null }> }
   | { ok: false; at: number; detail: string };
-
-/** Pure. `at` is the instant the exec STARTED (stamped by the caller). Per session: the pid of the lowest
- *  `pane_index` whose window is active; a session listed with no active window answers `pid: null`. Empty stdout on
- *  exit 0 is NOT a listing of zero sessions: a running tmux server always has a session (with none it exits 1, "no
- *  server running"), so an empty answer proves nothing and reads `ok: false`, and the tick falls back per row. */
-export function parsePaneListing(r: ExecResult, at: number): PaneListing {
-  if (r.ran === false) return { ok: false, at, detail: `tmux list-panes did not run (${r.reason}: ${r.detail})` };
-  if (typeof r.signal === 'string') {
-    return { ok: false, at, detail: `tmux list-panes got ${r.signal} before it answered (exit ${r.code})` };
-  }
-  if (r.code !== 0) {
-    const msg = r.stderr.trim();
-    return { ok: false, at, detail: msg !== '' ? msg : `tmux list-panes exited ${r.code} with no message` };
-  }
-  const best = new Map<string, { index: number; pid: number } | null>();
-  for (const line of r.stdout.split('\n')) {
-    if (line.trim() === '') continue;
-    const m = PANE_LISTING_ROW.exec(line);
-    if (m === null) return { ok: false, at, detail: `tmux list-panes printed a line this parser does not know: ${line.slice(0, 80)}` };
-    const name = m[1]!;
-    if (!best.has(name)) best.set(name, null);
-    if (m[2] !== '1') continue;
-    const index = Number(m[3]);
-    const cur = best.get(name) ?? null;
-    if (cur === null || index < cur.index) best.set(name, { index, pid: Number(m[4]) });
-  }
-  if (best.size === 0) return { ok: false, at, detail: 'tmux listed no panes' };
-  const panes = new Map<string, { pid: number | null }>();
-  for (const [name, v] of best) panes.set(name, { pid: v === null ? null : v.pid });
-  return { ok: true, at, panes };
-}
 
 /** `live` when `tmuxName(id)` is in a clean listing, else `gone` (the polarity note on `PaneListing`). */
 export function verdictFromListing(l: PaneListing & { ok: true }, id: string): SessionVerdict {

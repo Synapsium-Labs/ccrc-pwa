@@ -132,10 +132,45 @@ const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
  *  believing them. */
 export const PANE_LISTING_FORMAT = '#{session_name} #{window_active} #{pane_index} #{pane_pid}';
 
-// The pure decoder of the listing (`PaneListing`, `parsePaneListing`, `verdictFromListing`, `pidFromListing`) lives in
-// `tickPlan.ts` (L1) so no policy file loads this adapter; re-exported here so every import of it keeps resolving.
-export { parsePaneListing, verdictFromListing, pidFromListing, type PaneListing } from './tickPlan.js';
-import { parsePaneListing, type PaneListing } from './tickPlan.js';
+// The pure readers of a decoded listing (`PaneListing`, `verdictFromListing`, `pidFromListing`) live in `tickPlan.ts`
+// (L1) so no policy file loads this adapter; re-exported here so every import of them keeps resolving. The decoder of
+// tmux's own text stays here, beside the format it reads.
+export { verdictFromListing, pidFromListing, type PaneListing } from './tickPlan.js';
+import type { PaneListing } from './tickPlan.js';
+
+/** The name is greedy and anchored on the three numeric fields, so a session named with a space still parses. */
+const PANE_LISTING_ROW = /^(.+) ([01]) (\d+) (\d+)$/;
+
+/** Pure. `at` is the instant the exec STARTED (stamped by the caller). Per session: the pid of the lowest
+ *  `pane_index` whose window is active; a session listed with no active window answers `pid: null`. Empty stdout on
+ *  exit 0 is NOT a listing of zero sessions: a running tmux server always has a session (with none it exits 1, "no
+ *  server running"), so an empty answer proves nothing and reads `ok: false`, and the tick falls back per row. */
+export function parsePaneListing(r: ExecResult, at: number): PaneListing {
+  if (r.ran === false) return { ok: false, at, detail: `tmux list-panes did not run (${r.reason}: ${r.detail})` };
+  if (typeof r.signal === 'string') {
+    return { ok: false, at, detail: `tmux list-panes got ${r.signal} before it answered (exit ${r.code})` };
+  }
+  if (r.code !== 0) {
+    const msg = r.stderr.trim();
+    return { ok: false, at, detail: msg !== '' ? msg : `tmux list-panes exited ${r.code} with no message` };
+  }
+  const best = new Map<string, { index: number; pid: number } | null>();
+  for (const line of r.stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    const m = PANE_LISTING_ROW.exec(line);
+    if (m === null) return { ok: false, at, detail: `tmux list-panes printed a line this parser does not know: ${line.slice(0, 80)}` };
+    const name = m[1]!;
+    if (!best.has(name)) best.set(name, null);
+    if (m[2] !== '1') continue;
+    const index = Number(m[3]);
+    const cur = best.get(name) ?? null;
+    if (cur === null || index < cur.index) best.set(name, { index, pid: Number(m[4]) });
+  }
+  if (best.size === 0) return { ok: false, at, detail: 'tmux listed no panes' };
+  const panes = new Map<string, { pid: number | null }>();
+  for (const [name, v] of best) panes.set(name, { pid: v === null ? null : v.pid });
+  return { ok: true, at, panes };
+}
 
 export class Tmux {
   constructor(private run: Runner) {}
