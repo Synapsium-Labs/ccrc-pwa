@@ -36,11 +36,14 @@ export function reclaimAttentionRunIds(items: readonly ChildReclaimAttention[] |
 
 /**
  * Every ACTIVE run (state not terminal, as `runs()` reads it), the newest `limit` TERMINAL runs with `id < before` (all
- * terminal runs when `before` is absent), and every run in `pinned` however old; no duplicates, ordered by id ascending.
+ * terminal runs when `before` is absent), every run in `pinned` however old, and, on page one only (`before` absent),
+ * every TERMINAL run whose `closedAt` is at or after the smallest `closedAt` among the page's `limit` terminal rows: a
+ * long-lived run with an old id that closes after newer ones is the operator's newest finished work, and an id-ordered
+ * page alone would drop it from Finished the moment it leaves Active. No duplicates, ordered by id ascending.
  *
- * `nextBefore` is the smallest terminal id among the `limit` page rows (a pinned extra never counts) WHEN a terminal run
- * with a smaller id remains, and absent on the last page. `limit` and `before` are bound parameters, and so is every
- * pinned id.
+ * `nextBefore` is the smallest terminal id among the `limit` page rows (a pinned or recently-closed extra never counts)
+ * WHEN a terminal run with a smaller id remains, and absent on the last page. `limit` and `before` are bound
+ * parameters, and so is every pinned id.
  */
 export function runsPage(
   db: RunsDb,
@@ -65,9 +68,14 @@ export function runsPage(
     `SELECT ${sql.columns} FROM runs r JOIN programs p ON p.slug = r.program ` +
     `WHERE r.state NOT IN ${terminal} OR r.id IN ` +
     `(SELECT id FROM runs WHERE state IN ${terminal}${older} ORDER BY id DESC LIMIT ?)` +
-    (pinned.length === 0 ? ' ' : ` OR r.id IN (${marks}) `) +
-    'ORDER BY r.id',
-  ).all(...olderArgs, limit, ...pinned);
+    (pinned.length === 0 ? '' : ` OR r.id IN (${marks})`) +
+    // Page one only: a later page is strictly older by contract, and its own minimum would re-add page one.
+    (before === undefined
+      ? ` OR (r.state IN ${terminal} AND r.closedAt >= (SELECT MIN(closedAt) FROM ` +
+        `(SELECT closedAt FROM runs WHERE state IN ${terminal} ORDER BY id DESC LIMIT ?)))`
+      : '') +
+    ' ORDER BY r.id',
+  ).all(...olderArgs, limit, ...pinned, ...(before === undefined ? [limit] : []));
   const read = hydrate(rows);
   return nextBefore === undefined ? { read } : { read, nextBefore };
 }

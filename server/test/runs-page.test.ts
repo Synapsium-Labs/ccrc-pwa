@@ -189,6 +189,27 @@ describe('GET /api/runs?closed=1&limit=&before= pages the archive (console speed
   });
 });
 
+describe('page one keeps a long-lived run that closed after newer ones (console speed S2, final review I1)', () => {
+  it('a run closed recently with an old id is on page one', async () => {
+    const h = await harness();
+    const old = dispatched(h.coord); // id 1: opened first, closes last
+    const oldProgram = `runs-page-${n}`;
+    const newer: number[] = [];
+    for (let i = 0; i < 55; i += 1) newer.push(closed(h.coord, T_OPEN + i * 1_000));
+    expect(h.coord.closeRun({ runId: old, finalState: 'done', causedBy: 'coordinator', handoffCommit: null, program: oldProgram, viaClosing: true }).ok).toBe(true);
+    h.coord.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(T_OPEN + 999_000, old);
+    const page = await getPage(h.app, '/api/runs?closed=1&limit=50');
+    // The newest 50 closed by id are 7..56; run 1 closed after all of them, so it rides page one as an extra.
+    expect(ids(page.runs)).toEqual([old, ...newer.slice(5)]);
+    // The extra never moves the cursor: it is still the smallest id of the 50 page rows.
+    expect(page.nextBefore).toBe(newer[5]);
+    // A later page is strictly older: the arm belongs to page one, so nothing at or above `before` rides it (run 1 is
+    // here only because its own id is below the cursor).
+    const second = await getPage(h.app, `/api/runs?closed=1&limit=50&before=${page.nextBefore}`);
+    expect(ids(second.runs)).toEqual([old, ...newer.slice(0, 5)]);
+  }, 120_000);
+});
+
 describe('reclaimAttentionRunIds', () => {
   it('collects every number runId and member run, once, and none for null', () => {
     const items = [

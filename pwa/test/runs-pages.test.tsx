@@ -299,6 +299,36 @@ describe('the run archive in pages', () => {
     expect(result.current.hasOlder).toBe(false);
   });
 
+  it('an old run that closes stays on the board', async () => {
+    // The server's page one carries a terminal run whose `closedAt` is at or after the page's oldest `closedAt`, however
+    // old its id (console speed S2, final review I1). The fake loader answers that way: run 30 is active at the mount,
+    // closes after runs 100..149, and rides page one as an extra.
+    let activeOld = true;
+    const load = vi.fn<PagedLoader>(async (limit, before) => {
+      const pageIds = range(149, 100).slice(0, limit);
+      const old = activeOld ? run(30) : closed(30, { closedAt: T });
+      const rows = before === undefined
+        ? [old, ...pageIds.map((id) => closed(id))].sort((a, b) => a.id - b.id)
+        : [];
+      return { runs: rows, nextBefore: 100 };
+    });
+    const store = makeStore();
+    const { result } = renderHook(() => useColdRuns(store, load, { page: 50 }));
+    await flush();
+    expect(result.current.cold?.find((r) => r.id === 30)?.state).toBe('working');
+    activeOld = false;                                              // run 30 closes, after 50 newer runs closed
+    await act(async () => { await result.current.reload(); });
+    const thirty = (result.current.cold ?? []).filter((r) => r.id === 30);
+    expect(thirty).toHaveLength(1);
+    expect(thirty[0]!.state).toBe('done');
+    expect(result.current.hasOlder).toBe(true);
+    expect(store.getState().runPages?.nextBefore).toBe(100);
+    // A later re-read that no longer carries it keeps the closed copy the operator already holds.
+    load.mockImplementation(async (limit) => ({ runs: range(149, 100).slice(0, limit).reverse().map((id) => closed(id)), nextBefore: 100 }));
+    await act(async () => { await result.current.reload(); });
+    expect((result.current.cold ?? []).filter((r) => r.id === 30).map((r) => r.state)).toEqual(['done']);
+  });
+
   it('an older page that lands after a re-read does not undo it', async () => {
     const a = archive(range(120, 1), [130]);
     const store = makeStore();
