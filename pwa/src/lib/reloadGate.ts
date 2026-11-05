@@ -9,12 +9,15 @@
 //   `onNeedReload`, `main.tsx`).
 // - A pending reload runs at the next move between screens, once the page has been back for RELOAD_QUIET_MS, and
 //   never while a send is unresolved (the move arrives `held`).
-// - "Back" is the page turning visible, loading visible, or regaining window focus after the window was away for
-//   longer than RELOAD_QUIET_MS.
+// - "Back" is the page turning visible, loading visible, regaining window focus after the window was away for at
+//   least RELOAD_QUIET_MS, or being restored from the back-forward cache.
+// - A move reload counts once the page has been back for at least RELOAD_QUIET_MS (the boundary is inclusive).
 // - One case reloads at once, because the old build cannot go on: the block screen asked for a build (`urgent`), and
 //   only while the block stands (`calm` lowers it). A failed lazy chunk does not reload: the screen draws its own
 //   fallback with a Reload door.
-// - The latch: once the gate has answered reload, every later event answers no, for the rest of the page.
+// - The latch: once the gate has answered reload, every later event answers no, for the rest of the page. A restore
+//   from the back-forward cache is a page again on the old build: it clears the latch, restarts the window and keeps
+//   `pending`, so the first move at least RELOAD_QUIET_MS later reloads onto the new build.
 import { matchRoute } from './routes';
 
 /** "The first seconds back": a move this soon after the page came back holds the reload. By then the update check has
@@ -51,6 +54,7 @@ export type ReloadEvent =
   | { readonly kind: 'hidden' }
   | { readonly kind: 'blurred'; readonly at: number }
   | { readonly kind: 'focused'; readonly at: number }
+  | { readonly kind: 'restored'; readonly at: number }
   | { readonly kind: 'move'; readonly from: string; readonly to: string; readonly held: boolean };
 
 /** The screen a path is on: the route `matchRoute` names and its parameter (`'<id> <param>'`, the parameter empty when
@@ -68,7 +72,7 @@ function moveReloads(s: ReloadState, from: string, to: string, held: boolean, no
   return nowMs - s.visibleSince >= RELOAD_QUIET_MS;   // a negative age (a clock step back) holds
 }
 
-/** Focus regained: back when the window was away for longer than the quiet window, and the page is visible. */
+/** Focus regained: back when the window was away for at least the quiet window, and the page is visible. */
 function focused(s: ReloadState, at: number): ReloadState {
   const away = s.blurredSince !== null && at - s.blurredSince >= RELOAD_QUIET_MS;
   return { ...s, blurredSince: null, visibleSince: away && s.visibleSince !== null ? at : s.visibleSince };
@@ -87,6 +91,7 @@ function decide(s: ReloadState, e: ReloadEvent, nowMs: number): { readonly state
     case 'blurred': return { state: { ...s, blurredSince: s.blurredSince ?? e.at }, reload: false };
     case 'focused': return { state: focused(s, e.at), reload: false };
     case 'move': return { state: s, reload: moveReloads(s, e.from, e.to, e.held, nowMs) };
+    case 'restored': return { state: s, reload: false };   // answered by reloadStep, before the latch
   }
 }
 
@@ -96,6 +101,9 @@ function decide(s: ReloadState, e: ReloadEvent, nowMs: number): { readonly state
 export function reloadStep(
   s: ReloadState, e: ReloadEvent, nowMs: number,
 ): { readonly state: ReloadState; readonly reload: boolean } {
+  if (e.kind === 'restored') {
+    return { state: { ...s, reloading: false, visibleSince: e.at, blurredSince: null }, reload: false };
+  }
   const r = decide(s, e, nowMs);
   if (s.reloading) return { state: r.state, reload: false };
   return r.reload ? { state: { ...r.state, reloading: true }, reload: true } : r;

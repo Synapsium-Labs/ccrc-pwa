@@ -111,7 +111,7 @@ describe('reloadStep: when a pending reload runs (Task C3)', () => {
     expect(reloadStep(pending, move('/', '/runs', false), T0 + 600_000).reload).toBe(true);
   });
 
-  it('focus regained after a blur longer than the window restarts the 15 s; a short blur does not', () => {
+  it('focus regained after a blur of at least the window restarts the 15 s; a short blur does not', () => {
     const b = reloadStep(pending, { kind: 'blurred', at: T0 + 60_000 }, T0 + 60_000);
     expect(b.reload).toBe(false);
     const f = reloadStep(b.state, { kind: 'focused', at: T0 + 60_000 + RELOAD_QUIET_MS }, T0 + 60_000 + RELOAD_QUIET_MS);
@@ -137,6 +137,18 @@ describe('reloadStep: when a pending reload runs (Task C3)', () => {
     expect(back.state.visibleSince).toBe(T0 + 50_000);
     expect(reloadStep(back.state, move('/', '/runs'), T0 + 55_000).reload, 'the window restarted').toBe(false);
     expect(reloadStep(back.state, move('/', '/runs'), T0 + 65_000).reload).toBe(true);
+  });
+
+  it('a restore from the back-forward cache clears the latch, restarts the window and keeps pending', () => {
+    const go = reloadStep(pending, move('/', '/runs'), T0 + 60_000);
+    expect(go.reload).toBe(true);
+    const back = reloadStep(go.state, { kind: 'restored', at: T0 + 600_000 }, T0 + 600_000);
+    expect(back.reload).toBe(false);
+    expect(back.state).toMatchObject({ pending: true, reloading: false, visibleSince: T0 + 600_000 });
+    expect(reloadStep(back.state, move('/runs', '/accounts'), T0 + 605_000).reload, 'inside 15 s').toBe(false);
+    const again = reloadStep(back.state, move('/runs', '/accounts'), T0 + 615_000);
+    expect(again.reload).toBe(true);
+    expect(reloadStep(again.state, move('/accounts', '/'), T0 + 700_000).reload, 'latched again').toBe(false);
   });
 
   it('after one reload: true, every arm answers false for the rest of the page', () => {

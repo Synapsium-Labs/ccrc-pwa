@@ -197,6 +197,7 @@ describe('main.tsx hands the release reload to the gate (console speed, Task C3)
     useFleetStore.setState({ blocked: false });
     requestUpdate();
     useFleetStore.setState({ blocked: true });
+    window.dispatchEvent(new Event('blur'));   // a step while the block stands: urgent holds
     useFleetStore.setState({ blocked: false });
     captured.onNeedReload?.();
     expect(gate.reload, 'the block lifted: the release waits for a move').toBe(0);

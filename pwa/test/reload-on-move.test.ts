@@ -267,6 +267,7 @@ describe('once per page, and never over an unsent message (Task C3, fix round 1)
     start();
     requestUpdate();                     // the fleet store asks on the rising edge, then sets blocked
     blocked = true;
+    dispatchEvent(new Event('blur'));    // a step while the block stands: urgent holds
     blocked = false;                     // a later compatible hello lowers it
     noteActivated();
     expect(acts.reload, 'no longer urgent').not.toHaveBeenCalled();
@@ -288,7 +289,38 @@ describe('once per page, and never over an unsent message (Task C3, fix round 1)
     expect(acts.reload).toHaveBeenCalledTimes(1);
   });
 
-  it('focus regained after the window was away for more than 15 s restarts the window', () => {
+  it('a page restored from the back-forward cache is back: the latch clears, the window restarts, the reload stays pending', () => {
+    start();
+    noteActivated();
+    now = T0 + 15_000;
+    navigate('/runs');
+    expect(acts.go, 'the move reload').toHaveBeenCalledTimes(1);
+    now = T0 + 600_000;
+    dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    now = T0 + 605_000;
+    navigate('/accounts');
+    expect(acts.go, 'five seconds after the restore: holds').toHaveBeenCalledTimes(1);
+    now = T0 + 615_000;
+    navigate('/waiting');
+    expect(acts.go).toHaveBeenCalledTimes(2);
+    expect(acts.go).toHaveBeenLastCalledWith('/waiting', false);
+    now = T0 + 700_000;
+    navigate('/runs');
+    expect(acts.go, 'latched again').toHaveBeenCalledTimes(2);
+  });
+
+  it('a pageshow that is not a restore changes nothing', () => {
+    start();
+    noteActivated();
+    now = T0 + 15_000;
+    navigate('/runs');
+    now = T0 + 600_000;
+    dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }));
+    navigate('/accounts');
+    expect(acts.go, 'still latched').toHaveBeenCalledTimes(1);
+  });
+
+  it('focus regained after the window was away for at least 15 s restarts the window', () => {
     start();
     noteActivated();
     now = T0 + 60_000;
@@ -373,7 +405,7 @@ describe('the gate starts once and stops whole (Task C3)', () => {
     expect(docAdd.mock.calls.filter((c) => c[0] === 'visibilitychange')).toHaveLength(1);
     stop?.();
     stop = null;
-    for (const kind of ['popstate', 'focus', 'blur']) {
+    for (const kind of ['popstate', 'focus', 'blur', 'pageshow']) {
       const added = winAdd.mock.calls.find((c) => c[0] === kind);
       expect(added, kind).toBeDefined();
       expect(winRemove.mock.calls.some((c) => c[0] === kind && c[1] === added?.[1]), kind).toBe(true);

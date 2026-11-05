@@ -17,7 +17,7 @@
 // most once per page. Two probes beside `setUpdater`, registered by `main.tsx`,
 // keep this module free of the stores: whether a send is unresolved (the move
 // holds) and whether the block screen still stands.
-import { onPageHidden, onPageVisible, onWindowBlur, onWindowFocus } from './pageClock';
+import { onPageHidden, onPageRestored, onPageVisible, onWindowBlur, onWindowFocus } from './pageClock';
 import { RELOAD_IDLE, reloadStep, type ReloadEvent, type ReloadState } from './reloadGate';
 
 let updater: (() => void) | null = null;
@@ -104,6 +104,7 @@ export function startReloadGate(given: Partial<ReloadActs> = {}): () => void {
   const stopHidden = onPageHidden(() => { step({ kind: 'hidden' }); });
   const stopFocus = onWindowFocus(() => { step({ kind: 'focused', at: acts.now() }); });
   const stopBlur = onWindowBlur(() => { step({ kind: 'blurred', at: acts.now() }); });
+  const stopRestored = onPageRestored(() => { step({ kind: 'restored', at: acts.now() }); });
   // Back and forward: the browser has already moved the path, so a reload loads the new one (the router may draw the
   // new path in this build until the page unloads). `navigate`'s own `popstate` after a push the gate allowed asks the
   // same move again; once any reload has been answered, the latch answers no, so no second reload follows.
@@ -119,6 +120,7 @@ export function startReloadGate(given: Partial<ReloadActs> = {}): () => void {
     stopHidden();
     stopFocus();
     stopBlur();
+    stopRestored();
     removeEventListener('popstate', onPop);
     state = { ...state, visibleSince: null };
     if (stopGate === stop) stopGate = null;
