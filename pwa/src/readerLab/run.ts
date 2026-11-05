@@ -47,7 +47,8 @@ export const LAB_STALL_BUDGET_MS = 200;
 
 /** Where a timed mount's frame-gap window ends (the reader lab design, section 8). `ready`: at the mount's outcome, which
  *  holds the draw while the library's `ready` waits for its figures (library 1.0.0). `ready-and-settle`: LAB_DRAW_SETTLE_MS
- *  past `ready`, for a library that draws after `ready`, so the draw stays inside the window. */
+ *  past `ready`, for a library that draws after `ready`, so the draw stays inside the window. The hostile mount stays live
+ *  for LAB_SETTLE_MS under `ready`, or LAB_DRAW_SETTLE_MS under `ready-and-settle`, to observe its requests. */
 export type LabGapWindow = 'ready' | 'ready-and-settle';
 /** The window for the library this build pins. The library change that draws after `ready` flips it, in that change. */
 export const LAB_GAP_WINDOW: LabGapWindow = 'ready';
@@ -219,7 +220,7 @@ async function readyMount(deps: LabDeps, text: string, on: {
 async function hostileAndStrays(deps: LabDeps, base: string, read: () => Promise<void>): Promise<{
   readonly hostile: NonNullable<LabLocal['hostile']>; readonly strays: NonNullable<LabLocal['strays']>;
 }> {
-  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, async () => undefined) };
+  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS)) };
   const benign = LAB_PAGES.find((p) => p.label === 'none');
   let effects = 0;
   let addressChanged = false;

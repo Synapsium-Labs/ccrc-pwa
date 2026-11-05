@@ -5,7 +5,7 @@
 // door's run life is derived from.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  LAB_BATTERY_CHANNELS, LAB_DRAW_SETTLE_MS, LAB_MOUNTS, LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, LAB_STEPS,
+  LAB_BATTERY_CHANNELS, LAB_DRAW_SETTLE_MS, LAB_MOUNTS, LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, LAB_SETTLE_MS, LAB_STEPS,
   type LabProbeName, type LabProbeTally, type LabRunView,
 } from '../../shared/readerLab';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
@@ -239,6 +239,26 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(r.inputs[0]!.document.result.outcome).toBe('rendered');
   });
 
+  it.each([{ window: 'ready' as const, ms: LAB_SETTLE_MS }, { window: 'ready-and-settle' as const, ms: LAB_DRAW_SETTLE_MS }])('keeps the hostile reader alive through its $window observation window', async ({ window, ms }) => {
+    const r = rig({ gapWindow: window });
+    let hostileLive = false;
+    let observed = false;
+    await runReaderLab({ ...r.deps,
+      mountReader: async (el, input) => {
+        const mount = await r.deps.mountReader(el, input);
+        if (r.inputs.length !== 1) return mount;
+        hostileLive = true;
+        return { ...mount, destroy: () => { hostileLive = false; mount.destroy(); } };
+      },
+      sleep: async (duration) => {
+        if (r.inputs.length === 1 && duration === ms) { expect(hostileLive).toBe(true); observed = true; }
+        await r.deps.sleep(duration);
+      },
+    }, () => undefined);
+    expect(observed).toBe(true);
+    expect(hostileLive).toBe(false);
+  });
+
   it('a hostile fallback after ready is the library failing closed, not a stray effect: bridge-strays still holds, and csp-27 still reads the hostile mount ready', async () => {
     const r = rig({ afterReady: (input, index) => { if (index === 0) input.onFallback('error'); } });
     const result = await runReaderLab(r.deps, () => undefined);
@@ -276,7 +296,7 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(slept).toEqual([LAB_DRAW_SETTLE_MS]);
     const after = rig({ gapWindow: 'ready-and-settle' });
     await runReaderLab(after.deps, () => undefined);
-    expect(after.slept.filter((ms) => ms === LAB_DRAW_SETTLE_MS), 'one settle per timed page').toHaveLength(LAB_PAGES.length);
+    expect(after.slept.filter((ms) => ms === LAB_DRAW_SETTLE_MS), 'one settle per timed page and the hostile page').toHaveLength(LAB_PAGES.length + 1);
     const now = rig();
     await runReaderLab(now.deps, () => undefined);
     expect(now.slept.filter((ms) => ms === LAB_DRAW_SETTLE_MS)).toEqual([]);
