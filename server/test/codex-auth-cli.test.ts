@@ -297,6 +297,55 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     }
   });
 
+  it.each(['codex-cli', 'unreadable'])('signin --over refuses a %s file there before any request, with its own status', async (kind) => {
+    const home = mkTmp('codex-auth-over-');
+    const dir = join(home, 'scratch', 'codex');
+    const lane = laneDir(home);
+    mkdirSync(lane, { recursive: true });
+    const content = kind === 'codex-cli'
+      ? JSON.stringify({ OPENAI_API_KEY: 'x', tokens: { id_token: syntheticJwt({ sub: 'a' }), access_token: syntheticJwt({ sub: 'b' }), refresh_token: 'rtok-fixture-cli' } })
+      : '{"access_token": ';
+    writeFileSync(credPath(lane), content, { mode: 0o600 });
+    const before = dirState(lane);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status).toBe(5);
+      expect(r.stderr).toMatch(kind === 'unreadable' ? /^ccgpt-auth: credential-unusable: /m : /^ccgpt-auth: foreign-family: /m);
+      expect(r.stdout).toBe('');
+      expect(srv.requests).toHaveLength(0);
+      expect(existsSync(dir), 'the scratch folder').toBe(false);
+      expect(dirState(lane)).toEqual(before);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it.each([['a good credential', true], ['no credential yet', false]])('signin --over beside %s signs in to --auth-dir and leaves it be', async (_name, planted) => {
+    const home = mkTmp('codex-auth-over-ok-');
+    const dir = join(home, 'scratch', 'codex');
+    const lane = laneDir(home);
+    if (planted) plantBackendCredential(lane);
+    const before = planted ? readFileSync(credPath(lane), 'utf8') : null;
+    const t = issued();
+    const srv = await fakeAuthServer(fullSignin(t));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(credPath(dir), 'utf8'))).toMatchObject({ refresh_token: t.refresh });
+      expect(existsSync(credPath(lane)) ? readFileSync(credPath(lane), 'utf8') : null).toBe(before);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('signin: a relative --over is usage', async () => {
+    const home = mkTmp('codex-auth-over-usage-');
+    const r = await runCli(home, ['signin', '--auth-dir', laneDir(home), '--lane', 'codex-a', '--over', 'relative/dir']);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/^usage: /);
+  });
+
   it('signin: a timeout is login-failed after DEVICE_TIMEOUT_S, writing nothing', async () => {
     const home = mkTmp('codex-auth-timeout-');
     const dir = laneDir(home);
@@ -725,8 +774,20 @@ describe.skipIf(!PY)('install: a checked sign-in moves over the lane\'s credenti
     const before = lstatKey(credPath(dir));
     plantBackendCredential(from);
     const r = await install(home, dir, from);
-    expect(r.status).toBe(1);
+    expect(r.status).toBe(5);
     expect(r.stderr).toMatch(/^ccgpt-auth: foreign-family: /);
+    expect(lstatKey(credPath(dir))).toBe(before);
+  });
+
+  it('never writes over a lane file it cannot read, and says so by the same status', async () => {
+    const { home, dir, from } = lanes('codex-install-unreadable-');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(credPath(dir), '{"access_token": ', { mode: 0o600 });
+    const before = lstatKey(credPath(dir));
+    plantBackendCredential(from);
+    const r = await install(home, dir, from);
+    expect(r.status).toBe(5);
+    expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: /);
     expect(lstatKey(credPath(dir))).toBe(before);
   });
 

@@ -1956,7 +1956,8 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   a fresh folder, `exec.authDir: ".local/share/ccrc/codex/<id>-<six random hex digits>"`, refusing `authdir-occupied` if
   anything stands there. So a re-added id never meets an old lane's sign-in. The folder is only a name until the first
   sign-in makes it. It refuses `codex-runtime-absent`, with nothing written, on a box with no Codex runtime, and builds
-  none: `ccrc install` does. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
+  none: run `ccgpt-runtime build`, then add the lane again. `ccrc install` builds a runtime only for a lane the roster
+  already names, so the first ChatGPT lane on a box takes that step. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
   the next `ccrc install` or `ccrc update` enables `ccrc-codex-usage@<id>.timer`. The next step is `auth-start --method
   openai-login`, then `check` and `enable`.
 - **A credential only ever arrives on a pipe.** `--credential -` is the only spelling — a literal would sit in
@@ -2012,8 +2013,10 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   says what happened: `no-credential` (the sign-in is absent, expired, barred, unreadable or not private to this user;
   nothing was sent, or the library would not install it), `token-unverified` (a request went, and the provider refused
   it or did not answer), `codex-answer-unreadable` (the provider answered, but not with a model list this box can
-  read), `codex-runtime-absent` (run `ccrc install`, then sign in again) and `codex-check-unrun` (the check could not
-  run here, which says nothing of the sign-in; `ccrc doctor` names what is missing). A refused, cancelled or expired
+  read), `codex-runtime-absent` (run `ccrc install`, then sign in again), `codex-check-unrun` (the check could not
+  run here, which says nothing of the sign-in; `ccrc doctor` names what is missing) and `lane-credential-refused` (the
+  lane's own `auth.json` is unreadable or another family's, so no sign-in can land on it; `ccrc doctor` names it). That
+  last one is read before the device flow, so the operator approves no code, and again at the install. A refused, cancelled or expired
   attempt leaves the lane as it was, and every attempt's end kills its tmux server and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
   --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
   ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`
@@ -2038,8 +2041,9 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   `--keep-credential` keeps it (`--delete-codex-auth` spells the default, and refuses beside `--keep-codex-auth`). The
   test is the path, not who made the folder, because nothing records that: a folder under
   `.local/share/ccrc/codex/` goes, a hand-written lane's included, so pass `--keep-codex-auth` to keep a sign-in you
-  placed there yourself. Two folders stay whatever was asked, each reported in `kept` and named in `operator-steps`:
-  one outside that home, and one another lane's row still names. It also refuses `auth-in-progress` while a sign-in for the lane runs, and
+  placed there yourself. Three folders stay whatever was asked, each reported in `kept` and named in `operator-steps`:
+  one outside that home; one another lane's row reaches, whether the row names it in another spelling (`codex//<x>`),
+  through a link, or names a folder inside it or around it; and one whose fate could not be read. It also refuses `auth-in-progress` while a sign-in for the lane runs, and
   `sleeping-sessions` (with their ids) for hibernated rows, which a removal would move to upstream to wake there;
   `--rehome-sleeping` moves them anyway. `~/.ccrc/auth-scratch/<id>` is deleted, and the answer's `atProvider`
   says, per credential kind, what is still valid at the provider: deleting a Codex folder ends nothing there, so a

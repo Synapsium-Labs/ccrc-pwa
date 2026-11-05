@@ -156,6 +156,18 @@ describe('`add --provider openai` (spec §7.2 step 3; G2)', () => {
     expect(readFileSync(join(home, 'runtime-calls'), 'utf8').trim().split('\n')).not.toContain('build');
   }, 60_000);
 
+  it('the first lane on a box: the refusal names the build that needs no lane, and what it leaves gets the add through', async () => {
+    const { home, base } = await codexBox('ccrc-codex-add-first-', { runtime: false });
+    const refused = add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base });
+    expect(answerOf(refused)['error']).toBe('codex-runtime-absent');
+    // `ccrc install` builds nothing here: its step answers "none" until a row exists, and this verb writes the row.
+    expect(String(answerOf(refused)['detail'])).toContain("Run 'ccgpt-runtime build'");
+    plantFakeRuntime(home);
+    const r = add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rowOf(home, 'lane-g')!['exec']['kind']).toBe('codex');
+  }, 60_000);
+
   it.each([
     [['--credential', '-'], 'credential-not-managed'],
     [['--base-url', 'https://orchard-api/v1'], 'base-url-not-supported'],
@@ -317,6 +329,119 @@ describe('the guard is the path, not who made the folder (D-8016 (6))', () => {
   }, 90_000);
 });
 
+describe('a folder another lane reaches stays, however its row spells it (D-8016 (6))', () => {
+  /** lane-h beside a signed-in lane-g, on a folder this case names, and valid enough for `ccrc wrappers`. */
+  async function beside(prefix: string, name: (rel: string) => string): Promise<{ home: string; authDir: string; rel: string; other: string }> {
+    const { home, authDir, rel } = await signedInLane(prefix);
+    const roster = rosterOf(home);
+    const lane = roster.accounts.find((a) => a['id'] === 'lane-g')!;
+    const ports = (await freePorts(8)).slice(-2);   // past the two the add took from the same allocator
+    const other = name(rel);
+    roster.accounts.push({ ...lane, id: 'lane-h', label: 'lane·h', configDirSuffix: '.claude-lane-h', hue: 'blue',
+      exec: { ...lane['exec'], authDir: other, proxyPort: ports[0], litellmPort: ports[1] } });
+    seedRoster(home, roster);
+    const wrote = ccrcAuth(home, ['wrappers'], '', host);
+    expect(wrote.code, wrote.stdout + wrote.stderr).toBe(0);
+    return { home, authDir, rel, other };
+  }
+  const keptAndNamed = (r: ReturnType<typeof ccrcAuth>, authDir: string, rel: string): void => {
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const a = answerOf(r);
+    expect(existsSync(authDir), 'the sign-in folder').toBe(true);
+    expect(a['kept']).toContain(authDir);
+    expect(a['removed']).not.toContain(authDir);
+    expect(String(a['operator-steps'])).toContain(rel);
+  };
+
+  it.each<[string, (rel: string) => string]>([
+    ['a doubled slash', (rel) => rel.replace('/codex/', '/codex//')],
+    ['a doubled slash further up', (rel) => rel.replace('.local/', '.local//')],
+    ['a trailing dot', (rel) => `${rel}/.`],
+  ])('the same folder spelled with %s', async (_name, name) => {
+    const { home, authDir, rel } = await beside('ccrc-codex-remove-spelled-', name);
+    keptAndNamed(ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host), authDir, rel);
+  }, 90_000);
+
+  it('a folder inside it: lane-h keeps its credential', async () => {
+    const { home, authDir, rel, other } = await beside('ccrc-codex-remove-nested-', (r) => `${r}/sub`);
+    const cred = plantBackendCredential(join(home, other));
+    keptAndNamed(ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host), authDir, rel);
+    expect(JSON.parse(readFileSync(join(home, other, 'auth.json'), 'utf8'))['refresh_token']).toBe(cred.refresh);
+  }, 90_000);
+
+  it('a folder around it: lane-h\'s folder is not emptied of what stands inside it', async () => {
+    const { home, authDir, rel } = await beside('ccrc-codex-remove-around-', () => AUTH_ROOT);
+    keptAndNamed(ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host), authDir, rel);
+  }, 90_000);
+
+  it('a link that lane-h names: the folder it points at is a credential in use', async () => {
+    const { home, authDir, rel, other } = await beside('ccrc-codex-remove-alias-', () => `${AUTH_ROOT}/alias`);
+    symlinkSync(authDir, join(home, other));
+    keptAndNamed(ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host), authDir, rel);
+  }, 90_000);
+
+  it.each([
+    ['fails', 'exit 1'],
+    ['answers nothing', 'exit 0'],
+    ['answers a word nobody knows', `printf '%s\\n' '{"ok":true,"fate":"maybe"}'; exit 0`],
+  ])('a judge that %s keeps the folder: a delete cannot be taken back', async (_name, body) => {
+    const { home, authDir, rel } = await signedInLane('ccrc-codex-remove-unanswered-');
+    writeFileSync(join(home, '.local', 'bin', 'node'),
+      `#!/bin/sh\ncase " $* " in *" auth-dir-fate "*) ${body} ;; esac\nexec ${JSON.stringify(process.execPath)} "$@"\n`, { mode: 0o755 });
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host);
+    keptAndNamed(r, authDir, rel);
+    expect(String(answerOf(r)['operator-steps'])).toContain('could not be told');
+  }, 60_000);
+});
+
+describe('`auth-dir-fate`, the judge of that folder', () => {
+  const lane = (id: string, authDir: string, port: number) => ({
+    id, label: `${id}·x`, configDirSuffix: `.claude-${id}`, homeAble: true, hue: 'green', telemetry: 'codex',
+    exec: { kind: 'codex', provider: 'openai', proxyPort: port, litellmPort: port + 1, authDir },
+  });
+  const fate = (home: string, dir: string): string => {
+    const r = spawnSync(process.execPath, [ACCOUNT_OP, 'auth-dir-fate', '--file', join(home, '.ccrc', 'accounts.json'), '--home', home, '--auth-dir', dir],
+      { encoding: 'utf8' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    return String(JSON.parse(r.stdout)['fate']);
+  };
+  const box = (others: string[]): string => {
+    const home = authBox('ccrc-codex-fate-', { roster: { ...AUTH_ROSTER, accounts: [...AUTH_ROSTER.accounts,
+      ...others.map((o, i) => lane(`lane-${'hijk'[i]}`, o, 14000 + 2 * i))] } });
+    homes.push(home);
+    mkdirSync(join(home, AUTH_ROOT), { recursive: true });
+    return home;
+  };
+  const mine = `${AUTH_ROOT}/lane-g-5655e6`;
+
+  it.each<[string, string, string[], string]>([
+    ['nothing else names it', mine, [], 'delete'],
+    ['a sibling shares only its first letters', mine, [`${mine}0`], 'delete'],
+    ['it names the same folder', mine, [mine], 'named'],
+    ['a row spells it with a doubled slash', mine, [mine.replace('/codex/', '/codex//')], 'named'],
+    ['a row spells it with a trailing dot', mine, [`${mine}/.`], 'named'],
+    ['it is spelled so itself', `${AUTH_ROOT}//lane-g-5655e6`, [mine], 'named'],
+    ['a row sits inside it', mine, [`${mine}/sub/deeper`], 'named'],
+    ['a row holds it', `${mine}/sub`, [mine], 'named'],
+    ['a row is the home itself', mine, [AUTH_ROOT], 'named'],
+    ['it is the home itself', `${AUTH_ROOT}/.`, [], 'outside'],
+    ['it is another home with the same first letters', '.local/share/ccrc/codexes/a', [], 'outside'],
+    ['it is elsewhere', '.handoff/auth', [], 'outside'],
+  ])('%s', (_name, dir, others, want) => {
+    expect(fate(box(others), dir)).toBe(want);
+  });
+
+  it('a path that leaves the home through a link is outside, and a link at the end goes, not what it points at', () => {
+    const home = box([`${AUTH_ROOT}/real`]);
+    mkdirSync(join(home, '.handoff', 'sub'), { recursive: true });
+    symlinkSync(join(home, '.handoff'), join(home, AUTH_ROOT, 'out'));
+    expect(fate(home, `${AUTH_ROOT}/out/sub`)).toBe('outside');
+    mkdirSync(join(home, AUTH_ROOT, 'real'));
+    symlinkSync(join(home, AUTH_ROOT, 'real'), join(home, AUTH_ROOT, 'link'));
+    expect(fate(home, `${AUTH_ROOT}/link`), 'rm removes the link alone').toBe('delete');
+  });
+});
+
 const CODEX_ROSTER = (ports: number[]) => ({
   ...AUTH_ROSTER,
   accounts: [...AUTH_ROSTER.accounts, {
@@ -390,6 +515,44 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
     expect(r.code).toBe(1);
     expect(answerOf(r)['error']).toBe('token-unverified');
     laneUntouched(home, authDir, old);
+  }, 60_000);
+
+  it.each<[string, string]>([
+    ['unreadable', '{"access_token": '],
+    ['another family\'s', JSON.stringify({ OPENAI_API_KEY: 'x', tokens: null })],
+  ])('a lane file that reads %s refuses before any code is asked for: the operator approves nothing they cannot keep', async (_name, body) => {
+    const { home, authDir } = await codexLane('ccrc-codex-reauth-lanefile-');
+    writeFileSync(join(authDir, 'auth.json'), body, { mode: 0o600 });
+    const srv = await fakeAuthServer({
+      usercode: [{ status: 200, body: { device_auth_id: 'dev-1', user_code: 'ABCD-5678', interval: 1 } }],
+      deviceToken: [{ status: 200, body: { authorization_code: 'code-1', code_challenge: 'challenge-1', code_verifier: 'verifier-1' } }],
+    });
+    try {
+      expect(ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-c', '--method', 'openai-login', '--attempt', ATTEMPT], '',
+        { CCRC_CODEX_AUTH_BASE: srv.base, CCRC_AUTH_TIMEOUT: '60', ...fetched }).code).toBe(0);
+      expect(await waitState(home, 'lane-c', ['done', 'failed'], 60_000), JSON.stringify(scrollbacks(home))).toBe('failed');
+      await waitQuiet(home);
+      const status = statusOf(home, 'lane-c');
+      expect(status?.['error']).toBe('lane-credential-refused');
+      expect(status?.['userCode'] ?? null, 'a code was published').toBeNull();
+      expect(srv.requests, 'a request went to the provider').toHaveLength(0);
+      expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).toBe(body);
+      expect(readdirSync(authDir)).toEqual(['auth.json']);
+      expect(existsSync(scratchOf(home, 'lane-c'))).toBe(false);
+    } finally {
+      await srv.close();
+    }
+  }, 120_000);
+
+  it('a lane file that went bad during the sign-in is the same code at the install, never a write failure', async () => {
+    const { home, authDir } = await codexLane('ccrc-codex-reauth-lanefile-late-');
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    writeFileSync(join(authDir, 'auth.json'), '{"access_token": ', { mode: 0o600 });
+    const r = setCodex(home);
+    expect(r.code).toBe(1);
+    expect(answerOf(r)['error']).toBe('lane-credential-refused');
+    expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).toBe('{"access_token": ');
   }, 60_000);
 
   it('no sign-in in scratch refuses `no-credential`, and another attempt\'s refuses `no-auth-attempt`', async () => {

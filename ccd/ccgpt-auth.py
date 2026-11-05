@@ -1764,8 +1764,13 @@ def _pending_exists(auth_dir: str) -> bool:
     return True
 
 
-def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, timeout_s: Optional[float] = None) -> str:
+def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, timeout_s: Optional[float] = None,
+                   over: Optional[str] = None) -> str:
     """Sign the lane in by LiteLLM's device-code protocol, writing the credential through the library's commit.
+
+    `over` is the folder this sign-in will be installed over, when `auth_dir` is a scratch folder (`install_signin`). It
+    is read as step 1 reads `auth_dir`, with no lock and nothing written, so an operator whose sign-in could not land
+    there never approves a code. The install reads it again, under the lock.
 
     1. `read`, with no lock and nothing written: `unreadable` refuses Unreadable and `foreign-family` ForeignFamily,
        before any request.
@@ -1787,6 +1792,8 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     With CCRC_CODEX_AUTH_BASE set, one stderr line names it and its URL before the first request."""
     stream = sys.stdout if out is None else out
     wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
+    if over is not None:
+        _refuse_signin(read(over))
     r = read(auth_dir)
     _refuse_signin(r)
     if _pending_exists(auth_dir):
@@ -1944,12 +1951,12 @@ def status_report(auth_dir: str) -> dict:
 
 
 # ── the command line ─────────────────────────────────────────────────────────────────────────────────────────────
-USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> | install --from <absolute> --lane <id> | paths "
-         "| secret-files, each with --auth-dir <absolute>")
+USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> [--over <absolute>] | install --from <absolute> "
+         "--lane <id> | paths | secret-files, each with --auth-dir <absolute>")
 # Each verb's options: (required, optional). Every option takes one value.
 _VERBS = {
     "status": (frozenset({"--auth-dir"}), frozenset({"--lane"})),
-    "signin": (frozenset({"--auth-dir", "--lane"}), frozenset()),
+    "signin": (frozenset({"--auth-dir", "--lane"}), frozenset({"--over"})),
     "install": (frozenset({"--auth-dir", "--from", "--lane"}), frozenset()),
     "paths": (frozenset({"--auth-dir"}), frozenset()),
     "secret-files": (frozenset({"--auth-dir"}), frozenset()),
@@ -1966,12 +1973,15 @@ def main(argv: List[str]) -> int:
     unknown verb or option, a repeated or valueless option, or a missing required one is usage: one line on stderr,
     rc 2. No verb ever prints a token.
       status [--lane <id>]  one JSON object, `status_report`, rc 0
-      signin --lane <id>    the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
+      signin --lane <id> [--over <absolute>]
+                            the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
                             `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
-                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1
+                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1; with --over, rc 5 for a file it
+                            will not sign in over
       install --from <absolute> --lane <id>
                             `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; the refusal line above, rc 1;
-                            or that line and rc 4 when the sign-in at --from fails its check
+                            or that line and rc 4 when the sign-in at --from fails its check, or rc 5 when
+                            --auth-dir holds a file it will not write over
       paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
       secret-files          the credential and checkpoint paths, one per line, rc 0"""
     if not argv or argv[0] not in _VERBS:
@@ -1990,7 +2000,7 @@ def main(argv: List[str]) -> int:
     if not required <= set(opts):
         return _usage()
     auth_dir = opts["--auth-dir"]
-    if not os.path.isabs(auth_dir) or not os.path.isabs(opts.get("--from", auth_dir)):
+    if not all(os.path.isabs(opts.get(name, auth_dir)) for name in ("--auth-dir", "--from", "--over")):
         return _usage()
     out = sys.stdout
     if verb == "status":
@@ -2010,11 +2020,14 @@ def main(argv: List[str]) -> int:
         if verb == "install":
             result = install_signin(auth_dir, source=opts["--from"], lane=lane)
         else:
-            result = sign_in_device(auth_dir, lane=lane, out=out)
+            result = sign_in_device(auth_dir, lane=lane, out=out, over=opts.get("--over"))
     except AuthError as e:
         out.flush()
         sys.stderr.write("ccgpt-auth: " + e.word + ": " + str(e) + "\n")
-        return 4 if isinstance(e, SigninUnusable) else 1
+        if isinstance(e, SigninUnusable):
+            return 4
+        # A sign-in held apart from the lane: the caller answers a lane's file that bars it with a code of its own.
+        return 5 if isinstance(e, (Unreadable, ForeignFamily)) and (verb == "install" or "--over" in opts) else 1
     line = "ccgpt-auth: " + lane + ": " + result
     if result == "already-signed-in":
         line += ": " + ALREADY_SIGNED_IN

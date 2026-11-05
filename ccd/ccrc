@@ -7772,12 +7772,13 @@ _acct_switch_write() {   # <id> off|on|on-any -> rc, see above
 ACCT_BASE_URL_RESOLVED=""; ACCT_MODELS_RESOLVED="{}"; ACCT_SECRET_WRITTEN=""
 # ── THE CODEX ARM OF `add` (spec §7.2 step 3, G2, G20; accounts plan Task A24; D-5519) ─────────────────────────────
 # ccrc owns this lane, so `add` makes it where a roster edit used to. `_acct_codex_pick` measures what `check-add`
-# judges: the runtime `ccrc install` built, two ports neither the roster nor a listener holds, and a folder name no
+# judges: a Codex runtime, two ports neither the roster nor a listener holds, and a folder name no
 # earlier lane used. The caller holds the placement lock, so two adds never draw one pair. The folder is a name only:
 # the auth library makes it at the first sign-in, so an abandoned add leaves none. The six random hex digits are what
 # keep a re-added id from ever meeting an old lane's sign-in.
 #
-# NO RUNTIME IS BUILT HERE: a build takes minutes of pip under a verb a sheet is waiting on. `ccrc install` builds it.
+# NO RUNTIME IS BUILT HERE: a build takes minutes of pip under a verb a sheet is waiting on. `ccrc install` builds one
+# only for a lane the roster names, so the first lane on a box needs `ccgpt-runtime build`, which reads no roster.
 : "${CCRC_ACCOUNT_CODEX_PORT_BASE:=14100}"   # the harness's knob; below every kernel's ephemeral range
 ACCT_CODEX_PORT_SPAN=200
 ACCT_CODEX_ARGS=()
@@ -7786,7 +7787,7 @@ _acct_codex_pick() {   # <id> -> ACCT_CODEX_ARGS, or refuses
   local -a free=()
   ACCT_CODEX_ARGS=()
   "$(_codex_runtime_cli)" python >/dev/null 2>&1 \
-    || _acct_refuse 1 codex-runtime-absent "this box has no Codex runtime, so a ChatGPT lane has nothing to run on. 'ccrc install' builds it once the roster names a codex lane, and no build runs under this verb. Nothing was written."
+    || _acct_refuse 1 codex-runtime-absent "this box has no Codex runtime, so a ChatGPT lane has nothing to run on. Run 'ccgpt-runtime build' (pip, a few minutes), then add the lane again: no build runs under this verb, and 'ccrc install' builds one only for a lane the roster already names. Nothing was written."
   [[ "$base" =~ ^[0-9]{4,5}$ ]] \
     || _acct_refuse 2 bad-port-base "CCRC_ACCOUNT_CODEX_PORT_BASE must be a TCP port of four or five digits. Nothing was written."
   held="$(jq -r '[.accounts[]? | .exec? | objects | (.proxyPort?, .litellmPort?) | numbers] | map(tostring) | join(" ")' "$(_acct_roster_path)" 2>/dev/null)" \
@@ -9546,7 +9547,7 @@ _acct_remove_gate() {   # <id> <remove|discard> <rehome-sleeping 0|1> — refuse
 _acct_remove() {
   local id="" v="" flag="" item="" sid="" field="" f="" model="" stands="" modelfiles="" lane_dir="" tier="" unit="" port="" q=0 usage_note=""
   local keepcred=0 seen_id=0 seen_keep=0 was_placeable=0 rc=0 already=0 mode=remove dry=0 rehome_sleeping=0
-  local keep_codex=0 delete_codex=0 codex_auth="" codex_sign_in=""
+  local keep_codex=0 delete_codex=0 codex_auth="" codex_sign_in="" codex_fate="" why=""
   local -a rehomed=() rehomed_fields=() kept=() removed=() operator_steps=() lane_before=() lane_left=()
   while [ $# -gt 0 ]; do
     flag="${1%%=*}"
@@ -9835,23 +9836,23 @@ _acct_remove() {
     # lane's ChatGPT sign-in is not left on the box. The stops above ended every tier that reads it, and a sign-in in
     # flight refused this removal. THE GUARD IS THE PATH, NOT WHO MADE THE FOLDER: nothing on the box records that. A
     # hand-written row under `.local/share/ccrc/codex/`, the path the README's example and the roster's remedies give,
-    # is deleted as an added lane's is. Two folders stay whatever was asked: one outside that home, and one another
-    # lane's row still names. Each is named as a step. `rm` removes a symlink there, never what it points at. A sign-in
-    # the folder held stays authorised at the provider, which the answer's `atProvider` says.
+    # is deleted as an added lane's is. Three folders stay whatever was asked, each named as a step: one outside that
+    # home, one another lane's row reaches, and one whose fate could not be read, since a delete cannot be taken back.
+    # `auth-dir-fate` judges them. `rm` removes a symlink there, never what it points at. A sign-in the
+    # folder held stays authorised at the provider, which the answer's `atProvider` says.
     f="$HOME/$codex_auth"
     if [ -n "$codex_auth" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
-      if [ "$keep_codex" -eq 1 ]; then
-        kept+=("$f")
-      elif [[ "$codex_auth" != .local/share/ccrc/codex/* ]]; then
-        kept+=("$f")
-        operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: ccrc deletes one only under .local/share/ccrc/codex/. Delete it by hand if nothing else uses it.")
-      elif jq -e --arg d "$codex_auth" 'any(.accounts[]?; .exec?.authDir? == $d)' "$(_acct_roster_path)" >/dev/null 2>&1; then
-        kept+=("$f")
-        operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: another lane still names it.")
-      else
-        rm -rf -- "${f:?}" 2>/dev/null
-        if [ -e "$f" ] || [ -L "$f" ]; then kept+=("$f"); else removed+=("$f"); fi
-      fi
+      codex_fate=keep; why=""
+      [ "$keep_codex" -eq 1 ] || codex_fate="$(_acct_node auth-dir-fate --file "$(_acct_roster_path)" --home "$HOME" --auth-dir "$codex_auth" 2>/dev/null | jq -r '.fate // empty' 2>/dev/null)" || codex_fate=""
+      case "$codex_fate" in
+        keep) : ;;
+        delete) rm -rf -- "${f:?}" 2>/dev/null; [ -e "$f" ] || [ -L "$f" ] || { removed+=("$f"); f=""; } ;;
+        outside) why="ccrc deletes one only under .local/share/ccrc/codex/. Delete it by hand if nothing else uses it." ;;
+        named) why="another lane still names it, or a folder inside it or around it." ;;
+        *) why="whether another lane still names it could not be told. Delete it by hand if nothing else uses it." ;;
+      esac
+      [ -z "$f" ] || kept+=("$f")
+      [ -z "$why" ] || operator_steps+=("\$HOME/$codex_auth, lane $id's ChatGPT sign-in folder, was kept: $why")
     fi
   fi
 
@@ -11184,6 +11185,7 @@ _acct_install_codex() {   # <id> <what-still-stands>
   case "$rc" in
     0) : ;;
     4) _acct_refuse 1 no-credential "the sign-in in $src passed the request, but the auth library would not install it: it is expired, barred or not private to this user. $stands" ;;
+    5) _acct_refuse 1 lane-credential-refused "the sign-in passed the request, but the lane's own file in \$HOME/$CX_AUTH reads as one the auth library will not write over (its line is on stderr). 'ccrc doctor' names it. $stands" ;;
     *) _acct_refuse 1 credential-write "the auth library could not install the sign-in into \$HOME/$CX_AUTH (exit $rc; its line is on stderr). $stands" ;;
   esac
   rm -rf -- "${src:?}"
@@ -15720,18 +15722,20 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # `--scratch` (accounts plan Task A24) IS AN ATTEMPT'S: the sign-in goes to the
 # lane's scratch folder, and `ccrc account set --method openai-login` moves it
 # in once it passes its check. The row is still read, so no folder is ever made
-# for a lane the roster does not name as a codex lane.
+# for a lane the roster does not name as a codex lane. The library reads the
+# lane's folder first (`--over`), and rc 5, this flag's alone, is that refusal:
+# a lane's file no sign-in can land on, before any code is asked for.
 _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff the auth library's sign-in exited 0
-  local id="$1" dir res rc word re='^ccgpt-auth: ([a-z][a-z-]*): '
+  local id="$1" dir res rc word over='' re='^ccgpt-auth: ([a-z][a-z-]*): '
   _codex_row "$id" || return $?
   dir="$HOME/$CX_AUTH"
-  [ "${2:-}" != --scratch ] || dir="$(_codex_scratch_dir "$id")"
+  if [ "${2:-}" = --scratch ]; then dir="$(_codex_scratch_dir "$id")"; over="$HOME/$CX_AUTH"; fi
   # stdout straight through (fd 3, this function's stdout). stderr goes down
   # the pipe to the relay, which prints each line to stderr as it arrives and,
   # once the library has closed it, the last refusal word to the capture; the
   # library's own rc follows, from PIPESTATUS, so nothing has to wait for a
   # process substitution.
-  { res="$( { (umask 077; _codex_auth signin --auth-dir "$dir" --lane "$id") 2>&1 1>&3 3>&- \
+  { res="$( { (umask 077; _codex_auth signin --auth-dir "$dir" --lane "$id" ${over:+--over "$over"}) 2>&1 1>&3 3>&- \
       | { w=''; while IFS= read -r l || [ -n "$l" ]; do
             printf '%s\n' "$l" >&2
             if [[ $l =~ $re ]]; then w="${BASH_REMATCH[1]}"; fi
@@ -15741,6 +15745,7 @@ _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff th
   case "$rc" in
     0) printf '%s codex: %s: logged in\n' "$PROG" "$id"; return 0 ;;
     3) return 1 ;;   # `_codex_auth` has said auth-library-absent
+    5) _codex_say lane-credential-refused "$id's own file in ~/$CX_AUTH cannot be signed in over (the auth library's line above says why), so no code was asked for and the lane is as it was. Run 'ccrc doctor', then sign in again."; return 5 ;;
   esac
   _codex_say login-failed "the auth library's sign-in for $id failed${word:+ ($word)} and exited $rc (its own line is above), so $id is not logged in. Retry with: ccrc codex login $id"
   return 1

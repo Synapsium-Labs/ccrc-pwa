@@ -37,9 +37,9 @@
 
 import {
   chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync,
-  readSync, renameSync, statSync, unlinkSync, writeFileSync,
+  readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
@@ -698,6 +698,8 @@ const OPS = {
   // has written nothing passes none, and the refusal keeps the sentence it
   // always had.
   drop: { keys: ['file', 'id', 'stands'], repeat: [] },
+  // Asked after `drop`, so every row left is another lane's. `authDirFate` says what the answer means.
+  'auth-dir-fate': { keys: ['file', 'home', 'auth-dir'], repeat: [] },
   removed: {
     keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets',
       'codex-sign-in'],
@@ -2164,6 +2166,34 @@ function opAuthAnswer(a) {
   return 0;
 }
 
+/** The one home `remove` deletes a lane's sign-in folder under, `$HOME`-relative. */
+const CODEX_AUTH_HOME = '.local/share/ccrc/codex';
+
+/** What `ccrc account remove` may do with a lane's sign-in folder, once its row is gone (spec §11 step 4; D-8016 (6)).
+ *  `outside`: it is not under that home. `named`: another lane's folder is that folder, or is inside it, or holds it.
+ *  `delete`: neither. The roster's validator admits several spellings of one folder (`codex//a`, `codex/a/.`), so paths
+ *  are compared resolved, never as written, and also through their symlinks, since `real` is where a credential is. The
+ *  end of `authDir` is not followed: `rm` removes a link there, not what it points at. A path that cannot be measured
+ *  throws, and the caller reads no answer as keep. */
+function authDirFate(accounts, home, authDir) {
+  const real = (p) => {
+    try { return realpathSync(p); } catch (e) { if (e.code === 'ENOENT') return p; throw e; }
+  };
+  const inside = (p, root) => p.startsWith(`${root}/`);
+  const overlap = (a, b) => a === b || inside(a, b) || inside(b, a);
+  const root = resolve(home, CODEX_AUTH_HOME);
+  const dir = resolve(home, authDir);
+  const stands = join(real(dirname(dir)), basename(dir));
+  if (!inside(dir, root) || !inside(stands, real(root))) return 'outside';
+  const named = accounts.some((row) => {
+    const other = row?.exec?.authDir;
+    if (typeof other !== 'string') return false;
+    const at = resolve(home, other);
+    return overlap(dir, at) || overlap(stands, real(at));
+  });
+  return named ? 'named' : 'delete';
+}
+
 function main(argv) {
   const op = argv[2];
   if (op === undefined || !Object.hasOwn(OPS, op)) {
@@ -3225,6 +3255,16 @@ function main(argv) {
       'operator-steps': a['operator-step'] ?? [],
       ...(a['kind'] === undefined ? {} : { atProvider: kind === null ? [] : [{ kind, ...AT_PROVIDER[kind] }] }),
     });
+    return 0;
+  }
+
+  if (op === 'auth-dir-fate') {
+    for (const k of ['file', 'home', 'auth-dir']) {
+      if (a[k] === undefined) { refuse('bad-argv', `auth-dir-fate needs --${k}`); return 2; }
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    out({ ok: true, fate: authDirFate(json['accounts'], a['home'], a['auth-dir']) });
     return 0;
   }
 
