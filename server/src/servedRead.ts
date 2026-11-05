@@ -20,3 +20,19 @@ export function servedFromWatcher<T extends { listedAt: number }>(
   const ageMs = nowMs - stamped.listedAt;
   return ageMs >= 0 && ageMs < boundMs ? { serve: true, value: stamped, ageMs } : { serve: false };
 }
+
+/**
+ * `GET /api/projects` reads two things the watcher also holds: the project-pool sweep and the limits. It serves them
+ * only when BOTH are within the bound, since one served beside one read would stamp an answer with an age that is true of
+ * half of it. The age it reports is the older of the two. Pure.
+ */
+export function servedProjectReads<P extends { listedAt: number }, L extends { listedAt: number }>(
+  pools: P | null,
+  limits: L | null,
+  nowMs: number,
+  boundMs: number = FLEET_ROWS_MAX_AGE_MS,
+): { serve: true; pools: P; limits: L; ageMs: number } | { serve: false } {
+  const p = servedFromWatcher(pools, nowMs, boundMs);
+  const l = servedFromWatcher(limits, nowMs, boundMs);
+  return p.serve && l.serve ? { serve: true, pools: p.value, limits: l.value, ageMs: Math.max(p.ageMs, l.ageMs) } : { serve: false };
+}

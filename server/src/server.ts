@@ -75,6 +75,7 @@ import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '.
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
+import { servedFromWatcher, servedProjectReads } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
@@ -1210,6 +1211,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // through to here, and only the disconnected arm above carries `downSince`. Its counterpart on a listable
     // registry is `fleet-health.test.ts`'s disconnected case with no cache, which takes the live assemble.
     // [registry-refused:stale]
+    // Console speed S2: the watcher's last listed tick, while it is fresh and its pools wire exists, answers whole with its
+    // age: no registry read, no pools read, no assembly. Anything less falls to the reads below, which are today's.
+    const servedFleet = servedFromWatcher(watcher?.currentFleetListing() ?? null, Date.now());
+    const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
+    if (servedFleet.serve && servedPools !== null) return { sessions: servedFleet.value.sessions, pools: servedPools, ageMs: servedFleet.ageMs };
     const reg = await readRegistryMeasured(deps.io, deps.cfg);
     if (!reg.listed) {
       return { sessions: dropStaleLandings(watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], Date.now()), stale: true };
@@ -1441,7 +1447,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/accounts', async (req, reply): Promise<AccountsResponse> => {
     // `no-store` on every answer (accounts plan Task A12): a session reader's carries identities and key hints.
     reply.header('cache-control', 'no-store');
-    const limits = await readLimits(deps.io, deps.cfg);
+    // Console speed S2: the watcher's last tick of the limits while it is fresh, with its age on the answer; else the read as before.
+    const servedLimits = servedFromWatcher(watcher?.currentLimits() ?? null, Date.now());
+    const limits = servedLimits.serve ? servedLimits.value.limits : await readLimits(deps.io, deps.cfg);
     // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
     // exactly the way `shares`/`limits` are each one read for every row below
     // rather than one per account: `deps.coord?.accountPoolEdges()` inside
@@ -1510,6 +1518,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // central tag has moved.
       projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }, accountEdges),
       roster: rosterWireOf(accountEdges),
+      ...(servedLimits.serve ? { ageMs: servedLimits.ageMs } : {}),
     };
     // `lanes` and `connect` for the SESSION verdict only (D-5511, D-5517): a dark gate's reader, and a box token (which
     // an armed gate refuses before this handler), get today's three fields and nothing else. The lane states are read
@@ -2872,13 +2881,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // which needs the PARENT listing to tell an absent `pools/` from an
     // unlistable one (`pools.ts`, spec §5.4.4). This request uses the shared
     // request-lane budget rather than inheriting the watcher's cadence slice.
-    const poolsRead = await readProjectPools(
+    // Console speed S2: both from the watcher's last tick while both are fresh (`servedProjectReads`), else read as before.
+    const servedReads = servedProjectReads(watcher?.currentProjectPoolsRead() ?? null, watcher?.currentLimits() ?? null, Date.now());
+    const poolsRead = servedReads.serve ? servedReads.pools.read : await readProjectPools(
       deps.io,
       deps.cfg,
       (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
-    const limits = await readLimits(deps.io, deps.cfg);
+    const limits = servedReads.serve ? servedReads.limits.limits : await readLimits(deps.io, deps.cfg);
+    const servedAge = servedReads.serve ? { ageMs: servedReads.ageMs } : {};
     // ONE shares read for the whole request, exactly the way `limits` above
     // is one `readLimits` for every row — and skipped entirely for the
     // default class, so a caller that never asked for a class never pays for
@@ -2912,6 +2924,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return {
         ...listed,
         projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p) })),
+        ...servedAge,
       };
     }
     const coord = deps.coord;
@@ -2932,6 +2945,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         }
         return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p) };
       }),
+      ...servedAge,
     };
   });
 
