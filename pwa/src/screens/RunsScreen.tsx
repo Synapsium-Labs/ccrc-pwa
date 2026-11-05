@@ -49,7 +49,7 @@ import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
 import { backToFleet } from '../command/door';
-import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
+import { Button, EmptyState, PageScaffold, SECTION_PURPOSE, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -411,27 +411,21 @@ export function RunsScreen({
               <ul className="runs-list">
                 {finished.slice(0, shownFinished).map((run) => rowFor(run, finishedNow))}
               </ul>
-              {shownFinished < finished.length && (
+              {/* One quiet control at the foot of Finished. It unfolds the loaded rows first; once every loaded row is
+                  shown it asks for the next page ("Show older", console speed S2), so a tap always changes something the
+                  operator can see. The two are never offered together, so they are one control. */}
+              {(shownFinished < finished.length || hasOlder) && (
                 <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
-                  onClick={showMoreFinished}>
-                  {finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
-                    finished.length - shownFinished)}
+                  disabled={shownFinished >= finished.length && olderBusy}
+                  onClick={shownFinished < finished.length ? showMoreFinished : showOlder}>
+                  {shownFinished < finished.length
+                    ? finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
+                      finished.length - shownFinished)
+                    : 'Show older'}
                 </Button>
               )}
-              {/* Console speed S2: offered only once every loaded row is shown, so a tap that loads the next page
-                  changes something the operator can see. */}
-              {hasOlder && shownFinished >= finished.length && (
-                <>
-                  <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
-                    disabled={olderBusy} onClick={showOlder}>
-                    Show older
-                  </Button>
-                  {olderFailed && (
-                    <p role="status" className="m-0 font-ui text-meta leading-normal text-ink-secondary">
-                      Could not load older runs.
-                    </p>
-                  )}
-                </>
+              {hasOlder && shownFinished >= finished.length && olderFailed && (
+                <p role="status" className={SECTION_PURPOSE}>Could not load older runs.</p>
               )}
             </div>
           ) : coldFailed ? (
