@@ -290,13 +290,13 @@ function rig(w: World, seams: Record<string, unknown> = {}): Rig {
 
 // ── the timing vocabulary (design: the phases, their enclosers, what `block` sums) ─────────────────────────────────────
 
-const TOP = ['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile'];
+const TOP = ['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile', 'leaseActs'];
 const INNER = ['pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
 const PARTS = ['attempts', 'leases', 'intervals', 'absence', 'repair'];
 const TIME_KEYS = [...TOP, ...INNER, ...PARTS, 'rewrite'];
 /** What `block` sums: the BLOCKING phases. Never the reads (`open recover root load owners readMetas`), `rewrite` (it overlaps its
  *  callers), `reconcile` (its parts are) or the effect parts (inside `effects`). */
-const BLOCK = ['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
+const BLOCK = ['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'leaseActs', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
 const ENCLOSERS: Record<string, string[]> = {
   ...Object.fromEntries(INNER.map((k) => [k, ['reconcile']])),
   ...Object.fromEntries(PARTS.map((k) => [k, ['effects', 'reconcile']])),
