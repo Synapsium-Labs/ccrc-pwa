@@ -15,6 +15,8 @@ import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_C
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
 const SHA256_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+/** The three keys D-7999 (cleanup un-wedge R1) adds to the archive manifest, for the rows rung's archive arm. */
+const R1_MANIFEST_KEYS: readonly string[] = ['workdir', 'workdirReal', 'uuid'];
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-arch-'); });
@@ -924,6 +926,23 @@ describe('ws-archive', () => {
     // The manifest describes the thing that may later be deleted, so it cannot
     // live inside it.
     expect(fs.existsSync(path.join(wt, '.archivemanifest'))).toBe(false);
+  });
+
+  // D-7999 (cleanup un-wedge R1), Step 0: the manifest's keys as `main` wrote them before R1 added
+  // `workdir`, `workdirReal` and `uuid`, taken on `main` first. Every older key keeps its name, its place and its value.
+  it('every older key is unchanged', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    const old = Object.fromEntries(Object.entries(m).filter(([k]) => !R1_MANIFEST_KEYS.includes(k)));
+    expect(Object.keys(old)).toEqual(['id', 'branch', 'worktreeHead', 'base', 'tip', 'dirty', 'ignoredDigest', 'stashes',
+      'worktreeBytes', 'pr', 'prHistory', 'transcript']);
+    expect(old).toEqual({
+      id: 'demo-quiet-basin', branch: 'ws/quiet-basin', worktreeHead: 'ws/quiet-basin', base: 'origin/main',
+      tip: h.git(wt, 'rev-parse', 'HEAD'), dirty: 0, ignoredDigest: SHA256_EMPTY, stashes: 0,
+      worktreeBytes: expect.any(Number) as unknown, pr: null, prHistory: [],
+      transcript: path.join(h.home, '.claude', 'projects', mungePath(wt), `${h.reg('demo-quiet-basin', 'uuid')}.jsonl`),
+    });
   });
 
   it('carries the stash count a reap would refuse on', () => {
