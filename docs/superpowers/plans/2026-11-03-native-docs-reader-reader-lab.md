@@ -6,14 +6,16 @@
 
 **Revisions:** rev 3 (2026-11-04): the operator's approval is recorded. Before dispatch, the coordinator re-counted every Find block against `main` at `6da86bb83`. RL-b's all match once, except the two marked "as RL-a leaves it". RL-a's five route-count blocks in Task 3 missed: two later PRs (the PL6 follow-up and landing order wave 5f) had added four routes, two of them exempt. Those blocks, Task 3 Step 0's base check and Global Constraints' census note are re-quoted at that commit. The door adds the same five routes as before, so the counts become 174 -> 179 total, 171 -> 176 HTTP, 105 -> 108 gated and 66 -> 68 exempt-HTTP. Two user-agent strings in Task 8's test code are cut to `Chrome/141.0` and `CriOS/141.0`: a four-part version reads as a public IPv4 address to `topology-clean.test.ts`. The case reads only the major version. rev 2 (2026-11-03) applies review round 1 (twenty findings upheld, two refuted): a run's life is derived from the lab's own caps, now declared in `shared/readerLab.ts` and summed by a test (about eighteen minutes), and the run keeps its counts once they are complete (the hostile step moves before the Mermaid mounts, and the final read degrades); a run answers only the session that opened it, through a one-way digest of the session cookie; the door is named for what it is, a permanent surface on every box that is inert until a session opens a run; the gate's origin-check note names the probe, and the armed box's foreign-origin journal line is asserted, not silenced; the uniform-answer test covers expired and saturated runs and an armed POST from origin `null`; the busy frame is a fact (shared thread or own thread) that gates nothing; the Mermaid line counts all six figures together and every mount that did not draw; `csp-27` needs M8.B1's control floor and a ready library mount; a teardown-signal line splits from the self-navigation wall; the gap window has a mode for the library change; the block carries the device's feature facts, a draw-on-open reading and the door's session-cookie class; a silent top-navigation block is refinement (u); the browser case reads headers with `allHeaders()` and leaves the preflight to a server test; Task 1 runs the single-definition directory; the browser time is reported per file.
 
+**RL-b execution revision (2026-11-05):** the 24 full-file code fences for Tasks 6-11, the shared vocabulary, its test and the run store below are implementation snapshots at `257533d6d`, including the held-out review fixes. The task headings, base checks and Find/Replace fragments retain their execution order; they are not a second set of edits to replay over the snapshots. The separate benign strays mount makes eleven mounts, 876 000 ms of run caps and 1 176 000 ms of run life. The wall policy adds three sources: the battery nonce, a fixed hash for an unnonced dynamic-import script, and an exact canary. Saturation never hides an observed break. A rejected final read keeps completed counts but never swallows Stop. The browser case uses its own loopback HTTP server because request interception missed early out-of-process sandbox requests. Counts still labelled predictions are historical expectations; Results records measurements, process departures and remaining limitations. Task 10's shell and route-test Finds are re-quoted at the later absorption: ReaderLab uses main's existing lazyScreen/loading wrapper, and its test awaits the heading. The full-file implementation snapshots and original 54 mutation measurements remain pre-absorption provenance.
+
 **Scope:**
 - In, RL-a (the door): `shared/readerLab.ts` (the vocabulary); `server/src/readerLab/runs.ts` (the run store) and `server/src/readerLab/routes.ts` (the counter hook and the five routes); their wiring in `server/src/server.ts`; two `EXEMPT` entries and reason 8 in `server/src/auth/gate.ts`; the census edits in `server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts` and `server/test/rings/fastify-l4.data.ts`; two `EXEMPT` rows in `server/test/secret-mask.test.ts`'s egress census (ruled at Task 5, under the census exception in Global Constraints); one row of the architecture spec's context table; one README sentence; three new server test files.
-- In, RL-b (the page): `pwa/src/readerLab/` (the battery source, the frame scripts, the frame builder, the fixtures, the check list, the verdicts, the device line, the result block, the page's words, the run, a stylesheet); `pwa/src/docs/reader/labPolicy.ts` (the wall frame's policy); `pwa/src/lib/frameGap.ts` (R19's stall measure, moved); `pwa/src/screens/ReaderLab.tsx` and its route, ladder rung and palette door; `api.readerLab` in `pwa/src/lib/api.ts`; the `lab-draw` mount profile in `pwa/src/docs/reader/policy.ts`, `bridge.ts` and `pwa/src/lib/readerLimits.ts`; the desktop battery on the shared list in `pwa/browser/reader-frame.browser.test.ts`; the PWA cell of the same context-table row; six new PWA test files, one new browser test file, and edits to `reader-bridge.test.ts`, `app.test.tsx` and `command-registry.test.ts`.
+- In, RL-b (the page): `pwa/src/readerLab/` (the battery source, the frame scripts, the frame builder, the fixtures, the check list, the verdicts, the device line, the result block, the page's words, the run, a stylesheet); `pwa/src/docs/reader/labPolicy.ts` (the wall frame's policy); `pwa/src/lib/frameGap.ts` (R19's stall measure, moved); `pwa/src/screens/ReaderLab.tsx` and its route, ladder rung and palette door; `api.readerLab` in `pwa/src/lib/api.ts`; the `lab-draw` mount profile in `pwa/src/docs/reader/policy.ts`, `bridge.ts` and `pwa/src/lib/readerLimits.ts`; the desktop battery on the shared list in `pwa/browser/reader-frame.browser.test.ts`; the PWA cell of the same context-table row; six new PWA test files, one new browser test file, and edits to `reader-bridge.test.ts`, `app.test.tsx` and `command-registry.test.ts`. Corrections licensed during execution also touch `pwa/test/contrast.test.ts` (one stylesheet-census entry), `pwa/test/command-layer.test.tsx` (the Go-to Settings census), `pwa/test/app-lazy.test.tsx` (one ReaderLab row and six-to-seven census wording, by scoped leave at absorption), `shared/readerLab.ts`, `server/test/reader-lab-vocabulary.test.ts` and `server/src/readerLab/runs.ts` (the eleventh mount and its derived caps).
 - Out: the shared library's change that draws Mermaid after `ready` (it flips `LAB_GAP_WINDOW` in its own change); W8b (the version menu, "changes since") and every item of W8a's residue; W5b; a Settings index row (question Q7); any CI change: a `FILE_MS` entry for the lab's browser file in `pwa/browser/slowFirst.ts`, with the matching `pwa/test/browser-leg.test.ts` census, is a separate change that Task 11 Step 4's measured figure informs, and Playwright WebKit and Firefox proxies are the design's Later; the phone runs themselves, which are the operator's after rollout.
 
 **Goal:** The operator opens Settings › Reader lab on a phone, taps Start, taps once inside one frame when the page asks, and typically about two minutes later selects a result block that says, for that engine, whether each of the reader frame's seven walls holds and whether a blocked navigation gives the teardown signal (E18), and whether the console stays live while the reader draws Mermaid on open, beside the fact of whether a busy frame shares the console's thread (E17). Today those labs have never run on a phone: every wall was measured on desktop Chromium through Playwright, which a phone does not have.
 
-**Architecture:** RL-a adds a measurement door to the server, present on every box and inert until someone opens a run (a signed-in session on an armed box; anyone who reaches the port on a dark one). A session opens a run (`POST /api/reader-lab/runs`) and is handed a 128-bit nonce the server mints; the run is bound to that session by a one-way digest of its cookie, never the cookie. For at most a life derived from the lab's own caps (about eighteen minutes; a run takes about two), a counter hook added immediately before the session gate counts each request to `/api/reader-lab/probe/<nonce>/<name>` by name, keeping only classes (the session cookie present by name or not, `Sec-Fetch-Site`, `Origin`, upgrade or not); the probe route itself is `EXEMPT` (a permanent reason 8), and every request that reaches its handler gets the same empty `204`. Only the opening session reads its counts back (`GET …/runs/:nonce`) and closes the run; any other gets the unknown-nonce answer. RL-b adds the page. It builds frames of the reader frame's shape (`sandbox="allow-scripts"`, `srcdoc`, `no-referrer`) whose constant scripts report only by requesting probe URLs; one "wall" frame runs the 27-channel battery under the shared library's own `frameCsp()` plus its script nonce and one canary URL; it mounts the production reader under a new `lab-draw` profile to time Mermaid and to expose it to hostile figures and stray messages; and it turns the counts and its own observations into three-outcome lines and a versioned text block. Every arrival that decides a verdict is read by step 7, before the Mermaid mounts, so a run whose life runs out later keeps its counts. No frame gets a port and the console adds no message listener: the door is the only channel out of a frame.
+**Architecture:** RL-a adds a measurement door to the server, present on every box and inert until someone opens a run (a signed-in session on an armed box; anyone who reaches the port on a dark one). A session opens a run (`POST /api/reader-lab/runs`) and is handed a 128-bit nonce the server mints; the run is bound to that session by a one-way digest of its cookie, never the cookie. For at most a life derived from the lab's own caps (about twenty minutes; a run takes about two), a counter hook added immediately before the session gate counts each request to `/api/reader-lab/probe/<nonce>/<name>` by name, keeping only classes (the session cookie present by name or not, `Sec-Fetch-Site`, `Origin`, upgrade or not); the probe route itself is `EXEMPT` (a permanent reason 8), and every request that reaches its handler gets the same empty `204`. Only the opening session reads its counts back (`GET …/runs/:nonce`) and closes the run; any other gets the unknown-nonce answer. RL-b adds the page. It builds frames of the reader frame's shape (`sandbox="allow-scripts"`, `srcdoc`, `no-referrer`) whose constant scripts report only by requesting probe URLs; one "wall" frame runs the 27-channel battery under the shared library's own `frameCsp()` plus its battery nonce, one fixed import-script hash and one exact canary URL; it mounts the production reader under a new `lab-draw` profile to time Mermaid and to expose it to hostile figures and stray messages; and it turns the counts and its own observations into three-outcome lines and a versioned text block. Every arrival that decides a verdict is read by step 7, before the Mermaid mounts, so a run whose life runs out later keeps its counts. No frame gets a port and the console adds no message listener: the door is the only channel out of a frame.
 
 **Tech Stack:** TypeScript (server's own `tsc`, pwa's own `tsc`), Fastify 5 with `@fastify/websocket` 11 (`request.ws`, `injectWS`), vitest 5 (server on node, pwa on jsdom, the browser leg through `playwright-core`), React 19 with `@ccrc/ui`'s `PageScaffold` and `Button`, the shared Markdown library's `./frame` (`frameCsp`, `FRAME_MANIFEST`), `node:crypto` (`randomBytes`). Node `>=22.16.0`.
 
@@ -39,10 +41,10 @@
 - **SAFETY.** Never run `ccd` against the live HOME; never run a destructive ccd verb; never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*` units; never call the live ccrc server; never print a secret file's contents and never put a token in an argv (read-only `gh` verbs only, `GH_TOKEN` from the environment). No test reaches a network or a real server; every server case runs on `app.inject` or `app.injectWS`; the browser leg serves the built PWA from loopback and answers `/api` from fixtures.
 - **FIXTURE HOME.** No task runs `ccd`. A guard suite that drives `ccd` runs under `makeCcdHarness` fixture HOMEs only (`server/test/ccdWsHelpers.ts`); quote every fixture path.
 - **LOW DISK.** No new worktrees, no `git archive` copies, no second checkout or `node_modules` beyond the run's own workspace. Each run installs `ui/`, `pwa/` and `server/` modules once (`npm ci` in each); neither run changes a lock or a `package.json`. Nothing builds into `server/dist-pwa` in the workspace (`auth-gate.test.ts` changes what it asserts when that bundle exists); the browser leg builds into its own temporary directory as it always does. Mutation rows are measured **in the workspace itself**, sequentially, never in parallel: save the target file to `$HOME/.cc-tmp/rlb-mut/<id>.orig` with its sha256, apply the row's `old` → `new` (the `Edit` tool, exact unique match), run the row's `tests`, record the red line, restore from the saved copy (never `git checkout`), check the sha256 equals the saved one, and check `git status --porcelain` is unchanged from before the row. Each run is bounded: `timeout -k 10 600` and `ulimit -u 4096`. `$HOME/.cc-tmp/rlb-mut/` is removed at Tasks 5 and 12.
-- **Scope.** RL-a creates `shared/readerLab.ts`, `server/src/readerLab/runs.ts`, `server/src/readerLab/routes.ts`, `server/test/reader-lab-vocabulary.test.ts`, `server/test/reader-lab-runs.test.ts` and `server/test/reader-lab-routes.test.ts`; it edits `server/src/server.ts` (two import lines, one block before `installGate`, one registration line), `server/src/auth/gate.ts` (its first line's count, "THE EIGHT REASONS", reason 8, two `EXEMPT` entries), `server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts` (one appended describe), `server/test/rings/fastify-l4.data.ts` (one entry), `server/test/secret-mask.test.ts` (two `EXEMPT` rows, ruled at Task 5 under the exception below), `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (the C9 row's server cell), `README.md` (one sentence) and this plan. RL-b creates the files File Structure lists under Tasks 6-11 and edits `pwa/src/lib/readerLimits.ts`, `pwa/src/docs/reader/policy.ts`, `pwa/src/docs/reader/bridge.ts`, `pwa/src/screens/highlightMeasureRun.tsx`, `pwa/src/lib/routes.ts`, `pwa/src/app.tsx`, `pwa/src/lib/api.ts`, `pwa/browser/reader-frame.browser.test.ts`, `pwa/test/reader-bridge.test.ts` (one appended describe), `pwa/test/app.test.tsx`, `pwa/test/command-registry.test.ts`, the same context-table row's PWA cell, and this plan. Byte-identical in both runs: every other file, and in particular `shared/docs.ts`, `shared/api.ts`, every other file under `server/src/**` and `pwa/src/**`, `agent/**`, `ccd/**`, `deploy/**`, `install.sh`, `.github/**`, `ui/**`, `pwa/index.html`, `pwa/vite.config.ts`, `pwa/vitest.browser.config.ts`, `pwa/browser/harness.ts`, `pwa/browser/app.ts`, `pwa/test/docs-scans.test.ts`, `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/screens/HighlightMeasure.tsx`, `CLAUDE.md`, every `package.json` and lock. Any other file is a stop-and-ask. One allowed exception, claimed first: if the CI selection or a close task's whole-suite run reds a census in another programme's file that this wave's new words or files trip, the worker stops and asks the coordinator, who rules on that file.
+- **Scope.** RL-a creates `shared/readerLab.ts`, `server/src/readerLab/runs.ts`, `server/src/readerLab/routes.ts`, `server/test/reader-lab-vocabulary.test.ts`, `server/test/reader-lab-runs.test.ts` and `server/test/reader-lab-routes.test.ts`; it edits `server/src/server.ts` (two import lines, one block before `installGate`, one registration line), `server/src/auth/gate.ts` (its first line's count, "THE EIGHT REASONS", reason 8, two `EXEMPT` entries), `server/test/auth-gate.test.ts`, `server/test/box-token-census.test.ts` (one appended describe), `server/test/rings/fastify-l4.data.ts` (one entry), `server/test/secret-mask.test.ts` (two `EXEMPT` rows, ruled at Task 5 under the exception below), `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (the C9 row's server cell), `README.md` (one sentence) and this plan. RL-b creates the files File Structure lists under Tasks 6-11 and edits `pwa/src/lib/readerLimits.ts`, `pwa/src/docs/reader/policy.ts`, `pwa/src/docs/reader/bridge.ts`, `pwa/src/screens/highlightMeasureRun.tsx`, `pwa/src/lib/routes.ts`, `pwa/src/app.tsx`, `pwa/src/lib/api.ts`, `pwa/browser/reader-frame.browser.test.ts`, `pwa/test/reader-bridge.test.ts` (one appended describe), `pwa/test/app.test.tsx`, `pwa/test/command-registry.test.ts`, the same context-table row's PWA cell, and this plan. Licensed execution corrections add `pwa/test/contrast.test.ts` (one layout-only stylesheet-census entry), `pwa/test/command-layer.test.tsx` (one option assertion, the count seven to eight, and its comment), `pwa/test/app-lazy.test.tsx` (one ReaderLab row and six-to-seven census wording, ruled at absorption), and the eleventh mount's caps in `shared/readerLab.ts`, `server/test/reader-lab-vocabulary.test.ts` and `server/src/readerLab/runs.ts`; no other server behavior changes. Subject to those named corrections, byte-identical in both runs: every other file, and in particular `shared/docs.ts`, `shared/api.ts`, every other file under `server/src/**` and `pwa/src/**`, `agent/**`, `ccd/**`, `deploy/**`, `install.sh`, `.github/**`, `ui/**`, `pwa/index.html`, `pwa/vite.config.ts`, `pwa/vitest.browser.config.ts`, `pwa/browser/harness.ts`, `pwa/browser/app.ts`, `pwa/test/docs-scans.test.ts`, `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/screens/HighlightMeasure.tsx`, `CLAUDE.md`, every `package.json` and lock. Any other file is a stop-and-ask. One allowed exception, claimed first: if the CI selection or a close task's whole-suite run reds a census in another programme's file that this wave's new words or files trip, the worker stops and asks the coordinator, who rules on that file.
 - **Base.** RL-a's child workspace is minted from `main` at or after `94bdcf45485c9cea22ce0563ef07a90a19fe9197`; RL-b's from `main` at or after RL-a's merge. Each task's Step 0 runs a **content** check, not an ancestry check (`T<n>-BASE-OK`), and the first task of each run records BASE in the gitignored SDD ledger `.superpowers/sdd/2026-11-03-native-docs-reader-reader-lab/progress.md`.
 - **Rings and seams.** `shared/readerLab.ts` is L0: it imports nothing. `server/src/readerLab/runs.ts` is L1 (imports only `shared/`; no `fs`, no timers, no fastify; the clock is a parameter). `server/src/readerLab/routes.ts` is L4 (fastify, `node:crypto`). `pwa/src/readerLab/checks.ts`, `device.ts`, `verdicts.ts`, `result.ts`, `labText.ts`, `battery.ts`, `frameScripts.ts` and `fixtures.ts` are L1 (no `.tsx`, store or `lib/api.ts` import); `pwa/src/docs/reader/labPolicy.ts` and `pwa/src/lib/frameGap.ts` are L1; `pwa/src/readerLab/frames.ts` and `run.ts` and `pwa/src/screens/ReaderLab.tsx` are L4. No overloaded `null`: every `null` in a new type has one stated meaning; the door's read answers a union, never a `null` body.
-- **Exact values.** Declared once each. In `shared/readerLab.ts`: the 27 channels, the 40 fixed probe names, the six `Sec-Fetch-Site` classes and three `Origin` classes, `READER_LAB_RUNS_PATH = '/api/reader-lab/runs'`, `READER_LAB_PROBE_ROUTE = '/api/reader-lab/probe/:nonce/:name'`, the nonce shape (22 base64url characters). Also in `shared/readerLab.ts`, the run's own time caps, which the page waits by and the door derives a run's life from: `LAB_SETTLE_MS = 2000`, `LAB_BUSY_SPIN_MS = 3000`, `LAB_TAP_WAIT_MS = 30_000`, `LAB_MOUNT_WAIT_MS = 65_000`, `LAB_DRAW_SETTLE_MS = 10_000`, `LAB_STEPS = 9`, `LAB_MOUNTS = 10`, and their sum `LAB_RUN_CAPS_MS` (801 000 ms). In `server/src/readerLab/runs.ts`: `READER_LAB_RUN_SLACK_MS = 300_000`, `READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS` (1 101 000 ms, about eighteen minutes), `READER_LAB_RUNS_MAX = 4`, `READER_LAB_RUN_HITS_MAX = 1024`. In `server/src/readerLab/routes.ts`: `READER_LAB_PROBE_BODY_MAX = 1024`, `LAB_NO_SESSION = '-'`. In `pwa/src/lib/readerLimits.ts`: `READER_LAB_DRAW_WATCHDOG_MS = 60000`. In `pwa/src/readerLab/run.ts`: `LAB_WATCHDOG_PROBE_MS = 500`, `LAB_TAP_READ_EVERY_MS = 1000`, `LAB_STALL_BUDGET_MS = 200` (question Q2), `LAB_GAP_WINDOW = 'ready'`. In `pwa/src/readerLab/verdicts.ts`: `LAB_CONTROL_FLOOR = 20` (M8.B1). In `pwa/src/readerLab/frames.ts`: `LAB_SANDBOX = 'allow-scripts'`. In `pwa/src/readerLab/result.ts`: `LAB_RESULT_FORMAT = 1`.
+- **Exact values.** Declared once each. In `shared/readerLab.ts`: the 27 channels, the 40 fixed probe names, the six `Sec-Fetch-Site` classes and three `Origin` classes, `READER_LAB_RUNS_PATH = '/api/reader-lab/runs'`, `READER_LAB_PROBE_ROUTE = '/api/reader-lab/probe/:nonce/:name'`, the nonce shape (22 base64url characters). Also in `shared/readerLab.ts`, the run's own time caps, which the page waits by and the door derives a run's life from: `LAB_SETTLE_MS = 2000`, `LAB_BUSY_SPIN_MS = 3000`, `LAB_TAP_WAIT_MS = 30_000`, `LAB_MOUNT_WAIT_MS = 65_000`, `LAB_DRAW_SETTLE_MS = 10_000`, `LAB_STEPS = 9`, `LAB_MOUNTS = 11`, and their sum `LAB_RUN_CAPS_MS` (876 000 ms). In `server/src/readerLab/runs.ts`: `READER_LAB_RUN_SLACK_MS = 300_000`, `READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS` (1 176 000 ms, about twenty minutes), `READER_LAB_RUNS_MAX = 4`, `READER_LAB_RUN_HITS_MAX = 1024`. In `server/src/readerLab/routes.ts`: `READER_LAB_PROBE_BODY_MAX = 1024`, `LAB_NO_SESSION = '-'`. In `pwa/src/lib/readerLimits.ts`: `READER_LAB_DRAW_WATCHDOG_MS = 60000`. In `pwa/src/readerLab/run.ts`: `LAB_WATCHDOG_PROBE_MS = 500`, `LAB_TAP_READ_EVERY_MS = 1000`, `LAB_STALL_BUDGET_MS = 200` (question Q2), `LAB_GAP_WINDOW = 'ready'`. In `pwa/src/readerLab/verdicts.ts`: `LAB_CONTROL_FLOOR = 20` (M8.B1). In `pwa/src/readerLab/frames.ts`: `LAB_SANDBOX = 'allow-scripts'`. In `pwa/src/readerLab/result.ts`: `LAB_RESULT_FORMAT = 1`.
 - **Never spelled by this wave:** the shared Markdown library's package or directory name, anywhere in `pwa/src` except as an import specifier in `docs/reader/labPolicy.ts` (M7.9; write "the shared Markdown library" in comments); a `docs/` path literal in `pwa/vite.config.ts` (untouched); a six-digit hex colour in any new or edited pwa file (`contrast.test.ts`); real host, user, project, account or path names (fixtures use `demo`, `https://box.example`, `project-a`); a numeric line citation (`file.ts` + colon + line) in any code or test file (`citations.test.ts`; cite `file#symbol`); a `D-` number outside `## Deviations found`; a placeholder deviation token in any commit (`server/test/dtbd.test.ts`); a number WORD from two upwards inside README's auth paragraph (box-token census).
 - **PUBLIC REPO.** This repository is public: code, docs, commit messages, branch names, the PR body and every comment. Never write host names, home or mount paths, account or lane names, other projects' names, real names, e-mail addresses, private ticket ids or tracker links. Refer to other ccrc work by its GitHub `#n`. Each close task scans every changed file before the push, and every mail is gated on the same scan (rc 0, zero hits).
 - **Locate every edit by content.** Each Find block below must match exactly once in the file it names, at the run's BASE; if it is absent or matches twice, stop and ask the coordinator. Cite code by `file#symbol`, never by line number.
@@ -75,7 +77,7 @@
 | A slow phone | its run's life runs out mid-run and the counts already read are lost | Task 1 (RLB-T1-M4: the caps' sum), Task 2 (RLB-T2-M9: the life derived from it), Task 9 (RLB-T9-M6: the final read keeps the last view) |
 | The gate's foreign-origin journal line on an armed box | it fires for each frame's WebSocket upgrade and reads as an attack, or is silenced in a test so nobody knows | Task 3's armed upgrade case asserts it; the page says it is expected (Task 10, RLB-T10-M5) |
 | A lab frame | carries a token beyond `allow-scripts`, reaches beyond the console's origin, carries a policy other than the stated one, sends a value it read | Task 6 (RLB-T6-M1 to M6), Task 11 (scans, browser) |
-| A missing report, canary, control floor, ready library mount, drawn figure or tap | read as "holds" | Task 8 (RLB-T8-M1 to M3, M7 to M10, M13), Task 9 |
+| A missing report, canary, control floor, ready library mount, Mermaid asset or tap | read as "holds" | Task 8 (RLB-T8-M1 to M3, M7 to M10, M13), Task 9; FR1 D-8030. Ready is not a drawn signal: in-frame diagram failures remain carried until the library reports drawn. |
 | The busy frame on a shared thread | reads as a defect, or a deliberate spin is made a gate condition no engine can meet | Task 8 (RLB-T8-M11) |
 | The six figures together, or a figure that fell back | left out of the Mermaid verdict | Task 8 (RLB-T8-M5, M7, M8) |
 | The `lab-draw` profile | reaches the Docs reader, or keeps a store under the lab | Task 7 (RLB-T7-M1, M2), Task 11 (scan) |
@@ -113,7 +115,7 @@
 | `pwa/src/lib/api.ts` | 9 | K | `api.readerLab`: open, read, close, probe, through the funnel |
 | `pwa/test/reader-lab-run.test.ts` | 9 | — | the run with a fake door, frames and mounts; a run lost late; the gap window |
 | `pwa/src/screens/ReaderLab.tsx`, `pwa/src/readerLab/readerLab.css`, `pwa/src/lib/routes.ts`, `pwa/src/app.tsx` | 10 | L4 | the page, its stylesheet, its route and rung |
-| `pwa/test/reader-lab-page.test.tsx`, `pwa/test/app.test.tsx`, `pwa/test/command-registry.test.ts` | 10 | — | the page's states and `api.readerLab`'s requests; the route and palette |
+| `pwa/test/reader-lab-page.test.tsx`, `pwa/test/app.test.tsx`, `pwa/test/command-registry.test.ts`, `pwa/test/contrast.test.ts`, `pwa/test/command-layer.test.tsx` | 10, 12 | — | the page's states and `api.readerLab`'s requests; the route, palette and licensed censuses |
 | `pwa/test/reader-lab-scans.test.ts` | 11 | — | what the lab never does, with planted controls |
 | `pwa/browser/reader-lab.browser.test.ts` | 11 | — | the page in Chrome with a fake door |
 
@@ -134,29 +136,29 @@ Each refinement says What, Why and Cost if wrong. (a), (b), (c), (h), (i), (k), 
   - Why: an opaque frame's WebSocket upgrade carries `Origin: null`, which the gate refuses with `403` before any route handler, and `@fastify/websocket` would hand an upgrade on a non-WebSocket route to its own no-handler path anyway. Counting in the handler would leave the WebSocket channel unmeasured on every box.
   - Cost if wrong: the WebSocket channel reads "not measured"; moving the count into the handler is one function.
 - **(d) The bounds: a life derived from the lab's own caps, four runs, 1024 counts, a run bound to its opener, always registered** (question Q5).
-  - What: `READER_LAB_RUN_TTL_MS` is `LAB_RUN_CAPS_MS` (the 30 s tap wait, a 2 s settle per step, the 3 s spin, and ten mounts at their 65 s cap and 10 s draw settle: 801 000 ms, about thirteen minutes) plus five minutes, about eighteen; a test sums the caps. A run on a working phone takes about two minutes and sends about 150 requests. A run is bound to the session that opened it by `routes.ts#labOwnerOf`, a sha256 of `reader-lab:` and the session cookie's value, never the value; any other session's read or close gets exactly the unknown-nonce answer. With no session cookie (a box with the gate dark) every caller is the one owner `-`, so there anyone who reaches the port and holds the nonce can read or close a run, as every route there. A fifth open evicts the oldest run, whoever opened it; that page then reads "start again". The door is registered on every box, inert until a run opens.
+  - What: `READER_LAB_RUN_TTL_MS` is `LAB_RUN_CAPS_MS` (the 30 s tap wait, a 2 s settle per step, the 3 s spin, and eleven mounts at their 65 s cap and 10 s draw settle: 876 000 ms, about fifteen minutes) plus five minutes, about twenty; a test sums the caps. A run on a working phone takes about two minutes and sends about 150 requests. A run is bound to the session that opened it by `routes.ts#labOwnerOf`, a sha256 of `reader-lab:` and the session cookie's value, never the value; any other session's read or close gets exactly the unknown-nonce answer. With no session cookie (a box with the gate dark) every caller is the one owner `-`, so there anyone who reaches the port and holds the nonce can read or close a run, as every route there. A fifth open evicts the oldest run, whoever opened it; that page then reads "start again". The door is registered on every box, inert until a run opens.
   - Why: the life must outlast the run's own worst case on the slow phones E17 exists to measure; the owner keeps one signed-in session from reading or closing another's run for the price of one digest.
   - Cost if wrong: a box setting is added later (Q5's option b), or a run's life is set by a measured figure instead of the caps.
 - **(e) Classes only, memory only.** The counter keeps whether `ccrc_session` was present by name with a value, the `Sec-Fetch-Site` class, the `Origin` class and whether the request was an upgrade; never a value, a path beyond the name, a query, a body, an address or a user agent; a run keeps its owner's digest, never the cookie; nothing is written to disk, and the door logs nothing of its own. On an armed box the gate's own foreign-origin line fires for each frame's WebSocket upgrade (one or two per run); the gate keeps that alarm unchanged, Task 3's test asserts it, and the page says it is expected. Cost if wrong: a diagnosis needs a header the door did not keep; the lab is re-run with a richer class.
 - **(f) One answer for every probe.** Every request that reaches the probe handler gets the same `204`, no body, `cache-control: no-store`, nothing else, by GET or POST, for a live, unknown, malformed, closed, expired or saturated run and an unknown name, an armed box's POST from origin `null` included (exempt, so it skips the origin check on purpose; the gate's `needsOriginCheck` note says so); a body Fastify refuses (413, 415, 400) still answers the same `204` through the route's `errorHandler`. `exposeHeadRoute: false` on both GETs. No answer to a request that reaches no probe handler, and nothing the upgrade layer does, depends on the nonce, the run or the name: Fastify answers a malformed percent-escape 400 before any hook, on every box and by every method, and an over-long name 414 before any hook on a POST (and on a GET where no catch-all route matches); anything else (a HEAD, a wrong-shaped path) gets a 404 from the server's not-found handler where the built bundle's catch-all matches it (a GET or a HEAD on a box serving the PWA), and where none matches (an API-only box, and a POST on any box), since every `onRequest` hook still runs for it, a 404 on a dark box and the gate's 401 `no-session` on an armed one for a caller with no session. The handler never reads a body. No route answers `OPTIONS`, so a preflight is never approved (the cookie check's marker). Cost if wrong: a probe could tell a live nonce from a dead one, which a 128-bit nonce makes worthless anyway.
 - **(g) One vocabulary.** `shared/readerLab.ts` declares the channels (W8a's 27, in its order), the 40 fixed probe names, the classes, the paths and the wire; the server and the PWA import it, and RL-b's desktop browser battery reads its channel list from it. Each union has its `Record<…, true>` map (`wire-totality.test.ts`). Cost if wrong: none to behaviour; a later name is one entry.
 - **(h) The lab's frames have one home, outside the Docs reader.** Departs from the rich-docs spec's A2b ("`<iframe` and `srcDoc` only in `MockupFrame.tsx` and `docs/export/buildExport.tsx`").
-  - What: `pwa/src/readerLab/frames.ts` builds every lab frame: `sandbox="allow-scripts"` and nothing else, `srcdoc`, `referrerpolicy="no-referrer"`, a JSON data block just before one constant script. No other file outside `pwa/src/docs` names `srcdoc` or an `iframe`, and no file in `pwa/src` holds another sandbox token (Task 11's scans).
+  - What: `pwa/src/readerLab/frames.ts` builds every lab frame: `sandbox="allow-scripts"` and nothing else, `srcdoc`, `referrerpolicy="no-referrer"`, a JSON data block just before each constant script. No other file outside `pwa/src/docs` names `srcdoc` or an `iframe`, and no file in `pwa/src` holds another sandbox token (Task 11's scans).
   - Why: on a phone, a frame of the reader frame's shape running the lab's own script is the only way to exercise the walls (the reader frame's scripts are hash-locked).
   - Cost if wrong: a reviewer wants the frames under `pwa/src/docs`; that needs the W8a clause's `docs:` rules widened by one more allowance.
-- **(i) The wall frame's policy is the library's, plus two sources.** Departs from E18's "re-run … the M8.B1 battery" in the production frame, and adds a file under `docs/reader/` that the rich-docs spec's A17 list does not name (question Q3).
-  - What: `pwa/src/docs/reader/labPolicy.ts#labWallCsp(nonceSource, canary)` returns `frameCsp()` with `'nonce-<n>'` appended to `script-src` and the canary URL to `img-src`, and refuses anything that is not one such source; it lives under `docs/reader/` because that is `./frame`'s one home (M8.10). The real library is checked separately: Task 9 mounts it on two hostile figures aimed at the door.
-  - Why: the nonce lets the battery's own inline script run; the canary is the positive signal that it ran, since a battery that never ran reaches nothing too.
-  - Cost if wrong: an engine that matched CSP paths loosely would show a channel as reached: a false alarm, never a false pass.
-- **(j) One stall measure.** R19's private `longestGap` becomes `pwa/src/lib/frameGap.ts#longestFrameGap`, which R19's module calls (rounding stays in R19); the lab uses the same function. Consolidation, not a departure: R19's behaviour is unchanged and `highlight-measure.test.tsx` is its characterization. Cost if wrong: none to R19; the mockup's 50 ms interval heartbeat is not built.
+- **(i) The wall frame's policy is the library's, plus three sources.** Departs from E18's "re-run … the M8.B1 battery" in the production frame, and adds a file under `docs/reader/` that the rich-docs spec's A17 list does not name (question Q3).
+  - What: `pwa/src/docs/reader/labPolicy.ts#labWallCsp(nonceSource, importHash, canary)` returns `frameCsp()` with the battery's nonce and the fixed dynamic-import script's SHA-256 source appended to `script-src`, and the exact canary URL to `img-src`. The validator checks source shape; the mounted-policy tests pin the actual hash and canary. It lives under `docs/reader/` because that is `./frame`'s one home (M8.10). The import script runs without a nonce, matching the production reader's hash-authorized scripts: a nonce can propagate to dynamic import and would widen the channel being measured. The canary is emitted only after that script ran. The real library is checked separately: Task 9 mounts it on two hostile figures aimed at the door and retains it for the observation window. Strays then get their own benign mount because the library's hostile-figure CSP fallback can correctly destroy the first reader.
+  - Why: the nonce runs the battery's ordinary inline script, while a separate unnonced, hash-authorized script measures dynamic import under the reader's own authorization shape. The canary confirms both scripts ran; a battery that never ran reaches nothing too.
+  - Cost if wrong: with the current fixed hash and exact canary caller, an engine that matches CSP paths loosely may show a channel as reached. The validator checks only source shape, not identity; a future widened caller could undermine the comparison. Mounted-policy tests pin the current actual sources, and Results carries the latent validation limitation.
+- **(j) One stall measure.** R19's private `longestGap` becomes `pwa/src/lib/frameGap.ts#longestFrameGap`, which R19's module calls (rounding stays in R19); the lab uses the same function. Consolidation, not a departure: R19's behaviour is unchanged and `highlight-measure.test.tsx` is its characterization. The reader-mount scroll fix lives in `pwa/src/readerLab/run.ts#hostIn`, not in R19's module; FR1 also scrolls lab frames before their windows. FR1's source scan pins both callers' imports and rejects a second frame-gap loop. Cost if wrong: none to R19; the mockup's 50 ms interval heartbeat is not built.
 - **(k) The `lab-draw` mount profile.** Departs from the W8a plan's refinement (c) and the rich-docs spec's §4.6 `reader-mermaid-on-tap` as the only draw mode, for the lab's own mounts only.
   - What: `ReaderMountInput` gains `profile?: 'lab-draw'`; `pwa/src/docs/reader/policy.ts#readerMountPlan` maps it to `{draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false}` and no profile to `{draw: 'on-request', watchdogMs: readerWatchdogMs(bytes), store: true}`; `bridge.ts` applies the plan. `ReaderFrame.tsx` is byte-identical, so the Docs reader passes no profile.
   - Why: E17's Mermaid figure needs the real library drawing on open; 60 s lets a slow phone's draw be timed rather than cut off; no storage port keeps the lab from storing anything.
-  - Cost if wrong: the profile could leak into the Docs reader; Task 11's scan allows `'lab-draw'` only in `policy.ts`, `bridge.ts` (its type) and `run.ts`.
-- **(l) Three outcomes, each with its positive signal.** Every check needs a frame's own report, the control and its floor, the canary, the tap or a mount that reached `ready` before it can hold; a missing signal is "not measured", never "holds"; any arrival on a wall's target is "does not hold". A saturated run makes every count-based line "not measured". Three lines are shaped by what they measure:
-  - `busy-frame` is a fact, `shared thread` or `own thread` (or not measured), with the gap and how late the watchdog's stand-in timer fired; it steers the Mermaid policy and gates nothing, because a deliberate 3 s spin on a shared thread can meet no budget;
-  - `self-nav-teardown` holds when a blocked self-navigation fires a second `load` (the signal that closes the reader's port) and otherwise reads `differs from desktop`, a miss E18 investigates, never a broken wall; the `no-self-navigate` wall is the door's silence alone;
-  - `mermaid` counts every figure mount, the six together (`all`) included, and a mount that fell back or timed out counts its gap: over the budget it does not hold; within it, a mount that did not draw makes the line "not measured", naming it.
+  - Cost if wrong: the profile could leak into the Docs reader; Task 11's scan allows `'lab-draw'` only in `policy.ts` and `run.ts`.
+- **(l) Three outcomes, each with its positive signal.** Every check needs a frame's own report, the control and its floor, the canary, the tap or a mount that reached `ready` before it can hold; a missing signal is "not measured", never "holds"; any arrival on a wall's target is "does not hold". A saturated run preserves any observed "does not hold"; otherwise its count-based lines are "not measured". The local stray-effect break is read before an absent or saturated door gate. Three lines are shaped by what they measure:
+  - **E17, D-8033:** `busy-frame` is a fact, `shared thread` or `own thread` (or not measured). It reads shared-thread if either `longestGapMs >= 0.8 * spinMs` or `timerLateMs >= 0.5 * spinMs`; only both below reads own-thread. Detail retains the gap and watchdog stand-in timer lateness and names shared evidence as gap, timer, or both. Missing-run/probe, saturation and hidden-window gates remain. It steers the Mermaid policy and gates nothing, because a deliberate 3 s spin on a shared thread can meet no budget;
+  - **E11, D-8032:** `no-self-navigate` first reads a `self-nav` target arrival as does not hold. Otherwise either `self-nav-tried > 0` or a second console-observed frame load proves the attempt; the wall holds and names `attempt seen: second load` and/or `attempt seen: tried`. Neither signal means not measured, `the frame did not try`. `self-nav-teardown` first holds on a second load (`second load fired`); otherwise a tried arrival reads `differs from desktop` (`no second load`), a miss E18 investigates, never a broken wall; neither signal is not measured. Unavailable/saturated-door gates still apply. The tried image can be cancelled by its own navigation, so its absence alone is not evidence that the attempt never ran;
+  - `mermaid` counts every figure mount, the six together (`all`) included, and a mount that fell back or timed out counts its gap: over the budget it does not hold; within it, a mount that did not draw or a missing figure label makes the line "not measured", naming it.
   `csp-27` needs M8.B1's control floor (`LAB_CONTROL_FLOOR`, 20 of the 26 channels a srcdoc frame can reach; `iframe` is left out because the shell's `frame-src 'none'` stops it) and the library's hostile mount ready; otherwise it is "not measured". The no-cookie line counts toward the retirement gate only on a run against an armed box, which the block's door line names (`session cookie sent`); on a dark box it reads "not measured" here and "not applicable" at the gate (READER_CSP is the wall there). Cost if wrong: a check reads "not measured" on a slow phone; the operator runs it again.
 - **(m) The popup check needs one tap.** Departs from E18's and M8.B4's scripted form (question Q6). The popup frame shows one button; the operator's tap is the user activation, so a browser's popup blocker cannot answer for the sandbox. With no tap within 30 s the check reads "not measured". Cost if wrong: one more instruction on the page.
 - **(n) The result block, version 1.** Fixed keys, each line's words, a `reader-lab 1` first line with device classes only (engine and major version, OS class, cores, whether the browser has a Worker, the iframe `sandbox` attribute and the iframe `csp` attribute, and the library build's first twelve hex digits; the mockup's "srcdoc sandbox" is said as "frame sandbox", because Task 11's rule 2 reads the word `srcdoc` in any string outside the frame home, and the lab's own sandboxed srcdoc frames running is the stronger proof anyway); the E18 summary with the teardown signal; a `draw on open:` line that reads the busy frame's fact and the Mermaid line together into what the ruled draw-on-open needs on this engine (the mockup's verdict line, reworded for the ruling); a door line that names whether the console's own request carried the session cookie and whether the final read found the run gone. Never the user agent string, a device model, a host, an origin or a nonce. Cost if wrong: a later field is additive under the same version.
@@ -164,7 +166,7 @@ Each refinement says What, Why and Cost if wrong. (a), (b), (c), (h), (i), (k), 
 - **(p) The page measures and nothing else.** Its code loads through one literal dynamic `import('../readerLab/run')`; its modules name no storage, no clipboard, no `fetch` of their own, no foreign URL, no `postMessage` and no `MessageChannel`, and read `api` only as `api.readerLab`. Cost if wrong: none to behaviour.
 - **(q) The stall budget is 200 ms** for the Mermaid line (question Q2), the responsiveness line browsers use for a tap; the busy frame is a fact and has none. Cost if wrong: the verdict word moves; the numbers in the block stay.
 - **(r) No Settings index row**, as for R19 (question Q7): the palette's "Go to Settings › Reader lab" and the URL. Cost if wrong: one row in `SettingsIndex.tsx` later.
-- **(s) An older door fails the run clearly; a run lost late keeps its counts.** The run's door adapter answers `unreadable` when `readerLab/wire.ts#readLabRunView` finds the server's answer lacking any probe name of the page's vocabulary or a count, and `no-door` when the open answers `404`; the first read happens before any frame. The page then says "This server's lab door is older than this page; update the server." The hostile step (7) runs before the Mermaid mounts (8), so every arrival that decides a verdict is read by step 7, and every read up to there fails the run on `unknown-run` or `unreadable`; the final read (9) that finds the run gone or unreadable keeps the last view, and the door line says so. Cost if wrong: none; additive names keep both sides compatible once both are updated.
+- **(s) An older door fails the run clearly; a run lost late keeps its counts.** The run's door adapter answers `unreadable` when `readerLab/wire.ts#readLabRunView` finds the server's answer lacking any probe name of the page's vocabulary or a count, and `no-door` when the open answers `404`; the first read happens before any frame. The page then says "This server's lab door is older than this page; update the server." The hostile step (7) runs before the Mermaid mounts (8), so every arrival that decides a verdict is read by step 7, and every read up to there fails the run on `unknown-run` or `unreadable`; the final read (9) that finds the run gone or unreadable, including a rejected read, keeps the last view, and the door line says so. Stop is rechecked on both rejection and success and is never converted into an unreadable result. Cost if wrong: none; additive names keep both sides compatible once both are updated.
 - **(t) The tap wait reads the door once a second, at most 30 times.** It is a bounded wait inside one measurement step, not a page poll, so it uses no `setInterval` and no `usePoll` (the census-w7 request-poll rule's subject is a page that keeps a view fresh). Cost if wrong: the census's next widening names it; it then moves behind `usePoll` with its bound.
 - **(u) A silent top-navigation block holds.** Departs from the rich-docs spec's M8.B4 ("`top.location=` throws") and the design's §3.2 row as rev 1 wrote it.
   - What: the popup check holds when the frame's `top.location` write returned without an error while nothing reached its target, with the detail "top navigation blocked without an error"; a write that neither threw nor returned (no report) is "not measured".
@@ -259,12 +261,12 @@ describe('the reader lab vocabulary (reader lab plan, Task 1)', () => {
     expect(READER_LAB_PROBE_ROUTE).toBe(`${readerLabProbeBase(':nonce')}:name`);
   });
 
-  it('the run\'s own caps, and their sum, from which the door derives a run\'s life: about thirteen minutes', () => {
+  it('the run\'s own caps, and their sum, from which the door derives a run\'s life: about fifteen minutes', () => {
     expect([LAB_TAP_WAIT_MS, LAB_SETTLE_MS, LAB_BUSY_SPIN_MS, LAB_MOUNT_WAIT_MS, LAB_DRAW_SETTLE_MS, LAB_STEPS, LAB_MOUNTS])
-      .toEqual([30_000, 2000, 3000, 65_000, 10_000, 9, 10]);
+      .toEqual([30_000, 2000, 3000, 65_000, 10_000, 9, 11]);
     expect(LAB_RUN_CAPS_MS)
       .toBe(LAB_TAP_WAIT_MS + LAB_STEPS * LAB_SETTLE_MS + LAB_BUSY_SPIN_MS + LAB_MOUNTS * (LAB_MOUNT_WAIT_MS + LAB_DRAW_SETTLE_MS));
-    expect(LAB_RUN_CAPS_MS).toBe(801_000);
+    expect(LAB_RUN_CAPS_MS).toBe(876_000);
   });
 });
 ```
@@ -393,10 +395,10 @@ export const LAB_MOUNT_WAIT_MS = 65_000;
 export const LAB_DRAW_SETTLE_MS = 10_000;
 /** The run's steps, for the page's progress. */
 export const LAB_STEPS = 9;
-/** The run's reader mounts: the nine pages and the hostile page. */
-export const LAB_MOUNTS = 10;
+/** The run's reader mounts: the nine pages, the hostile page, and the benign page the stray messages are sent to. */
+export const LAB_MOUNTS = 11;
 /** The longest a run takes by its own caps: the tap wait, a settle per step, the spin, and every mount at its cap and its
- *  draw settle. About thirteen minutes; a run on a working phone takes about two. */
+ *  draw settle. About fifteen minutes; a run on a working phone takes about two. */
 export const LAB_RUN_CAPS_MS = LAB_TAP_WAIT_MS + LAB_STEPS * LAB_SETTLE_MS + LAB_BUSY_SPIN_MS
   + LAB_MOUNTS * (LAB_MOUNT_WAIT_MS + LAB_DRAW_SETTLE_MS);
 
@@ -663,7 +665,7 @@ import {
 /** What a run's life adds to the lab run's own caps: the requests, the parses and a slow phone's own work. */
 export const READER_LAB_RUN_SLACK_MS = 300_000;
 /** How long a run stays open after it opened, derived from the lab run's own caps (`LAB_RUN_CAPS_MS`, every wait at its
- *  cap, about thirteen minutes) plus the slack: about eighteen minutes. A run on a working phone takes about two. */
+ *  cap, about fifteen minutes) plus the slack: about twenty minutes. A run on a working phone takes about two. */
 export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;
 /** Runs open at once; opening one more evicts the oldest. */
 export const READER_LAB_RUNS_MAX = 4;
@@ -1732,9 +1734,9 @@ anyone who reaches the port on a dark one), and `GET /*`, the
 - Modify: `pwa/browser/reader-frame.browser.test.ts` (two import lines; `CHANNELS` and the battery's channel object read from the shared list and source), `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (the C9 row's PWA cell gains `readerLab/**`).
 - Guards (not edited): `pwa/test/docs-scans.test.ts` (clause W8a: `/frame` in `docs/reader/labPolicy.ts` is in its home; `labPolicy.ts` holds no `srcdoc`, `iframe` or `default-src 'none'` text), `server/test/docs-parity.test.ts` (M7.9: the library's name only as an import specifier), `pwa/test/contrast.test.ts`, `server/test/rings/totality.test.ts`, `server/test/rings/pwa-rings.test.ts`, `server/test/census-w7/pwa.test.ts`.
 
-**Interfaces:** Consumes RL-a's `shared/readerLab.ts`. Produces `LAB_BATTERY_PRELUDE_JS`, `LAB_BATTERY_CHANNELS_JS`; `AMBIENT_SCRIPT`, `COOKIE_SCRIPT`, `BATTERY_SCRIPT`, `POPUP_SCRIPT`, `SELF_NAV_SCRIPT`, `BUSY_SCRIPT`, `STRAYS_SCRIPT`, `LAB_FRAME_SCRIPTS`, `LAB_STRAYS_POSTED`; `labWallCsp`, `READER_LIBRARY_BUILD`; `LAB_SANDBOX`, `LabFrameSpec`, `LabFrame`, `labDataText`, `labSrcdoc`, `mountLabFrame`.
+**Interfaces:** Consumes RL-a's `shared/readerLab.ts`. Produces `LAB_BATTERY_PRELUDE_JS`, `LAB_BATTERY_CHANNELS_JS`; `AMBIENT_SCRIPT`, `COOKIE_SCRIPT`, `BATTERY_SCRIPT`, `POPUP_SCRIPT`, `SELF_NAV_SCRIPT`, `BUSY_SCRIPT`, `STRAYS_SCRIPT`, `LAB_FRAME_SCRIPTS`, `LAB_STRAYS_POSTED`, `LAB_IMPORT_CHANNEL`, `LAB_IMPORT_MARK`, `LAB_IMPORT_SCRIPT`, `LAB_IMPORT_SCRIPT_SHA256`; `labWallCsp`, `READER_LIBRARY_BUILD`; `LAB_SANDBOX`, `LabFrameSpec`, `LabFrame`, `labDataText`, `labSrcdoc`, `mountLabFrame`.
 
-**Decisions:** (1) A frame script never varies: what a run needs (the probe base, the battery's prefix, the spin time, the button's label) is in the JSON data block, which the script reads as the element just before itself (the library's seed rule, M8.8). So the wall frame needs one nonce, not a hash recomputed per run. (2) A script reports only through `hit(name)` (an image request to `<base><name>`), never sends a value it read, and deletes any store it managed to open. (3) The wall's nonce is fresh per frame (`crypto.getRandomValues` in the run's defaults; any string in the tests). (4) `mountLabFrame` sets `sandbox` before `srcdoc` and before insertion, and counts the frame's `load` events (an element listener, never a `message` one).
+**Decisions:** (1) A frame script never varies: run-specific values live in a JSON data block immediately before each constant script (the library's seed rule, M8.8). The ordinary battery script has one fresh nonce; dynamic import runs separately without a nonce, authorized by its fixed script hash, so nonce propagation cannot widen that channel. The ordinary battery skips that channel, and the canary waits for the import-script marker. (2) A script reports only through fixed probe names, never sends a value it read, and deletes any store it managed to open. (3) The wall's battery nonce is fresh per frame (`crypto.getRandomValues` in the run's defaults; any string in the tests); the import script's hash is constant and verified by the frame tests. (4) `mountLabFrame` sets `sandbox` before `srcdoc` and insertion, and counts `load` events (an element listener, never a message listener).
 
 - [ ] **Step 0: Base (RL-a merged).** `test -f shared/readerLab.ts && test -f server/src/readerLab/routes.ts && test ! -e pwa/src/readerLab && test ! -e pwa/src/docs/reader/labPolicy.ts && git grep -qF '| C9 Docs | `docs/**`, `readerLab/**` | `docs/**`, `screens/DocsScreen.tsx`, `screens/HighlightMeasure.tsx`, `screens/highlightMeasureRun.tsx` |' HEAD -- docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md && git grep -qF "const CHANNELS = [" HEAD -- pwa/browser/reader-frame.browser.test.ts && echo T6-BASE-OK` — Expected: `T6-BASE-OK`. Record BASE in the SDD ledger. Confirm the claim on `pwa/browser/reader-frame.browser.test.ts` (W8b edits it too).
 - [ ] **Step 1: Write the failing test,** `pwa/test/reader-lab-frames.test.ts`, with exactly this content:
@@ -1743,13 +1745,16 @@ anyone who reaches the port on a dark one), and `GET /*`, the
 // The reader lab's frames (native Docs reader, the reader lab plan of 2026-11-03, Task 6; the rich-docs spec's rows
 // M10.9, M10.10, M10.11, M10.16): `readerLab/frames.ts`, `readerLab/frameScripts.ts`, `readerLab/battery.ts` and
 // `docs/reader/labPolicy.ts` in jsdom. Every frame is the reader frame's shape; only the wall frame carries a policy, the
-// library's own with exactly two sources added; every URL a frame can form is the console's origin plus this run's
+// library's own with exactly three sources added; every URL a frame can form is the console's origin plus this run's
 // probe path; the battery is L0's 27 channels in order.
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { frameCsp } from '@synapsium-labs/docserver/frame';
 import { LAB_BATTERY_CHANNELS, LAB_PROBE_NAMES, readerLabProbeBase } from '../../shared/readerLab';
 import { LAB_BATTERY_CHANNELS_JS } from '../src/readerLab/battery';
-import { AMBIENT_SCRIPT, BATTERY_SCRIPT, BUSY_SCRIPT, LAB_FRAME_SCRIPTS } from '../src/readerLab/frameScripts';
+import {
+  AMBIENT_SCRIPT, BATTERY_SCRIPT, BUSY_SCRIPT, LAB_FRAME_SCRIPTS, LAB_IMPORT_CHANNEL, LAB_IMPORT_MARK, LAB_IMPORT_SCRIPT, LAB_IMPORT_SCRIPT_SHA256,
+} from '../src/readerLab/frameScripts';
 import { LAB_SANDBOX, labDataText, labSrcdoc, mountLabFrame } from '../src/readerLab/frames';
 import { labWallCsp } from '../src/docs/reader/labPolicy';
 
@@ -1759,6 +1764,7 @@ const BASE = `${ORIGIN}${readerLabProbeBase(NONCE)}`;
 const CANARY = `${BASE}csp-canary`;
 const SCRIPT_NONCE = 'Zm9vYmFyYmF6cXV4MTIzNA';
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const HASH_SOURCE = `'${LAB_IMPORT_SCRIPT_SHA256}'`;
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -1806,9 +1812,9 @@ describe('the reader lab frames (reader lab plan, Task 6)', () => {
     expect(JSON.parse(scripts[0]!.textContent ?? '')).toEqual(hostile);
   });
 
-  it('only the wall frame carries a policy: frameCsp() plus its nonce in script-src and the canary in img-src, as the meta and the csp attribute (M10.10)', () => {
+  it('only the wall frame carries a policy: frameCsp() plus its nonce and the import script\'s hash in script-src and the canary in img-src, as the meta and the csp attribute (M10.10)', () => {
     const s = stage();
-    mountLabFrame(s, { script: BATTERY_SCRIPT, config: { base: BASE, prefix: 'csp-', canary: true }, wall: { canary: CANARY } }, () => SCRIPT_NONCE);
+    mountLabFrame(s, { script: BATTERY_SCRIPT, config: { base: BASE, prefix: 'csp-', canary: true }, importChannel: true, wall: { canary: CANARY } }, () => SCRIPT_NONCE);
     const el = s.querySelector('iframe')!;
     const policy = el.getAttribute('csp') ?? '';
     const doc = new DOMParser().parseFromString(el.getAttribute('srcdoc') ?? '', 'text/html');
@@ -1817,26 +1823,95 @@ describe('the reader lab frames (reader lab plan, Task 6)', () => {
     const lib = directives(frameCsp());
     expect([...got.keys()]).toEqual([...lib.keys()]);
     for (const [name, sources] of lib) {
-      const extra = name === 'script-src' ? [`'nonce-${SCRIPT_NONCE}'`] : name === 'img-src' ? [CANARY] : [];
+      const extra = name === 'script-src' ? [`'nonce-${SCRIPT_NONCE}'`, HASH_SOURCE] : name === 'img-src' ? [CANARY] : [];
       expect(got.get(name), name).toEqual([...sources, ...extra]);
     }
-    expect(doc.body.querySelectorAll('script')[1]?.getAttribute('nonce')).toBe(SCRIPT_NONCE);
+    const scripts = [...doc.body.querySelectorAll('script')];
+    expect(scripts.map((x) => x.getAttribute('nonce'))).toEqual([null, null, null, SCRIPT_NONCE]);
   });
 
-  it('labWallCsp refuses anything but one nonce source and one URL with no separator in it', () => {
-    const cases: readonly (readonly [string, string])[] = [
-      ["'unsafe-inline'", CANARY], ["'nonce-abc def'", CANARY], [`'nonce-${SCRIPT_NONCE}'`, 'https://a.example; connect-src *'],
-      [`'nonce-${SCRIPT_NONCE}'`, '*'], [`'nonce-${SCRIPT_NONCE}'`, "https://a.example/x'"], [`'nonce-${SCRIPT_NONCE}'`, 'https://a.example/x y'],
+  it('labWallCsp accepts exactly one nonce, one sha256 and one URL with no separator in it, and refuses anything else', () => {
+    const nonce = `'nonce-${SCRIPT_NONCE}'`;
+    const cases: readonly (readonly [string, string, string])[] = [
+      ["'unsafe-inline'", HASH_SOURCE, CANARY], ["'nonce-abc def'", HASH_SOURCE, CANARY], [nonce, HASH_SOURCE, 'https://a.example; connect-src *'],
+      [nonce, HASH_SOURCE, '*'], [nonce, HASH_SOURCE, "https://a.example/x'"], [nonce, HASH_SOURCE, 'https://a.example/x y'],
+      [nonce, "'unsafe-inline'", CANARY], [nonce, `'sha256-${'A'.repeat(42)}='`, CANARY], [nonce, `'sha512-${'A'.repeat(43)}='`, CANARY],
+      [nonce, `${HASH_SOURCE} 'sha256-${'B'.repeat(43)}='`, CANARY], [nonce, `'sha256-${'A'.repeat(43)}=' *`, CANARY], [nonce, '', CANARY],
     ];
-    for (const [source, canary] of cases) expect(() => labWallCsp(source, canary), `${source} ${canary}`).toThrow(TypeError);
+    for (const [source, hash, canary] of cases) expect(() => labWallCsp(source, hash, canary), `${source} ${hash} ${canary}`).toThrow(TypeError);
+    const got = directives(labWallCsp(nonce, HASH_SOURCE, CANARY));
+    const lib = directives(frameCsp());
+    expect(got.get('script-src')).toEqual([...(lib.get('script-src') ?? []), nonce, HASH_SOURCE]);
+    expect(got.get('img-src')).toEqual([...(lib.get('img-src') ?? []), CANARY]);
+    for (const [name, sources] of lib) if (name !== 'script-src' && name !== 'img-src') expect(got.get(name), name).toEqual(sources);
+  });
+
+  it('the import script\'s hash constant is the sha256 of the shipped text, and the text is what the frame inlines without a nonce', () => {
+    expect(`sha256-${createHash('sha256').update(LAB_IMPORT_SCRIPT, 'utf8').digest('base64')}`).toBe(LAB_IMPORT_SCRIPT_SHA256);
+    const doc = new DOMParser().parseFromString(labSrcdoc({ script: BATTERY_SCRIPT, config: { base: BASE, prefix: 'csp-', canary: true }, importChannel: true }, null, SCRIPT_NONCE), 'text/html');
+    const scripts = [...doc.body.querySelectorAll('script')];
+    expect(scripts.map((x) => x.getAttribute('type'))).toEqual(['application/json', null, 'application/json', null]);
+    expect(scripts[1]!.textContent).toBe(LAB_IMPORT_SCRIPT);
+    expect(scripts[1]!.getAttribute('nonce')).toBeNull();
+    expect(scripts[1]!.previousElementSibling).toBe(scripts[0]);
+    expect(scripts[3]!.previousElementSibling).toBe(scripts[2]);
+    expect(scripts[2]!.textContent).toBe(scripts[0]!.textContent);
+    expect(scripts[3]!.getAttribute('nonce')).toBe(SCRIPT_NONCE);
+    // A frame without the channel carries neither the import script nor a second data block.
+    const plain = new DOMParser().parseFromString(labSrcdoc({ script: BATTERY_SCRIPT, config: { base: BASE } }, null, null), 'text/html');
+    expect(plain.body.querySelectorAll('script')).toHaveLength(2);
+    expect(plain.body.innerHTML).not.toContain(LAB_IMPORT_SCRIPT);
+  });
+
+  /** Runs a frame script's own text with a stub document and the requests it makes recorded. `channels` replaces the
+   *  battery's channel object, so no channel does anything; the gate and the loop are the script's own. */
+  const run = (script: string, config: Record<string, unknown>, win: Record<string, unknown>) => {
+    const requested: string[] = [];
+    class FakeImage {
+      set src(v: string) {
+        requested.push(v);
+      }
+    }
+    const document = { currentScript: { previousElementSibling: { textContent: JSON.stringify(config) } } };
+    new Function('document', 'window', 'Image', script)(document, win, FakeImage);
+    return requested;
+  };
+
+  it('the battery asks for its canary only after the import script ran, and runs no import channel itself; the import script marks, then imports', () => {
+    const bare = BATTERY_SCRIPT.replace(LAB_BATTERY_CHANNELS_JS, '{}');
+    expect(bare).not.toBe(BATTERY_SCRIPT);
+    const wall = { base: BASE, prefix: 'csp-', canary: true };
+    expect(run(bare, wall, { [LAB_IMPORT_MARK]: true })).toEqual([`${BASE}csp-canary`]);
+    // The hash script did not run: no mark, so no canary and the wall reads "canary missing", never "holds".
+    expect(run(bare, wall, {})).toEqual([]);
+    expect(run(bare, wall, { [LAB_IMPORT_MARK]: false })).toEqual([]);
+    expect(run(bare, { base: BASE, prefix: 'ctl-', canary: false }, { [LAB_IMPORT_MARK]: true })).toEqual([]);
+    // With the channels in, the import channel is the one the battery leaves to its own script.
+    const names: string[] = [];
+    const spy = BATTERY_SCRIPT.replace(LAB_BATTERY_CHANNELS_JS, `new Proxy({}, { ownKeys: () => ${JSON.stringify(['fetch-cors', LAB_IMPORT_CHANNEL, 'image'])}, getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }), get: (t, k) => (u) => names.push(String(k) + '=' + u) })`);
+    new Function('document', 'window', 'Image', 'names', spy)({ currentScript: { previousElementSibling: { textContent: JSON.stringify(wall) } } }, {}, class {}, names);
+    expect(names).toEqual([`fetch-cors=${BASE}csp-fetch-cors`, `image=${BASE}csp-image`]);
+    // The import script: the mark is set before the import is asked for, and the URL is the data block's.
+    const win: Record<string, unknown> = {};
+    const imported: string[] = [];
+    const importing = LAB_IMPORT_SCRIPT.replace('import(', 'importStub(');
+    new Function('document', 'window', 'importStub', importing)(
+      { currentScript: { previousElementSibling: { textContent: JSON.stringify(wall) } } }, win,
+      (u: string) => {
+        expect(win[LAB_IMPORT_MARK]).toBe(true);
+        imported.push(u);
+        return Promise.resolve();
+      },
+    );
+    expect(imported).toEqual([`${BASE}csp-${LAB_IMPORT_CHANNEL}`]);
   });
 
   it('every URL any lab frame can form is the console origin plus this run\'s probe path (M10.11)', () => {
     const urlsIn = (t: string): string[] => t.match(/[a-z][a-z0-9+.-]*:\/\/[^\s'"`)<>\\]*/gi) ?? [];
     for (const [name, script] of Object.entries(LAB_FRAME_SCRIPTS)) {
       expect(urlsIn(script), `${name} spells a URL of its own`).toEqual(script.includes(SVG_NS) ? [SVG_NS] : []);
-      const policy = name === 'battery' ? labWallCsp(`'nonce-${SCRIPT_NONCE}'`, CANARY) : null;
-      for (const url of urlsIn(labSrcdoc({ script, config: { base: BASE } }, policy, null))) {
+      const policy = name === 'battery' ? labWallCsp(`'nonce-${SCRIPT_NONCE}'`, HASH_SOURCE, CANARY) : null;
+      for (const url of urlsIn(labSrcdoc({ script, config: { base: BASE }, importChannel: name === 'battery' }, policy, null))) {
         expect(url === SVG_NS || url.startsWith(BASE), `${name}: ${url}`).toBe(true);
       }
     }
@@ -1928,7 +2003,7 @@ export const LAB_BATTERY_CHANNELS_JS = `{
 // data block the script reads by position (the element just before it), so a script's text never varies and nothing
 // about a run is spelled in it. Every script reports only by loading `<base><name>` as an image, `base` being this run's
 // probe path on the console's own origin (M10.11); a name says what happened (`…-held`, `…-broke`), and no value a script
-// reads is ever sent. A store a script manages to open is deleted at once. Classic scripts, ES2017 at most.
+// reads is ever sent. A store a script manages to open is deleted at once. Classic scripts use dynamic import (ES2020).
 // Ring L1: string constants.
 import { LAB_BATTERY_CHANNELS_JS, LAB_BATTERY_PRELUDE_JS } from './battery';
 
@@ -1973,14 +2048,40 @@ try { hit('cookie-image'); } catch (e) {}
 setTimeout(function () { hit('cookie-ran'); }, 300);
 })();`;
 
-/** The frame CSP battery (M8.B1): the wall frame first requests its canary, the one URL its policy allows, then every
- *  channel to `<base><prefix><channel>`; the control frame, with no policy, the same channels under its own prefix. */
+/** The one channel that does not run in the battery: a dynamic import takes its nonce from the script that calls it, so
+ *  from the battery's nonce'd script it would reach what the reader frame's hash-only scripts cannot. It runs from its
+ *  own constant script, `LAB_IMPORT_SCRIPT`, which the wall policy allows by hash. */
+export const LAB_IMPORT_CHANNEL = 'import-dynamic';
+
+/** The window property the import script sets before it imports: the battery's sign that the script ran. */
+export const LAB_IMPORT_MARK = 'ccrcLabImportRan';
+
+/** The dynamic-import channel's script (the reader lab design, section 3.1; the lab's wall frame allows it by hash, as the
+ *  reader frame allows its own scripts). Constant text on one line each: its sha256 below is of exactly this text. It
+ *  reads the data block just before it, sets the mark, and imports `<base><prefix>import-dynamic`. It runs in both the
+ *  wall frame and the control frame, before the battery. */
+export const LAB_IMPORT_SCRIPT = [
+  '(function () {',
+  'var cfg = JSON.parse(document.currentScript.previousElementSibling.textContent);',
+  `window.${LAB_IMPORT_MARK} = true;`,
+  `import(cfg.base + cfg.prefix + '${LAB_IMPORT_CHANNEL}').catch(function () {});`,
+  '})();',
+].join('\n');
+
+/** The CSP hash source of `LAB_IMPORT_SCRIPT`, declared once. No run-time hashing: `crypto.subtle` needs a secure context
+ *  and a box over plain HTTP is not one. `reader-lab-frames.test.ts` hashes the shipped text and pins it equal. */
+export const LAB_IMPORT_SCRIPT_SHA256 = 'sha256-RUqyX54BLN90Rd98EvQDICTn0kVK5pAY31kNiLY5E2E=';
+
+/** The frame CSP battery (M8.B1): the wall frame first requests its canary, the one URL its policy allows, and only when
+ *  the import script ran before it (so a wall frame whose hash script never ran reads "canary missing", never "holds");
+ *  then every channel but the import to `<base><prefix><channel>`; the control frame, with no policy, the same channels
+ *  under its own prefix. */
 export const BATTERY_SCRIPT = `(function () {
 ${PRELUDE}
 ${LAB_BATTERY_PRELUDE_JS}
 var channels = ${LAB_BATTERY_CHANNELS_JS};
-if (cfg.canary === true) hit('csp-canary');
-Object.keys(channels).forEach(function (name) { try { channels[name](url(cfg.prefix + name)); } catch (e) {} });
+if (cfg.canary === true && window.${LAB_IMPORT_MARK} === true) hit('csp-canary');
+Object.keys(channels).forEach(function (name) { if (name === '${LAB_IMPORT_CHANNEL}') return; try { channels[name](url(cfg.prefix + name)); } catch (e) {} });
 })();`;
 
 /** No popup, no top navigation (E1, M8.B4), after the operator's tap: every target is a door URL answering 204. */
@@ -2008,8 +2109,7 @@ b.addEventListener('click', function () {
 /** The frame cannot navigate itself (E11): it says it tried, then sets its own location to a door URL. */
 export const SELF_NAV_SCRIPT = `(function () {
 ${PRELUDE}
-hit('self-nav-tried');
-setTimeout(function () { location.href = url('self-nav'); }, 200);
+setTimeout(function () { hit('self-nav-tried'); location.href = url('self-nav'); }, 200);
 })();`;
 
 /** A busy frame (E17): it marks its start, spins for the configured time, and marks its end. */
@@ -2041,7 +2141,7 @@ hit('strays-sent');
 
 /** Every frame script, by name: the tests and the scans walk it. */
 export const LAB_FRAME_SCRIPTS: Readonly<Record<string, string>> = {
-  ambient: AMBIENT_SCRIPT, cookie: COOKIE_SCRIPT, battery: BATTERY_SCRIPT, popup: POPUP_SCRIPT,
+  ambient: AMBIENT_SCRIPT, cookie: COOKIE_SCRIPT, import: LAB_IMPORT_SCRIPT, battery: BATTERY_SCRIPT, popup: POPUP_SCRIPT,
   selfNav: SELF_NAV_SCRIPT, busy: BUSY_SCRIPT, strays: STRAYS_SCRIPT,
 };
 ```
@@ -2051,9 +2151,11 @@ export const LAB_FRAME_SCRIPTS: Readonly<Record<string, string>> = {
 ```ts
 // The reader lab's wall-frame policy (native Docs reader, the reader lab plan of 2026-11-03, Task 6, refinement (i); the
 // rich-docs spec's row M10.10). Ring L1: pure. The lab's wall frame runs its battery under the shared Markdown library's
-// own frame policy with exactly two sources added: the frame's script nonce in `script-src`, so the battery's own inline
-// script runs, and one image URL, the run's canary, in `img-src`, which the battery requests first as its sign that it
-// ran. Everything else is `frameCsp()` as the reader frame carries it, so the walls the lab measures are the reader's.
+// own frame policy with exactly three sources added: the frame's script nonce in `script-src`, so the battery's own inline
+// script runs; the sha256 of the lab's one other inline script, the dynamic-import channel's, in the same `script-src`
+// (so that channel runs from a hash-allowed script, as the reader's own scripts do, and carries no nonce); and one image
+// URL, the run's canary, in `img-src`, which the battery requests first as its sign that it ran. Everything else is
+// `frameCsp()` as the reader frame carries it, so the walls the lab measures are the reader's.
 // This file lives under `docs/reader/` because that is the one home of the library's `./frame` (M8.10).
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
 
@@ -2062,13 +2164,16 @@ export const READER_LIBRARY_BUILD: string = FRAME_MANIFEST.enhance.sha256.slice(
 
 /** One CSP nonce source. */
 const NONCE_SOURCE = /^'nonce-[A-Za-z0-9+/_-]+={0,2}'$/;
+/** One hash source: a sha256 of 32 bytes in base64. */
+const HASH_SOURCE = /^'sha256-[A-Za-z0-9+/]{43}='$/;
 /** One URL source: a scheme, a host and a path, with no character a policy splits on or quotes with. */
 const URL_SOURCE = /^https?:\/\/[^\s;,'"]+$/;
 
-/** The wall frame's policy. Throws a TypeError for a source that is not exactly one nonce or one URL: the lab builds
- *  both, so that is a defect. */
-export function labWallCsp(nonceSource: string, canary: string): string {
+/** The wall frame's policy. Throws a TypeError for a source that is not exactly one nonce, one sha256 or one URL: the lab
+ *  builds all three, so that is a defect. */
+export function labWallCsp(nonceSource: string, hashSource: string, canary: string): string {
   if (!NONCE_SOURCE.test(nonceSource)) throw new TypeError('labWallCsp: not one nonce source');
+  if (!HASH_SOURCE.test(hashSource)) throw new TypeError('labWallCsp: not one sha256 source');
   if (!URL_SOURCE.test(canary)) throw new TypeError('labWallCsp: not one URL source');
   let scripts = 0;
   let images = 0;
@@ -2076,7 +2181,7 @@ export function labWallCsp(nonceSource: string, canary: string): string {
     const name = d.split(/\s+/)[0];
     if (name === 'script-src') {
       scripts += 1;
-      return `${d} ${nonceSource}`;
+      return `${d} ${nonceSource} ${hashSource}`;
     }
     if (name === 'img-src') {
       images += 1;
@@ -2095,12 +2200,14 @@ export function labWallCsp(nonceSource: string, canary: string): string {
 // The reader lab's frames (native Docs reader, the reader lab plan of 2026-11-03, Task 6, refinement (h); the rich-docs
 // spec's rows A24, M10.9, M10.10). The one place in `pwa/src` outside the Docs reader that builds an iframe or a srcdoc.
 // Every frame is the reader frame's shape: `sandbox="allow-scripts"` and nothing else, a `srcdoc`,
-// `referrerpolicy="no-referrer"`. Only the wall frame carries a policy, the library's own with its script nonce and
-// canary added (`docs/reader/labPolicy.ts`), as a meta and as the iframe's `csp` attribute, as the reader frame does. A
+// `referrerpolicy="no-referrer"`. Only the wall frame carries a policy, the library's own with its script nonce,
+// fixed import hash and canary added (`docs/reader/labPolicy.ts`), as a meta and as the iframe's `csp` attribute, as the reader frame does. A
 // frame's script is one of `frameScripts.ts`' constants; what varies per run travels in a JSON data block just before it,
-// which no policy runs. No frame is handed a port, and nothing here listens for a message: a frame reports only through
+// which no policy runs. A battery frame also carries the constant import script, first, with a data block of its own just
+// before it; the wall policy allows that script by its hash and the battery's by the frame's nonce. No frame is handed a port, and nothing here listens for a message: a frame reports only through
 // the door. Ring L4: it makes DOM elements.
 import { labWallCsp } from '../docs/reader/labPolicy';
+import { LAB_IMPORT_SCRIPT, LAB_IMPORT_SCRIPT_SHA256 } from './frameScripts';
 
 /** The one sandbox a lab frame carries: the reader frame's, exactly (M10.9). */
 export const LAB_SANDBOX = 'allow-scripts';
@@ -2111,6 +2218,8 @@ export interface LabFrameSpec {
   /** `base` is always this run's probe path on the console's origin. */
   readonly config: Readonly<Record<string, string | number | boolean>>;
   readonly wall?: { readonly canary: string };
+  /** True for a battery frame, wall or control: the import channel's constant script runs before the frame's own. */
+  readonly importChannel?: boolean;
 }
 
 /** A mounted lab frame. */
@@ -2128,17 +2237,20 @@ export function labDataText(config: LabFrameSpec['config']): string {
 
 const attr = (s: string): string => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-/** A lab frame's srcdoc: the policy's meta when there is one, then, in the body, the data block and the one script
- *  (carrying `nonce` when there is one). Throws on a script that would end its own element. */
+/** A lab frame's srcdoc: the policy's meta when there is one, then, in the body, the data block and the frame's script
+ *  (carrying `nonce` when there is one); for an `importChannel` frame the import script, with its own copy of the data
+ *  block just before it, comes first and carries no nonce. Throws on a script that would end its own element. */
 export function labSrcdoc(spec: LabFrameSpec, policy: string | null, nonce: string | null): string {
   if (spec.script.toLowerCase().includes('</script')) throw new Error('a lab frame script holds a script close');
   const meta = policy === null ? '' : `<meta http-equiv="Content-Security-Policy" content="${attr(policy)}">`;
   const nonceAttr = nonce === null ? '' : ` nonce="${attr(nonce)}"`;
+  const data = `<script type="application/json">${labDataText(spec.config)}</script>`;
+  const importing = spec.importChannel === true ? `${data}<script>${LAB_IMPORT_SCRIPT}</script>` : '';
   return `<!doctype html><html><head><meta charset="utf-8">${meta}<title>reader lab</title></head><body>`
-    + `<script type="application/json">${labDataText(spec.config)}</script><script${nonceAttr}>${spec.script}</script></body></html>`;
+    + `${importing}${data}<script${nonceAttr}>${spec.script}</script></body></html>`;
 }
 
-/** Mounts one lab frame at the end of `stage`. `nonce` makes the wall frame's script nonce; no other frame asks for one. */
+/** Mounts one lab frame at the end of `stage`. `nonce` makes the wall frame's script nonce; no other frame asks for one. The hash source is the constant import script's. */
 export function mountLabFrame(stage: HTMLElement, spec: LabFrameSpec, nonce: () => string): LabFrame {
   const el = document.createElement('iframe');
   el.setAttribute('sandbox', LAB_SANDBOX);
@@ -2148,7 +2260,7 @@ export function mountLabFrame(stage: HTMLElement, spec: LabFrameSpec, nonce: () 
   let scriptNonce: string | null = null;
   if (spec.wall !== undefined) {
     scriptNonce = nonce();
-    policy = labWallCsp(`'nonce-${scriptNonce}'`, spec.wall.canary);
+    policy = labWallCsp(`'nonce-${scriptNonce}'`, `'${LAB_IMPORT_SCRIPT_SHA256}'`, spec.wall.canary);
     el.setAttribute('csp', policy);
   }
   let loads = 0;
@@ -2547,7 +2659,7 @@ export function readerMountPlan(profile: ReaderMountProfile | undefined, bytes: 
 
 **Interfaces:** Produces `LabCheckId`, `LAB_CHECKS`, `LAB_WALLS`, `LAB_E18`, `LAB_E17`, `LAB_CHECK_STEP`, `LabVerdict`, `LabOutcome`; `LabFeatures`, `LabDevice`, `labFeaturesOf(win)`, `deviceOf(ua, cores, features)`, `deviceFacts(device)`; `LabMount`, `LabLocal`, `LAB_CONTROL_FLOOR`, `labVerdicts(run, local, budgetMs)`, `drawOnOpenReading(outcomes, local, budgetMs)`; `LAB_RESULT_FORMAT`, `LAB_VERDICT_WORDS`, `LabFinalRead`, `formatLabResult(device, library, outcomes, local, run, budgetMs, finalRead)`.
 
-**Decisions:** (1) A wall's broken signals are read before its positive signals, so a forged arrival cannot hide a real "broke" or a real arrival at a wall's target. That is all the rules guarantee: a forged POSITIVE signal (the canary, a `*-held` report, `cookie-ran`, `popup-ran`, `strays-sent`, `busy-start`/`busy-end`) can turn "not measured" into "holds" for a frame that never ran, and the defence against that is the nonce's secrecy (the design's section 4.6), not these rules. (2) `run === null` (the door could not be read) and a saturated run make every count-reading line "not measured"; `mermaid` reads only the page's own mounts. (3) The block names no host, origin, nonce or user agent; the device line is classes and three feature facts. (4) Each line has its own three words (`checks.ts#LabVerdict`): `busy-frame` answers a fact, `shared-thread` or `own-thread`, and is held to no budget (a deliberate spin on a shared thread meets none); `self-nav-teardown` answers `differs` when there is no second `load`, never `does-not-hold`, since the wall itself held. (5) `mermaid` decides over every figure mount, `all` included, whatever each one's outcome: the worst gap over the budget does not hold, and within it a mount that did not draw makes the line not measured. (6) `csp-27` compares the control frame's channels, `iframe` left out, with `LAB_CONTROL_FLOOR` (M8.B1's 20), and needs the hostile mount ready; either missing is not measured. (7) The popup check's silent block holds with its detail (refinement (u)); a write with no report is not measured. (8) The `draw on open:` line is a reading of the two E17 lines for the library change, never a verdict, and the door line names the console request's session-cookie class, which says whether the no-cookie line can count toward the gate.
+**Decisions:** (1) A wall's broken signals are read before its positive signals, so a forged arrival cannot hide a real "broke" or a real arrival at a wall's target. That is all the rules guarantee: a forged POSITIVE signal (the canary, a `*-held` report, `cookie-ran`, `popup-ran`, `strays-sent`, `busy-start`/`busy-end`) can turn "not measured" into "holds" for a frame that never ran, and the defence against that is the nonce's secrecy (the design's section 4.6), not these rules. (2) A missing run makes count-reading lines "not measured". On a saturated run, each wall's observed "does not hold" survives; without such a break it is "not measured", never "holds" from incomplete counts. The local stray-effect break is checked before either missing-run or saturation gate. `mermaid` reads only the page's own mounts and requires all six figure labels plus `all` before it can hold. (3) The block names no host, origin, nonce or user agent; the device line is classes and three feature facts. (4) Each line has its own three words (`checks.ts#LabVerdict`): `busy-frame` answers a fact, `shared-thread` or `own-thread`, and is held to no budget (a deliberate spin on a shared thread meets none); `self-nav-teardown` holds on a second `load`, otherwise answers `differs` only with a tried arrival, and otherwise is not measured; never `does-not-hold`. D-8032's E11 rule in refinement (l) supplies both independent attempt signals and their details. (5) `mermaid` decides over every figure mount, `all` included, whatever each one's outcome: the worst gap over the budget does not hold, and within it a mount that did not draw makes the line not measured. (6) `csp-27` compares the control frame's channels, `iframe` left out, with `LAB_CONTROL_FLOOR` (M8.B1's 20), and needs the hostile mount ready; either missing is not measured. (7) The popup check's silent block holds with its detail (refinement (u)); a write with no report is not measured. (8) The `draw on open:` line is a reading of the two E17 lines for the library change, never a verdict, and the door line names the console request's session-cookie class, which says whether the no-cookie line can count toward the gate.
 
 - [ ] **Step 0: Base.** `test -f pwa/src/readerLab/frameScripts.ts && git grep -qF "export const LAB_STRAYS_POSTED = 8;" HEAD -- pwa/src/readerLab/frameScripts.ts && test ! -e pwa/src/readerLab/verdicts.ts && echo T8-BASE-OK` — Expected: `T8-BASE-OK`.
 - [ ] **Step 1: Write the failing test,** `pwa/test/reader-lab-verdicts.test.ts`, with exactly this content:
@@ -2559,7 +2671,7 @@ export function readerMountPlan(profile: ReaderMountProfile | undefined, bytes: 
 // is a fact; the block is format 1 and names no host, nonce or user agent.
 import { describe, expect, it } from 'vitest';
 import {
-  LAB_BATTERY_CHANNELS, LAB_PROBE_NAMES, type LabProbeName, type LabProbeTally, type LabRunView,
+  LAB_BATTERY_CHANNELS, LAB_PROBE_NAMES, type LabBatteryChannel, type LabProbeName, type LabProbeTally, type LabRunView,
 } from '../../shared/readerLab';
 import { LAB_CHECKS, LAB_E17, LAB_E18, LAB_WALLS } from '../src/readerLab/checks';
 import { deviceOf, labFeaturesOf, type LabFeatures } from '../src/readerLab/device';
@@ -2598,7 +2710,8 @@ const LOCAL_OK: LabLocal = {
   busy: { longestGapMs: 30, timerLateMs: 5, spinMs: 3000 },
   mounts: [['none', 40], ['trivial', 120], ['f1', 30], ['f2', 20], ['f3', 50], ['f4', 60], ['f5', 70], ['f6', 25], ['all', 150]]
     .map(([label, gap]) => ({ label: String(label), outcome: 'ready' as const, longestGapMs: Number(gap), elapsedMs: 900 })),
-  hostile: { ready: true, effects: 0, addressChanged: false },
+  hostile: { ready: true },
+  strays: { ready: true, effects: 0, addressChanged: false },
 };
 
 const verdictsOf = (over: Over, local: LabLocal = LOCAL_OK) => labVerdicts(runWith({ ...HEALTHY, ...over }), local, 200);
@@ -2612,7 +2725,7 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     expect(v['busy-frame']).toEqual({ verdict: 'own-thread', detail: 'longest gap 30 ms in a 3000 ms spin; watchdog timer 5 ms late' });
     expect(v['no-cookie'].detail).toBe('4 arrived, 0 with the cookie; the control carried it');
     expect(v['csp-27'].detail).toBe('0 of 27 reached; 25 measured; not measured: link-prefetch, iframe; library 0 of 2');
-    expect(v['no-self-navigate'].detail).toBe('');
+    expect(v['no-self-navigate'].detail).toBe('attempt seen: second load; attempt seen: tried');
     expect(v['self-nav-teardown'].detail).toBe('second load fired');
     expect(v['bridge-strays'].detail).toBe('8 sent, 0 effects');
     expect(v.mermaid.detail).toBe('longest gap 150 ms, all six together; worst single: figure 5, 70 ms');
@@ -2648,7 +2761,7 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
 
   it('csp-27: under M8.B1\'s control floor, iframe left out, the line is not measured; at the floor it holds (F6)', () => {
     expect(LAB_CONTROL_FLOOR).toBe(20);
-    const reachable = LAB_BATTERY_CHANNELS.filter((c) => c !== 'iframe');
+    const reachable: readonly LabBatteryChannel[] = LAB_BATTERY_CHANNELS.filter((c) => c !== 'iframe');
     const control = (n: number): Over => Object.fromEntries(LAB_BATTERY_CHANNELS.map((c) => [`ctl-${c}`, { hits: reachable.indexOf(c) > -1 && reachable.indexOf(c) < n ? 1 : 0 }])) as Over;
     expect(verdictsOf(control(19))['csp-27']).toEqual({ verdict: 'not-measured', detail: 'the control frame reached 19 of 26 (floor 20)' });
     expect(verdictsOf({ ...control(19), 'ctl-iframe': one })['csp-27'].verdict, 'iframe does not count toward the floor').toBe('not-measured');
@@ -2657,7 +2770,7 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
   });
 
   it('csp-27: a library mount that never became ready is not measured, never holds (F6)', () => {
-    for (const hostile of [null, { ready: false, effects: 0, addressChanged: false }]) {
+    for (const hostile of [null, { ready: false }]) {
       expect(verdictsOf({}, { ...LOCAL_OK, hostile })['csp-27'])
         .toEqual({ verdict: 'not-measured', detail: 'library not measured: the hostile mount never became ready' });
     }
@@ -2681,22 +2794,37 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
       .toBe('does-not-hold');
   });
 
-  it('self-navigation: the navigation arriving does not hold; no tried report is not measured', () => {
-    expect(verdictsOf({ 'self-nav': one })['no-self-navigate'].verdict).toBe('does-not-hold');
-    expect(verdictsOf({ 'self-nav-tried': { hits: 0 } })['no-self-navigate'].verdict).toBe('not-measured');
-    expect(verdictsOf({}, { ...LOCAL_OK, selfNavLoads: 1 })['no-self-navigate'].verdict, 'the wall is the door\'s silence alone').toBe('holds');
+  it('self-navigation: a second load proves the attempt even when the tried image is missing (F2)', () => {
+    const v = verdictsOf({ 'self-nav-tried': { hits: 0 } }, { ...LOCAL_OK, selfNavLoads: 2 });
+    expect(v['no-self-navigate']).toEqual({ verdict: 'holds', detail: 'attempt seen: second load' });
+    expect(v['self-nav-teardown']).toEqual({ verdict: 'holds', detail: 'second load fired' });
   });
 
-  it('teardown signal: a second load holds; none differs from desktop, a miss E18 reads, never a broken wall; no run is not measured (F7)', () => {
-    expect(verdictsOf({}, { ...LOCAL_OK, selfNavLoads: 1 })['self-nav-teardown']).toEqual({ verdict: 'differs', detail: 'no second load' });
-    expect(verdictsOf({}, { ...LOCAL_OK, selfNavLoads: null })['self-nav-teardown'].verdict).toBe('not-measured');
-    expect(verdictsOf({ 'self-nav-tried': { hits: 0 } })['self-nav-teardown'].verdict).toBe('not-measured');
+  it('self-navigation: tried alone proves the wall and teardown differs even with no load measurement', () => {
+    for (const selfNavLoads of [1, null]) {
+      const v = verdictsOf({}, { ...LOCAL_OK, selfNavLoads });
+      expect(v['no-self-navigate']).toEqual({ verdict: 'holds', detail: 'attempt seen: tried' });
+      expect(v['self-nav-teardown']).toEqual({ verdict: 'differs', detail: 'no second load' });
+    }
+  });
+
+  it('self-navigation: without either attempt signal neither line is measured', () => {
+    for (const selfNavLoads of [1, null]) {
+      const v = verdictsOf({ 'self-nav-tried': { hits: 0 } }, { ...LOCAL_OK, selfNavLoads });
+      expect(v['no-self-navigate']).toEqual({ verdict: 'not-measured', detail: 'the frame did not try' });
+      expect(v['self-nav-teardown']).toEqual({ verdict: 'not-measured', detail: 'the frame did not try' });
+    }
+  });
+
+  it('self-navigation: an arrival breaks the wall even when a second load is observed', () => {
+    expect(verdictsOf({ 'self-nav': one, 'self-nav-tried': { hits: 0 } }, LOCAL_OK)['no-self-navigate'])
+      .toEqual({ verdict: 'does-not-hold', detail: 'the frame navigated itself to the server' });
   });
 
   it('strays: an effect or an address change does not hold; a reader that never became ready is not measured', () => {
-    expect(verdictsOf({}, { ...LOCAL_OK, hostile: { ready: true, effects: 1, addressChanged: false } })['bridge-strays'].verdict).toBe('does-not-hold');
-    expect(verdictsOf({}, { ...LOCAL_OK, hostile: { ready: true, effects: 0, addressChanged: true } })['bridge-strays'].verdict).toBe('does-not-hold');
-    expect(verdictsOf({}, { ...LOCAL_OK, hostile: { ready: false, effects: 0, addressChanged: false } })['bridge-strays'].verdict).toBe('not-measured');
+    expect(verdictsOf({}, { ...LOCAL_OK, strays: { ready: true, effects: 1, addressChanged: false } })['bridge-strays'].verdict).toBe('does-not-hold');
+    expect(verdictsOf({}, { ...LOCAL_OK, strays: { ready: true, effects: 0, addressChanged: true } })['bridge-strays'].verdict).toBe('does-not-hold');
+    expect(verdictsOf({}, { ...LOCAL_OK, strays: { ready: false, effects: 0, addressChanged: false } })['bridge-strays'].verdict).toBe('not-measured');
     expect(verdictsOf({ 'strays-sent': { hits: 0 } })['bridge-strays'].verdict).toBe('not-measured');
   });
 
@@ -2736,6 +2864,28 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
       for (const k of LAB_CHECKS.filter((c) => c !== 'mermaid')) expect(v[k].verdict, k).toBe('not-measured');
       expect(v.mermaid.verdict).toBe('holds');
     }
+  });
+
+  it('a saturated run keeps a counted broke; a run the door could not read still reads a local stray effect broke; neither ever holds', () => {
+    const sat = (over: Over, local: LabLocal = LOCAL_OK) => labVerdicts(runWith({ ...HEALTHY, ...over }, { saturated: true }), local, 200);
+    expect(sat({ 'csp-beacon': one })['csp-27'].verdict).toBe('does-not-hold');
+    expect(sat({ 'ambient-local-broke': one })['no-ambient-state'].verdict).toBe('does-not-hold');
+    expect(sat({ 'popup-open': one })['no-popup-top-nav'].verdict).toBe('does-not-hold');
+    expect(sat({})['csp-27']).toEqual({ verdict: 'not-measured', detail: 'the door counted more than a lab run sends' });
+    const effect = { ...LOCAL_OK, strays: { ready: true, effects: 1, addressChanged: false } };
+    expect(sat({}, effect)['bridge-strays'].verdict).toBe('does-not-hold');
+    expect(labVerdicts(null, effect, 200)['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
+    expect(labVerdicts(null, LOCAL_OK, 200)['bridge-strays'].verdict).toBe('not-measured');
+    expect(labVerdicts(runWith({ ...HEALTHY, 'csp-beacon': one }), LOCAL_OK, 200)['csp-27'].verdict).toBe('does-not-hold');
+  });
+
+  it('mermaid: a partial mount list is not measured, never holds, and an over-budget gap still decides', () => {
+    const f1 = LOCAL_OK.mounts.filter((m) => m.label === 'f1');
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: f1 }).mermaid)
+      .toEqual({ verdict: 'not-measured', detail: 'did not draw: f2 missing, f3 missing, f4 missing, f5 missing, f6 missing, all missing' });
+    const noAll = LOCAL_OK.mounts.filter((m) => m.label !== 'all');
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: noAll }).mermaid).toEqual({ verdict: 'not-measured', detail: 'did not draw: all missing' });
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: [{ ...f1[0]!, longestGapMs: 420 }] }).mermaid.verdict).toBe('does-not-hold');
   });
 
   it('the draw-on-open reading: what the busy frame\'s fact and the Mermaid line mean for drawing on open', () => {
@@ -2872,10 +3022,10 @@ export interface LabDevice extends LabFeatures {
 
 /** The features, read from `win` (the page hands it `window`): presence tests, nothing called. */
 export function labFeaturesOf(win: unknown): LabFeatures {
-  const w = (typeof win === 'object' && win !== null ? win : {}) as { readonly Worker?: unknown; readonly HTMLIFrameElement?: { readonly prototype?: unknown } };
+  const w = (typeof win === 'object' && win !== null ? win : {}) as { readonly 'Worker'?: unknown; readonly HTMLIFrameElement?: { readonly prototype?: unknown } };
   const proto = w.HTMLIFrameElement?.prototype;
   const has = (k: string): boolean => typeof proto === 'object' && proto !== null && k in proto;
-  return { worker: typeof w.Worker === 'function', frameSandbox: has('sandbox'), cspAttribute: has('csp') };
+  return { worker: typeof w['Worker'] === 'function', frameSandbox: has('sandbox'), cspAttribute: has('csp') };
 }
 
 /** The device line's facts. Every browser on iOS is WebKit, whatever its name. */
@@ -2908,11 +3058,14 @@ export function deviceFacts(d: LabDevice): string[] {
 // reader lab design, section 3.2; the rich-docs spec's row M10.13). Ring L1: pure. Each line answers one of its three
 // words and a short detail, from the door's counts for the run and what the page itself observed. "Not measured" never
 // folds into "holds": a check holds only once its own positive signal is there (a frame's report, the control and its
-// floor, the canary, the tap, a mount that reached ready), and a wall's broken signals are read first, so a forged arrival
-// cannot hide a real "broke" or a real arrival at a wall's target. (A forged POSITIVE signal can still turn "not measured"
-// into "holds" for a frame that never ran: that defence is the nonce's secrecy, the design's section 4.6, not these
-// rules.) An unread or saturated run makes every line that reads counts "not measured". `busy-frame` is a fact that gates
-// nothing; `self-nav-teardown` names an engine that differs from desktop Chromium without calling a wall broken.
+// floor, the canary, the tap, a mount that reached ready, every figure mount present), and a wall's broken signals are read
+// first, so a forged arrival cannot hide a real "broke" or a real arrival at a wall's target. (A forged POSITIVE signal can
+// still turn "not measured" into "holds" for a frame that never ran: that defence is the nonce's secrecy, the design's
+// section 4.6, not these rules.) A saturated run (the door stopped counting) keeps a counted "does not hold", which is
+// already in the counts it took, and answers every other count line "not measured"; an unread run answers every count line
+// "not measured"; so neither ever reads "holds". `bridge-strays`' broken arm is local (the reader's own callbacks), so it is
+// read before the door's state. `busy-frame` is a fact that gates nothing; `self-nav-teardown` names an engine that differs
+// from desktop Chromium without calling a wall broken.
 import { LAB_BATTERY_CHANNELS, type LabBatteryChannel, type LabProbeName, type LabRunView } from '../../../shared/readerLab';
 import type { LabCheckId, LabOutcome } from './checks';
 import { LAB_STRAYS_POSTED } from './frameScripts';
@@ -2935,8 +3088,12 @@ export interface LabLocal {
   readonly busy: { readonly longestGapMs: number; readonly timerLateMs: number; readonly spinMs: number } | null;
   /** The figure mounts, in run order; empty when that step did not run. */
   readonly mounts: readonly LabMount[];
-  /** The hostile page's mount: whether it became ready, and the host callbacks the stray messages reached. */
-  readonly hostile: { readonly ready: boolean; readonly effects: number; readonly addressChanged: boolean } | null;
+  /** The hostile page's mount: whether it became ready (`csp-27`'s condition). A fallback after ready is the library
+   *  failing closed on a figure the wall refused, and it is no effect of any stray message. */
+  readonly hostile: { readonly ready: boolean } | null;
+  /** The benign page's mount, which the stray messages are sent to: whether it became ready, and the host callbacks the
+   *  stray messages reached (a fallback after ready counts as one here). */
+  readonly strays: { readonly ready: boolean; readonly effects: number; readonly addressChanged: boolean } | null;
 }
 
 const ORIGIN_KEYS = ['parent', 'origin'] as const;
@@ -3040,24 +3197,34 @@ function popups(r: LabRunView): LabOutcome {
   return holds(threw ? '' : 'top navigation blocked without an error');
 }
 
-function selfNavigate(r: LabRunView): LabOutcome {
+function selfNavigate(r: LabRunView, local: LabLocal): LabOutcome {
   if (hits(r, 'self-nav') > 0) return broken('the frame navigated itself to the server');
-  return hits(r, 'self-nav-tried') === 0 ? unmeasured('the frame did not run') : holds();
+  const evidence = [
+    ...(local.selfNavLoads !== null && local.selfNavLoads >= 2 ? ['attempt seen: second load'] : []),
+    ...(hits(r, 'self-nav-tried') > 0 ? ['attempt seen: tried'] : []),
+  ];
+  return evidence.length === 0 ? unmeasured('the frame did not try') : holds(evidence.join('; '));
 }
 
 /** The engine's teardown signal: a blocked self-navigation fires a second `load`, which is what closes the reader's port
  *  (the rich-docs spec's section 5.1 and M8.B5). No port exists in a lab frame; this is the engine signal it relies on. An
  *  engine without it differs from desktop Chromium: a miss E18 investigates, not a broken wall. */
 function selfNavTeardown(r: LabRunView, local: LabLocal): LabOutcome {
-  if (hits(r, 'self-nav-tried') === 0 || local.selfNavLoads === null) return unmeasured('the frame did not run');
-  return local.selfNavLoads >= 2 ? holds('second load fired') : { verdict: 'differs', detail: 'no second load' };
+  if (local.selfNavLoads !== null && local.selfNavLoads >= 2) return holds('second load fired');
+  return hits(r, 'self-nav-tried') > 0 ? { verdict: 'differs', detail: 'no second load' } : unmeasured('the frame did not try');
+}
+
+/** The stray messages' broken signal, observed by the page itself and so independent of the door: `undefined` when none. */
+function straysBroke(local: LabLocal): LabOutcome | undefined {
+  const h = local.strays;
+  return h !== null && (h.effects > 0 || h.addressChanged)
+    ? broken(`${h.effects} effects${h.addressChanged ? '; the address changed' : ''}`) : undefined;
 }
 
 function strays(r: LabRunView, local: LabLocal): LabOutcome {
-  const h = local.hostile;
-  if (h !== null && (h.effects > 0 || h.addressChanged)) {
-    return broken(`${h.effects} effects${h.addressChanged ? '; the address changed' : ''}`);
-  }
+  const h = local.strays;
+  const bad = straysBroke(local);
+  if (bad !== undefined) return bad;
   if (h === null || !h.ready) return unmeasured('the reader did not become ready');
   if (hits(r, 'strays-sent') === 0) return unmeasured('the stray frame did not run');
   return holds(`${LAB_STRAYS_POSTED} sent, 0 effects`);
@@ -3075,12 +3242,15 @@ function busyFrame(r: LabRunView, local: LabLocal): LabOutcome {
   };
 }
 
+/** The seven figure mounts the Mermaid line needs before it can hold: the six figures singly, then the six together. */
+const FIGURE_LABELS = ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'all'] as const;
+
 const worstOf = (list: readonly LabMount[]): LabMount => list.reduce((a, b) => (b.longestGapMs > a.longestGapMs ? b : a));
 
 /** The Mermaid stall under the lab profile's draw mode, draw on open. Every figure mount counts, the six together (`all`,
  *  the heavy page) included, and so does a mount that fell back or timed out, where a stall is likeliest: the worst gap of
- *  them all decides. Over the budget: does not hold. Within it, a figure mount that did not draw cannot show that it
- *  holds: not measured, naming it. */
+ *  them all decides. Over the budget: does not hold. Within it, a figure mount that did not draw, or that is missing from
+ *  the list, cannot show that it holds: not measured, naming it. */
 function mermaid(local: LabLocal, budgetMs: number): LabOutcome {
   const figures = local.mounts.filter((m) => /^f\d$/.test(m.label) || m.label === 'all');
   if (figures.length === 0) return unmeasured('not run');
@@ -3091,7 +3261,10 @@ function mermaid(local: LabLocal, budgetMs: number): LabOutcome {
     : `all six together${single === null ? '' : `; worst single: figure ${single.label.slice(1)}, ${ms(single.longestGapMs)} ms`}`;
   const detail = `longest gap ${ms(worst.longestGapMs)} ms, ${where}`;
   if (worst.longestGapMs > budgetMs) return broken(detail);
-  const missed = figures.filter((m) => m.outcome !== 'ready').map((m) => `${m.label} ${m.outcome}`);
+  const missed = [
+    ...figures.filter((m) => m.outcome !== 'ready').map((m) => `${m.label} ${m.outcome}`),
+    ...FIGURE_LABELS.filter((l) => !figures.some((m) => m.label === l)).map((l) => `${l} missing`),
+  ];
   return missed.length > 0 ? unmeasured(`did not draw: ${missed.join(', ')}`) : holds(detail);
 }
 
@@ -3115,8 +3288,10 @@ export function drawOnOpenReading(o: Readonly<Record<LabCheckId, LabOutcome>>, l
 export function labVerdicts(run: LabRunView | null, local: LabLocal, budgetMs: number): Record<LabCheckId, LabOutcome> {
   const fromCounts = (f: (r: LabRunView) => LabOutcome): LabOutcome => {
     if (run === null) return unmeasured('the door could not be read');
-    if (run.saturated) return unmeasured('the door counted more than a lab run sends');
-    return f(run);
+    const o = f(run);
+    // A saturated run: the door stopped counting, which does not falsify the counts it had taken, so a counted "does not
+    // hold" stands; anything else cannot be trusted to be complete and is not measured.
+    return run.saturated && o.verdict !== 'does-not-hold' ? unmeasured('the door counted more than a lab run sends') : o;
   };
   return {
     'opaque-origin': fromCounts((r) => opaqueOrigin(r)),
@@ -3124,8 +3299,8 @@ export function labVerdicts(run: LabRunView | null, local: LabLocal, budgetMs: n
     'no-cookie': fromCounts((r) => noCookie(r)),
     'csp-27': fromCounts((r) => csp27(r, local)),
     'no-popup-top-nav': fromCounts((r) => popups(r)),
-    'no-self-navigate': fromCounts((r) => selfNavigate(r)),
-    'bridge-strays': fromCounts((r) => strays(r, local)),
+    'no-self-navigate': fromCounts((r) => selfNavigate(r, local)),
+    'bridge-strays': straysBroke(local) ?? fromCounts((r) => strays(r, local)),
     'self-nav-teardown': fromCounts((r) => selfNavTeardown(r, local)),
     'busy-frame': fromCounts((r) => busyFrame(r, local)),
     mermaid: mermaid(local, budgetMs),
@@ -3244,7 +3419,7 @@ RLB-T8-M5 and M7 share their `old`; each is applied alone, from the saved copy.
 
 **Interfaces:** Consumes Tasks 1 and 6-8 (the run's caps come from `shared/readerLab.ts`, never redeclared here). Produces `LAB_FIGURES`, `LAB_PAGES`, `hostileDoc(base)`; `LAB_TEXT`; `readLabRunView(body)`; `LAB_WATCHDOG_PROBE_MS`, `LAB_TAP_READ_EVERY_MS`, `LAB_STALL_BUDGET_MS`, `LabGapWindow`, `LAB_GAP_WINDOW`, `gapWindowEnd(window, settled, sleep)`, `LabDoor`, `LabDeps` (with `gapWindow`), `LabProgress`, `LabResult` (with `finalRead`), `LabFailure`, `runReaderLab(deps, progress)`, `defaultLabDeps({stage, signal})`, `labResultText(result, device)`; `api.readerLab.{open, read, close, probe}`.
 
-**Decisions:** (1) `api.readerLab` is thin (the funnel, no parsing); the run's own door adapter turns answers into words: `open` → a nonce, `no-door` (404) or `refused` (any other refusal); `read` → a run, `unknown-run` (404) or `unreadable` (`readLabRunView` says no). A 401 still raises the login overlay through the funnel, and the run stops. (2) The first read happens before any frame, so an older door stops the run before anything is mounted. (3) Each step's frame or mount is removed in a `finally`, and the door run is closed in the run's own `finally`. (4) The busy step starts its frame-gap measure and its timer before it mounts the busy frame, so the spin is inside both. (5) Every reader mount is `profile: 'lab-draw'`, `docKey: null`, no images, so it stores nothing and loads nothing beyond its own text. (6) The hostile step is step 7 and the Mermaid mounts step 8: every arrival that decides a verdict is read by step 7, every read up to there fails the run on `unknown-run` or `unreadable`, and the final read (step 9) that finds the run gone or unreadable keeps the last view and says so in `finalRead` (the run's life is derived from the caps, so this is the slow phone's safety net, not the plan). (7) A timed mount's gap window ends where `gapWindowEnd` says: at its outcome under `'ready'` (library 1.0.0, whose `ready` waits for its figures), or `LAB_DRAW_SETTLE_MS` past a `ready` outcome under `'ready-and-settle'`; `elapsedMs` is still measured to the outcome. (8) The run's mounts and steps are `LAB_MOUNTS` and `LAB_STEPS`, the figures the door's life is summed from; the healthy and profile cases pin both.
+**Decisions:** (1) `api.readerLab` is thin (the funnel, no parsing); the run's own door adapter turns answers into words: `open` → a nonce, `no-door` (404) or `refused` (any other refusal); `read` → a run, `unknown-run` (404) or `unreadable` (`readLabRunView` says no). A 401 still raises the login overlay through the funnel, and the run stops. (2) The first read happens before any frame, so an older door stops the run before anything is mounted. (3) Each step's frame or mount is removed in a `finally`, and the door run is closed in the run's own `finally`. (4) The busy step starts its frame-gap measure and its timer before it mounts the busy frame, so the spin is inside both. (5) Every reader mount is `profile: 'lab-draw'`, `docKey: null`, no images, so it stores nothing and loads nothing beyond its own text. (6) The hostile step is step 7 and the Mermaid mounts step 8: every arrival that decides a verdict is read by step 7, every read up to there fails the run on `unknown-run` or `unreadable`, and the final read (step 9) that finds the run gone or unreadable, or rejects, keeps the last view and says so in `finalRead`; Stop is rechecked and still aborts (the run's life is derived from the caps, so this is the slow phone's safety net, not the plan). (7) A timed mount's gap window ends where `gapWindowEnd` says: at its outcome under `'ready'` (library 1.0.0, whose `ready` waits for its figures), or `LAB_DRAW_SETTLE_MS` past a `ready` outcome under `'ready-and-settle'`; `elapsedMs` is still measured to the outcome. (8) The run's eleven mounts and nine steps are `LAB_MOUNTS` and `LAB_STEPS`, the figures the door's life is summed from; the healthy and profile cases pin both. (9) The hostile mount remains live for `LAB_SETTLE_MS` after ready, or `LAB_DRAW_SETTLE_MS` in ready-and-settle mode, before destruction. A separate benign mount receives strays: the library's fail-safe CSP fallback may legitimately destroy the hostile reader. A fallback from the hostile reader is not itself a stray effect. (10) Each host is scrolled into view before mounting and before timing starts; off-screen cross-origin frames otherwise received no animation frames in the measured engine and ran into the watchdog. Scrolling away during a mount can make it not measured. The mount input and return types are derived from `lazyMountReader`'s signature, with no direct bridge import.
 
 - [ ] **Step 0: Base.** `test -f pwa/src/readerLab/verdicts.ts && git grep -qF "export type Api = ReturnType<typeof createApi>;" HEAD -- pwa/src/lib/api.ts && ! git grep -qF "readerLab" HEAD -- pwa/src/lib/api.ts && git grep -qF "export const lazyMountReader: ReaderDeps['mount'] = async (el, input) => {" HEAD -- pwa/src/docs/ReaderFrame.tsx && test ! -e pwa/src/readerLab/run.ts && echo T9-BASE-OK` — Expected: `T9-BASE-OK`. Confirm the claim on `pwa/src/lib/api.ts`.
 - [ ] **Step 1: Write the failing test,** `pwa/test/reader-lab-run.test.ts`, with exactly this content:
@@ -3257,7 +3432,7 @@ RLB-T8-M5 and M7 share their `old`; each is applied alone, from the saved copy.
 // door's run life is derived from.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  LAB_BATTERY_CHANNELS, LAB_DRAW_SETTLE_MS, LAB_MOUNTS, LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, LAB_STEPS,
+  LAB_BATTERY_CHANNELS, LAB_DRAW_SETTLE_MS, LAB_MOUNTS, LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, LAB_SETTLE_MS, LAB_STEPS,
   type LabProbeName, type LabProbeTally, type LabRunView,
 } from '../../shared/readerLab';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
@@ -3305,6 +3480,8 @@ interface RigOptions {
   /** The door forgets the run once this many reader mounts have started (a run whose life ran out mid-Mermaid). */
   loseAfterMounts?: number;
   gapWindow?: LabGapWindow;
+  /** Runs right after a reader mount became ready, with the mount's input and its place in the run (0: the hostile page). */
+  afterReady?: (input: ReaderMountInput, index: number) => void;
   onFrame?: (spec: LabFrameSpec, rig: Rig) => void;
 }
 interface Rig {
@@ -3339,6 +3516,7 @@ function rig(o: RigOptions = {}): Rig {
   const stage = document.createElement('div');
   document.body.append(stage);
   let live = 0;
+  let liveReaders = 0;
   let clock = 0;
   const names = new Map<string, string>([[POPUP_SCRIPT, 'popup'], [AMBIENT_SCRIPT, 'ambient'], [COOKIE_SCRIPT, 'cookie'],
     [BATTERY_SCRIPT, 'battery'], [SELF_NAV_SCRIPT, 'selfNav'], [BUSY_SCRIPT, 'busy'], [STRAYS_SCRIPT, 'strays']]);
@@ -3372,9 +3550,12 @@ function rig(o: RigOptions = {}): Rig {
         mermaid: { fences: 1, largestBytes: 10, totalBytes: 10, largestChars: 10, totalChars: 10 }, images: [],
       }) as unknown as ReaderRenderOutcome,
       mountReader: async (_el, input) => {
+        expect(liveReaders, 'a reader mount was still up when the next one mounted').toBe(0);
+        liveReaders += 1;
         inputs.push(input);
-        queueMicrotask(() => input.onReady());
-        return { destroy: vi.fn(), setPrefs: vi.fn() } satisfies ReaderMount;
+        const index = inputs.length - 1;
+        queueMicrotask(() => { input.onReady(); o.afterReady?.(input, index); });
+        return { destroy: vi.fn(() => { liveReaders -= 1; }), setPrefs: vi.fn() } satisfies ReaderMount;
       },
       frame: () => Promise.resolve((clock += 16)),
       now: () => clock,
@@ -3416,12 +3597,32 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
   it('every reader mount is the lab profile: lab-draw, no doc key, no images; there are as many as the caps count', async () => {
     const r = rig();
     await runReaderLab(r.deps, () => undefined);
-    expect(LAB_PAGES.length + 1, 'the pages and the hostile page').toBe(LAB_MOUNTS);
+    expect(LAB_PAGES.length + 2, 'the pages, the hostile page and the benign page the strays go to').toBe(LAB_MOUNTS);
     expect(r.inputs).toHaveLength(LAB_MOUNTS);
     for (const input of r.inputs) {
       expect(input.profile).toBe('lab-draw');
       expect(input.docKey).toBeNull();
       expect(input.document.images).toEqual({});
+    }
+  });
+
+  it('every mount host is scrolled into view before its reader mounts (a frame off screen draws nothing, so ready never comes)', async () => {
+    const calls: string[] = [];
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function scrolled(this: HTMLElement): void {
+      calls.push(`scroll:${this.className}`);
+    });
+    try {
+      const r = rig();
+      await runReaderLab({
+        ...r.deps,
+        mountReader: (el, input) => { calls.push(`mount:${el.className}`); return r.deps.mountReader(el, input); },
+      }, () => undefined);
+      expect(calls.filter((c) => c.startsWith('mount:'))).toHaveLength(LAB_MOUNTS);
+      for (let i = 0; i < calls.length; i += 2) {
+        expect([calls[i], calls[i + 1]], 'a scroll comes right before each mount').toEqual(['scroll:reader-lab-mount', 'mount:reader-lab-mount']);
+      }
+    } finally {
+      scroll.mockRestore();
     }
   });
 
@@ -3458,12 +3659,76 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(result.outcomes['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
   });
 
+  it('the hostile page and the benign page mount one at a time, hostile first, and the strays go to the benign page', async () => {
+    const r = rig({ onFrame: (spec, rr) => { if (spec.script === STRAYS_SCRIPT) rr.order.push(`inputs:${rr.inputs.length}`); } });
+    await runReaderLab(r.deps, () => undefined);
+    expect(r.order.slice(-2), 'the stray frame mounts after both reader mounts of the step started').toEqual(['strays', 'inputs:2']);
+    expect(r.inputs[0]!.document.result.outcome).toBe('rendered');
+  });
+
+  it.each([{ window: 'ready' as const, ms: LAB_SETTLE_MS }, { window: 'ready-and-settle' as const, ms: LAB_DRAW_SETTLE_MS }])('keeps the hostile reader alive through its $window observation window', async ({ window, ms }) => {
+    const r = rig({ gapWindow: window });
+    let hostileLive = false;
+    let observed = false;
+    await runReaderLab({ ...r.deps,
+      mountReader: async (el, input) => {
+        const mount = await r.deps.mountReader(el, input);
+        if (r.inputs.length !== 1) return mount;
+        hostileLive = true;
+        return { ...mount, destroy: () => { hostileLive = false; mount.destroy(); } };
+      },
+      sleep: async (duration) => {
+        if (r.inputs.length === 1 && duration === ms) { expect(hostileLive).toBe(true); observed = true; }
+        await r.deps.sleep(duration);
+      },
+    }, () => undefined);
+    expect(observed).toBe(true);
+    expect(hostileLive).toBe(false);
+  });
+
+  it('a hostile fallback after ready is the library failing closed, not a stray effect: bridge-strays still holds, and csp-27 still reads the hostile mount ready', async () => {
+    const r = rig({ afterReady: (input, index) => { if (index === 0) input.onFallback('error'); } });
+    const result = await runReaderLab(r.deps, () => undefined);
+    expect(result.local.hostile).toEqual({ ready: true });
+    expect(result.local.strays).toEqual({ ready: true, effects: 0, addressChanged: false });
+    expect(result.outcomes['bridge-strays'].verdict).toBe('holds');
+    expect(result.outcomes['csp-27'].verdict).toBe('holds');
+  });
+
+  it('a benign fallback after ready counts as an effect: bridge-strays does not hold', async () => {
+    const r = rig({ afterReady: (input, index) => { if (index === 1) input.onFallback('error'); } });
+    const result = await runReaderLab(r.deps, () => undefined);
+    expect(result.local.strays).toEqual({ ready: true, effects: 1, addressChanged: false });
+    expect(result.outcomes['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
+    expect(result.outcomes['csp-27'].verdict).toBe('holds');
+  });
+
   it('a run lost after the hostile step keeps every count it read: the walls still decide, and the result says the final read failed', async () => {
-    const r = rig({ loseAfterMounts: 1 });
+    const r = rig({ loseAfterMounts: 2 });
     const result = await runReaderLab(r.deps, () => undefined);
     for (const k of LAB_WALLS) expect(result.outcomes[k].verdict, `${k}: ${result.outcomes[k].detail}`).toBe('holds');
     expect(result.finalRead).toBe('unknown-run');
     expect(result.run).not.toBeNull();
+    expect(r.door.closed).toEqual([NONCE]);
+  });
+
+  it('a rejected final read keeps completed counts and wall verdicts and closes', async () => {
+    const r = rig();
+    let final = false;
+    const door = r.deps.door;
+    const result = await runReaderLab({ ...r.deps, door: { ...door, read: (n) => final ? Promise.reject(new Error('lost')) : door.read(n) } }, (p) => { if (p.step === 9) final = true; });
+    expect(result.finalRead).toBe('unreadable');
+    expect(result.run).not.toBeNull();
+    for (const k of LAB_WALLS) expect(result.outcomes[k].verdict).toBe('holds');
+    expect(r.door.closed).toEqual([NONCE]);
+  });
+
+  it('a stop during a rejecting final read remains stopped and closes', async () => {
+    const r = rig();
+    let final = false;
+    const door = r.deps.door;
+    const run = runReaderLab({ ...r.deps, door: { ...door, read: (n) => final ? new Promise((_resolve, reject) => { queueMicrotask(() => { r.abort.abort(); reject(new Error('lost')); }); }) : door.read(n) } }, (p) => { if (p.step === 9) final = true; });
+    await expect(run).rejects.toThrow('stopped');
     expect(r.door.closed).toEqual([NONCE]);
   });
 
@@ -3478,7 +3743,7 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(slept).toEqual([LAB_DRAW_SETTLE_MS]);
     const after = rig({ gapWindow: 'ready-and-settle' });
     await runReaderLab(after.deps, () => undefined);
-    expect(after.slept.filter((ms) => ms === LAB_DRAW_SETTLE_MS), 'one settle per timed page').toHaveLength(LAB_PAGES.length);
+    expect(after.slept.filter((ms) => ms === LAB_DRAW_SETTLE_MS), 'one settle per timed page and the hostile page').toHaveLength(LAB_PAGES.length + 1);
     const now = rig();
     await runReaderLab(now.deps, () => undefined);
     expect(now.slept.filter((ms) => ms === LAB_DRAW_SETTLE_MS)).toEqual([]);
@@ -3736,7 +4001,6 @@ import {
   readerLabProbeBase, type LabRunView,
 } from '../../../shared/readerLab';
 import { lazyMountReader } from '../docs/ReaderFrame';
-import type { ReaderMount, ReaderMountInput } from '../docs/reader/bridge';
 import { READER_LIBRARY_BUILD } from '../docs/reader/labPolicy';
 import { api } from '../lib/api';
 import { ApiError } from '../lib/apiError';
@@ -3758,6 +4022,11 @@ import { formatLabResult, type LabFinalRead } from './result';
 import { labVerdicts, type LabLocal, type LabMount } from './verdicts';
 import { readLabRunView } from './wire';
 
+// The reader's types come through the loader's own signature, so this file names the bridge nowhere (the docs scan's
+// rule: the adapters are reached only through ReaderFrame).
+type ReaderMountInput = Parameters<typeof lazyMountReader>[1];
+type ReaderMount = Awaited<ReturnType<typeof lazyMountReader>>;
+
 /** The timer whose lateness stands for the reader's watchdog while the busy frame spins. */
 export const LAB_WATCHDOG_PROBE_MS = 500;
 /** How often the popup step reads the door while it waits for the operator's tap (`LAB_TAP_WAIT_MS`). */
@@ -3767,7 +4036,8 @@ export const LAB_STALL_BUDGET_MS = 200;
 
 /** Where a timed mount's frame-gap window ends (the reader lab design, section 8). `ready`: at the mount's outcome, which
  *  holds the draw while the library's `ready` waits for its figures (library 1.0.0). `ready-and-settle`: LAB_DRAW_SETTLE_MS
- *  past `ready`, for a library that draws after `ready`, so the draw stays inside the window. */
+ *  past `ready`, for a library that draws after `ready`, so the draw stays inside the window. The hostile mount stays live
+ *  for LAB_SETTLE_MS under `ready`, or LAB_DRAW_SETTLE_MS under `ready-and-settle`, to observe its requests. */
 export type LabGapWindow = 'ready' | 'ready-and-settle';
 /** The window for the library this build pins. The library change that draws after `ready` flips it, in that change. */
 export const LAB_GAP_WINDOW: LabGapWindow = 'ready';
@@ -3849,11 +4119,17 @@ function mountInput(out: Extract<ReaderRenderOutcome, { kind: 'rendered' }>, byt
   };
 }
 
-/** A host element for one mount, at the end of the stage. */
+/** A host element for one mount, at the end of the stage, scrolled into view before the mount starts. The mount is a
+ *  frame of an opaque origin, and Chrome throttles a cross-origin frame that is off screen: no animation frame runs in
+ *  it, so the library's draw never starts and `ready`, which waits for the figures under `lab-draw`, never comes before
+ *  the watchdog. The stage sits below the lists, and the rows' details push it down as the run goes. The limit: this is
+ *  one scroll before the mount, not a hold. If the operator scrolls the stage away mid-mount, that mount reads "not
+ *  measured" (a fallback or the cap), never a false "holds". */
 function hostIn(stage: HTMLElement): HTMLElement {
   const host = document.createElement('div');
   host.className = 'reader-lab-mount';
   stage.append(host);
+  host.scrollIntoView({ block: 'nearest' });
   return host;
 }
 
@@ -3887,48 +4163,74 @@ async function timedMount(deps: LabDeps, label: string, text: string): Promise<L
   }
 }
 
-/** The hostile page under the lab profile, and, once it is ready, the stray frame's messages: the host callbacks they
- *  reach are counted as effects, and so is a fallback after ready. */
-async function hostileAndStrays(deps: LabDeps, base: string, read: () => Promise<void>): Promise<NonNullable<LabLocal['hostile']>> {
-  const text = hostileDoc(base);
+/** One page mounted under the lab profile for step 7, with no timing: `true` once it is ready (after `whileReady` has run
+ *  while it is up), `false` for a fallback or throw before ready, the cap or a stop. `onFallback` hears every fallback with
+ *  whether ready had come, and `effect` is every host callback the page's messages can reach. The mount and its host are
+ *  gone when this returns. */
+async function readyMount(deps: LabDeps, text: string, on: {
+  readonly onFallback: (afterReady: boolean) => void; readonly effect: () => void;
+}, whileReady: () => Promise<void>): Promise<boolean> {
   const bytes = utf8ByteLength(text);
   const out = await deps.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: deps.signal });
-  if (out.kind !== 'rendered') return { ready: false, effects: 0, addressChanged: false };
+  if (out.kind !== 'rendered') return false;
   const host = hostIn(deps.stage);
-  let effects = 0;
   let ready = false;
   let settle: (r: boolean) => void = noop;
   const settled = new Promise<boolean>((resolve) => { settle = resolve; });
   const onAbort = (): void => settle(false);
   deps.signal.addEventListener('abort', onAbort, { once: true });
   void deps.sleep(LAB_MOUNT_WAIT_MS).then(() => settle(false));
-  const effect = (): void => { effects += 1; };
   let mount: ReaderMount | null = null;
   try {
     try {
       mount = await deps.mountReader(host, mountInput(out, bytes, {
         onReady: () => { ready = true; settle(true); },
-        onFallback: () => { if (ready) effects += 1; settle(false); },
-        onLink: effect, onHash: effect, copy: effect,
+        onFallback: () => { on.onFallback(ready); settle(false); },
+        onLink: on.effect, onHash: on.effect, copy: on.effect,
       }));
     } catch {
-      return { ready: false, effects: 0, addressChanged: false };
+      return false;
     }
-    if (!(await settled)) return { ready: false, effects, addressChanged: false };
-    const before = deps.address();
-    const strays = deps.mountFrame(deps.stage, { script: STRAYS_SCRIPT, config: { base } });
-    try {
-      await deps.sleep(LAB_SETTLE_MS);
-    } finally {
-      strays.remove();
-    }
-    await read();
-    return { ready: true, effects, addressChanged: deps.address() !== before };
+    if (!(await settled)) return false;
+    await whileReady();
+    return true;
   } finally {
     deps.signal.removeEventListener('abort', onAbort);
     mount?.destroy();
     host.remove();
   }
+}
+
+/** Step 7, one mount at a time. First the hostile page under the lab profile: `csp-27` needs it ready, and a fallback after
+ *  ready is the library failing closed on a figure the wall refused, never an effect of a stray message. Then a benign
+ *  page (the step-8 "none" page, the same lab profile and caps), where `bridge-strays` is measured: while it is up and
+ *  ready the stray frame posts its messages, and any host callback they reach, a fallback after ready, or a change of the
+ *  console's address is an effect. Last, the step's one read of the door. */
+async function hostileAndStrays(deps: LabDeps, base: string, read: () => Promise<void>): Promise<{
+  readonly hostile: NonNullable<LabLocal['hostile']>; readonly strays: NonNullable<LabLocal['strays']>;
+}> {
+  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS)) };
+  const benign = LAB_PAGES.find((p) => p.label === 'none');
+  let effects = 0;
+  let addressChanged = false;
+  let readDone = false;
+  const effect = (): void => { effects += 1; };
+  const ready = benign !== undefined && await readyMount(deps, benign.text, {
+    onFallback: (afterReady) => { if (afterReady) effects += 1; }, effect,
+  }, async () => {
+    const before = deps.address();
+    const frame = deps.mountFrame(deps.stage, { script: STRAYS_SCRIPT, config: { base } });
+    try {
+      await deps.sleep(LAB_SETTLE_MS);
+    } finally {
+      frame.remove();
+    }
+    readDone = true;
+    await read();
+    addressChanged = deps.address() !== before;
+  });
+  if (!readDone) await read();
+  return { hostile, strays: { ready, effects, addressChanged } };
 }
 
 /** The run: nine steps, then the verdicts. Rejects with a LabFailure for the door's words up to step 7, and with `stopped`
@@ -3942,8 +4244,8 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
   const nonce = opened.nonce;
   const base = `${deps.origin}${readerLabProbeBase(nonce)}`;
   const counts: { view: LabRunView | null } = { view: null };
-  const local: { selfNavLoads: number | null; busy: LabLocal['busy']; mounts: LabMount[]; hostile: LabLocal['hostile'] } =
-    { selfNavLoads: null, busy: null, mounts: [], hostile: null };
+  const local: { selfNavLoads: number | null; busy: LabLocal['busy']; mounts: LabMount[]; hostile: LabLocal['hostile']; strays: LabLocal['strays'] } =
+    { selfNavLoads: null, busy: null, mounts: [], hostile: null, strays: null };
   let step = 0;
   const say = (line: string, tap = false): void => {
     progress({ step, of: LAB_STEPS, line, tap, outcomes: counts.view === null ? {} : labVerdicts(counts.view, local, LAB_STALL_BUDGET_MS) });
@@ -3995,8 +4297,8 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     // 4. The battery: the control frame with no policy, then the wall frame under the library's.
     step = 4;
     say(LAB_TEXT.steps.battery);
-    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'ctl-', canary: false } }, LAB_SETTLE_MS);
-    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'csp-', canary: true }, wall: { canary: `${base}csp-canary` } }, LAB_SETTLE_MS);
+    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'ctl-', canary: false }, importChannel: true }, LAB_SETTLE_MS);
+    await withFrame({ script: BATTERY_SCRIPT, config: { base, prefix: 'csp-', canary: true }, importChannel: true, wall: { canary: `${base}csp-canary` } }, LAB_SETTLE_MS);
     // 5. A frame navigating itself.
     step = 5;
     say(LAB_TEXT.steps.selfNav);
@@ -4010,12 +4312,12 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     const late = deps.sleep(LAB_WATCHDOG_PROBE_MS).then(() => Math.max(0, deps.now() - t0 - LAB_WATCHDOG_PROBE_MS));
     await withFrame({ script: BUSY_SCRIPT, config: { base, spinMs: LAB_BUSY_SPIN_MS } }, 0, () => spinOver);
     local.busy = { longestGapMs: await gap, timerLateMs: await late, spinMs: LAB_BUSY_SPIN_MS };
-    // 7. The real library on hostile figures, and stray messages while it is up: the last step whose arrivals decide a
-    // verdict, so its read is the last one that must succeed (the reader lab design, section 4.4).
+    // 7. The real library on hostile figures, then on a benign page with stray messages sent while it is up: the last step
+    // whose arrivals decide a verdict, so its read is the last one that must succeed (the reader lab design, section 4.4).
     step = 7;
     stop();
     say(LAB_TEXT.steps.strays);
-    local.hostile = await hostileAndStrays(deps, base, read);
+    ({ hostile: local.hostile, strays: local.strays } = await hostileAndStrays(deps, base, read));
     // 8. Mermaid drawn on open, one page at a time. Nothing here sends a probe.
     step = 8;
     for (const page of LAB_PAGES) {
@@ -4028,7 +4330,8 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     step = 9;
     stop();
     say(LAB_TEXT.steps.done);
-    const last = await deps.door.read(nonce);
+    const last = await deps.door.read(nonce).catch(() => { stop(); return 'unreadable' as const; });
+    stop();
     if (last !== 'unknown-run' && last !== 'unreadable') counts.view = last;
     const finalRead: LabFinalRead = typeof last === 'string' ? last : 'read';
     return { outcomes: labVerdicts(counts.view, local, LAB_STALL_BUDGET_MS), local, run: counts.view, finalRead };
@@ -4170,11 +4473,12 @@ RLB-T9-M1's `old` is the line in `withFrame`'s `finally`; `hostileAndStrays` nam
 **Files:**
 - Create: `pwa/src/screens/ReaderLab.tsx`, `pwa/src/readerLab/readerLab.css`, `pwa/test/reader-lab-page.test.tsx`.
 - Modify: `pwa/src/lib/routes.ts` (one row), `pwa/src/app.tsx` (one import, one ladder rung), `pwa/test/app.test.tsx` (one probe, one case), `pwa/test/command-registry.test.ts` (the id list, the rank filter, two rank rows, one title), `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (the C9 row's PWA cell gains `screens/ReaderLab.tsx`).
-- Guards (not edited): `pwa/test/contrast.test.ts`, `pwa/test/tap-targets.test.tsx`, `pwa/test/highlight-measure.test.tsx`, `server/test/rings/totality.test.ts`, `server/test/census-w7/pwa.test.ts`.
+- Licensed census corrections: `pwa/test/contrast.test.ts` adds only the layout-only stylesheet to `APP_SHEETS`; `pwa/test/command-layer.test.tsx` adds only the Reader lab option assertion, the Go-to Settings count seven to eight and its explanatory comment. At absorption, scoped leave adds only one ReaderLab row and six-to-seven census wording in `pwa/test/app-lazy.test.tsx`, retaining exact equality. The stylesheet's ungrounded detail color is removed, not exempted.
+- Guards (otherwise not edited): `pwa/test/tap-targets.test.tsx`, `pwa/test/highlight-measure.test.tsx`, `server/test/rings/totality.test.ts`, `server/test/census-w7/pwa.test.ts`.
 
 **Interfaces:** Produces `ReaderLab(props: { load?: () => Promise<typeof import('../readerLab/run')> })`, the route row `reader-lab`, and the palette command `go-reader-lab` ("Go to Settings › Reader lab").
 
-**Decisions:** (1) R19's page shape: `PageScaffold`, one Start/Stop button, one live line, the result in one `<pre>` with Select result; no copy control, no storage. (2) The run's module loads on Start through the one literal `import('../readerLab/run')`, so the main bundle holds only the screen, the check list, the device line and the words. (3) A check's row shows its outcome only after the step that decides it has passed (`LAB_CHECK_STEP`), so a partial count never shows as a verdict. (4) The stage is a visible `role="group"` under the lists: the popup frame's button must be tappable. (5) Two groups: E18's eight lines (the walls and the teardown signal) and E17's two. (6) Before Start the page says, in one sentence, that on a server with sign-in on each run leaves one or two foreign-origin lines in the server's journal, from the lab's own frames, and that they are expected; and it shows the device line from `deviceFacts`, the same facts the block's first line carries.
+**Decisions:** (1) R19's page shape: `PageScaffold`, one Start/Stop button, one live line, the result in one `<pre>` with Select result; no copy control, no storage. (2) The run's module loads on Start through the one literal `import('../readerLab/run')`, so opening the screen does not load the run module. At absorption the screen itself also loads through main's existing lazyScreen/loading wrapper; the shell introduces no second lazy mechanism. (3) A check's row shows its outcome only after the step that decides it has passed (`LAB_CHECK_STEP`), so a partial count never shows as a verdict. (4) The stage is a visible `role="group"` under the lists: the popup frame's button must be tappable. (5) Two groups: E18's eight lines (the walls and the teardown signal) and E17's two. (6) Before Start the page says, in one sentence, that on a server with sign-in on each run leaves one or two foreign-origin lines in the server's journal, from the lab's own frames, and that they are expected; and it shows the device line from `deviceFacts`, the same facts the block's first line carries.
 
 - [ ] **Step 0: Base.** `test -f pwa/src/readerLab/run.ts && git grep -qF "  { id: 'measure-highlighting', pattern:" HEAD -- pwa/src/lib/routes.ts && ! git grep -qF "reader-lab" HEAD -- pwa/src/lib/routes.ts && git grep -qF '| C9 Docs | `docs/**`, `readerLab/**` | `docs/**`, `screens/DocsScreen.tsx`, `screens/HighlightMeasure.tsx`, `screens/highlightMeasureRun.tsx`, `readerLab/**` |' HEAD -- docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md && echo T10-BASE-OK` — Expected: `T10-BASE-OK`. Confirm the claims on `routes.ts`, `app.tsx`, `app.test.tsx`, `command-registry.test.ts`. Run `test/app.test.tsx` and `test/command-registry.test.ts` alone and record their counts.
 - [ ] **Step 1: Write the failing tests.** Create `pwa/test/reader-lab-page.test.tsx` with exactly this content:
@@ -4207,7 +4511,7 @@ class FakeFailure extends Error {
 }
 
 const HOLDS = Object.fromEntries(LAB_CHECKS.map((k) => [k, { verdict: 'holds', detail: '' }])) as unknown as LabResult['outcomes'];
-const RESULT = { outcomes: HOLDS, local: { selfNavLoads: 2, busy: null, mounts: [], hostile: null }, run: null, finalRead: 'read' } as LabResult;
+const RESULT = { outcomes: HOLDS, local: { selfNavLoads: 2, busy: null, mounts: [], hostile: null, strays: null }, run: null, finalRead: 'read' } as LabResult;
 
 /** A run module whose run is `run`; it records the deps it was handed. */
 function fakeModule(run: (deps: LabDeps, progress: (p: LabProgress) => void) => Promise<LabResult>): { mod: RunModule; handed: LabDeps[] } {
@@ -4336,23 +4640,23 @@ describe('api.readerLab (reader lab plan, Task 10)', () => {
     // The reader lab (the reader lab plan, Task 10).
     '/settings/reader-lab',
 ```
-  Find: ``  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', () => {``
+  Find (re-quoted at absorption): ``  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', { timeout: LAZY_CEILING_MS }, async () => {``
   Replace:
 ```tsx
-  it('`/settings/reader-lab` renders the reader lab, not the Settings frame (the reader lab plan, Task 10)', () => {
+  it('`/settings/reader-lab` renders the reader lab, not the Settings frame (the reader lab plan, Task 10)', { timeout: LAZY_CEILING_MS }, async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
     try {
       navigate('/settings/reader-lab');
       render(<App />);
       const detail = document.querySelector('.shell-detail')!;
-      expect(within(detail as HTMLElement).getByRole('heading', { level: 1, name: 'Reader lab' })).toBeInTheDocument();
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Reader lab' }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument();
       expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', () => {
+  it('`/settings/bogus` renders Settings with the not-found line, never ScreenFallback (D-5504)', { timeout: LAZY_CEILING_MS }, async () => {
 ```
   In `pwa/test/command-registry.test.ts`:
   Find:
@@ -4388,12 +4692,12 @@ describe('api.readerLab (reader lab plan, Task 10)', () => {
 
 ```css
 /* The reader lab page (native Docs reader, the reader lab plan of 2026-11-03, Task 10). Layout only, and no colour of its
-   own beyond the ink tokens every palette defines, so every skin and theme draws it. The stage holds the lab's frames
+   own: the text inherits the page's ink, so every skin and theme draws it. The stage holds the lab's frames
    and its reader mounts while a run is under way; the popup frame's button must be visible to be tapped. */
 .reader-lab-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
 .reader-lab-row { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-1) var(--sp-2); align-items: baseline; }
 .reader-lab-word { font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); }
-.reader-lab-detail { grid-column: 1 / -1; color: var(--ink-secondary); overflow-wrap: anywhere; }
+.reader-lab-detail { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .reader-lab-result {
   margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
   font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
@@ -4537,23 +4841,23 @@ export function ReaderLab(p: { readonly load?: () => Promise<RunModule> }): Reac
   // as "Go to Settings › Reader lab". Its id is not `settings-…`, so the ladder renders the page itself.
   { id: 'reader-lab', pattern: /^\/settings\/reader-lab\/?$/, title: 'Reader lab', top: false, path: '/settings/reader-lab' },
 ```
-  In `pwa/src/app.tsx`:
-  Find: `import { RunsScreen } from './screens/RunsScreen';`
+  In `pwa/src/app.tsx` (re-quoted at the licensed main absorption; reuse its existing wrapper):
+  Find: `const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));`
   Replace:
 ```ts
-import { RunsScreen } from './screens/RunsScreen';
-import { ReaderLab } from './screens/ReaderLab';
+const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
+const ReaderLab = lazyScreen(() => import('./screens/ReaderLab').then((m) => m.ReaderLab));
 ```
   Find:
 ```tsx
-  ) : route === 'measure-highlighting' ? (
+  ) : route === 'measure-highlighting' ? loading(
     <HighlightMeasure />
 ```
   Replace:
 ```tsx
-  ) : route === 'measure-highlighting' ? (
+  ) : route === 'measure-highlighting' ? loading(
     <HighlightMeasure />
-  ) : route === 'reader-lab' ? (
+  ) : route === 'reader-lab' ? loading(
     <ReaderLab />
 ```
   In `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (as Task 6 leaves it):
@@ -4598,7 +4902,7 @@ import { ReaderLab } from './screens/ReaderLab';
 - Create: `pwa/test/reader-lab-scans.test.ts`, `pwa/browser/reader-lab.browser.test.ts`.
 - Guards (not edited): `pwa/test/docs-scans.test.ts`, `pwa/test/browser-leg.test.ts` (if it pins the browser files it lists, Step 0 records that and this task adds no edit there without asking), `pwa/browser/reader-frame.browser.test.ts`.
 
-**Decisions:** (1) The scans read TypeScript's parse of each file, so the frame scripts' text, which names `fetch`, `localStorage` and the rest on purpose, is strings and never counts; that text runs only inside opaque frames, and the browser case checks what it does. (2) Each rule has planted controls run on the file's own text plus one planted line, as clause M7.12 does. (3) The browser case is one end-to-end run of the built page in Chrome against a fake door that counts by name, the cookie by name and `Sec-Fetch-Site`, as the server's counter does; it asserts the seven wall lines and the teardown signal, records the E17 lines, and is the target of two rows that rebuild the page with a widened sandbox and with no wall policy. (4) Two things the harness cannot show, said rather than faked. First, `openApp` intercepts requests (`ctx.route('**/api/**', …)`), and while Playwright intercepts it answers a CORS preflight itself, approving it; so the cookie frame's marker request (`cookie-fetch-marker`, which needs a preflight) arrives here although a real server never approves that preflight. The fake door records the marker as harness-limited and does not count it, the case asserts the record, and the refusal itself is pinned at the server (Task 3's `'a CORS preflight to the probe is never approved'`), because `pwa/browser/app.ts` stays byte-identical and its interception covers every `/api` request of the context. Second, Playwright can route WebSocket upgrades (`ctx.routeWebSocket`, which `app.ts` uses for `/ws/`), but its route exposes the URL, not the request's headers, so it cannot say whether an upgrade carried the cookie; the case leaves the probe's WebSocket unrouted (the static server answers it with no upgrade), so `cookie-websocket` reads as not arrived here, and the server's armed upgrade case counts it with its class. (5) Headers are read with `await route.request().allHeaders()`: `request.headers()` leaves out `cookie` and the `sec-fetch-*` headers.
+**Decisions:** (1) The scans read TypeScript's parse, so frame-script text is data, never host-side identifiers. Rule 1 includes the named channel constructors and fixed `onmessage` members, with planted controls; Worker feature detection uses quoted properties without a filename exception. The NOT EXHAUSTIVE list remains: this is a structural regression guard, not an adversarial JavaScript proof. (2) Each rule has planted controls run on the file's own text plus one planted line. (3) The browser case is one built-page run against ONE loopback `node:http` server owned by the case. It serves `sharedDist()` with an SPA fallback and counts the door's requests exactly once, by probe name and cookie/header classes. It asserts seven walls and teardown, records E17, and is the target of three rebuilding mutation rows, including the later dynamic-import row. Playwright interception missed early out-of-process sandbox requests, so it cannot be the counter. (4) The inherited harness still may approve a CORS preflight itself. `cookie-fetch-marker` is recorded separately as harness-limited and never counted; an OPTIONS that reaches the case's server gets 404, no CORS header, and no count. The actual refusal is pinned by Task 3's server test. Probe WebSocket requests are left unrouted and receive no upgrade; the server's armed upgrade case measures that channel and its classes. The browser case does not claim a cookie observation for a probe upgrade it did not receive. (5) The page opens at the case-owned server's origin. A context route for `/api/reader-lab/` only calls `route.continue()`, never `fulfill()`. Counting reads the server request headers; Playwright header inspection, when needed, uses `allHeaders()`, not the incomplete `headers()` view.
 
 - [ ] **Step 0: Base.** `test -f pwa/src/screens/ReaderLab.tsx && test ! -e pwa/test/reader-lab-scans.test.ts && test ! -e pwa/browser/reader-lab.browser.test.ts && git grep -qF "export async function openApp(browser: Browser, view: AppView, fixture: AppFixture): Promise<OpenedApp> {" HEAD -- pwa/browser/app.ts && echo T11-BASE-OK` — Expected: `T11-BASE-OK`. Read `pwa/test/browser-leg.test.ts` and record whether it lists browser files by name (W8a recorded that it does not).
 - [ ] **Step 1: Write the scans,** `pwa/test/reader-lab-scans.test.ts`, with exactly this content:
@@ -4610,15 +4914,16 @@ import { ReaderLab } from './screens/ReaderLab';
 //   1. The lab's modules (`screens/ReaderLab.tsx`, `docs/reader/labPolicy.ts`, every file under `readerLab/`) import no
 //      `lib/storage`, name no `localStorage`, `sessionStorage`, `indexedDB` or `caches`, read no `clipboard`, call no
 //      `fetch`, `sendBeacon`, `postMessage` or `window.open`, name no `XMLHttpRequest`, `WebSocket`, `EventSource` or
-//      `MessageChannel`, read `api` only as `api.readerLab`, and spell no URL but the SVG namespace. The frame scripts'
-//      TEXT names several of these on purpose; it runs only inside opaque frames, and a string is not an identifier.
+//      `MessageChannel`, `BroadcastChannel`, `MessagePort`, `Worker` or `SharedWorker`, access no `onmessage` member,
+//      read `api` only as `api.readerLab`, and spell no URL but the SVG namespace. The frame scripts' TEXT names several
+//      of these on purpose; it runs only inside opaque frames, and a string is not an identifier.
 //   2. Outside `pwa/src/docs` (whose own clause W8a holds that tree), an iframe or a srcdoc is built in
 //      `readerLab/frames.ts` alone.
 //   3. No string in `pwa/src` holds a sandbox token beyond `allow-scripts`, and `frames.ts` sets `sandbox` only from
 //      `LAB_SANDBOX`.
 //   4. `'lab-draw'` is spelled only in `docs/reader/policy.ts` and `readerLab/run.ts`.
-// NOT EXHAUSTIVE. An alias (`const s = localStorage`), a computed member, `globalThis[…]`, `eval` and a name built from
-// pieces are not seen; the held-out review reads for them, and the browser case checks what the frames do.
+// NOT EXHAUSTIVE. Dynamically computed members, `globalThis[…]`, `eval` and names built from pieces can evade these
+// checks; the held-out review reads for them, and the browser case checks what the frames do.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
@@ -4676,7 +4981,8 @@ function labFindings(source: string, file: string): string[] {
     if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier !== undefined && ts.isStringLiteral(n.moduleSpecifier)
       && /(?:^|\/)lib\/storage$/.test(n.moduleSpecifier.text)) out.add('storage');
     if (ts.isIdentifier(n) && ['localStorage', 'sessionStorage', 'indexedDB', 'caches'].includes(n.text)) out.add('storage');
-    if (ts.isIdentifier(n) && ['XMLHttpRequest', 'WebSocket', 'EventSource', 'MessageChannel'].includes(n.text)) out.add('channel');
+    if (ts.isIdentifier(n) && ['XMLHttpRequest', 'WebSocket', 'EventSource', 'MessageChannel', 'BroadcastChannel', 'MessagePort', 'Worker', 'SharedWorker'].includes(n.text)) out.add('channel');
+    if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'onmessage') out.add('onmessage');
     if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'clipboard') out.add('clipboard');
     if (ts.isCallExpression(n)) {
       const callee = unwrap(n.expression);
@@ -4757,6 +5063,12 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
     ['a fetch of its own', "export const planted = () => fetch('/api/x');", 'fetch'],
     ['a beacon', "export const planted = () => navigator.sendBeacon('/api/x', 'x');", 'fetch'],
     ['a port', 'export const planted = () => new MessageChannel();', 'channel'],
+    ['a broadcast channel', 'export const planted = () => new BroadcastChannel();', 'channel'],
+    ['a message port', 'export const planted = () => MessagePort;', 'channel'],
+    ['a worker', 'export const planted = () => Worker;', 'channel'],
+    ['a shared worker', 'export const planted = () => SharedWorker;', 'channel'],
+    ['an onmessage property', 'export const planted = () => target.onmessage;', 'onmessage'],
+    ['an onmessage element', "export const planted = () => target['onmessage'];", 'onmessage'],
     ['a post', "export const planted = () => window.parent.postMessage('x', '*');", 'postMessage'],
     ['another api read', 'export const planted = () => api.docs;', 'api'],
     ['a URL of its own', "export const planted = 'https://elsewhere.example/x';", 'url'],
@@ -4802,16 +5114,16 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
 });
 ```
 
-- [ ] **Step 2: Run the scans.** `( cd pwa && ./node_modules/.bin/vitest run test/reader-lab-scans.test.ts )` — Expected (prediction): `Tests  18 passed (18)` (8 cases and 10 planted rows). The scans guard code that already exists, so their red-first half is the planted rows, each red on its own planted line, and RLB-T11-M3 and M4 below. A red unplanted rule is a finding in Tasks 6-10's code: fix the code, never the scan; a planted row that does not red is a hole in the scan: fix the scan.
+- [ ] **Step 2: Run the scans.** `( cd pwa && ./node_modules/.bin/vitest run test/reader-lab-scans.test.ts )` — Expected (prediction): `Tests  24 passed (24)` (8 cases and 16 planted rows; measured after the final scan fix). The scans guard code that already exists, so their red-first half is the planted rows, each red on its own planted line, and RLB-T11-M3 and M4 below. A red unplanted rule is a finding in Tasks 6-10's code: fix the code, never the scan; a planted row that does not red is a hole in the scan: fix the scan.
 - [ ] **Step 3: Write the browser case,** `pwa/browser/reader-lab.browser.test.ts`, from this list (its fixtures are the harness's, so it is specified rather than spelled; the per-task `opus` reviewer checks every listed assertion is in the file):
-  - Header: what it measures (the built page's `/settings/reader-lab` in Chrome, end to end, against a fake door; every wall line and the teardown signal must hold on desktop Chrome, the engine every wall was measured on; E17 lines recorded, not asserted; the preflight marker harness-limited and the probe's WebSocket unrouted, each with Decision (4)'s reason), and the run command.
-  - Setup, as `reader-frame.browser.test.ts` does: `resolveChrome()` in `beforeAll` (red, never skipped, with no Chrome), `sharedDist()`, `serveDist(dist)`, `chromium.launch({ executablePath, headless: true })`; `openApp(browser, { width: 390, skin: REFINED, theme: 'light' }, { api: {}, fleetFrames: [] })`; `ctx.addCookies([{ name: 'ccrc_session', value: 'lab-session', url: server.origin }])`.
-  - The fake door, one `ctx.route((u) => u.pathname.startsWith('/api/reader-lab/'), …)` registered after `openApp` (so it takes precedence over the fixture `/api` route), reading each request's headers with `await route.request().allHeaders()`: `POST /api/reader-lab/runs` answers `{ok: true, nonce: 'BBBBBBBBBBBBBBBBBBBBBB', ttlMs: <READER_LAB_RUN_TTL_MS's figure, 1101000>}`; `GET /api/reader-lab/runs/<nonce>` answers a `LabRunView` naming every `LAB_PROBE_NAMES` entry (zeros included); `POST …/close` answers `{ok: true, closed: true}` and records the close; `GET`/`POST /api/reader-lab/probe/<nonce>/<name>` counts the name (`hits`, `cookie` when the `cookie` header holds `ccrc_session=`, `site` from `sec-fetch-site`, `origin` from `origin`) and answers `204` with no body, except `cookie-fetch-marker`, which it records in a separate `harnessLimited` list, counts nothing for and answers `204` (Decision (4)); an `OPTIONS` that does reach it answers `404` with no CORS header and counts nothing.
+  - Header: what it measures (the built `/settings/reader-lab` page in Chrome against the case-owned loopback door; every wall and teardown must hold, E17 is recorded), why request interception is not the counter, and the inherited preflight limitation. Probe upgrades remain unrouted as Decision (4) describes; the run command is stated.
+  - Setup: `resolveChrome()` in `beforeAll` (red, never skipped, with no Chrome), `sharedDist()`, then the case's `startDoorServer(dist)` serving the shared build and door; `chromium.launch({ executablePath, headless: true })`. `openApp` still supplies the 390px light fixture context, but navigation and the session cookie use the case server's origin. No edits to the shared harness or app fixture.
+  - The fake door lives in the case's one HTTP server, not in a Playwright answer: open returns the fixed nonce and `ttlMs: 1176000`; read returns every `LAB_PROBE_NAMES` entry, including zeros; close records one close. Probe arrivals count `hits`, cookie present by name, `Sec-Fetch-Site`, `Origin` and upgrade class from request headers, then answer empty204. The marker is only recorded in `harnessLimited`; OPTIONS answers404 without CORS and counts nothing. After `openApp`, the context route passes `/api/reader-lab/` requests through with `continue`, never `fulfill`.
   - The case `'the reader lab in Chrome: every wall holds, the door run is closed, and the block names no host or nonce (M10.B1)'`, 240 s timeout:
     1. `goto(server.origin + '/settings/reader-lab')`; click `Start`.
     2. The tap: `page.frameLocator('.reader-lab-stage > iframe').first().getByRole('button', { name: 'Tap here' }).click({ timeout: 30_000 })`.
     3. Wait for the `Result` caption (180 s), read `pre.reader-lab-result`'s text, `console.log('RLB-T11-FIGURES', text)` for the SDD ledger.
-    4. Assert: the first line matches `/^reader-lab 1 · Blink \d+ · .* · worker yes · frame sandbox yes · csp attribute yes · library [0-9a-f]{12}$/`; the second line is `E18 walls: 7 of 7 hold; teardown signal holds`; each of the seven wall lines reads `holds`, and the `self-nav-teardown` line reads `holds (second load fired)`; the door line ends `session cookie sent`; the fake door recorded `cookie-console` with the cookie, at least one of `cookie-fetch`, `cookie-xhr`, `cookie-beacon`, `cookie-image` with no cookie, `csp-canary` once, no `csp-*` channel, at least `LAB_CONTROL_FLOOR` (imported from `verdicts.ts`) `ctl-*` channels other than `ctl-iframe`, no `popup-open`, `popup-blank`, `top-nav` or `self-nav`, and one close; its `harnessLimited` list is `['cookie-fetch-marker']` or empty (logged either way: the harness approves the preflight, so the marker may arrive); the text contains neither the server's host nor the nonce.
+    4. Assert the versioned first line and feature facts; `E18 walls: 7 of 7 hold; teardown signal holds`; seven wall lines with the verdict `holds` and an optional parenthesized detail; `self-nav-teardown` with second-load detail; door session cookie sent. The counter must see the console cookie, at least one cookie-less frame request, exactly one canary, no CSP channel, the control floor, no popup/top/self-navigation targets, and one close. The separately recorded marker list may be empty or contain only the marker. The block contains neither the server host nor nonce. Record, do not gate on, E17 timings.
   - The run command, in the header: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/reader-lab.browser.test.ts )`, through `ccrc test`.
 - [ ] **Step 4: Run it.** Through `ccrc test`, the browser case alone — Expected (prediction): `Tests  1 passed (1)`, in under 240 s; record (a) the case file's own measured duration and the `RLB-T11-FIGURES` block (desktop Chrome's own E17 lines) in the SDD ledger. Then the whole browser leg once through `ccrc test`: every other file green at its BASE count; record (b) the leg's total time beside BASE's, as information only (a local whole-leg time is not comparable with CI's per-shard limit). Note (c): CI runs the leg in two shards, each limited to 20 minutes and balanced by `pwa/browser/slowFirst.ts#FILE_MS`, where a file the table does not name is costed at the table's median. If (a) is far above that median (more than about 120 s), do not edit `slowFirst.ts` (Scope freezes it): report the figure to the coordinator in the wave-done, so a separate change adds a `FILE_MS` entry with the matching `pwa/test/browser-leg.test.ts` census.
 - [ ] **Step 5: Guards.** `TSC-OK`. `( cd pwa && ./node_modules/.bin/vitest run test/docs-scans.test.ts test/browser-leg.test.ts )` — green.
@@ -4837,19 +5149,19 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
 
 RLB-T11-M2 keeps the wall frame's canary in its config, so the canary arrives and the check reads its channels: the red is "does not hold", never "not measured". The browser rows' tests run with the browser config; the scans rows' with the default.
 
-**Verify:** the scans 18 passed; the browser case 1 passed and the whole leg green, the case's own time and the leg's recorded, and a case time above about 120 s reported; `TSC-OK`.
+**Verify:** the scans 24 passed; the browser case 1 passed and the whole leg green, the case's own time and the leg's recorded, and a case time above about 120 s reported; `TSC-OK`.
 
 ### Task 12: Close RL-b — review, suites, the mutation table, results, push and the one PR
 
 **Run:** RL-b. **Model routing:** the main loop (Opus); review lenses as "How this wave runs" names them; `sonnet` subagents for the runs.
 
-- [ ] **Step 1: Whole-branch review (held out).** Two `opus` lenses over `BASE..HEAD` against this plan and the design's sections 3, 5 and 7: (1) the frames, the walls and what the lab never does (each frame's sandbox, policy and reach; the scripts' reports and that no value leaves a frame; the wall policy's two added sources; the tap; the stray messages; the scans' reach and their NOT EXHAUSTIVE list; the `lab-draw` profile's reach); (2) the verdicts and their anti-vacuity signals (every line's three outcomes, the order "broken first" and what it does not guarantee against a forged positive signal, saturation, the control floor and the ready library mount, every figure mount and `all` in the Mermaid line, the busy frame as a fact, the teardown signal, refinement (u), the run that keeps its counts after step 7, the gap window, the result block's grammar and what it never names, the page's partial-outcome rule). One `sonnet` lens: the page, the route and palette, `api.readerLab`, the censuses (`totality`, `pwa-rings`, `census-w7`, `docs-scans`, `contrast`, `docs-parity`, `citations`), the browser case's own time against `FILE_MS`'s median, and the public-repo scan. Each finding gets a `sonnet` refute pass; confirmed findings are fixed one commit each, each with a test or a row that goes red without the fix.
-- [ ] **Step 2: Suites**, each in the foreground through `ccrc test`, split to fit: the `pwa` suite in pieces, `TSC-OK`; the browser leg whole once, with its time; `git fetch -q origin main`, then the WHOLE `server` suite in pieces (its rings, censuses and docs-parity read `pwa/src`), `typecheck-tests` alone, `SERVER-TSC-OK`; a red census in a file outside this run's Scope is a stop-and-ask; re-run any known load flake alone before calling it broken.
-- [ ] **Step 3: The mutation table** of Tasks 6-11 at the end state, in the workspace, sequentially, under the low-disk discipline (the two browser rows rebuild once each); keep the last occurrence of each id; every row red, every restore sha-checked, `git status --porcelain` clean after the last row.
-- [ ] **Step 4: Define the deviations.** Replace `## Deviations found`'s RL-b placeholder with the issued numbers for refinements (h), (i), (k), (m) and (u), in that order, then any found while executing, and write the unused ones without their prefix. Commit, then `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` green.
-- [ ] **Step 5: Draft `## Results` (RL-b)**: the counts per suite; every task's JSON row fence as measured; the browser case's own time and desktop Chrome's own result block; the leg's total time beside BASE's, as information only, and whether the case's time was reported for a `FILE_MS` entry; "Named, without a number"; "Carried, not fixed". Draft the PR body into `.superpowers/sdd/2026-11-03-native-docs-reader-reader-lab/pr-body-rl-b.md` (gitignored): title `pwa: Settings › Reader lab, the Docs reader's phone checks on one page`; what ships; what the operator does (open, Start, one tap, select, send); what it never does (the design's section 7, short); desktop Chrome's block from Step 4 of Task 11; the expected CI (the PR's selection; `test (pwa)` in full; `browser (pwa)` gates in the merge queue); this plan's and the design's GitHub `blob/main` links; ending with the attribution line the dispatch gives.
-- [ ] **Step 6: Public-repo scan** of every file changed since BASE and the drafted PR body, as Task 5 Step 6: rc 0, zero hits. Remove `$HOME/.cc-tmp/rlb-mut/`.
-- [ ] **Step 7: Commit the results, last.** Stage this plan by name, message `docs: the reader lab page's results (docs reader lab)`, trailer. This commit is RL-b's `handoffCommit` and the branch tip.
+- [x] **Step 1: Whole-branch review (held out).** Two `opus` lenses over `BASE..HEAD` against this plan and the design's sections 3, 5 and 7: (1) the frames, the walls and what the lab never does (each frame's sandbox, policy and reach; the scripts' reports and that no value leaves a frame; the wall policy's three added sources; the tap; the stray messages; the scans' reach and their NOT EXHAUSTIVE list; the `lab-draw` profile's reach); (2) the verdicts and their anti-vacuity signals (every line's three outcomes, the order "broken first" and what it does not guarantee against a forged positive signal, saturation, the control floor and the ready library mount, every figure mount and `all` in the Mermaid line, the busy frame as a fact, the teardown signal, refinement (u), the run that keeps its counts after step 7, the gap window, the result block's grammar and what it never names, the page's partial-outcome rule). One `sonnet` lens: the page, the route and palette, `api.readerLab`, the censuses (`totality`, `pwa-rings`, `census-w7`, `docs-scans`, `contrast`, `docs-parity`, `citations`), the browser case's own time against `FILE_MS`'s median, and the public-repo scan. Each finding gets a `sonnet` refute pass; confirmed findings are fixed one commit each, each with a test or a row that goes red without the fix.
+- [x] **Step 2: Suites**, each in the foreground through `ccrc test`, split to fit: the `pwa` suite in pieces, `TSC-OK`; the browser leg whole once, with its time; `git fetch -q origin main`, then the WHOLE `server` suite in pieces (its rings, censuses and docs-parity read `pwa/src`), `typecheck-tests` alone, `SERVER-TSC-OK`; a red census in a file outside this run's Scope is a stop-and-ask; re-run any known load flake alone before calling it broken.
+- [x] **Step 3: The mutation table** of Tasks 6-11 at the end state, in the workspace, sequentially, under the low-disk discipline (the three browser rows, including the later dynamic-import row, rebuild once each); keep the last occurrence of each id; every row red, every restore sha-checked, `git status --porcelain` clean after the last row.
+- [x] **Step 4: Define the deviations.** Replace `## Deviations found`'s RL-b placeholder with the issued numbers for refinements (h), (i), (k), (m) and (u), in that order, then any found while executing, and write the unused ones without their prefix. Commit, then `git fetch -q origin main && ( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` green.
+- [x] **Step 5: Draft `## Results` (RL-b)**: the counts per suite; every task's JSON row fence as measured; the browser case's own time and desktop Chrome's own result block; the leg's total time beside BASE's, as information only, and whether the case's time was reported for a `FILE_MS` entry; "Named, without a number"; "Carried, not fixed". Draft the PR body into `.superpowers/sdd/2026-11-03-native-docs-reader-reader-lab/pr-body-rl-b.md` (gitignored): title `pwa: Settings › Reader lab, the Docs reader's phone checks on one page`; what ships; what the operator does (open, Start, one tap, select, send); what it never does (the design's section 7, short); desktop Chrome's block from Step 4 of Task 11; the expected CI (the PR's selection; `test (pwa)` in full; `browser (pwa)` gates in the merge queue); this plan's and the design's GitHub `blob/main` links; ending with the attribution line the dispatch gives.
+- [x] **Step 6: Public-repo scan** of every file changed since BASE and the drafted PR body, as Task 5 Step 6: rc 0, zero hits. Remove `<scratch>/rlb-mut/`.
+- [x] **Step 7: Commit the results, last.** Stage this plan by name, message `docs: the reader lab page's results (docs reader lab)`, trailer. This commit is RL-b's `handoffCommit` and the branch tip.
 - [ ] **Step 8: Push** the workspace branch and open RL-b's ONE pull request with the scanned body.
 - [ ] **Step 9:** Measure the fingerprint (`handoffCommit === branchTip`, the PR number, `prPhase: 'open'`), list mail, then send the wave-done.
 
@@ -5023,6 +5335,408 @@ These are choices that filled a silence while executing. The one departure found
   - The malformed-escape `400` has no row: Fastify answers it while routing, before any file of the door runs. The case pins it.
 - **The full run's reds outside this run's Scope**, listed under Suites above, go to the pull request's CI and the merge queue.
 
+## Results (RL-b)
+
+Measured on 2026-11-04 and 2026-11-05, from dispatch BASE `4b0614ab13f83167fa08b657946f47bfbae385a2`, after RL-a merged as `2593469be` (#2283). The complete source inventory and 54 end-state mutations below were measured before absorption, at `257533d6d306782ff7a94194ef2b114f648e6979`. The definitions commit followed, then one conflict-triggered main absorption, `b4ebadcf3fbe0e4861a9f4b74c342db34e82055f`, changed the shell integration and its tests. The post-merge scoped gates and one additional mutation are recorded separately below; the whole suites and original 54 mutations were not remeasured on that merged tree. The final Results commit changes documentation only. Tasks 6-11, their task reviews, the held-out whole-branch lenses and independent refutes are complete. One final fix dispatch and one scoped re-review followed; the re-review passed spec compliance and quality with zero findings. The palette census correction was separately licensed. No unrelated failing test was patched, no agent dependency tree was installed, and no main absorption was inferred from a main-red result.
+
+### Pre-absorption suites: complete measured coverage, not a green first attempt
+
+The first close attempt at `5a1e82068` was interrupted by a restart. Its retained report has 13 151 PWA passes, one palette-census failure and three skips, the two browser header failures, and incomplete server/browser coverage. Its full logs could not be recovered. **It remains incomplete and red.** The palette's eighth Settings option is this wave's own census correction, not a pre-existing red. The following is the later, fully inventoried pre-absorption end-state measurement, not a relabelling of that attempt or a claim about the whole merged tree.
+
+| End-state leg | Configured files / files with results | Passed | Failed | Intentional skipped | Setup-blocked |
+|---|---:|---:|---:|---:|---:|
+| PWA | 436 / 436 | 13 162 | 0 | 3 | 0 |
+| Server | 1 334 / 1 334 | 69 251 | 34 | 144 | 49 |
+| Browser | 59 / 59 | 2 150 | 2 | 52 | 0 |
+
+These are unique runtime cases, taking the latest actual measured status by full test name and occurrence within its file. Rerun executions are not summed into them. A case excluded by a bounded name filter never overwrites a measured status with skipped. Setup failure is not an intentional skip. Earlier failures and interruptions are retained separately. A static test inventory was not treated as runtime coverage: parameterized watcher and recovery files were reconciled against runtime lists, and every file in a server subdirectory is included.
+
+Both standalone production typechecks passed: PWA `tsc --noEmit -p tsconfig.json`, exit 0 in 15.45 s; server, exit 0 in 1.32 s. The test-inclusive `typecheck-tests` suite is separately red, 10 passed and 2 failed, because this workspace has no agent dependency install (`ws`, its types and `node-pty`); the same errors reproduce on main. `testbox-wrapper` is blocked at setup for the same missing-module boundary: its 49 cases are reported as setup-blocked, not 49 intentional skips.
+
+All tests and typechecks ran through `ccrc test`, with foreground calls and the stated timeout discipline. The first recovery helpers were automatically backgrounded by the harness; their recorded process groups were stopped, not adopted as completed coverage. Large files were then split into bounded runtime-name subsets. Whole-call timeouts without JSON and a filter selecting zero cases contributed no result coverage; those cases were subsequently measured. This is why raw execution totals in the scratch checkpoint differ from the unique table. A terminated or timed-out call is not a pass.
+
+This wave's final files are green: frames 10, frame-gap 3, verdicts/device/result 24, run 20, page 7, scans 24, and the Reader lab browser case 1. The shared vocabulary 8, door store 13 and routes 18 are also green, including the eleventh-mount cap and TTL assertions.
+
+### Remaining reds and main comparisons
+
+Persistent failures were re-run in isolation and compared on a clean, temporary detached checkout in this same workspace, with guaranteed restoration of the worker branch. No second tree, repository copy or install was made. All four package locks were identical at the comparison points. Main-red evidence is reported, not treated as permission to bypass CI or edit an unrelated file.
+
+| Remaining file | Failed cases | Main evidence |
+|---|---:|---|
+| `server/test/ccd-docs-fetch.test.ts` | 4 | Same 27 passed / 4 failed at `86184deabcd4dd90070d804219612165239799ff` |
+| `server/test/ccd-tool-adj.test.ts` | 1 | Same 10 / 1 at that ref |
+| `server/test/ccrc-containment.test.ts` | 1 | Same 95 / 1 at that ref |
+| `server/test/ccrc-test-wrapper.test.ts` | 16 | Same 135 / 16 at that ref |
+| `server/test/child-reclaim-paused-at-server.test.ts` | 1 | Same case at `5d6b6c3655f35b8266d1e700fe1e8f372d3cf336` |
+| `server/test/platform-hazards.test.ts` | 1 | Same case at that ref |
+| `server/test/retire-executors-pin.test.ts` | 4 | All four fail at that ref; main has one further selected failure that later passed on the unchanged branch |
+| `server/test/shadow-journal.test.ts` | 1 | Same case at that ref |
+| `server/test/testbox-box-package.test.ts` | 1 | Same case at that ref |
+| `server/test/tmp-sweep.test.ts` | 1 | Same case at that ref |
+| `server/test/update-store-nodes.test.ts` | 1 | Same case at that ref |
+| `server/test/typecheck-tests.test.ts` | 2 | Same missing-agent-dependency errors at that ref |
+| `pwa/browser/session-header.browser.test.ts` | 2 | Same 74 passed / 2 failed at the earlier ref: 900px phosphor and light header height |
+
+The second main comparison covered 12 files in 14 commands. Earlier failing timeout cases in `approvals-routes`, `collect-lane-route` and `delegation-recovery` passed on main, then passed on the unchanged branch in targeted remeasurement. `asks-sweep` also passed alone. Those are not remaining branch failures. The four remaining retirement cases were remeasured on the unchanged branch and each has a matching main failure: the two child-spent cases (mail cancellation and unreadable marker), and the two archive-expired cases (pair precedence and unlistable registry). The corresponding main comparison had five selected failures, not four; its extra failed case later passed on the branch. No third comparison or code fix was used to turn these results into green.
+
+### Pre-absorption browser leg and desktop Chrome
+
+The final browser inventory is 59 files, not the 53 retained by Task 11's earlier four-batch report. That earlier report's case passed in 22.137 s (file 32.1 s including its build), and its approximately 1348 s of completed batches are incomplete whole-leg coverage. They remain historical measurements, not a 59-file claim.
+
+| Final batch | Files | Passed | Failed | Skipped | Foreground wall seconds |
+|---|---:|---:|---:|---:|---:|
+| 1 | 10 | 738 | 0 | 12 | 440.88 |
+| 2 | 8 | 149 | 0 | 0 | 109.86 |
+| 3 | 10 | 238 | 0 | 40 | 247.63 |
+| 4 | 8 | 161 | 0 | 0 | 112.48 |
+| 5 | 8 | 349 | 2 | 0 | 118.24 |
+| 6 | 8 | 159 | 0 | 0 | 80.81 |
+| 7 | 7 | 356 | 0 | 0 | 340.44 |
+| Total | 59 | 2 150 | 2 | 52 | 1 450.34 |
+
+The final Reader lab case passed in 24.130767 s, with the console reporting its file at 24.287 s; its batch took 112.48 s. The JSON file interval of 24.130768 s does not include shared-build overhead and is not called the full build time. The case remains below the measured `FILE_MS` median of 28.8 s, far below the plan's roughly 120 s report point; no separate entry was requested and neither the table nor its census changed. The marker list was empty in this final healthy run. These are local batch measurements, not CI shard timings. **BASE whole-leg wall time was not measured; comparison: BASE unmeasured, final 1450.34 s.** No relative speed-up or regression is inferred.
+
+Final pre-absorption desktop Chrome block:
+
+```text
+reader-lab 1 · Blink 153 · Linux · 16 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 2)
+  no-popup-top-nav   holds
+  no-self-navigate   holds
+  bridge-strays      holds (8 sent, 0 effects)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         own thread (longest gap 67 ms in a 3000 ms spin; watchdog timer 0 ms late)
+  mermaid            holds (longest gap 67 ms, all six together; worst single: figure 5, 50 ms)
+    gaps ms          none 17 · trivial 67 · f1 50 · f2 50 · f3 33 · f4 50 · f5 50 · f6 50 · all 67
+draw on open: costs the console nothing here; the change only stops ready waiting for figures
+door: 49 counted, 0 ignored; session cookie sent
+```
+
+This is Blink on Linux, not a phone-engine result. The operator's later runs provide the other E17/E18 blocks; this wave neither rolls out nor retires a wall from this one result.
+
+### Close gates
+
+After committing the issued deviations and implementation snapshots, the close ran `deviation-refs`, `dtbd` and `topology-clean` through admitted `ccrc test`: three files, 92 tests passed. With the final Results inserted, the same guards plus `anchors` and `citations` passed: five files, 105 tests. The historical RL-a Results section was preserved byte-for-byte. The public scan covers every changed file and the unpublished PR body; it requires both scanner exit 0 and zero hits. Those five-file guards ran before absorption. The final Results commit changes this plan only; the implementation and tests are now those of the separately gated absorption commit, not the earlier full-inventory tip.
+
+### Main absorption and scoped re-gate
+
+The fetched-main compatibility probe exited 1 with tree `ecd95eb14802494d010df89a2893ea1a8f1af882` and three conflicts. That licensed one absorption under the worker contract, not a general refresh. `git merge` absorbed `5d6b6c3655f35b8266d1e700fe1e8f372d3cf336`; no rebase, force-push, Update branch or second absorption was used. The architecture table retains both main's platform additions and this wave's C9 additions. The app uses main's existing `lazyScreen` and `loading`/Suspense wrapper for Reader lab, and its route test awaits the heading with main's existing wait/ceiling constants. Task 10's affected Finds are re-quoted to that form. Other inherited main files are absorption content, not independently authored wave changes.
+
+The inherited `app-lazy.test.tsx` first measured 7 passed / 1 failed because its exact dynamic-import list expected six screens and received Reader lab as the seventh. Execution stopped before editing it. Scoped coordinator leave then licensed only one ReaderLab row and the six-to-seven census wording; the file was claimed before editing, and its exact equality remains unchanged. The corrected file passed all eight cases. Making ReaderLab a static import redded exactly its intended census case (7 passed / 1 failed); saved-byte SHA and porcelain status both matched after restoration. This is one additional row, not a rerun or replacement of the earlier 54.
+
+The absorption is `b4ebadcf3fbe0e4861a9f4b74c342db34e82055f`. The first two rows below ran on its resolved source/test tree before committing; those bytes were committed unchanged. The remaining regression gates ran at that commit. All ran in the foreground through `ccrc test`.
+
+| Scoped gate | Files | Passed | Failed | Skipped |
+|---|---:|---:|---:|---:|
+| `app-lazy`, `app`, `reader-lab-page`, `command-layer`, `contrast` | 5 | 442 | 0 | 0 |
+| `reader-frame` and `reader-lab` browser files | 2 | 25 | 0 | 0 |
+| `docs-scans`, `reader-bridge`, `reader-lab-frames`, `reader-lab-run`, `reader-lab-scans` | 5 | 194 | 0 | 0 |
+| `rings/totality`, `rings/pwa-rings`, `census-w7/pwa`, `docs-parity`, lab vocabulary/store/routes | 7 | 182 | 0 | 0 |
+| `deviation-refs`, `dtbd`, `topology-clean`, `anchors`, `citations` after drafting Results | 5 | 105 | 0 | 0 |
+
+PWA production `tsc --noEmit` exited 0 on the same resolved tree. Server production `tsc --noEmit -p tsconfig.json` also exited 0 at the absorption commit. The five documentation guards passed after drafting Results and fetching main; these are separate from their earlier pre-absorption run. The reader browser file's serialized interval was 44.157 s (24 passed), and the lab's was 24.290 s (1 passed), excluding shared-build overhead. These two-file results are not a whole-browser rerun and do not replace the pre-absorption block or totals. The first close attempt remains incomplete/red, and its unrelated remaining failures remain reported above. The normal PR and merge-queue gates still apply.
+
+```json
+[
+  {
+    "id": "RLB-T12-M7",
+    "spec": "lazy-screen census correction",
+    "pkg": "pwa",
+    "file": "src/app.tsx",
+    "old": "const ReaderLab = lazyScreen(() => import('./screens/ReaderLab').then((m) => m.ReaderLab));",
+    "new": "import { ReaderLab } from './screens/ReaderLab';",
+    "tests": [
+      "test/app-lazy.test.tsx"
+    ],
+    "red": "Tests 1 failed | 7 passed | 0 skipped",
+    "failing": [
+      "the entry does not carry the seven screens app.tsx imports none of the seven screens statically, and each only by its own dynamic import"
+    ],
+    "restore_sha_equal": true,
+    "status_equal": true,
+    "shaBefore": "ebcb64cf6340c0d4e081afdfeae69909dedb944dde398fdb4c428ee5a6c58ff2",
+    "shaAfter": "ebcb64cf6340c0d4e081afdfeae69909dedb944dde398fdb4c428ee5a6c58ff2",
+    "at": "b4ebadcf3fbe0e4861a9f4b74c342db34e82055f",
+    "measurement": "resolved merge tree before its commit; restored source and tests are byte-identical to this commit",
+    "parents": [
+      "4d52217b349001f2ef1cfdaf9d4a9a9d7bc5bd94",
+      "5d6b6c3655f35b8266d1e700fe1e8f372d3cf336"
+    ],
+    "vs": "Predicted one census case; measured one."
+  }
+]
+```
+
+### The pre-absorption end-state mutation table
+
+All 54 unique rows were measured at the pre-absorption source tip, sequentially in this workspace. Each used a saved original, exact unique replacement, `timeout -k 10 600`, `ulimit -u 4096` and admitted `ccrc test`; each exited 1 with assertion failures, and all 54 saved-byte SHA-256 and status restores matched. No green mutant, syntax-only failure, unfinished mutation or active mutation remains. The three browser rows rebuild once each. The sandbox row's browser and scans commands used their respective configs under the same applied mutant; passing both paths to the browser config would silently omit the scan and was not counted.
+
+The final three browser mutations produced these wall readings:
+
+| Row | Planted defect | Measured result |
+|---|---|---|
+| RLB-T11-M1 | Add `allow-same-origin` | Browser 1 failed; scans 2 failed. Three walls hold; opaque-origin, ambient-state, request-cookie and popup/top-navigation walls break. The frame reads the console address. |
+| RLB-T11-M2 | Omit the wall policy | Browser 1 failed; CSP breaks with 26 of 27 channels reached, only iframe unmeasured. |
+| RLB-T11-M9 | Nonce the import script | Browser 1 failed; CSP breaks on `import-dynamic` alone. |
+
+Seven counts grew as later ruled cases were added. The coordinator restated them on 2026-11-05, without a new deviation number: T6-M6 1→2; T8-M4 3→4; T8-M5 3→6; T8-M8 1→2; T9-M1 10→18; T9-M2 4→6; T9-M6 1→2. The predicted figure is preserved beside the actual `red`; every actual failing runtime name is retained, including the added ones, with each row's reason. No test or source was changed to force a predicted count.
+
+| Row | Passed | Failed | Skipped | Restore SHA / status |
+|---|---:|---:|---:|---|
+| RLB-T6-M1 | 9 | 1 | 0 | equal / equal |
+| RLB-T6-M2 | 8 | 2 | 0 | equal / equal |
+| RLB-T6-M3 | 9 | 1 | 0 | equal / equal |
+| RLB-T6-M4 | 9 | 1 | 0 | equal / equal |
+| RLB-T6-M5 | 9 | 1 | 0 | equal / equal |
+| RLB-T6-M6 | 8 | 2 | 0 | equal / equal |
+| RLB-T7-M1 | 22 | 2 | 0 | equal / equal |
+| RLB-T7-M2 | 22 | 2 | 0 | equal / equal |
+| RLB-T7-M3 | 2 | 1 | 0 | equal / equal |
+| RLB-T8-M1 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M2 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M3 | 22 | 2 | 0 | equal / equal |
+| RLB-T8-M4 | 20 | 4 | 0 | equal / equal |
+| RLB-T8-M5 | 18 | 6 | 0 | equal / equal |
+| RLB-T8-M6 | 22 | 2 | 0 | equal / equal |
+| RLB-T8-M7 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M8 | 22 | 2 | 0 | equal / equal |
+| RLB-T8-M9 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M10 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M11 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M12 | 22 | 2 | 0 | equal / equal |
+| RLB-T8-M13 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M14 | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M14b | 23 | 1 | 0 | equal / equal |
+| RLB-T8-M15 | 23 | 1 | 0 | equal / equal |
+| RLB-T9-M1 | 2 | 18 | 0 | equal / equal |
+| RLB-T9-M2 | 14 | 6 | 0 | equal / equal |
+| RLB-T9-M3 | 19 | 1 | 0 | equal / equal |
+| RLB-T9-M4 | 19 | 1 | 0 | equal / equal |
+| RLB-T9-M5 | 18 | 2 | 0 | equal / equal |
+| RLB-T9-M6 | 18 | 2 | 0 | equal / equal |
+| RLB-T9-M7 | 19 | 1 | 0 | equal / equal |
+| RLB-T9-M8 | 19 | 1 | 0 | equal / equal |
+| RLB-T10-M1 | 66 | 4 | 0 | equal / equal |
+| RLB-T10-M2 | 6 | 1 | 0 | equal / equal |
+| RLB-T10-M3 | 6 | 1 | 0 | equal / equal |
+| RLB-T10-M4 | 6 | 1 | 0 | equal / equal |
+| RLB-T10-M5 | 6 | 1 | 0 | equal / equal |
+| RLB-T11-M5 | 19 | 1 | 0 | equal / equal |
+| RLB-T11-M6 | 19 | 1 | 0 | equal / equal |
+| RLB-T11-M7 | 9 | 1 | 0 | equal / equal |
+| RLB-T11-M8 | 8 | 2 | 0 | equal / equal |
+| RLB-T11-M10 | 9 | 1 | 0 | equal / equal |
+| RLB-T11-M1 | 22 | 3 | 0 | equal / equal |
+| RLB-T11-M2 | 0 | 1 | 0 | equal / equal |
+| RLB-T11-M3 | 23 | 1 | 0 | equal / equal |
+| RLB-T11-M4 | 23 | 1 | 0 | equal / equal |
+| RLB-T11-M9 | 0 | 1 | 0 | equal / equal |
+| RLB-T12-M1 | 17 | 3 | 0 | equal / equal |
+| RLB-T12-M2 | 18 | 2 | 0 | equal / equal |
+| RLB-T12-M3 | 19 | 1 | 0 | equal / equal |
+| RLB-T12-M4 | 20 | 4 | 0 | equal / equal |
+| RLB-T12-M5 | 22 | 2 | 0 | equal / equal |
+| RLB-T12-M6 | 56 | 1 | 0 | equal / equal |
+
+The fence keeps only the last measurement of each id. `at` is the measured source commit, not a later documentation commit.
+
+```json
+[
+  {"id": "RLB-T6-M1", "spec": "(h) M10.9", "pkg": "pwa", "file": "src/readerLab/frames.ts", "old": "export const LAB_SANDBOX = 'allow-scripts';", "new": "export const LAB_SANDBOX = 'allow-scripts allow-same-origin';", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 1 failed | 9 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) every lab frame is the reader frame's shape: sandbox exactly allow-scripts, a srcdoc, no-referrer, nothing that loads (M10.9)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: every lab frame is the reader frame's shape. Measured as predicted."},
+  {"id": "RLB-T6-M2", "spec": "(i) M10.10", "pkg": "pwa", "file": "src/docs/reader/labPolicy.ts", "old": "return `${d} ${canary}`;", "new": "return `${d} ${canary} 'self'`;", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 2 failed | 8 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) only the wall frame carries a policy: frameCsp() plus its nonce and the import script's hash in script-src and the canary in img-src, as the meta and the csp attribute (M10.10)", "the reader lab frames (reader lab plan, Task 6) labWallCsp accepts exactly one nonce, one sha256 and one URL with no separator in it, and refuses anything else"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: measured: 2 failed: only the wall frame carries a policy; labWallCsp accepts exactly one nonce, one sha256 and one URL. Measured as predicted."},
+  {"id": "RLB-T6-M3", "spec": "(i) M10.10", "pkg": "pwa", "file": "src/readerLab/frames.ts", "old": "el.setAttribute('csp', policy);", "new": "", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 1 failed | 9 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) only the wall frame carries a policy: frameCsp() plus its nonce and the import script's hash in script-src and the canary in img-src, as the meta and the csp attribute (M10.10)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: measured: 1 failed: only the wall frame carries a policy. Measured as predicted."},
+  {"id": "RLB-T6-M4", "spec": "(h) M10.9", "pkg": "pwa", "file": "src/readerLab/frames.ts", "old": "return JSON.stringify(config).replace(/</g, '\\\\u003c').replace(/\\u2028/g, '\\\\u2028').replace(/\\u2029/g, '\\\\u2029');", "new": "return JSON.stringify(config);", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 1 failed | 9 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) the data block is the element just before the one script, and its text can end neither its element nor its line"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: the data block is the element just before the one script. Measured as predicted."},
+  {"id": "RLB-T6-M5", "spec": "(g) M10.16", "pkg": "pwa", "file": "src/readerLab/battery.ts", "old": "'import-dynamic': (u) => import(u).catch(() => 0),", "new": "", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 1 failed | 9 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) the battery source names L0's 27 channels, in order, and is what the battery script inlines (M10.16)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: measured: 1 failed: the battery source names L0's 27 channels. Measured as predicted."},
+  {"id": "RLB-T6-M6", "spec": "(h) M10.11", "pkg": "pwa", "file": "src/readerLab/frameScripts.ts", "old": "\"var url = function (name) { return cfg.base + name; };\",", "new": "\"var url = function (name) { return 'https://elsewhere.example/' + name; };\",", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 2 failed | 8 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) the battery asks for its canary only after the import script ran, and runs no import channel itself; the import script marks, then imports", "the reader lab frames (reader lab plan, Task 6) every URL any lab frame can form is the console origin plus this run's probe path (M10.11)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: every URL any lab frame can form is the console origin plus this run's probe path. Restated at the measured count by the coordinator on 2026-11-05; no number. The hash-run-import change added the canary/import-marker and script-order case; both that case and the original URL-home case now read the broken URL builder. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T7-M1", "spec": "(k) M10.15", "pkg": "pwa", "file": "src/docs/reader/policy.ts", "old": "? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false }", "new": "? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: true }", "tests": ["test/reader-bridge.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["the reader lab profile (reader lab plan, Task 7) lab-draw draws Mermaid on open, waits READER_LAB_DRAW_WATCHDOG_MS, and is handed no storage port", "the reader lab profile (reader lab plan, Task 7) readerMountPlan is the one decision, and only lab-draw maps to drawing on open"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2 failed: lab-draw draws Mermaid on open; readerMountPlan is the one decision. Measured as predicted."},
+  {"id": "RLB-T7-M2", "spec": "(k) M10.15", "pkg": "pwa", "file": "src/docs/reader/bridge.ts", "old": "mermaidDraw: plan.draw,", "new": "mermaidDraw: 'auto',", "tests": ["test/reader-bridge.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["the adapters mermaidDraw is on-request, storePrefix is ccrc:reader:v1:, focus is true", "the reader lab profile (reader lab plan, Task 7) no profile is the Docs reader: Mermaid on request, the reader watchdog, the storage port"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2 failed: no profile is the Docs reader; mermaidDraw is on-request, storePrefix is ccrc:reader:v1:, focus is true. Measured as predicted."},
+  {"id": "RLB-T7-M3", "spec": "(j)", "pkg": "pwa", "file": "src/lib/frameGap.ts", "old": "gap = Math.max(gap, t - last);", "new": "gap = Math.max(gap, t - last - 1);", "tests": ["test/frame-gap.test.ts"], "red": "Tests 1 failed | 2 passed | 0 skipped", "failing": ["longestFrameGap (reader lab plan, Task 7) is the longest gap between two consecutive frames while the work runs"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: is the longest gap between two consecutive frames while the work runs. Measured as predicted."},
+  {"id": "RLB-T8-M1", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (control.cookie === 0) return unmeasured('this console sent no session cookie (is the sign-in gate off?)');", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) no cookie: a frame request with the cookie, or the preflighted one arriving, does not hold; no control cookie or no arrival is not measured"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: no cookie. Measured as predicted."},
+  {"id": "RLB-T8-M2", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (hits(r, 'csp-canary') === 0) return unmeasured('the wall frame did not run');", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) csp-27: a wall channel or a hostile target arriving does not hold; no canary is not measured"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: csp-27. Measured as predicted."},
+  {"id": "RLB-T8-M3", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (hits(r, 'popup-ran') === 0) return unmeasured('the button in the frame was not tapped');", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) popups: any target reached, a returned window or a read of the console address does not hold; no tap or a missing report is not measured", "the device line and the result block (reader lab plan, Task 8) the block is format 1: fixed keys in order, each line's words, the budget, the gaps, the reading and the door line, and no host, nonce or user agent (M10.14)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2 failed: the block is format 1: fixed keys in order, each l; popups. Measured as predicted."},
+  {"id": "RLB-T8-M4", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (hits(r, `ambient-${key}-broke` as LabProbeName) > 0) return 'broke';", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 4 failed | 20 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) opaque origin: a broke report or a same-origin arrival does not hold; a missing report is not measured", "the reader lab verdicts (reader lab plan, Task 8) ambient state: a reachable store does not hold; a missing report is not measured", "the reader lab verdicts (reader lab plan, Task 8) a forged arrival cannot hide a real broke: held reports added to a broken wall leave it broken (M10.13)", "the reader lab verdicts (reader lab plan, Task 8) a saturated run keeps a counted broke; a run the door could not read still reads a local stray effect broke; neither ever holds"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 3 failed: a forged arrival cannot hide a real broke: held re; ambient state: a reachable store does not hold; a ; opaque origin: a broke report or a same-origin arr. Restated at the measured count by the coordinator on 2026-11-05; no number. The saturation-preserves-break ruling added a known-break case that reds through ambient-local-broke in reader-lab-verdicts.test.ts, not through a missing library-ready guard. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T8-M5", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "const figures = local.mounts.filter((m) => /^f\\d$/.test(m.label) || m.label === 'all');", "new": "const figures = local.mounts.filter((m) => /^f\\d$/.test(m.label));", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 6 failed | 18 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) a healthy engine: all seven walls, the teardown signal and the Mermaid line hold, and the busy frame is a fact", "the reader lab verdicts (reader lab plan, Task 8) mermaid: every figure mount counts, the six together included; the worst gap decides (F3)", "the reader lab verdicts (reader lab plan, Task 8) mermaid: a mount that fell back or timed out still counts its gap; within the budget it is not measured, never holds (F4)", "the reader lab verdicts (reader lab plan, Task 8) a saturated or unread run makes every count line not measured; mermaid still reads its mounts", "the reader lab verdicts (reader lab plan, Task 8) the draw-on-open reading: what the busy frame's fact and the Mermaid line mean for drawing on open", "the device line and the result block (reader lab plan, Task 8) the block is format 1: fixed keys in order, each line's words, the budget, the gaps, the reading and the door line, and no host, nonce or user agent (M10.14)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 3 failed: a healthy engine: all seven walls, the teardown si; mermaid; the draw-on-open reading: what the busy frame's fa. Restated at the measured count by the coordinator on 2026-11-05; no number. Later gap, saturation and format-block cases added by the wave now read this Mermaid decision as well. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T8-M6", "spec": "(n) M10.14", "pkg": "pwa", "file": "src/readerLab/device.ts", "old": "return { engine, os, cores: typeof cores === 'number' && Number.isSafeInteger(cores) && cores > 0 ? cores : null, ...features };", "new": "return { engine: `${engine} ${ua}`, os, cores: typeof cores === 'number' && Number.isSafeInteger(cores) && cores > 0 ? cores : null, ...features };", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["the device line and the result block (reader lab plan, Task 8) deviceOf keeps classes only: engine and major version, OS class, cores, and the three features", "the device line and the result block (reader lab plan, Task 8) the block is format 1: fixed keys in order, each line's words, the budget, the gaps, the reading and the door line, and no host, nonce or user agent (M10.14)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2 failed: deviceOf keeps classes only: engine and major vers; the block is format 1: fixed keys in order, each l. Measured as predicted."},
+  {"id": "RLB-T8-M7", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "const figures = local.mounts.filter((m) => /^f\\d$/.test(m.label) || m.label === 'all');", "new": "const figures = local.mounts.filter((m) => (/^f\\d$/.test(m.label) || m.label === 'all') && m.outcome === 'ready');", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) mermaid: a mount that fell back or timed out still counts its gap; within the budget it is not measured, never holds (F4)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: mermaid. Measured as predicted."},
+  {"id": "RLB-T8-M8", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "return missed.length > 0 ? unmeasured(`did not draw: ${missed.join(', ')}`) : holds(detail);", "new": "return holds(detail);", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) mermaid: a mount that fell back or timed out still counts its gap; within the budget it is not measured, never holds (F4)", "the reader lab verdicts (reader lab plan, Task 8) mermaid: a partial mount list is not measured, never holds, and an over-budget gap still decides"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: mermaid. Restated at the measured count by the coordinator on 2026-11-05; no number. The complete-label fix added a partial-mount-list case that also fails when the missing/failed-mount guard is removed. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T8-M9", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (counted < LAB_CONTROL_FLOOR) return unmeasured(`the control frame reached ${counted} of ${reachable.length} (floor ${LAB_CONTROL_FLOOR})`);", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) csp-27: under M8.B1's control floor, iframe left out, the line is not measured; at the floor it holds (F6)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: csp-27. Measured as predicted."},
+  {"id": "RLB-T8-M10", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (local.hostile?.ready !== true) return unmeasured('library not measured: the hostile mount never became ready');", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) csp-27: a library mount that never became ready is not measured, never holds (F6)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: csp-27. Measured as predicted."},
+  {"id": "RLB-T8-M11", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "verdict: b.longestGapMs >= 0.8 * b.spinMs ? 'shared-thread' : 'own-thread',", "new": "verdict: b.longestGapMs >= 0.8 * b.spinMs ? 'does-not-hold' : 'own-thread',", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) busy frame: a fact, never a pass or a fail: a gap over most of the spin is a shared thread, whatever the budget (F2)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: busy frame. Measured as predicted."},
+  {"id": "RLB-T8-M12", "spec": "(l) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "return local.selfNavLoads >= 2 ? holds('second load fired') : { verdict: 'differs', detail: 'no second load' };", "new": "return holds(local.selfNavLoads >= 2 ? 'second load fired' : 'no second load');", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) teardown signal: a second load holds; none differs from desktop, a miss E18 reads, never a broken wall; no run is not measured (F7)", "the device line and the result block (reader lab plan, Task 8) the block is format 1: fixed keys in order, each line's words, the budget, the gaps, the reading and the door line, and no host, nonce or user agent (M10.14)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2 failed: the block is format 1: fixed keys in order, each l; teardown signal. Measured as predicted."},
+  {"id": "RLB-T8-M13", "spec": "(u) M10.13", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "if (hits(r, 'popup-null') === 0 || hits(r, 'top-read-held') === 0 || (!threw && hits(r, 'top-write-returned') === 0)) {", "new": "if (hits(r, 'popup-null') === 0 || hits(r, 'top-read-held') === 0) {", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) popups: any target reached, a returned window or a read of the console address does not hold; no tap or a missing report is not measured"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: popups. Measured as predicted."},
+  {"id": "RLB-T8-M14", "spec": "(l) M10.13, fix round 1 A", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "return run.saturated && o.verdict !== 'does-not-hold' ? unmeasured('the door counted more than a lab run sends') : o;", "new": "return run.saturated ? unmeasured('the door counted more than a lab run sends') : o;", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) a saturated run keeps a counted broke; a run the door could not read still reads a local stray effect broke; neither ever holds"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: a saturated run keeps a counted broke. Measured as predicted."},
+  {"id": "RLB-T8-M14b", "spec": "(l) M10.13, fix round 1 A (local arm)", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "'bridge-strays': straysBroke(local) ?? fromCounts((r) => strays(r, local)),", "new": "'bridge-strays': fromCounts((r) => strays(r, local)),", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) a saturated run keeps a counted broke; a run the door could not read still reads a local stray effect broke; neither ever holds"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: a saturated run keeps a counted broke. Measured as predicted."},
+  {"id": "RLB-T8-M15", "spec": "(l) M10.13, fix round 1 B", "pkg": "pwa", "file": "src/readerLab/verdicts.ts", "old": "...FIGURE_LABELS.filter((l) => !figures.some((m) => m.label === l)).map((l) => `${l} missing`),", "new": "", "tests": ["test/reader-lab-verdicts.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["the reader lab verdicts (reader lab plan, Task 8) mermaid: a partial mount list is not measured, never holds, and an over-budget gap still decides"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: mermaid: a partial mount list is not measured. Measured as predicted."},
+  {"id": "RLB-T9-M1", "spec": "(l)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "f.remove();", "new": "", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 18 failed | 2 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) a healthy engine: every line holds but the busy frame's fact, every step reports, and the door run is closed at the end", "the reader lab run (reader lab plan, Task 9) the steps run in order, one frame at a time, and leave the stage empty", "the reader lab run (reader lab plan, Task 9) every reader mount is the lab profile: lab-draw, no doc key, no images; there are as many as the caps count", "the reader lab run (reader lab plan, Task 9) every mount host is scrolled into view before its reader mounts (a frame off screen draws nothing, so ready never comes)", "the reader lab run (reader lab plan, Task 9) the tap wait ends at the tap: one read while it waits, not thirty", "the reader lab run (reader lab plan, Task 9) a frame that never reports reads not measured, never holds (M10.13)", "the reader lab run (reader lab plan, Task 9) no tap within the wait reads not measured for popups, and the run goes on to the end", "the reader lab run (reader lab plan, Task 9) a stray message that reached a host callback makes bridge-strays not hold", "the reader lab run (reader lab plan, Task 9) the hostile page and the benign page mount one at a time, hostile first, and the strays go to the benign page", "the reader lab run (reader lab plan, Task 9) keeps the hostile reader alive through its ready observation window", "the reader lab run (reader lab plan, Task 9) keeps the hostile reader alive through its ready-and-settle observation window", "the reader lab run (reader lab plan, Task 9) a hostile fallback after ready is the library failing closed, not a stray effect: bridge-strays still holds, and csp-27 still reads the hostile mount ready", "the reader lab run (reader lab plan, Task 9) a benign fallback after ready counts as an effect: bridge-strays does not hold", "the reader lab run (reader lab plan, Task 9) a run lost after the hostile step keeps every count it read: the walls still decide, and the result says the final read failed", "the reader lab run (reader lab plan, Task 9) a rejected final read keeps completed counts and wall verdicts and closes", "the reader lab run (reader lab plan, Task 9) a stop during a rejecting final read remains stopped and closes", "the reader lab run (reader lab plan, Task 9) the gap window ends at ready under the library this build pins, and a settle past ready once the library draws after it", "the reader lab run (reader lab plan, Task 9) Stop: an abort mid-run removes what the step mounted and closes the door run"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 10 failed: the steps run in order, one frame at a time; a healthy engine; Stop; a frame that never reports; a run lost after the hostile step; a stray message that reached a host callback; every reader mount is the lab profile; no tap within the wait; the gap window ends at ready; the tap wait ends at the tap. Restated at the measured count by the coordinator on 2026-11-05; no number. The benign-mount ruling, host-in-view pin, hostile-observation fixes and final-read-retention cases added later all require removal of their frames. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T9-M2", "spec": "(s)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "await deps.door.close(nonce).catch(noop);", "new": "", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 6 failed | 14 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) a healthy engine: every line holds but the busy frame's fact, every step reports, and the door run is closed at the end", "the reader lab run (reader lab plan, Task 9) a run lost after the hostile step keeps every count it read: the walls still decide, and the result says the final read failed", "the reader lab run (reader lab plan, Task 9) a rejected final read keeps completed counts and wall verdicts and closes", "the reader lab run (reader lab plan, Task 9) a stop during a rejecting final read remains stopped and closes", "the reader lab run (reader lab plan, Task 9) an older door: the first read fails the run with unreadable before any frame, and the run is closed", "the reader lab run (reader lab plan, Task 9) Stop: an abort mid-run removes what the step mounted and closes the door run"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 4 failed: a healthy engine; a run lost after the hostile step; an older door; Stop. Restated at the measured count by the coordinator on 2026-11-05; no number. The final-read-retention fix added rejected-read and Stop-during-rejection cases; both also require the close in finally. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T9-M3", "spec": "(k) M10.15", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "bytes, docKey: null, title: 'reader-lab.md', prefs: { theme: 'auto' }, profile: 'lab-draw',", "new": "bytes, docKey: null, title: 'reader-lab.md', prefs: { theme: 'auto' },", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) every reader mount is the lab profile: lab-draw, no doc key, no images; there are as many as the caps count"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: every reader mount is the lab profile. Measured as predicted."},
+  {"id": "RLB-T9-M4", "spec": "(t)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "if ((counts.view?.probes['popup-ran'].hits ?? 0) > 0) return;", "new": "", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) the tap wait ends at the tap: one read while it waits, not thirty"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: the tap wait ends at the tap: one read while it waits, not thirty. Measured as predicted."},
+  {"id": "RLB-T9-M5", "spec": "(s)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "// An older door fails here, before any frame (refinement (s)).\n    await read();", "new": "// An older door fails here, before any frame (refinement (s)).", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 2 failed | 18 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) the tap wait ends at the tap: one read while it waits, not thirty", "the reader lab run (reader lab plan, Task 9) an older door: the first read fails the run with unreadable before any frame, and the run is closed"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2 failed: an older door; the tap wait ends at the tap. Measured as predicted."},
+  {"id": "RLB-T9-M6", "spec": "(s) M10.18", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "if (last !== 'unknown-run' && last !== 'unreadable') counts.view = last;", "new": "if (last === 'unknown-run' || last === 'unreadable') throw new LabFailure(last); else counts.view = last;", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 2 failed | 18 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) a run lost after the hostile step keeps every count it read: the walls still decide, and the result says the final read failed", "the reader lab run (reader lab plan, Task 9) a rejected final read keeps completed counts and wall verdicts and closes"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: a run lost after the hostile step keeps every count it read. Restated at the measured count by the coordinator on 2026-11-05; no number. The rejected-final-read-retention case added later also requires the last completed view to survive an unreadable final read. Every actual failing name, including the added cases, is retained in failing."},
+  {"id": "RLB-T9-M7", "spec": "(v)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "const gap = longestFrameGap(deps.frame, gapWindowEnd(deps.gapWindow, settled, deps.sleep));", "new": "const gap = longestFrameGap(deps.frame, settled);", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) the gap window ends at ready under the library this build pins, and a settle past ready once the library draws after it"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: the gap window ends at ready under the library this build pins. Measured as predicted."},
+  {"id": "RLB-T9-M8", "spec": "(v)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "return w === 'ready' ? settled : settled.then((o) => (o === 'ready' ? sleep(LAB_DRAW_SETTLE_MS) : undefined));", "new": "return settled;", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) the gap window ends at ready under the library this build pins, and a settle past ready once the library draws after it"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: the gap window ends at ready under the library this build pins. Measured as predicted."},
+  {"id": "RLB-T10-M1", "spec": "(p)", "pkg": "pwa", "file": "src/lib/routes.ts", "old": "{ id: 'reader-lab', pattern: /^\\/settings\\/reader-lab\\/?$/, title: 'Reader lab', top: false, path: '/settings/reader-lab' },", "new": "", "tests": ["test/app.test.tsx", "test/command-registry.test.ts"], "red": "Tests 4 failed | 66 passed | 0 skipped", "failing": ["ROUTES and the ladder, both ways `/settings/reader-lab` renders the reader lab, not the Settings frame (the reader lab plan, Task 10)", "the base commands offers R19's measurement page under Settings, and the oracle's rule admits a planted page under a top route and none under no top route (W5h-a)", "the ids are W2's door table's every base command carries the id docs/superpowers/plans/2026-10-18-ccrc-skins-w2-shells.md §The door table names", "the top search: terms, tier and search-only (D-6714) entries with no terms, tier or searchOnly rank exactly as before"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 4 failed: app reader-lab case; command-registry R19 page/rank case, W2 door-table id list, no-terms rank case. Measured as predicted."},
+  {"id": "RLB-T10-M2", "spec": "(p) M10.12", "pkg": "pwa", "file": "src/screens/ReaderLab.tsx", "old": "useEffect(() => () => { running.current?.abort(); }, []);", "new": "", "tests": ["test/reader-lab-page.test.tsx"], "red": "Tests 1 failed | 6 passed | 0 skipped", "failing": ["the reader lab page (reader lab plan, Task 10) Stop aborts the run and returns to Before; leaving the page aborts it too"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: Stop aborts the run and returns to Before; leaving the page aborts it too. Measured as predicted."},
+  {"id": "RLB-T10-M3", "spec": "(p)", "pkg": "pwa", "file": "src/lib/api.ts", "old": "await request(readerLabProbePath(nonce, 'cookie-console'));", "new": "await request(readerLabProbePath(nonce, 'cookie-image'));", "tests": ["test/reader-lab-page.test.tsx"], "red": "Tests 1 failed | 6 passed | 0 skipped", "failing": ["api.readerLab (reader lab plan, Task 10) opens, reads, closes and probes through the funnel, at the vocabulary's paths"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: opens, reads, closes and probes through the funnel. Measured as predicted."},
+  {"id": "RLB-T10-M4", "spec": "(l)", "pkg": "pwa", "file": "src/screens/ReaderLab.tsx", "old": "if (state.p.step === decidedAt || o === undefined) return { word: LAB_TEXT.running, detail: '' };", "new": "if (o === undefined) return { word: LAB_TEXT.running, detail: '' };", "tests": ["test/reader-lab-page.test.tsx"], "red": "Tests 1 failed | 6 passed | 0 skipped", "failing": ["the reader lab page (reader lab plan, Task 10) a check decided by the current step reads running, not its partial outcome"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: a check decided by the current step reads running, not its partial outcome. Measured as predicted."},
+  {"id": "RLB-T10-M5", "spec": "(e)", "pkg": "pwa", "file": "src/screens/ReaderLab.tsx", "old": "<p>{LAB_TEXT.journal}</p>", "new": "", "tests": ["test/reader-lab-page.test.tsx"], "red": "Tests 1 failed | 6 passed | 0 skipped", "failing": ["the reader lab page (reader lab plan, Task 10) before: the title, the intro, the journal note, the device line, ten lines not run, and Start"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: before: the title, the intro, the journal note, the device line, ten lines not run, and Start. Measured as predicted."},
+  {"id": "RLB-T11-M5", "spec": "scroll fix", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "  host.scrollIntoView({ block: 'nearest' });", "new": "", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) every mount host is scrolled into view before its reader mounts (a frame off screen draws nothing, so ready never comes)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: every mount host is scrolled into view before its reader mounts. Measured as predicted."},
+  {"id": "RLB-T11-M6", "spec": "strays mount (a)", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS)) };\n  const benign = LAB_PAGES.find((p) => p.label === 'none');\n  let effects = 0;", "new": "  let effects = 0;\n  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: (afterReady) => { if (afterReady) effects += 1; }, effect: noop }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS)) };\n  const benign = LAB_PAGES.find((p) => p.label === 'none');", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) a hostile fallback after ready is the library failing closed, not a stray effect: bridge-strays still holds, and csp-27 still reads the hostile mount ready"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: a hostile fallback after ready is the library failing closed. Measured as predicted."},
+  {"id": "RLB-T11-M7", "spec": "(a) M10.10", "pkg": "pwa", "file": "src/readerLab/frameScripts.ts", "old": "export const LAB_IMPORT_SCRIPT_SHA256 = 'sha256-RUqyX54BLN90Rd98EvQDICTn0kVK5pAY31kNiLY5E2E=';", "new": "export const LAB_IMPORT_SCRIPT_SHA256 = 'sha256-RUqyX54BLN90Rd98EvQDICTn0kVK5pAY31kNiLY5E2F=';", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 1 failed | 9 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) the import script's hash constant is the sha256 of the shipped text, and the text is what the frame inlines without a nonce"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: measured: 1 failed: the import script's hash constant is the sha256 of the shipped text. Measured as predicted."},
+  {"id": "RLB-T11-M8", "spec": "(b) M10.10", "pkg": "pwa", "file": "src/docs/reader/labPolicy.ts", "old": "return `${d} ${nonceSource} ${hashSource}`;", "new": "return `${d} ${nonceSource} ${hashSource} 'self'`;", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 2 failed | 8 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) only the wall frame carries a policy: frameCsp() plus its nonce and the import script's hash in script-src and the canary in img-src, as the meta and the csp attribute (M10.10)", "the reader lab frames (reader lab plan, Task 6) labWallCsp accepts exactly one nonce, one sha256 and one URL with no separator in it, and refuses anything else"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: measured: 2 failed: only the wall frame carries a policy; labWallCsp accepts exactly one nonce, one sha256 and one URL. Measured as predicted."},
+  {"id": "RLB-T11-M10", "spec": "(d) M10.10", "pkg": "pwa", "file": "src/readerLab/frameScripts.ts", "old": "if (cfg.canary === true && window.${LAB_IMPORT_MARK} === true) hit('csp-canary');", "new": "if (cfg.canary === true) hit('csp-canary');", "tests": ["test/reader-lab-frames.test.ts"], "red": "Tests 1 failed | 9 passed | 0 skipped", "failing": ["the reader lab frames (reader lab plan, Task 6) the battery asks for its canary only after the import script ran, and runs no import channel itself; the import script marks, then imports"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: measured: 1 failed: the battery asks for its canary only after the import script ran. Measured as predicted."},
+  {"id": "RLB-T11-M1", "spec": "(h) M10.9", "pkg": "pwa", "file": "src/readerLab/frames.ts", "old": "export const LAB_SANDBOX = 'allow-scripts';", "new": "export const LAB_SANDBOX = 'allow-scripts allow-same-origin';", "tests": ["browser/reader-lab.browser.test.ts", "test/reader-lab-scans.test.ts"], "red": "Tests 3 failed | 22 passed | 0 skipped", "failing": ["the reader lab in Chrome (reader lab plan, Task 11) the reader lab in Chrome: every wall holds, the door run is closed, and the block names no host or nonce (M10.B1)", "what the reader lab never does (reader lab plan, Task 11) rule 3: no sandbox token beyond allow-scripts anywhere in pwa/src, and frames.ts sets sandbox only from LAB_SANDBOX (M10.9)", "what the reader lab never does (reader lab plan, Task 11) rule 3 planted: a widened token or a sandbox set from anything else is red"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: scans 2 failed (rule 3; rule 3 planted); browser case failed: 3 of 7 hold (opaque-origin, no-ambient-state, no-cookie, no-popup-top-nav do not hold). Measured as separate browser and unit-config commands under one applied mutant: browser 1 failed; scans 2 failed. No browser-config omission of the scans."},
+  {"id": "RLB-T11-M2", "spec": "(i) M10.10", "pkg": "pwa", "file": "src/readerLab/frames.ts", "old": "if (spec.wall !== undefined) {", "new": "if (spec.wall !== undefined && spec.script === '') {", "tests": ["browser/reader-lab.browser.test.ts"], "red": "Tests 1 failed | 0 passed | 0 skipped", "failing": ["the reader lab in Chrome (reader lab plan, Task 11) the reader lab in Chrome: every wall holds, the door run is closed, and the block names no host or nonce (M10.B1)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: browser case failed: csp-27 does not hold (26 of 27 reached). Browser assertion failed as predicted; the measured wall reading is recorded above."},
+  {"id": "RLB-T11-M3", "spec": "(p) M10.12", "pkg": "pwa", "file": "src/screens/ReaderLab.tsx", "old": "const loadRun = (): Promise<RunModule> => import('../readerLab/run');", "new": "const loadRun = (): Promise<RunModule> => { void localStorage.length; return import('../readerLab/run'); };", "tests": ["test/reader-lab-scans.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["what the reader lab never does (reader lab plan, Task 11) rule 1: the lab modules store nothing, copy nothing, request nothing of their own, read api only as readerLab, and spell no URL (M10.12)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: rule 1. Measured as predicted."},
+  {"id": "RLB-T11-M4", "spec": "(k) M10.15", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "onFallback: (r) => fallBack(String(r)),", "new": "onFallback: (r) => fallBack(String(r)), profile: 'lab-draw',", "tests": ["test/reader-lab-scans.test.ts"], "red": "Tests 1 failed | 23 passed | 0 skipped", "failing": ["what the reader lab never does (reader lab plan, Task 11) rule 4: 'lab-draw' is spelled only in policy.ts and run.ts, and both spell it (M10.15)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1 failed: rule 4. Measured as predicted."},
+  {"id": "RLB-T11-M9", "spec": "(c) M10.10", "pkg": "pwa", "file": "src/readerLab/frames.ts", "old": "${data}<script>${LAB_IMPORT_SCRIPT}</script>", "new": "${data}<script${nonceAttr}>${LAB_IMPORT_SCRIPT}</script>", "tests": ["browser/reader-lab.browser.test.ts"], "red": "Tests 1 failed | 0 passed | 0 skipped", "failing": ["the reader lab in Chrome (reader lab plan, Task 11) the reader lab in Chrome: every wall holds, the door run is closed, and the block names no host or nonce (M10.B1)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: browser case failed: csp-27 does not hold (1 of 27 reached: import-dynamic). Browser assertion failed as predicted; the measured wall reading is recorded above."},
+  {"id": "RLB-T12-M1", "spec": "A", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS)) };", "new": "const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, async () => undefined) };", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 3 failed | 17 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) keeps the hostile reader alive through its ready observation window", "the reader lab run (reader lab plan, Task 9) keeps the hostile reader alive through its ready-and-settle observation window", "the reader lab run (reader lab plan, Task 9) the gap window ends at ready under the library this build pins, and a settle past ready once the library draws after it"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 3. Measured as predicted."},
+  {"id": "RLB-T12-M2", "spec": "B", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "const last = await deps.door.read(nonce).catch(() => { stop(); return 'unreadable' as const; });", "new": "const last = await deps.door.read(nonce);", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 2 failed | 18 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) a rejected final read keeps completed counts and wall verdicts and closes", "the reader lab run (reader lab plan, Task 9) a stop during a rejecting final read remains stopped and closes"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2. Measured as predicted."},
+  {"id": "RLB-T12-M3", "spec": "B", "pkg": "pwa", "file": "src/readerLab/run.ts", "old": "const last = await deps.door.read(nonce).catch(() => { stop(); return 'unreadable' as const; });\n    stop();", "new": "const last = await deps.door.read(nonce).catch(() => 'unreadable' as const);", "tests": ["test/reader-lab-run.test.ts"], "red": "Tests 1 failed | 19 passed | 0 skipped", "failing": ["the reader lab run (reader lab plan, Task 9) a stop during a rejecting final read remains stopped and closes"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1. Measured as predicted."},
+  {"id": "RLB-T12-M4", "spec": "C", "pkg": "pwa", "file": "test/reader-lab-scans.test.ts", "old": "if (ts.isIdentifier(n) && ['XMLHttpRequest', 'WebSocket', 'EventSource', 'MessageChannel', 'BroadcastChannel', 'MessagePort', 'Worker', 'SharedWorker'].includes(n.text)) out.add('channel');", "new": "if (ts.isIdentifier(n) && ['XMLHttpRequest', 'WebSocket', 'EventSource', 'MessageChannel'].includes(n.text)) out.add('channel');", "tests": ["test/reader-lab-scans.test.ts"], "red": "Tests 4 failed | 20 passed | 0 skipped", "failing": ["what the reader lab never does (reader lab plan, Task 11) rule 1 planted: a broadcast channel in the run module is red", "what the reader lab never does (reader lab plan, Task 11) rule 1 planted: a message port in the run module is red", "what the reader lab never does (reader lab plan, Task 11) rule 1 planted: a worker in the run module is red", "what the reader lab never does (reader lab plan, Task 11) rule 1 planted: a shared worker in the run module is red"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 4. Measured as predicted."},
+  {"id": "RLB-T12-M5", "spec": "C", "pkg": "pwa", "file": "test/reader-lab-scans.test.ts", "old": "if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'onmessage') out.add('onmessage');", "new": "", "tests": ["test/reader-lab-scans.test.ts"], "red": "Tests 2 failed | 22 passed | 0 skipped", "failing": ["what the reader lab never does (reader lab plan, Task 11) rule 1 planted: an onmessage property in the run module is red", "what the reader lab never does (reader lab plan, Task 11) rule 1 planted: an onmessage element in the run module is red"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 2. Measured as predicted."},
+  {"id": "RLB-T12-M6", "spec": "palette census correction, leave 15315", "pkg": "pwa", "file": "src/lib/routes.ts", "old": "  { id: 'reader-lab', pattern: /^\\/settings\\/reader-lab\\/?$/, title: 'Reader lab', top: false, path: '/settings/reader-lab' },\n", "new": "", "tests": ["test/command-layer.test.tsx"], "red": "Tests 1 failed | 56 passed | 0 skipped", "failing": ["a door runs its command, through this layer the palette's Go-to list offers Settings › Updates and the others, and not settings-section (D-5504)"], "restore_sha_equal": true, "status_equal": true, "at": "257533d6d306782ff7a94194ef2b114f648e6979", "vs": "Predicted: 1. Measured as predicted."}
+]
+```
+
+### Named, without a number
+
+- The run's injected reader input and return types are derived from `lazyMountReader`; a test's profile union needed a TypeScript annotation. Neither introduces a second bridge model.
+- The layout-only stylesheet entered the contrast census by explicit leave, and its ungrounded detail color was removed rather than exempted.
+- Hosts are scrolled into view before mounting and timing. Off-screen cross-origin frames in the measured engine otherwise received no animation frames and met the watchdog. The page tells the operator to keep the app in front; scrolling away can make a mount not measured.
+- The browser's holds matcher accepts the formatter's existing optional parenthesized detail; no verdict was weakened.
+- The route/palette census now names the Reader lab and expects eight Settings options. Deleting the route kills that assertion. No Settings-index row was added.
+- During the licensed absorption, the lab's own screen reached main's lazy-screen census. Scoped leave added only its LAZY row and six-to-seven wording, preserving exact equality; the static-import row above proves that Reader lab must remain lazy. The screen reuses the one existing wrapper rather than introducing a parallel loading mechanism.
+- The one final fix wave restored hostile observation in both gap modes, kept completed counts after a rejected final read without swallowing Stop, widened unconditional channel/onmessage scans and their planted controls, and corrected stale comments. Worker feature detection uses quoted properties, preserving behavior without a file exception.
+- Task 10's first app red was one case rather than the predicted two, and its route-deletion mutation redded four under a prediction of “2+”. The page component and its page tests landed in the same step rather than giving the page a separate red-first step; that process departure is retained, not rewritten as red-first evidence. End-state guard mutations are measured above.
+- Automatic backgrounding, interrupted admission waits, incomplete first recovery and zero-selection filters are disclosed under Suites. No background call with no completed report was promoted to coverage.
+- Three earlier commits retain their honestly reported Sonnet attribution by ruling; subsequent commits use the dispatch's specified trailer. No history rewrite was used.
+
+### FR1 — coordinator rulings at review 1524
+
+The coordinator ruled F1–F10 at review 1524, measured against `f90737362a76534cf56d90a2f2c0d396adb83ce6`, and issued D-8030 and D-8031 for this round. The later ruling issued D-8032 for independent second-load attempt evidence, rejecting a fixture change. This is a new fix round on the same branch and #2340, without another merge of main. The first suite signal remains red; these measurements do not rewrite the earlier inventory, 55 historical mutation rows or initial handoff. All F1–F10 edits are implemented. The F3 visibility-tail correction and the D-8032 continuation each passed scoped task review with separate spec-compliance and quality approval. The final-source production PWA typecheck, whole PWA unit suite and combined Chromium gate passed, alongside the selected server guards recorded below. Exact-tip post-push CI remains a separate required gate.
+
+| Item | Coordinator ruling | Required closure / retained limit |
+|---|---|---|
+| F1 | Blocking dropped-scan half, D-8030 | Report Mermaid asset rejection/deadline only for lab-draw; non-ready lab outcome, no favourable draw reading. In-frame diagram failure after a successful asset load remains residual until a library drawn signal. |
+| F2 | Blocking; later E11 evidence rule D-8032 | Keep self-nav-tried inside the timer immediately before navigation. A target arrival breaks the wall; otherwise tried or a second load proves the attempt. Neither is not measured. The fixture and reporting channel stay unchanged. |
+| F3 | Blocking start-hidden and in-window visibility change, D-8031 | Use pageClock subscriptions; busy line and timed mount gaps become not measured. Stop deferred while hidden remains residual. |
+| F4 | Fix this round | Scroll every lab frame into view before its window, including the popup at step 1. |
+| F5 | Fix this round | An aborted resolve after Stop resets the page and offers Start; pin final door.close. |
+| F6 | Wording, narrower residual | Name observed navigate/hash/copy arms; store.set and a same-source-only listener are not exercised. |
+| F7 | Fix pins and attribution | Pin both longestFrameGap imports and absence of a second loop; exact weak-case value; scroll fix belongs to run.ts#hostIn. |
+| F8 | Correct attempted count; retain rest | Library detail says 0 of 1 attempted; ambient-state, shape validation, lazy-mount, marker and engine limitations stay carried. |
+| F9 | Evidence comments only | Clarify fake TTL ignored by the page; RLB-T8-M4's added red is ambient-local-broke, not the library-ready guard. |
+| F10 | Neutral scratch spelling | Task 12 Step 6 uses the scratch placeholder, not a home-based spelling. |
+
+The three refuted review claims remain refuted. The review did not measure the agent leg of typecheck-tests; CI owns that leg, and this round neither installs agent dependencies nor edits unrelated files.
+
+#### FR1 targeted evidence (not the full local gates)
+
+- **F2 / F8:** the self-navigation timer and attempted-library-count cases failed first for the intended assertions (one failure each), then the two focused files passed 35 tests. New mutations RLB-FR1-M1 and M2 each reproduced the intended single failure and restored equal source SHA-256. Their records do not carry before/after status snapshots; none is inferred.
+- **F1:** rejected and over-deadline Mermaid assets, the run's dropped-scan outcome and its verdict reason first produced four intended assertion failures, with 44 tests passing. Five focused files then passed 96 tests, including the unchanged ordinary-reader bridge regression and the lab scans. RLB-FR1-M3 deletes the bridge report (two intended failures); M4 ignores it in the run (one intended failure). Both restored saved bytes with equal SHA-256 and equal working-tree status. Ready-following-drop cannot erase the non-ready outcome; a counted hostile arrival still reads does not hold.
+- **F3:** two verdict/format cases and six run cases first produced eight intended failures. The focused selection then passed all eight (46 filter-skipped); the broader run/verdict/scan group passed 78 tests in three files. RLB-FR1-M5 removes the initial visibility check (two intended failures); M6 removes the in-window callback (six at review 1529, including the two later final-frame tail cases; this count correction is the review's measurement, not a new worker rerun); M7 removes the busy-line guard, M8 the figure-line guard and M9 the formatter guard (one each). Every row restored saved bytes with equal SHA-256 and equal working-tree status. The tests cover hidden-at-start and both pageClock callback directions for busy and mount windows, subscription cleanup, no favourable draw reading from an unmeasured busy line, and no numeric evidence printed for an invalidated gap.
+
+- **F4:** the real lab-frame adapter/run ordering case first failed on the popup not being scrolled before its observation wait (one intended failure, 27 passing). Run and frame suites then passed 39 tests. RLB-FR1-M10 removes the scroll and reproduces that one failure; saved SHA-256 and working-tree status restored equally. The busy timer starts after its frame scroll, not before.
+- **F5:** an integration case uses the real run with fixture dependencies, reaches the final door.close, stops while that close is pending, then resolves it. It first failed with the page stuck at Stopping (one failure, seven passing); the page suite then passed eight tests. RLB-FR1-M11 removes the aborted-resolve reset, reproduces the same failure, and restores equal saved SHA-256/status.
+- **F6 and ready wording:** strays names navigate/hash/copy and the two unexercised arms. Mermaid detail and per-mount result evidence say ready. Two wording red runs were observed but not saved; no reconstructed original log is claimed. The saved verdict/frame-gap green run passed 30 tests. At that point the no-tried/two-load case and exact rejection gap of zero characterized existing behavior, not new red-first production guards. D-8032 later superseded that no-tried expectation with the independent second-load rule, measured separately below.
+- **F7:** the new structural detector first ran as a no-op and failed four planted-control cases, with two passing and 24 filter-skipped. The finished scan suite passed 30 tests. RLB-FR1-M12 to M17 separately remove each caller's import, remove its call, and plant the original inline loop with the import retained: each produces one intended failure and restores saved bytes with equal SHA-256/status. It is a structural tripwire for loops with an await, subtraction and Math.max, not a proof against deliberately disguised alternatives. R19 production behavior is unchanged.
+- **Task review and R1 correction:** the FR1 task reviewer initially returned separate spec and quality FAIL with one finding: the end promise can settle while the shared measure is awaiting a final frame; unsubscribing then misses a hidden interval included in that frame's gap. The correction retains the two subscriptions through the final frame, with cleanup in finally. Both deterministic tail cases failed first, then the run suite passed 30 tests. RLB-FR1-M18 and M19 separately restore premature busy/mount unsubscription; each causes one intended failure and restores equal saved SHA-256/status. Scoped re-review passed spec compliance and quality with zero actionable findings. Other FR1 dispositions had no actionable task finding; the shared measure, pageClock and R19 remain unchanged.
+
+- **D-8032 continuation:** the changed verdict tests first measured four intended failures and 25 passes; broken-target precedence was already green and remains characterization. One earlier helper invocation rejected a duplicate maxWorkers argument before running tests and is not counted as a test red. Restored verdict/frame tests passed 40 cases. RLB-FR1-M20 removes only the wall's second-load arm: two unit failures (both-evidence detail and the missing-tried/two-load case), and the actual browser case fails its unchanged E18 assertion at 6 of 7 walls. That browser invocation built the mutated source into a fresh temporary Vite output before running, not a cached green build. M21 removes only the tried arm: two unit failures (both-evidence detail and tried-only). Both sequential rows restored equal saved source SHA-256 and equal complete working-tree status. The scoped task review approved spec compliance and quality, with zero critical/important findings; existing Vite native-config and Vitest experimental-type-testing warnings remain noted, not called pristine output. The parent verified the browser diff against committed HEAD: only the F9 TTL comment and the required D-8032 comment changed; interception and every assertion remain. The review's reconstructed-baseline limit is retained; no independent pre-edit snapshot is claimed.
+
+The original 55-row inventory remains historical and was not rerun. FR1 adds 21 measured mutation rows with their own provenance (M1/M2 have equal saved SHA but no historical status snapshots). The first complete pre-correction FR1 local gates measured PWA production typecheck exit zero and 452 PWA files: 13,459 passing, zero failing and three intentional skips. The independent server lab/auth group passed 303 tests in four files. After the visibility-tail correction, PWA production typecheck passed and 452 PWA files measured 13,461 passing, zero failing and three intentional skips. Server single-definition and rings passed 1,199 tests in 33 files; a separate census-w7 and documentation guard group passed 199 tests in six files. The first combined Chromium gate passed all 24 reader-frame cases but failed reader-lab at 6 of 7 walls, with self-navigation and teardown not measured. The diagnostic and subsequent D-8032 ruling below correct the evidence rule, not the fixture or reporting channel.
+
+| Final-source FR1 gate after D-8032 | Files | Passed | Failed | Intentional skips | Measured time |
+|---|---:|---:|---:|---:|---|
+| Whole PWA unit suite, including docs-scans | 452 | 13,463 | 0 | 3 | 374.946 s |
+| Production PWA typecheck | — | exit 0 | — | — | 22.676 s |
+| Chromium reader-lab and reader-frame | 2 | 25 | 0 | 0 | 88.250 s including build |
+| Census-w7 and documentation guards | 6 | 199 | 0 | 0 | 75.692 s |
+
+The final Chromium lab block is desktop Blink/Linux evidence, not a phone result:
+
+```text
+reader-lab 1 · Blink 153 · Linux · 16 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         own thread (longest gap 67 ms in a 3000 ms spin; watchdog timer 0 ms late)
+  mermaid            holds (ready; longest gap 100 ms, figure 2)
+    gaps ms          none 67 ready · trivial 100 ready · f1 50 ready · f2 100 ready · f3 83 ready · f4 67 ready · f5 100 ready · f6 67 ready · all 83 ready
+draw on open: costs the console nothing here; the change only stops ready waiting for figures
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+These final-source gates ran while the fix was uncommitted at HEAD `f90737362`; they are not exact-tip CI or a new whole-server/browser inventory. Coordinator mail 15588 withdrew the initial prune-deny exception after #2339 merged: the new exact-tip PR run must be green, with no additional main merge and only the previously ruled watcher census setup-timeout job rerun. A green FR1 run needs no separate land-sync.
+
+### FR2 — coordinator rulings at review 1529
+
+Review 1529 at `3cb3c32cce8d6fbec6e1b0627cc4ce385960b7fd` found no blocking finding. The coordinator nevertheless ruled the following closed second fix round on #2340 and issued D-8033. This round does not merge main, change the shared timing implementation, library or pin, add a door, alter sandbox/wall policy, or move any verdict toward holds or own-thread. The next separate review is the last of the three-round allowance. The first complete-suite signal stays red/shallow.
+
+| Item | Coordinator ruling at review 1529 | FR2 disposition |
+|---|---|---|
+| F-A / D-8033 | Fix the residual false own-thread fact | Shared-thread when gap is at least 0.8 of the spin **or** timer lateness is at least 0.5; own-thread only below both. Both measured numbers remain; shared detail names gap, timer, or both. Missing-run/probe, saturation and hidden-window gates stay. |
+| F-B | Strengthen the existing F4 scroll spy | Assert the iframe is connected when scrolled, inside the IFRAME branch; retain observation-window and busy-window ordering assertions. Production frame ordering remains unchanged. |
+| F-C | Carry the narrow tried-send/removal window; documentation only | Record below that tried may arrive before removal cancels the navigation request. No script/channel/fixture/verdict change for this item. |
+| F-D | Correct the M6 count and carry the mixed Mermaid case; text only | M6 now says six with review-1529 provenance. Dropped/hidden-before-over-budget remains an untested safe-direction mixed case, not a new fix. |
+| CodeQL #266 | Equivalent test-only cleanup | Pass the battery channel key list as a Function argument, not interpolated JSON source. Existing behavioral expectations remain. |
+| CodeQL #267 | Equivalent test-only cleanup | Test extracted URLs by exact equality: no URL except the SVG namespace, with at most one such URL. Retain the mounted-frame URL assertion. |
+
+D-8033 supersedes the gap-only busy-frame implementation and its detail in Task 8's original execution excerpts; those excerpts and the original mutation rows retain their historical provenance. Refinement (l) above states the current E17 rule. The coordinator carries the design integration separately; this worker edits the plan only.
+
+#### FR2 targeted evidence
+
+- The first verdict red run measured two failures and 28 passes: the small-gap/late-timer case still read own-thread, and the existing shared-evidence detail lacked its new suffix. The half-spin boundary case was split into a separate test after that run; its red evidence is the later timer-arm mutation, **not** an independently captured pre-fix run. The low-timer own-thread arm remains characterization.
+- **RLB-FR2-M1:** remove the timer arm from the classification (`gap || timer` → `gap`). Two intended failures, 29 passes: the late-timer case and the half-spin boundary case. Saved/restored verdict-source SHA-256 is `ee900a78f2c8871a41e5d7684d63976e2f9921dd667472f8fc0ffee3533df7c6`; the target-only diff still contains the intended FR2 source edit.
+- **RLB-FR2-M2:** move scroll before append in `frames.ts`. One intended failure, 29 passes: the existing F4 case fails its connected-frame assertion. Saved/restored SHA-256 is `1b96b7d0c735aad9925e3ac8f4f722f09f2dfd80f5989ae94ad4a3a149d02c94`; the file is byte-identical to the FR2 base. This is a mutation red against an already-correct order, not a claimed original-code failure.
+- Restored focused green: three files, 72 tests, zero failures. Both mutations ran sequentially through the test runner and restored saved bytes. No historical mutation inventory was rerun. The two CodeQL changes are equivalent rewrites of existing tests, not new behavior for which a fabricated red is claimed.
+- Scoped task review returned separate spec-compliance PASS and quality PASS with zero actionable findings. It verified the actual diff, red/mutation logs and restore hashes, and explicitly retained the boundary-test chronology limit above. The required local scoped gates and exact-tip CI are recorded separately; the focused run does not substitute for them.
+
+#### FR2 local scoped gates
+
+These measurements ran in the foreground through the test runner against the final FR2 source, before its local commit, at committed HEAD `3cb3c32cc`. Source hashes are recorded with each gate. They are scoped gates, not a new whole-PWA/server/browser inventory.
+
+| Gate | Files | Passed | Failed | Skipped | Measured time |
+|---|---:|---:|---:|---:|---|
+| Production PWA typecheck | — | exit 0 | — | — | 11.922 s |
+| Reader-lab units, ordinary reader-bridge, frame-gap and docs-scans | 9 | 255 | 0 | 0 | 34.083 s |
+| Chromium reader-lab and reader-frame, fresh build | 2 | 25 | 0 | 0 | 51.625 s |
+| Server reader-lab vocabulary/runs/routes and auth-gate | 4 | 303 | 0 | 0 | 3.945 s |
+| Server single-definition, rings and census-w7 | 33 | 1,199 | 0 | 0 | 32.879 s |
+
+The PWA run retains the existing Vite native-config compatibility warning and Vitest experimental-type-testing warning; zero test failures does not mean pristine output. The fetched documentation-guard baseline is `origin/main` at `426accca5b669f9703c111aa23d0c41ac75075ca`, with no merge. After local commit `6d5b3219c` defined D-8033 in the same commit as its production use, the tracked documentation guards passed: deviation-refs, dtbd, citations, anchors and docs-parity, five files and 116 tests, zero failures/skips, 13.475 s. Exact-tip CI, the CodeQL check itself, and alert states remain publication gates; the worker does not dismiss alerts.
+
+### Carried, not fixed
+
+- **No second load and cancelled tried image (D-8032).** On an engine with no second load, the wall holds only if tried survives its own navigation; otherwise both self-navigation lines are not measured. This is conservative, and E18 reads it. No beacon/keepalive substitution or fixture change is made.
+- **Tried can arrive before removal cancels navigation (review 1529 F-C).** A frame script starting about 1.8 s late can enter its timer while the step is ending. It sends tried in that timer task, but subsequent frame removal can cancel navigation before the request leaves. Tried can therefore arrive without navigation having left, and the wall can read holds from that attempt signal. A navigation request that did leave is caught by later door reads. This narrow window remains carried; no script, reporting channel or fixture is changed in FR2.
+- **Mixed dropped/hidden and over-budget Mermaid mounts (review 1529 F-D).** `mermaid()` checks dropped and hidden mounts before the over-budget check. One dropped or hidden mount can therefore mask another mount's does-not-hold result with not-measured. This is the safe direction. The mixed case is untested and is not made into a new code fix or mutation inventory in FR2.
+- **In-frame Mermaid failure after asset load (D-8030).** The bridge can report an asset rejection or deadline, but the opaque host cannot observe a Mermaid asset that loaded followed by every figure failing inside the frame while the library still posts ready. The lab's evidence is ready, not drawn. The library's drawn signal described in the design's gap-window discussion closes this residual; this round changes neither the library nor its pin.
+- **Policy validation is shape-only (latent).** `labWallCsp` accepts a syntactically valid hash and a URL-shaped canary, not their identities. Current callers pass the fixed hash and exact run canary, and mounted-policy tests pin them. A future widened caller could undermine the comparison; no such current caller was established.
+- **Stop while hidden (D-8031 residual).** The coordinator ruled hidden-at-start and any visibility change during timed windows blocking, to be marked not measured in FR1. Awaiting an animation frame can still defer an aborted run: **Stop takes effect on return to the page.** Foreground instructions do not remove that scheduling limit.
+- **Cookie/cache ambient claims (conditional).** Empty script-visible cookies or an absent Cache API do not alone establish denied access. If other stores are independently denied under the specific cookie/cache conditions, the composite ambient-state line can conditionally hold without measuring those denials. This is unproven on the pinned engine, not dismissed as wording only. Request-cookie isolation is a separate controlled check.
+- Structural scans are regression guards, not an adversarial JavaScript proof: dynamically computed members, assembled names and listeners, `globalThis` indirection and eval remain beyond their stated reach. The held-out source review and browser controls complement, not replace, that limit.
+- The canary is constructed in two places; a disagreement fails the positive signal closed. `LabFrameSpec.config` does not require `base` in its type, although every caller supplies it. The URL scan recognizes literal schemes, not every possible URL construction.
+- Awaiting the lazy reader mount can hang before the per-mount cap/Stop logic takes over. Early-settled mounts leave harmless 65 s sleep timers pending. Neither produces a completed false hold, but responsiveness and cleanup could be better.
+- The hostile click target is not activated by a step; only the hostile image channel is attempted. FR1 corrects the detail to “0 of 1 attempted”, retaining both target arrivals as break signals. Ready remains weaker than a library drawn signal (D-8030). The strays tripwire observes navigate, hash and copy only; its store.set stray and a same-source-only listener are not exercised.
+- Some leak assertions in unit tests are vacuous because their inputs contain no host or nonce; the formatter's input is structurally restricted, and the browser checks its actual host and nonce. The browser host assertion includes the port, not an additional bare-hostname assertion. Its marker-name `every` assertion is also vacuous because only that name is pushed.
+- The browser fixture's `decodeURIComponent` can throw for a malformed request, affecting that loopback test process only. Its header omits the full unrouted-WebSocket explanation, although the plan records it; two comment lines remain over-wide. The case-owned server has no upgrade handler; the armed server route test, not the browser's silence, pins upgrade counting.
+- The inherited interception harness can approve a marker preflight; that marker is separately recorded and never counted. An OPTIONS arriving at the case-owned server is refused without CORS, and the real refusal remains pinned by the server tests. Desktop proxies and other phone engines remain later work.
+- Unrelated suite reds above remain for their owning work and CI. The pull request's selected checks and the merge queue remain gates; there is no runner-image waiver or admin-merge exception.
+
 ## Deviations found
 
 Issued at each run's opening; refinements (a), (b) and (c) take RL-a's first three numbers, and (h), (i), (k), (m) and (u) RL-b's first five. (Task 5 Step 4 replaces RL-a's line, and Task 12 Step 4 RL-b's.)
@@ -5032,7 +5746,34 @@ Issued at each run's opening; refinements (a), (b) and (c) take RL-a's first thr
 - **D-7965 (2026-11-04)** — door-reason-8 (refinement (b)). The door is three session-gated run routes and an exempt probe pair under a new gate reason 8. This departs from `gate.ts`'s "THE SEVEN REASONS, and there are only seven" and adds a route family the base spec's §3.4 does not list (design A25). A frame's request carries no session cookie, which is what the lab measures, so a gated probe would count nothing. The door is a permanent surface on every box, inert until a session opens a run (question Q5 (a)). Applied by Task 3 (rows RLB-T3-M3 to M6, M10, M11) and Task 4 (rows RLB-T4-M1 to M4).
 - **D-7966 (2026-11-04)** — counter-before-gate (refinement (c)). The counter is an `onRequest` hook added immediately before the gate's, so the gate is no longer the root's first `onRequest` hook (design A25, question Q4). An opaque frame's WebSocket upgrade is refused by the gate before any handler, so counting in the handler would leave that channel unmeasured on every box. The counter never answers, never reads a body and never awaits. Applied by Task 3 (rows RLB-T3-M1 and M2, and Step 9's measured order figure).
 - **D-7967 (2026-11-04)** — egress-census. The door's two GET routes also enter `server/test/secret-mask.test.ts`'s egress census as two `EXEMPT` rows, each with its reason: the run read answers counts by the lab's closed names and classes, and the probe an empty `204`, so neither carries session-derived text. This departs from the design's section 4.7 and this plan's Scope, which list the census sites the door touches and miss this one: the census reads every `app.get(` under `server/src`. The whole-suite run at Task 5 found it red. The worker stopped and asked under the Scope's census exception, and the coordinator ruled. `INLINE`, `MASKED_GET_ROUTES` and the write census are unchanged. Applied by Task 4's Files (ruled at Task 5) and rows RLB-T4-M5 and M6.
-- RL-b: placeholder.
+- RL-b: issued at dispatch as one block, 8003 to 8008; all six used. Three further numbers were issued by the coordinator for measured execution departures; none was invented or borrowed from the floor.
+- **D-8003 (2026-11-04)** — lab-frame-home (refinement (h)). `pwa/src/readerLab/frames.ts` is the one home outside the Docs reader for lab frames with `sandbox="allow-scripts"`, `srcdoc` and `no-referrer`. This departs from rich-docs A2b's earlier two-home list. A phone cannot inject a battery into the production reader's hash-locked scripts; frames of its shape are the executable lab. Task6 and RLB-T6-M1/M4/M6 pin shape, data and reach; Task11 scans pin the home. Cost if wrong: move that one owner and adjust its explicit allowance.
+- **D-8004 (2026-11-04)** — wall-policy-extension (refinement (i)). The wall frame uses the library's `frameCsp()` plus lab-specific sources, rather than running E18's battery inside the production frame; it adds `labPolicy.ts` under the `/frame` import home. The initial nonce and canary extension is refined by the hash-run-import departure below. Control floor, canary and ready hostile reader are all required. Task6 and its policy rows pin the mounted policy. Cost if wrong: an engine's result is not comparable to the production reader; the extension stays explicit.
+- **D-8005 (2026-11-04)** — lab-draw-profile (refinement (k)). The lab alone gets Mermaid auto-draw, a 60000 ms watchdog and no storage port, departing from the rich-docs §4.6 and W8a refinement (c) on-request default. No-profile production mounts retain that default. Task7 RLB-T7-M1/M2 and Task11's profile scan pin the boundary. Cost if wrong: a profile leak changes the real reader; the scan and default-profile assertions must fail first.
+- **D-8006 (2026-11-04)** — activated-popup-check (refinement (m)). The popup/top-navigation check needs one real tap, unlike E18's scripted M8.B4 form, so a generic popup blocker cannot stand in for the sandbox. Without the tap in 30 s the result is not measured. Task9's bounded wait and Task11's frame-button click exercise it. Cost if wrong: one extra operator action per run.
+- **D-8007 (2026-11-04)** — silent-top-navigation (refinement (u)). A returned `top.location` write with no target arrival holds and names the quiet block, instead of requiring M8.B4's throw. A write without either return or throw report is not measured. RLB-T8-M13 pins the distinction. Cost if wrong: the labelled result must be re-read under a stricter retirement criterion.
+- **D-8008 (2026-11-04)** — saturation-preserves-break. The design's Saturation sentence and this plan's original Task8 Decision(2) said every count-reading line becomes not measured. That could hide a known wall break, contradicting the same design's stolen-nonce guarantee that a real broke cannot be erased. Confirmed breaks now survive saturation; all other count-dependent outcomes remain not measured. A locally observed stray effect precedes both unavailable-run and saturation gates. The coordinator concurred; RLB-T8-M14/M14b/M15 pin these cases and the complete Mermaid-label signal. Cost if wrong: an operator sees a real break rather than only an incomplete-measurement warning.
+- **D-8020 (2026-11-04)** — benign-strays-mount. The hostile reader's own CSP fallback can destroy it correctly, so it cannot remain the strays target as Task9 originally specified. The run retains the hostile mount through its observation window, then mounts a separate benign reader for strays; a hostile fallback is not a stray effect. This makes eleven mounts, 876000 ms run caps and 1176000 ms TTL, derived from the same shared caps. It supersedes Task9's hostileAndStrays docstring and single-mount assumption and the design's old minute figures in Lifetime of a run, The door on every box, RL6, Q5 and In short; the coordinator carries those design edits separately. RLB-T11-M6 and RLB-T12-M1 pin separate ownership and hostile lifetime. Cost if wrong: one extra mount and its cap; no production profile changes.
+- **D-8021 (2026-11-04)** — case-owned-door-server. Playwright routing missed early out-of-process sandbox requests, leaving walls not measured. Task11's case now owns one loopback `node:http` server for sharedDist and all counting instead of answering the door in `ctx.route`. The route only continues, with no second counter; shared harness files stay unchanged. OPTIONS still refuses without CORS, and the inherited marker limitation remains explicit. Cost if wrong: one small case-local server with cleanup, rather than falsely treating missing intercepted requests as a measured wall.
+- **D-8022 (2026-11-04)** — hash-run-import. A nonce on the battery propagated into dynamic import, widening its script channel and creating a false break. The battery skips just that channel; a separate constant unnonced script runs it under a fixed SHA-256 source, with its own adjacent data block. The canary waits for its marker. The mounted policy now has exactly three lab additions: ordinary-script nonce, import-script hash, exact canary URL. Only import() is split because a module fetch takes its nonce from the calling script; none of the other 26 channels here inherits that nonce. This supersedes the design's section3.1 Its one script, its Frame CSP row, section3.3's added script nonce allows only the battery's own inline script, RL4, A24, the E18 setup sentence and rich-docs M10.10's nothing else; the coordinator carries those spec edits separately. RLB-T11-M7 to M10 pin the script, hash, skip and canary order. Cost if wrong: the lab's dynamic-import channel is not comparable to the production hash-authorized script; keeping this authorization shape explicit is the safeguard.
+
+- **D-8030 (2026-11-05)** — dropped-Mermaid-scan (FR1 F1, coordinator ruling at review 1524). The bridge's deliberate ordinary-reader behavior drops the Mermaid scan after an asset rejection or its deadline and can still reach ready. Reading that as successful lab figure readiness produced a false favourable result. Lab-draw alone reports the dropped scan through an optional seam; the lab treats it as non-ready for Mermaid and the hostile library check, and the draw-on-open reading stays not measured. The ordinary reader receives no new signal and its existing drop tests remain unchanged. In-frame figure failures after a loaded asset remain residual until the library supplies a drawn signal; lab details say ready, not drawn. Cost if wrong: an unmeasured lab result instead of a false favourable reading; no library, pin, frame policy or sandbox change.
+- **D-8031 (2026-11-05)** — visible-timing-windows (FR1 F3, coordinator ruling at review 1524). A hidden-at-start busy window can report a false favourable own-thread fact, and a visibility change mid-window can distort any timed gap. Lab windows read initial visibility and subscribe through the existing pageClock owner in both directions. A hidden start or any in-window visibility change makes the busy line and timed mount gap not measured and prevents a favourable draw-on-open reading. This supersedes carrying those two halves as timing risks; Stop's wait for a resumed animation frame remains residual: Stop takes effect on return to the page. Cost if wrong: an honest unmeasured run after a visibility transition; no second visibilitychange owner.
+
+- **D-8032 (2026-11-05)** — self-navigation-attempt-evidence (FR1 E11, later coordinator ruling). The tried image starts in the same task as navigation; committing the blocked navigation's error page can cancel the image. Fixture interception widens that race, but a phone can lose it too. Removing interception would hide it, so the fixture remains unchanged. The script makes only one self-navigation: every load beyond the first is independent console-observed attempt evidence. Keep F2's tried send inside the timer immediately before navigation, with no sendBeacon or keepalive change. A target arrival still breaks the wall first; otherwise tried or a second load holds it, naming the observed evidence. Neither signal is not measured (`the frame did not try`). Teardown holds on a second load, otherwise differs on tried, otherwise is not measured. Unavailable/saturated-door gates remain. This supersedes E11's old missing-tried-only condition in refinement (l) and the design's corresponding rows; the coordinator carries the design integration separately. Unit cases pin each signal, both, neither, null loads and broken precedence; M20 kills the second-load arm in unit and actual browser runs, M21 kills the tried arm in unit. Cost if wrong: on an engine without a second load and with a cancelled tried image, both lines conservatively read not measured; E18 must investigate rather than infer a hold.
+
+  The diagnostic used the current script, one fixture-only server and the same Chromium. All four arms entered the timer and observed two loads:
+
+  | Diagnostic arm | Timer entered | Loads | Attempt reached the fixture server |
+  |---|---|---:|---|
+  | Current script, no interception | yes | 2 | GET |
+  | Current script, route.continue interception | yes | 2 | none |
+  | Before-timer control, intercepted | yes | 2 | GET |
+  | Beacon-at-attempt control, intercepted | yes | 2 | POST |
+
+  The before-timer and beacon arms are diagnostic controls only, not licensed production changes. The blocked navigation can cancel its own attempted image; second-load evidence avoids relying on delivery of that image.
+
+- **D-8033 (2026-11-05)** — timer-or-gap-thread-evidence (FR2 F-A, issued by the coordinator at review 1529). A shared-thread spin can start before the console's first animation frame, leaving only a small measured post-spin frame gap while the console timer is late. Gap-only classification can then falsely read own-thread. The busy fact now reads shared-thread if `longestGapMs >= 0.8 * spinMs` **or** `timerLateMs >= 0.5 * spinMs`; own-thread requires both below. Shared detail names gap, timer, or both and retains both measured numbers. Missing-run/probe, saturation and hidden-window gates remain; this is a fact, not a budget gate. The small-gap/2500 ms lateness case, the 1499/1500 ms timer boundary for a 3000 ms spin, and the gap-only/both-evidence details are pinned; RLB-FR2-M1 removes the timer arm and fails the two intended cases. This supersedes Task 8's gap-only excerpt and the corresponding E17 design wording; the coordinator owns design integration. Cost if wrong: conservative shared-thread classification from either signal rather than a favourable own-thread inference; no shared gap/clock code, library/pin, door, sandbox or wall-policy change.
 
 ## Where things stand
 

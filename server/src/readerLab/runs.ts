@@ -14,7 +14,7 @@ import {
 /** What a run's life adds to the lab run's own caps: the requests, the parses and a slow phone's own work. */
 export const READER_LAB_RUN_SLACK_MS = 300_000;
 /** How long a run stays open after it opened, derived from the lab run's own caps (`LAB_RUN_CAPS_MS`, every wait at its
- *  cap, about thirteen minutes) plus the slack: about eighteen minutes. A run on a working phone takes about two. */
+ *  cap, about fifteen minutes) plus the slack: about twenty minutes. A run on a working phone takes about two. */
 export const READER_LAB_RUN_TTL_MS = LAB_RUN_CAPS_MS + READER_LAB_RUN_SLACK_MS;
 /** Runs open at once; opening one more evicts the oldest. */
 export const READER_LAB_RUNS_MAX = 4;

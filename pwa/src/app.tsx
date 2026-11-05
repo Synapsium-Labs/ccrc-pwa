@@ -43,6 +43,7 @@ import { SettingsDataProvider } from './screens/settings/SettingsDataProvider';
 const AccountsScreen = lazyScreen(() => import('./screens/AccountsScreen').then((m) => m.AccountsScreen));
 const DigestScreen = lazyScreen(() => import('./screens/DigestScreen').then((m) => m.DigestScreen));
 const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
+const ReaderLab = lazyScreen(() => import('./screens/ReaderLab').then((m) => m.ReaderLab));
 const RunsScreen = lazyScreen(() => import('./screens/RunsScreen').then((m) => m.RunsScreen));
 const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
 const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
@@ -183,6 +184,8 @@ export function App(): ReactNode {
     <DigestScreen day={digestDay} />
   ) : route === 'measure-highlighting' ? loading(
     <HighlightMeasure />
+  ) : route === 'reader-lab' ? loading(
+    <ReaderLab />
   ) : route === 'docs' ? (
     // NOT keyed: one mount spans one Docs visit (its listings, its auto-refresh set, its image queue), across every
     // page, ref and view the visit opens.

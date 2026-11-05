@@ -13,6 +13,8 @@
 // so the figures show their source and the page still mounts (the W8a plan's refinement (c)).
 //
 // `mountReader` never remounts: the library's `update` is not called, and a theme change is the library's `setPrefs`.
+// The watchdog, the draw mode and whether a storage port is handed over are `policy.ts#readerMountPlan`'s, by the input's
+// `profile`: none for the Docs reader, `lab-draw` for the reader lab's timed mounts (the reader lab plan, refinement (k)).
 import {
   mermaidGate, type FrameAssets, type RenderInput,
 } from '@synapsium-labs/docserver/frame';
@@ -21,7 +23,7 @@ import {
 } from '@synapsium-labs/docserver/host';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
-import { readerWatchdogMs, type ReaderLink } from './policy';
+import { readerMountPlan, type ReaderLink, type ReaderMountProfile } from './policy';
 import { loadMermaidAsset, loadReaderAssets } from './assets';
 
 /** The theme choice the frame takes. */
@@ -44,6 +46,11 @@ export interface ReaderMountInput {
   readonly copy: (text: string, hidden: readonly HiddenChar[]) => void;
   readonly onReady: () => void;
   readonly onFallback: (r: FallbackReason) => void;
+  /** Lab-only observation: the Mermaid asset failed or passed the mount deadline. */
+  readonly onMermaidDrop?: () => void;
+  /** Absent for the Docs reader. `lab-draw` is the reader lab's timed mount (`readerMountPlan`): Mermaid drawn on open,
+   *  the lab's watchdog, no storage port. Only the reader lab passes it. */
+  readonly profile?: ReaderMountProfile;
 }
 
 export interface ReaderMountDeps {
@@ -99,7 +106,8 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     return INERT;
   }
 
-  const watchdogMs = readerWatchdogMs(input.bytes);
+  const plan = readerMountPlan(input.profile, input.bytes);
+  const watchdogMs = plan.watchdogMs;
   let document = withServedVersion(input.document);
   if (document.scan !== undefined && mermaidGate(document.scan.mermaid).inline) {
     // The wait ends at the frame's own watchdog: an import that never settles drops the scan exactly as a rejected one
@@ -114,12 +122,13 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     } catch {
       const { scan: _dropped, ...withoutScan } = document;
       document = withoutScan;
+      if (plan.draw === 'auto') input.onMermaidDrop?.();
     } finally {
       clearTimeout(timer);
     }
   }
 
-  const port = (deps.store ?? enumerablePageStorage)();
+  const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
   const adapters: HostAdapters = {
     assets,
     watchdogMs,
@@ -127,7 +136,7 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     storePrefix: READER_STORE_PREFIX,
     ...(input.docKey === null ? {} : { docKey: input.docKey }),
     prefs: { theme: input.prefs.theme },
-    mermaidDraw: 'on-request',
+    mermaidDraw: plan.draw,
     title: input.title,
     focus: true,
     onLink: (l) => input.onLink(readerLinkOf(l)),

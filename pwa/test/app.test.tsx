@@ -385,6 +385,8 @@ describe('ROUTES and the ladder, both ways', () => {
     // Settings' five pages and the catch-all (D-5504).
     '/settings/updates', '/settings/appearance', '/settings/notifications', '/settings/automation',
     '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
+    // The reader lab (the reader lab plan, Task 10).
+    '/settings/reader-lab',
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 
@@ -422,6 +424,19 @@ describe('ROUTES and the ladder, both ways', () => {
       // The page loads on demand (console speed C1): its chunk resolves after the first render.
       expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Measure highlighting' }, { timeout: LAZY_WAIT_MS }))
         .toBeInTheDocument();
+      expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('`/settings/reader-lab` renders the reader lab, not the Settings frame (the reader lab plan, Task 10)', { timeout: LAZY_CEILING_MS }, async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    try {
+      navigate('/settings/reader-lab');
+      render(<App />);
+      const detail = document.querySelector('.shell-detail')!;
+      expect(await within(detail as HTMLElement).findByRole('heading', { level: 1, name: 'Reader lab' }, { timeout: LAZY_WAIT_MS })).toBeInTheDocument();
       expect(within(detail as HTMLElement).queryByRole('navigation', { name: 'Settings sections' })).toBeNull();
     } finally {
       vi.unstubAllGlobals();

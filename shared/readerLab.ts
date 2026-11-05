@@ -118,10 +118,10 @@ export const LAB_MOUNT_WAIT_MS = 65_000;
 export const LAB_DRAW_SETTLE_MS = 10_000;
 /** The run's steps, for the page's progress. */
 export const LAB_STEPS = 9;
-/** The run's reader mounts: the nine pages and the hostile page. */
-export const LAB_MOUNTS = 10;
+/** The run's reader mounts: the nine pages, the hostile page, and the benign page the stray messages are sent to. */
+export const LAB_MOUNTS = 11;
 /** The longest a run takes by its own caps: the tap wait, a settle per step, the spin, and every mount at its cap and its
- *  draw settle. About thirteen minutes; a run on a working phone takes about two. */
+ *  draw settle. About fifteen minutes; a run on a working phone takes about two. */
 export const LAB_RUN_CAPS_MS = LAB_TAP_WAIT_MS + LAB_STEPS * LAB_SETTLE_MS + LAB_BUSY_SPIN_MS
   + LAB_MOUNTS * (LAB_MOUNT_WAIT_MS + LAB_DRAW_SETTLE_MS);
 

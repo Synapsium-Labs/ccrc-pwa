@@ -1,4 +1,4 @@
-// Console speed, task C1 (the link and the start): six big screens load on demand (spec 2026-11-04 §2.3). The entry
+// Console speed, task C1 (the link and the start): seven big screens load on demand (spec 2026-11-04 §2.3). The entry
 // imports none of them statically; a route that opens one shows the loading line, then the screen; a chunk that fails
 // to load throws into the detail boundary, whose fallback is drawn instead of a blank pane.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import path from 'node:path';
 import postcss from 'postcss';
 import { act, cleanup, render, screen } from '@testing-library/react';
 
-/** The six, by module path as `app.tsx` names them. */
+/** The seven, by module path as `app.tsx` names them. */
 const LAZY = [
   './screens/SessionScreen',
   './screens/settings/SettingsFrame',
@@ -17,6 +17,7 @@ const LAZY = [
   './screens/RunsScreen',
   './screens/DigestScreen',
   './screens/HighlightMeasure',
+  './screens/ReaderLab',
 ] as const;
 
 /** The screens that stay in the entry (spec §2.3): Docs, the programme, Mail, Archive and the Waiting routes. */
@@ -39,19 +40,19 @@ vi.mock('../src/screens/DigestScreen', () => {
 const APP = readFileSync(path.join(__dirname, '../src/app.tsx'), 'utf8');
 /** Every module specifier a static statement names (review 1473 F7): `import … from`, a bare `import '…'`, and
  *  `export … from` (a re-export loads the module as surely), in either quote, with or without a trailing semicolon,
- *  however many share a line, a type-only one included (it loads nothing, but none of the six is imported for a type
- *  either). Read from `app.tsx` alone: no other module imports the six. */
+ *  however many share a line, a type-only one included (it loads nothing, but none of the seven is imported for a type
+ *  either). Read from `app.tsx` alone: no other module imports the seven. */
 const staticImports = (src: string): string[] =>
   [...src.matchAll(/(?:^|;)[ \t]*(?:import|export)\s+(?:type\s+)?(?:[^;'"`()]*?\bfrom\s*)?(['"])([^'"\n]+)\1/gm)]
     .map((m) => m[2] as string);
 /** Every specifier a dynamic `import(…)` names, spaced or across lines, in any quote, and every `import.meta.glob`
- *  pattern, so a glob that reaches a screen shows in the list the case compares with the six. */
+ *  pattern, so a glob that reaches a screen shows in the list the case compares with the seven. */
 const dynamicImports = (src: string): string[] => [
   ...[...src.matchAll(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*[,)]/g)].map((m) => m[2] as string),
   ...[...src.matchAll(/\bimport\.meta\.glob\s*(?:<[^>]*>)?\s*\(\s*(['"`])([^'"`]+)\1/g)].map((m) => m[2] as string),
 ];
 
-describe('the entry does not carry the six screens', () => {
+describe('the entry does not carry the seven screens', () => {
   it('CONTROL: the scanners read every static and dynamic form', () => {
     expect(staticImports([
       "import { A } from './a';",
@@ -71,7 +72,7 @@ describe('the entry does not carry the six screens', () => {
     ].join('\n'))).toEqual(['./a', './b', './c', './screens/*.tsx']);
   });
 
-  it('app.tsx imports none of the six screens statically, and each only by its own dynamic import', () => {
+  it('app.tsx imports none of the seven screens statically, and each only by its own dynamic import', () => {
     const statics = staticImports(APP);
     expect(statics.length).toBeGreaterThan(10);
     expect(statics.filter((s) => (LAZY as readonly string[]).includes(s))).toEqual([]);

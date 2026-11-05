@@ -67,11 +67,11 @@ describe('the reader lab vocabulary (reader lab plan, Task 1)', () => {
     expect(READER_LAB_PROBE_ROUTE).toBe(`${readerLabProbeBase(':nonce')}:name`);
   });
 
-  it('the run\'s own caps, and their sum, from which the door derives a run\'s life: about thirteen minutes', () => {
+  it('the run\'s own caps, and their sum, from which the door derives a run\'s life: about fifteen minutes', () => {
     expect([LAB_TAP_WAIT_MS, LAB_SETTLE_MS, LAB_BUSY_SPIN_MS, LAB_MOUNT_WAIT_MS, LAB_DRAW_SETTLE_MS, LAB_STEPS, LAB_MOUNTS])
-      .toEqual([30_000, 2000, 3000, 65_000, 10_000, 9, 10]);
+      .toEqual([30_000, 2000, 3000, 65_000, 10_000, 9, 11]);
     expect(LAB_RUN_CAPS_MS)
       .toBe(LAB_TAP_WAIT_MS + LAB_STEPS * LAB_SETTLE_MS + LAB_BUSY_SPIN_MS + LAB_MOUNTS * (LAB_MOUNT_WAIT_MS + LAB_DRAW_SETTLE_MS));
-    expect(LAB_RUN_CAPS_MS).toBe(801_000);
+    expect(LAB_RUN_CAPS_MS).toBe(876_000);
   });
 });

@@ -31,3 +31,8 @@ export const READER_DOC_KEY_MAX_UNITS = 1024;
  *  The sheet's size is bounded by the text's own, which the library caps at `READER_COPY_WRITE_MAX_BYTES`, so a hostile
  *  page cannot make the named markers (about 30 characters each) outgrow it. */
 export const READER_COPY_SHEET_MARKERS_MAX = 64;
+
+/** The reader lab's watchdog for its own timed mounts (the reader lab plan, refinement (k)): Mermaid drawn on open is
+ *  inside it, so a slow phone's draw is timed rather than cut off. Never the Docs reader's: `readerMountPlan` gives it to
+ *  the `lab-draw` profile only. Within the library's own ceiling of 120 000 ms. */
+export const READER_LAB_DRAW_WATCHDOG_MS = 60000;
