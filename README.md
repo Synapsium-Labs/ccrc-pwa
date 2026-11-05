@@ -1371,11 +1371,11 @@ box, one row each, with where it came from (the environment, `ccrc.env`, an empt
 whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
 are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
 URL's scheme and host only (the release base shows as `default`, or `custom <scheme://host>`, or `custom` alone when the
-value does not reduce to one), `is-set` (the spec's `presence`, D12) prints only that it is set (the test-box URL, D19), and `omit` is not shown. A
+value does not reduce to one or its text has no `http://` or `https://` scheme, D-7923), `is-set` (the spec's `presence`, D12) prints only that it is set (the test-box URL, D19), and `omit` is not shown. A
 refused row records its source and its check's words and never the value, wave 1's seven included (D14, D22). Every wave-2
 setting is read from `ccrc.env` alone; only the backups and the updates settings keep the environment-first read (D20). The
 session slice's two limits and the four graph settings that the installed units render take effect at the next
-update, so the card shows the configured value, not the installed one. A value that passes its check but is wider than
+update, and that update installs a value from its own shell's environment when the shell sets one, so the card shows what ccrc.env says, which can differ from what is installed. A value that passes its check but is wider than
 the view records reads as not measured (D-7909). It also counts the timestamped backups, those that still hold a
 `coord.db`, their size, and the home filesystem's free space. It is read-only: it never prunes, takes no lock and
 changes no setting. `--json` prints the record, and `--write` writes it to `~/.ccrc/box-settings.json` (0600), every
