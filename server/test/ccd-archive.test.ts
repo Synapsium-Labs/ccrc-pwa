@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -170,6 +170,8 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_ARGV_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_APPLY_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ACCOUNT_POOLS_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SYNC_INSTALLED_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SYNC_ABSENT_CAP);
     // Terminal drawer wave 2's token. Task 2 added the STRING to the list
     // above; this line is what holds it equal to the constant wave 3 reads —
     // without it `win-size-v1` would be the one known token whose three
@@ -233,7 +235,9 @@ describe('ccd caps', () => {
     // the known set — neither a silently-dropped one nor an undocumented
     // extra one hiding inside what the verb-parity check above now excludes.
     const capabilities = advertised.filter((a) => KNOWN_CAPABILITY_TOKENS.includes(a));
-    expect(capabilities.sort()).toEqual([...KNOWN_CAPABILITY_TOKENS].sort());
+    // One word of the known set is not printed here: the two `pool-sync-*` words are one measured fact, and this
+    // fixture HOME has no timer. `ccd-caps-pool-sync.test.ts` holds the other arm.
+    expect(capabilities.sort()).toEqual(KNOWN_CAPABILITY_TOKENS.filter((t) => t !== POOL_SYNC_INSTALLED_CAP).sort());
   });
 });
 

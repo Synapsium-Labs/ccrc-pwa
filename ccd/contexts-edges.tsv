@@ -330,6 +330,7 @@ cmd_account_pane -> _tmux_new_session
 cmd_attach -> _alive
 cmd_attach -> _id
 cmd_attach -> cmd_ensure
+cmd_caps -> _pool_sync_installed
 cmd_clip -> _alive
 cmd_clip -> _tmux_t
 cmd_enable -> _ws_expire_refuse_return

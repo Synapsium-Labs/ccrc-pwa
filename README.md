@@ -2581,7 +2581,9 @@ with no `ccd-pool-sync.timer` — `--role both` or `--role server`, the
 single-box default, or any macOS box — has none of this: with no projection on
 disk it reads the declared tag, as before, so there a central tag is the
 server's refusal and forecast while ccd's own placement still follows
-`accounts.json`. The server never nudges; convergence is the timer's pull
+`accounts.json`. The PWA says so: `ccd caps` prints `pool-sync-absent` there,
+and the account pool chip dims and the editor warns that nothing enforces the
+tag. The server never nudges; convergence is the timer's pull
 alone, so a central change reaches the fleet within about a minute. On a fleet
 box running the timer, the fleet header shows `epoch N / observed M` (or
 `observed never synced`) while the fleet's projection lags the server's epoch;
