@@ -70,6 +70,7 @@ export function mountLabFrame(stage: HTMLElement, spec: LabFrameSpec, nonce: () 
   });
   el.setAttribute('srcdoc', labSrcdoc(spec, policy, scriptNonce));
   stage.append(el);
+  el.scrollIntoView({ block: 'nearest' });
   return {
     loads: () => loads,
     remove: () => {

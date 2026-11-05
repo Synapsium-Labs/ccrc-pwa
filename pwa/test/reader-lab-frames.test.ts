@@ -9,7 +9,7 @@ import { frameCsp } from '@synapsium-labs/docserver/frame';
 import { LAB_BATTERY_CHANNELS, LAB_PROBE_NAMES, readerLabProbeBase } from '../../shared/readerLab';
 import { LAB_BATTERY_CHANNELS_JS } from '../src/readerLab/battery';
 import {
-  AMBIENT_SCRIPT, BATTERY_SCRIPT, BUSY_SCRIPT, LAB_FRAME_SCRIPTS, LAB_IMPORT_CHANNEL, LAB_IMPORT_MARK, LAB_IMPORT_SCRIPT, LAB_IMPORT_SCRIPT_SHA256,
+  AMBIENT_SCRIPT, BATTERY_SCRIPT, BUSY_SCRIPT, SELF_NAV_SCRIPT, LAB_FRAME_SCRIPTS, LAB_IMPORT_CHANNEL, LAB_IMPORT_MARK, LAB_IMPORT_SCRIPT, LAB_IMPORT_SCRIPT_SHA256,
 } from '../src/readerLab/frameScripts';
 import { LAB_SANDBOX, labDataText, labSrcdoc, mountLabFrame } from '../src/readerLab/frames';
 import { labWallCsp } from '../src/docs/reader/labPolicy';
@@ -132,6 +132,22 @@ describe('the reader lab frames (reader lab plan, Task 6)', () => {
     new Function('document', 'window', 'Image', script)(document, win, FakeImage);
     return requested;
   };
+
+  it('reports a self-navigation attempt only when its timer actually fires, immediately before navigation', () => {
+    const events: string[] = [];
+    let fire: (() => void) | undefined;
+    const doc = { currentScript: { previousElementSibling: { textContent: JSON.stringify({ base: BASE }) } } };
+    class ImageProbe { set src(value: string) { events.push(value); } }
+    const location = { set href(value: string) { events.push(value); } };
+    new Function('document', 'Image', 'location', 'setTimeout', SELF_NAV_SCRIPT)(doc, ImageProbe, location, (fn: () => void, ms: number) => {
+      expect(ms).toBe(200);
+      fire = fn;
+    });
+    expect(events).toEqual([]);
+    expect(fire).toBeDefined();
+    fire!();
+    expect(events).toEqual([`${BASE}self-nav-tried`, `${BASE}self-nav`]);
+  });
 
   it('the battery asks for its canary only after the import script ran, and runs no import channel itself; the import script marks, then imports', () => {
     const bare = BATTERY_SCRIPT.replace(LAB_BATTERY_CHANNELS_JS, '{}');

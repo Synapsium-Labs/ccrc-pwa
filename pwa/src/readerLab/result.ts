@@ -38,7 +38,7 @@ export function formatLabResult(
     }),
   ].join(', ');
   const gaps = local.mounts.length === 0 ? [] : [`    ${'gaps ms'.padEnd(17)}${local.mounts
-    .map((m) => `${m.label} ${m.outcome === 'ready' ? String(Math.round(m.longestGapMs)) : `${Math.round(m.longestGapMs)} ${m.outcome}`}`).join(' · ')}`];
+    .map((m) => `${m.label} ${m.gapHidden ? 'not measured: the page was hidden' : `${Math.round(m.longestGapMs)} ${m.outcome}`}`).join(' · ')}`];
   const cookie = run === null ? '' : run.probes['cookie-console'].cookie > 0 ? '; session cookie sent' : '; no session cookie (sign-in gate off?)';
   const kept = finalRead === 'read' ? '' : `; final read ${finalRead === 'unknown-run' ? 'found the run gone' : 'unreadable'}, counts as of the hostile step`;
   const door = run === null ? 'door: not read'

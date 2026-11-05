@@ -57,11 +57,11 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     for (const k of LAB_CHECKS.filter((c) => c !== 'busy-frame')) expect(v[k].verdict, k).toBe('holds');
     expect(v['busy-frame']).toEqual({ verdict: 'own-thread', detail: 'longest gap 30 ms in a 3000 ms spin; watchdog timer 5 ms late' });
     expect(v['no-cookie'].detail).toBe('4 arrived, 0 with the cookie; the control carried it');
-    expect(v['csp-27'].detail).toBe('0 of 27 reached; 25 measured; not measured: link-prefetch, iframe; library 0 of 2');
-    expect(v['no-self-navigate'].detail).toBe('');
+    expect(v['csp-27'].detail).toBe('0 of 27 reached; 25 measured; not measured: link-prefetch, iframe; library 0 of 1 attempted');
+    expect(v['no-self-navigate'].detail).toBe('attempt seen: second load; attempt seen: tried');
     expect(v['self-nav-teardown'].detail).toBe('second load fired');
-    expect(v['bridge-strays'].detail).toBe('8 sent, 0 effects');
-    expect(v.mermaid.detail).toBe('longest gap 150 ms, all six together; worst single: figure 5, 70 ms');
+    expect(v['bridge-strays'].detail).toBe('8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised');
+    expect(v.mermaid.detail).toBe('ready; longest gap 150 ms, all six together; worst single: figure 5, 70 ms');
   });
 
   it('opaque origin: a broke report or a same-origin arrival does not hold; a missing report is not measured', () => {
@@ -127,16 +127,31 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
       .toBe('does-not-hold');
   });
 
-  it('self-navigation: the navigation arriving does not hold; no tried report is not measured', () => {
-    expect(verdictsOf({ 'self-nav': one })['no-self-navigate'].verdict).toBe('does-not-hold');
-    expect(verdictsOf({ 'self-nav-tried': { hits: 0 } })['no-self-navigate'].verdict).toBe('not-measured');
-    expect(verdictsOf({}, { ...LOCAL_OK, selfNavLoads: 1 })['no-self-navigate'].verdict, 'the wall is the door\'s silence alone').toBe('holds');
+  it('self-navigation: a second load proves the attempt even when the tried image is missing (F2)', () => {
+    const v = verdictsOf({ 'self-nav-tried': { hits: 0 } }, { ...LOCAL_OK, selfNavLoads: 2 });
+    expect(v['no-self-navigate']).toEqual({ verdict: 'holds', detail: 'attempt seen: second load' });
+    expect(v['self-nav-teardown']).toEqual({ verdict: 'holds', detail: 'second load fired' });
   });
 
-  it('teardown signal: a second load holds; none differs from desktop, a miss E18 reads, never a broken wall; no run is not measured (F7)', () => {
-    expect(verdictsOf({}, { ...LOCAL_OK, selfNavLoads: 1 })['self-nav-teardown']).toEqual({ verdict: 'differs', detail: 'no second load' });
-    expect(verdictsOf({}, { ...LOCAL_OK, selfNavLoads: null })['self-nav-teardown'].verdict).toBe('not-measured');
-    expect(verdictsOf({ 'self-nav-tried': { hits: 0 } })['self-nav-teardown'].verdict).toBe('not-measured');
+  it('self-navigation: tried alone proves the wall and teardown differs even with no load measurement', () => {
+    for (const selfNavLoads of [1, null]) {
+      const v = verdictsOf({}, { ...LOCAL_OK, selfNavLoads });
+      expect(v['no-self-navigate']).toEqual({ verdict: 'holds', detail: 'attempt seen: tried' });
+      expect(v['self-nav-teardown']).toEqual({ verdict: 'differs', detail: 'no second load' });
+    }
+  });
+
+  it('self-navigation: without either attempt signal neither line is measured', () => {
+    for (const selfNavLoads of [1, null]) {
+      const v = verdictsOf({ 'self-nav-tried': { hits: 0 } }, { ...LOCAL_OK, selfNavLoads });
+      expect(v['no-self-navigate']).toEqual({ verdict: 'not-measured', detail: 'the frame did not try' });
+      expect(v['self-nav-teardown']).toEqual({ verdict: 'not-measured', detail: 'the frame did not try' });
+    }
+  });
+
+  it('self-navigation: an arrival breaks the wall even when a second load is observed', () => {
+    expect(verdictsOf({ 'self-nav': one, 'self-nav-tried': { hits: 0 } }, LOCAL_OK)['no-self-navigate'])
+      .toEqual({ verdict: 'does-not-hold', detail: 'the frame navigated itself to the server' });
   });
 
   it('strays: an effect or an address change does not hold; a reader that never became ready is not measured', () => {
@@ -154,6 +169,23 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     expect(verdictsOf({}, { ...LOCAL_OK, busy: null })['busy-frame'].verdict).toBe('not-measured');
   });
 
+  it('a hidden busy window is not measured and cannot favour draw on open', () => {
+    const local = { ...LOCAL_OK, busy: { ...LOCAL_OK.busy!, gapHidden: true } };
+    const v = verdictsOf({}, local);
+    expect(v['busy-frame']).toEqual({ verdict: 'not-measured', detail: 'the page was hidden' });
+    expect(drawOnOpenReading(v, local, 200)).toBe('not measured');
+    expect(verdictsOf({ 'hostile-img': one }, local)['csp-27'].verdict).toBe('does-not-hold');
+  });
+
+  it('a hidden timed gap is not measured or printed as a number', () => {
+    const local = { ...LOCAL_OK, mounts: LOCAL_OK.mounts.map((m) => m.label === 'f1' ? { ...m, longestGapMs: 9876, gapHidden: true } : m) };
+    const v = verdictsOf({}, local);
+    expect(v.mermaid).toEqual({ verdict: 'not-measured', detail: 'the page was hidden' });
+    const text = formatLabResult(deviceOf('x', null, { worker: true, frameSandbox: true, cspAttribute: true }), 'build', v, local, runWith(HEALTHY), 200, 'read');
+    expect(text).toContain('f1 not measured: the page was hidden');
+    expect(text).not.toContain('9876');
+  });
+
   it('mermaid: every figure mount counts, the six together included; the worst gap decides (F3)', () => {
     const slow = LOCAL_OK.mounts.map((m) => (m.label === 'f4' ? { ...m, longestGapMs: 420 } : m));
     expect(verdictsOf({}, { ...LOCAL_OK, mounts: slow }).mermaid).toEqual({ verdict: 'does-not-hold', detail: 'longest gap 420 ms, figure 4' });
@@ -167,7 +199,7 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     const timedOut = LOCAL_OK.mounts.map((m) => (m.label === 'f3' ? { ...m, outcome: 'timeout' as const, longestGapMs: 420 } : m));
     expect(verdictsOf({}, { ...LOCAL_OK, mounts: timedOut }).mermaid).toEqual({ verdict: 'does-not-hold', detail: 'longest gap 420 ms, figure 3' });
     const fell = LOCAL_OK.mounts.map((m) => (m.label === 'f2' ? { ...m, outcome: 'fallback' as const } : m));
-    expect(verdictsOf({}, { ...LOCAL_OK, mounts: fell }).mermaid).toEqual({ verdict: 'not-measured', detail: 'did not draw: f2 fallback' });
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: fell }).mermaid).toEqual({ verdict: 'not-measured', detail: 'not ready: f2 fallback' });
     const none = LOCAL_OK.mounts.map((m) => ({ ...m, outcome: 'timeout' as const }));
     expect(verdictsOf({}, { ...LOCAL_OK, mounts: none }).mermaid.verdict).toBe('not-measured');
   });
@@ -197,12 +229,24 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     expect(labVerdicts(runWith({ ...HEALTHY, 'csp-beacon': one }), LOCAL_OK, 200)['csp-27'].verdict).toBe('does-not-hold');
   });
 
+  it('a dropped Mermaid asset is not measured even if the mount later says ready', () => {
+    const dropped = { ...LOCAL_OK, hostile: { ready: false, mermaidDropped: true },
+      mounts: LOCAL_OK.mounts.map((m) => m.label === 'f1' ? { ...m, outcome: 'mermaid-dropped' } : m) } as unknown as LabLocal;
+    const v = verdictsOf({}, dropped);
+    expect(v.mermaid).toEqual({ verdict: 'not-measured', detail: 'the Mermaid asset did not load' });
+    expect(v['csp-27']).toEqual({ verdict: 'not-measured', detail: 'library not measured: the Mermaid asset did not load' });
+    expect(drawOnOpenReading(v, dropped, 200)).toBe('not measured');
+    const text = formatLabResult(deviceOf('x', null, { worker: true, frameSandbox: true, cspAttribute: true }), 'build', v, dropped, runWith(HEALTHY), 200, 'read');
+    expect(text).toContain('mermaid            not measured (the Mermaid asset did not load)');
+    expect(verdictsOf({ 'hostile-img': one }, dropped)['csp-27'].verdict).toBe('does-not-hold');
+  });
+
   it('mermaid: a partial mount list is not measured, never holds, and an over-budget gap still decides', () => {
     const f1 = LOCAL_OK.mounts.filter((m) => m.label === 'f1');
     expect(verdictsOf({}, { ...LOCAL_OK, mounts: f1 }).mermaid)
-      .toEqual({ verdict: 'not-measured', detail: 'did not draw: f2 missing, f3 missing, f4 missing, f5 missing, f6 missing, all missing' });
+      .toEqual({ verdict: 'not-measured', detail: 'not ready: f2 missing, f3 missing, f4 missing, f5 missing, f6 missing, all missing' });
     const noAll = LOCAL_OK.mounts.filter((m) => m.label !== 'all');
-    expect(verdictsOf({}, { ...LOCAL_OK, mounts: noAll }).mermaid).toEqual({ verdict: 'not-measured', detail: 'did not draw: all missing' });
+    expect(verdictsOf({}, { ...LOCAL_OK, mounts: noAll }).mermaid).toEqual({ verdict: 'not-measured', detail: 'not ready: all missing' });
     expect(verdictsOf({}, { ...LOCAL_OK, mounts: [{ ...f1[0]!, longestGapMs: 420 }] }).mermaid.verdict).toBe('does-not-hold');
   });
 
@@ -257,7 +301,7 @@ describe('the device line and the result block (reader lab plan, Task 8)', () =>
     expect(lines[10]).toBe('E17 responsive (mermaid budget 200 ms):');
     expect(lines[11]).toBe('  busy-frame         own thread (longest gap 30 ms in a 3000 ms spin; watchdog timer 5 ms late)');
     expect(lines[12]!.trim().startsWith('mermaid            holds')).toBe(true);
-    expect(lines[13]).toBe('    gaps ms          none 40 · trivial 120 · f1 30 · f2 20 · f3 50 · f4 60 · f5 70 · f6 25 · all 150');
+    expect(lines[13]).toBe('    gaps ms          none 40 ready · trivial 120 ready · f1 30 ready · f2 20 ready · f3 50 ready · f4 60 ready · f5 70 ready · f6 25 ready · all 150 ready');
     expect(lines[14]).toBe('draw on open: costs the console nothing here; the change only stops ready waiting for figures');
     expect(lines[15]).toBe('door: 151 counted, 0 ignored; session cookie sent');
     for (const leak of ['Mozilla', 'Chrome/', 'box.example', 'AAAAAAAAAAAAAAAAAAAAAA', 'http']) expect(text, leak).not.toContain(leak);

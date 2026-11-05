@@ -46,6 +46,8 @@ export interface ReaderMountInput {
   readonly copy: (text: string, hidden: readonly HiddenChar[]) => void;
   readonly onReady: () => void;
   readonly onFallback: (r: FallbackReason) => void;
+  /** Lab-only observation: the Mermaid asset failed or passed the mount deadline. */
+  readonly onMermaidDrop?: () => void;
   /** Absent for the Docs reader. `lab-draw` is the reader lab's timed mount (`readerMountPlan`): Mermaid drawn on open,
    *  the lab's watchdog, no storage port. Only the reader lab passes it. */
   readonly profile?: ReaderMountProfile;
@@ -120,6 +122,7 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     } catch {
       const { scan: _dropped, ...withoutScan } = document;
       document = withoutScan;
+      if (plan.draw === 'auto') input.onMermaidDrop?.();
     } finally {
       clearTimeout(timer);
     }

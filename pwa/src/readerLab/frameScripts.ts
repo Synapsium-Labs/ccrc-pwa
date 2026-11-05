@@ -109,8 +109,7 @@ b.addEventListener('click', function () {
 /** The frame cannot navigate itself (E11): it says it tried, then sets its own location to a door URL. */
 export const SELF_NAV_SCRIPT = `(function () {
 ${PRELUDE}
-hit('self-nav-tried');
-setTimeout(function () { location.href = url('self-nav'); }, 200);
+setTimeout(function () { hit('self-nav-tried'); location.href = url('self-nav'); }, 200);
 })();`;
 
 /** A busy frame (E17): it marks its start, spins for the configured time, and marks its end. */

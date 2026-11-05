@@ -18,9 +18,11 @@ import { LAB_STRAYS_POSTED } from './frameScripts';
 export interface LabMount {
   /** `none`, `trivial`, `f1` to `f6`, or `all`. */
   readonly label: string;
-  readonly outcome: 'ready' | 'fallback' | 'timeout' | 'not-rendered';
+  readonly outcome: 'ready' | 'fallback' | 'timeout' | 'not-rendered' | 'mermaid-dropped';
   /** The longest gap between animation frames from the mount's start to its outcome. */
   readonly longestGapMs: number;
+  /** Visibility invalidated the gap; the number is not a measurement. */
+  readonly gapHidden?: boolean;
   /** From the mount's start to its outcome. */
   readonly elapsedMs: number;
 }
@@ -29,12 +31,12 @@ export interface LabMount {
 export interface LabLocal {
   /** The `load` events the self-navigating frame fired. */
   readonly selfNavLoads: number | null;
-  readonly busy: { readonly longestGapMs: number; readonly timerLateMs: number; readonly spinMs: number } | null;
+  readonly busy: { readonly longestGapMs: number; readonly timerLateMs: number; readonly spinMs: number; readonly gapHidden?: boolean } | null;
   /** The figure mounts, in run order; empty when that step did not run. */
   readonly mounts: readonly LabMount[];
   /** The hostile page's mount: whether it became ready (`csp-27`'s condition). A fallback after ready is the library
    *  failing closed on a figure the wall refused, and it is no effect of any stray message. */
-  readonly hostile: { readonly ready: boolean } | null;
+  readonly hostile: { readonly ready: boolean; readonly mermaidDropped?: boolean } | null;
   /** The benign page's mount, which the stray messages are sent to: whether it became ready, and the host callbacks the
    *  stray messages reached (a fallback after ready counts as one here). */
   readonly strays: { readonly ready: boolean; readonly effects: number; readonly addressChanged: boolean } | null;
@@ -114,9 +116,10 @@ function csp27(r: LabRunView, local: LabLocal): LabOutcome {
   const reachable = LAB_BATTERY_CHANNELS.filter((c) => !UNREACHABLE.includes(c));
   const counted = measured.filter((c) => !UNREACHABLE.includes(c)).length;
   if (counted < LAB_CONTROL_FLOOR) return unmeasured(`the control frame reached ${counted} of ${reachable.length} (floor ${LAB_CONTROL_FLOOR})`);
+  if (local.hostile?.mermaidDropped === true) return unmeasured('library not measured: the Mermaid asset did not load');
   if (local.hostile?.ready !== true) return unmeasured('library not measured: the hostile mount never became ready');
   const unseen = LAB_BATTERY_CHANNELS.filter((c) => hits(r, `ctl-${c}`) === 0);
-  return holds(`0 of 27 reached; ${measured.length} measured${unseen.length > 0 ? `; not measured: ${unseen.join(', ')}` : ''}; library 0 of 2`);
+  return holds(`0 of 27 reached; ${measured.length} measured${unseen.length > 0 ? `; not measured: ${unseen.join(', ')}` : ''}; library 0 of 1 attempted`);
 }
 
 function popups(r: LabRunView): LabOutcome {
@@ -141,17 +144,21 @@ function popups(r: LabRunView): LabOutcome {
   return holds(threw ? '' : 'top navigation blocked without an error');
 }
 
-function selfNavigate(r: LabRunView): LabOutcome {
+function selfNavigate(r: LabRunView, local: LabLocal): LabOutcome {
   if (hits(r, 'self-nav') > 0) return broken('the frame navigated itself to the server');
-  return hits(r, 'self-nav-tried') === 0 ? unmeasured('the frame did not run') : holds();
+  const evidence = [
+    ...(local.selfNavLoads !== null && local.selfNavLoads >= 2 ? ['attempt seen: second load'] : []),
+    ...(hits(r, 'self-nav-tried') > 0 ? ['attempt seen: tried'] : []),
+  ];
+  return evidence.length === 0 ? unmeasured('the frame did not try') : holds(evidence.join('; '));
 }
 
 /** The engine's teardown signal: a blocked self-navigation fires a second `load`, which is what closes the reader's port
  *  (the rich-docs spec's section 5.1 and M8.B5). No port exists in a lab frame; this is the engine signal it relies on. An
  *  engine without it differs from desktop Chromium: a miss E18 investigates, not a broken wall. */
 function selfNavTeardown(r: LabRunView, local: LabLocal): LabOutcome {
-  if (hits(r, 'self-nav-tried') === 0 || local.selfNavLoads === null) return unmeasured('the frame did not run');
-  return local.selfNavLoads >= 2 ? holds('second load fired') : { verdict: 'differs', detail: 'no second load' };
+  if (local.selfNavLoads !== null && local.selfNavLoads >= 2) return holds('second load fired');
+  return hits(r, 'self-nav-tried') > 0 ? { verdict: 'differs', detail: 'no second load' } : unmeasured('the frame did not try');
 }
 
 /** The stray messages' broken signal, observed by the page itself and so independent of the door: `undefined` when none. */
@@ -161,13 +168,14 @@ function straysBroke(local: LabLocal): LabOutcome | undefined {
     ? broken(`${h.effects} effects${h.addressChanged ? '; the address changed' : ''}`) : undefined;
 }
 
+/** Observes navigate, hash and copy effects; store.set and a same-source-only listener are not exercised. */
 function strays(r: LabRunView, local: LabLocal): LabOutcome {
   const h = local.strays;
   const bad = straysBroke(local);
   if (bad !== undefined) return bad;
   if (h === null || !h.ready) return unmeasured('the reader did not become ready');
   if (hits(r, 'strays-sent') === 0) return unmeasured('the stray frame did not run');
-  return holds(`${LAB_STRAYS_POSTED} sent, 0 effects`);
+  return holds(`${LAB_STRAYS_POSTED} sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised`);
 }
 
 /** A fact, never a pass or a fail: whether the busy frame shares the console's thread (its spin stops the console's
@@ -176,6 +184,7 @@ function strays(r: LabRunView, local: LabLocal): LabOutcome {
 function busyFrame(r: LabRunView, local: LabLocal): LabOutcome {
   const b = local.busy;
   if (b === null || hits(r, 'busy-start') === 0 || hits(r, 'busy-end') === 0) return unmeasured('the busy frame did not run');
+  if (b.gapHidden) return unmeasured('the page was hidden');
   return {
     verdict: b.longestGapMs >= 0.8 * b.spinMs ? 'shared-thread' : 'own-thread',
     detail: `longest gap ${ms(b.longestGapMs)} ms in a ${ms(b.spinMs)} ms spin; watchdog timer ${ms(b.timerLateMs)} ms late`,
@@ -189,11 +198,13 @@ const worstOf = (list: readonly LabMount[]): LabMount => list.reduce((a, b) => (
 
 /** The Mermaid stall under the lab profile's draw mode, draw on open. Every figure mount counts, the six together (`all`,
  *  the heavy page) included, and so does a mount that fell back or timed out, where a stall is likeliest: the worst gap of
- *  them all decides. Over the budget: does not hold. Within it, a figure mount that did not draw, or that is missing from
- *  the list, cannot show that it holds: not measured, naming it. */
+ *  them all decides. Over the budget: does not hold. Within it, a figure mount that did not become ready, or that is
+ *  missing from the list, cannot show that it holds. Ready does not prove that figures drew inside the opaque frame. */
 function mermaid(local: LabLocal, budgetMs: number): LabOutcome {
   const figures = local.mounts.filter((m) => /^f\d$/.test(m.label) || m.label === 'all');
   if (figures.length === 0) return unmeasured('not run');
+  if (figures.some((m) => m.outcome === 'mermaid-dropped')) return unmeasured('the Mermaid asset did not load');
+  if (figures.some((m) => m.gapHidden)) return unmeasured('the page was hidden');
   const worst = worstOf(figures);
   const singles = figures.filter((m) => m.label !== 'all');
   const single = singles.length === 0 ? null : worstOf(singles);
@@ -205,7 +216,7 @@ function mermaid(local: LabLocal, budgetMs: number): LabOutcome {
     ...figures.filter((m) => m.outcome !== 'ready').map((m) => `${m.label} ${m.outcome}`),
     ...FIGURE_LABELS.filter((l) => !figures.some((m) => m.label === l)).map((l) => `${l} missing`),
   ];
-  return missed.length > 0 ? unmeasured(`did not draw: ${missed.join(', ')}`) : holds(detail);
+  return missed.length > 0 ? unmeasured(`not ready: ${missed.join(', ')}`) : holds(`ready; ${detail}`);
 }
 
 /** What the E17 lines mean for drawing Mermaid on open, the operator's ruling of 2026-11-03 (the reader lab design,
@@ -239,7 +250,7 @@ export function labVerdicts(run: LabRunView | null, local: LabLocal, budgetMs: n
     'no-cookie': fromCounts((r) => noCookie(r)),
     'csp-27': fromCounts((r) => csp27(r, local)),
     'no-popup-top-nav': fromCounts((r) => popups(r)),
-    'no-self-navigate': fromCounts((r) => selfNavigate(r)),
+    'no-self-navigate': fromCounts((r) => selfNavigate(r, local)),
     'bridge-strays': straysBroke(local) ?? fromCounts((r) => strays(r, local)),
     'self-nav-teardown': fromCounts((r) => selfNavTeardown(r, local)),
     'busy-frame': fromCounts((r) => busyFrame(r, local)),

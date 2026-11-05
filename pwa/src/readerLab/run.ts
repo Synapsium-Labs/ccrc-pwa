@@ -17,6 +17,7 @@ import { api } from '../lib/api';
 import { ApiError } from '../lib/apiError';
 import { longestFrameGap } from '../lib/frameGap';
 import { utf8ByteLength } from '../lib/markdownGuard';
+import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { DOCS_PARSE_BUDGET_MS } from '../lib/markdownLimits';
 import { docsRunner } from '../lib/markdownRunner';
 import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
@@ -118,15 +119,25 @@ export class LabFailure extends Error {
 
 const noop = (): void => undefined;
 
+/** Any visibility change invalidates a frame-gap window, even if the page became visible again. */
+function watchGapVisibility(): { hidden: () => boolean; stop: () => void } {
+  let hidden = document.visibilityState === 'hidden';
+  const changed = (): void => { hidden = true; };
+  const stopHidden = onPageHidden(changed);
+  const stopVisible = onPageVisible(changed);
+  return { hidden: () => hidden, stop: () => { stopHidden(); stopVisible(); } };
+}
+
 /** A timed mount's input: the lab profile, no doc key, no images. */
 function mountInput(out: Extract<ReaderRenderOutcome, { kind: 'rendered' }>, bytes: number, cb: {
-  readonly onReady: () => void; readonly onFallback: () => void;
+  readonly onReady: () => void; readonly onFallback: () => void; readonly onMermaidDrop: () => void;
   readonly onLink?: () => void; readonly onHash?: () => void; readonly copy?: () => void;
 }): ReaderMountInput {
   return {
     document: { result: out.result, scan: { mermaid: out.mermaid }, images: {}, initialHash: null },
     bytes, docKey: null, title: 'reader-lab.md', prefs: { theme: 'auto' }, profile: 'lab-draw',
     onLink: cb.onLink ?? noop, onHash: cb.onHash ?? noop, copy: cb.copy ?? noop, onReady: cb.onReady, onFallback: cb.onFallback,
+    onMermaidDrop: cb.onMermaidDrop,
   };
 }
 
@@ -155,19 +166,23 @@ async function timedMount(deps: LabDeps, label: string, text: string): Promise<L
   const onAbort = (): void => settle('timeout');
   deps.signal.addEventListener('abort', onAbort, { once: true });
   void deps.sleep(LAB_MOUNT_WAIT_MS).then(() => settle('timeout'));
-  const gap = longestFrameGap(deps.frame, gapWindowEnd(deps.gapWindow, settled, deps.sleep));
+  const visibility = watchGapVisibility();
+  const windowEnd = gapWindowEnd(deps.gapWindow, settled, deps.sleep);
+  const gap = longestFrameGap(deps.frame, windowEnd);
   const t0 = deps.now();
   let mount: ReaderMount | null = null;
   try {
     try {
-      mount = await deps.mountReader(host, mountInput(out, bytes, { onReady: () => settle('ready'), onFallback: () => settle('fallback') }));
+      mount = await deps.mountReader(host, mountInput(out, bytes, { onReady: () => settle('ready'), onFallback: () => settle('fallback'),
+        onMermaidDrop: () => settle('mermaid-dropped') }));
     } catch {
       settle('fallback');
     }
     const outcome = await settled;
     const elapsedMs = deps.now() - t0;
-    return { label, outcome, longestGapMs: await gap, elapsedMs };
+    return { label, outcome, longestGapMs: await gap, elapsedMs, ...(visibility.hidden() ? { gapHidden: true } : {}) };
   } finally {
+    visibility.stop();
     deps.signal.removeEventListener('abort', onAbort);
     mount?.destroy();
     host.remove();
@@ -179,7 +194,7 @@ async function timedMount(deps: LabDeps, label: string, text: string): Promise<L
  *  whether ready had come, and `effect` is every host callback the page's messages can reach. The mount and its host are
  *  gone when this returns. */
 async function readyMount(deps: LabDeps, text: string, on: {
-  readonly onFallback: (afterReady: boolean) => void; readonly effect: () => void;
+  readonly onFallback: (afterReady: boolean) => void; readonly effect: () => void; readonly onMermaidDrop?: () => void;
 }, whileReady: () => Promise<void>): Promise<boolean> {
   const bytes = utf8ByteLength(text);
   const out = await deps.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: deps.signal });
@@ -197,6 +212,7 @@ async function readyMount(deps: LabDeps, text: string, on: {
       mount = await deps.mountReader(host, mountInput(out, bytes, {
         onReady: () => { ready = true; settle(true); },
         onFallback: () => { on.onFallback(ready); settle(false); },
+        onMermaidDrop: () => { on.onMermaidDrop?.(); settle(false); },
         onLink: on.effect, onHash: on.effect, copy: on.effect,
       }));
     } catch {
@@ -220,7 +236,10 @@ async function readyMount(deps: LabDeps, text: string, on: {
 async function hostileAndStrays(deps: LabDeps, base: string, read: () => Promise<void>): Promise<{
   readonly hostile: NonNullable<LabLocal['hostile']>; readonly strays: NonNullable<LabLocal['strays']>;
 }> {
-  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS)) };
+  let mermaidDropped = false;
+  const hostileReady = await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop,
+    onMermaidDrop: () => { mermaidDropped = true; } }, () => deps.sleep(deps.gapWindow === 'ready' ? LAB_SETTLE_MS : LAB_DRAW_SETTLE_MS));
+  const hostile = { ready: hostileReady, ...(mermaidDropped ? { mermaidDropped: true } : {}) };
   const benign = LAB_PAGES.find((p) => p.label === 'none');
   let effects = 0;
   let addressChanged = false;
@@ -314,15 +333,23 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     step = 5;
     say(LAB_TEXT.steps.selfNav);
     local.selfNavLoads = (await withFrame({ script: SELF_NAV_SCRIPT, config: { base } }, LAB_SETTLE_MS)).loads();
-    // 6. A busy frame: the frame gaps and a timer, both started before it mounts.
+    // 6. A busy frame: start the gap and timer after the frame has been scrolled into view.
     step = 6;
     say(LAB_TEXT.steps.busy);
-    const spinOver = deps.sleep(LAB_BUSY_SPIN_MS + LAB_SETTLE_MS);
-    const gap = longestFrameGap(deps.frame, spinOver);
-    const t0 = deps.now();
-    const late = deps.sleep(LAB_WATCHDOG_PROBE_MS).then(() => Math.max(0, deps.now() - t0 - LAB_WATCHDOG_PROBE_MS));
-    await withFrame({ script: BUSY_SCRIPT, config: { base, spinMs: LAB_BUSY_SPIN_MS } }, 0, () => spinOver);
-    local.busy = { longestGapMs: await gap, timerLateMs: await late, spinMs: LAB_BUSY_SPIN_MS };
+    const visibility = watchGapVisibility();
+    try {
+      await withFrame({ script: BUSY_SCRIPT, config: { base, spinMs: LAB_BUSY_SPIN_MS } }, 0, async () => {
+        const spinOver = deps.sleep(LAB_BUSY_SPIN_MS + LAB_SETTLE_MS);
+        const gap = longestFrameGap(deps.frame, spinOver);
+        const t0 = deps.now();
+        const late = deps.sleep(LAB_WATCHDOG_PROBE_MS).then(() => Math.max(0, deps.now() - t0 - LAB_WATCHDOG_PROBE_MS));
+        await spinOver;
+        local.busy = { longestGapMs: await gap, timerLateMs: await late, spinMs: LAB_BUSY_SPIN_MS,
+          ...(visibility.hidden() ? { gapHidden: true } : {}) };
+      });
+    } finally {
+      visibility.stop();
+    }
     // 7. The real library on hostile figures, then on a benign page with stray messages sent while it is up: the last step
     // whose arrivals decide a verdict, so its read is the last one that must succeed (the reader lab design, section 4.4).
     step = 7;

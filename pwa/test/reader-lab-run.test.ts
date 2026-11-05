@@ -5,7 +5,7 @@
 // door's run life is derived from.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  LAB_BATTERY_CHANNELS, LAB_DRAW_SETTLE_MS, LAB_MOUNTS, LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, LAB_SETTLE_MS, LAB_STEPS,
+  LAB_BATTERY_CHANNELS, LAB_BUSY_SPIN_MS, LAB_DRAW_SETTLE_MS, LAB_MOUNTS, LAB_MOUNT_WAIT_MS, LAB_PROBE_NAMES, LAB_SETTLE_MS, LAB_STEPS,
   type LabProbeName, type LabProbeTally, type LabRunView,
 } from '../../shared/readerLab';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
@@ -15,7 +15,7 @@ import { LAB_PAGES } from '../src/readerLab/fixtures';
 import {
   AMBIENT_SCRIPT, BATTERY_SCRIPT, BUSY_SCRIPT, COOKIE_SCRIPT, POPUP_SCRIPT, SELF_NAV_SCRIPT, STRAYS_SCRIPT,
 } from '../src/readerLab/frameScripts';
-import type { LabFrameSpec } from '../src/readerLab/frames';
+import { mountLabFrame, type LabFrameSpec } from '../src/readerLab/frames';
 import {
   LAB_GAP_WINDOW, LabFailure, gapWindowEnd, runReaderLab, type LabDeps, type LabGapWindow, type LabProgress,
 } from '../src/readerLab/run';
@@ -159,6 +159,117 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(result.local.mounts.map((m) => m.label)).toEqual(['none', 'trivial', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'all']);
   });
 
+  it('a dropped Mermaid asset makes the hostile and timed mounts not measured even if ready follows', async () => {
+    const r = rig();
+    const result = await runReaderLab({ ...r.deps, mountReader: (el, input) => {
+      const index = r.inputs.length;
+      const withDrop = input as ReaderMountInput & { onMermaidDrop?: () => void };
+      return r.deps.mountReader(el, { ...input, onReady: () => {
+        if (index === 0 || index === 4) withDrop.onMermaidDrop?.();
+        input.onReady();
+      } });
+    } }, () => undefined);
+    expect(result.outcomes.mermaid).toEqual({ verdict: 'not-measured', detail: 'the Mermaid asset did not load' });
+    expect(result.outcomes['csp-27']).toEqual({ verdict: 'not-measured', detail: 'library not measured: the Mermaid asset did not load' });
+    expect(result.outcomes['bridge-strays'].verdict).toBe('holds');
+  });
+
+  it.each([
+    ['busy', 'start'], ['mount', 'start'],
+    ['busy', 'hidden'], ['mount', 'hidden'], ['busy', 'visible'], ['mount', 'visible'],
+  ] as const)('marks the %s window hidden for %s and cleans up visibility subscriptions', async (target, mode) => {
+    let visibility: DocumentVisibilityState = 'visible';
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    const adds = vi.spyOn(document, 'addEventListener');
+    const removes = vi.spyOn(document, 'removeEventListener');
+    const change = (): void => {
+      visibility = mode === 'hidden' ? 'hidden' : 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      visibility = 'visible';
+    };
+    try {
+      const r = rig({ onFrame: (spec) => { if (target === 'busy' && mode !== 'start' && spec.script === BUSY_SCRIPT) change(); } });
+      const result = await runReaderLab({ ...r.deps, mountReader: (el, input) => {
+        if (target === 'mount' && mode !== 'start' && r.inputs.length === 4) change();
+        return r.deps.mountReader(el, input);
+      } }, (p) => {
+        if (mode === 'start' && target === 'busy') {
+          if (p.step === 6) visibility = 'hidden';
+          if (p.step === 7) visibility = 'visible';
+        }
+        if (mode === 'start' && target === 'mount' && p.step === 8) visibility = 'hidden';
+      });
+      const line = target === 'busy' ? result.outcomes['busy-frame'] : result.outcomes.mermaid;
+      expect(line).toEqual({ verdict: 'not-measured', detail: 'the page was hidden' });
+      const addCount = adds.mock.calls.filter(([type]) => type === 'visibilitychange').length;
+      const removeCount = removes.mock.calls.filter(([type]) => type === 'visibilitychange').length;
+      expect(addCount).toBeGreaterThan(0);
+      expect(removeCount).toBe(addCount);
+    } finally {
+      state.mockRestore(); adds.mockRestore(); removes.mockRestore();
+    }
+  });
+
+  it.each(['busy', 'mount'] as const)('marks the %s gap hidden when visibility changes after work settles but before its last frame', async (target) => {
+    let visibility: DocumentVisibilityState = 'visible';
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility);
+    const adds = vi.spyOn(document, 'addEventListener');
+    const removes = vi.spyOn(document, 'removeEventListener');
+    let finishWork: () => void = () => { throw new Error('work did not start'); };
+    let finishFrame: (time: number) => void = () => { throw new Error('final frame did not start'); };
+    let enteredFrame: () => void = () => undefined;
+    const framePending = new Promise<void>((resolve) => { enteredFrame = resolve; });
+    let measuring = false;
+    let frameCalls = 0;
+    const r = rig();
+    try {
+      const run = runReaderLab({ ...r.deps,
+        frame: () => {
+          if (!measuring) return r.deps.frame();
+          frameCalls += 1;
+          if (frameCalls === 1) return Promise.resolve(0);
+          measuring = false;
+          enteredFrame();
+          return new Promise<number>((resolve) => { finishFrame = resolve; });
+        },
+        sleep: (ms) => {
+          if (target === 'busy' && ms === LAB_BUSY_SPIN_MS + LAB_SETTLE_MS) {
+            return new Promise<void>((resolve) => { finishWork = resolve; });
+          }
+          return r.deps.sleep(ms);
+        },
+        mountReader: (el, input) => {
+          if (target === 'mount' && r.inputs.length === 4) {
+            return r.deps.mountReader(el, { ...input, onReady: () => { finishWork = input.onReady; } });
+          }
+          return r.deps.mountReader(el, input);
+        },
+      }, (p) => {
+        if ((target === 'busy' && p.step === 6) || (target === 'mount' && p.step === 8 && p.line.endsWith(' f1'))) measuring = true;
+      });
+      await framePending;
+      finishWork();
+      // Let the work's completion callbacks run while the already-requested second frame remains pending.
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      visibility = 'hidden';
+      document.dispatchEvent(new Event('visibilitychange'));
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      finishFrame(10_000);
+      const result = await run;
+      const measured = target === 'busy' ? result.local.busy : result.local.mounts.find((m) => m.label === 'f1');
+      expect(measured?.longestGapMs).toBe(10_000);
+      expect(measured?.gapHidden).toBe(true);
+      expect(target === 'busy' ? result.outcomes['busy-frame'] : result.outcomes.mermaid)
+        .toEqual({ verdict: 'not-measured', detail: 'the page was hidden' });
+      expect(adds.mock.calls.filter(([type]) => type === 'visibilitychange').length).toBeGreaterThan(0);
+      expect(removes.mock.calls.filter(([type]) => type === 'visibilitychange').length)
+        .toBe(adds.mock.calls.filter(([type]) => type === 'visibilitychange').length);
+    } finally {
+      state.mockRestore(); adds.mockRestore(); removes.mockRestore();
+    }
+  });
+
   it('the steps run in order, one frame at a time, and leave the stage empty', async () => {
     const r = rig();
     await runReaderLab(r.deps, () => undefined);
@@ -182,7 +293,7 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
   it('every mount host is scrolled into view before its reader mounts (a frame off screen draws nothing, so ready never comes)', async () => {
     const calls: string[] = [];
     const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function scrolled(this: HTMLElement): void {
-      calls.push(`scroll:${this.className}`);
+      if (this.className === 'reader-lab-mount') calls.push(`scroll:${this.className}`);
     });
     try {
       const r = rig();
@@ -197,6 +308,31 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     } finally {
       scroll.mockRestore();
     }
+  });
+
+  it('scrolls every lab frame before its observation window, including the popup', async () => {
+    const r = rig();
+    const scrolled: string[] = [];
+    let pending = '';
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
+      if (this.tagName === 'IFRAME') { scrolled.push(pending); pending = ''; }
+    });
+    try {
+      await runReaderLab({ ...r.deps,
+        mountFrame: (stage, spec) => {
+          const fake = r.deps.mountFrame(stage, spec);
+          pending = r.order.at(-1)!;
+          const real = mountLabFrame(stage, spec, () => 'nonce');
+          return { loads: fake.loads, remove: () => { fake.remove(); real.remove(); } };
+        },
+        sleep: (ms) => {
+          expect(pending, 'frame scroll precedes its observation sleep').toBe('');
+          if (ms === LAB_BUSY_SPIN_MS + LAB_SETTLE_MS) expect(r.order.at(-1), 'busy window starts after its frame scroll').toBe('busy');
+          return r.deps.sleep(ms);
+        },
+      }, () => undefined);
+      expect(scrolled).toEqual(['popup', 'ambient', 'cookie', 'battery', 'battery', 'selfNav', 'busy', 'strays']);
+    } finally { scroll.mockRestore(); }
   });
 
   it('the tap wait ends at the tap: one read while it waits, not thirty', async () => {
