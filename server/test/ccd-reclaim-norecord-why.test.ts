@@ -1,11 +1,14 @@
 // Rung 8's `no-worktree-record` says WHY git has no record (cleanup un-wedge, Task R4; spec §6.2). A standing tree
 // git does not record stays TERMINAL: nothing can pin what git cannot read, and the word does not change. What changes
-// is the detail, which now carries one read-only sentence from `_ws_reclaim_norecord_why`:
+// is the detail, which now carries one read-only sentence from `_ws_reclaim_norecord_why`, naming one of six causes:
 //   - the tree has no `.git`;
 //   - its `.git` names an admin directory that is absent;
-//   - that admin directory stands and records another path (a copied or moved tree), and
-//     `git -C <main> worktree repair <tree>`, the OPERATOR's act, re-links it;
-//   - its `.git` could not be read.
+//   - or one that is not among this repository's worktree records;
+//   - or one of them that holds no `gitdir`;
+//   - or one of them that stands and records another path (a copied or moved tree): check the recorded path first,
+//     because if the original still stands there, `git -C <main> worktree repair <tree>`, the OPERATOR's act, moves
+//     its record to this copy; after a move it re-links it;
+//   - its `.git` (or what it names) could not be read.
 // ccd never runs `git worktree repair` itself (spec D13): a git shim on PATH catches any repair, prune or remove.
 // FIXTURE HOMEs ONLY: every ccd call runs through the harness, never against $HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -29,7 +32,7 @@ const ROOT = process.getuid?.() === 0;
 /** git's admin entry for the child: `<main>/.git/worktrees/<basename of its tree>`. */
 const adminOf = (c: Child): string => path.join(c.main, '.git', 'worktrees', 'quiet-basin');
 
-/** The four shapes of a standing tree git keeps no record of. Each removes or rewrites what git reads, never the
+/** Four shapes of a standing tree git keeps no record of, run through the ladder and the audit. Each removes or rewrites what git reads, never the
  *  registry row. */
 const SHAPES: { label: string; make: (c: Child) => void; says: (c: Child) => string[] }[] = [
   {
@@ -50,8 +53,10 @@ const SHAPES: { label: string; make: (c: Child) => void; says: (c: Child) => str
     make: (c) => { fs.writeFileSync(path.join(adminOf(c), 'gitdir'), `${path.join(h.home, 'elsewhere', 'quiet-basin')}/.git\n`); },
     says: () => [
       'its admin directory stands but records another path',
-      'git -C <main> worktree repair <tree>',
-      'the operator’s act, never ccd’s'.replace(/’/g, "'"),
+      'Check the recorded path first: if the original still stands there',
+      'git -C <main> worktree repair <tree> (both named above) moves its record to this copy',
+      'after a move it re-links it',
+      'operator’s act, never ccd’s'.replace(/’/g, "'"),
     ],
   },
   {
@@ -119,19 +124,40 @@ describe('rung 8 says why git has no record, and the word stays no-worktree-reco
   }, 60_000);
 
   it('the diagnosis is one capped line: an absent admin directory named through a path over 300 bytes holding a newline', () => {
-    // The cut is `_ws_leaf_why_line`'s: 300 bytes, then its own "…" (3 bytes), every control byte read as "?".
+    // The cut is `_ws_leaf_why_line`'s: 300 bytes, then its own "…" (3 bytes), every control byte read as "?". Two
+    // components of 200 bytes, so no name passes NAME_MAX (255) and the absence is MEASURED (shape 1), never the
+    // ENAMETOOLONG a single 320-byte name reads as "could not be read".
     const c = makeChild(h);
     const common = h.sh(`_ws_common_dir '${c.main}'`);
     const odd = path.join(h.home, 'odd\nname');
     fs.mkdirSync(odd);
-    const rel = `${'a'.repeat(320)}/worktrees/quiet-basin`;
+    const rel = `${'a'.repeat(200)}/${'b'.repeat(200)}/worktrees/quiet-basin`;
     fs.writeFileSync(path.join(odd, '.git'), `gitdir: ${rel}\n`);
     const out = h.sh(`_ws_reclaim_norecord_why $'${h.home}/odd\\nname' '${common}'; printf '%s' "$_WS_NOREC_DIAG"`);
     expect(out).toContain('its .git names the admin directory');
+    expect(out).not.toContain('could not be read');
+    // The whole sentence passes the cap, so "which is absent" is asked of the uncut text: the long path cut short
+    // still names the admin directory, and the cap cut it before its verdict.
+    const whole = h.sh(`_ws_leaf_why_line() { printf '%s' "$1"; }; _ws_reclaim_norecord_why $'${h.home}/odd\\nname' '${common}'; printf '%s' "$_WS_NOREC_DIAG"`);
+    expect(whole).toContain('which is absent: git keeps no record of the tree');
     expect(out).not.toContain('\n');
     expect(out).toContain('odd?name');
     expect(out.endsWith('…')).toBe(true);
     expect(Buffer.byteLength(out.slice(0, -1))).toBeLessThanOrEqual(300);
+  }, 60_000);
+
+  it('an admin directory with no gitdir says it holds none, never that it records another path', () => {
+    const c = makeChild(h);
+    const common = h.sh(`_ws_common_dir '${c.main}'`);
+    fs.rmSync(path.join(adminOf(c), 'gitdir'));
+    const out = h.sh(`_ws_reclaim_norecord_why '${c.wt}' '${common}'; printf '%s' "$_WS_NOREC_DIAG"`);
+    expect(out).toContain(`its .git names the admin directory ${adminOf(c)}, which holds no gitdir`);
+    expect(out).not.toContain('records another path');
+    expect(out).not.toContain('worktree repair');
+    // And at rung 8 itself, the word unchanged.
+    const r = evalOf(h);
+    expect(r.verdict, r.detail).toBe('no-worktree-record');
+    expect(r.detail).toContain('which holds no gitdir');
   }, 60_000);
 
   it('an admin directory outside this repository’s worktree records is named so, never the repair', () => {

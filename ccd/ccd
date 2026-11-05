@@ -34692,15 +34692,18 @@ _ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the rep
 
 _WS_NOREC_DIAG=''
 _ws_reclaim_norecord_why() {   # workdir common -> rc 0 with _WS_NOREC_DIAG = ONE capped line saying why git keeps no
-  #                                 record of the standing tree at workdir: it has no .git; its .git names an admin
-  #                                 directory that is absent; that directory, one of common's worktree records, stands
-  #                                 and records another path; or its .git (or what it names) could not be read. '' when
-  #                                 the admin directory records workdir itself (nothing to say)
+  #                                 record of the standing tree at workdir, one of six causes: it has no .git; its .git
+  #                                 names an admin directory that is absent; or one that is not among common's worktree
+  #                                 records; or one of them that holds no gitdir; or one of them that stands and records
+  #                                 another path; or its .git (or what it names) could not be read. '' when the admin
+  #                                 directory records workdir itself (nothing to say)
   # RUNG 8'S `no-worktree-record` SAYS WHY (cleanup un-wedge, Task R4; spec
-  # §6.2). The word does not change and stays TERMINAL: this only reads the
-  # tree's `.git` file and the admin directory it names, both as files
-  # (`_ws_leaf_read_small`), and runs NO git — never `git worktree repair`,
-  # which re-links a copied or moved tree and is the operator's act (spec D13).
+  # §6.2). The word does not change and stays TERMINAL: this only reads, as
+  # files, the tree's `.git` (`_ws_leaf_read_small`), the admin directory it
+  # names and, through the matcher, every `<common>/worktrees/*/gitdir`, and
+  # runs NO git — never `git worktree repair`, which re-links a moved tree,
+  # takes the record from an original a copy was made of, and is the
+  # operator's act (spec D13).
   # The refusal's detail already names the main checkout and the tree, so a
   # sentence names at most one more path, and the line is capped
   # (`_ws_leaf_why_line`): a path is a name a session chose. Whether the admin
@@ -34739,14 +34742,16 @@ _ws_reclaim_norecord_why() {   # workdir common -> rc 0 with _WS_NOREC_DIAG = ON
           s="its .git names the admin directory $ad, which could not be read"
         elif [[ -z "$common" || "${adreal%/*}" != "$(_ws_realpath "$common/worktrees" 2>/dev/null)" ]]; then
           s="its .git names the admin directory $ad, which is not one of this repository's worktree records"
-        elif ! _ws_reclaim_admin_entries "$common" "$w" 0; then
+        elif _ws_reclaim_absent "$ad/gitdir"; then   # the matcher skips an entry with no gitdir: say so first
+          s="its .git names the admin directory $ad, which holds no gitdir"
+        elif (( $? == 2 )) || ! _ws_reclaim_admin_entries "$common" "$w" 0; then   # $?: the elif above's rc
           s="its .git names the admin directory $ad, which could not be read"
         else
           for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
             [[ "$e" == gitdir:* && "$(_ws_realpath "${e#gitdir:}" 2>/dev/null)" == "$adreal" ]] && hit=1
           done
           (( hit )) \
-            || s="its admin directory stands but records another path, so the tree was copied or moved: git -C <main> worktree repair <tree>, with the two named above, re-links it, and that is the operator's act, never ccd's"
+            || s="its admin directory stands but records another path: the tree was copied or moved. Check the recorded path first: if the original still stands there, git -C <main> worktree repair <tree> (both named above) moves its record to this copy; after a move it re-links it. The operator's act, never ccd's"
         fi
       fi
     fi

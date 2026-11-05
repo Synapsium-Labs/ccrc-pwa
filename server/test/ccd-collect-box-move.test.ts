@@ -242,6 +242,15 @@ describe.runIf(LINUX)('the release holds: each condition kept, or unmeasured, ne
     expect(detail(r)).toContain('not a real directory of this user');
   }, 60_000);
 
+  it('the owner seam itself, unstubbed, as any user: this user’s directory 0; `/`, an empty or no path 1', () => {
+    // The seam's body (`-O`) is pinned here off root too; root owns `/`, so there it answers 0.
+    const own = path.join(h.home, 'own-dir');
+    fs.mkdirSync(own);
+    const r = h.sh(`_ws_collect_leaf_owned '${own}'; a=$?; _ws_collect_leaf_owned /; b=$?;`
+      + ` _ws_collect_leaf_owned ''; c=$?; _ws_collect_leaf_owned; d=$?; echo "$a $b $c $d"`);
+    expect(r).toBe(ROOT ? '0 0 1 1' : '0 1 1 1');
+  }, 60_000);
+
   it('a leaf on a file system that keeps no birth time (it prints 0) is unmeasured, never witness-mismatch', () => {
     // The identity check reads the same 0, which is no match for the witness, so the release is asked, and M5 cannot
     // read a birth time it could compare.
