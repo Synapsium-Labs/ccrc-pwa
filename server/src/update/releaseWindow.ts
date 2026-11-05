@@ -14,7 +14,10 @@
 //   5. the newest `stableBack` Stable releases that are not withdrawn (`yanked`), whatever is installed. The PWA's
 //      unmeasured branch (no managed node, a node unmeasured or unversioned, or the channel unread) shows the newest
 //      three rows on the channel, and on a Stable channel those are these; `installed` may be empty there, and the
-//      catalogue is mostly prereleases, so the newest `recent` can hold fewer than three Stable rows or none.
+//      catalogue is mostly prereleases, so the newest `recent` can hold fewer than three Stable rows or none;
+//   6. every release whose `refused` list is non-empty, however old: the PWA's Ack (`refusedTags` in
+//      `pwa/src/fleet/updateAck.ts`) reads `releases[].refused` to say what it makes a node forget, and a refused tag
+//      outside the window would lose that line.
 // Ordering and "newer/older" are the PWA's: `compareReleaseTags` over release-tag rows, newest first, and rows whose
 // tag is not a release tag keep their input order after them. `compareReleaseTags` throws on a non-tag, so every
 // call is behind `isReleaseTag`; an installed, previous or intent value that is not a release tag is ignored by
@@ -36,7 +39,7 @@ export interface ReleaseWindowContext {
   readonly stableBack: number;
 }
 
-export function releaseWindow<R extends { tag: string; channel: string | null; yanked?: boolean | null }>(
+export function releaseWindow<R extends { tag: string; channel: string | null; yanked?: boolean | null; refused?: readonly unknown[] | null }>(
   releases: readonly R[], ctx: ReleaseWindowContext,
 ): R[] {
   // Newest first; `filter` returns fresh arrays, so the stable sort never reorders the caller's list.
@@ -77,6 +80,9 @@ export function releaseWindow<R extends { tag: string; channel: string | null; y
     if (waiting >= ctx.stableBack) break;
     if (r.channel === 'stable' && r.yanked !== true) { keep.add(r); waiting++; }
   }
+
+  // 6. Every release a node refused: the Ack's reader.
+  for (const r of releases) if (Array.isArray(r.refused) && r.refused.length > 0) keep.add(r);
 
   return sorted.filter((r) => keep.has(r));
 }

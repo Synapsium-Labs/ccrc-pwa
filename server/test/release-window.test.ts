@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { RELEASE_WINDOW_RECENT, RELEASE_WINDOW_STABLE_BACK, releaseWindow } from '../src/update/releaseWindow.js';
 
-interface Row { tag: string; channel: string | null; yanked?: boolean }
+interface Row { tag: string; channel: string | null; yanked?: boolean; refused?: unknown[] | null }
 
 // v0.0.1 .. v0.0.80, every 10th Stable, the rest Dev; input order is oldest first, so newest-first is the decider's work.
 const catalogue: Row[] = Array.from({ length: 80 }, (_, i) => ({
@@ -109,6 +109,18 @@ describe('releaseWindow', () => {
     expect(out).toEqual([...v(51, 80), 'v0.0.8', 'v0.0.5', 'v0.0.3']);
     expect(out).not.toContain('v0.0.12');
     expect(out).not.toContain('v0.0.2');
+  });
+
+  it('keeps every release a node refused', () => {
+    // v0.0.3 and v0.0.4 are far outside every other rule; the Ack reads their `refused` lists. An empty list, null and
+    // an absent field keep nothing.
+    const withRefused: Row[] = catalogue.map((r) => (
+      r.tag === 'v0.0.3' ? { ...r, refused: ['node-a'] }
+        : r.tag === 'v0.0.4' ? { ...r, refused: ['node-a', 'node-b'] }
+          : r.tag === 'v0.0.5' ? { ...r, refused: [] }
+            : r.tag === 'v0.0.6' ? { ...r, refused: null } : r));
+    const out = tags(releaseWindow(withRefused, ctx()));
+    expect(out).toEqual([...v(51, 80), 'v0.0.4', 'v0.0.3']);
   });
 
   it('does not mutate its input', () => {
