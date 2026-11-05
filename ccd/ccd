@@ -32372,13 +32372,15 @@ _ws_reclaim_recorded_archive() {   # id workdir -> rc 0 with _WS_RECORDED_ARCH=1
   # A7, a plain spelling whose leaf is proven absent, `_ws_reclaim_recorded`
   # asked before any arm. Placing is not releasing: the row is compared with
   # the child as text, as the breadcrumb arm's is. A tree that went with its
-  # record is held by A6; a tree moved by a plain `mv` whose record was then
-  # pruned keeps a `.git` naming an admin directory that is gone. For that one
-  # the arm sets _WS_RECORDED_ARCH, which makes `_ws_reclaim_owned` scan the
-  # child at the tail and `_ws_reclaim_moved_check` read the git directory of
-  # every checkout inside it (D5), and an unreadable one is unmeasured; at the
-  # ladder, rung 9's own read of each nested checkout's repository fails on it
-  # first. Nothing here reads a process, a pane, a unit or the journal,
+  # record is held by A6 (the archive records `worktreeAdmin` only when that
+  # directory names the tree back, so the name is the tree's own, or null). The
+  # arm sets _WS_RECORDED_ARCH on every placement; what it catches is a tree
+  # moved by a plain `mv` whose record was then pruned, which keeps a `.git`
+  # naming an admin directory that is gone: the flag makes `_ws_reclaim_owned`
+  # scan the child at the tail and `_ws_reclaim_moved_check` read the git
+  # directory of every checkout inside it (D5), and an unreadable one is
+  # unmeasured; at the ladder, rung 9's own read of each nested checkout's
+  # repository fails on it first. Nothing here reads a process, a pane, a unit or the journal,
   # and nothing is made or taken away. The record readers' globals, and the
   # resolver's, are shadowed here, as in the other two arms.
   local o="$1" w="$2" a f ruuid rbranch parent project rc e adm common RECLAIM_REC_BRANCH='' RECLAIM_REC_HEAD='' RECLAIM_REC_MAIN=0 RECLAIM_REC_PRUNABLE=0 _WS_REC_WHY=''
@@ -32410,6 +32412,12 @@ sys.stdout.write(a if ok else ""); sys.exit(0 if ok else 1)
   _ws_reclaim_record "$PROJECTS_ROOT/$project" "$w"; rc=$?; (( rc == 1 )) || return 1
   _ws_reclaim_log_of "$PROJECTS_ROOT/$project" tree "$w" 0 || return 1
   for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do [[ "$e" != gitdir:* ]] || return 1; done
+  # The project's repository is asked as it is NOW, as the git and breadcrumb
+  # arms ask it: the record names the admin directory's basename, not the
+  # common directory it lay under then. A common directory that cannot be read
+  # fails closed (no answer is a no); a project directory re-pointed to another
+  # repository since the archive is answered for that repository (review 1521,
+  # F4, carried to the follow-up with recording the common directory).
   common=$(_ws_common_dir "$PROJECTS_ROOT/$project") && _ws_reclaim_absent "$common/worktrees/$adm" || return 1
   _WS_RECORDED_ARCH=1
   return 0
