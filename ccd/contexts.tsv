@@ -539,6 +539,7 @@ _ws_reclaim_recorded_keep	C4
 _ws_reclaim_gone_quiet	C4
 _ws_reclaim_quiet_row	C4
 _ws_reclaim_no_checkout	C4
+_ws_quiet_rows_json	C4
 _ws_reclaim_recorded_git	C4
 _ws_reclaim_recorded_crumb	C4
 _ws_reclaim_moved_check	C4

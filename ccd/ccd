@@ -14519,8 +14519,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # verdict: no token, and the same token name the eval uses, so the sheet
   # reads the same sentence whichever read caught it.
   if [[ $mode == reclaim ]]; then
-    printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
-      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
+    printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,"quietRows":%s,' \
+      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}" "$(_ws_quiet_rows_json)"
     _ws_rescue_doc
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
@@ -31053,6 +31053,7 @@ _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the re
   _WS_LADDER_BIND=()        # the token's LEADING inputs — the caller's rungs 1-2 set them (`_ws_reclaim_ladder`)
   EXPIRE_ARCHIVED_AT=""     # ws-expire's archive epoch, as READ (the EXPIRE region); '' on every reclaim
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""   # the rows rung's entry-field counts: '' = not counted, printed null
+  _WS_QUIET_ROWS=""                         # the gone rows the rows rung released: printed `[]`, or null when not counted
 }
 
 _ws_reclaim_fingerprint() {   # key=value... -> the token. THE ONE ENCODING: every verb's
@@ -31468,6 +31469,7 @@ _ws_workdirid_read() {   # id logical -> 0 `valid` (_WS_WDID_IDENT "<dev>:<ino>:
 
 _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''; _WS_RECORDED_IDS=''
 _WS_LEGACY_ROWS=''; _WS_PENDING_ROWS=''   # THE COUNTS of `_ws_reclaim_workdir_shared` ('' = not counted)
+_WS_QUIET_ROWS=''                         # the gone rows that pass released, comma-joined ('' = none)
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
   #                                 `.workdir` names workdir, _WS_NESTED_ROWS = those whose `.workdir`
   #                                 lies INSIDE it, or at, inside or through a leaf the tail removes
@@ -31550,7 +31552,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # outside the child, and the child's `server/` went with it (measured). It
   # is not-asked, never skipped and never terminal: the fault is another
   # row's, and it stops every child's reclaim until that row is restarted or
-  # purged — the accepted fail-closed cost. The unreadable and the unplaced
+  # purged — the accepted fail-closed cost, which a row that is only gone no
+  # longer pays (A GONE ROW NOTHING RUNS FOR, below). The unreadable and the unplaced
   # rows are COLLECTED and decided after the loop, both named in one why (both
   # need fixing, and neither outranks the other), and a SHARED, NESTED or
   # THROUGH row found in the same pass OUTRANKS both — so the order `find`
@@ -31653,10 +31656,11 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # the eval's vanished fork (`_ws_reclaim_absent`), which the eval asks right
   # AFTER this helper (review 214, F8), and a row literally at or below it
   # is refused by the literal arms whatever its basis. R19's arm is unchanged,
-  # but an ambiguous OTHER row holds a vanished child too — and two vanished
-  # children hold each other — until that row is purged, a link on its path
-  # is restored to its original target, or the `recorded` basis below places
-  # it, and a later attempt runs: the stated cost. A directory created where
+  # but an ambiguous OTHER row holds a vanished child too until that row is
+  # purged, a link on its path is restored to its original target, the
+  # `recorded` basis below places it, or it is released as a row nothing runs
+  # for, and a later attempt runs: the stated cost. So two vanished children
+  # release each other once nothing runs for either. A directory created where
   # a link stood ends the hold unsafely: it
   # re-points the spelling by replacement. And `complete` places the
   # SPELLING as it reads now, not the session: an alias re-pointed after the
@@ -31673,8 +31677,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # names and compared exactly as a `complete` row is (the git-record arm; the
   # breadcrumb arm's spelling is compared as text, bounded by the leaf's proven
   # absence and by `_ws_reclaim_owned`'s ask at the tail), so a recovered row at,
-  # inside or through the child still refuses. Anything short of it is
-  # collected as a row that cannot be placed, as before. A record says where a
+  # inside or through the child still refuses. Anything short of it is a row
+  # that cannot be placed: it holds, unless it is released (A GONE ROW NOTHING
+  # RUNS FOR, below). A record says where a
   # tree WAS, not that it is gone rather than moved, so the admin directory
   # the git-record arm named is kept in _WS_RECORDED_GDIRS (`id<TAB>dir`
   # lines, reset on every call), and, for a row either arm places whose entry
@@ -31705,10 +31710,14 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # sweep. A checkout, or a scan that did not finish, keeps the row holding
   # (`unquiet`), retryable and by id, and a child's own nested checkout counts: a
   # checkout is not told from a moved tree here. Nothing is kept for the moved-check.
+  # EVERY RELEASE IS NAMED. `_WS_QUIET_ROWS` holds the rows this pass let go, set only
+  # once the scan answered clean and cleared on every call and by `_ws_reclaim_reset`, and
+  # both audit documents print it as `quietRows` (`_ws_quiet_rows_json`). A child held for
+  # another reason still names them: they were let go, and something else held.
   # WHAT THIS DOES NOT SEE, a stated residual (`gone-row-release-misses-a-tree-with-no-git`):
-  # a stopped row's tree that was no checkout, moved inside the child, has no `.git`
-  # to find, and goes with the child. The release needs nothing to run for it, so no
-  # session loses a tree it is in.
+  # a tree stripped of its `.git`, moved by hand into a child or a leaf, for a stopped row
+  # with a gone spelling, is removed with the child. The base held this only by accident,
+  # and it is not in use: nothing runs for its row.
   #
   # NOR AT, INSIDE OR THROUGH A LEAF THE TAIL REMOVES WITH IT (spec §5.5,
   # §5.6). "Inside the child" is all three trees the tail deletes: the
@@ -31784,6 +31793,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # counted (cleared here and by `_ws_reclaim_reset`; a registry that will not
   # list leaves them ''). `cmd_ws_audit` prints them in the reclaim document as
   # `legacyRows` and `pendingRows`, `null` when not counted, and so does `_ws_expire_audit_contained` in the expiry one.
+  # `quietRows` rides beside them and reads their `null` (`_ws_quiet_rows_json`).
   #
   # AND BY DEVICE AND INODE, BESIDE THE STRINGS (path-identity spec §4.5 and
   # §4.8; PI3 B, PI6 M4). A string says where a spelling reads now, and a bind
@@ -31846,7 +31856,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local eff efx efy efk efn efr efr1 efp1 efhit efok eft0 efc0 efb efa efcur efrc efstand
   local -a efo=() efi=() efp=() efw=() efbp=() efbw=() wbt=()
   local -A efans=() efbt=() efaidx=()
-  _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""
+  _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""; _WS_QUIET_ROWS=""
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
     || { _WS_SHARED_WHY="could not list $REG"; return 2; }
   if _ws_reclaim_resolve "$wd"; then
@@ -32200,7 +32210,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   if [[ -n "$quiet" ]]; then
     [[ -z "${3-}" ]] || own=''
     for lw in ${lspell[@]+"${lspell[@]}"}; do [[ "$wd" != "$lw" ]] || own=''; done
-    _ws_reclaim_no_checkout "$wd" "$own" ${lres[@]+"${lres[@]}"} || unquiet="$quiet"
+    if _ws_reclaim_no_checkout "$wd" "$own" ${lres[@]+"${lres[@]}"}; then _WS_QUIET_ROWS="$quiet"; else unquiet="$quiet"; fi
   fi
   [[ -z "$unmine" ]] \
     || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir $minewhy"
@@ -32234,8 +32244,9 @@ _ws_reclaim_recorded() {   # id workdir -> rc 0 when the OTHER row id, whose wor
   #                             RECORDED evidence (spec §5.5): _WS_RECORDED_AT = the path it is placed by,
   #                             _WS_RECORDED_G = the admin directory git records for it, resolved ('' on the
   #                             breadcrumb arm); rc 1 when neither arm proves it, and the row holds as before
-  # A ROW WHOSE WORKDIR IS GONE STOPS HOLDING OTHER CHILDREN ONLY ON POSITIVE
-  # EVIDENCE (spec §5.5). `_ws_reclaim_workdir_shared` asks this only of a
+  # A ROW WHOSE WORKDIR IS GONE IS PLACED ONLY ON POSITIVE EVIDENCE (spec §5.5),
+  # and short of it stops holding only as a row nothing runs for
+  # (`_ws_reclaim_gone_quiet`). `_ws_reclaim_workdir_shared` asks this only of a
   # row its resolver placed by projection alone (`absent-suffix`). Two arms,
   # each sufficient and each fail-closed: git's own record of the tree
   # (`_ws_reclaim_recorded_git`), and ccd's own breadcrumb and tombstone
@@ -32333,6 +32344,19 @@ _ws_reclaim_no_checkout() {   # workdir own [resolved-leaf...] -> rc 0 when no c
     found=$(_ws_nested_checkouts "$p") || { _WS_CHECKOUT_WHY="$p could not be scanned for a checkout"; return 1; }
     [[ -z "$found" ]] || { _WS_CHECKOUT_WHY="a checkout stands under $p"; return 1; }
   done
+}
+
+_ws_quiet_rows_json() {   # -> the rows the last pass released, as a JSON list; null when it counted nothing
+  # THE AUDIT TRAIL OF THE RELEASE (A GONE ROW NOTHING RUNS FOR): every row let go is named in the audit document, beside
+  # the counts and read as they are read. `null` is the same "not counted" (`_WS_LEGACY_ROWS` is the pass's own witness).
+  local o sep='' rest="$_WS_QUIET_ROWS"
+  [[ -n "$_WS_LEGACY_ROWS" ]] || { printf null; return 0; }
+  printf '['
+  while [[ -n "$rest" ]]; do
+    o="${rest%%, *}"; [[ "$rest" == *", "* ]] && rest="${rest#*, }" || rest=''
+    printf '%s%s' "$sep" "$(_json_str "$o")"; sep=','
+  done
+  printf ']'
 }
 
 _ws_reclaim_recorded_git() {   # id workdir -> rc 0 with _WS_RECORDED_G when git's own record places the gone
@@ -38869,9 +38893,9 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   # else). Both null when no archive could be read as an epoch.
   local stamp=null expires=null
   if _ws_expire_epoch_ok "$EXPIRE_STAMP_AT"; then stamp="$EXPIRE_STAMP_AT"; expires=$(( EXPIRE_STAMP_AT + WS_EXPIRE_AFTER_S )); fi
-  printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
+  printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,"quietRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
-    "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
+    "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}" "$(_ws_quiet_rows_json)"
   _ws_rescue_doc
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
