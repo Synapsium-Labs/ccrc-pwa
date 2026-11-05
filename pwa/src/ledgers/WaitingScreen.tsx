@@ -14,6 +14,8 @@ import {
   COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf,
   programmeIsLive, questionRows, resolveList, summaryCounts, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
+import { SpecLink } from './GoalsPanel';
+import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -106,10 +108,11 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
 }
 
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
- *  the list beside an open item (plan PL9), which passes the open item as `currentId`. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null }: {
+ *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
+ *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
-  onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
+  onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -124,6 +127,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
         <h2 className="wl-gtitle">{title}</h2>
         {wave !== null && <span className="wl-gwave">{waveOfWords(wave)}</span>}
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
+        <SpecLink href={specHref} programme={title} className="wl-gspec" />
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} />
     </section>
@@ -213,7 +217,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                 {shown.map((g) => (
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
-                         hue={g.program === null ? null : hues.get(g.program) ?? null} />
+                             hue={g.program === null ? null : hues.get(g.program) ?? null}
+                             specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
               </div>
             </div>

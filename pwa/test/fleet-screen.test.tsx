@@ -7,7 +7,7 @@ import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
 import { ApiError, api } from '../src/lib/api';
-import { ack, FEED_ACK_KEY, loadAcks, resetAcks } from '../src/lib/seen';
+import { ack, loadAcks, resetAcks } from '../src/lib/seen';
 import { navigate } from '../src/lib/router';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
@@ -15,9 +15,9 @@ import { SkinSetProvider } from '../src/skins/frame';
 import { REFINED_SET } from '../src/skins/refined/parts';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
-import { ICONS } from '../../ui/src/icons/lucide';
 import { TEST_ROSTER } from './rosterFixture';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { clearScreenCache } from '../src/lib/screenCache';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
 // never leak into the next's initial (expanded) expectation. `resetAcks` for
@@ -422,10 +422,10 @@ describe('FleetScreen', () => {
     seed(store, { conn: 'open', sessions: [] });
 
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();
-    // With a lane to show, the strip is a group of lane doors and the strip's door to /accounts is its All accounts
-    // button at the end (T2c, D-6329).
-    const all = await screen.findByRole('button', { name: 'All accounts' });
-    expect(all).toHaveAttribute('data-command', 'go-accounts');
+    // With a lane to show, the strip is a group of lane doors (T2c, D-6329): found by its lane card. jsdom is a phone here,
+    // where the bottom bar holds the Accounts place and the strip draws no All accounts (desktop-polish PL10, review 1466 F3).
+    await waitFor(() => expect(document.querySelector('.accounts-strip .account-gauge')).not.toBeNull());
+    expect(screen.queryByRole('button', { name: 'All accounts' })).toBeNull();
   });
 
   it('renders the accounts strip during the initial skeleton load, not just once sessions are known', () => {
@@ -433,72 +433,44 @@ describe('FleetScreen', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
     // untouched store: conn 'connecting', no sessions — same state as the
-    // skeleton test above.
+    // skeleton test above. jsdom is a phone here: the bottom bar's Accounts door is the door, so the strip draws no
+    // placeholder (desktop-polish PL10, review 1466 F3, the ruling on 15104); at the desk the placeholder is the door.
+    expect(screen.queryByRole('link', { name: 'account usage — open accounts' })).toBeNull();
+    cleanup();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px'), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+    renderFleet(<FleetScreen store={makeStore()} />);
     expect(screen.getByRole('link', { name: 'account usage — open accounts' })).toBeInTheDocument();
   });
 
-  // Fix round 1, Task 4, finding 5: MailBadge is D-2's ENTIRE remedy — the
-  // only door to /mail — and nothing pinned it at its mount point. Deleting
-  // `<MailBadge waiting={waiting} />` from `.fleet-head-right` (and its
-  // import) left the full 1253-test suite green, because the door is only
-  // ever rendered standalone in mail-screen.test.tsx and tap-targets.test.tsx
-  // — never inside the screen that hosts it. This is the AccountsStrip pair's
-  // twin (see the review fix above): the door is present in the first-run
-  // block AND during the skeleton load, not only once the fleet is
-  // populated.
-  it('renders the mail door in the first-run block, not just the populated fleet', () => {
+  // Desktop-polish PL10 (D-7952; the coordinator's ruling of 2026-11-04, leave 14832): the phone's bottom bar is the phone's one
+  // navigation, so the fleet head draws no door to a place the bar holds (Docs, the Accounts place, the Inbox's mail), and
+  // keeps the doors the bar lacks, Settings and the bell. The bar's doors, with no sessions too, are `test/phone-bar.test.tsx`'s.
+  it('the fleet head draws no Docs, Account or Mail door; Settings and the bell stay', () => {
     const store = makeStore();
     renderFleet(<FleetScreen store={store} />);
-    seed(store, { conn: 'open', sessions: [] });
-
-    expect(screen.getByText('No sessions yet')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
-  });
-
-  it('renders the mail door during the initial skeleton load, not just once sessions are known', () => {
-    const store = makeStore();
-    renderFleet(<FleetScreen store={store} />);
-    // untouched store: conn 'connecting', no sessions — same state as the
-    // skeleton test above.
-    expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
-  });
-
-  // The mail door's count (FleetScreen.tsx, beside `countLine`) says what waits on the operator, never the unread mail
-  // (T2d, D-6330): replacing `waitingOnYou` with the feed's unread count, or with a literal `0`, reds this. The rows'
-  // own unread mark, `raisesUnread` and the ack's strict `>`, is pinned on the rows in mail-screen.test.tsx.
-  it("the mail door counts the sessions waiting on the operator, never the unread mail", () => {
-    const store = makeStore();
-    renderFleet(<FleetScreen store={store} />);
-    const stamp = Date.now();
-    act(() => { ack(FEED_ACK_KEY, stamp); });
-    seed(store, {
-      conn: 'open',
-      sessions: [
-        session({ id: 'claude:ask-a', bucket: 'attention' }),
-        session({ id: 'claude:ask-b', bucket: 'attention' }),
-        session({ id: 'claude:child', bucket: 'working', child: { kind: 'child', runId: 7 } }),
-      ],
-      feed: [
-        { seq: 1, at: stamp + 60_000, kind: 'mail', sessionId: 'x', title: 'unread', body: '', runId: null },
-        { seq: 2, at: stamp + 60_001, kind: 'mail', sessionId: 'x', title: 'unread too', body: '', runId: null },
-        { seq: 3, at: stamp + 60_002, kind: 'mail', sessionId: 'x', title: 'unread as well', body: '', runId: null },
-      ],
-    });
-    // Before the first fleet frame the rows are the offline snapshot's, not a fact: the door is named plainly, never
-    // "nothing waiting" (folding the not-yet-known `null` to 0 at FleetScreen's seam reds this).
-    expect(screen.getByRole('button', { name: /^Mail$/ })).toBeInTheDocument();
-    seed(store, { fleetFrameSeen: true });
-    expect(screen.getByRole('button', { name: /mail — 2 waiting for you/i })).toBeInTheDocument();
-  });
-
-  // The other side of that seam: a first frame with nobody waiting is a measured zero, and the door says so.
-  it('a first fleet frame with nobody waiting names the mail door "nothing waiting for you"', () => {
-    const store = makeStore();
-    renderFleet(<FleetScreen store={store} />);
-    seed(store, { conn: 'open', sessions: [session({ id: 'claude:idle', bucket: 'idle' })] });
-    expect(screen.getByRole('button', { name: /^Mail$/ })).toBeInTheDocument();
-    seed(store, { fleetFrameSeen: true });
-    expect(screen.getByRole('button', { name: /^Mail — nothing waiting for you$/ })).toBeInTheDocument();
+    for (const sessions of [[], [session({ id: 'claude:ask-a', bucket: 'attention' })]]) {
+      seed(store, { conn: 'open', sessions, fleetFrameSeen: true });
+      const head = document.querySelector<HTMLElement>('.fleet-head-right')!;
+      expect(within(head).queryByRole('button', { name: /^(Docs|Account|Mail)\b/ })).toBeNull();
+      expect(head.querySelector('.docs-door, .accounts-door, .mail-badge')).toBeNull();
+      // Settings is always drawn.
+      expect(within(head).getByRole('button', { name: /^Settings/ })).toBeInTheDocument();
+    }
+    // The bell is drawn where the browser offers push (`pushSupported`), which jsdom does not: offered here, it stays in the
+    // head (review 1466 F19: the case's name says so).
+    cleanup();
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('Notification', { permission: 'default' });
+    Object.defineProperty(navigator, 'serviceWorker', { value: { getRegistration: async () => undefined }, configurable: true });
+    onTestFinished(() => { vi.unstubAllGlobals(); delete (navigator as { serviceWorker?: unknown }).serviceWorker; });
+    const pushing = makeStore();
+    renderFleet(<FleetScreen store={pushing} />);
+    seed(pushing, { conn: 'open', sessions: [], fleetFrameSeen: true });
+    expect(within(document.querySelector<HTMLElement>('.fleet-head-right')!).getByRole('button', { name: /^Notifications (on|off)$/ })).toBeInTheDocument();
   });
 
   // The runs line says what it counts (T2d, D-6330): "N active" is the runs in `ACTIVE_RUN_STATES`, "N open" is what
@@ -3293,6 +3265,9 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     expect(exposed(), 'said to assistive tech once').toBe(1);
     expect(screen.getByText(/run different builds/i), 'and the skew arm no longer vouches for auto').toHaveTextContent('then run ccrc rollout');
     cleanup();
+    // The second half starts from a first visit with nothing kept: the first half's answer stays in the screen cache
+    // (console speed C2), and a remount would draw it as the last answer that landed.
+    clearScreenCache();
     vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
     renderFleet(<FleetScreen store={makeStore()} />);
     await until(() => expect(document.querySelector('.build-line')).not.toBeNull());
@@ -3359,56 +3334,6 @@ describe('cross-project nesting on the fleet screen (D-5527)', () => {
     expect(labels).toEqual(['tidy-docs · wave 1 of 2', 'port-api · wave 5 of 7']);
     expect(document.querySelector('.sess-child')?.getAttribute('title'))
       .toBe('this workspace does one wave of Tidy the docs for the coordinator; it is stopped or reclaimed when the wave is done');
-  });
-});
-
-// ── native Docs reader W5 part 1, Task 11: the Docs door (design 2026-10-01 section 4.8, M4.L1) ───────────────
-//
-// The `/settings` door's twin above, with its placement pinned too: immediately before `.accounts-door` in the
-// header's control cluster, with the word beside an aria-hidden glyph, rendered whether or not the fleet has a
-// session. Its two tap-target halves live in tap-targets.test.tsx. The file-level afterEach does not reset the route.
-describe('the Docs door (docs design 4.8, M4.L1)', () => {
-  afterEach(() => navigate('/'));
-
-  it('sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs', () => {
-    renderFleet(<FleetScreen store={makeStore()} />);
-    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
-    expect(door).toHaveClass('docs-door');
-    expect(door.parentElement).toHaveClass('fleet-head-right');
-    expect(door.nextElementSibling).toHaveClass('accounts-door');
-    const words = [...door.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent?.trim()).join('');
-    expect(words).toBe('Docs');
-    expect(door.querySelector('.docs-door-glyph')?.getAttribute('aria-hidden')).toBe('true');
-    // The glyph is `Icon file-text` (skins plan Task 8, "#402's 📄"; D-5500): an svg drawn from the vendored nodes,
-    // stroked in the door's ink, and no text of its own, so the platform's colour 📄 cannot come back here.
-    const glyph = door.querySelector('.docs-door-glyph')!;
-    expect(glyph.querySelector('svg')?.children.length).toBe(ICONS['file-text'].length);
-    expect(glyph.textContent).toBe('');
-    fireEvent.click(door);
-    expect(location.pathname).toBe('/docs');
-  });
-
-  it('renders with no sessions at all', () => {
-    const store = makeStore();
-    renderFleet(<FleetScreen store={store} />);
-    act(() => { store.setState({ conn: 'open', sessions: [] }); });
-    expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
-  });
-
-  it('is still there, in the header cluster before the accounts door, with a session present', () => {
-    const store = makeStore();
-    renderFleet(<FleetScreen store={store} />);
-    seed(store, { conn: 'open', sessions: [session({ project: 'demo' })] });
-    // The fleet really holds a session now (the header counts it, and the first-run empty state is gone), so the
-    // empty-fleet cases above are not what this one measures.
-    expect(document.querySelector('.fleet-count')?.textContent).toContain('1 session');
-    expect(screen.queryByRole('heading', { name: 'No sessions yet' })).toBeNull();
-    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
-    expect(door).toHaveClass('docs-door');
-    expect(door.parentElement).toHaveClass('fleet-head-right');
-    expect(door.nextElementSibling).toHaveClass('accounts-door');
-    fireEvent.click(door);
-    expect(location.pathname).toBe('/docs');
   });
 });
 

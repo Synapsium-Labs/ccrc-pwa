@@ -1,4 +1,4 @@
-// The fleet screen's header — the wordmark, the readouts, and the five doors.
+// The fleet screen's header — the wordmark, the readouts, and the doors the phone's bottom bar does not hold (PL10).
 //
 // WHY IT IS ITS OWN FILE. `FleetScreen` was ONE component with a 932-line
 // body, worse than `SessionLine` was before this branch cut it. This header
@@ -12,22 +12,19 @@
 // rather than a fragment inlined in a screen: a reader looking for "how do I
 // reach settings" should land in a file that is only about that.
 import type { ReactNode } from 'react';
-import { Door, Icon, SETTINGS_GLYPH } from '@ccrc/ui';
-import { MailBadge } from '../fleet/MailBadge';
+import { Door, SETTINGS_GLYPH } from '@ccrc/ui';
 import { NotificationBell } from '../fleet/NotificationBell';
 import { PoolLag } from './poolLag';
 import { navigate } from '../lib/router';
 import '../fleet/fleet.css';
 
 export function FleetHead(
-  { countLine, poolLag, waiting, chrome = true }: {
+  { countLine, poolLag, chrome = true }: {
     /** The "N sessions" readout, or `null` when the fleet is empty or the frame's status bar prints the count
      *  (Instrument at a desk, T2g). Both draw the same: nothing. */
     countLine: string | null;
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
-    /** The sessions waiting on the operator (`waitingOnYou`); `null` before the first fleet frame, "not heard yet". */
-    waiting: number | null;
     /** The wordmark and the doors. False where the skin's frame holds them: Refined's bar holds both, and Instrument's
      *  top bar holds the wordmark while its rail holds the doors (Refined's `Sidebar` and Instrument's `ListColumn` at a
      *  desk, W2 Task S4b, T2e): the readouts stay here, and the identity mark is drawn once. With no
@@ -45,50 +42,14 @@ export function FleetHead(
           {poolLag !== null && <PoolLag text={poolLag} />}
           {chrome && (
             <>
-              {/* THE DOOR TO /docs (native Docs reader design 2026-10-01, section 4.8): the doors' pattern, a glyph AND a
-                  word, placed immediately before `.accounts-door`. Rendered unconditionally, like Settings: the Docs index
-                  lists every project, so a fleet with no sessions still has docs to read. It is a plain button rather than
-                  a `Door`: its box is the `.docs-door` rule in docs/docs.css (the pre-`Door` door rules, restated there),
-                  which the contrast gate, the tap floor and the build gate measure; that stylesheet reaches the main one
-                  through app.tsx's static import of DocsScreen. */}
-              <button
-                type="button"
-                className="docs-door"
-                aria-label="Docs: specs, plans and design notes"
-                onClick={() => navigate('/docs')}
-              >
-                <span className="docs-door-glyph" aria-hidden="true"><Icon name="file-text" /></span>
-                Docs
-              </button>
-              {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
-                  target was the only one — its own comment says so — and its
-                  accessible name is "account usage — open accounts": a full-width
-                  readout of 5h/7d meters, which reads as DATA and not as
-                  navigation. /runs, /archive and /mail each have an explicit
-                  control; the screen carrying the passkey enrolment button and the
-                  sign-out button had none, so the operator hunting for it on a
-                  laptop never found the screen at all. The strip STAYS a door (a
-                  second one costs nothing and it is where a gauge is being looked
-                  at anyway); this is the one that says what it is.
-
-                  A SHORT TEXT LABEL, not a lone glyph: icon-only would be exactly
-                  as undiscoverable as the strip, which is the defect. The
-                  accessible name names both halves of the screen — sign-in and
-                  accounts — because "Account" alone is what the strip already
-                  failed to communicate. It begins with the visible word, like
-                  the settings door below, so a voice user saying "Account"
-                  reaches it (WCAG 2.5.3, D-7897). */}
-              <Door
-                className="accounts-door"
-                glyph="🔑"
-                aria-label="Account — your sign-in and accounts"
-                onClick={() => navigate('/accounts')}
-              >
-                Account
-              </Door>
+              {/* THE PHONE'S PLACES ARE THE BOTTOM BAR'S (desktop-polish PL10, D-7952; the coordinator's ruling of 2026-11-04,
+                  "the phone bar is the phone's one navigation"). This head's doors to Docs (`/docs`), Account (`/accounts`, the
+                  Accounts place) and Mail (`/mail`, the Inbox place) each opened a place the bar holds, so they are gone, and
+                  the doors the bar lacks stay: Settings and the bell. D-161's "a durable door to /accounts" and D-2's "the only
+                  door to /mail" are the bar's Accounts and Inbox doors now, mounted on every page but an open session. */}
               {/* THE DOOR TO /settings (centralised update management §13) — the
-                  `.accounts-door` pattern directly above, for the argument its
-                  comment makes: a glyph AND a short text label, because an
+                  pattern the head's Accounts door had until PL10 moved that door to
+                  the phone's bottom bar: a glyph AND a short text label, because an
                   icon-only gear would be exactly as undiscoverable as the
                   AccountsStrip tap target that D-161 found was the only door to
                   /accounts. The accessible name says what is behind it — updates
@@ -107,7 +68,6 @@ export function FleetHead(
               >
                 Settings
               </Door>
-              <MailBadge waiting={waiting} />
               <NotificationBell />
             </>
           )}

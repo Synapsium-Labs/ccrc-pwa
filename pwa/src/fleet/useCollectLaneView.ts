@@ -22,11 +22,16 @@ import {
 import { ApiError, api, apiErrorText } from '../lib/api';
 import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 import { isRecord } from '../lib/wire';
 import { asCollectLaneConfirm, asCollectLaneView } from './collectLaneRead';
 
 /** The read's cadence, the stall section's: 60 s. */
 export const COLLECT_LANE_POLL_MS = 60_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount; a write, or an answer
+ *  that drops the view, forgets it. */
+const CACHE_KEY = settingsKey('collect-lane');
 
 /** Why the latest poll produced no view: the shared helper's two words, plus the one answer this route alone gives
  *  (a 503 `state-unmeasurable` from the GET: the switch's row is absent, spec §5.6), with the server's bounded detail. */
@@ -108,26 +113,33 @@ const readFailureOf = (err: unknown): CollectLaneReadFailure => {
  */
 export function useCollectLaneView(pollMs: number = COLLECT_LANE_POLL_MS): CollectLanePoll {
   const [state, setState] = useState<{ view: CollectLaneView | null; failure: CollectLaneReadFailure | null }>(
-    { view: null, failure: null });
+    () => ({ view: asCollectLaneView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
-    request: () => api.collectLane(),
+    request: (signal) => api.collectLane({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asCollectLaneView(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         setState((prev) => (view === null ? { view: prev.view, failure: { kind: 'failed' } } : { view, failure: null }));
       } else {
         const failure = readFailureOf(outcome.err);
         // The server saying the switch is not here, or cannot be measured, drops the landed view; a read that did
-        // not land keeps it.
+        // not land keeps it. A dropped view is forgotten too, so the next mount never draws it.
+        if (failure.kind !== 'failed') forget(CACHE_KEY);
         setState((prev) => ({ view: failure.kind === 'failed' ? prev.view : null, failure }));
       }
     },
   });
 
-  const reload = useCallback(() => { load(); }, [load]);
+  // A caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed or failed branch, an ack or a
+  // move; console speed C2 fix rounds 1 and 2), with a few re-reads that follow no write (the collector's
+  // marker-still-controls answer, Linear's legacy act), which cost only a Loading on the next visit. The kept answer
+  // goes first: leaving Settings before the re-read lands (which aborts it) must not bring a pre-write view back.
+  const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   const settle = useCallback((view: CollectLaneView) => {
     supersede();   // every poll issued before this write now lands stale
+    forget(CACHE_KEY);   // the kept answer is from before the write; the next read keeps the new one
     setState({ view, failure: null });
   }, [supersede]);
   return { view: state.view, failure: state.failure, reload, settle };

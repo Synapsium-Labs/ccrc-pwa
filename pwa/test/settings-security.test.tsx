@@ -342,6 +342,29 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
     expect(within(signInCard()).getByText(KEY_B.label)).toBeInTheDocument();
   });
 
+  // Console speed C2 fix round 2 (F2): a Revoke whose answer never arrives may have committed, so it counts as a write
+  // and forgets the kept list. The operator leaves before any re-read lands and comes back: the revoked key is not drawn.
+  it('a Revoke that fails after the server could have committed: leave, return, and the kept list is not drawn', async () => {
+    const b = await armed();
+    expect(within(signInCard()).getByText(KEY_A.label)).toBeInTheDocument();
+    let committed = false;
+    b.f.mockImplementation(async (url: unknown, init?: RequestInit): Promise<Response> => {
+      const u = String(url);
+      if (u.startsWith('/api/auth/passkey/') && init?.method === 'DELETE') {
+        committed = true;   // the server removed the key, then the connection dropped before its answer
+        throw new TypeError('network connection was lost');
+      }
+      return new Promise<Response>(() => {});   // every later read hangs: the operator leaves before it lands
+    });
+    await revokeAndConfirm(KEY_A.label);
+    expect(committed).toBe(true);
+    cleanup();
+    quietReads();
+    renderSettings('security');
+    await settle();
+    expect(screen.queryByText(KEY_A.label)).toBeNull();
+  });
+
   it('after Add the new row appears', async () => {
     const b = await armed([KEY_A]);
     await act(async () => {
@@ -349,6 +372,20 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
     });
     expect(await within(signInCard()).findByText(NEW_KEY.label)).toBeInTheDocument();
     expect(b.calls('/api/auth/passkeys')).toBe(2);
+  });
+
+  it('an Add whose answer never arrives reads the pair again: it may have stored the key (console speed C2)', async () => {
+    const b = await armed([KEY_A]);
+    const real = b.f.getMockImplementation()!;
+    b.f.mockImplementation(async (url: unknown, init?: RequestInit): Promise<Response> => {
+      if (String(url).endsWith('/passkey/register/finish')) throw new TypeError('network connection was lost');
+      return real(url as string, init);
+    });
+    const before = b.calls('/api/auth/status');
+    await act(async () => {
+      fireEvent.click(within(signInCard()).getByRole('button', { name: 'Add a passkey on this device' }));
+    });
+    await waitFor(() => expect(b.calls('/api/auth/status')).toBe(before + 1));
   });
 
   it('Add and Revoke each announce authPostureChanged', async () => {

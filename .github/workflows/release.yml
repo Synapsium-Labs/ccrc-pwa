@@ -37,7 +37,7 @@ jobs:
   # checkout removes that file in the step's own cleanup; a failed removal
   # does not fail the step, the action only warns or says nothing, as at v4.
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 30: the build is most of the run.
     timeout-minutes: 30
     permissions:
@@ -108,7 +108,7 @@ jobs:
   # no release decision: it runs whenever the build job succeeds.
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 10: it downloads, checks, attests and publishes; it builds nothing.
     timeout-minutes: 10
     permissions:

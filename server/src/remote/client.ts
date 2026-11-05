@@ -52,9 +52,13 @@ export interface RemoteFleetConfig {
   reconnectMaxMs?: number;
   /** default per-request local wait timeout when a call site doesn't override it. Default 15000. */
   requestTimeoutMs?: number;
+  /** Called ONCE per settled request (answered, failed, timed out or aborted; never for one not sent), with the op word
+   *  (`exec:<cmd>` for exec, the command word only, never its arguments) and the milliseconds since the send
+   *  (console speed S1). */
+  onRoundTrip?: (op: string, ms: number) => void;
 }
 
-type ResolvedConfig = Required<RemoteFleetConfig>;
+type ResolvedConfig = Required<Omit<RemoteFleetConfig, 'onRoundTrip'>> & Pick<RemoteFleetConfig, 'onRoundTrip'>;
 
 // Re-exported so callers can obtain the connected client and its state type
 // from one remote boundary. `refreshcaps.ts` and its test import `FleetState`
@@ -192,6 +196,7 @@ export class FleetClient {
       reconnectMinMs: cfg.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS,
       reconnectMaxMs: cfg.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS,
       requestTimeoutMs: cfg.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      onRoundTrip: cfg.onRoundTrip,
     };
     this.backoffMs = this.cfg.reconnectMinMs;
   }
@@ -268,6 +273,8 @@ export class FleetClient {
     } catch (e) {
       return Promise.reject(new LinkNotSentError(e instanceof Error ? e.message : String(e)));
     }
+    const op = payload.op === 'exec' ? `exec:${payload.cmd}` : payload.op;   // the word only: never an argument (console speed S1)
+    const sentAt = performance.now();
     const answer = this.register(id, timeoutMs ?? this.cfg.requestTimeoutMs, signal);
     try {
       ws.send(text);
@@ -283,7 +290,17 @@ export class FleetClient {
         entry.reject(new LinkNotSentError(e instanceof Error ? e.message : String(e)));
       }
     }
-    return answer;
+    return this.cfg.onRoundTrip === undefined ? answer : this.measured(op, sentAt, answer);
+  }
+
+  /** Reports one settled request's round trip; a request that was never sent (`LinkNotSentError`) reports nothing. Takes
+   *  no part of the frame (D-5623). */
+  private measured(op: string, sentAt: number, answer: Promise<ResOk>): Promise<ResOk> {
+    const report = (e: unknown): void => {
+      if (e instanceof LinkNotSentError) return;
+      try { this.cfg.onRoundTrip?.(op, performance.now() - sentAt); } catch { /* a recorder must not fail a request */ }
+    };
+    return answer.then((v) => { report(null); return v; }, (e: unknown) => { report(e); throw e; });
   }
 
   /** The pending entry and its settlement closures for request `id`. Takes no part of the frame, so nothing it

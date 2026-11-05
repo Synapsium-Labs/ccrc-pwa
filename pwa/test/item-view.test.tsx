@@ -174,6 +174,15 @@ describe('the item view', () => {
     expect([...new Set([...operatorCodes, ...generic])].sort()).toEqual(Object.keys(LEDGER_REFUSAL_TEXT).sort());
   });
 
+  // Review 1440 F2 (desktop-polish PL10): the sentence says what is stored, that nothing was saved, and the operator's own door.
+  it('the secret-name-collides sentence says a secret is stored under another spelling, nothing was saved, and how to clear it', () => {
+    const t = LEDGER_REFUSAL_TEXT['secret-name-collides'];
+    expect(t).toMatch(/already stored under a name spelled differently/);
+    expect(t).toMatch(/nothing was saved/);
+    expect(t).toMatch(/Remove that stored secret/);
+    expect(t).not.toMatch(/raise the item again/);
+  });
+
   it('the programme-unclaimed sentence never says to dismiss: a dismiss is refused while its run is open', () => {
     expect(LEDGER_REFUSAL_TEXT['programme-unclaimed']).not.toMatch(/dismiss/i);
     expect(LEDGER_REFUSAL_TEXT['programme-unclaimed']).toMatch(/abandon/i);
@@ -333,3 +342,109 @@ describe('the recommendation on a decide item (plan PL9; spec §3.2, D24)', () =
     expect(screen.getByRole('region', { name: 'Why it is recommended' }).textContent).toContain('x'.repeat(2000));
   });
 });
+
+// Desktop-polish PL10 (D-7952; spec §2, D26 to D28): the band names the programme as a door to its view and links its pinned
+// spec; links in the item's text are links (`linkRuns`), a document path opening in the Docs reader of the programme's home.
+describe('the item view: the spec one tap away, and links that work (PL10)', () => {
+  const SPEC_HREF = '/docs/project-a/specs/2026-10-31-prog-a-design.md';
+  const PROG = { name: 'Programme A', hue: null, href: '/programmes/prog-a', specHref: SPEC_HREF, homeProject: 'project-a' };
+  afterEach(() => { history.replaceState(null, '', '/'); });
+
+  it('the item band links the pinned spec', () => {
+    show(itemView(), { programme: PROG });
+    const band = document.querySelector<HTMLElement>('.wi-band')!;
+    const spec = within(band).getByRole('link', { name: 'Spec for Programme A' });
+    expect(spec.getAttribute('href')).toBe(SPEC_HREF);
+    fireEvent.click(spec);
+    expect(location.pathname).toBe(SPEC_HREF);
+  });
+
+  it('no spec link is drawn without a pin', () => {
+    show(itemView(), { programme: { ...PROG, specHref: null } });
+    expect(within(document.querySelector<HTMLElement>('.wi-band')!).queryByRole('link', { name: /^Spec/ })).toBeNull();
+    // Not even as words: a link with no address is no `link` role, so the words are what a dead "Spec" leaves (review 1466 F15).
+    expect(within(document.querySelector<HTMLElement>('.wi-band')!).queryByText('Spec')).toBeNull();
+  });
+
+  it("the band's programme name opens the programme view", () => {
+    show(itemView(), { programme: PROG });
+    const name = within(document.querySelector<HTMLElement>('.wi-band')!).getByRole('link', { name: 'Programme A' });
+    expect(name.getAttribute('href')).toBe('/programmes/prog-a');
+    fireEvent.click(name);
+    expect(location.pathname).toBe('/programmes/prog-a');
+    cleanup();
+    // A programme the console cannot open draws its name as words.
+    show(itemView(), { programme: { ...PROG, href: null } });
+    expect(within(document.querySelector<HTMLElement>('.wi-band')!).queryByRole('link', { name: 'Programme A' })).toBeNull();
+    expect(document.querySelector('.wi-band')!.textContent).toContain('Programme A');
+  });
+
+  it('https, console paths and document paths in item text are links', () => {
+    show(itemView({
+      title: 'Read docs/superpowers/specs/a-design.md',
+      why: 'See https://example.com/page and /runs for the state.',
+      how: ['Open /programmes/prog-a', 'Then read docs/superpowers/plans/p.md'],
+      history: [{ at: NOW - MIN, act: 'raise', note: null }, { at: NOW, act: 'return', note: 'see https://example.com/why' }],
+    }), { programme: PROG });
+    const href = (name: string) => screen.getByRole('link', { name }).getAttribute('href');
+    expect(href('docs/superpowers/specs/a-design.md')).toBe('/docs/project-a/specs/a-design.md');
+    expect(href('https://example.com/page')).toBe('https://example.com/page');
+    expect(href('/runs')).toBe('/runs');
+    expect(href('/programmes/prog-a')).toBe('/programmes/prog-a');
+    expect(href('docs/superpowers/plans/p.md')).toBe('/docs/project-a/plans/p.md');
+    expect(href('https://example.com/why')).toBe('https://example.com/why');
+    // The words around them are drawn as they were.
+    expect(document.querySelector('.wi-text')!.textContent).toBe('See https://example.com/page and /runs for the state.');
+  });
+
+  // Review 1466 F5: a document link outside the console is text wherever the console draws item text, a return's note included,
+  // as the routes refuse it (`linksDocumentOutside`, the one decider).
+  it('an artifact page or an outside document server stays text, in the text and in a return note', () => {
+    show(itemView({
+      why: 'See https://claude.ai/artifact/abc and https://b.example/docs/p/specs/a.md.',
+      history: [{ at: NOW - MIN, act: 'raise', note: null }, { at: NOW, act: 'return', note: 'see https://claude.ai/public/artifacts/abc' }],
+    }), { programme: PROG });
+    expect(document.querySelector('.wi-text')!.querySelectorAll('a')).toHaveLength(0);
+    expect(document.querySelector('.wi-history')!.querySelectorAll('a')).toHaveLength(0);
+    expect(document.querySelector('.wi-history')!.textContent).toContain('sent back: see https://claude.ai/public/artifacts/abc');
+  });
+
+  it('a javascript or data address stays text', () => {
+    show(itemView({ why: 'javascript:alert(1) and JavaScript:alert(2) and data:text/html,<b>x</b> and vbscript:msgbox(1)' }), { programme: PROG });
+    expect(document.querySelector('.wi-text')!.querySelectorAll('a')).toHaveLength(0);
+    expect(document.querySelector('.wi-text')!.textContent).toContain('javascript:alert(1)');
+  });
+
+  it('a document path opens in the Docs reader', () => {
+    show(itemView({ why: 'Read docs/superpowers/specs/a-design.md.' }), { programme: PROG });
+    const link = screen.getByRole('link', { name: 'docs/superpowers/specs/a-design.md' });
+    fireEvent.click(link);
+    expect(location.pathname).toBe('/docs/project-a/specs/a-design.md');
+    cleanup();
+    // With no home project to open it in, the path stays text.
+    show(itemView({ why: 'Read docs/superpowers/specs/a-design.md.' }), { programme: { ...PROG, homeProject: null } });
+    expect(screen.queryByRole('link', { name: 'docs/superpowers/specs/a-design.md' })).toBeNull();
+  });
+
+  it('an outside link opens with no opener', () => {
+    show(itemView({ why: 'See https://example.com/page.' }), { programme: PROG });
+    const link = screen.getByRole('link', { name: 'https://example.com/page' });
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')!.split(' ').sort()).toEqual(['noopener', 'noreferrer']);
+    // A tap opens a real new context through `openExternal`, so an installed app's own window never navigates (review 1466 F10).
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    try {
+      fireEvent.click(link);
+      expect(open).toHaveBeenCalledWith('https://example.com/page', '_blank', 'noopener,noreferrer');
+      expect(location.pathname).toBe('/');
+    } finally {
+      open.mockRestore();
+    }
+    // An in-console link stays in this tab: its click is the console's own navigation.
+    cleanup();
+    show(itemView({ why: 'Open /runs.' }), { programme: PROG });
+    fireEvent.click(screen.getByRole('link', { name: '/runs' }));
+    expect(location.pathname).toBe('/runs');
+  });
+});
+

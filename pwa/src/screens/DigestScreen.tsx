@@ -8,7 +8,7 @@
 //
 // Every text a line carries was redacted by the server when it built the digest. It is the children's words, shown
 // as text and never as markup.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import {
@@ -17,6 +17,7 @@ import {
 } from '../../../shared/api';
 import { api, ApiError, apiErrorText } from '../lib/api';
 import { navigate } from '../lib/router';
+import { digestKey, forget, peek, put } from '../lib/screenCache';
 import { doorMark } from '../command/door';
 import './digest.css';
 
@@ -139,27 +140,59 @@ function DigestRow({ line, correct, onCorrected }: {
   );
 }
 
-export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
+/** A correction changed `day`'s lines on the server, so every kept answer for that day is from before it: its own key,
+ *  and the default key when the default answer is for that day (console speed C2 fix round 1). */
+function forgetDay(day: string): void {
+  forget(digestKey(day));
+  if (asDigestAnswer(peek(digestKey(null))?.raw)?.day === day) forget(digestKey(null));
+}
+
+export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT }: {
   day: string | null; load?: Load; correct?: Correct;
 }): ReactNode {
-  const [digest, setDigest] = useState<DigestAnswer | null>(null);
-  const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading');
+  // An empty `?day=` reads as the default day, as no `?day=` does.
+  const day = asked === '' ? null : asked;
+  // The day's last answer, kept from an earlier visit (console speed C2), drawn at once through the wire guard while
+  // the screen re-reads; a failed re-read keeps it and says the error beside it.
+  const [digest, setDigest] = useState<DigestAnswer | null>(() => asDigestAnswer(peek(digestKey(day))?.raw));
+  const [state, setState] = useState<'loading' | 'ok' | 'error'>(digest === null ? 'loading' : 'ok');
   const [error, setError] = useState<string | null>(null);
   const [gen, setGen] = useState(0);
+  // Previous and Next change `day` without a remount, so the kept answer is consulted on every day change, not only on
+  // mount: a return to a day already read this page load draws it at once (fix round 1).
+  const [seededFor, setSeededFor] = useState(day);
+  if (seededFor !== day) {
+    setSeededFor(day);
+    const kept = asDigestAnswer(peek(digestKey(day))?.raw);
+    if (kept !== null) setDigest(kept);
+  }
   const reload = useCallback(() => setGen((g) => g + 1), []);
+  // The correction generation: a read records it when it starts, and one that started before a correction neither
+  // keeps nor draws its answer, even when it settles before the re-read's effect has run (fix round 2).
+  const corrections = useRef(0);
+  // A correction changes the day's lines on the server: forget every kept answer for that day, then re-read.
+  const corrected = useCallback(() => {
+    corrections.current += 1;
+    if (digest !== null) forgetDay(digest.day);
+    forget(digestKey(day));
+    reload();
+  }, [digest, day, reload]);
   useEffect(() => {
     let live = true;
+    const started = corrections.current;
+    const current = (): boolean => live && corrections.current === started;
     setState((s) => (s === 'ok' ? s : 'loading'));
     load(day ?? undefined)
       .then((raw) => {
-        if (!live) return;
+        if (!current()) return;
         const d = asDigestAnswer(raw);
         if (d === null) { setState('error'); setError('This server answered in a shape this app cannot read.'); return; }
+        put(digestKey(day), raw, Date.now());
         setDigest(d);
         setState('ok');
       })
       .catch((err: unknown) => {
-        if (!live) return;
+        if (!current()) return;
         setState('error');
         setError(err instanceof ApiError && err.status === 501
           ? 'This server keeps no coordination record, so there is no digest.'
@@ -211,7 +244,7 @@ export function DigestScreen({ day, load = LOAD, correct = CORRECT }: {
           ) : (
             <ul className="digest-list">
               {shown.lines.map((l) => (
-                <DigestRow key={`${l.rowKind}-${l.id}`} line={l} correct={correct} onCorrected={reload} />
+                <DigestRow key={`${l.rowKind}-${l.id}`} line={l} correct={correct} onCorrected={corrected} />
               ))}
             </ul>
           )}

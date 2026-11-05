@@ -130,6 +130,33 @@ describe('the hook\'s forbidden match is held equal to approvalClass over Task 1
   });
 });
 
+// Cleanup un-wedge, Task R3: the prune row (`GITWT` in the hook, `git worktree prune` in `FORBIDDEN_PATTERNS`) is held
+// equal over both of its fixture lists, in class mode, and deny mode answers it for every must-deny command.
+describe('the hook\'s prune row is held equal to the classifier\'s over fixtures/prune-deny', () => {
+  const HOMEDIR = '/rig/home';
+  const roots = rootsForChild({ id: ID, workdir: `${HOMEDIR}/ws/${ID}`, child: { kind: 'child', runId: 7 } }, HOMEDIR);
+  const list = (k: 'deny' | 'allow'): string[] =>
+    JSON.parse(fs.readFileSync(path.resolve(__dirname, `fixtures/prune-deny/must-${k}.json`), 'utf8'));
+  for (const k of ['deny', 'allow'] as const) {
+    it(`must-${k}: the hook's class mode answers forbidden exactly when the classifier does`, () => {
+      const cmds = list(k);
+      const hook = runForbiddenJq('class', cmds.map((command) => ({ tool_name: 'Bash', tool_input: { command } })));
+      const mismatches = cmds.flatMap((c, i) => {
+        const ts = approvalClass('Bash', { command: c }, { ...roots!, cwd: `${HOMEDIR}/ws/${ID}` }) === 'forbidden';
+        const sh = (hook[i] as string) !== '';
+        return ts === sh ? [] : [`${c}: classifier ${ts ? 'forbidden' : 'not'}, hook ${sh ? 'forbidden' : 'not'}`];
+      });
+      expect(mismatches).toEqual([]);
+    });
+  }
+  it('deny mode answers the prune category for every must-deny command, and nothing for a must-allow one', () => {
+    const deny = runForbiddenJq('deny', list('deny').map((command) => ({ tool_name: 'Bash', tool_input: { command } })));
+    expect(deny.filter((l) => l !== 'prune\tgit worktree prune')).toEqual([]);
+    const allow = runForbiddenJq('deny', list('allow').map((command) => ({ tool_name: 'Bash', tool_input: { command } })));
+    expect(allow.filter((l) => l !== '')).toEqual([]);
+  });
+});
+
 describe('the approval-surface deny: a child cannot reach the approval surface (D-5297)', () => {
   const surface = [
     '"$API" approvals rule 1 allow',

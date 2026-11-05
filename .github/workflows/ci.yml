@@ -214,7 +214,7 @@ jobs:
   ledger-guard:
     name: ledger guard
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       LEDGER_GUARD_MODE: warn
@@ -238,7 +238,7 @@ jobs:
   # dies, `test (server)` below goes red.
   select:
     name: select tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # actions: read — the map and the durations are artifacts of trusted
     # main runs, listed and downloaded here; and the daily run lists the
@@ -453,7 +453,7 @@ jobs:
   # to their own install, so it can only save time.
   deps:
     name: install dependencies (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A cold install of the four packages measured about three minutes
     # (server-deps' old note on node-floor); 30 is a deadline, not an estimate.
     timeout-minutes: 30
@@ -492,7 +492,7 @@ jobs:
     name: plan fast server tests
     needs: [select, deps]
     if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.fast == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     # actions: read — the durations are an artifact of a trusted main run, as in select.
     permissions:
@@ -566,7 +566,7 @@ jobs:
     # A fast pull request runs fast-plan's matrix (never empty: the guard suites always run); every other run runs
     # select's.
     if: ${{ !cancelled() && (needs.select.outputs.fast == 'true' && needs.fast-plan.result == 'success' && needs.fast-plan.outputs.count != '0' || needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged. Each shard is
     # packed to about four minutes, up to 12 shards (a longer file gets one of
@@ -672,7 +672,7 @@ jobs:
     name: typecheck (server)
     needs: select
     if: needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # tsc over server/src alone; about a minute. 15 carries a cold npm cache.
     timeout-minutes: 15
     steps:
@@ -707,7 +707,7 @@ jobs:
     name: perf (server)
     needs: [select, deps]
     if: ${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -745,7 +745,7 @@ jobs:
     name: perf (secret-mask)
     needs: [select, deps]
     if: ${{ !cancelled() && needs.select.outputs.fast != 'true' && needs.select.outputs.count != '0' && (needs.select.outputs.tests == 'selected' || needs.select.outputs.tests == 'full') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -792,7 +792,7 @@ jobs:
     name: test (server)
     needs: [select, fast-plan, server-shard, server-typecheck, node-floor]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # A fast pull request's verdict is over the fast plan's shards: the plan must have succeeded, and its count is
@@ -824,7 +824,7 @@ jobs:
   # check green without running it. `test (pwa)` is no longer a leg of this
   # matrix: it is the aggregate `pwa` job below (D-6768). Not selected.
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A deadline, not the default. Without this key a wedged job runs for
     # GitHub's 360 minutes before anyone learns it wedged; the agent leg takes
     # about a minute (measured 2026-09-23), so 30 is a deadline with room for
@@ -906,7 +906,7 @@ jobs:
     # shard its own install. `pwa` below still reads every shard's result.
     needs: deps
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A deadline, not the default: a shard is about four minutes plus install,
     # and the whole unsharded suite was under eleven. Pinned — key AND ceiling —
     # by server/test/oss-metadata.test.ts.
@@ -996,7 +996,7 @@ jobs:
     # Same install as the shards: the `deps` entry, restored read-only.
     needs: deps
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CCRC_LEG: ${{ (github.event.schedule == '23 */3 * * *' || inputs.mode == 'refresh' || inputs.mode == 'rebuild') && 'skip' || 'run' }}
@@ -1080,7 +1080,7 @@ jobs:
     name: test (pwa)
     needs: [pwa-shard, pwa-static, browser-pwa]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Refuse a shard or the static checks that did not succeed
@@ -1127,7 +1127,7 @@ jobs:
   # refresh ("no test legs") and a rebuild. And no merge-queue run,
   # like the other advisory legs. Pinned by server/test/ci-pipeline.test.ts.
   storybook-a11y:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The browser download dominates; each skin's build and axe run is ~40s
     # for 180 stories, and the job runs one per skin.
     timeout-minutes: 20
@@ -1240,7 +1240,7 @@ jobs:
       probe: true
 
   build-pwa:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Under a minute in practice; 15 is headroom for a cold npm cache.
     timeout-minutes: 15
     # attestations: read, declared for the provenance step alone (M8.16); the census at the top of this file says what it
@@ -1326,7 +1326,7 @@ jobs:
   # THE REAL-BROWSER LEG (native Docs reader spec 2026-10-01 §5.7, U4). pwa's
   # second vitest config drives a real Chrome through playwright-core for the
   # claims jsdom cannot show: what Chrome does with the docs response headers
-  # and with an SVG drawn as an image (M5.B5, M5.B6). ubuntu-latest ships
+  # and with an SVG drawn as an image (M5.B5, M5.B6). ubuntu-24.04 ships
   # /usr/bin/google-chrome, which the harness takes when CCRC_CHROME is unset;
   # with neither, its beforeAll throws, so a missing browser is a red leg and
   # never a skipped one.
@@ -1347,7 +1347,7 @@ jobs:
   # read `needs.browser-pwa.result`, which is red when any shard is.
   browser-pwa:
     name: browser (pwa) ${{ matrix.shard }}/${{ matrix.total }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Measured 2026-10-28 (desktop polish Task C11, run 40612653530, whose
     # log has 30 browser files): the Test step took 861 s of an 893 s job,
     # about 2,430 s of file time over three workers. At 15 that left 7 s; 20
@@ -1460,7 +1460,7 @@ jobs:
     # event runs it unless it is a refresh or a rebuild.
     needs: [select, deps]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # server-deps installs four packages from a cold cache in about three
     # minutes (it restores them from the `deps` job's entry otherwise); the
     # list runs in seconds. 30 is a deadline, not an estimate.
@@ -1528,7 +1528,7 @@ jobs:
     name: trace ${{ matrix.shard }}/${{ matrix.total }}
     needs: [select, deps]
     if: ${{ !cancelled() && needs.select.outputs.trace != 'none' && needs.select.outputs.trace_count != '0' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Tracing costs 1.7-4.3x wall-clock (measured on the fleet box). A refresh
     # is BOUNDED (planTraceBatch, .github/ci/shards.mjs): select plans at most
     # 45 minutes of that cost per shard and defers the rest to the next
@@ -1595,7 +1595,7 @@ jobs:
   map-build:
     needs: [select, trace-shard]
     if: always() && needs.select.result == 'success' && needs.select.outputs.trace_count != '0' && (needs.trace-shard.result == 'success' || needs.trace-shard.result == 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # actions: read — the check before a refresh publishes asks which trusted
     # map is newest.
@@ -1728,7 +1728,7 @@ jobs:
   times-build:
     needs: [select, server-shard]
     if: always() && needs.select.outputs.tests == 'full' && github.ref == 'refs/heads/main' && inputs.workers != '4' && (needs.server-shard.result == 'success' || needs.server-shard.result == 'failure')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -1813,7 +1813,7 @@ jobs:
     # order stage 2; amendment 2026-10-15). Neither is ever the stable gate's
     # evidence: main-artifact.mjs trusts no merge_group or pull_request run.
     if: always() && github.event_name != 'merge_group' && github.event_name != 'pull_request' && needs.select.outputs.tests == 'full'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       verdict: ${{ steps.verdict.outputs.verdict }}

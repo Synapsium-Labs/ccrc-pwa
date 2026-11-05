@@ -16,8 +16,9 @@ import { useFleetStore } from '../stores/fleet';
  *  keeps all of it (one instance of each at any width, as with the accounts strip). Four flags, because the four
  *  things are held by different parts (W2 desk polish T2e, D-6335; before it, one `barHoldsChrome` drove both of the first
  *  two; T2g, D-6715, adds the third; T2f, D-6371, the fourth):
- *  - `headChrome`: the head's wordmark and its Docs, Accounts, Settings, Inbox and Bell doors. Instrument's top bar
- *    holds the wordmark and its rail holds the doors, so its column draws none of them. The pool-lag readout stays,
+ *  - `headChrome`: the head's wordmark and its Settings and Bell doors (its Docs, Accounts and Mail doors went to the
+ *    phone's bottom bar in desktop-polish PL10, D-7952). Instrument's top bar holds the wordmark and its rail holds the
+ *    doors, so its column draws none of them. The pool-lag readout stays,
  *    because it is drawn outside that gate.
  *  - `headCount`: the head's count line. Instrument's status bar prints the fleet's count at every desk width, so its
  *    column draws none; Refined's frame has no such bar, so its column keeps the line.

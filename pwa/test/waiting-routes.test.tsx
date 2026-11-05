@@ -103,6 +103,26 @@ describe('ItemRoute', () => {
     await waitFor(() => expect(store.getState().waiting?.items[0]?.state).toBe('checking'));
   });
 
+  // Desktop-polish PL10 (D-7952; D26): the route hands the band the programme view's path, the pinned spec's Docs address (the
+  // one Goals builds) and the home project a document path in the text opens in.
+  it("hands the band the programme's view, its pinned spec and its home project", () => {
+    const store = mk();
+    const spec = 'docs/superpowers/specs/2026-10-31-prog-a-design.md';
+    act(() => store.setState({
+      runsFrameSeen: true, fleetFrameSeen: true, sessions: [],
+      runs: [runRow({ id: 1, program: 'prog-a', programTitle: 'Programme A', homeProject: 'project-a' } as never)],
+      waiting: waitingView({
+        items: [itemView({ id: 7, program: 'prog-a', why: 'Read docs/superpowers/plans/p.md.' })],
+        goals: [{ program: 'prog-a', specPath: spec, inShort: null, inShortAt: null, modifications: [] }],
+      }),
+    }));
+    render(<ItemRoute id={7} store={store} />);
+    const band = document.querySelector<HTMLElement>('.wi-band')!;
+    expect(within(band).getByRole('link', { name: 'Programme A' }).getAttribute('href')).toBe('/programmes/prog-a');
+    expect(within(band).getByRole('link', { name: 'Spec for Programme A' }).getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
+    expect(screen.getByRole('link', { name: 'docs/superpowers/plans/p.md' }).getAttribute('href')).toBe('/docs/project-a/plans/p.md');
+  });
+
   it('finds a recently cleared item, and says so when the list does not hold it', () => {
     const store = mk();
     act(() => store.setState({ waiting: waitingView({ cleared: [itemView({ id: 5, state: 'done', title: 'Approve it' })] }) }));

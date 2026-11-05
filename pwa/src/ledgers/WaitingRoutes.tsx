@@ -19,11 +19,12 @@ import { programmeTitle } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { LEDGER_REFUSAL_TEXT } from '../lib/refusalWords';
 import { navigate, useLocation } from '../lib/router';
-import { ROUTES, programmePath, sessionPath } from '../lib/routes';
+import { ROUTES, programmeIsOpenable, programmePath, sessionPath } from '../lib/routes';
 import { FleetBanners } from '../screens/FleetScreen';
 import { useFrameSet } from '../skins/frame';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
+import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
 import {
   BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, EMPTY_WORD, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
   NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace, knownProgrammes,
@@ -322,7 +323,13 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   } else {
     body = (
       <ItemView key={item.id} item={item} now={Date.now()} programmeLive={programmeIsLive(item.program, runs)}
-                programme={{ name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null }}
+                programme={{
+                  name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,
+                  // The band's doors (desktop-polish PL10, D-7952; D26): the programme view, and its pinned spec in the Docs reader.
+                  href: programmeIsOpenable(item.program) ? programmePath(item.program) : null,
+                  specHref: view === null ? null : programmeSpecHref(item.program, view.goals, runs ?? []),
+                  homeProject: homeProjectOf(item.program, runs ?? []),
+                }}
                 onTick={async (answer) => {
                   await (answer === undefined ? api.tickItem(item.id) : api.tickItem(item.id, answer));
                   await refetchWaiting(store);

@@ -105,6 +105,12 @@ describe('cold start: a persisted snapshot with a roster, before any answer', ()
     expect(store.getState().roster).toEqual(TEST_ROSTER);
     expect(store.getState().usage).toBeNull();
     expect(store.getState().projected).toBeUndefined();
+    // At the desk, where the strip's placeholder is drawn: a phone draws none, since the bottom bar holds the Accounts place
+    // (PL10 fix round 1, review 1466 F3).
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('min-width: 900px'), media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
     render(createElement('div', null, createElement(AccountsStrip, { store }), createElement(HookProbe, { store })));
     expect(screen.getByText('checking accounts…')).toBeInTheDocument();
     expect(gauges()).toBe(0);

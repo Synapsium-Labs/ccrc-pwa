@@ -2,15 +2,16 @@
 // S5a), in a real Chrome over the production build.
 //
 // What jsdom cannot hold: at 360, 390 and 438 in both palettes, with a three-digit Runs count and five lanes (and, in a case of
-// its own, the Waiting door's "99+" badge drawn too), the header is one row with nothing cut, every door is at least 44 x 44 under the phone's touch screen, the readout is one
+// its own, the Waiting door's "99+" badge drawn too), the header is one row with nothing cut (the wordmark and Settings; the
+// badged places are the bottom bar's since desktop-polish PL10, D-7952, and measured there), every door is at least 44 x 44 under the phone's touch screen, the readout is one
 // line, the strip's lane cards sit in two columns, the `+ New` clears the last card once the list is scrolled to its
 // end and sits above a 34 px home indicator (emulated through the DevTools protocol, so `env(safe-area-inset-bottom)` is
 // non-zero), a real toast (`ToastHost`'s, raised by the update line's dismiss) sits above it, and the page does not
 // scroll sideways (R13 F1 and F2, carried by T2b, D-6328). At 900,
 // 1280 and 1920 no `+ New` is mounted (the bar's button is the door). Instrument's phone keeps today's head and round
 // `+` (S11). With seventeen lanes at 360 and 390 the folded strip's four cards read most free first, each shows its
-// windows, every countdown it prints is seen (a client rect inside the card, not covered), and All accounts has a row of
-// its own under the cards; the same checks run over the phone's PANEL, which holds the thirteen lanes the line folds
+// windows, every countdown it prints is seen (a client rect inside the card, not covered), and the fold's control has a row
+// of its own under the cards, with no All accounts beside it (the bottom bar holds Accounts: PL10, review 1466 F3); the same checks run over the phone's PANEL, which holds the thirteen lanes the line folds
 // away (T2c, D-6329; R18 F4, F5; S5c; Task C13).
 //
 // THE FOLD AND THE PHONE'S PANEL (desktop polish S5b, D-6530; S5c, phone-strip-tap-panel, phone-fold-two-lines). Below
@@ -18,12 +19,12 @@
 // same seventeen lanes (`test/seventeenLanes.ts`, the fixture every strip suite shares) a phone shows two lines of the
 // tracks its grid draws: four cards in two rows of two below 700 (360, 390 and 699 are measured here; the fold at 438 is
 // not measured here, and jsdom, which evaluates no stylesheet, cannot hold it either), eight in two rows of four from
-// 700 (700 and 899); the control and All accounts share one row, nothing scrolls sideways, and the first session row sits
+// 700 (700 and 899); the control has the row under the cards (no All accounts on a phone since PL10), nothing scrolls sideways, and the first session row sits
 // at most 440 px down in Refined and at most 540 px down in Instrument at 390x844, with the choice stored expanded too.
 // A real tap on the control (`locator.tap()`, a touch screen below 900) opens the panel: the lanes the line folds away, in
 // order, each lane drawn once across the line and the panel (Task C13), hung from
 // the strip's bottom edge, drawn over the content with no push of the page, bounded by the room left under the strip and
-// scrolling inside itself when it is taller (also with a release waiting, a case run at 390x744 so that the panel of
+// scrolling inside itself when it is taller (also with a release waiting, a case run at 390x640 so that the panel of
 // thirteen scrolls: at 844 it fits Instrument's room, review 1142 measured). A tap outside the strip and the panel, Escape
 // and a second tap on the control close it; closing leaves focus on the control, on screen.
 //
@@ -135,8 +136,8 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
         await insetHomeIndicator(ctx, page);
         await page.goto(server!.origin + '/');
         await page.waitForFunction(() => document.querySelectorAll('.ref-phone-head .account-gauge').length === 5
-          && document.querySelector('.ref-phone-head [aria-label="Inbox, 1 waiting for you"]') !== null
-          && document.querySelector('.ref-phone-head [aria-label="Runs, 120 needs you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null
           && document.querySelectorAll('.proj-card').length > 0 && document.querySelector('.ref-fab') !== null, undefined, { timeout: 20_000 });
         await page.waitForTimeout(200); // the FAB's ResizeObserver publishes
         const faults = await page.evaluate((inset) => {
@@ -145,10 +146,11 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           const row = document.querySelector<HTMLElement>('.ref-phone-row')!;
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
-          if (parts.length !== 6) out.push(`the row holds ${parts.length} parts, not the wordmark and five doors`);
-          // Named, not only counted (desktop-polish PL5a, review 1374 A1): a different door in Waiting's place would pass the count.
+          // Since desktop-polish PL10 (D-7952) the row is the wordmark and Settings; the places are the bottom bar's.
+          if (parts.length !== 2) out.push(`the row holds ${parts.length} parts, not the wordmark and the Settings door`);
+          // Named, not only counted (desktop-polish PL5a, review 1374 A1): a different door in Settings' place would pass the count.
           const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
-          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
+          if (doors.join(' ') !== 'go-settings') out.push(`the doors are ${doors.join(' ')}`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {
@@ -158,16 +160,21 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
             if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
             if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
           }
-          const badges = [...row.querySelectorAll<HTMLElement>('.ref-phone-badge')];
+          // The badges are the bottom bar's (PL10): on Inbox and Runs, inside the viewport, never over a glyph's centre point.
+          const badges = [...document.querySelectorAll<HTMLElement>('.shell-phone-nav .phone-bar-count')];
           if (badges.length !== 2) out.push(`${badges.length} badges, not Inbox's and Runs'`);
           for (const badge of badges) {
             const br = badge.getBoundingClientRect();
-            if (br.right > rr.right + 0.5) out.push('the badge is cut');
+            if (br.right > window.innerWidth + 0.5) out.push('the badge is cut');
             // The glyph is the door's only visible label: a "99+" may sit on its top-right corner, never its middle.
             const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
             const cx = (g.left + g.right) / 2;
             const cy = (g.top + g.bottom) / 2;
-            if (br.left < cx - 0.5 || br.bottom > cy + 0.5) out.push(`the badge covers the glyph's middle (${Math.round(br.left)},${Math.round(br.bottom)} vs ${Math.round(cx)},${Math.round(cy)})`);
+            // Over the middle is over the glyph's centre point: a count that moved left to stay inside its door (review 1466 F18)
+            // sits above it.
+            if (br.left < cx - 0.5 && br.right > cx + 0.5 && br.top < cy - 0.5 && br.bottom > cy + 0.5) out.push(`the badge covers the glyph's middle (${Math.round(br.left)},${Math.round(br.bottom)} vs ${Math.round(cx)},${Math.round(cy)})`);
+            const door = badge.closest('[data-command]')!.getBoundingClientRect();
+            if (br.left < door.left - 0.5 || br.right > door.right + 0.5) out.push(`the badge reaches past its door (${Math.round(br.left)}-${Math.round(br.right)} in ${Math.round(door.left)}-${Math.round(door.right)})`);
           }
           const sub = document.querySelector<HTMLElement>('.ref-phone-sub .fleet-count');
           if (sub === null) out.push('no readout');
@@ -354,7 +361,7 @@ function cardFaults({ expected, cardSel, inside }: { expected: Array<{ label: st
 // Carry C (D-7951), review 1379 F6: the phone's Waiting door with its widest badge, "99+", drawn beside Inbox's and Runs'. The
 // header case above serves no list, so it asserts two badges; this one serves a hundred open items (with the one asking session,
 // the door counts 101), and holds that the third badge leaves the row's fit as it was: one row, every door whole and a
-// finger's square, each badge on its glyph's corner and never its middle, and nothing scrolls sideways.
+// finger's square, each badge clear of its glyph's centre point, and nothing scrolls sideways.
 const listItem = (id: number): object => ({
   id, program: 'p', runId: null, kind: 'do', title: `Item ${id} title`, why: 'Why.', how: ['Do it.'], options: null,
   neededBy: 'later', soonLabel: null, state: 'open', stale: false, raisedAt: Date.now() - 60_000, tickedAt: null, closedAt: null,
@@ -366,15 +373,15 @@ const WITH_LIST: AppFixture = {
   fleetFrames: [{ type: 'waiting', waiting: LIST }, ...FIXTURE.fleetFrames],
 };
 
-describe("Refined's phone header with the Waiting badge drawn keeps its one row of finger-sized doors", () => {
+describe("Refined's phone header and the bottom bar with the Waiting badge drawn keep their finger-sized doors", () => {
   for (const view of PHONES) {
     it(named(view), async () => {
       const { ctx, page, errors } = await openApp(browser!, view, WITH_LIST);
       try {
         await page.goto(server!.origin + '/');
-        await page.waitForFunction(() => document.querySelector('.ref-phone-head [aria-label="Waiting on you, 101 waiting on you"]') !== null
-          && document.querySelector('.ref-phone-head [aria-label="Inbox, 1 waiting for you"]') !== null
-          && document.querySelector('.ref-phone-head [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
+        await page.waitForFunction(() => document.querySelector('.shell-phone-nav [aria-label="Waiting on you, 101 waiting on you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
+          && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
         const faults = await page.evaluate(() => {
           const out: string[] = [];
           if (!matchMedia('(pointer: coarse)').matches) out.push('the coarse pointer was not emulated');
@@ -382,7 +389,7 @@ describe("Refined's phone header with the Waiting badge drawn keeps its one row 
           const rr = row.getBoundingClientRect();
           const parts = [row.querySelector<HTMLElement>('[data-wordmark]')!, ...row.querySelectorAll<HTMLElement>('[data-command]')];
           const doors = parts.slice(1).map((d) => d.getAttribute('data-command'));
-          if (doors.join(' ') !== 'go-waiting go-inbox go-runs go-docs go-settings') out.push(`the doors are ${doors.join(' ')}`);
+          if (doors.join(' ') !== 'go-settings') out.push(`the doors are ${doors.join(' ')}`);
           const mid = (el: HTMLElement): number => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
           const line = mid(parts.at(-1)!);
           for (const p of parts) {
@@ -392,18 +399,25 @@ describe("Refined's phone header with the Waiting badge drawn keeps its one row 
             if (r.right > rr.right + 0.5 || r.left < rr.left - 0.5) out.push(`${name} is cut`);
             if (p.matches('[data-command]') && (r.width < 43.5 || r.height < 43.5)) out.push(`${name} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
           }
-          const badges = [...row.querySelectorAll<HTMLElement>('.ref-phone-badge')];
+          // The badges are the bottom bar's since PL10 (D-7952); every bar door at the floor too.
+          for (const d of document.querySelectorAll<HTMLElement>('.shell-phone-nav [data-command]')) {
+            const r = d.getBoundingClientRect();
+            if (r.width < 43.5 || r.height < 43.5) out.push(`${d.getAttribute('aria-label')} is ${Math.round(r.width)} x ${Math.round(r.height)}`);
+          }
+          const badges = [...document.querySelectorAll<HTMLElement>('.shell-phone-nav .phone-bar-count')];
           const on = badges.map((b) => b.closest('[data-command]')!.getAttribute('data-command'));
           if (on.join(' ') !== 'go-waiting go-inbox go-runs') out.push(`the badges are on ${on.join(' ')}`);
           const waitingBadge = badges[0];
           if (waitingBadge?.textContent !== '99+') out.push(`the Waiting badge reads ${waitingBadge?.textContent ?? 'nothing'}`);
           for (const badge of badges) {
             const br = badge.getBoundingClientRect();
-            if (br.right > rr.right + 0.5) out.push('the badge is cut');
+            if (br.right > window.innerWidth + 0.5) out.push('the badge is cut');
             const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
             const cx = (g.left + g.right) / 2;
             const cy = (g.top + g.bottom) / 2;
-            if (br.left < cx - 0.5 || br.bottom > cy + 0.5) out.push(`a badge covers its glyph's middle (${Math.round(br.left)},${Math.round(br.bottom)} vs ${Math.round(cx)},${Math.round(cy)})`);
+            if (br.left < cx - 0.5 && br.right > cx + 0.5 && br.top < cy - 0.5 && br.bottom > cy + 0.5) out.push(`a badge covers its glyph's middle (${Math.round(br.left)},${Math.round(br.bottom)} vs ${Math.round(cx)},${Math.round(cy)})`);
+            const door = badge.closest('[data-command]')!.getBoundingClientRect();
+            if (br.left < door.left - 0.5 || br.right > door.right + 0.5) out.push(`a badge reaches past its door (${Math.round(br.left)}-${Math.round(br.right)} in ${Math.round(door.left)}-${Math.round(door.right)})`);
           }
           if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
           return out;
@@ -420,32 +434,31 @@ describe("Refined's phone header with the Waiting badge drawn keeps its one row 
 describe("with 17 lanes the phone's strip keeps every card readable", () => {
   for (const theme of THEMES) {
     for (const width of [360, 390]) {
-      it(`with 17 lanes at 360 and 390 the folded line's four cards and the tapped panel's thirteen folded-away lanes run most free first, each lane once, each shows its windows and every countdown it prints is seen, a long label is cut inside its card, All accounts sits on a row under the cards, and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
+      it(`with 17 lanes at 360 and 390 the folded line's four cards and the tapped panel's thirteen folded-away lanes run most free first, each lane once, each shows its windows and every countdown it prints is seen, a long label is cut inside its card, the control sits on a row under the cards with no All accounts beside it (PL10, review 1466 F3), and nothing scrolls sideways: ${theme}, ${width}px`, async () => {
         const { ctx, page, errors, order } = await openFolded({ skin: REFINED, theme, width }, 4);
         const { cases } = seventeen();
         const expected = mostFreeFirst(cases).map((c) => ({ label: c.label, windows: c.windows, counted: c.counted }));
         expect(order).toEqual(expected.map((e) => e.label));
         try {
-          // The folded line: its four freest cards, then the control and All accounts on one row under them.
+          // The folded line: its four freest cards, then the control on a row under them; a phone draws no All accounts (the
+          // bottom bar holds the Accounts place: desktop-polish PL10, review 1466 F3).
           const cardsOfLine = await page.evaluate(cardFaults, { expected: expected.slice(0, 4), cardSel: '.ref-phone-head .accounts-strip > .account-gauge', inside: null });
           const end = await page.evaluate(() => {
             const out: string[] = [];
             const strip = document.querySelector<HTMLElement>('.ref-phone-head .accounts-strip')!;
             const cards = [...strip.querySelectorAll<HTMLElement>(':scope > .account-gauge')];
             const endCell = strip.querySelector<HTMLElement>(':scope > .accounts-end');
-            const door = endCell?.querySelector<HTMLElement>('[data-command="go-accounts"]'); // not 'button': the fold's control comes first
             const vw = window.innerWidth;
-            if (endCell === null || door === null || door === undefined) out.push('no All accounts');
+            if (document.querySelector('.ref-phone-head [data-command="go-accounts"]') !== null) out.push('a go-accounts door in the phone head');
+            const control = endCell?.querySelector<HTMLElement>('[aria-expanded]') ?? null;
+            if (endCell === null || control === null) out.push('no end cell with the control');
             else {
               const er = endCell.getBoundingClientRect();
-              const dr = door.getBoundingClientRect();
+              const cr = control.getBoundingClientRect();
               const lowest = Math.max(...cards.map((c) => c.getBoundingClientRect().bottom));
-              if (er.top < lowest - 0.5) out.push(`All accounts (top ${er.top}) is not under the cards (bottom ${lowest})`);
-              if (dr.left < -0.5 || dr.right > vw + 0.5) out.push('All accounts is outside the viewport');
-              if (dr.height < 43.5) out.push(`All accounts is ${Math.round(dr.height)} tall`);
-              // The tab order the plan states: the control, when there is one, comes before All accounts.
-              const control = endCell.querySelector<HTMLElement>('[aria-expanded]');
-              if (control === null || !(control.compareDocumentPosition(door) & Node.DOCUMENT_POSITION_FOLLOWING)) out.push('the fold control does not precede All accounts');
+              if (er.top < lowest - 0.5) out.push(`the end cell (top ${er.top}) is not under the cards (bottom ${lowest})`);
+              if (cr.left < -0.5 || cr.right > vw + 0.5) out.push('the control is outside the viewport');
+              if (cr.height < 43.5) out.push(`the control is ${Math.round(cr.height)} tall`);
             }
             if (document.documentElement.scrollWidth > window.innerWidth + 0.5) out.push('the page scrolls sideways');
             return out;
@@ -534,10 +547,10 @@ describe('the folded phone strip is four cards and one control', () => {
           }
           const end = strip.querySelector<HTMLElement>('.accounts-end')!;
           const control = end.querySelector<HTMLElement>('[aria-expanded]');
-          const door = end.querySelector<HTMLElement>('[data-command="go-accounts"]');
-          if (control === null || door === null) return [...out, 'the end cell lacks the control or All accounts'];
+          // A phone draws no All accounts: the bottom bar holds the Accounts place (desktop-polish PL10, review 1466 F3).
+          if (strip.querySelector('[data-command="go-accounts"]') !== null) out.push('a go-accounts door in the strip');
+          if (control === null) return [...out, 'the end cell lacks the control'];
           const cr = control.getBoundingClientRect();
-          const dr = door.getBoundingClientRect();
           const lowest = Math.max(...cards.map((c) => c.getBoundingClientRect().bottom));
           if (control.getAttribute('aria-expanded') !== 'false') out.push(`aria-expanded is ${control.getAttribute('aria-expanded')}`);
           // A phone's control names the panel it opens (not the cards' group, which is a desk's), and no panel is mounted while it is shut.
@@ -547,10 +560,8 @@ describe('the folded phone strip is four cards and one control', () => {
           if (control.hasAttribute('data-command') || control.hasAttribute('data-action')) out.push('the control is a door');
           if (control.textContent !== expectedWords) out.push(`the control reads "${control.textContent}"`);
           if (cr.height < 43.5) out.push(`the control is ${Math.round(cr.height)} tall`);
-          if (dr.height < 43.5) out.push(`All accounts is ${Math.round(dr.height)} tall`);
           if (cr.top < lowest - 0.5) out.push(`the control (top ${cr.top}) is not under the cards (bottom ${lowest})`);
-          if (Math.abs(cr.top - dr.top) > 1) out.push(`the control (top ${cr.top}) and All accounts (top ${dr.top}) are not on one row`);
-          if (cr.left < -0.5 || dr.right > vw + 0.5 || cr.right > dr.left + 0.5) out.push(`the end row is cut or overlaps (${cr.left}..${cr.right}, ${dr.left}..${dr.right} in ${vw})`);
+          if (cr.left < -0.5 || cr.right > vw + 0.5) out.push(`the end row is cut (${cr.left}..${cr.right} in ${vw})`);
           if (control.scrollWidth > control.clientWidth + 0.5) out.push("the control's words are cut");
           if (document.documentElement.scrollWidth > vw + 0.5) out.push(`the page scrolls sideways (${document.documentElement.scrollWidth} > ${vw})`);
           // The first session row, in document order, at 390×844, against the skin's own bound.
@@ -791,10 +802,11 @@ describe("the phone's panel", () => {
     it(`with a release waiting the panel stays inside the viewport, bounded by the room under the strip, and scrolls inside itself to its last card: ${named(view)}`, async () => {
       const { ctx, page, errors } = await openFolded(view, 4, false, undefined, true);
       try {
-        // A shorter phone (390x744), so that the panel scrolls: it holds the thirteen folded-away lanes (Task C13), which
+        // A shorter phone (390x640), so that the panel scrolls: it holds the thirteen folded-away lanes (Task C13), which
         // fit Instrument's room under the strip at 844 (review 1142 measured about 106 px to spare there, and about 8 px of
-        // scrolling at 744).
-        await page.setViewportSize({ width: view.width, height: 744 });
+        // scrolling at 744). Since desktop-polish PL10 (D-7952) Instrument's phone head holds no Docs, Account or Mail door,
+        // so it is shorter and the panel fit at 744 too (396 in 396, measured): 640 leaves it scrolling again.
+        await page.setViewportSize({ width: view.width, height: 640 });
         await page.waitForTimeout(300);
         const before = await page.evaluate(measurePanelBaseline);
         await openPanel(page);

@@ -79,9 +79,11 @@ describe('the programme route', () => {
   it('a slug the owner refuses is no route at all: matchRoute answers null, and the frame\'s view is the fleet', () => {
     const tooLong = 'a'.repeat(PROGRAM_SLUG_MAX_CHARS + 1);
     for (const path of ['/programmes/a.b', '/programmes/a.b/', '/programmes/a%20b', '/programmes/%20a', '/programmes/%C3%A9', `/programmes/${tooLong}`]) {
+      // The row's own pattern takes the path, so the null below is the row's `accepts` refusing it, and nothing else (review 1437
+      // A3: the `topRouteOf` null this case asserted held with or without that fix, since the programme row is no place).
+      expect(ROUTES.find((r) => r.id === 'programme')!.pattern.test(path), path).toBe(true);
       expect(matchRoute(path), path).toBeNull();
       expect(shellViewOf(path), path).toBe('fleet');
-      expect(topRouteOf(path), path).toBeNull();
     }
     expect(shellViewOf('/programmes/prog-a')).toBe('session');
   });
@@ -93,6 +95,9 @@ describe('the programme route', () => {
       expect(() => matchRoute(path), path).not.toThrow();
       expect(matchRoute(path), path).toBeNull();
       expect(shellViewOf(path), path).toBe('fleet');
+      // Under no place either: the rail and the phone's bar mark nothing current where the pane draws the placeholder (review
+      // 1437 F2: `/settings/%zz` was under Settings by `topRouteOf`'s prefix fallback).
+      expect(topRouteOf(path), path).toBeNull();
     }
   });
 
@@ -158,6 +163,36 @@ describe('the programme view: the head', () => {
     view.unmount();
     const unheard = render(<ProgrammeScreen slug="prog-a" store={heard({ runsFrameSeen: false, runs: [] })} />);
     expect(unheard.container.textContent).not.toContain('no open run');
+  });
+});
+
+// Desktop-polish PL10 (D-7952; spec §2, D26): the programme's pinned spec is one tap away from its head, at the address Goals
+// builds (`specHref`, the one builder), and no link is drawn while the programme has no pin.
+describe('the programme view: the spec one tap away', () => {
+  it('the programme head links the pinned spec, at the address Goals builds', async () => {
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    const head = document.querySelector<HTMLElement>('.pv-head')!;
+    const link = await within(head).findByRole('link', { name: 'Spec for Programme A' });
+    expect(link.textContent).toBe('Spec');
+    expect(link.getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
+    expect(screen.getByRole('link', { name: 'Open the spec in Docs' }).getAttribute('href')).toBe(link.getAttribute('href'));
+    fireEvent.click(link);
+    expect(location.pathname).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
+  });
+
+  it('no spec link is drawn without a pin, or without a home project', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals({ specPath: null, inShort: null, inShortAt: null }) });
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    expect(await screen.findByText('No spec is pinned yet.')).toBeTruthy();
+    expect(within(view.container.querySelector<HTMLElement>('.pv-head')!).queryByRole('link')).toBeNull();
+    // Not even as words: a link with no address is no `link` role, so the words are what a dead "Spec" leaves (review 1466 F15).
+    expect(within(view.container.querySelector<HTMLElement>('.pv-head')!).queryByText('Spec')).toBeNull();
+    view.unmount();
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals() });
+    const homeless = render(<ProgrammeScreen slug="prog-a" store={heard({ runs: [runRow({ id: 1, program: 'prog-a', homeProject: null } as never)] })} />);
+    expect(await screen.findByText('A console view of what the programme is building.')).toBeTruthy();
+    expect(within(homeless.container.querySelector<HTMLElement>('.pv-head')!).queryByRole('link')).toBeNull();
+    expect(within(homeless.container.querySelector<HTMLElement>('.pv-head')!).queryByText('Spec')).toBeNull();
   });
 });
 

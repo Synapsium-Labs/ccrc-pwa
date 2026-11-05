@@ -248,6 +248,74 @@ describe('POST /api/programmes/:slug/items (plan PL3)', () => {
  *  each alternative. */
 const RECOMMEND = { recommended: 0, recommendedWhy: 'Yes keeps the wave on time; no would cost a day of rework.' };
 
+// Desktop-polish PL10 (D-7952; spec §2, D28): a link to a document is its repository path, which the console opens in the Docs
+// reader. The raise route refuses an item that links a document any other way, an artifact page or a document server outside the
+// console, in any field the operator reads, and writes nothing; an outside service's own page stays an ordinary https link.
+describe('document links go only to the Docs reader (plan PL10, spec D28)', () => {
+  const DECIDE = { kind: 'decide', options: ['Ship it', 'Hold it'], recommended: 0, recommendedWhy: 'It is ready.' };
+  it.each([
+    ['an artifact page in why', { why: 'Read https://claude.ai/artifact/0f1e2d3c first.' }],
+    ['a code artifact page in a step', { how: ['Open https://claude.ai/code/artifact/0f1e2d3c-aaaa-bbbb-cccc-0123456789ab'] }],
+    ['an outside document server in the title', { title: 'Read https://b.example/docs/project-a/specs/a-design.md' }],
+    ['a repository document on a code host in why', { why: 'See https://github.com/org-a/repo-a/blob/main/docs/superpowers/plans/p.md.' }],
+    ['an http document server in the soon label', { soonLabel: 'http://b.example/docs/p/plans/x.md' }],
+    ['an artifact page in an option', { ...DECIDE, options: ['Ship it', 'See https://claude.ai/artifact/abc'] }],
+    ['an artifact page in the recommendation', { ...DECIDE, recommendedWhy: 'As https://claude.ai/artifact/abc shows.' }],
+    // Review 1466 F6 (fix round 1): spelt with escapes, trimmed as the console trims, or on the artifact host's plural shape.
+    ['a percent-encoded artifact segment', { why: 'See https://claude.ai/%61rtifact/abc first.' }],
+    ['a percent-encoded section on a document server', { why: 'See https://b.example/docs/p/%73pecs/x.md first.' }],
+    ['an encoded slash between the section directories on a code host', { why: 'See https://github.com/o/r/blob/main/docs/superpowers%2Fspecs/x.md now.' }],
+    ['a document server section with a full stop after it', { why: 'see https://b.example/docs/p/specs.' }],
+    ['a document server section in brackets', { why: 'Read it (https://b.example/docs/p/plans) first.' }],
+    ["the artifact host's public artifacts page", { why: 'See https://claude.ai/public/artifacts/0f1e2d3c first.' }],
+    ["a code host's view of a section directory, with no trailing slash", { why: 'See https://github.com/o/r/tree/main/docs/superpowers/plans now.' }],
+    // Decoded until it is stable, and a decoded backslash is a separator, as some servers read it (fix round 1's hardening).
+    ['a double-encoded artifact segment', { why: 'See https://claude.ai/%2561rtifact/abc first.' }],
+    ['encoded backslashes between the section directories', { why: 'See https://github.com/o/r/blob/main/docs%5Csuperpowers%5Cspecs%5Cx.md now.' }],
+    // Fix round 2 (review 1481 F1 to F3): a stray percent sign hides nothing, an empty segment or an encoded dot-segment
+    // hides nothing, and a segment still changing after four rounds of decoding counts as outside.
+    ['a stray percent before a double-encoded artifact segment', { why: 'See https://h.example/%25zz%252Fartifact now.' }],
+    ['a stray percent before double-encoded section directories', { why: 'See https://github.com/o/r/blob/main/a%25zz%252Fdocs%252Fsuperpowers%252Fspecs%252Fb now.' }],
+    ['an empty segment inside public artifacts', { why: 'See https://claude.ai/public//artifacts/abc now.' }],
+    ['an empty segment after docs on a document server', { why: 'See https://b.example/docs//p/specs/a.md now.' }],
+    ['an empty segment before docs on a document server', { why: 'See https://b.example//docs/p/specs/a.md now.' }],
+    ['an empty segment between the section directories', { why: 'See https://github.com/o/r/blob/main/docs/superpowers//specs/x.md now.' }],
+    ['an encoded slash after a dot-dot', { why: 'See https://b.example/docs/p/x/..%2fspecs/a.md now.' }],
+    ['an encoded backslash after a dot-dot', { why: 'See https://b.example/docs/p/x/..%5cspecs/a.md now.' }],
+    ['a double-encoded dot-dot', { why: 'See https://b.example/docs/p/x/%252e%252e/specs/a.md now.' }],
+    ['an artifact segment an encoded dot-dot would pop', { why: 'See https://x.example/artifact/..%2fy now.' }],
+    ['a section directory an encoded dot-dot would pop', { why: 'See https://b.example/docs/p/specs/..%2fa.md now.' }],
+    ['a segment still changing after four rounds', { why: 'See https://a.example/%2525252541bc now.' }],
+    ['a five-deep artifact segment', { why: 'See https://claude.ai/%2525252561rtifact/abc now.' }],
+  ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
+    const r = await rig();
+    const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-a'), ...RAISE, ...over });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'outside-doc-link' });
+    expect(String(res.json().detail)).toMatch(/Docs reader|repository path/);
+    expect(r.coord.itemsFor(null, Date.now()).open).toEqual([]);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it("an outside service's own page stays a link, and a repository path is the way to link a document", async () => {
+    const r = await rig();
+    const id = await raise(r, {
+      why: 'Sign in at https://github.com/settings/applications/new and read docs/superpowers/specs/a-design.md.',
+      how: ['Open https://console.example.com/sign-in', 'Download https://github.com/org-a/repo-a/actions/runs/1/artifacts/2', 'Open /docs/project-a/specs/a-design.md'],
+    });
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
+  });
+
+  it('a literal percent sign is an ordinary link, and four encodings deep is judged by its last spelling (review 1481 F1)', async () => {
+    const r = await rig();
+    const id = await raise(r, {
+      why: 'See https://en.wikipedia.org/wiki/100%25 and https://a.example/discount-50%25-off.',
+      how: ['Open https://a.example/50%-off', 'Open https://a.example/%25252541bc'],
+    });
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
+  });
+});
+
 describe('a decide item names the option its raiser recommends, and why (plan PL9, spec §3.2, D24)', () => {
   const DECIDE = { kind: 'decide', options: ['Library first', 'Keep the order', 'Split the wave'] };
 
@@ -394,6 +462,23 @@ describe('the item routes act on the caller\'s own programme\'s items (plan PL3)
     const res = await post(r, `/api/items/${id}/return`, { ...as(), note: 'The setting still reads off.' });
     expect(res.statusCode).toBe(200);
     expect(r.coord.itemById(id)).toMatchObject({ state: 'open', note: 'The setting still reads off.' });
+  });
+
+  // Review 1466 F5 (fix round 1): the console draws a return's note through `linkRuns` ("sent back: <note>"), so the return
+  // route refuses a document link outside the console as the raise route does, before it reads the item, and moves nothing.
+  it('return with a note that links an artifact page or an outside document server is refused outside-doc-link', async () => {
+    const r = await rig();
+    const id = await raise(r);
+    r.coord.moveItem(id, 'tick', 'operator', { answer: null }, Date.now(), { programmeHasOpenRun: true });
+    for (const note of ['See https://claude.ai/artifact/abc.', 'Read https://b.example/docs/p/%73pecs/x.md again']) {
+      const res = await post(r, `/api/items/${id}/return`, { ...as(), note });
+      expect(res.statusCode, note).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'outside-doc-link' });
+    }
+    expect(stateOf(r, id)).toBe('checking');
+    const ok = await post(r, `/api/items/${id}/return`, { ...as(), note: 'Read docs/superpowers/specs/a-design.md again.' });
+    expect(ok.statusCode).toBe(200);
+    expect(stateOf(r, id)).toBe('open');
   });
 
   it('return on an open item is refused not-open', async () => {

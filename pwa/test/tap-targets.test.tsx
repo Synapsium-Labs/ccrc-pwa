@@ -31,7 +31,6 @@ import { renderFleet } from './fleetHost';
 import { MailScreen } from '../src/screens/MailScreen';
 import { RunsScreen } from '../src/screens/RunsScreen';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { MailBadge } from '../src/fleet/MailBadge';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {
   BARE_ROW, CONTROL_ROW, CollapsibleStrip, LIST_ROW, MailStrip, SELECT, Select, TEXT_INPUT, buttonVariants,
@@ -380,17 +379,6 @@ describe('.settings-index-row — the Settings index, one row per section (setti
     expect(rows).toHaveLength(5);
     for (const row of rows) expect(row).toHaveClass('settings-index-row');
     navigate('/');
-  });
-});
-
-describe('.mail-badge — the only door to /mail', () => {
-  it('is at least one tap square, off the shared token', () => {
-    expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-height')).toBe('var(--tap-min)');
-    expect(declValue(ruleIn(fleetCss, '.mail-badge'), 'min-width')).toBe('var(--tap-min)');
-  });
-  it('is the class the rendered head control actually carries', () => {
-    render(<MailBadge waiting={0} />);
-    expect(screen.getByRole('button', { name: /mail/i })).toHaveClass('mail-badge');
   });
 });
 
@@ -918,10 +906,6 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
   describe('.docs-door — the fleet header’s door to /docs', () => {
     it('is at least one tap tall, off the shared token', () => {
       expect(floorIn(docsCss, '.docs-door')).toBe('var(--tap-min)');
-    });
-    it('is the class the rendered door actually carries', () => {
-      renderFleet(<FleetScreen store={makeStore()} />);
-      expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
     });
     it('reaches the main stylesheet: DocsScreen imports docs.css, and app.tsx imports DocsScreen statically', () => {
       // A text scan, NOT EXHAUSTIVE: a re-export, or a lazy import spelled another way, is not seen. The plan's build

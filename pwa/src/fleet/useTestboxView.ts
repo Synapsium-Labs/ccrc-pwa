@@ -19,9 +19,14 @@ import { api } from '../lib/api';
 import { isCount, isRecord } from '../lib/wire';
 import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 
 /** The read's cadence: `CCRC_TESTBOX_POLL`'s default, the server poll's own beat. */
 export const TESTBOX_POLL_MS = 30_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount; a not-available
+ *  answer forgets it. */
+const CACHE_KEY = settingsKey('testbox');
 
 export type TestboxSwitch = 'on' | 'off' | 'unknown';
 
@@ -114,20 +119,26 @@ export interface TestboxPoll {
 
 export function useTestboxView(pollMs: number = TESTBOX_POLL_MS): TestboxPoll {
   const [state, setState] = useState<{ view: TestboxRead | null; failure: SettingsReadFailure | null }>(
-    { view: null, failure: null });
+    () => ({ view: asTestboxRead(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load } = usePoll({
     pollMs,
-    request: () => api.testbox(),
+    request: (signal) => api.testbox({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asTestboxRead(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
       } else {
         const failure = settingsReadFailure(outcome.err);
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: failure === 'not-configured' ? null : prev.view, failure }));
       }
     },
   });
-  const reload = useCallback(() => { load(); }, [load]);
+  // A caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed or failed branch, an ack or a
+  // move; console speed C2 fix rounds 1 and 2), with a few re-reads that follow no write (the collector's
+  // marker-still-controls answer, Linear's legacy act), which cost only a Loading on the next visit. The kept answer
+  // goes first: leaving Settings before the re-read lands (which aborts it) must not bring a pre-write view back.
+  const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   return { view: state.view, failure: state.failure, reload };
 }

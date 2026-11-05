@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
 import { parseAudit, parseReap, refusalSentence, SENTENCES } from '../src/wsaudit.js';
 import { reviveWsAudit } from '../../shared/api.js';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
@@ -139,6 +142,15 @@ describe('refusalSentence', () => {
     expect(s).toMatch(/untracked files/);
     expect(s).toMatch(/commit, move or delete them in that checkout, then reap again/);
     expect(s, 'the remedy is the operator’s own act, not another verb').not.toMatch(/reclaim/i);
+  });
+
+  it('the advice names the scoped removal and never git worktree prune', () => {
+    // Cleanup un-wedge, Task R3: a repository-wide prune deletes git's record of every gone worktree at once, and
+    // ccd's cleanup reads those records, so the remedy for one stale record is that record's own removal. The session
+    // hook refuses the prune on every session.
+    const s = refusalSentence('child-record-stale');
+    expect(s).toContain('`git -C <main> worktree remove <path>`');
+    expect(s).not.toMatch(/worktree\s+prune/);
   });
 
   it('maps reaping-phase-unknown — the Task 7 token this task was holding open for', () => {
@@ -329,5 +341,47 @@ describe('parseReap strips the refusal-v1 machine line (#560)', () => {
   it('keeps the operator-facing sentence free of it', () => {
     const r = parseReap('', 1, 'ccd-refusal: ws-reap held\nccd: held: x\n');
     expect(r).toMatchObject({ refused: 'error', detail: 'ccd: held: x', sentence: 'ccd: held: x' });
+  });
+});
+
+// Cleanup un-wedge, Task R3: the `child-record-stale` advice is measured on this machine's git, not assumed. In a
+// fixture repository with two linked worktrees whose directories are both gone, the scoped removal of one exits 0 and
+// leaves the other's record in place, `prunable`, which is what a repository-wide prune would have deleted. If this
+// fails on a CI git, report that git's version: the advice is not changed to fit it.
+describe('the scoped removal the advice names, measured on this git', () => {
+  it('git -C <main> worktree remove <one gone tree> exits 0 and leaves the other gone tree prunable', () => {
+    const root = mkTmp('ccrc-r3-wtremove-');
+    try {
+      const main = path.join(root, 'main');
+      mkdirSync(main);
+      const env = { ...process.env, HOME: root, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+        GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
+        GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
+      const git = (...args: string[]): { status: number | null; out: string } => {
+        const r = spawnSync('git', ['-C', main, ...args], { env, encoding: 'utf8' });
+        return { status: r.status, out: `${r.stdout}${r.stderr}` };
+      };
+      expect(git('init', '-q', '-b', 'main').status).toBe(0);
+      writeFileSync(path.join(main, 'a.txt'), 'a\n');
+      expect(git('add', 'a.txt').status).toBe(0);
+      expect(git('commit', '-q', '-m', 'one').status).toBe(0);
+      const rowA = path.join(root, 'row-a');
+      const rowB = path.join(root, 'row-b');
+      expect(git('worktree', 'add', '-q', rowA, '-b', 'row-a').status).toBe(0);
+      expect(git('worktree', 'add', '-q', rowB, '-b', 'row-b').status).toBe(0);
+      rmSync(rowA, { recursive: true, force: true });
+      rmSync(rowB, { recursive: true, force: true });
+      expect(existsSync(rowA) || existsSync(rowB)).toBe(false);
+      const removed = git('worktree', 'remove', rowA);
+      expect(removed.status, `${git('--version').out.trim()}: ${removed.out}`).toBe(0);
+      const list = git('worktree', 'list', '--porcelain').out;
+      const stanzas = list.split('\n\n').filter((x) => x.trim() !== '');
+      expect(stanzas.some((x) => x.includes(`worktree ${rowA}\n`)), 'the removed record is gone').toBe(false);
+      const b = stanzas.find((x) => x.includes(`worktree ${rowB}\n`));
+      expect(b, `the other record stands:\n${list}`).toBeDefined();
+      expect(b, 'and git still calls it prunable').toMatch(/^prunable/m);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

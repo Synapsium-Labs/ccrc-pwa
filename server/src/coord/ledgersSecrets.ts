@@ -99,7 +99,7 @@ const isTempOf = (entry: string, slot: string): boolean =>
 
 /**
  * Removes what a crash between a temp file's open and its rename left of ONE slot (review 1389 A4): a 0600 copy of a value in
- * the programme directory, which nothing lists, masks or re-keys. Only this slot's own temps, and only on this slot's chain
+ * the programme directory, which nothing lists, masks or re-keys. Only this slot's own temps, and only on its programme's chain
  * (the route's `underSlot`), so another slot's write in flight is never touched. `slot` passed its shape before any path was
  * built. Never throws: a temp that cannot be removed stays, as before.
  */
@@ -179,9 +179,9 @@ async function privateDir(dir: string, which: string): Promise<void> {
  * own. A rotation does not undo that: the re-key that reads the slot adds the value it read under the new token beside the
  * current rows and drops the lane's rows of older tokens (`SecretMasker.ingest`'s `rekey`).
  *
- * THE WINDOW (review 1426 F-D): it opens after ANY rotation followed by a restart, before the boot re-key lands, for every
- * stored slot, with no fault at all. The rows reload under the previous token, and previous box tokens are memory-only
- * (`SecretMasker`'s class doc, `accounts/mask.ts`), so after the restart they match nothing: from the restart until the re-key
+ * THE WINDOW (review 1426 F-D): it opens on a restart that comes before the rotation's re-key has landed (review 1440 F8), for
+ * every stored slot, with no fault at all. The rows reload under the previous token, and previous box tokens are memory-only
+ * (`accounts/mask.ts`'s module header, A ROTATION …; review 1440 F5), so after the restart they match nothing: from the restart until the re-key
  * reads the slot (it asks at start, after the roster read, so at least one box round trip; then it retries on its backoff),
  * the value on disk is unmasked. A rotation while the slot cannot be read keeps it open past the boot re-key, until a re-key
  * can read the slot. Without a restart, this process keeps a previous token while its generation holds rows, so the value
@@ -218,6 +218,16 @@ export async function writeOperatorSecret(
   }
   if (unsynced) throw new OperatorSecretStoredUnrecorded();
   return meta;
+}
+
+/** The key of the chain a save or a Remove runs on in the routes (`underSlot`, `ledgersRoutes.ts`): the programme case-folded,
+ *  and nothing else. Every act of one programme's store, in any slot and any spelling, is one chain, so the two steps that change
+ *  the programme's directory never meet another act of it half done: a save's case check (`refuseCaseCollision`) and the
+ *  directory it makes (review 1440 F1, review 1466 F11: two slots were two chains, so `prog-a/slot-x` and `Prog-A/slot-y` made
+ *  two sibling directories), and a Remove's removal of the directory it empties (review 1466 F12: it could take the directory
+ *  from under another slot's save). Saves of different slots of one programme wait for each other; they are the operator's. */
+export function programmeChainKey(program: string): string {
+  return program.toLowerCase();
 }
 
 /**
@@ -363,6 +373,10 @@ export function readStoredSecrets(ccrcDir: string, program: string):
  * made here. Answers `removed`, or `none` when no value file is there (a record left without one is removed too). A value
  * file that cannot be removed rejects with what failed, and nothing else is touched; a record or temp that cannot be removed
  * after the value is gone stays (every reader ignores a record whose value file is gone). Never reads the value.
+ *
+ * A programme directory the Remove leaves empty is removed too (review 1440 F2): an emptied directory spelled in another case
+ * would otherwise block every save of the programme's other spelling (`refuseCaseCollision`), with no console door to clear
+ * it. `rmdir` removes only an empty directory, so another slot's files, or a temp the sweep could not remove, keep it.
  */
 export async function removeOperatorSecret(ccrcDir: string, program: string, slot: string): Promise<'removed' | 'none'> {
   if (!operatorSlotNamesValid(program, slot)) throw new OperatorSecretBadSlot();
@@ -406,6 +420,7 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
       // The value is unlinked; its durability across a crash is unproven, and a re-run of Remove finishes it.
     }
   }
+  await fsp.rmdir(dir).catch(() => {});
   return had ? 'removed' : 'none';
 }
 

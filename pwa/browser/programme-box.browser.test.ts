@@ -280,6 +280,52 @@ describe.each(SKINS)('the programme box in %s', (skin) => {
   });
 });
 
+// Desktop-polish PL10, D26 amended (D-7952): every box's title is a door into its programme view, whatever its count (port-api
+// has nothing open), and the box whose programme has a pin (billing) links its spec in the Docs reader. At 360, 390, 900 and
+// 1280, under a coarse pointer each is at the 44 px floor, and no kicker overflows its box.
+describe.each(SKINS)('every programme box opens its view and links its spec in %s (PL10)', (skin) => {
+  for (const width of [360, 390, 900, 1280] as const) {
+    it(`at ${width}: each title is a door, billing's box links its spec, both at the tap floor, no kicker overflows`, async () => {
+      const { ctx, page, errors } = await open(skin, PHOSPHOR, width, true);
+      try {
+        const m = await page.evaluate(() => {
+          const r = (el: Element) => { const b = el.getBoundingClientRect(); return { h: Math.round(b.height), w: Math.round(b.width) }; };
+          return [...document.querySelectorAll<HTMLElement>('section.pg-box')].map((box) => {
+            const kicker = box.querySelector<HTMLElement>('.pg-kicker')!;
+            const door = kicker.querySelector<HTMLAnchorElement>('a.pg-title-door');
+            const spec = kicker.querySelector<HTMLAnchorElement>('a.pg-spec');
+            return {
+              title: kicker.querySelector('.pg-title')?.textContent ?? '',
+              door: door === null ? null : { href: door.getAttribute('href'), ...r(door) },
+              spec: spec === null ? null : { href: spec.getAttribute('href'), ...r(spec) },
+              overflow: kicker.scrollWidth - kicker.clientWidth, boxOverflow: box.scrollWidth - box.clientWidth,
+            };
+          });
+        });
+        expect(m.length, `${width}: the boxes`).toBeGreaterThanOrEqual(2);
+        for (const b of m) {
+          expect(b.door, `${width} ${b.title}: the title is a door`).not.toBeNull();
+          expect(b.door!.href, b.title).toMatch(/^\/programmes\//);
+          expect(b.door!.h, `${width} ${b.title}: the door, tall`).toBeGreaterThanOrEqual(44);
+          expect(b.overflow, `${width} ${b.title}: the kicker overflows`).toBeLessThanOrEqual(1);
+          expect(b.boxOverflow, `${width} ${b.title}: the box overflows`).toBeLessThanOrEqual(1);
+        }
+        const billing = m.find((b) => b.door?.href === '/programmes/billing');
+        expect(billing?.spec?.href, `${width}: billing links its pin`).toBe('/docs/project-a/specs/2026-10-31-billing-design.md');
+        expect(billing!.spec!.h, `${width}: the spec link, tall`).toBeGreaterThanOrEqual(44);
+        for (const b of m.filter((x) => x !== billing)) expect(b.spec, `${width} ${b.title}: no pin, no link`).toBeNull();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 'sideways').toBeLessThanOrEqual(0);
+        // A box with nothing waiting opens its view by its title.
+        await page.click('section.pg-box a.pg-title-door[href="/programmes/port-api"]');
+        await page.waitForFunction(() => location.pathname === '/programmes/port-api');
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
 // PL5b: the chip is a door. Tapping it opens the programme's view, laid out as the prototype's view 2: no sideways scroll at
 // any width, no page error, Goals beside this programme's share of the list, the programme's name in its hue on the surface.
 describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) => {

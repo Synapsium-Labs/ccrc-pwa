@@ -378,6 +378,9 @@
   /* Whatever is fixed to a phone's bottom edge (W2 Task S5's `+ New`, D-5471),
      published by it while mounted; 0px for the same reason as above. */
   --phone-nav-h: 0px;
+  /* The phone's bottom bar of the console's places (desktop-polish PL10), set by
+     shell.css on the root while the bar is mounted; 0px for the same reason. */
+  --phone-bar-h: 0px;
 
   --r-sm:   6px;    /* inline code, keycaps, badges */
   --r-md:   10px;   /* tool cards, buttons, wells */

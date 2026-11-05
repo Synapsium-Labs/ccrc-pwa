@@ -8,7 +8,8 @@
 // seventeen lanes). This file holds the bar itself with its row: at 900, 930, 960, 1000 and 1280 in both palettes, the bar's
 // line is whole and holds no card, the row sits under it, every card is whole inside the row with its readings whole
 // inside it, and the page does not scroll sideways. Under a coarse pointer every door and every tab in the bar is at least 44 x 44,
-// the check counts what it measured (six tabs, four doors), and every tab carries the tap floor as its minimum width.
+// the check counts what it measured (five tabs, four doors: the desk has no fleet tab since desktop-polish PL10, D-7952),
+// and every tab carries the tap floor as its minimum width.
 // 1000 is the first width with the full padding and gap (carry C, D-7951; review 1379 F1, F5 and F6).
 // The coarse pointer is a touch screen: headless Chrome ignores the DevTools protocol's pointer media feature
 // (measured), so `openApp` takes `touch`. The strip folds by default (S5b, D-6530) and six lanes fold at every desk width, so
@@ -133,7 +134,7 @@ describe("Refined's app bar shows nothing cut, and every door is a finger's squa
           const tabs = [...document.querySelectorAll<HTMLElement>('.ref-tabs > *')];
           // The selection's size first (review 1379 F1): a renamed class would otherwise measure nothing and pass.
           const out: string[] = [];
-          if (tabs.length !== 6) out.push(`${tabs.length} tabs measured, not 6`);
+          if (tabs.length !== 5) out.push(`${tabs.length} tabs measured, not 5 (no fleet tab at a desk, PL10)`);
           if (doors.length !== 4) out.push(`${doors.length} doors measured, not 4 (the bell, search, settings, new session)`);
           // The floor is the tab's own (review 1379 F5): its words and padding clear 44px today, the minimum width keeps it so.
           for (const t of tabs) {

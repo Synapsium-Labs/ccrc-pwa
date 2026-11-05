@@ -15,6 +15,8 @@ import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_C
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
 const SHA256_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+/** The three keys D-7999 (cleanup un-wedge R1) adds to the archive manifest, for the rows rung's archive arm. */
+const R1_MANIFEST_KEYS: readonly string[] = ['workdir', 'workdirReal', 'uuid', 'worktreeAdmin'];
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-arch-'); });
@@ -924,6 +926,73 @@ describe('ws-archive', () => {
     // The manifest describes the thing that may later be deleted, so it cannot
     // live inside it.
     expect(fs.existsSync(path.join(wt, '.archivemanifest'))).toBe(false);
+  });
+
+  // D-7999 (cleanup un-wedge R1), Step 0: the manifest's keys as `main` wrote them before R1 added
+  // `workdir`, `workdirReal` and `uuid`, taken on `main` first. Every older key keeps its name, its place and its value.
+  it('every older key is unchanged', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    const old = Object.fromEntries(Object.entries(m).filter(([k]) => !R1_MANIFEST_KEYS.includes(k)));
+    expect(Object.keys(old)).toEqual(['id', 'branch', 'worktreeHead', 'base', 'tip', 'dirty', 'ignoredDigest', 'stashes',
+      'worktreeBytes', 'pr', 'prHistory', 'transcript']);
+    expect(old).toEqual({
+      id: 'demo-quiet-basin', branch: 'ws/quiet-basin', worktreeHead: 'ws/quiet-basin', base: 'origin/main',
+      tip: h.git(wt, 'rev-parse', 'HEAD'), dirty: 0, ignoredDigest: SHA256_EMPTY, stashes: 0,
+      worktreeBytes: expect.any(Number) as unknown, pr: null, prHistory: [],
+      transcript: path.join(h.home, '.claude', 'projects', mungePath(wt), `${h.reg('demo-quiet-basin', 'uuid')}.jsonl`),
+    });
+  });
+
+  it('the archive record carries workdir, workdirReal and uuid', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.workdir).toBe(h.reg('demo-quiet-basin', 'workdir'));
+    expect(m.workdir).toBe(wt);
+    expect(m.workdirReal, 'a physical spelling records itself').toBe(wt);
+    expect(m.uuid).toBe(h.reg('demo-quiet-basin', 'uuid'));
+    expect(m.uuid).toMatch(/^[0-9a-f-]{36}$/);
+    // Fix round 1, F1: the name of git's admin directory for the tree, under the common directory's worktrees/.
+    const admin = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    expect(path.basename(path.dirname(admin))).toBe('worktrees');
+    expect(m.worktreeAdmin).toBe(path.basename(admin));
+  });
+
+  it('a tree whose git directory is not one of the project’s linked admin directories records worktreeAdmin as null', () => {
+    workspace('demo', 'quiet-basin');
+    // `git rev-parse --git-dir` answers something outside `<common>/worktrees/`: the record names no admin directory.
+    h.sh(`${ARCH} git() { if [[ "$*" == *"rev-parse --path-format=absolute --git-dir"* ]]; then echo /elsewhere/x; return 0; fi;`
+      + ' command git "$@"; }; cmd_ws_archive --session demo-quiet-basin');
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.worktreeAdmin).toBeNull();
+  });
+
+  it('a workspace reached through a link records workdirReal as its physical path', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    const linked = path.join(h.home, 'wtlink', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.workdir'), linked);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.workdir, 'the row’s spelling, as read').toBe(linked);
+    expect(m.workdirReal, 'where that spelling lands').toBe(fs.realpathSync(wt));
+    expect(m.workdirReal).not.toBe(m.workdir);
+  });
+
+  it('an unreadable .uuid refuses the archive, and nothing is touched', (ctx) => {
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    workspace('demo', 'quiet-basin');
+    const f = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.uuid');
+    fs.chmodSync(f, 0o000);
+    try {
+      const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/manifest: could not read the uuid/);
+      expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+      expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    } finally { fs.chmodSync(f, 0o644); }
   });
 
   it('carries the stash count a reap would refuse on', () => {

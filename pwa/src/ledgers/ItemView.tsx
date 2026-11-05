@@ -21,11 +21,17 @@
 // Remove asks for confirmation, is a credential act like the save (the same step-up), and never shows any part of the value.
 // A slot that holds a value whose record cannot be read (`secretSet: {at: null}`, review 1416 F4) is stored all the same: the
 // view says "Stored" with its Remove, and nothing of when or how. A slot the box cannot read at all (`{unreadable: true}`,
-// review 1418 F2) is neither stored nor empty as far as anyone knows: the view says so in the stored-secrets read's own
-// sentence, and offers no Remove and no field to give a secret.
-import { useEffect, useId, useRef, useState } from 'react';
+// review 1418 F2) is neither stored nor empty as far as anyone knows: the view says so in its own slot-level sentence
+// (`STORED_TEXT.slotUnreadable`; review 1440 F4), and offers no Remove and no field to give a secret.
+//
+// THE BAND AND THE TEXT (desktop-polish PL10, D-7952; spec §2, D26 to D28). The band's programme name is a door to the programme
+// view, and a "Spec" link opens its pinned spec in the Docs reader, both addresses handed in by the route (`programme.href`,
+// `programme.specHref`), so this file still names no route. The item's what, why, steps and history are drawn through
+// `linkRuns`: an `https` address opens in a new tab with no opener, a console path and a repository document path (in the
+// programme's home project's Docs reader) open in the console, and anything else, `javascript:` and `data:` included, is text.
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, QuickConfirm, RadioFieldset, TextInput } from '@ccrc/ui';
+import { Button, QuickConfirm, RadioFieldset, TextInput, TextLink } from '@ccrc/ui';
 import {
   ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
   type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
@@ -35,10 +41,14 @@ import type { ProgHue } from '../fleet/programmeBoxes';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { api } from '../lib/api';
+import { inAppClick } from '../fleet/settingsText';
+import { openExternal } from '../lib/markdown';
 import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
+import { SpecLink } from './GoalsPanel';
+import { linkRuns } from './ledgerLinks';
 import { ageWords, itemPills, KIND_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
@@ -52,8 +62,13 @@ export interface ItemViewProps {
   readonly programmeLive: boolean;
   /** The page clock, epoch ms. */
   readonly now: number;
-  /** The programme's name and fleet hue for the band; the slug and no hue when the shell has neither. */
-  readonly programme?: { readonly name: string; readonly hue: ProgHue | null };
+  /** The programme's name and fleet hue for the band; the slug and no hue when the shell has neither. `href` is the programme
+   *  view's path (null: the name is words), `specHref` its pinned spec in the Docs reader (null: no Spec link), and
+   *  `homeProject` the repository a document path in the item's text opens in (null: such a path stays text). */
+  readonly programme?: {
+    readonly name: string; readonly hue: ProgHue | null;
+    readonly href?: string | null; readonly specHref?: string | null; readonly homeProject?: string | null;
+  };
   /** Sends a secret item's value to its own route (plan PL6). Defaults to the console's client; a test passes its own. */
   readonly saveSecret?: SaveSecret;
   /** Removes a stored secret (the Remove door). Defaults to the console's client; a test passes its own. */
@@ -289,12 +304,25 @@ const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
   dismiss: 'You dismissed it',
 };
 
-function History({ item, now }: { item: ItemWire; now: number }): ReactNode {
+/** Text with its links drawn as links (`linkRuns`, PL10): an outside page in a new tab with no opener, through `openExternal`,
+ *  as every outside link of the console is (an installed app's own window must not navigate, review 1466 F10); a console or
+ *  Docs path through the console's own navigation. The split is made once per text and home (review 1466 F9). */
+function Linked({ text, homeProject }: { text: string; homeProject: string | null }): ReactNode {
+  const runs = useMemo(() => linkRuns(text, homeProject), [text, homeProject]);
+  return runs.map((r, i) => {
+    if (r.kind === 'text') return <span key={i}>{r.text}</span>;
+    return r.external
+      ? <TextLink key={i} href={r.href} onClick={(e) => openExternal(e, r.href)}>{r.text}</TextLink>
+      : <TextLink key={i} href={r.href} onClick={inAppClick(r.href)}>{r.text}</TextLink>;
+  });
+}
+
+function History({ item, now, homeProject }: { item: ItemWire; now: number; homeProject: string | null }): ReactNode {
   return (
     <ul className="wi-history" aria-label="History">
       {item.history.map((h, i) => (
         <li key={`${h.at}:${h.act}:${i}`}>
-          {h.act === 'return' && h.note !== null ? `sent back: ${h.note}` : ACT_WORD[h.act]}
+          {h.act === 'return' && h.note !== null ? <Linked text={`sent back: ${h.note}`} homeProject={homeProject} /> : ACT_WORD[h.act]}
           {` · ${ageWords(h.at, now)}`}
         </li>
       ))}
@@ -450,29 +478,34 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
 export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus }: ItemViewProps): ReactNode {
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
+  const href = programme?.href ?? null;
+  const home = programme?.homeProject ?? null;
   return (
     <div className="wi">
       <div className="wi-band" data-hue={programme?.hue ?? 'none'}>
-        <span className="wi-prog">{name}</span>
+        {href === null
+          ? <span className="wi-prog">{name}</span>
+          : <TextLink href={href} onClick={inAppClick(href)} className="wi-prog-door">{name}</TextLink>}
         {pills.map((p) => <span key={p.tone} className="wl-pill wi-pill" data-tone={p.tone}>{p.word}</span>)}
+        <SpecLink href={programme?.specHref ?? null} programme={name} className="wi-spec" />
       </div>
       <div className="wi-detail">
         <div className="wi-card">
           <span className="wl-kind wi-kind">{KIND_WORD[item.kind]}</span>
-          <h1 className="wi-what">{item.title}</h1>
+          <h1 className="wi-what"><Linked text={item.title} homeProject={home} /></h1>
           <section>
             <h3 className="wi-h">Why</h3>
-            <p className="wi-text">{item.why}</p>
+            <p className="wi-text"><Linked text={item.why} homeProject={home} /></p>
           </section>
           {item.how.length > 0 && (
             <section>
               <h3 className="wi-h">How</h3>
-              <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}>{s}</li>)}</ol>
+              <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}><Linked text={s} homeProject={home} /></li>)}</ol>
             </section>
           )}
           <section>
             <h3 className="wi-h">History</h3>
-            <History item={item} now={now} />
+            <History item={item} now={now} homeProject={home} />
           </section>
         </div>
         <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss}
