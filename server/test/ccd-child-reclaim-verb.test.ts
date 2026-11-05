@@ -1054,11 +1054,12 @@ it('liveness independent: gone alternate projection whose unit runs refuses', ()
   expect(tmuxSessions(h), 'the CONTROL: no session of the alternate row was modelled').not.toContain(`cc-${ALT}`);
 }, 90_000);
 
-it('a gone alternate projection nothing runs for stops holding, unplaced: the child reclaims, its tree pinned first (#2294)', () => {
+it('a gone alternate projection nothing runs for stops holding, unplaced: the child reclaims, what git would add pinned first (#2294)', () => {
   // The way the path-identity rule was measured failing needs a session in the tree. With its pane positively gone,
   // its unit positively stopped and no checkout under the child, the row's spelling is still placed nowhere: only
   // `unres` is skipped. What the stopped session left in `<child>/server` is the child's tree, and its WIP pin
-  // commits it to the attic before the removal, as it does for any untracked file.
+  // commits it to the attic before the removal, as it does for any untracked file. An ignored file it never commits:
+  // the next case.
   const { a, answer } = livenessCase(h, () => plantTmux(h, { sessions: ['cc-unrelated'] }), 0);
   expect(answer.verdict, answer.detail).toBe('reclaimable');
   const v = childReclaimVerb(h, answer.token);
@@ -1066,6 +1067,41 @@ it('a gone alternate projection nothing runs for stops holding, unplaced: the ch
   expect(h.reg(ALT, 'workdir'), 'the row stands: it only stopped holding').toBe(a.raw);
   const wip = (JSON.parse(v.stdout) as { wip: string | null }).wip;
   expect(wip, 'the other session’s file is pinned').toMatch(/^[0-9a-f]{40}$/);
+}, 90_000);
+
+it('the stated residual, gone-row-release-misses-a-tree-with-no-git: the row’s real tree lies in the child, and an ignored file in it goes with no copy (#2294)', () => {
+  // The shape the projection rule was measured failing on, and the base refused it on purpose: nothing was moved and
+  // nothing stripped. `<child>/server` is the row's real tree, reached through `$HOME/alias`, and the only `.git` above
+  // it is the child's own, which the scan does not count. The audit answers reclaimable, the verb exits 0, and the WIP
+  // pin takes what git would add: never an ignored file. Spec §5.5 states this, and the operator rules on it on #2294.
+  const NOTE = 'the only copy of what a stopped session kept out of git\n';
+  const c = makeChild(h);
+  const a = aliasRow(h, c);
+  const note = path.join(c.wt, 'server', 'notes.local');
+  fs.writeFileSync(path.join(c.wt, 'server', '.gitignore'), 'notes.local\n');
+  fs.writeFileSync(note, NOTE);
+  const blob = h.run(`git -C "${c.main}" hash-object "${note}"`).stdout.trim();
+  a.pointAt('child');
+  a.writeRow();
+  a.removeAlias();
+  plantTmux(h, { sessions: [`cc-${ALT}`] });
+  expect(evalOf(h).verdict, 'the CONTROL: with the row’s pane up this is the hold the base always gave').toBe('unmeasured');
+  plantTmux(h, { sessions: ['cc-unrelated'] });
+  const answer = evalOf(h);
+  expect(answer.verdict, answer.detail).toBe('reclaimable');
+  const v = childReclaimVerb(h, answer.token);
+  expect(v.code, v.stdout + v.stderr).toBe(0);
+  expect(fs.existsSync(note), 'the file went with the child').toBe(false);
+  expect(h.run(`find "${h.home}" -name notes.local`).stdout, 'no copy by name under HOME').toBe('');
+  expect(h.run(`grep -rlF "${NOTE.trim()}" "${h.home}"`).stdout, 'no copy by content under HOME').toBe('');
+  expect(h.run(`git -C "${c.main}" cat-file -e ${blob}`).code, 'no object of it in the repository, on any ref or none').not.toBe(0);
+  const wip = (JSON.parse(v.stdout) as { wip: string | null }).wip ?? '';
+  const pinned = h.run(`git -C "${c.main}" ls-tree -r --name-only ${wip}`).stdout.split('\n');
+  expect(pinned, 'the CONTROL: the pin took what git would add').toEqual(expect.arrayContaining(['server/.gitignore', 'server/live.txt']));
+  expect(pinned, 'and not the ignored file').not.toContain('server/notes.local');
+  const tomb = fs.readFileSync(path.join(h.home, '.cc-sessions', '.reaped', `${CHILD_ID}.json`), 'utf8');
+  expect(tomb, 'the tombstone names its path').toContain('server/notes.local');
+  expect(tomb, 'and keeps none of its bytes').not.toContain(NOTE.trim());
 }, 90_000);
 
 it('liveness independent: unknown alternate projection refuses', () => {

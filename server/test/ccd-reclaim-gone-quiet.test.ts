@@ -9,8 +9,9 @@
 //   4. Its session is alive somewhere unknown.
 // Ways 2 and 3 cannot be excluded from the spelling, so a gone row is still never PLACED by a projection. It is only
 // RELEASED, by a stronger question than the moved-check: nothing runs for the row (`_ws_reclaim_gone_quiet`), and no
-// checkout at all stands under the child or either leaf (`_ws_reclaim_no_checkout`). The second shape is on #2294 too:
-// a row that goes between the rows pass and the identity walk.
+// checkout at all stands under the child or either leaf (`_ws_reclaim_no_checkout`). That excludes a moved checkout,
+// never a tree with no `.git` of its own, so ways 2 and 3 keep a stated residual, pinned below and in the verb's suite.
+// The second shape is on #2294 too: a row that goes between the rows pass and the identity walk.
 //
 // FIXTURE HOME ONLY: `makePrHarness`'s HOME is the isolation boundary, and every call runs under `CHILD_STUBS`, so no
 // unit or pane is touched. `CHILD_STUBS` answers `gone` for a pane nobody planted and `inactive` for every unit: a row
@@ -376,6 +377,74 @@ describe('no checkout at all under the child or a leaf: a moved tree the moved-c
     fs.writeFileSync(path.join(c.wt, 'moved-plain-tree', 'notes.txt'), 'no session is in it: nothing runs for its row\n');
     expect(rows(c.wt).rc).toBe('0');
   }, 120_000);
+
+  describe('the stated limit through the real verb: each tree with no `.git` of its own, and what the pin keeps of it', () => {
+    const ROW = 'demo3-plain-tree';
+    const KEPT = 'kept.txt';
+    const IGNORED = 'notes.local';
+    /** A tree a stopped session left: one file git would add, one it ignores. */
+    const fill = (dir: string): void => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, '.gitignore'), `${IGNORED}\n`);
+      fs.writeFileSync(path.join(dir, KEPT), 'what git would add\n');
+      fs.writeFileSync(path.join(dir, IGNORED), 'what git would not\n');
+    };
+    /** Each answers the spelling the row keeps, with the tree standing there as a stopped session left it. */
+    const SHAPES: ReadonlyArray<readonly [string, () => string]> = [
+      ['a row that was never a checkout', (): string => {
+        const was = path.join(h.home, 'plain-tree');
+        fill(was);
+        return was;
+      }],
+      ['a subdirectory of a checkout moved alone', (): string => {
+        const was = path.join(other().wt, 'sub');
+        fill(was);
+        return was;
+      }],
+      ['a checkout stripped of its `.git`', (): string => {
+        const was = other().wt;
+        fs.rmSync(path.join(was, '.git'));
+        fill(was);
+        return was;
+      }],
+    ];
+    const reclaimed = (make: () => string, to: 'child' | 'leaf'): { c: Child; wip: string } => {
+      const c = makeChild(h);
+      const was = make();
+      // The clips leaf: the tail's in-use probe of a temp root cannot be asked on every platform this suite runs on.
+      const dest = to === 'child' ? path.join(c.wt, 'moved') : path.join(leaf('.cc-clips'), 'moved');
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(was, dest);
+      handRow(ROW, was);
+      const r = evalOf(h);
+      placed(r, 'nothing here has a `.git` to find');
+      const v = childReclaimVerb(h, r.token);
+      expect(v.code, v.stdout + v.stderr).toBe(0);
+      expect(fs.existsSync(dest), 'the tree went with the child').toBe(false);
+      expect(h.reg(ROW, 'workdir'), 'the row stands').toBe(was);
+      expect(fs.existsSync(was), 'no directory was created at the gone path').toBe(false);
+      return { c, wip: (JSON.parse(v.stdout) as { wip: string | null }).wip ?? '' };
+    };
+    const noCopy = (name: string): void => {
+      expect(h.sh(`find '${h.home}' -name '${name}' -not -path '*/.git/*'`), `no copy of ${name} under HOME`).toBe('');
+    };
+
+    it.each(SHAPES)('%s, moved into the child: the pin keeps what git would add, and never an ignored file', (_label, make) => {
+      const { c, wip } = reclaimed(make, 'child');
+      expect(wip, 'the CONTROL: the pin ran').toMatch(/^[0-9a-f]{40}$/);
+      const pinned = h.git(c.main, 'ls-tree', '-r', '--name-only', wip).split('\n');
+      expect(pinned).toContain(`moved/${KEPT}`);
+      expect(pinned).not.toContain(`moved/${IGNORED}`);
+      noCopy(IGNORED);
+    }, 180_000);
+
+    it.each(SHAPES)('%s, moved into a leaf: nothing in a leaf is ever pinned', (_label, make) => {
+      const { c } = reclaimed(make, 'leaf');
+      expect(h.git(c.main, 'rev-list', '--all', '--objects'), 'in no tree on any ref').not.toContain(KEPT);
+      noCopy(KEPT);
+      noCopy(IGNORED);
+    }, 180_000);
+  });
 
   it('a link at a leaf is unlinked, never followed, so nothing behind it is scanned', () => {
     const { c } = goneRow();
@@ -773,6 +842,68 @@ describe('_ws_unit_stopped: the one read of "is this unit stopped"', () => {
     const body = src.slice(from, src.indexOf('\n}\n', from));
     expect(body).not.toContain('_ws_refuse');
     expect(body).not.toContain('_ws_reclaim_unmeasured');
+  });
+});
+
+describe('the records state the release, the exception it makes and what it costs', () => {
+  const ROOT = path.resolve(import.meta.dirname, '..', '..');
+  const read = (f: string): string => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\s+/g, ' ');
+  const between = (s: string, from: string, to: string): string => {
+    const at = s.indexOf(from);
+    expect(at, `${from} is missing`).toBeGreaterThan(-1);
+    const end = s.indexOf(to, at + 1);
+    expect(end, `${to} must follow ${from}`).toBeGreaterThan(at);
+    return s.slice(at, end);
+  };
+  const AMENDED = '**Amended by the gone-row release (2026-11-05, #2294, D-8019).**';
+  const contract = read('docs/superpowers/programs/child-reclamation-contract.md');
+  const spec = read('docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md');
+  const unwedge = read('docs/superpowers/specs/2026-11-04-cleanup-unwedge-design.md');
+  const header = ccdSource().split('\n').filter((l) => l.startsWith('  #')).map((l) => l.replace(/^ *# ?/, '')).join(' ');
+
+  it('R31 says, beside the words it keeps, that process state is an input here and that the cost narrowed', () => {
+    const r31 = between(contract, '- **R31 —', '- **R32 —');
+    const at = r31.indexOf(AMENDED);
+    expect(at, 'R31 carries no amendment').toBeGreaterThan(-1);
+    const a = r31.slice(at);
+    expect(a).toContain('"is not an input"');
+    expect(a).toContain('"Holds every child\'s reclaim"');
+    expect(a).toContain('release each other');
+    expect(a).toContain('a purge or a restored link');
+    expect(r31.slice(0, at), 'the amendment follows the bullets it amends').toContain('hold each other');
+  });
+
+  it('R94 and its as-built note both name the one place process state does more than refuse', () => {
+    const r94 = between(contract, '- **R94 — R31 amended', '- **R95 —');
+    expect(r94).toContain(AMENDED);
+    expect(r94).toContain('turn a hold into a removal');
+    expect(between(contract, '**R94 as built (process state may only refuse).**', '**R54 as W3 leaves it')).toContain('turn a hold into a removal');
+  });
+
+  it.each([
+    ['the spec', (): string => between(spec, '**The residual, stated plainly', '- **A `complete` resolution places the spelling')],
+    ['the rung header', (): string => between(header, 'WHAT THIS DOES NOT SEE', 'NOR AT, INSIDE OR THROUGH A LEAF')],
+    ['the contract', (): string => between(contract, '- **R31 —', '- **R32 —')],
+  ])('%s states the residual whole: every shape with no `.git` of its own, and what the pin does not keep', (_label, text) => {
+    const t = text();
+    expect(t).toContain('gone-row-release-misses-a-tree-with-no-git');
+    for (const shape of ['a link now gone', 'never a checkout', 'a subdirectory of a checkout moved alone', 'stripped of its `.git`']) {
+      expect(t, shape).toContain(shape);
+    }
+    expect(t).toContain('ignored file');
+    expect(t).toContain('leaf');
+  });
+
+  it('no record says a tree with no `.git` is excluded by the scan', () => {
+    expect(unwedge).not.toContain('With no checkout there no moved tree is');
+    expect(spec).not.toContain('with no checkout there no moved tree is');
+    expect(header).not.toContain('With no checkout there, no moved tree is');
+  });
+
+  it('D6 asks the operator about the exception and the residual, not only the narrowing', () => {
+    const open = between(unwedge, '- D6: ccd\'s hold for rows with no durable record', '- D12:');
+    expect(open).toContain('R94');
+    expect(open).toContain('gone-row-release-misses-a-tree-with-no-git');
   });
 });
 
