@@ -10990,10 +10990,24 @@ sys.stdout.write(out)
     | python3 -c 'import json,sys; json.dumps(json.loads(sys.stdin.read()), allow_nan=False)' >/dev/null 2>&1 \
     || { echo "manifest: the PR ledger read for $id did not produce JSON" >&2; return 1; }
   transcript=$(_transcript_path "$id") || transcript=""
-  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s}\n' \
+  # WHERE THE TREE STOOD, AND WHOSE IT WAS (D-7999): the rows rung's archive
+  # arm (`_ws_reclaim_recorded_archive`) places this row from these three once
+  # its tree is gone and git has forgotten it. `workdir` is the row's spelling
+  # as read; `workdirReal` is where that spelling lands now, while the tree
+  # stands (`complete`, and not opening with `//`), else null, so the arm can
+  # prove the spelling was physical; `uuid` is this incarnation's. A uuid that
+  # does not read refuses, as any field above that does not read.
+  local uuid wdreal=null _WS_RESOLVED='' _WS_RESOLVE_BASIS=''
+  uuid=$(_reg_read "$id" uuid) && [[ -n "$uuid" ]] \
+    || { echo "manifest: could not read the uuid of '$id'" >&2; return 1; }
+  if _ws_reclaim_resolve "$workdir" && [[ "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" != //* ]]; then
+    wdreal=$(_json_str "$_WS_RESOLVED")
+  fi
+  printf '{"id":%s,"branch":%s,"worktreeHead":%s,"base":%s,"tip":%s,"dirty":%s,"ignoredDigest":%s,"stashes":%s,"worktreeBytes":%s,"pr":%s,"prHistory":%s,"transcript":%s,"workdir":%s,"workdirReal":%s,"uuid":%s}\n' \
     "$(_json_str "$id")" "$(_json_str "$branch")" "$(_json_str "$wthead")" "$(_json_str "$base")" \
     "$( [[ -n "$tip" ]] && _json_str "$tip" || echo null)" \
-    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")"
+    "$dirty" "$(_json_str "$ignored")" "$stashes" "$bytes" "$pr" "$prhistory" "$(_json_str "$transcript")" \
+    "$(_json_str "$workdir")" "$wdreal" "$(_json_str "$uuid")"
 }
 
 cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirely

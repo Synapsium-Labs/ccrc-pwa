@@ -945,6 +945,43 @@ describe('ws-archive', () => {
     });
   });
 
+  it('the archive record carries workdir, workdirReal and uuid', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.workdir).toBe(h.reg('demo-quiet-basin', 'workdir'));
+    expect(m.workdir).toBe(wt);
+    expect(m.workdirReal, 'a physical spelling records itself').toBe(wt);
+    expect(m.uuid).toBe(h.reg('demo-quiet-basin', 'uuid'));
+    expect(m.uuid).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('a workspace reached through a link records workdirReal as its physical path', () => {
+    const wt = workspace('demo', 'quiet-basin');
+    fs.symlinkSync(path.join(h.home, 'worktrees'), path.join(h.home, 'wtlink'));
+    const linked = path.join(h.home, 'wtlink', 'demo', 'quiet-basin');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.workdir'), linked);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.workdir, 'the row’s spelling, as read').toBe(linked);
+    expect(m.workdirReal, 'where that spelling lands').toBe(fs.realpathSync(wt));
+    expect(m.workdirReal).not.toBe(m.workdir);
+  });
+
+  it('an unreadable .uuid refuses the archive, and nothing is touched', (ctx) => {
+    if (process.getuid?.() === 0) { ctx.skip(); return; }
+    workspace('demo', 'quiet-basin');
+    const f = path.join(h.home, '.cc-sessions', 'demo-quiet-basin.uuid');
+    fs.chmodSync(f, 0o000);
+    try {
+      const r = shFail(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/manifest: could not read the uuid/);
+      expect(h.reg('demo-quiet-basin', 'archivemanifest')).toBeNull();
+      expect(h.reg('demo-quiet-basin', 'archived')).toBeNull();
+    } finally { fs.chmodSync(f, 0o644); }
+  });
+
   it('carries the stash count a reap would refuse on', () => {
     // `stashes` is one of the fields Task 6 refuses on (`stashes-present`), and
     // the manifest is what the archive screen shows for a workspace nobody has
