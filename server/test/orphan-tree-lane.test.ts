@@ -7,11 +7,14 @@ import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
 import {
   ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, orphanPressure, orphanCensusRetryAt, orphanCensusDue, orphanInsideVerdict, orphanLicence,
-  orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus,
+  orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus, orphanAuditEndsHoldWait,
 } from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
 import { ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, RECLAIM_PAUSE_MARKER } from '../../shared/switches.js';
 import type { CcdResult } from '../src/lifecycle.js';
+import type { OrphanLeaseHold } from '../src/coord/delegation-orphan-hold.js';
+import { beatLeaseHold } from '../src/orphanTreeBeat.js';
+import { checkpointWithLease } from './delegationLeaseFixture.js';
 
 const HOUR = ORPHAN_LICENCE_MS;
 const MIN = 60_000;
@@ -39,6 +42,9 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
   const wsKinds = new Map<string, boolean | null | 'throw'>();
   const ok = (stdout: string): CcdResult => ({ ran: true, ok: true, stdout, stderr: '', killed: false, signal: null });
   let pressure = false;
+  // The delegation hold (PR4): free unless a case sets it; every ask is recorded with the path and class it was handed.
+  let leaseHold: (p: string, cls: string | null) => Promise<OrphanLeaseHold> = async () => ({ kind: 'free' });
+  const holdAsks: Array<{ path: string; cls: string | null }> = [];
   const deps: OrphanSweepDeps = {
     io: { readdirMeasured: async () => ({ ok: true, entries: [...markers] }) } as unknown as OrphanSweepDeps['io'],
     registryDir: '/reg',
@@ -69,11 +75,12 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     record: (title, body) => { feed.push({ title, body }); },
     isWorkspace: async (id) => { const k = wsKinds.has(id) ? wsKinds.get(id)! : true; if (k === 'throw') throw new Error('row unreadable'); return k; },
     coordinators: () => { if (!coordsReadable) throw new Error('store unreadable'); return coordinators; },
+    leaseHold: async (p, cls) => { holdAsks.push({ path: p, cls }); return leaseHold(p, cls); },
   };
   const sweep = new OrphanTreeSweep(deps);
   const acts = (): string[][] => calls.filter((c) => c[0] === 'ws-orphan');
   return {
-    sweep, trees, markers, calls, feed, acts,
+    deps, sweep, trees, markers, calls, feed, acts,
     add: (p: string, cls: string, audit: Record<string, unknown>): string => { const h = hexOf(p); trees.set(h, { cls, audit }); return h; },
     advance: (ms: number): void => { mono += ms; },
     truncate: (v: boolean): void => { truncated = v; },
@@ -81,6 +88,7 @@ function rig(verbs: string[] | null = ['orphan-v1', 'reclaim-pause-v1', 'actor-f
     pressured: (v: boolean): void => { pressure = v; },
     censusTakes: (ms: number): void => { censusTakesMs = ms; },
     coordinators, wsKinds, unreadable: (v: boolean): void => { coordsReadable = !v; },
+    holdAsks, hold: (f: (p: string, cls: string | null) => Promise<OrphanLeaseHold>): void => { leaseHold = f; },
     addInside: (p: string, cls: string, audit: Record<string, unknown>, inside: string): string => { const h = hexOf(p); trees.set(h, { cls, audit, inside }); return h; },
   };
 }
@@ -518,13 +526,13 @@ describe('the executor stops on its own, whatever the pass did', () => {
     let n = 0;
     const deps = {
       io: { readdirMeasured: async () => ({ ok: true, entries: listings[Math.min(n++, listings.length - 1)]! }) } as never,
-      registryDir: '/reg', epochNow: () => 1, fleetState: { ccdVerbs: ['orphan-v1'] },
+      registryDir: '/reg', epochNow: () => 1, fleetState: { ccdVerbs: ['orphan-v1'] }, leaseHold: async () => ({ kind: 'free' }),
       runCcd: async (argv: readonly string[]) => {
         calls.push([...argv]);
         return { ran: true, ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null };
       },
     };
-    return collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1);
+    return collectOrphanTree(deps as never, hex, 'claude', { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1);
   };
 
   it('a pause standing at the job asks ccd nothing', async () => {
@@ -543,9 +551,9 @@ describe('the executor stops on its own, whatever the pass did', () => {
     const calls: string[][] = [];
     const deps = {
       io: { readdirMeasured: async () => ({ ok: false, reason: 'unreadable' }) } as never, registryDir: '/reg', epochNow: () => 1,
-      fleetState: { ccdVerbs: ['orphan-v1'] }, runCcd: async (a: readonly string[]) => { calls.push([...a]); throw new Error('no'); },
+      fleetState: { ccdVerbs: ['orphan-v1'] }, leaseHold: async () => ({ kind: 'free' }), runCcd: async (a: readonly string[]) => { calls.push([...a]); throw new Error('no'); },
     };
-    expect(await collectOrphanTree(deps as never, hex, null, () => 0, 1)).toEqual({ kind: 'stopped', why: 'paused' });
+    expect(await collectOrphanTree(deps as never, hex, 'claude', null, () => 0, 1)).toEqual({ kind: 'stopped', why: 'paused' });
     expect(calls).toEqual([]);
   });
 
@@ -553,10 +561,10 @@ describe('the executor stops on its own, whatever the pass did', () => {
     const calls: string[][] = [];
     const deps = {
       io: { readdirMeasured: async () => ({ ok: true, entries: [ORPHAN_TREE_LIVE_MARKER] }) } as never, registryDir: '/reg', epochNow: () => 2,
-      fleetState: { ccdVerbs: ['orphan-v1'] },
+      fleetState: { ccdVerbs: ['orphan-v1'] }, leaseHold: async () => ({ kind: 'free' }),
       runCcd: async (a: readonly string[]) => { calls.push([...a]); return { ran: true, ok: true, stdout: JSON.stringify({ mode: 'orphan', pathHex: hex, verdict: 'token', token: tok('a') }), stderr: '', killed: false, signal: null }; },
     };
-    expect(await collectOrphanTree(deps as never, hex, { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'epoch' });
+    expect(await collectOrphanTree(deps as never, hex, 'claude', { token: tok('a'), rescue: false, atMono: 0 }, () => 2 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'epoch' });
     expect(calls.some((c) => c[0] === 'ws-orphan')).toBe(false);
   });
 });
@@ -710,5 +718,146 @@ describe('an unreadable containing row is reported once per tree', () => {
     r.addInside('/p/.claude/worktrees/a', 'claude', clean('a'), 'demo-main');
     r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
     expect(said()).toHaveLength(2);
+  });
+});
+
+// Delegation broker wave 5 PR4 (Task 5.4.3, D-7828, D-7811, D-7850): the server skip. The executor asks the delegation hold after
+// the audit and before the licence, with the census row's class and the tree's EXACT decoded path; `held` and `not-ready` compose
+// no `ws-orphan`, and `not-ready` stops only `claude`/`superpowers` trees.
+describe('the delegation hold', () => {
+  /** Passes until each ripe tree has been offered the act: a first sighting, an hour, then one act per pass. */
+  const settle = async (r: ReturnType<typeof rig>, passes = 4): Promise<void> => {
+    await r.sweep.pass();
+    r.advance(HOUR);
+    for (let i = 0; i < passes; i += 1) { await r.sweep.pass(); r.advance(1); }
+  };
+
+  it('W5-O13: a held tree composes no ws-orphan; a free one composes exactly what it did before', async () => {
+    const held = rig(); held.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const h = held.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    held.hold(async () => ({ kind: 'held', leaseId: 'l-1', state: 'retained', until: '2026-12-01T00:00:00.000Z' }));
+    await settle(held);
+    expect(held.acts()).toEqual([]);
+    expect(held.holdAsks.length).toBeGreaterThan(0);
+    expect(held.holdAsks[0]).toEqual({ path: '/p/.claude/worktrees/a', cls: 'claude' });
+    expect(held.trees.has(h)).toBe(true);
+    const free = rig(); free.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const f = free.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    await settle(free);
+    expect(free.acts()).toEqual([['ws-orphan', '--expect', tok('a'), '--tree-hex', f, '--surface', 'agent', '--actor', 'orphan-tree sweep']]);
+  });
+
+  it('W5-O13: the real hold over a ready checkpoint matches a long path, and one holding a tab, byte for byte', async () => {
+    const long = `/p/.claude/worktrees/${'x'.repeat(320)}`;
+    for (const p of [long, '/p/.claude/worktrees/a\tb']) {
+      expect(p.length > 300 || p.includes('\t')).toBe(true);
+      const cp = checkpointWithLease({ canonicalPath: p, disposition: 'retained', cleanupDueAt: '2099-01-01T00:00:00.000Z' });
+      const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+      r.add(p, 'claude', clean('a'));
+      r.hold(beatLeaseHold(() => cp));
+      await settle(r);
+      expect(r.holdAsks[0]).toEqual({ path: p, cls: 'claude' });
+      expect(await beatLeaseHold(() => cp)(p, 'claude')).toMatchObject({ kind: 'held', state: 'retained' });
+      expect(r.acts()).toEqual([]);
+    }
+  });
+
+  it('W5-O13b: an unready checkpoint stops the claude tree, composes the ccd-root tree as before, and is counted', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const c = r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    const w = r.add('/w/p/still-cove', 'ccd-root', clean('c'));
+    r.hold(beatLeaseHold(() => null));
+    await settle(r);
+    expect(r.acts().map((a) => a[a.indexOf('--tree-hex') + 1])).toEqual([w]);
+    expect(r.acts()).toEqual([['ws-orphan', '--expect', tok('c'), '--tree-hex', w, '--surface', 'agent', '--actor', 'orphan-tree sweep']]);
+    expect(r.trees.has(c)).toBe(true);
+    expect(r.holdAsks.map((a) => a.cls).sort()).toEqual(['ccd-root', 'claude']);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    expect(r.feed.map((x) => x.title)).toEqual(['orphan worktree removed']);   // the stop says nothing
+  });
+
+  it('W5-O13c: a tree the lane holds no row for has an unknown class, which an unready checkpoint stops, never frees', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const h = r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    const obs = { token: tok('a'), rescue: false, atMono: 0 };
+    const deps = { ...r.deps, leaseHold: beatLeaseHold(() => null) };
+    expect(await collectOrphanTree(deps, h, null, obs, () => 10 * HOUR, 1)).toEqual({ kind: 'stopped', why: 'lease-unready' });
+    expect(r.acts()).toEqual([]);
+    const cp = checkpointWithLease({ canonicalPath: '/p/other', disposition: 'retained', cleanupDueAt: '2099-01-01T00:00:00.000Z' });
+    expect(await collectOrphanTree({ ...r.deps, leaseHold: beatLeaseHold(() => cp) }, h, null, obs, () => 10 * HOUR, 1))
+      .toMatchObject({ kind: 'result', result: { kind: 'removed' } });                  // CONTROL: a ready checkpoint reads any class
+  });
+
+  it('W5-O13d: the lease-unready count clears on any later outcome and when the census drops the tree, and counts a returning tree once', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const p = '/p/.claude/worktrees/a';
+    const h = r.add(p, 'claude', clean('a'));
+    r.hold(beatLeaseHold(() => null));
+    await settle(r);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    // the box's own `leased` answers the next learning audit: the tree is no longer unready, the count goes
+    r.trees.set(h, { cls: 'claude', audit: refused('leased', 'lease l-1 holds this tree (adopted) until 2099-01-01T00:00:00.000Z, and for 3600 s after') });
+    r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();
+    expect(r.calls.filter((c) => c[1] === '--orphan-hex').length).toBeGreaterThan(1);
+    expect(r.sweep.health()!.leaseUnready).toBeUndefined();
+    // stopped again, then the census no longer lists it, then lists it again
+    r.trees.set(h, { cls: 'claude', audit: clean('a') });
+    r.advance(ORPHAN_CENSUS_MS); await settle(r);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    r.trees.delete(h);
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.sweep.health()!.leaseUnready).toBeUndefined();
+    r.add(p, 'claude', clean('a'));
+    r.advance(ORPHAN_CENSUS_MS); await r.sweep.pass();
+    expect(r.sweep.health()!.leaseUnready, 'a returning tree is not counted before it is stopped again').toBeUndefined();
+    r.advance(1); await settle(r);
+    expect(r.sweep.health()!.leaseUnready, 'and once after').toBe(1);
+  });
+
+  it('W5-O13h: a learning audit after which an act follows leaves the lease-unready count; the act that follows decides it', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const h = r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.hold(beatLeaseHold(() => null));
+    await settle(r);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    const audits = (): number => r.calls.filter((c) => c[1] === '--orphan-hex').length;
+    const before = audits();
+    r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();                     // the learning audit answers `token`: an act follows
+    expect(audits()).toBe(before + 1);
+    expect(r.sweep.health()!.leaseUnready, 'a token audit measures nothing about readiness').toBe(1);
+    r.trees.set(h, { cls: 'claude', audit: refused('dirty', 'one modified file') });
+    r.advance(ORPHAN_LICENCE_MS); await r.sweep.pass();                   // the act that follows: its audit refuses, an outcome other
+                                                                          // than lease-unready, so the entry goes (W5-O13d has the
+                                                                          // learning audit's own refusal, the box's `leased`)
+    expect(audits()).toBe(before + 2);
+    expect(r.sweep.health()!.leaseUnready).toBeUndefined();
+    // the rule itself (L1): only a refusal or an unarmed rescuable ends the wait
+    const answers = [
+      { kind: 'token', token: tok('a') }, { kind: 'rescuable', word: 'head-not-on-remote', rescueToken: tok('b'), detail: '' },
+      { kind: 'refused', word: 'leased', detail: '' }, { kind: 'unmeasured', detail: '' }, { kind: 'unreadable', detail: '' },
+    ] as const;
+    expect(answers.map((a) => [orphanAuditEndsHoldWait(a as never, false), orphanAuditEndsHoldWait(a as never, true)]))
+      .toEqual([[false, false], [true, false], [true, true], [false, false], [false, false]]);
+  });
+
+  it('W5-O13e: the box\'s `leased` refusal is said as a sentence, its expiry an ISO instant', async () => {
+    const r = rig();
+    const detail = 'lease l-1 holds this tree (adopted) until 2099-01-01T00:00:00.000Z, and for 3600 s after';
+    r.add('/p/.claude/worktrees/a', 'claude', refused('leased', detail));
+    await r.sweep.pass();
+    const left = r.feed.filter((x) => x.title === 'orphan worktree left');
+    expect(left).toHaveLength(1);
+    expect(left[0]!.body).toBe(`/p/.claude/worktrees/a (claude): a delegation lease holds it (${detail})`);
+    expect(left[0]!.body).not.toMatch(/ccd answered|epoch ms/);
+  });
+
+  it('W5-O13f: readDiskHealth reads leaseUnready above zero and leaves it out when absent or malformed', () => {
+    const counts = { byClass: { 'ccd-root': 0, claude: 1, superpowers: 0, other: 0, 'not-a-worktree': 0 }, byOutcome: { pending: 1, would: 0, left: 0, removed: 0 } };
+    const block = (orphanTrees: unknown) => ({ disk: { at: 1, level: 'ok', pressure: false, filesystems: [], expectedMounts: [], holders: [], orphanTrees } });
+    expect(readDiskHealth(block({ ...counts, leaseUnready: 2 }))!.orphanTrees).toEqual({ ...counts, leaseUnready: 2 });
+    expect(readDiskHealth(block(counts))!.orphanTrees).toEqual(counts);
+    for (const bad of [-1, 1.5, '2', null]) {
+      expect(readDiskHealth(block({ ...counts, leaseUnready: bad }))!.orphanTrees, String(bad)).toEqual(counts);
+    }
   });
 });
