@@ -124,6 +124,19 @@ describe('console speed S2: the beat of both sockets', () => {
     expect(beatsOf(frames)).toBe(seen);
   });
 
+  it('the /ws/fleet beat timer never holds the process open (fix round 1, F13)', async () => {
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
+      await opened(ws);
+      await settle();
+      const at = spy.mock.calls.findIndex((c) => c[1] === BEAT_MS);
+      expect(at, 'a beat timer was made').toBeGreaterThanOrEqual(0);
+      expect((spy.mock.results[at]!.value as NodeJS.Timeout).hasRef()).toBe(false);
+      ws.close();
+    } finally { spy.mockRestore(); }
+  });
+
   it('/ws/session/:id sends beats', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/session/${ID}`);

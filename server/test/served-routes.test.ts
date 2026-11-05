@@ -3,13 +3,14 @@
 // This file pins today's status and body shape: later steps add the "fresh watcher state answers with ageMs" cases
 // beside these, and the cases here must stay green when they do.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { localIO, type FleetIO } from '../src/io.js';
+import type { FleetState } from '../src/fleetstate.js';
 import { servedFleetReads, servedProjectReads } from '../src/servedRead.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -231,6 +232,29 @@ describe('served routes with a fresh watcher tick: the answer carries ageMs and 
     expect('ageMs' in body).toBe(false);
     expect(Object.keys(body).sort()).toEqual(['pools', 'sessions']);
     expect(measuredReads(r.requests).length, 'the route read the registry itself').toBeGreaterThan(0);
+  });
+
+  it('GET /api/fleet: a remote link that is down, with no snapshot, is not served (fix round 1, F3)', async () => {
+    const f = fixture();
+    const c = countingIO();
+    const base = testDeps(f.home);
+    const link = { connected: true, downSince: null as number | null };
+    // The snapshot path is the fixture's, never the default under the real home: "no snapshot" is this case's premise.
+    const stateCachePath = path.join(f.home, '.ccrc', 'state-cache.json');
+    const deps = withFakeClock({ ...base, io: c.io, cfg: { ...base.cfg, fleetMode: 'remote' as const }, fleetState: link as unknown as FleetState, stateCachePath });
+    const bus = new Bus();
+    const w = new FleetWatcher(deps, bus, 2000);
+    watcher = w;
+    await w.tick();
+    app = await buildServer(deps, bus, w);
+    const get = async (): Promise<Record<string, unknown>> => (await app!.inject({ method: 'GET', url: '/api/fleet' })).json() as Record<string, unknown>;
+    expect(typeof (await get()).ageMs, 'control: the link up, the tick is served').toBe('number');
+    rmSync(stateCachePath, { force: true });
+    link.connected = false; link.downSince = Date.now();
+    c.requests.length = 0;
+    const body = await get();
+    expect('ageMs' in body, 'the served arm declines while the link is down').toBe(false);
+    expect(measuredReads(c.requests).length, 'the route read the registry itself, as the base did').toBeGreaterThan(0);
   });
 
   it('GET /api/projects: the ?class= validation still runs first', async () => {

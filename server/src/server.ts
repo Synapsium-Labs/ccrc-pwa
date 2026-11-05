@@ -1205,7 +1205,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // D-5995: session text in a fleet answer (an ask summary, a task's active form) is masked before it is serialized,
   // on every arm of the route; each row's server-built identity fields (its id, its names) are kept as they are.
   app.get('/api/fleet', async () => {
-    if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
+    const linkDown = deps.cfg.fleetMode === 'remote' && deps.fleetState !== undefined && !deps.fleetState.connected;
+    if (linkDown && deps.fleetState) {
       const snap = await loadSnapshot(stateCachePath);
       // NO `pools` KEY on this arm, deliberately: nothing about pools is
       // persisted (spec §5.4.1), so there is nothing measured to serve, and a
@@ -1215,10 +1216,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // Console speed S2: the watcher's last listed tick answers whole with its age (no registry read, no pools read, no
     // assembly) while BOTH the listing and the pools read beside its wire are fresh (`servedFleetReads`). Anything less
-    // falls to the reads below, which are today's.
+    // falls to the reads below, which are today's, and so does a link that is down with no snapshot (F3).
     const servedFleet = servedFleetReads(watcher?.currentFleetListing() ?? null, watcher?.currentProjectPoolsRead() ?? null, Date.now());
     const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
-    if (servedFleet.serve && servedPools !== null) return { sessions: dropStaleLandings(servedFleet.listing.sessions, Date.now()), pools: servedPools, ageMs: servedFleet.ageMs };
+    if (servedFleet.serve && servedPools !== null && !linkDown) return { sessions: dropStaleLandings(servedFleet.listing.sessions, Date.now()), pools: servedPools, ageMs: servedFleet.ageMs };
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
     // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
@@ -1612,7 +1613,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
-    const beat = setInterval(() => socket.send(JSON.stringify({ type: 'beat', at: Date.now() } satisfies FleetMsg)), BEAT_MS);
+    // F13: the close listener before the timer, and the timer unref'd, as the session beat does.
+    socket.on('close', () => { clearInterval(beat); });
+    const beat = setInterval(() => socket.send(JSON.stringify({ type: 'beat', at: Date.now() } satisfies FleetMsg)), BEAT_MS).unref();
     // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized, once per
     // broadcast (`maskedFrame`); a fleet row's server-built identity fields are kept as they are (`maskFleetFrame`).
     const sendFleet = (sessions: FleetSession[]) =>
@@ -1771,7 +1774,6 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     bus.on('waiting', onWaitingEvent);
     bus.on('fleet', onFleetWaiting);
     socket.on('close', () => {
-      clearInterval(beat);
       bus.off('fleet', onFleet);
       bus.off('notice', onNotice);
       bus.off('runs', onRuns);
