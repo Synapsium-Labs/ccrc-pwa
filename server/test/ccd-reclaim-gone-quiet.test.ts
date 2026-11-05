@@ -18,11 +18,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
+import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import {
-  CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child, type LadderAnswer,
+  CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, TMUX_FAULTS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
+import { EXP_ID, EXP_STUBS, NOW, makeArchived } from './wsExpireFixture.js';
+import { FAKE_PROC_SELF } from './worktreeIdentityFixture.js';
+import { parseChildReclaimAudit, parseChildReclaimAuditFailed } from '../src/coord/childReclaim.js';
+import { parseExpireAudit } from '../src/archivedExpiry.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-reclaim-gone-quiet-'); });
@@ -72,12 +76,12 @@ const handRow = (id: string, workdir: string): void => {
   fs.writeFileSync(path.join(REG(), `${id}.workdir`), workdir);
 };
 /** `_ws_reclaim_workdir_shared`'s whole answer, for the child or any spelling of it. */
-const rows = (wd: string, pre = ''): { rc: string; shared: string; nested: string; through: string; why: string; ids: string } => {
-  const [rc = '', shared = '', nested = '', through = '', why = '', ids = ''] = h.sh(`${CHILD_STUBS} ${pre}`
+const rows = (wd: string, pre = ''): { rc: string; shared: string; nested: string; through: string; why: string; ids: string; quietRows: string } => {
+  const [rc = '', shared = '', nested = '', through = '', why = '', ids = '', quietRows = ''] = h.sh(`${CHILD_STUBS} ${pre}`
     + ` _ws_reclaim_workdir_shared ${CHILD_ID} '${wd}' >/dev/null; rc=$?;`
-    + ' printf \'%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\' "$rc" "$_WS_SHARED_ROWS" "$_WS_NESTED_ROWS" "$_WS_THROUGH_ROWS" "$_WS_SHARED_WHY" "$_WS_RECORDED_GDIRS$_WS_RECORDED_IDS"')
+    + ' printf \'%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\' "$rc" "$_WS_SHARED_ROWS" "$_WS_NESTED_ROWS" "$_WS_THROUGH_ROWS" "$_WS_SHARED_WHY" "$_WS_RECORDED_GDIRS$_WS_RECORDED_IDS" "$_WS_QUIET_ROWS"')
     .split('\x1f');
-  return { rc, shared, nested, through, why, ids };
+  return { rc, shared, nested, through, why, ids, quietRows };
 };
 const owned = (c: Child, pre = ''): { rc: string; why: string } => {
   const [rc = '', why = ''] = h.sh(`${CHILD_STUBS} ${pre} _ws_reclaim_owned ${CHILD_ID} "${c.wt}" "${c.main}"; printf '%s\\x1f%s' "$?" "$_WS_OWNED_WHY"`)
@@ -86,6 +90,24 @@ const owned = (c: Child, pre = ''): { rc: string; why: string } => {
 };
 const quiet = (id: string, w: string, pre = ''): string =>
   h.sh(`${CHILD_STUBS} ${pre} _ws_reclaim_gone_quiet ${id} '${w}'; printf '%s' "$?"`);
+/** A document with its release key taken out: what a reader that ignores the key is handed. */
+const withoutQuietRows = (stdout: string): string => {
+  const o = JSON.parse(stdout) as Record<string, unknown>;
+  delete o['quietRows'];
+  return JSON.stringify(o);
+};
+/** `ws-audit --session <child> --reclaim`, its document parsed. */
+const auditDoc = (pre = ''): { code: number; stdout: string; stderr: string; doc: Record<string, unknown> } => {
+  const r = h.run(`${CHILD_STUBS} _session_verdict() { echo gone; }; ${GH_STUB} ${pre} cmd_ws_audit --session ${CHILD_ID} --reclaim`);
+  return { ...r, doc: JSON.parse(r.stdout) as Record<string, unknown> };
+};
+/** `ws-audit --session <id> --expire` over a fake process root, its document parsed. */
+const expireDocOf = (id: string): { code: number; stdout: string; stderr: string; doc: Record<string, unknown> } => {
+  const r = h.run(`${EXP_STUBS} ${FAKE_PROC_SELF} cmd_ws_audit --session ${id} --expire`);
+  return { ...r, doc: JSON.parse(r.stdout) as Record<string, unknown> };
+};
+const expireVerbOf = (id: string, token: string): { code: number; stdout: string; stderr: string } =>
+  h.run(`${EXP_STUBS} ${FAKE_PROC_SELF} ${CHILD_ENV} cmd_ws_expire --expect ${token} --session ${id}`);
 /** Runs `script` inside the rows pass, between its last resolve and the identity walk: the window #2294's comment names. */
 const atWalk = (script: string): string =>
   `f=$(declare -f _ws_reclaim_idwalk); eval "_ws_idwalk_real\${f#_ws_reclaim_idwalk}"; _ws_reclaim_idwalk() { ${script}; _ws_idwalk_real "$@"; };`;
@@ -96,6 +118,21 @@ describe('the ticket: one unresolvable row beside an unrelated finished child', 
     const r = evalOf(h);
     placed(r, 'a gone row nothing runs for holds no unrelated child');
     const v = childReclaimVerb(h, r.token);
+    expect(v.code, v.stdout + v.stderr).toBe(0);
+    expect((JSON.parse(v.stdout) as { reclaimed: string }).reclaimed).toBe(CHILD_ID);
+    expect(fs.existsSync(c.wt), 'the child’s tree is gone').toBe(false);
+    expect(fs.existsSync(o.wt), 'no directory was created at the gone path').toBe(false);
+    expect(h.reg(OTHER, 'workdir'), 'the row stands: it only stopped holding').toBe(o.wt);
+  }, 180_000);
+
+  it('the ticket’s own row, with a legacy entry and no field at all: the audit answers reclaimable and the real verb reclaims', () => {
+    const { c, o } = goneRow();
+    fs.rmSync(path.join(REG(), `${OTHER}.workdirid`));
+    const a = auditDoc();
+    expect(a.code, a.stderr).toBe(0);
+    expect(a.doc['verdict'], String(a.doc['detail'])).toBe('reclaimable');
+    expect(a.doc, 'the CONTROL: the row’s entry is legacy').toHaveProperty('legacyRows', 1);
+    const v = childReclaimVerb(h, String(a.doc['token']));
     expect(v.code, v.stdout + v.stderr).toBe(0);
     expect((JSON.parse(v.stdout) as { reclaimed: string }).reclaimed).toBe(CHILD_ID);
     expect(fs.existsSync(c.wt), 'the child’s tree is gone').toBe(false);
@@ -487,6 +524,221 @@ describe('the second shape: a row that goes during the walk', () => {
     const l = rows(c.wt, `${atWalk(rmTree(o))} _ws_reclaim_recorded() { _WS_RECORDED_AT='${inLeaf}'; _WS_RECORDED_G=''; return 0; };`);
     expect([l.rc, l.nested]).toEqual(['0', OTHER]);
   }, 120_000);
+});
+
+describe('a pane that comes up after the audit: the tail asks again', () => {
+  it('`_ws_reclaim_owned` answers 2, and the same row with no pane answers 0', () => {
+    const { c } = goneRow();
+    placed(evalOf(h), 'the audit released it');
+    expect(owned(c).rc, 'the CONTROL: nothing has changed since the audit').toBe('0');
+    plantTmux(h, { sessions: [`cc-${OTHER}`] });
+    const t = owned(c);
+    expect(t.rc, t.why).toBe('2');
+    expect(t.why).toContain(`registry row(s) ${OTHER} ${HELD}`);
+  }, 120_000);
+
+  it('the verb’s own tail asks it: a pane up at the ownership check stops the reclaim with the tree standing, resumably', () => {
+    const { c } = goneRow();
+    const r = evalOf(h);
+    placed(r, 'the audit released it');
+    // Past the audit and the locked recomputation, so only the tail's own ask can see it.
+    const paneAtTail = `f=$(declare -f _ws_reclaim_owned); eval "_ws_owned_real\${f#_ws_reclaim_owned}";`
+      + ` _ws_reclaim_owned() { echo 'cc-${OTHER}' >> "$HOME/tmux-sessions"; _ws_owned_real "$@"; };`;
+    const v = childReclaimVerb(h, r.token, { pre: paneAtTail });
+    expect(v.code, v.stdout + v.stderr).not.toBe(0);
+    expect(JSON.parse(v.stdout) as Record<string, unknown>).toHaveProperty('failed', 'worktree-remove-failed');
+    expect(fs.existsSync(c.wt), 'the tree stands').toBe(true);
+  }, 180_000);
+});
+
+describe('two gone stopped rows, and the expiry of each', () => {
+  const SECOND = 'demo3-gone-mesa';
+  /** Stamps the archive on a row `makeArchived` did not build. */
+  const archive = (id: string): void => {
+    fs.writeFileSync(path.join(REG(), `${id}.archived`), `${NOW - 8 * 86_400}\n`);
+    fs.writeFileSync(path.join(REG(), `${id}.archivedreason`), 'operator\n');
+    fs.writeFileSync(path.join(REG(), `${id}.archivemanifest`), '{"paths":[]}\n');
+  };
+  /** Two archived workspaces of two repositories, each tree gone, and git's record of each gone with it. */
+  const twoArchivedGone = (): { a: { main: string; wt: string }; b: { main: string; wt: string } } => {
+    const a = makeArchived(h);
+    const b = other();
+    archive(OTHER);
+    for (const r of [a, b]) {
+      fs.rmSync(r.wt, { recursive: true, force: true });
+      h.git(r.main, 'worktree', 'prune');
+      expect(stanza(r.main, r.wt), 'the CONTROL: git records nothing of it').toBe('');
+    }
+    return { a, b };
+  };
+
+  it('a child beside two of them reclaims, and the audit names both', () => {
+    goneRow();
+    handRow(SECOND, path.join(fs.realpathSync(h.home), 'worktrees', 'gone-too'));
+    const d = auditDoc();
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('reclaimable');
+    expect((d.doc['quietRows'] as string[]).slice().sort()).toEqual([OTHER, SECOND].sort());
+    const v = childReclaimVerb(h, String(d.doc['token']));
+    expect(v.code, v.stdout + v.stderr).toBe(0);
+  }, 180_000);
+
+  it('each is the other’s gone row: both audits answer expirable, and each names the other', () => {
+    twoArchivedGone();
+    const first = expireDocOf(EXP_ID);
+    expect(first.doc['verdict'], String(first.doc['detail'])).toBe('expirable');
+    expect(first.doc['quietRows']).toEqual([OTHER]);
+    const second = expireDocOf(OTHER);
+    expect(second.doc['verdict'], String(second.doc['detail'])).toBe('expirable');
+    expect(second.doc['quietRows']).toEqual([EXP_ID]);
+  }, 180_000);
+
+  it('the verb expires each in turn, the first with the second still gone beside it', () => {
+    twoArchivedGone();
+    for (const id of [EXP_ID, OTHER]) {
+      const d = expireDocOf(id);
+      expect(d.doc['verdict'], String(d.doc['detail'])).toBe('expirable');
+      const v = expireVerbOf(id, String(d.doc['token']));
+      expect(v.code, v.stdout + v.stderr).toBe(0);
+      expect(JSON.parse(v.stdout) as Record<string, unknown>).toHaveProperty('expired', id);
+    }
+  }, 240_000);
+
+  it('an archived tree that stands expires beside a gone stopped row, and that row’s gone path stays gone', () => {
+    const a = makeArchived(h);
+    const o = other();
+    fs.rmSync(o.wt, { recursive: true, force: true });
+    h.git(o.main, 'worktree', 'prune');
+    const d = expireDocOf(EXP_ID);
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('expirable');
+    const v = expireVerbOf(EXP_ID, String(d.doc['token']));
+    expect(v.code, v.stdout + v.stderr).toBe(0);
+    expect(fs.existsSync(a.wt), 'the archived tree went').toBe(false);
+    expect(fs.existsSync(o.wt), 'no directory was created at the gone path').toBe(false);
+    expect(h.reg(OTHER, 'workdir'), 'the row stands: it only stopped holding').toBe(o.wt);
+  }, 180_000);
+
+  it('a pane up for the gone row keeps holding the expiry', () => {
+    makeArchived(h);
+    const o = other();
+    fs.rmSync(o.wt, { recursive: true, force: true });
+    h.git(o.main, 'worktree', 'prune');
+    plantTmux(h, { sessions: [`cc-${OTHER}`] });
+    const d = expireDocOf(EXP_ID);
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('unmeasured');
+    expect(String(d.doc['detail'])).toContain(`registry row(s) ${OTHER} ${HELD}`);
+    expect(d.doc['quietRows']).toEqual([]);
+  }, 180_000);
+});
+
+describe('the audit trail: every release is named in the audit document', () => {
+  it('a reclaimable document names the row, and the parser reads it exactly as it reads one without the key', () => {
+    goneRow();
+    const d = auditDoc();
+    expect(d.code, d.stderr).toBe(0);
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('reclaimable');
+    expect(d.doc['quietRows']).toEqual([OTHER]);
+    const parsed = parseChildReclaimAudit(CHILD_ID, d.stdout);
+    expect(parsed.kind).toBe('token');
+    expect(parsed).toEqual(parseChildReclaimAudit(CHILD_ID, withoutQuietRows(d.stdout)));
+  }, 120_000);
+
+  it('the key sits beside the counts, and asks nothing of the token', () => {
+    goneRow();
+    const keys = Object.keys(auditDoc().doc);
+    expect(keys.slice(keys.indexOf('legacyRows'), keys.indexOf('legacyRows') + 3)).toEqual(['legacyRows', 'pendingRows', 'quietRows']);
+  }, 120_000);
+
+  it('a child with no gone row names none: an empty list, never a missing key', () => {
+    makeChild(h);
+    expect(auditDoc().doc['quietRows']).toEqual([]);
+  }, 120_000);
+
+  it('a row that keeps holding is not named: nothing was released', () => {
+    goneRow();
+    plantTmux(h, { sessions: [`cc-${OTHER}`] });
+    const d = auditDoc(`_session_probe() { if [[ "$1" == ${OTHER} ]]; then PROBE_VERDICT=live; else PROBE_VERDICT=gone; fi; };`);
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('unmeasured');
+    expect(d.doc['quietRows']).toEqual([]);
+    const failed = parseChildReclaimAuditFailed(CHILD_ID, d.stdout, d.stderr);
+    expect(failed).toEqual(parseChildReclaimAuditFailed(CHILD_ID, withoutQuietRows(d.stdout), d.stderr));
+  }, 120_000);
+
+  it('a checkout under the child takes the release back: the row was not let go, so it is not named', () => {
+    const { c } = goneRow();
+    fs.mkdirSync(path.join(c.wt, 'vendor', 'lib', '.git'), { recursive: true });
+    const d = auditDoc();
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('unmeasured');
+    expect(String(d.doc['detail'])).toContain(QUIET_HELD);
+    expect(d.doc['quietRows']).toEqual([]);
+    expect(rows(c.wt).quietRows).toBe('');
+  }, 120_000);
+
+  it('a refusal outranks the release, and the scan was never asked: none is named', () => {
+    const { c } = goneRow();
+    handRow('demo3-inside', path.join(c.wt, 'gone'));
+    const d = auditDoc();
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('containment-unproven');
+    expect(d.doc['quietRows']).toEqual([]);
+  }, 120_000);
+
+  it('one row released beside one that holds: the hold answers, and the release is still named', () => {
+    goneRow();
+    const gone = path.join(fs.realpathSync(h.home), 'worktrees', 'gone-too');
+    handRow('demo3-running', gone);
+    const d = auditDoc('_svc_is_active() { [[ "$1" == *demo3-running* ]] && printf active || printf inactive; };');
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('unmeasured');
+    expect(String(d.doc['detail'])).toContain(`registry row(s) demo3-running ${HELD}`);
+    expect(d.doc['quietRows']).toEqual([OTHER]);
+  }, 120_000);
+
+  it('not counted is null, as the counts are: a ladder that stops before the rows rung', () => {
+    goneRow();
+    fs.rmSync(path.join(REG(), `${CHILD_ID}.child`));
+    const d = auditDoc();
+    expect(d.doc['verdict']).toBe('not-a-child');
+    expect(d.doc['quietRows']).toBeNull();
+  }, 120_000);
+
+  it('not counted is null: a registry that cannot be listed', () => {
+    goneRow();
+    const d = auditDoc('find() { [[ "$*" == *"-name *.workdir"* ]] && return 1; command find "$@"; };');
+    expect(String(d.doc['detail'])).toContain('could not list');
+    expect(d.doc['quietRows']).toBeNull();
+  }, 120_000);
+
+  it('a row released where the walk found it gone is named too', () => {
+    const c = makeChild(h);
+    const o = other();
+    placed(evalOf(h), 'the CONTROL: the row stands, placed outside');
+    const r = rows(c.wt, atWalk(`rm -rf '${o.wt}'; git -C '${o.main}' worktree prune`));
+    expect([r.rc, r.quietRows]).toEqual(['0', OTHER]);
+  }, 120_000);
+
+  it('every pass starts clean, and so does the ladder’s reset', () => {
+    const { c } = goneRow();
+    expect(h.sh(`${CHILD_STUBS} _WS_QUIET_ROWS=stale; _ws_reclaim_reset; printf '[%s]' "$_WS_QUIET_ROWS"`)).toBe('[]');
+    fs.rmSync(path.join(REG(), `${OTHER}.workdir`));
+    expect(rows(c.wt, '_WS_QUIET_ROWS=stale;').quietRows).toBe('');
+  }, 120_000);
+
+  it('`_ws_quiet_rows_json` prints each id through `_json_str`, and null when the rung did not count', () => {
+    const ask = (pre: string): string => h.sh(`${pre} _ws_quiet_rows_json`);
+    expect(ask("_WS_LEGACY_ROWS=''; _WS_QUIET_ROWS=''")).toBe('null');
+    expect(ask("_WS_LEGACY_ROWS=0; _WS_QUIET_ROWS=''")).toBe('[]');
+    expect(ask("_WS_LEGACY_ROWS=0; _WS_QUIET_ROWS='row-a'")).toBe('["row-a"]');
+    expect(JSON.parse(ask("_WS_LEGACY_ROWS=2; _WS_QUIET_ROWS='row-a, row\"b, row-c'"))).toEqual(['row-a', 'row"b', 'row-c']);
+  });
+
+  it('the expire document carries it too, and its parser reads it as before', () => {
+    makeArchived(h);
+    const o = other();
+    fs.rmSync(o.wt, { recursive: true, force: true });
+    h.git(o.main, 'worktree', 'prune');
+    const d = expireDocOf(EXP_ID);
+    expect(d.doc['verdict'], String(d.doc['detail'])).toBe('expirable');
+    expect(d.doc['quietRows']).toEqual([OTHER]);
+    expect(parseExpireAudit(EXP_ID, true, d.stdout)).toEqual(parseExpireAudit(EXP_ID, true, withoutQuietRows(d.stdout)));
+  }, 180_000);
 });
 
 describe('_ws_unit_stopped: the one read of "is this unit stopped"', () => {

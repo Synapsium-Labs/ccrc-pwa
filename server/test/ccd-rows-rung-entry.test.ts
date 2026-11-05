@@ -172,6 +172,7 @@ const withoutCounts = (stdout: string): string => {
   const o = JSON.parse(stdout) as Record<string, unknown>;
   delete o['legacyRows'];
   delete o['pendingRows'];
+  delete o['quietRows'];
   return JSON.stringify(o);
 };
 /** The collector's row rule over a dead child's temp root, asked as its callers ask it (contained). */
