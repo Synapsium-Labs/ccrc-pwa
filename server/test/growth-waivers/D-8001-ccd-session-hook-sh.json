@@ -1,0 +1,7 @@
+{
+  "file": "ccd/session-hook.sh",
+  "maxDelta": 68,
+  "d": "D-8001",
+  "reason": "cleanup un-wedge Task R3 and its fix round 1 (review 1479): the prune row on every session, read quote-aware as bash reads it (a per-line heredoc lexer, a quoted-span tokenizer, the bash -c rule), with git's own dry-run words and its global options; measured +68 net code lines against the merge-base; kept inline because the hook loads no library and the row is one jq program with the forbidden match it extends (spec 2026-11-04 section 5)",
+  "added": "2026-11-05"
+}
