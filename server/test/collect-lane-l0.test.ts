@@ -61,6 +61,7 @@ const IMPORTS = [
   "import type { BuildInfo } from './buildinfo.js';",
   "import type { BoxTokenView } from './box-token.js';",
   "import type { ReadFailure } from './agent-protocol.js';",
+  "import type { PerfHealth } from './perf.js';",
   "import type { WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
