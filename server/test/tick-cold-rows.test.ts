@@ -110,6 +110,7 @@ describe('FleetWatcher.tick cold rows (console speed S1)', () => {
     h.watcher.kick('usage');
     await h.watcher.tick();      // the row is cold again; the lane runs; the carried entry is 32 s old
     expect(h.watcher.currentUsage().get(b)!.cost).toBe(9.5);
+    expect(h.frames.at(-1)!.find((x) => x.id === b)!.usage?.cost).toBe(9.5);   // and the frame carries it
   });
 
   it('inside 30 s of its last read a cold row\'s sidecar is not read again by a lane run', async () => {
