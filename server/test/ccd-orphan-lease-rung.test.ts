@@ -65,7 +65,7 @@ describe('the lease rung refuses a held tree', () => {
     const a = audit(t);
     expect(a).toMatchObject({ verdict: 'refused', refusal: 'leased' });
     expect(a.detail).toContain(`until ${new Date(until).toISOString()},`);   // the expiry as an ISO instant, never epoch ms (F7)
-    expect(a.detail).not.toMatch(/epoch ms|until \d/);
+    expect(a.detail).not.toMatch(/epoch ms|until \d+[ ,]/);
     expect(a.token).toBeNull();
     expect(a.rescueToken).toBeNull();
     expect(fs.existsSync(t)).toBe(true);
