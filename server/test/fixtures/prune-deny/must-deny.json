@@ -54,5 +54,17 @@
   "git commit -m \"see `git worktree prune`\"",
   "cat <<EOF\n$(git worktree prune)\nEOF",
   "bash <<'EOF'\ngit worktree prune\nEOF",
-  "cat <<'EOF' | sh\ngit worktree prune\nEOF"
+  "cat <<'EOF' | sh\ngit worktree prune\nEOF",
+  "echo \"<<'X'\"\ngit worktree prune\nX",
+  "echo hi # <<'X'\ngit worktree prune\nX",
+  "cat <<'X'Y\nfoo\nXY\ngit worktree prune\nX",
+  "cat <<'EOF'\ngit worktree prune",
+  "bash -o pipefail <<'EOF'\ngit worktree prune\nEOF",
+  "sudo bash <<'EOF'\ngit worktree prune\nEOF",
+  "cat <<'EOF' | tee /dev/null | sh\ngit worktree prune\nEOF",
+  "git worktree prune ${X:- -n}",
+  "git worktree prune $DRY",
+  "git worktree prune -n $X",
+  "git worktree prune -n ${X:-}",
+  "git worktree prune -n \"$X\""
 ]

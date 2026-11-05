@@ -185,34 +185,41 @@ describe('this PR\'s own body is not refused by the prune row', () => {
   }
 });
 
-// Review 1479, F10(e): the quote-aware reading must cost no more than the tip's `norm` reading did. jq's global match and
-// `gsub` grow faster than linearly on a quote-dense payload, so both bounds are ratios measured in this run. Deny mode
-// is held against the same payload with the row's anchor spelled away (`prume`), so the ratio is the row's own share;
-// class mode, where the rest of the program is cheap, against the hook's `norm` over the same command. Measured on the
-// build box at 64 KB: the tip (33e521e07) 9.9 s in deny mode against 7.5 s without the row (1.32x), 2.7 s in class mode
-// against `norm`'s 3.0 s (0.9x); this program 7.8 s (1.04x) and 0.9 s (0.3x).
-describe('the prune row\'s cost on a 64 KB quote-dense payload naming prune', () => {
+// Review 1479, F10(e): the quote-aware reading must cost no more than the tip's reading did. jq's global match and `gsub`
+// grow faster than linearly on a quote-dense payload, and the test slice's CPU and memory caps move absolute times, so
+// both bounds compare programs run in this test, on one 64 KB quote-dense command naming `worktree` and `prune`. Deny
+// mode is held against a reference: this program with `pmatch` replaced by what the tip's row cost there (its `norm`
+// over the command, and again over `norm`'s own form, which the tip's deny mode also matched). Class mode, where the
+// rest of the program is cheap, is held against the hook's `norm` over the same command. Measured on the build box: the
+// tip (33e521e07) 9.95 s in deny mode and 2.5 s in class mode; this program 7.3 s and 0.5 s; `norm` alone 3.0 s.
+describe('the prune row\'s cost on a 64 KB quote-dense payload naming worktree and prune', () => {
   const hookSrc = fs.readFileSync(HOOK, 'utf8');
   const prog = (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(hookSrc) ?? [])[1] ?? '';
   const normDef = (/^def norm: .*$/m.exec(prog) ?? [])[0] ?? '';
+  const pmatchDef = (/^def pmatch: [\s\S]*?"prune\\tgit worktree prune";$/m.exec(prog) ?? [])[0] ?? '';
+  const reference = prog.replace(pmatchDef,
+    'def pmatch: select(test("prune") and ([norm, (norm | norm)] | length > 0)) | select(false) | "prune\\tgit worktree prune";');
   const unit = 'a "b c" \'d\' \\e ';
-  const command = `git fetch --prune ${unit.repeat(Math.floor((64 * 1024) / unit.length))}`;
-  const timed = (cmd: string, args: string[]): number => {
-    const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: cmd } });
+  const command = `git worktree list --porcelain; echo prune ${unit.repeat(Math.floor((64 * 1024) / unit.length))}`;
+  const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
+  const timed = (args: string[]): number => {
     const t0 = process.hrtime.bigint();
     const r = spawnSync('jq', args, { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: 120_000 });
     expect(r.status, r.stderr).toBe(0);
     return Number(process.hrtime.bigint() - t0) / 1e6;
   };
-  const mode = (m: string): string[] => ['-r', '--arg', 'q', "'", '--arg', 'mode', m, prog];
-  it('deny mode costs at most 1.25x the same payload without the row; the row alone (class mode) at most 0.6x norm', () => {
-    expect(prog).not.toBe('');
+  const run = (p: string, m: string): string[] => ['-r', '--arg', 'q', "'", '--arg', 'mode', m, p];
+  it('deny mode is no slower than the tip\'s row; the row alone (class mode) costs at most 0.6x norm', () => {
+    expect(pmatchDef).not.toBe('');
     expect(normDef).not.toBe('');
-    const normMs = timed(command, ['-r', '--arg', 'q', "'", `${normDef} .tool_input.command | norm | length`]);
-    const classMs = timed(command, mode('class'));
-    const withoutMs = timed(command.replace('--prune', '--prume'), mode('deny'));
-    const denyMs = timed(command, mode('deny'));
+    expect(reference).not.toBe(prog);
+    const normMs = timed(['-r', '--arg', 'q', "'", `${normDef} .tool_input.command | norm | length`]);
+    const classMs = timed(run(prog, 'class'));
+    // Two runs of each, interleaved, and the faster of each pair: a loaded box slows one run, rarely both.
+    const pairs = [0, 1].map(() => [timed(run(reference, 'deny')), timed(run(prog, 'deny'))]);
+    const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
+    const denyMs = Math.min(...pairs.map((p) => p[1] as number));
     expect(classMs, `class ${classMs} ms, norm ${normMs} ms`).toBeLessThan(0.6 * normMs);
-    expect(denyMs, `deny ${denyMs} ms, without the row ${withoutMs} ms`).toBeLessThan(1.25 * withoutMs);
+    expect(denyMs, `deny ${denyMs} ms, the tip's row ${referenceMs} ms`).toBeLessThan(referenceMs);
   }, 300_000);
 });
