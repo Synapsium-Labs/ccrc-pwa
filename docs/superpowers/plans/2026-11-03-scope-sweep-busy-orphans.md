@@ -1,6 +1,6 @@
 # Scope sweep: the busy arm
 
-> **Execution status:** The sweep, its switches, verb and door are built, shadow by default. The Settings card, Automation › Leftover processes, lands as its own pull request after them: `consolidation-path-guard.test.ts` reds any diff touching `shared/switches.ts` beside `pwa/`, and the fourteen latest commits that touched that file carry no `pwa/` file. After about a week of shadow verdicts the operator arms it from that card.
+> **Execution status:** The sweep, its switches, verb and door are built, shadow by default. The Settings card, Automation › Leftover processes, landed as its own pull request after them: `consolidation-path-guard.test.ts` reds any diff touching `shared/switches.ts` beside `pwa/`, and the fourteen latest commits that touched that file carry no `pwa/` file. Its words live in the PWA, as Stop leftovers' do, so that pull request leaves `shared/` alone. It shows the two switches and not the sweep's pause, which is no row of `shared/switches.ts`. After about a week of shadow verdicts the operator arms it from that card.
 
 **Goal:** A pane scope whose session is provably dead becomes collectable after a grace period even when its processes are busy, behind its own switch, shadowed first. It closes the follow-up of #1637.
 

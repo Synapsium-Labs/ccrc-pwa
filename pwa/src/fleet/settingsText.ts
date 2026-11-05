@@ -21,6 +21,7 @@ import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { PANE_SCOPE_STOP_TEXT } from './paneScopeStopWords';
+import { SCOPE_SWEEP_TEXT } from './scopeSweepWords';
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
@@ -324,6 +325,10 @@ export const SETTINGS_CARDS = {
     /** D-7902: the deliberate stop's pane-scope switch, after Roll idle sessions, one of the stops it reaches. */
     paneScopeStop: {
       scope: SETTINGS_SCOPE.fleet, title: PANE_SCOPE_STOP_TEXT.title, purpose: PANE_SCOPE_STOP_TEXT.purpose,
+    },
+    /** D-7994: the sweep's two switches, after Stop leftovers, which hands the sweep whatever a deliberate stop leaves. */
+    scopeSweep: {
+      scope: SETTINGS_SCOPE.fleet, title: SCOPE_SWEEP_TEXT.title, purpose: SCOPE_SWEEP_TEXT.purpose,
     },
     /** D-7860: the fleet box's backup, a quiet line; the card before Test box, which stays the section's last. */
     backup: {
