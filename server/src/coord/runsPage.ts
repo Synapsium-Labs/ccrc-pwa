@@ -22,7 +22,8 @@ export interface RunsPage { readonly read: RunsReadResult; readonly nextBefore?:
 
 /** The run ids a reclaim attention list names, deduplicated: every arm's own `runId` when it is a number (a null one
  *  names no run) and every collapsed arm's members. PURE. Written here because no shared extractor exists: the PWA's
- *  reader (`childReclaimWords.ts`) renders the list and does not collect ids. */
+ *  reader (`childReclaimWords.ts`) renders the list and does not collect ids. The result only chooses rows for the wire and
+ *  stays out of any branch that acts on a reclaim (spec §5.9). */
 export function reclaimAttentionRunIds(items: readonly ChildReclaimAttention[] | undefined): number[] {
   const ids = new Set<number>();
   for (const item of items ?? []) {
