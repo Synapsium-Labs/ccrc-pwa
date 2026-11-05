@@ -3,11 +3,13 @@
 // store (`runPages`, memory only) so a second mount draws them at once. The loader is a fake here: the real paged
 // read is another task's. Fake timers, so no wall-clock wait decides a count.
 import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from 'vitest';
-import { act, cleanup, render, renderHook } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import type { RunsPageAnswer, RunSummary } from '../../shared/api';
 import { useColdRuns, type PagedLoader } from '../src/screens/useColdRuns';
 import { appendOlderRunPage, mergeFirstRunPage } from '../src/fleet/runWords';
 import { MailScreen } from '../src/screens/MailScreen';
+import { RunsScreen } from '../src/screens/RunsScreen';
+import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 const T = 1_784_500_000_000;
@@ -39,6 +41,8 @@ function archive(terminal: number[], active: number[] = []): { load: Mock<PagedL
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
+const NO_CAPS = (): Promise<never> => new Promise(() => {});
+const NO_SPEND = (): Promise<never> => new Promise(() => {});
 const flush = async (): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(0); }); };
 const ids = (rows: RunSummary[] | null): number[] => (rows ?? []).map((r) => r.id);
 const range = (hi: number, lo: number): number[] => Array.from({ length: hi - lo + 1 }, (_, i) => hi - i);
@@ -47,8 +51,6 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('the run archive in pages', () => {
-  // The brief's first row names RunsScreen; its switch to the paged read waits for the paged `api` read, so this row
-  // pins the hook the screen will pass `page: 50` to.
   it('RunsScreen asks for limit 50 (the hook asks limit 50 when given page 50, and no before)', async () => {
     const a = archive(range(120, 1), [130]);
     const store = makeStore();
@@ -59,6 +61,52 @@ describe('the run archive in pages', () => {
     expect(result.current.state).toBe('ok');
     expect(ids(result.current.cold)).toEqual([...range(120, 71).reverse(), 130]);
     expect(result.current.hasOlder).toBe(true);
+  });
+
+  it('RunsScreen asks for limit 50', async () => {
+    // The screen's own default reader: the paged `api` read, limit 50 and no `before` on the first ask.
+    const spy = vi.spyOn(api, 'runsPage').mockImplementation(async () => ({ runs: [closed(3)] }));
+    render(<RunsScreen store={makeStore()} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith(50, null);
+    // And an injected loader is asked the same way: limit 50, no `before`.
+    const a = archive(range(120, 1), [130]);
+    cleanup();
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    expect(a.load).toHaveBeenCalledTimes(1);
+    expect(a.load).toHaveBeenCalledWith(50);
+  });
+
+  it('Show older appears only while older runs remain', async () => {
+    const a = archive(range(120, 1), [130]);
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    const button = screen.getByRole('button', { name: 'Show older' });
+    expect(button).not.toBeDisabled();
+    // One tap asks the next page (before = the oldest id of page one) and the control is disabled while it is on its way.
+    let release: () => void = () => {};
+    a.load.mockImplementationOnce((limit, before) => new Promise<RunsPageAnswer>((resolve) => {
+      release = () => { void archive(range(120, 1), [130]).load(limit, before).then(resolve); };
+    }));
+    fireEvent.click(button);
+    expect(a.load).toHaveBeenLastCalledWith(50, 71);
+    expect(screen.getByRole('button', { name: 'Show older' })).toBeDisabled();
+    await act(async () => { release(); await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
+    // The second page (21..70) leaves 20 runs older: still offered. The third reaches the end: gone.
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    expect(a.load).toHaveBeenLastCalledWith(50, 21);
+    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
+  });
+
+  it('Show older is absent when the archive fits one page', async () => {
+    const a = archive(range(30, 1));
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    await flush();
+    expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();
   });
 
   it('Show older appends the next page', async () => {

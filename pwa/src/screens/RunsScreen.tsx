@@ -60,19 +60,25 @@ import '../fleet/fleet.css';
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 /** D-6799: one run's spend. Module-level so its identity is stable across renders. */
 const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
+/** The board's archive reader (console speed S2): the paged `GET /api/runs?closed=1&limit=&before=`. Module-level, so its
+ *  identity is stable across renders (`useColdRuns.ts#loadColdRuns`'s reason). The Inbox and Mail keep the unpaged
+ *  `loadColdRuns`. */
+const loadColdRunsPage: PagedLoader = (limit, before) => api.runsPage(limit, before ?? null);
+/** How many closed runs one read of the archive asks for (console speed S2). */
+const ARCHIVE_PAGE = 50;
 
 import { RunRow } from './RunRow';
-import { loadColdRuns, useColdRuns } from './useColdRuns';
+import { useColdRuns, type PagedLoader } from './useColdRuns';
 
 
 export function RunsScreen({
   store = useFleetStore,
-  loadRuns = loadColdRuns,
+  loadRuns = loadColdRunsPage,
   loadCaps = loadCapsDefault,
   loadSpend = loadSpendDefault,
 }: {
   store?: FleetStore;
-  loadRuns?: () => Promise<{ runs: RunSummary[] }>;
+  loadRuns?: PagedLoader;
   /** The caps dial's own read, injected HERE rather than left to
    *  `CapsControl`'s default, for the reason `loadRuns` is: every loader this
    *  screen sets going on mount is one a test must be able to hold, and a
@@ -112,7 +118,13 @@ export function RunsScreen({
   // The archive read — the only carrier of a finished run — with its race
   // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
   // none of which rendered anything.
-  const { cold, state: coldState, reload: loadCold } = useColdRuns(store, loadRuns);
+  const { cold, state: coldState, reload: loadCold, loadOlder, hasOlder } = useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
+  // "Show older" (console speed S2): disabled while a page is on its way.
+  const [olderBusy, setOlderBusy] = useState(false);
+  const showOlder = (): void => {
+    setOlderBusy(true);
+    void loadOlder().finally(() => setOlderBusy(false));
+  };
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // #166 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
@@ -415,6 +427,13 @@ export function RunsScreen({
               </EmptyState>
             </div>
           ) : null}
+
+          {hasOlder && (
+            <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
+              disabled={olderBusy} onClick={showOlder}>
+              Show older
+            </Button>
+          )}
         </>
       )}
 
