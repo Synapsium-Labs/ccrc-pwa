@@ -10970,9 +10970,9 @@ class DelegationLane {
    *  event), one seen alive and then dead is, and one seen alive again is not dead. D-5433: a deliberate stop or archive is not a fresh death
    *  either. A dead row carrying stop evidence (`stoppedBy`, epoch ms, or `archivedAt`, epoch SECONDS, read when there is no stamp) is not counted,
    *  and a death already recorded for it is erased, when that instant is no later than the recorded death plus `DELEGATION_CLOCK_SKEW_MS` (this
-   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the tick starts its tmux listing before it reads the registry, while a stop
-   *  writes its stamp before it kills the pane, so the torn tick of the old order (registry first, tmux after) cannot make a stop read as a crash
-   *  that way; a stamp that shows only on a later pass (the box's clock, or a read that raced the write) can still follow a counted death. A stop stamped later than that leaves the
+   *  pass's instant plus the skew when none is recorded): the stamp is the fleet box's clock, and the tick's field reads wait for its tmux listing while a stop writes its
+   *  stamp before it kills the pane, so a fresh read sees the stamp of a pane the listing shows gone; but a reused record's key comes from the readdir
+   *  taken before the listing answered, so a stop landing between the two can still read as a stamp-less death for one pass; a stamp that shows only on a later pass (the box's clock, or a read that raced the write) can still follow a counted death. A stop stamped later than that leaves the
    *  death counted (an operator cleaning up after a crash). Residual: a crash followed by a stop or an archive within one pass, or within the skew
    *  of its recorded death, is not counted; the 60 s cadence and the clocks' sync bound it. The bound is from above only, so a stop stamp or an
    *  archive marker that outlived its pane (a kill that failed after `_ws_unsupervise`) also hides that pane's later crash; a lower bound would be
