@@ -941,7 +941,7 @@ says so. `GET /api/updates` (session-gated) reads all of it; `POST /api/updates/
 (rate-limited to at most once every few minutes, derived from the catalogue's own request budget) and
 `/api/updates/ack` are session-only — the box token never writes intent — and
 `GET /api/updates/intent/:nodeId` serves a node its projection as plain text under a session or the box token.
-`/api/fleet/health`'s `builds` is a view of the inventory rows, and the PWA no longer reads it. An `auto`
+`/api/fleet/health` no longer carries `builds` (retired in #2079); its `build` word is still derived from the inventory rows. An `auto`
 other than `off` is refused (`409`) until every node the intent covers lists `update-gate` in its `ccrc-caps`
 (an install of the W4 node side writes it); the dispatcher checks the same word again at every auto move.
 
@@ -3826,8 +3826,8 @@ the last-known-good fleet snapshot instead of going blank:
   the link is ready again, with the time since that stretch's first line. None of these values is an operator
   setting.
 - `GET /api/fleet/health` → `{mode, connected, downSince, roster, build, projectPools}`, plus
-  `builds` (each box's stamp) in remote mode and a `lifecycle` block (the journal mirror's state,
-  `unknown` until its first sweep) on a box running the coordination database —
+  a `lifecycle` block (the journal mirror's state, `unknown` until its first sweep) on a box running
+  the coordination database —
   poll `connected` for remote-mode connectivity (`mode: 'local'` always reports `connected: true`,
   with `roster` and `build` `unknown`). `roster` (does the fleet host's installed roster match the
   server's) reads `agreed`/`divergent`/`unknown`; `build` (do both boxes run the same build)
