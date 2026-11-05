@@ -341,7 +341,8 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     step = 9;
     stop();
     say(LAB_TEXT.steps.done);
-    const last = await deps.door.read(nonce);
+    const last = await deps.door.read(nonce).catch(() => { stop(); return 'unreadable' as const; });
+    stop();
     if (last !== 'unknown-run' && last !== 'unreadable') counts.view = last;
     const finalRead: LabFinalRead = typeof last === 'string' ? last : 'read';
     return { outcomes: labVerdicts(counts.view, local, LAB_STALL_BUDGET_MS), local, run: counts.view, finalRead };

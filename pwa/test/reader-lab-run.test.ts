@@ -285,6 +285,26 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(r.door.closed).toEqual([NONCE]);
   });
 
+  it('a rejected final read keeps completed counts and wall verdicts and closes', async () => {
+    const r = rig();
+    let final = false;
+    const door = r.deps.door;
+    const result = await runReaderLab({ ...r.deps, door: { ...door, read: (n) => final ? Promise.reject(new Error('lost')) : door.read(n) } }, (p) => { if (p.step === 9) final = true; });
+    expect(result.finalRead).toBe('unreadable');
+    expect(result.run).not.toBeNull();
+    for (const k of LAB_WALLS) expect(result.outcomes[k].verdict).toBe('holds');
+    expect(r.door.closed).toEqual([NONCE]);
+  });
+
+  it('a stop during a rejecting final read remains stopped and closes', async () => {
+    const r = rig();
+    let final = false;
+    const door = r.deps.door;
+    const run = runReaderLab({ ...r.deps, door: { ...door, read: (n) => final ? new Promise((_resolve, reject) => { queueMicrotask(() => { r.abort.abort(); reject(new Error('lost')); }); }) : door.read(n) } }, (p) => { if (p.step === 9) final = true; });
+    await expect(run).rejects.toThrow('stopped');
+    expect(r.door.closed).toEqual([NONCE]);
+  });
+
   it('the gap window ends at ready under the library this build pins, and a settle past ready once the library draws after it', async () => {
     expect(LAB_GAP_WINDOW).toBe('ready');
     const slept: number[] = [];
