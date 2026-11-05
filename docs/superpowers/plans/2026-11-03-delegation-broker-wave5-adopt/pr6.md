@@ -52,6 +52,8 @@ more, which are unused and not spelled here, since a mention would raise the led
   `server/src/coord/delegationCarrierMark.ts` added to the `W5_OPEN` row for `delegation/leases`. The effect census needed no line: the
   six policy effects are unchanged, and W5-K15 pins that only the `leaseActs` phase composes the mark.
 - Every other wave-5 word was kept out of the PR6 files by rewording comments, so `W5_OPEN` gains only that one path.
+- A fourth touch, made beyond the leave and reported afterwards: W5-K15 is keyed on the parse, so the file's existing import from
+  `./scan/symbols.js` widened from `parsedFile` to `callsIn, parsedFile, symbolOf`. The holder accepted it after the fact (mail 15751).
 
 ## Measured, not departures
 
@@ -74,6 +76,14 @@ more, which are unused and not spelled here, since a mention would raise the led
 - `shellcheck-ratchet` reads red on this box twice, alone, on `ccd/ccrc` (a file this PR does not touch): inside the test slice, under
   load 8, shellcheck exits with a code other than 1, while the same command outside the slice exits 1 (findings) in 14 s. The lease
   library's own warning count is 13 before and after this PR. CI decides.
+
+## The first full CI run
+
+The full run on `0e4788c93` was red in two server shards: two repo-wide censuses over `runCcd` sites that the local list did not
+name. `verb-gate` wants a capability gate in the function that builds a `CCD_ARGV` argv, and the gate sat one level up in the lane.
+`consolidation-census` (D-6840) wants `res.ran === false` before any read of the runner's words. Since `8fa6a4675`,
+`markLeaseCarrier` asks `ccdCan(fleetState, 'leaseMark')` itself, so PR9's direct call is gated too (row W5-K12b, which a mutant
+dropping the gate reds), and it narrows on `ran === false`.
 
 ## Mutation table, as measured
 
