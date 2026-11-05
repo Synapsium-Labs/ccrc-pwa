@@ -29,9 +29,66 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) |
-| RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | — | approved by the operator on 2026-11-04 with every recommendation; RL-a dispatched next, RL-b after RL-a merges. Its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
+| RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
+| 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0 and adopts Mermaid drawn after `ready`, the bar-off frame with progress and commands, and the phone header's option 2; E17 is measured on a phone with the reader lab | — | planned as run 1532; waits on the operator's signed v1.1.0 tag (console item 42); its plan is written next |
 
 ## Decisions & deviations
+- **2026-11-05 (evening): RL-b accepted and merged; the take-up run opened (coordinator).**
+  - **Review run 1524, round 1 (19 agents), at `f90737362`.** Three findings were ruled blocking and fixed in one round. Seven minors were fixed in the same round.
+    - F1: a lab mount whose Mermaid scan was dropped still read `ready`, so the figure lines and csp-27's library half could hold with nothing drawn. Ruled D-8030: under `lab-draw` only, the bridge reports a dropped scan through an optional seam, and the lab reads that mount "not measured". The text says "ready", never "drawn". A failure inside the frame stays carried until the library ships a drawn signal.
+    - F2: `self-nav-tried` was sent before the 200 ms timer, so `no-self-navigate` could hold with no navigation tried. It is now sent in the timer's own task, immediately before the location write.
+    - F3: the hidden page. Ruled D-8031: the busy-frame line and every timed mount's gap read "not measured" when the page was hidden at the window's start or any visibility change landed inside it. Visibility comes through `lib/pageClock.ts` only. Stop while hidden is carried.
+  - **Fix round 1's browser gate.** The tried report is an image load in the same task as the navigation, and the blocked navigation's error page cancels it. The worker measured this four ways: no route, routed, a before-timer control and a beacon control. The fixture's request interception widens the window; a phone can lose the same race. Ruled D-8032 instead of the fixture change the worker proposed:
+    - `no-self-navigate` holds on the door's silence plus evidence of the attempt, either `tried` or the console-seen second `load`;
+    - `self-nav-teardown` holds on a second load and differs on `tried` alone;
+    - the fixture, its interception and the reporting channel are unchanged.
+  - **#2339 merged during fix round 1** (`8d292bdab`). It cured main's red in `session-hook-prune-deny.test.ts`, so the exception that let RL-b's wave-done at `f90737362` name that red lapsed. The fix-round push had to be green on that file, and was.
+  - **Review run 1529, round 2 (15 agents), at `3cb3c32cc`.** Nothing was blocking. It found one residual and three minors, all ruled into a second round:
+    - F-A: a busy spin that starts before the console's first animation frame hides from the gap measure, so the line could read `own-thread` on a shared thread. Ruled D-8033: `shared-thread` when the longest gap is at least 0.8 of the spin OR the console's 500 ms timer ran at least half the spin late.
+    - F-B: the scroll test asserts that the frame is connected.
+    - F-C and F-D: plan text and the carried list.
+  - **CodeQL.** The round-1 tip's merge commit raised two alerts in `pwa/test/reader-lab-frames.test.ts`: #266 `js/bad-code-sanitization` and #267 `js/incomplete-url-substring-sanitization`. The "CodeQL" check read failure while the Analyze jobs passed, so a worker reading the Analyze jobs alone reads green. Both were false positives in test code. The tip was moving anyway, so fix round 2 made both clean in the test, as strict as before, rather than dismissing them. A brief now asks for the "CodeQL" check itself.
+  - **Fix round 2's wave-done** was refused `bad-kind`: the worker sent kind `wave-done`, where the protocol's kind is `status` with the subject `wave-done`. No mail was created. The coordinator took the worker's status mail with its measured gate record as the claim, measured it again, and dispatched the last review.
+  - **Review run 1531, round 3, the last (7 agents), at `65fc5848a`.** No finding was blocking, and none needed a ruling. Of its two minors, the plan sentence is corrected in this ledger PR and the test gap is carried (Carried constraints). Run 1470 was accepted at `65fc5848a`. #2340 merged through the merge queue on 2026-11-05 (`ce55b1ca9`) with no land-sync: fix round 2's run was already on a `main` that carried #2339. Run 1470 closed done.
+  - **The next run.** Run 1532 (wave 17, the library 1.1 take-up) was opened at `planned` before run 1470's close, so the programme keeps an open run. It waits on the operator's signed v1.1.0 tag of the library (see Next-wave brief).
+  - **Design and spec text.** This PR brings the reader-lab design, the rich-docs spec, the architecture spec's C9 row and the README's door sentence in line with the plan at the merged tip. That covers RL-a's handed-over sentences and review 1468's A3, A4 and F1, plus D-7967, D-8008, D-8020 to D-8022 and D-8030 to D-8033, each marked as amended where it changes.
+- **2026-11-05 (night to afternoon): RL-b executed; its rulings during the run (coordinator).**
+  - **Asks.**
+    - Ask 309 (Task 10): `contrast.test.ts`'s `APP_SHEETS` gains `src/readerLab/readerLab.css`, and the detail's colour is dropped (the plan's comment says "layout only"). No number.
+    - Ask 310 -> D-8020: the stray messages get their own benign mount, the hostile mount first. LAB_MOUNTS goes 10 to 11, the run's caps sum to 876 000 ms (about 15 minutes) and the TTL to 1 176 000 ms (about 20 minutes).
+    - Ask 311 -> D-8021: the browser case counts at its own loopback server, which serves `sharedDist` and the door. One route passes `/api/reader-lab/` on to the network, and the harness files are unedited.
+    - Ask 312 -> D-8022: `import-dynamic` runs from a constant script that the wall policy allows by hash, beside the nonce'd battery. Its sha256 is pinned against the text, and the canary is gated on its mark.
+  - **D-8008 (the worker's ruling, which the coordinator concurred with):** a saturated or unread run keeps a counted broke as "does not hold", and nothing else holds. It departs from the design's Saturation bullet, which is amended in this PR.
+  - **Without a number:** the reader mounts' scroll into view before a timed window (`hostIn`), and seven mutation rows that redded more cases than predicted, restated with the extra names.
+  - **Leaves.**
+    - In `pwa/test/command-layer.test.tsx`: the Go-to Settings census goes 7 to 8 with the Reader lab option (mail 15314).
+    - In `pwa/test/app-lazy.test.tsx`: the ReaderLab lazy row, six to seven, with a static-import pin (mail 15531; the census's owner was told).
+    - The polish programme's leave (mail 15117) in `api.ts`, `app.tsx`, `app.test.tsx` and `routes.ts`, on its terms: main's `lazyScreen` form and its retry wrapper, `findBy` awaits, and PL10's `topRouteOf` returning null outside its table.
+  - **One merge of `main`** (`b4ebadcf3`), on a measured conflict in the architecture spec's context table, `app.tsx` and `app.test.tsx`. ReaderLab uses main's `lazyScreen` with no second mechanism. Review 1524 found both sides of each conflict intact.
+  - **CI under the run.**
+    - The runner image moved to Ubuntu 26.04 and was pinned back to 24.04 by #2334. A re-run of an older PR run replays the old image, so only a fresh push picks up the pin.
+    - `main` was red in `session-hook-prune-deny.test.ts` until #2339.
+    - The wave-done at `f90737362` named both reds it carried: that file, and `rings/watcher-store-port.test.ts`'s 20 s census `beforeAll` timeout, a load flake that passes alone.
+- **2026-11-05 (morning): the library's 1.1.0 merged on its own repository (coordinator).** Run 1448 went through review runs 1480, 1494 and 1499 (the last). #82 merged in `docserver` on 2026-11-05 (`50cef012a`), with the library's ledger at C112 to C114 (#83). The signed v1.1.0 tag and the npm release are the operator's act (console item 42). The 1.1.x patch owes two red rows and some text residue, listed in the library's C114.
+- **2026-11-04 (evening): the header and RL-a merged; RL-b dispatched (coordinator).**
+  - **The phone header, run 1436.**
+    - Review run 1460 found F1 to F9, ruled into one round. F6 became D-7958: `openLeaf` re-opens a leaf once on a fallback. PHONE_TITLE_MAX stays 133.
+    - Review run 1463 (round 2) found no code finding. Its items are plan bookkeeping (Carried constraints).
+    - Accepted at `8b8737da6`; #2284 merged on 2026-11-04 (`23222e2cd`). D-7953 to D-7958 are defined; 7959 is unused.
+  - **RL-a, the door, run 1442.**
+    - Ask 307 -> D-7967: two EXEMPT rows in `server/test/secret-mask.test.ts`'s GET census, the run read and the probe. That census site was missed by the design's section 4.7, which this PR amends.
+    - `main` moved under the run (#2270 added a route). The worker merged `main` once, and the door's counts became 180 total, 177 HTTP, 109 gated and 68 exempt-HTTP.
+    - Review runs 1459, 1465 and 1468 (the last) found no behaviour defect at the end; their items are carried.
+    - Accepted at `1c807342c`; #2283 merged on 2026-11-04 (`2593469be`).
+  - **RL-b, run 1470**, was opened before run 1442's close, with the block 8003 to 8008: refinement (h) 8003, (i) 8004, (k) 8005, (m) 8006, (u) 8007, and the spare 8008. It was dispatched to a fresh child. All 26 Find blocks matched at `4b0614ab1`.
+  - **Consents and leaves to other runs.**
+    - PL10 (run 1441) got three consents inside this programme's claims, each measured clean against the header's or RL-a's changes:
+      - three deletions in `pwa/test/tap-targets.test.tsx` for its D-7952 (mail 14833);
+      - `pwa/test/icon.test.tsx`'s D-5452 comment and its FleetHead entry (mail 14927);
+      - the architecture spec's C5 row, removing the `fleet/MailBadge.tsx` entry.
+    - The speed waves S1 and S2 (runs 1453 and 1454) got leaves in the architecture spec's C1 and K rows; the K row sits beside RL-a's C9 row, with a union resolution agreed in advance.
+    - S2 also got additive lines in `server.ts`, on the condition that nothing runs ahead of the door's counter and nothing is keyed on the nonce.
+  - **The library batch** was dispatched as run 1448 on its own repository, after its plan merged there (#81).
 - **2026-11-04 (late afternoon): the header wave dispatched; the reader lab approved, its spec amendments written (operator, coordinator).**
   - **The phone header.** #2240 merged (`489d5b0d0`). The plan's find-check, run again at that commit, counts 22 blocks and no miss. Run 1436 was dispatched to a fresh child, with the block 7953 to 7959. Claim 3402 (run 1421, the delegation broker's visibility wave) covers `pwa/test/control-census.test.ts`. A scoped agreement covers it, accepted by that run's worker and coordinator: the header wave adds one entry after the `docs-copy` line, about 190 lines from run 1421's hunk.
   - **The reader lab (operator, console item 17).** "Approve with every recommendation". Q1: two runs, the door first. Q2: a 200 ms stall budget for the Mermaid line. Q3: the library's own frame policy plus a script nonce and one canary. Q4: the counter before the gate. Q5 (a): the door always registered, inert until a session opens a run. Q6: one tap. Q7: the gate's reading as the design says, with no Settings index row. The design and the plan record the answers (rev 3).
@@ -415,6 +472,34 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 ## Carried constraints (reviewers get these)
 
+- **RL-b residue, for the next wave that edits `pwa/test/reader-lab-run.test.ts`, `pwa/src/readerLab/verdicts.ts` or the reader-lab plan** (review runs 1529 and 1531):
+  - **The mount hosts' scroll order is unpinned.** F-B's `isConnected` assertion covers the lab frames only. Review 1531 measured that moving `host.scrollIntoView(...)` above `stage.append(host)` in `hostIn` leaves the suite green. It errs safe: an off-screen mount cannot reach `ready`, so the Mermaid line reads "not measured". Add the same assertion to the host test's spy.
+  - **One unpinned mutation.** Lowering `busyFrame`'s gap factor from 0.8 to 0.5 stays green. It moves readings only toward `shared-thread`.
+  - **The page's known limits** are listed in the plan's "Carried, not fixed" (Results RL-b), for E18 to read on a phone:
+    - `ready` is not proof that a figure drew;
+    - Stop while hidden waits for the page's return;
+    - on an engine with no second load and a cancelled `tried`, both self-navigation lines read "not measured";
+    - a late `tried` can precede a cancelled navigation;
+    - `mermaid()` checks a dropped or hidden mount before the over-budget check;
+    - the ambient-state limits;
+    - the healthy block is desktop Blink only.
+- **RL-a residue, for the next wave that edits `server/src/auth/gate.ts`, `server/src/readerLab/routes.ts` or the door's tests** (review run 1468):
+  - **F1, the source comments.** The "before any hook" comments omit two cases. An armed box answers a wrong-shaped write from origin `null` with `403 foreign-origin` before the session check. And on a bundle box, any method but GET or HEAD reaches no catch-all. This PR corrects the design and the README; the plan and the source comments are not corrected.
+  - **F2, the never-read scan's width.** It follows only what `scan/symbols.ts` keys as a symbol of `routes.ts`:
+    - a handler bound through `as` or `satisfies`, wrapped in a call, held as an object member, or imported, is not followed;
+    - `req.socket` is not matched;
+    - the multipart readers `req.file()` and `req.parts()` are not named.
+  - **A5 to A7, plan text.**
+    - A5: Task 3's and Task 4's tables carry the pre-review predictions; Results is right.
+    - A6: the equal-answers case asserts neither the dark-404 / armed-401 split nor the bundle 404.
+    - A7: the Results fence's failing entries start with a cut `IL`.
+  - The test and census minors are listed in the plan's "Carried, not fixed" (Results RL-a).
+  - **A historical mutation row.** RLB-T4-M2's `old` quotes the README's door sentence as it read before this ledger PR's A3 change. A replay reads the README at that row's commit.
+- **Header residue, for the next wave that edits the phone header plan or `openLeaf`** (review run 1463: plan bookkeeping, no code finding):
+  - **Counts.** Review 1463's hand re-runs counted more failing cases than the plan's results state: PHH-T4-M6 at 11, PHH-T4-M9 at 7, PHH-T4-M8 at 2 and PHH-FR-M6 at 2. Restate them from a fresh measurement.
+  - **D-7958's text** should say that Task 1's code fence carries the re-open.
+  - **A parse timeout is not retried.** `openLeaf` re-opens only on a `fallback`; a wave that widens the retry carries that predicate.
+  - F5 (the format of fix round 2's rows) and F6 (wording) are plan text only.
 - **No compressed shell copy without a server guard** (from compression's F3 and ask 302, 2026-11-04). The server sends a pre-compressed `index.html` or `sw.js` copy whenever one exists on disk; today only the build keeps them out (`assets/`-only copies and `emptyOutDir`). Any change that writes a shell copy must add a server guard first.
 - **W5h-b residue, for the next wave that edits the W5h-b plan** (from review run 1434):
   - **A number's spelling.** The results bullet for review 1432's F2 (~:1165) writes `D-7891` outside `## Deviations found`; write the bare `7891`.
@@ -495,6 +580,19 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
   - `ccd/ccrc-doctor-checks`' table line for `auth box-token` says `_check_box-token` is at the END of the file, which is no longer true.
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
+
+## Next-wave brief (library 1.1 take-up), after the operator's v1.1.0 tag
+
+- **Run:** 1532 (wave 17), opened at `planned` on 2026-11-05, before RL-b's run closed.
+- **Gate:** the operator signs and pushes the library's v1.1.0 tag on `50cef012a` and approves its npm release (console item 42). Before writing the brief, the coordinator checks the published package and the GitHub release.
+- **Plan (written next, then reviewed):**
+  - ccrc pins the library at 1.1.0;
+  - it mounts with Mermaid drawn after `ready` and the Mermaid build handed over;
+  - inside the frame, the bar is off, with the library's progress reports and the host's commands, the outline among them;
+  - the phone header's option 2;
+  - the adapter's key count grows by three;
+  - E17 is measured on a phone with the reader lab, whose busy-frame and Mermaid lines (D-8031, D-8033) the operator reads.
+- **Not in it:** W8a's residue stays with W8b. The RL-a, RL-b and header residue above goes to whichever wave next edits those files.
 
 ## Next-wave brief (Export), after W5h-a and Share merged
 
