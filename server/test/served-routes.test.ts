@@ -188,6 +188,24 @@ describe('served routes with a fresh watcher tick: the answer carries ageMs and 
     expect(body.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
   });
 
+  it('a served /api/fleet drops a landing past its window', async () => {
+    const r = await rig();
+    const listing = r.w.currentFleetListing()!;
+    // The radar's window is `RADAR_PROBE_FRESH_S` (1200 s): one row's landing is older than that, one is fresh.
+    const at = (offsetS: number): string => new Date(Date.now() + offsetS * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const [a, b] = listing.sessions;
+    const withLanding = [
+      { ...a!, landing: { at: at(-1201) } },
+      { ...b!, landing: { at: at(-10) } },
+    ] as unknown as typeof listing.sessions;
+    vi.spyOn(r.w, 'currentFleetListing').mockReturnValue({ ...listing, sessions: withLanding });
+    const body = await r.get('/api/fleet');
+    expect(typeof body.ageMs, 'this is the served arm').toBe('number');
+    const rows = body.sessions as Record<string, unknown>[];
+    expect('landing' in rows[0]!, 'the stale landing is dropped').toBe(false);
+    expect('landing' in rows[1]!, 'the fresh landing is carried').toBe(true);
+  });
+
   it('GET /api/accounts: a served answer has the keys and the account of the read one, plus ageMs', async () => {
     const r = await rig();
     const body = await r.get('/api/accounts');

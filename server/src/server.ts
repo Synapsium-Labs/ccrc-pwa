@@ -1214,7 +1214,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // falls to the reads below, which are today's.
     const servedFleet = servedFleetReads(watcher?.currentFleetListing() ?? null, watcher?.currentProjectPoolsRead() ?? null, Date.now());
     const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
-    if (servedFleet.serve && servedPools !== null) return { sessions: servedFleet.listing.sessions, pools: servedPools, ageMs: servedFleet.ageMs };
+    if (servedFleet.serve && servedPools !== null) return { sessions: dropStaleLandings(servedFleet.listing.sessions, Date.now()), pools: servedPools, ageMs: servedFleet.ageMs };
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
     // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
