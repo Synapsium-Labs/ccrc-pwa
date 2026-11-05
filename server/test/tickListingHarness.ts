@@ -11,6 +11,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { FleetSession } from '../../shared/api.js';
+import { PerfRecorder } from '../src/perf/recorder.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 
@@ -30,7 +31,7 @@ const plant = (reg: string, id: string, extra: Record<string, string> = {}): voi
 
 export type ListingMode = 'ok' | 'fail';
 
-export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string) => string; wrapIO?: (io: FleetIO) => FleetIO } = {}) {
+export function makeHarness(opts: { listing?: ListingMode; listingDelayMs?: number; perf?: boolean; paneOf?: (id: string) => string; wrapIO?: (io: FleetIO) => FleetIO } = {}) {
   const home = mkTmp('ccrc-');
   seedRoster(home);
   const reg = path.join(home, '.cc-sessions');
@@ -53,6 +54,7 @@ export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string)
     if (cmd === 'tmux' && args[0] === 'list-panes' && args.includes('-a')) {
       calls.listPanesAll += 1;
       if (args[args.length - 1] !== PANE_LISTING_FORMAT) throw new Error('unexpected listing format');
+      if (opts.listingDelayMs) await new Promise((r) => setTimeout(r, opts.listingDelayMs));
       if (state.listing === 'fail') return { ran: true, code: 1, stdout: '', stderr: 'error connecting to tmux' };
       return { ran: true, code: 0, stdout: [...state.live].map((id) => `cc-${id} 1 0 ${pidOf(id)}\n`).join(''), stderr: '' };
     }
@@ -77,8 +79,9 @@ export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string)
   const io = opts.wrapIO ? opts.wrapIO(base) : base;
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_FLEET: 'remote' });
   const cachePath = path.join(home, '.ccrc', 'state-cache.json');
+  const perf = opts.perf ? new PerfRecorder() : undefined;
   const deps = {
-    cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(),
+    perf, cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io, queue: new KeyedQueue(),
     fleetState: { connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null },
   };
   const bus = new Bus();
@@ -88,5 +91,5 @@ export function makeHarness(opts: { listing?: ListingMode; paneOf?: (id: string)
   const reset = (): void => { calls.hasSession = 0; calls.listPanesAll = 0; calls.listPanesRow = 0; calls.capture = []; reads.length = 0; };
   /** Reads of a row's own registry files, hook-state and usage sidecar (any path naming the id). */
   const readsOf = (id: string): string[] => reads.filter((p) => p.includes(id));
-  return { home, reg, cachePath, state, calls, reads, readsOf, watcher, bus, frames, reset };
+  return { perf, home, reg, cachePath, state, calls, reads, readsOf, watcher, bus, frames, reset };
 }

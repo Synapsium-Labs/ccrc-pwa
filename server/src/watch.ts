@@ -2537,7 +2537,7 @@ export class FleetWatcher {
       // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
       // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
       // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
-      const listingP = this.deps.tmux.listPanes().catch((err: unknown) => rejectedListing(listedAt, err));   // beside the registry read: one tmux ask a tick (console speed S1)
+      const listingP = timed(this.deps.perf, 'listing', this.deps.tmux.listPanes().catch((err: unknown) => rejectedListing(listedAt, err)));   // beside the registry read: one tmux ask a tick, timed from its start (console speed S1)
       // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       // The tick's ONE selection listing, as the model (D-5864): the lanes that choose their rows from the registry are
       // handed it below, so they do not list again.
@@ -2592,7 +2592,7 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
-      const paneListing = await timed(this.deps.perf, 'listing', listingP);
+      const paneListing = await listingP;
       const notice = listingNotice(this.listingFailed, paneListing);
       this.listingFailed = notice.failed;
       if (notice.warn !== null) console.warn(notice.warn);

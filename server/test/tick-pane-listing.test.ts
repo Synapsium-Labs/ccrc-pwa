@@ -81,4 +81,20 @@ describe('FleetWatcher.tick with one tmux listing (console speed S1)', () => {
     expect(listed.frames).toHaveLength(1);
     expect(JSON.stringify(listed.frames[0])).toBe(JSON.stringify(fallback.frames[0]));
   });
+
+  it('the tick times the listing from its start and the Finished loop as a whole (health().tick.phases)', async () => {
+    const h = makeHarness({ listingDelayMs: 60, perf: true });
+    await h.watcher.tick();   // priming
+    const w = h.watcher as unknown as {
+      prevStatus: Map<string, string>; episodeBusySince: Map<string, number>;
+      finishedEvidence: () => Promise<boolean>;
+    };
+    w.prevStatus.set(LIVE[0]!, 'busy');
+    w.episodeBusySince.set(LIVE[0]!, 1);
+    w.finishedEvidence = async () => { await new Promise((r) => setTimeout(r, 60)); return false; };
+    await h.watcher.tick();
+    const phases = h.watcher.perfHealth()!.tick.phases;
+    expect(phases.listing!.lastMs).toBeGreaterThanOrEqual(40);   // the wait for tmux, not 0 ms after the registry read
+    expect(phases.finished!.lastMs).toBeGreaterThanOrEqual(40);  // the loop's awaits, inside the phase
+  });
 });
