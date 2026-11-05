@@ -295,8 +295,8 @@ export class SessionStream implements FeedSubscriber {
   }
 
   /** The watcher saw this row's record or pane verdict change: re-resolve now (the same `tick()` the poll ran). Before
-   *  `start()` has armed the stream (`poll` is still null) it only keeps the event, as `rerun`. */
-  private readonly onRowChanged = (): void => { if (this.poll) void this.tick(); else this.rerun = true; };
+   *  `start()` has armed the stream, or while a tick is in flight, it keeps the event as `rerun`: only a row event is kept. */
+  private readonly onRowChanged = (): void => { if (this.poll && !this.ticking) void this.tick(); else this.rerun = true; };
 
   /** With a watcher, every `POLL_MS`: look this row up in the watcher's fleet listing, in memory, and run `tick()` only
    *  when its status or `statusUpdatedAt` is not what this stream last measured. No fresh listing, or no such row,
@@ -908,7 +908,7 @@ export class SessionStream implements FeedSubscriber {
   /** The poll's body (every 2 s; with a watcher, run on a row event, a status change in its listing or the backstop): uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
     if (this.stopped) return;
-    if (this.ticking) { if (this.rows) this.rerun = true; return; }   // no overlap; a watched stream's trigger is kept
+    if (this.ticking) return;   // no overlap: a poll or the backstop that finds a tick in flight drops, as before (F2)
     this.ticking = true;
     try {
       const r = await this.resolve();

@@ -203,6 +203,26 @@ describe('a chat stream and the watcher\'s row facts (console speed S2)', () => 
     } finally { s.stop(); }
   });
 
+  it('a poll that finds a tick in flight drops, as before: only a row event is kept (fix round 1, F2)', async () => {
+    listing = null;                                               // no fresh listing: every 2 s poll runs a full tick
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    const s = await open(source);
+    const ticking = (): boolean => (s as unknown as { ticking: boolean }).ticking;
+    try {
+      const before = factsReads;
+      let release: () => void = () => undefined;
+      hold = new Promise<void>((r) => { release = r; });
+      await vi.advanceTimersByTimeAsync(2000);                    // a poll's tick starts and waits on its reads
+      await vi.waitFor(() => expect(factsReads).toBe(before + 1));
+      await vi.advanceTimersByTimeAsync(4000);                    // two more polls find it in flight
+      expect(ticking()).toBe(true);
+      hold = null; release();
+      await vi.waitFor(() => expect(ticking()).toBe(false));
+      await new Promise((r) => setTimeout(r, 50));                // room for a kept trigger's tick to start
+      expect(factsReads, 'a dropped poll ran no tick when the held one ended').toBe(before + 1);
+    } finally { s.stop(); }
+  });
+
   it('a row event during start runs a tick once the stream is armed', async () => {
     let first = true;
     onFactsRead = () => { if (first) { first = false; bus.emit(`row:${ID}`, { listedAt: Date.now() }); queueMicrotask(() => { record = { ...record, uuid: UUID_B }; }); } };
