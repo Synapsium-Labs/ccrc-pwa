@@ -88,8 +88,8 @@ export class SessionStream implements FeedSubscriber {
   private poll: NodeJS.Timeout | null = null;
   /** With a watcher: the 30 s backstop's interval (`poll` is then the 2 s status look in the listing). */
   private backstop: NodeJS.Timeout | null = null;
-  /** With a watcher: a trigger that came in while a tick was in flight or before the stream was armed, so the tick that
-   *  ends (or `start()`) runs once more and the change is not left to the backstop. */
+  /** With a watcher: a ROW EVENT that came in while a tick was in flight, or the start pre-arm, and nothing else (a poll
+   *  or the backstop that finds a tick in flight drops), so the tick that ends (or `start()`) runs once more. */
   private rerun = false;
   /** The `statusUpdatedAt` of the last measurement this stream took, to compare with the listing's. */
   private statusAt: number | null = null;
