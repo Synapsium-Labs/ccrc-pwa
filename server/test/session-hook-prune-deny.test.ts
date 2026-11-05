@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -186,17 +187,29 @@ describe('this PR\'s own body is not refused by the prune row', () => {
 });
 
 // Review 1493, FD8/R3/R4: compare the actual original program, not a synthetic reference or the presence of pmatch.
-// CI's server checkout carries full history (as the tree-reading guard suites require). No hook is executed here:
-// both embedded jq programs receive JSON text. Each mode, shape and size is a single invocation (startup included),
-// using the faster of two interleaved measurements. The coordinator's FD8 ruling accepts fixed jq startup cost but
-// pins both historical cost and doubling-size scaling; it does not permit an amortized stream comparison.
-// The CI follow-up uses 32/64 KB only for quotes/deny, whose inherited normalization otherwise outlives its case.
+// The original is VENDORED, byte for byte, in `fixtures/prune-deny/forbidden-jq-33e521e07.jq`: it is the
+// APPROVAL_FORBIDDEN_JQ of the hook as it stood before this deny, extracted with `extract` below. It was first read by
+// `git show` of a commit that lived on a workspace branch only; a squash merge leaves branch commits off main and the
+// branch is deleted on merge, so no clone could reach it and eight cases went red on main (D-8001's repair). Never cite
+// a branch-only sha from a test: vendor the baseline with a pinned hash. The sha256 is pinned in one constant, so an
+// edit of the fixture reds, and a missing or unreadable fixture reds as a failing case, never a skip.
+// No hook is executed here: both embedded jq programs receive JSON text. Each mode, shape and size is a single
+// invocation (startup included), using the faster of two interleaved measurements. The coordinator's FD8 ruling accepts
+// fixed jq startup cost but pins both historical cost and doubling-size scaling; it does not permit an amortized stream
+// comparison. The CI follow-up uses 32/64 KB only for quotes/deny, whose inherited normalization otherwise outlives its
+// case.
 describe('the forbidden program\'s cost on quote-dense payloads naming worktree and prune', () => {
   const extract = (src: string): string => (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(src) ?? [])[1] ?? '';
   const prog = extract(fs.readFileSync(HOOK, 'utf8'));
-  const old = spawnSync('git', ['show', '33e521e07e7cc8585edade3f5162fc3ee0781457:ccd/session-hook.sh'],
-    { cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', maxBuffer: 1 << 24 });
-  const reference = extract(old.stdout);
+  const BASELINE_FIXTURE = path.join(FIX, 'forbidden-jq-33e521e07.jq');
+  /** The sha256 of the vendored baseline's bytes. */
+  const BASELINE_SHA256 = 'aa24afe9ff29c1f912cf5c1c8045f541ad45d6070c358c571d40c4d8d715262f';
+  /** The vendored original program: a missing, unreadable or edited fixture throws here, inside the case that reads it. */
+  const readBaseline = (): string => {
+    const bytes = fs.readFileSync(BASELINE_FIXTURE);
+    expect(createHash('sha256').update(bytes).digest('hex'), 'the vendored baseline was edited').toBe(BASELINE_SHA256);
+    return bytes.toString('utf8');
+  };
   for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
     const timed = (p: string, mode: string, kb: number): number => {
       const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
@@ -211,7 +224,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     };
     for (const mode of ['deny', 'class']) {
       it(`${name}: ${mode} stays within the startup-adjusted 33e521e07 bound at 64 KB`, () => {
-        expect(old.status, old.stderr).toBe(0);
+        const reference = readBaseline();
         expect(reference).not.toBe('');
         expect(prog).not.toBe('');
         const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(prog, mode, 64)]);
@@ -223,7 +236,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       const smallKb = name === 'quotes' && mode === 'deny' ? 32 : 64;
       const largeKb = smallKb * 2;
       it(`${name}: ${mode} linearity from ${smallKb} to ${largeKb} KB stays within the inherited-cost bound`, () => {
-        expect(old.status, old.stderr).toBe(0);
+        const reference = readBaseline();
         expect(reference).not.toBe('');
         expect(prog).not.toBe('');
         const pairs = [0, 1].map(() => [timed(reference, mode, smallKb), timed(prog, mode, smallKb),
