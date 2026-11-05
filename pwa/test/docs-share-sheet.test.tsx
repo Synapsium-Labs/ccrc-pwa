@@ -3,7 +3,7 @@
 // ones); `navigator.share` and `navigator.canShare` are defined per case and removed after each, since jsdom has
 // neither. The last describe is the Share chrome's colour guard. Placeholders only: `example-org/example-repo`, `demo`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ShareSheet } from '../src/docs/ShareSheet';
@@ -100,7 +100,7 @@ describe('the share sheet: the link, its notes, and Copy link where there is no 
     if (!(field instanceof HTMLInputElement)) throw new Error('the field is not an input');
     expect(field).toHaveValue(URL_A);
     expect(field).toHaveAttribute('readonly');
-    expect(document.activeElement).toBe(field);
+    await waitFor(() => expect(document.activeElement).toBe(field));
     expect([field.selectionStart, field.selectionEnd]).toEqual([0, URL_A.length]);
     expect(screen.getByText(SHARE_SHEET_TEXT.copyRefused)).toBeInTheDocument();
   });
@@ -113,7 +113,7 @@ describe('the share sheet: the link, its notes, and Copy link where there is no 
     const field = await screen.findByRole('textbox', { name: SHARE_SHEET_TEXT.field });
     if (!(field instanceof HTMLInputElement)) throw new Error('the field is not an input');
     const firstAlert = screen.getByText(SHARE_SHEET_TEXT.copyRefused);
-    expect(document.activeElement).toBe(field);
+    await waitFor(() => expect(document.activeElement).toBe(field));
     copy.focus();
     field.setSelectionRange(0, 0);
     expect(document.activeElement).toBe(copy);
