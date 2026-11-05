@@ -102,6 +102,29 @@ describe('the watcher publishes what it measured (console speed S1, Step 7)', ()
     expect(h.watcher.currentRowFacts(ARCHIVED)).toBeNull();
   });
 
+  it('row:<id> fires when a pane leaves the listing with the registry files unchanged', async () => {
+    const h = makeHarness();
+    await h.watcher.tick();
+    const seen: string[] = [];
+    for (const id of [...LIVE, ...STOPPED, ARCHIVED, CRASHED]) h.bus.on(`row:${id}`, () => seen.push(id));
+    h.state.live.delete(LIVE[0]!);   // the session died; every registry file of the row stays as it was
+    await h.watcher.tick();
+    expect(seen).toEqual([LIVE[0]]);
+    expect(h.watcher.currentRowFacts(LIVE[0]!)!.verdict.verdict).toBe('gone');
+  });
+
+  it('a failed listing and the recovered one (same panes) fire no row:<id>', async () => {
+    const h = makeHarness();
+    await h.watcher.tick();
+    const seen: string[] = [];
+    for (const id of [...LIVE, ...STOPPED, ARCHIVED, CRASHED]) h.bus.on(`row:${id}`, () => seen.push(id));
+    h.state.listing = 'fail';
+    await h.watcher.tick();
+    h.state.listing = 'ok';
+    await h.watcher.tick();
+    expect(seen).toEqual([]);
+  });
+
   it('every getter is null after an unlistable tick', async () => {
     let unlistable = false;
     const h = makeHarness({
