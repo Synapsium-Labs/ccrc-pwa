@@ -1197,6 +1197,58 @@ describe('rung 4 end to end: a raw worktree the session itself created becomes a
   });
 });
 
+// ── PR5b (Task 5.5.4): native-removed release through the lane's `leaseActs` phase ────────────────────────────────────
+
+describe('PR5b: a lease whose tree is gone from two successful listings is released by the lane', () => {
+  /** The rung-4 world, three passes on, with `raw-tree` leased (generation 0) and present at the third census. */
+  async function leasedRaw(): Promise<{ w: World; leaseId: string }> {
+    const w = await rawTreeWorld();
+    for (const n of [0, 1, 2]) await censusPass(w, at(n), { demo: [OLD, RAW] });
+    const [lease] = leasesOf(w.home);
+    expect(lease).toMatchObject({ adminRecord: 'raw-tree', releasedAt: null, generation: 0 });
+    return { w, leaseId: lease!.leaseId };
+  }
+
+  it('W5-J18: two passes with the record gone release the lease through releaseLease, and the leaseActs key is on the pass\'s slow line', async () => {
+    const { w, leaseId } = await leasedRaw();
+    const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
+    await censusPass(w, at(3), { demo: [OLD] });
+    expect(release, 'one listing absent releases nothing').not.toHaveBeenCalled();
+    expect(leasesOf(w.home)[0]!.releasedAt).toBeNull();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let slowed = false;     // a block phase made slow, so the pass writes its slow line
+    w.watcher.setDelegationSeams({ onPassPhase: (k: string): void => { if (k === 'noteSessions' && !slowed) { slowed = true; setNow(Date.now() + 1500); } } } as never);
+    await censusPass(w, at(4), { demo: [OLD] });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release.mock.calls[0]![0]).toMatchObject({ leaseId, expectGeneration: 0, releaseReason: 'native-removed', lastHeadSha: 'a'.repeat(40), resolvesThrough: null });
+    expect(leasesOf(w.home)[0]).toMatchObject({ leaseId, generation: 1, releasedAt: expect.any(String) });
+    expect(readFileSync(path.join(w.ccrcDir, DELEGATION_JOURNAL_FILE), 'utf8')).toContain('"kind":"lease-released"');
+    const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('ccrc-server: delegation pass slow:'));
+    expect(line, 'the pass wrote its slow line').toBeDefined();
+    expect(line).toMatch(/ leaseActs=\d+/);
+    await censusPass(w, at(5), { demo: [OLD] });
+    expect(release, 'a released lease is not planned again').toHaveBeenCalledTimes(1);
+  });
+
+  it('W5-J16c (the lane\'s half): a lease whose project the census does not reach is never released and is counted uncensusedLeases', async () => {
+    const { w } = await leasedRaw();
+    expect(w.watcher.currentDelegationHealth(), 'none uncensused: the member is absent').not.toHaveProperty('uncensusedLeases');
+    const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease');
+    for (const n of [3, 4, 5]) {
+      await censusPass(w, at(n), { other: [] });                       // the registry-named census no longer names `demo`
+      expect(w.watcher.currentDelegationHealth()).toMatchObject({ uncensusedLeases: 1 });
+    }
+    for (const n of [6, 7, 8]) {
+      await censusPass(w, at(n), { demo: 'unreachable' });              // listed, but unmeasured (`delegation: null`)
+      expect(w.watcher.currentDelegationHealth()).toMatchObject({ uncensusedLeases: 1 });
+    }
+    expect(release).not.toHaveBeenCalled();
+    expect(leasesOf(w.home)[0]!.releasedAt).toBeNull();
+    await censusPass(w, at(9), { demo: [OLD, RAW] });
+    expect(w.watcher.currentDelegationHealth()).not.toHaveProperty('uncensusedLeases');
+  });
+});
+
 describe('D-6191: attempts that repeat one decision collapse to the earliest, in the upkeep phase (C-K4, C-K5)', () => {
   const H = (s: string): string => delegationSha256Hex(`fixture-watch-collapse-${s}`);
   const DECIDED = {

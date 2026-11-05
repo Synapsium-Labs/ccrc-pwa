@@ -11937,6 +11937,12 @@ export interface DelegationObservationHealth {
    * whether a heal happened that no report of this process covers is UNKNOWN, never "no heal". Absent when it was listed.
    */
   tailQuarantineUnmeasured?: true;
+  /**
+   * Wave 5 (PR5b, D-7852): how many unreleased leases sit in a project the lane's last census did not reach (no live session names the
+   * project, or its census answered unmeasured), so native-removed neither counted nor released them. Absent when there are none, and
+   * from an older server: absence says none was counted, never that every lease was reached by an older lane.
+   */
+  uncensusedLeases?: number;
 }
 
 /** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes

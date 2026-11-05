@@ -962,7 +962,7 @@ type SlowLine = (fields: Readonly<Record<string, number>>, bound?: number) => st
 const SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
   'blockCpu', 'stallMax', 'stallP99', 'cpuThread',                  // D-5832: right after `other`, so the bound drops them last
-  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile', 'leaseActs',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
