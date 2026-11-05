@@ -47,7 +47,10 @@ export function useLinearWorkspaces(): LinearWorkspacesPoll {
     },
   });
 
-  const reload = useCallback(() => { load(); }, [load]);
+  // Every caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed branch, an ack or a move;
+  // console speed C2 fix round 1). The kept answer is from before that write, so it goes first: leaving Settings
+  // before the re-read lands (which aborts it) must not bring the pre-write view back on the next visit.
+  const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   const settle = useCallback((view: LinearWorkspacesRead) => {
     supersede();
     forget(CACHE_KEY);

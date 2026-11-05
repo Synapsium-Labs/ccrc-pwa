@@ -135,6 +135,9 @@ export function useTestboxView(pollMs: number = TESTBOX_POLL_MS): TestboxPoll {
       }
     },
   });
-  const reload = useCallback(() => { load(); }, [load]);
+  // Every caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed branch, an ack or a move;
+  // console speed C2 fix round 1). The kept answer is from before that write, so it goes first: leaving Settings
+  // before the re-read lands (which aborts it) must not bring the pre-write view back on the next visit.
+  const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   return { view: state.view, failure: state.failure, reload };
 }

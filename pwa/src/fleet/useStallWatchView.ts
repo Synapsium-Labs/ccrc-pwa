@@ -98,12 +98,18 @@ export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWa
         setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
       } else {
         const failure = settingsReadFailure(outcome.err);
+        // The server says the route is not here: the kept answer goes, so the next mount never draws its radios
+        // (fix round 1, extending a-dropped-view-forgets-its-key). The view of THIS mount stays as before.
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: prev.view, failure }));
       }
     },
   });
 
-  const reload = useCallback(() => { load(); }, [load]);
+  // Every caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed branch, an ack or a move;
+  // console speed C2 fix round 1). The kept answer is from before that write, so it goes first: leaving Settings
+  // before the re-read lands (which aborts it) must not bring the pre-write view back on the next visit.
+  const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   const settle = useCallback((view: StallWatchView) => {
     supersede();   // every poll issued before this write now lands stale
     forget(CACHE_KEY);   // the kept answer is from before the write; the next read keeps the new one

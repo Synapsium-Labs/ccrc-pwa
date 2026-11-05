@@ -360,3 +360,106 @@ describe('leaving Settings stops its reads (console speed C2, step 5)', () => {
     expect([statusSignal!.aborted, passkeysSignal!.aborted]).toEqual([true, true]);
   });
 });
+
+// Fix round 1 (review of the C2 tip): every write of the operator's forgets the kept answer before its re-read, a
+// not-available answer forgets in every hook that can get one, a refused answer never replaces a kept one, a gate-off
+// status forgets a kept list, and a failed sign-in read draws the failure (the coordinator's ruling).
+describe('fix round 1: writes, drops, refused answers and the sign-in failure', () => {
+  const ALL_SIX = ['updates', 'stall-watch', 'collect-lane', 'dispatch-abandon', 'testbox', 'linear-workspaces'] as const;
+
+  it("a write's re-read (reload) forgets the kept answer before it reads, in every hook", async () => {
+    await firstVisit();
+    holdAll();
+    visit();
+    for (const name of ALL_SIX) expect(peek(settingsKey(name)), name).toBeDefined();
+    act(() => {
+      view().updates.reload();
+      view().stall.reload();
+      view().collect.reload();
+      view().dispatchAbandon.reload();
+      view().testbox.reload();
+      view().linear.reload();
+    });
+    for (const name of ALL_SIX) expect(peek(settingsKey(name)), name).toBeUndefined();
+  });
+
+  it('the test-box switch: write, leave before the re-read lands, come back: the pre-write view is not drawn', async () => {
+    await firstVisit();
+    holdAll();
+    const r = visit();
+    expect(view().testbox.view).toEqual({ block: null });
+    act(() => { view().testbox.reload(); });   // TestBoxSection's flip: `.finally(() => poll.reload())`
+    r.unmount();                                // left before the re-read landed: usePoll aborts it
+    visit();
+    expect(view().testbox.view).toBeNull();
+  });
+
+  it('the update channel: write, leave before the re-read lands, come back: the pre-write view is not drawn', async () => {
+    await firstVisit();
+    holdAll();
+    const r = visit();
+    expect(view().updates.view).toEqual(UPDATES);
+    act(() => { view().updates.reload(); });   // UpdatesSection's channel and auto writes: `.finally(() => reload())`
+    r.unmount();
+    visit();
+    expect(view().updates.view).toBeNull();
+  });
+
+  it('a not-available answer forgets the stall-watch and updates keys too', async () => {
+    await firstVisit();
+    const notHere = (): Promise<never> => Promise.reject(new ApiError(501, { ok: false, error: 'not-configured' }));
+    holdAll();
+    for (const m of ['stallWatch', 'updates'] as const) vi.spyOn(api, m).mockImplementation(notHere as never);
+    for (const name of ['stall-watch', 'updates'] as const) expect(peek(settingsKey(name)), name).toBeDefined();
+    visit();
+    await waitFor(() => {
+      expect(view().stall.failure).toBe('not-configured');
+      expect(view().updates.failure).toBe('not-configured');
+    });
+    for (const name of ['stall-watch', 'updates'] as const) expect(peek(settingsKey(name)), name).toBeUndefined();
+  });
+
+  it('a refused answer after a good one keeps the earlier kept answer, in every hook', async () => {
+    await firstVisit();
+    holdAll();
+    for (const m of ['updates', 'stallWatch', 'collectLane', 'dispatchAbandon', 'testbox'] as const) {
+      vi.spyOn(api, m).mockResolvedValue({ junk: true } as never);
+    }
+    vi.spyOn(api, 'linearWorkspaces').mockResolvedValue('unreadable');
+    visit();
+    await waitFor(() => {
+      const v = view();
+      expect([v.updates.failure, v.stall.failure, v.dispatchAbandon.failure, v.testbox.failure, v.linear.failure])
+        .toEqual(['failed', 'failed', 'failed', 'failed', 'failed']);
+      expect(v.collect.failure).toEqual({ kind: 'failed' });
+    });
+    expect(peek(settingsKey('updates'))?.raw).toEqual(UPDATES);
+    expect(peek(settingsKey('stall-watch'))?.raw).toEqual(STALL);
+    expect(peek(settingsKey('collect-lane'))?.raw).toEqual(COLLECT);
+    expect(peek(settingsKey('dispatch-abandon'))?.raw).toEqual(ABANDON);
+    expect(peek(settingsKey('testbox'))?.raw).toEqual(TESTBOX);
+    expect(peek(settingsKey('linear-workspaces'))?.raw).toEqual(LINEAR);
+  });
+
+  it('a gate-off status landing over a kept passkey list forgets the list', async () => {
+    await firstVisit();
+    expect(peek(settingsKey('passkeys'))).toBeDefined();
+    holdAll();
+    vi.stubGlobal('fetch', vi.fn(async (path: string) =>
+      (path === '/api/auth/status' ? reply(200, { authed: true, passkeysEnrolled: 0, mode: 'off' }) : reply(404, {}))));
+    visit();
+    expect(view().passkeys).toEqual({ kind: 'read', list: PASSKEYS });   // the seed, before the status lands
+    await waitFor(() => expect(view().passkeys).toEqual({ kind: 'unasked' }));
+    expect(peek(settingsKey('passkeys'))).toBeUndefined();
+  });
+
+  it('a failed sign-in status read draws the failure, never the kept status (the coordinator ruling)', async () => {
+    await firstVisit();
+    holdAll();
+    vi.stubGlobal('fetch', vi.fn(async () => reply(503, {})));
+    visit();
+    expect(view().auth).toEqual({ kind: 'read', status: AUTH });   // drawn at once from the kept answer
+    await waitFor(() => expect(view().auth).toEqual({ kind: 'failed' }));
+    expect(view().passkeys).toEqual({ kind: 'unasked' });
+  });
+});

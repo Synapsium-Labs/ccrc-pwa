@@ -11,11 +11,11 @@
 // and must not claim the list is fresh either. (2) It re-polls when the page
 // becomes visible, because a phone that slept through three polls should not
 // show a 3-minute-old "vX is out" as current.
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { UpdatesView } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
-import { peek, put, settingsKey } from '../lib/screenCache';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 import { asUpdatesView } from './updatesRead';
 import { sameJson } from '../lib/sameJson';
 
@@ -83,7 +83,7 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
   // read of THIS mount has landed, so a hold waiting on a read issued after a tap keeps waiting (D-4273).
   const [state, setState] = useState<{ view: UpdatesView | null; failure: UpdatesFailure | null; seq: number }>(
     () => ({ view: asUpdatesView(peek(CACHE_KEY)?.raw), failure: null, seq: 0 }));
-  const { reload } = usePoll({
+  const { reload: load } = usePoll({
     pollMs,
     request: (signal) => api.updates({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome, issue) => {
@@ -97,11 +97,17 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
           : { view: sameJson(prev.view, view) ? prev.view : view, failure: null, seq: issue }));
       } else {
         const failure = failureOf(outcome.err);
+        // A box with no control plane: the kept answer goes, so the next mount never draws it (fix round 1).
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: prev.view, failure, seq: prev.seq }));
       }
     },
   });
-  // Memoised (C6, D-6438): `reload` is `usePoll`'s `useCallback([])`, so the plane changes only when a poll lands.
+  // Every caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed branch, an ack or a move;
+  // console speed C2 fix round 1). The kept answer is from before that write, so it goes first: leaving Settings
+  // before the re-read lands (which aborts it) must not bring the pre-write view back on the next visit.
+  const reload = useCallback((): number => { forget(CACHE_KEY); return load(); }, [load]);
+  // Memoised (C6, D-6438): `reload` is a `useCallback` over `usePoll`'s stable one, so the plane changes only when a poll lands.
   return useMemo(
     () => ({ view: state.view, failure: state.failure, seq: state.seq, reload }),
     [state.view, state.failure, state.seq, reload],
