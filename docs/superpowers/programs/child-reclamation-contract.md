@@ -1559,7 +1559,9 @@ This note amends; it edits no earlier text.
       start" on every attempt while the tombstone stays unreadable, yet ccd's next attempt resumes from the breadcrumb.
       The verb arm is reached only in an audit-to-verb race. Wave 7's `crumb` field carries it.
   - `die "bad run id"` was reclaim's alone, so the sanctioned unjournaled set narrows by one.
-- **R31's stated cost.** A row whose directory is gone now holds only while neither arm of R54 places it.
+- **R31's stated cost.** A row whose directory is gone now holds only while neither arm of R54 places it, and, since
+  #2294 (D-8019), only while something may run for it or a checkout stands under the child or a leaf (spec §5.5). The
+  list below is what R54 alone leaves holding.
   - Two interrupted children whose trees the tail removed release each other through the breadcrumb arm.
   - Two hand-deleted children of one repository release each other through the git-record arm.
   - These still hold: an unreadable `worktrees/` or `gitdir`, two admin entries naming one tree, a locked
@@ -1618,7 +1620,8 @@ This note amends; it edits no earlier text.
     - A leaf whose absence cannot be proven, or whose root cannot be resolved, answers unmeasured.
   - **Limits, stated.**
     - A tree stripped of its `.git`, or content that is no checkout, parked in a leaf is not seen. Base held
-      these only by accident, through the blanket hold on a gone row.
+      these only by accident, through the hold on a gone row, which since #2294 ends once nothing runs for the row
+      (spec §5.5).
     - The question and the `rm` are two looks, not one. A same-uid rename in between is removed with the leaf,
       which wave 7's quarantine rename closes.
     - Beside it, a registry row placed into a leaf after `_ws_reclaim_owned`'s ask at the start of the tail is not
@@ -1627,8 +1630,8 @@ This note amends; it edits no earlier text.
     - A clone, a submodule of one, or a worktree of one inside a leaf is the leaf's own and goes with it. That
       includes a foreign MAIN checkout, a `.git` DIRECTORY, moved into a leaf: with no registry row naming it, it
       passes the question and is removed with its object store. This is ruled, because a clone in a leaf is the
-      leaf's own. A registry row that names the moved tree's old path is a gone row, and the blanket hold on a gone
-      row keeps the child `unmeasured`.
+      leaf's own. A registry row that names the moved tree's old path is a gone row, and it keeps the child
+      `unmeasured`: such a row is released only when no `.git` of any kind stands at or under a leaf (spec §5.5).
     - The bind-mount alias spelling of a leaf is not compared. This is the existing residual.
     - On a case-insensitive file system (Darwin APFS), a hand-renamed `.GIT` that git honours is missed by
       `find -name .git`. Git never writes that name.
@@ -3678,7 +3681,9 @@ differ, the spec's design governs and this section is corrected.
 - **R97 — the reach of a blank admin entry, stated (PI9 K1).** A blank admin entry in a repository holds every child on
   the box at rung 9 while a gone row of that repository exists (review 378; `ccd/ccd`'s rung 9, located by content). It
   fails closed: it costs time, never a removal. Entry identity does not shrink it, because the entry field never releases a
-  gone row (spec section 4.5, step 2). Narrowing it by name is rejected, because git renames entries.
+  gone row (spec section 4.5, step 2). Narrowing it by name is rejected, because git renames entries. Since #2294 the
+  reach ends where the gone row is released (spec §5.5): nothing runs for it and no checkout stands under the child or a
+  leaf. That asks the disk, never the blank entry, so a checkout such an entry hides still holds.
 
 - **R98 — corrections.**
   - **§16 as built, Task 5.** In "and three one-clause docstrings beyond the three ruled, indented at fix round 2", two of
@@ -4335,7 +4340,7 @@ the spec, never this contract.
 
 **R97's reach, unchanged (PI9 K1).**
 - A blank admin entry still holds every child at rung 9 while a gone row of that repository exists. A gone row's valid
-  field never releases it, so W3 did not shrink that reach.
+  field never releases it, so W3 did not shrink that reach. #2294 did, later, on another proof (R97).
 
 **R95's asks, now a backstop (`w2-mount-asks-shadowed-by-the-reask`).**
 - The rows rung's mount hold (`rows-walk-second-mountinfo-reader`) is asked by the in-lock recompute, by owned at the

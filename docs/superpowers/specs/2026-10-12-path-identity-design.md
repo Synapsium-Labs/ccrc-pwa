@@ -946,11 +946,13 @@ Two readers proposed different shapes. They agree on what each mechanism can see
 The proposal combines them with one table read, not a per-row canonicalisation. Each step can only add a placement or a hold:
 
 1. Every row is placed by dev:ino ancestry of its resolved spelling, as well as by today's strings: SHARED if the identities are equal, NESTED if the child's identity is in the row's ancestor chain.
-2. The entry field can only add a placement. A row is SHARED, NESTED, THROUGH or unmeasured if today's string rule, step 1's ancestry, or the recorded physical path says so. If a valid field's dev:ino:btime differs from the current one and the recorded path cannot be placed, the row is unmeasured. A recorded path outside the child never moves a row out of any placement the other rules give it. A row whose current spelling is gone or `unres` is released only by R54's git-record or breadcrumb arm, exactly as today.
+2. The entry field can only add a placement. A row is SHARED, NESTED, THROUGH or unmeasured if today's string rule, step 1's ancestry, or the recorded physical path says so. If a valid field's dev:ino:btime differs from the current one and the recorded path cannot be placed, the row is unmeasured. A recorded path outside the child never moves a row out of any placement the other rules give it. A row whose current spelling is gone or `unres` is released only by R54's git-record or breadcrumb arm, or, since #2294, because nothing runs for it and no checkout stands under the child or a leaf (child-reclamation spec §5.5). No field releases it.
 3. One mountinfo read per reclaim or expiry. It holds at `unmeasured` when any mount on the child's device has a root at or under the child's device-relative path (a `//deleted` suffix counts), or when any mount point lies at or under the child. On the measured layout this refuses nothing.
 4. R54's gone-row recovery gains an identity moved-check beside the git and breadcrumb arms. Each nested checkout's dev:ino:btime is compared with every gone row's recorded identity, and a match adds a hold. It never releases a row. Its limit: a gone row whose workdir was a subdirectory of a moved tree is not matched.
 
 Why step 2 is written this way. Today a gone row holds every child until R54's git-record arm or breadcrumb arm places it on positive evidence (sourced: contract `:1385`). The blanket hold on a gone row is what keeps a foreign main checkout moved into a leaf from being removed with its object store (sourced: contract `:1595`, `:1601-1605`). A rule that let "recorded path outside the child" release a gone row would turn negative evidence into a licence: the moved-check misses a subdirectory of a moved tree, asks only the worktree and not the clips or temp-root leaves, and in a repository with a blank admin entry neither R54 arm can place the row (sourced: `ccd/ccd:28785-28786`). So the field never releases.
+
+Since #2294 the hold is no longer blanket. That is not the rule refused above: the release reads no recorded path, and it asks more than the moved-check does. Its row's pane must be gone and its unit stopped, and no `.git` of any kind may stand under the child or at or under a leaf. So a foreign main checkout moved into a leaf still holds, and so does a checkout a blank admin entry hides, because the scan asks the disk and no admin entry. A tree with no `.git` is the stated residual (child-reclamation spec §5.5). The field still never releases.
 
 The fuller option translates every row's spelling through mountinfo. It does the same work per row, inside a rung with no bound of its own, and adds parsing of octal escapes and stacked mounts, for no extra coverage (judgement).
 
@@ -1202,8 +1204,8 @@ into a pass.
   4. the mismatch rule: when its recorded identity differs from its current one, and the recorded path no longer stands
      with that identity, it is unmeasured (`unrec`), "entered a directory other than the one their workdir names now".
 - The mismatch rule is asked only of a row whose current spelling resolved complete. A gone row gets rules 1 to 3,
-  never 4, and is released only by R54's arms, as before, save one whose field reads `pending`: that field holds the
-  child whatever those arms answer (`gone-row-with-pending-field-holds-despite-its-release-arms`, below). A recorded
+  never 4, and is released only by R54's arms, or as a row nothing runs for (#2294, step 2), save one whose field reads
+  `pending`: that field holds the child whatever those arms answer (`gone-row-with-pending-field-holds-despite-its-release-arms`, below). A recorded
   path outside the child never moves a row out of any placement.
 - Birth times are read only where a rule compares across time: the field against the child, and the mismatch rule. A
   birth time that could not be read holds (`unwalk`), and is never read as "none". A recorded path that is gone adds
@@ -1213,7 +1215,8 @@ into a pass.
 - The count. The reclaim audit document carries `"legacyRows"` and `"pendingRows"`: `legacyRows` counts the other
   rows whose field is in a `legacy-*` state, and `pendingRows` those whose field reads `pending`. A field that reads
   `unmeasured` is in neither, and it holds the child. `null` means not counted: the ladder never reached the rung, or the rung could not list
-  the registry. The expiry audit document carries the same two keys. No server reader was added.
+  the registry. The expiry audit document carries the same two keys. No server reader was added. Since #2294 both
+  documents also carry `"quietRows"`, the ids of the gone rows this pass released, with no server reader either.
 
 **The moved-check (R54).**
 - R54's identity moved-check is built in `_ws_reclaim_moved_check`. The rung records each gone row's valid field in

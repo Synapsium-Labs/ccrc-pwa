@@ -4618,7 +4618,9 @@ recorded path is gone or no longer resolves to its workdir, a row whose field re
 which has no table. The refusal's detail names those rows and its remedy: stop each session and start it again, which
 writes a fresh field, or purge the row once its session has ended. The next reclaim pass then places it. One hold
 weakens until then: a gone row's recorded identity still names the old host's device, so the check that holds a child
-when a checkout inside it is that row's moved tree matches no checkout; git's record of the tree still holds it.
+when a checkout inside it is that row's moved tree matches no checkout; git's record of the tree still holds it. A row
+whose workdir is gone as well stops holding once its pane is gone, its unit stopped and no checkout stands under the
+child or a leaf (#2294). The reclaim and expiry audit documents name each such row in `quietRows`.
 
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's

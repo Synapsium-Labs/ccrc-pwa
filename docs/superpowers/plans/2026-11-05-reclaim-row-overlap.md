@@ -2,7 +2,7 @@
 
 **Goal:** A registry row whose workdir is gone stops holding every child on the box. It keeps holding only a reclaim it could really overlap (#2294).
 
-**Architecture:** One bash helper decides, `_ws_reclaim_workdir_shared`, the rows rung every seam asks: the audit, the verb's locked recomputation, `_ws_reclaim_owned` on every arm, the collector and the loose sweep. No new verb, no new refusal word, no token input and no wire change.
+**Architecture:** One bash helper decides, `_ws_reclaim_workdir_shared`, the rows rung every seam asks: the audit, the verb's locked recomputation, `_ws_reclaim_owned` on every arm, the collector and the loose sweep. No new verb, no new refusal word and no token input. The audit documents gain one additive key, `quietRows`, which no server reader reads.
 
 **Two PRs, in this order.** This plan is the first, the safety change. The fleet-level notice follows once it has merged.
 
@@ -40,10 +40,22 @@ It reads and only reads, and shadows the probe's globals. It stays apart from th
 
 A released row keeps its `A` and `F` walk rules: only `unres` is skipped, and nothing leaves a bucket.
 
+**The audit trail.** `_WS_QUIET_ROWS` holds the rows this pass released, set only once the checkout question has answered clean. `_ws_quiet_rows_json` prints it as `"quietRows":[ids]` beside `legacyRows` and `pendingRows`, in the reclaim document as #2294 asks and in the expiry document too, since the expiry ladder asks the same rung and releases the same rows. `[]` means none was released, and `null` means not counted, as the counts mean it. A child held for another reason still names the rows that were let go. `parseChildReclaimAudit`, `parseChildReclaimAuditFailed` and `parseExpireAudit` read a document with the key exactly as one without it, and a test pins each.
+
+## The docs this amends
+
+- Child-reclamation spec §5.5: the vanished-child limit, the recorded arms' never-list, the release and its residual. §5.6, §5.7 and §7 stop leaning on a blanket hold.
+- Path-identity spec §4.5 step 2 and its reason, and the two places that repeat them.
+- The un-wedge spec's §4.1 and D6, which stay open for the operator on #2294.
+- The contract's R31 cost, R97 and its W3 carry, and the leaf limits it mirrors from the spec.
+- The README's box-move paragraph.
+- The rung's header. `the accepted fail-closed cost` is about a row that is not absolute, and it still reads true, so it stays, with a pointer that a gone row's cost is narrower.
+
 ## Stated costs and limits
 
 - A child with a checkout of its own below its tree or in a leaf stays held while a gone row is released on it: here a checkout is not told from a moved tree. A temp root holding fixture clones is the common case. The hold is that child's alone, retryable, and names the rows by id.
-- `gone-row-release-misses-a-tree-with-no-git`: a stopped row's tree that was never a checkout, moved inside the child, has no `.git` to find and goes with the child. The release requires nothing to run for the row, so no session loses a tree it is in.
+- `gone-row-release-misses-a-tree-with-no-git`: a tree stripped of its `.git`, moved by hand into a child or a leaf, for a stopped row with a gone spelling, is removed with the child. The base held this only by accident. It is not in use: nothing runs for its row.
+- The trail is the audit document alone. The server reads no `quietRows` yet, so the key is visible where the document is printed, and the collector and the loose sweep, which print no such document, name no release. The fleet-level notice that follows is where the operator reads a held row.
 - A row dropped during the walk may still sit in a not-asked bucket it joined in the pass, such as a pending field. The next attempt finds no row.
 - The un-wedge spec (`2026-11-04-cleanup-unwedge-design.md`, D6) left narrowing ccd's hold for unrecorded rows open, pending a new proof and a ruling. #2294 asks for the narrowing, and this plan is that proof. The spec's archived-row arm and its naming of the hold are unaffected: a row this release cannot free stays in `unres`.
 - `ccd/ccd` grows by 93 net code lines, past the growth limit, under the waiver `D-8019-ccd-ccd.json`: the rung has one home.

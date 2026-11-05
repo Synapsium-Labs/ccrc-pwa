@@ -432,16 +432,18 @@ as `<alias>/server` after `<alias>` was removed. It names where that spelling wo
 session is: a process that entered through the alias keeps its physical cwd inside the child, and nothing on the
 box can reconstruct that cwd from a name that no longer exists. So another row is placed only on a `complete`
 resolution, every component of its spelling walked and entered. A projected one makes the reclaim `unmeasured`,
-retryable and with no new refusal word, at the audit and at the locked recomputation. The tail's final ownership
+retryable and with no new refusal word, at the audit and at the locked recomputation, unless the limit below
+releases it. The tail's final ownership
 check asks the same question. A refusal there fails the reclaim as `containment-refuted` when it proves the tree is
 not only the child's own, and as `worktree-remove-failed` when the question could not be asked (§5.6): it is
 journalled, and the tree, the branch and the breadcrumb are kept (D-3736). A row literally at, below or through the child's path
 keeps its terminal `containment-unproven`, because literal containment needs no resolution to be proven.
 
 Two limits follow, and both are stated so neither is discovered later:
-- **The hold reaches a vanished child.** The vanished-worktree arm itself is unchanged. But an ambiguous row holds
-  a vanished child as it holds a present one, and two vanished children hold each other. The hold ends safely
-  only once the row is purged after its session has ended, or a link on its path is restored to its original
+- **The hold reaches a vanished child, while something may run for the row.** The vanished-worktree arm itself is
+  unchanged. An ambiguous row holds a vanished child as it holds a present one, until it is released below, so two
+  vanished children with nothing running for either release each other (#2294). A row that is not released holds
+  until it is purged after its session has ended, or a link on its path is restored to its original
   target, and then a later attempt has to run (D-3734). A directory created where a link stood ends it unsafely,
   because that re-points the spelling (D-3735).
   Since wave 6 a row whose directory is gone also stops holding on positive evidence alone, by one of two
@@ -454,11 +456,32 @@ Two limits follow, and both are stated so neither is discovered later:
   interrupted expiry's breadcrumb is not such evidence, a lifecycle `create` row never decides, and an
   unreadable record is never read as no record. No checkout inside the child's worktree may resolve its git directory to
   the admin directory a recovered row named. That refusal reuses `containment-unproven`, whose sentence
-  describes such a moved tree only approximately. The recovery creates nothing, prunes nothing and purges no
-  row. Only the git-record arm needs the parent to resolve complete. The breadcrumb arm places the row by its
+  describes such a moved tree only approximately. The two recorded arms create nothing, prune nothing, purge no
+  row and read no process, pane or unit state. Only the git-record arm needs the parent to resolve complete. The breadcrumb arm places the row by its
   literal spelling, so a row whose parent is gone or reached through a link is released there once its leaf is
   proven absent. A spelling with a `.` or `..` component, a trailing `/` or a `//` is refused before either
   arm, and such a row holds.
+  Since #2294 (D-8019) a gone row neither recorded arm places stops holding when nothing runs for it and no
+  checkout stands where its tree could have gone. It is released, never placed: nothing is kept for the moved-check,
+  and a valid entry field still places it, because the release only leaves it out of the rows that could not be
+  placed. Every one of these is required:
+  - its spelling has no control character, is one plain path, and its absence is proven;
+  - no link stands on what is left of the path, a dangling one included;
+  - its pane is positively gone and its unit positively stopped, so `live`, `unknown` and an empty unit answer hold;
+  - its entry field is valid or legacy, since a pending or unreadable field holds by its own rule;
+  - its spelling lies at or under neither the child's resolved path nor a resolved leaf;
+  - no `.git` of any kind stands below the child, or at or below a standing directory leaf, and the scan finished.
+
+  This reads process state, which the recorded arms never do, so it stays apart from them. It answers a stronger
+  question than the moved-check, whose negatives prove little: with no checkout there no moved tree is, and with
+  nothing running no tree is in use. A checkout it finds is not told from a moved tree, so a child with a clone of
+  its own stays held while such a row stands, retryably and by row id. Both audit documents, reclaim and expiry,
+  name every released row in `quietRows`: `[]` when none, `null` when the rung did not count. A child held for
+  another reason still names the rows that were let go. The collector and the loose sweep ask the same rung, and
+  print no such key.
+  **The residual, stated plainly:** a tree stripped of its `.git`, moved by hand into a child or a leaf, for a
+  stopped row with a gone spelling, is removed with the child (`gone-row-release-misses-a-tree-with-no-git`). The
+  base held this only by accident, and it is not in use: nothing runs for its row.
 - **A `complete` resolution places the spelling as it reads now, not the session.** An alias re-pointed after a
   session entered through it resolves complete and outside, and so does a spelling through a bind mount. Both are
   pre-existing and left to a follow-up (D-3735).
@@ -698,7 +721,8 @@ tree moved in AS the leaf has its root's owner bits set (555 reads 755 afterward
   later `ws-add` recreated `worktrees/<name>` for another workspace. A refusal outranks an unmeasured entry.
 - **Its limits, stated.**
   - A tree stripped of its `.git`, or content that is no checkout, parked in a leaf is not seen. The base held
-    these only by accident, through the blanket hold on a gone row.
+    these only by accident, through the hold on a gone row, and since #2294 that hold ends once nothing runs for the
+    row, so such a tree goes with the leaf (the residual in §5.5).
   - The question and the `rm` are two looks, not one. A same-uid rename in between is removed with the leaf. The
     collector's quarantine rename closes this for a collected leaf (§5.10), and the tail keeps the window. Beside it,
     a registry row placed into a leaf after the ownership check the
@@ -707,8 +731,8 @@ tree moved in AS the leaf has its root's owner bits set (555 reads 755 afterward
   - A clone, a submodule of one, or a worktree of one inside a leaf is the leaf's own, and goes with it. That
     includes a foreign main checkout, a `.git` directory, moved into a leaf: with no registry row naming it, it
     passes the question and is removed with its object store. This is ruled, because a clone in a leaf is the leaf's
-    own. A registry row that names the moved tree's old path is a gone row, and the blanket hold on a gone row keeps
-    the child unmeasured.
+    own. A registry row that names the moved tree's old path is a gone row, and it keeps the child unmeasured: such a
+    row is released only when no `.git` of any kind stands at or under a leaf (§5.5), and this tree has one.
   - The bind-mount alias spelling of a leaf is not compared. This is the existing residual (§7).
   - On a case-insensitive file system (Darwin APFS), a hand-renamed `.GIT` that git honours is missed by the walk's
     name match. Git never writes that name.
@@ -1040,7 +1064,8 @@ rungs. It never skips the ownership comparison with other rows (§5.5, D-3731). 
 liveness reading makes a projected row placeable, whether its session is up, gone, or tmux cannot be asked. A
 session reported gone may still have processes whose cwd is inside the child, and a live one exposes nothing
 that ccd could check against a removed alias. Presence defers. Only a complete resolution places a row, and even
-that places its spelling, not its session (D-3735).
+that places its spelling, not its session (D-3735). A gone pane and a stopped unit can only let a gone row stop
+holding, with no checkout under the child or a leaf (§5.5, #2294), and that places nothing.
 
 ### 5.8 The kill-switch
 
@@ -1795,10 +1820,11 @@ approved on a narrow one.
      bounded to this uid's own files and their owner bits.
    - The checkout question (§5.6) sees checkouts and nothing else. A tree stripped of its `.git`, or content that is
      no checkout, parked in a clips directory or a temp root is not seen. The base held these only by accident,
-     through the blanket hold on a gone row. A clone, a submodule of one, or a worktree of one inside a leaf is the
+     through the hold on a gone row, which since #2294 ends once nothing runs for the row (the residual in §5.5). A
+     clone, a submodule of one, or a worktree of one inside a leaf is the
      leaf's own and goes with it, and so does a foreign main checkout, a `.git` directory, moved into a leaf with no
      registry row naming it: it is removed with its object store. A row that names the moved tree's old path is a
-     gone row, and the blanket hold keeps the child unmeasured. The bind-mount alias spelling of a leaf is not
+     gone row, and it keeps the child unmeasured, because a `.git` at or under a leaf keeps such a row held. The bind-mount alias spelling of a leaf is not
      compared. The question and the `rm` are two looks, and the same-uid rename window above covers both. A registry
      row placed into a leaf after the ownership check the tail makes at its start is not asked again at step 6;
      the removal-time question and the temp root's in-use probe still stand, and the worktree has the same window

@@ -168,6 +168,12 @@ row's entry field would each release a child that row may share. The reclamation
 explicitly ("NO FIELD RELEASES A ROW", `ccd/ccd:31506-31510`). So the hold stays, and what changes is how fast the
 operator learns of it. A narrower rule needs a new proof and a ruling (Waiting on you).
 
+**Amended 2026-11-05 (#2294, D-8019).** #2294 asked for that narrowing, and it is built on a new proof, on none of
+the three scopes rejected above. A gone row stops holding when nothing runs for it and no checkout stands under the
+child or a leaf (child-reclamation spec §5.5). With no checkout there no moved tree is, and with nothing running no
+tree is in use. A gone row something may run for still holds every child, one beside a checkout holds that child, and
+R2 still names both. The operator confirms this on that PR.
+
 ### 4.2 ccd names the rows
 
 `_ws_reclaim_workdir_shared` keeps a new global, `_WS_HELD_BY`: one `id<TAB>word` line for each OTHER row in a
@@ -288,7 +294,7 @@ This section lists what the design leaves alone on purpose.
   acts behind re-proved tokens. No verb is added. No exec grant is added.
 - **No new refusal word.** `no-worktree-record`, `witness-mismatch`, `containment-unproven` and `probe-unmeasured`
   keep their meanings.
-- **The rows rung's hold for unrecorded rows** stays box-wide (D6).
+- **The rows rung's hold for unrecorded rows** stays box-wide (D6), save the release #2294 built (§4.1).
 - **ccd never creates a directory at a gone path, never prunes, never purges a row** (the recovery census).
 - **`ws-gc --prune`** still runs a repo-wide prune: it is an operator verb (Later).
 - **No pacing change.** The sweeps' backoff and tier stay as they are (Later).
@@ -304,7 +310,7 @@ Each decision below is the drafter's call inside the operator's scope of item 36
 | D3 | Archive records written before this change | place by `.workdir` as it reads now; place nothing | place nothing: an old record cannot prove the spelling was physical then | Open |
 | D4 | A liveness input in the arm | require no running unit; no liveness input | none: liveness never makes a projection evidence (§5.5) | Proposed |
 | D5 | The tail's nested scan for an archive-placed row | as the breadcrumb arm (no scan); force the scan | force it: stricter, and a move between ladder and tail is caught | Proposed |
-| D6 | Narrowing ccd's hold for unrecorded rows | by project; by entry field; by time; not at all | not at all: no durable source proves the row is outside a child | Open |
+| D6 | Narrowing ccd's hold for unrecorded rows | by project; by entry field; by time; not at all | not at all: no durable source proves the row is outside a child. Amended by #2294 (§4.1): none of these, a new proof instead | Open, for the operator on #2294 |
 | D7 | How ccd names the holding rows | parse the sentence; a structured `heldBy` | `heldBy` ids with a word: the server never parses prose | Proposed |
 | D8 | Per-child items of held children | keep all; fold into the row's line | fold: one line per row, children counted, other refusals kept | Proposed |
 | D9 | Which sessions the prune deny covers | children only; every session | every session: any session's prune wedges the box | Proposed |
@@ -365,7 +371,8 @@ reclaims again, and R2's line shows any row that still holds. The five rows git 
   recommends no; then the two live rows need your one-time act (§10).
 - D6: ccd's hold for rows with no durable record stays box-wide. A narrower rule (for example, an archived row whose
   archive time precedes the child's birth) would need a new proof and has a box-move hole (a copied tree is born
-  again on the new box). The drafter recommends not building any narrowing in this set.
+  again on the new box). The drafter recommends not building any narrowing in this set. #2294 has since built one on
+  a different proof (§4.1), and it waits on your confirmation there.
 - D12: build the collector's box-move release, or rule once on the roots it would take.
 - The one-time act on `row-a` and `row-b` (§10), whichever you choose.
 
