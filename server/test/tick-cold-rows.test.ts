@@ -1,6 +1,6 @@
 // Cold rows cost the tick nothing (console speed S1, Step 4). RED before the tick passes the row cache.
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { usageSidecarPath, USAGE_FRESH_S } from '../src/usage.js';
 import { LIVE, STOPPED, STAMP, makeHarness } from './tickListingHarness.js';
@@ -126,5 +126,47 @@ describe('FleetWatcher.tick cold rows (console speed S1)', () => {
     await h.watcher.tick();
     expect(h.readsOf(b)).toEqual([]);
     expect(h.watcher.currentUsage().get(b)!.cost).toBe(1.25);
+  });
+
+  it('a lane run that only carries a cold row does not renew its read time', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    const h = makeHarness();
+    const b = STOPPED[1]!;
+    writeUsage(h, b, 1.25);
+    await h.watcher.tick();      // read at t0
+    await h.watcher.tick();      // cold from here
+    writeUsage(h, b, 9.5);
+    vi.setSystemTime(Date.now() + 10_000);
+    h.watcher.kick('usage');
+    await h.watcher.tick();      // +10 s: carried, and still 1.25
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(1.25);
+    vi.setSystemTime(Date.now() + 21_000);
+    await h.watcher.tick();      // +31 s: the row's own re-read; the usage lane is not due
+    vi.setSystemTime(Date.now() + 1_000);
+    h.watcher.kick('usage');
+    await h.watcher.tick();      // +32 s from the first read: due, though the +10 s run carried it
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(9.5);
+  });
+
+  it('an unreadable sidecar is not a read: the next lane run inside 30 s reads it again', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    const h = makeHarness();
+    const b = STOPPED[1]!;
+    const sidecar = usageSidecarPath(h.reg, b);
+    writeUsage(h, b, 1.25);
+    await h.watcher.tick();      // read at t0
+    await h.watcher.tick();
+    rmSync(sidecar);
+    mkdirSync(sidecar);          // a directory where the file was: the read is unreadable
+    vi.setSystemTime(Date.now() + 31_000);
+    h.watcher.kick('usage');
+    await h.watcher.tick();      // +31 s: the row is hot (its own re-read), the sidecar cannot be read, the old entry stays
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(1.25);
+    rmSync(sidecar, { recursive: true });
+    writeUsage(h, b, 9.5);
+    vi.setSystemTime(Date.now() + 1_000);
+    h.watcher.kick('usage');
+    await h.watcher.tick();      // +32 s: the row is cold again; the failed read was no read, so the row is still due
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(9.5);
   });
 });
