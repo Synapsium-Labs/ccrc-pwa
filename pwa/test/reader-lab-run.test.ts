@@ -315,7 +315,7 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     const scrolled: string[] = [];
     let pending = '';
     const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
-      if (this.tagName === 'IFRAME') { scrolled.push(pending); pending = ''; }
+      if (this.tagName === 'IFRAME') { expect(this.isConnected, 'frame is attached when scrolled').toBe(true); scrolled.push(pending); pending = ''; }
     });
     try {
       await runReaderLab({ ...r.deps,

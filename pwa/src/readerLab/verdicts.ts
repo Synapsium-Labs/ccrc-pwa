@@ -178,16 +178,20 @@ function strays(r: LabRunView, local: LabLocal): LabOutcome {
   return holds(`${LAB_STRAYS_POSTED} sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised`);
 }
 
-/** A fact, never a pass or a fail: whether the busy frame shares the console's thread (its spin stops the console's
- *  frames for most of the spin), and how late the console's timer, the reader watchdog's stand-in, fired. It steers the
- *  Mermaid policy and gates nothing: a deliberate spin on a shared thread can meet no budget. */
+/** A fact, never a pass or a fail: whether the busy frame shares the console's thread, evidenced by a long frame gap or
+ *  a late console timer (the reader watchdog's stand-in). It steers the Mermaid policy and gates nothing: a deliberate
+ *  spin on a shared thread can meet no budget. */
 function busyFrame(r: LabRunView, local: LabLocal): LabOutcome {
   const b = local.busy;
   if (b === null || hits(r, 'busy-start') === 0 || hits(r, 'busy-end') === 0) return unmeasured('the busy frame did not run');
   if (b.gapHidden) return unmeasured('the page was hidden');
+  const gap = b.longestGapMs >= 0.8 * b.spinMs;
+  const timer = b.timerLateMs >= 0.5 * b.spinMs;
+  const evidence = gap && timer ? 'gap and timer' : gap ? 'gap' : 'timer';
   return {
-    verdict: b.longestGapMs >= 0.8 * b.spinMs ? 'shared-thread' : 'own-thread',
-    detail: `longest gap ${ms(b.longestGapMs)} ms in a ${ms(b.spinMs)} ms spin; watchdog timer ${ms(b.timerLateMs)} ms late`,
+    verdict: gap || timer ? 'shared-thread' : 'own-thread',
+    detail: `longest gap ${ms(b.longestGapMs)} ms in a ${ms(b.spinMs)} ms spin; watchdog timer ${ms(b.timerLateMs)} ms late`
+      + (gap || timer ? `; shared-thread evidence: ${evidence}` : ''),
   };
 }
 

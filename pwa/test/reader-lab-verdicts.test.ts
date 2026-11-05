@@ -163,10 +163,26 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
 
   it('busy frame: a fact, never a pass or a fail: a gap over most of the spin is a shared thread, whatever the budget (F2)', () => {
     const shared = verdictsOf({}, { ...LOCAL_OK, busy: { longestGapMs: 3012, timerLateMs: 2489, spinMs: 3000 } })['busy-frame'];
-    expect(shared).toEqual({ verdict: 'shared-thread', detail: 'longest gap 3012 ms in a 3000 ms spin; watchdog timer 2489 ms late' });
+    expect(shared).toEqual({ verdict: 'shared-thread', detail: 'longest gap 3012 ms in a 3000 ms spin; watchdog timer 2489 ms late; shared-thread evidence: gap and timer' });
     expect(verdictsOf({}, { ...LOCAL_OK, busy: { longestGapMs: 30, timerLateMs: 250, spinMs: 3000 } })['busy-frame'].verdict).toBe('own-thread');
     expect(verdictsOf({ 'busy-end': { hits: 0 } })['busy-frame'].verdict).toBe('not-measured');
     expect(verdictsOf({}, { ...LOCAL_OK, busy: null })['busy-frame'].verdict).toBe('not-measured');
+  });
+
+  it('busy frame: a late timer exposes a shared thread even when the first frame misses the spin', () => {
+    const busy = (longestGapMs: number, timerLateMs: number) => verdictsOf({}, {
+      ...LOCAL_OK, busy: { longestGapMs, timerLateMs, spinMs: 3000 },
+    })['busy-frame'];
+    expect(busy(30, 2500)).toEqual({ verdict: 'shared-thread', detail: 'longest gap 30 ms in a 3000 ms spin; watchdog timer 2500 ms late; shared-thread evidence: timer' });
+    expect(busy(2400, 250)).toEqual({ verdict: 'shared-thread', detail: 'longest gap 2400 ms in a 3000 ms spin; watchdog timer 250 ms late; shared-thread evidence: gap' });
+  });
+
+  it('busy frame: timer evidence starts at half the spin, not just below it', () => {
+    const busy = (timerLateMs: number) => verdictsOf({}, {
+      ...LOCAL_OK, busy: { longestGapMs: 30, timerLateMs, spinMs: 3000 },
+    })['busy-frame'].verdict;
+    expect(busy(1499)).toBe('own-thread');
+    expect(busy(1500)).toBe('shared-thread');
   });
 
   it('a hidden busy window is not measured and cannot favour draw on open', () => {

@@ -160,8 +160,8 @@ describe('the reader lab frames (reader lab plan, Task 6)', () => {
     expect(run(bare, { base: BASE, prefix: 'ctl-', canary: false }, { [LAB_IMPORT_MARK]: true })).toEqual([]);
     // With the channels in, the import channel is the one the battery leaves to its own script.
     const names: string[] = [];
-    const spy = BATTERY_SCRIPT.replace(LAB_BATTERY_CHANNELS_JS, `new Proxy({}, { ownKeys: () => ${JSON.stringify(['fetch-cors', LAB_IMPORT_CHANNEL, 'image'])}, getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }), get: (t, k) => (u) => names.push(String(k) + '=' + u) })`);
-    new Function('document', 'window', 'Image', 'names', spy)({ currentScript: { previousElementSibling: { textContent: JSON.stringify(wall) } } }, {}, class {}, names);
+    const spy = BATTERY_SCRIPT.replace(LAB_BATTERY_CHANNELS_JS, `new Proxy({}, { ownKeys: () => keys, getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }), get: (t, k) => (u) => names.push(String(k) + '=' + u) })`);
+    new Function('document', 'window', 'Image', 'names', 'keys', spy)({ currentScript: { previousElementSibling: { textContent: JSON.stringify(wall) } } }, {}, class {}, names, ['fetch-cors', LAB_IMPORT_CHANNEL, 'image']);
     expect(names).toEqual([`fetch-cors=${BASE}csp-fetch-cors`, `image=${BASE}csp-image`]);
     // The import script: the mark is set before the import is asked for, and the URL is the data block's.
     const win: Record<string, unknown> = {};
@@ -181,7 +181,9 @@ describe('the reader lab frames (reader lab plan, Task 6)', () => {
   it('every URL any lab frame can form is the console origin plus this run\'s probe path (M10.11)', () => {
     const urlsIn = (t: string): string[] => t.match(/[a-z][a-z0-9+.-]*:\/\/[^\s'"`)<>\\]*/gi) ?? [];
     for (const [name, script] of Object.entries(LAB_FRAME_SCRIPTS)) {
-      expect(urlsIn(script), `${name} spells a URL of its own`).toEqual(script.includes(SVG_NS) ? [SVG_NS] : []);
+      const urls = urlsIn(script);
+      expect(urls.filter((url) => url !== SVG_NS), `${name} spells a URL of its own`).toEqual([]);
+      expect(urls.filter((url) => url === SVG_NS).length).toBeLessThanOrEqual(1);
       const policy = name === 'battery' ? labWallCsp(`'nonce-${SCRIPT_NONCE}'`, HASH_SOURCE, CANARY) : null;
       for (const url of urlsIn(labSrcdoc({ script, config: { base: BASE }, importChannel: name === 'battery' }, policy, null))) {
         expect(url === SVG_NS || url.startsWith(BASE), `${name}: ${url}`).toBe(true);
