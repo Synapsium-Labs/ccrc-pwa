@@ -285,8 +285,8 @@ export class SessionStream implements FeedSubscriber {
      *  state, and it is a state with no offset to protect. */
     private readonly since?: { uuid: string; offset: number; file?: string | null },
     /** The watcher's last tick (console speed S2). Given, `resolve()` takes the row, the pane verdict and the pid from
-     *  it while they are fresh, and the stream re-resolves on `row:<id>` and a backstop instead of every `POLL_MS`.
-     *  Omitted, the stream is exactly what it was. */
+     *  it while they are fresh; the stream re-resolves on `row:<id>`, on a status change `lookInListing` sees every
+     *  `POLL_MS` (a full tick when no fresh listing has the row) and on a backstop. Omitted, it is what it was. */
     private readonly rows?: RowFactsSource,
   ) {
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
@@ -674,8 +674,8 @@ export class SessionStream implements FeedSubscriber {
 
   /** Registry record + live state → current uuid, transcript file, and status. */
   private async resolve(): Promise<Resolution> {
-    // C0.3: one session's own row, not the whole registry — this stream only
-    // ever asks about `this.id`, every 2 s, for as long as the socket is open.
+    // C0.3: one session's own row, not the whole registry — this stream only ever asks about `this.id`: on a
+    // row event, a status change in the watcher's listing or the backstop (every 2 s with no watcher).
     const served = this.rows ? servedFromWatcher(this.rows.currentRowFacts(this.id), Date.now()) : null;
     const facts = served?.serve ? served.value : null;
     const read = facts ? { kind: 'found' as const, record: facts.record } : await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
