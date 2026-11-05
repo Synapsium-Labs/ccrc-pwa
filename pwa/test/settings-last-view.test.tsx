@@ -318,3 +318,45 @@ describe('Settings keeps its last view across visits (console speed C2)', () => 
     expect(peek(settingsKey('dispatch-abandon'))?.raw).toEqual(newer);
   });
 });
+
+describe('leaving Settings stops its reads (console speed C2, step 5)', () => {
+  it('leaving Settings aborts its six reads', () => {
+    const signals = new Map<string, AbortSignal | undefined>();
+    for (const m of ['updates', 'stallWatch', 'collectLane', 'dispatchAbandon', 'testbox', 'linearWorkspaces'] as const) {
+      vi.spyOn(api, m).mockImplementation(((opts?: { signal?: AbortSignal }) => {
+        signals.set(m, opts?.signal);
+        return never();
+      }) as never);
+    }
+    vi.stubGlobal('fetch', vi.fn(never));
+    const r = visit();
+    expect([...signals.keys()].sort()).toEqual(
+      ['collectLane', 'dispatchAbandon', 'linearWorkspaces', 'stallWatch', 'testbox', 'updates']);
+    for (const [m, s] of signals) {
+      expect(s, m).toBeInstanceOf(AbortSignal);
+      expect(s!.aborted, `${m} before leaving`).toBe(false);
+    }
+    r.unmount();
+    for (const [m, s] of signals) expect(s!.aborted, `${m} after leaving`).toBe(true);
+  });
+
+  it('leaving Settings aborts the auth status read and the passkey list read', async () => {
+    let statusSignal: AbortSignal | null | undefined;
+    let passkeysSignal: AbortSignal | undefined;
+    holdAll();
+    vi.spyOn(api, 'passkeys').mockImplementation(((opts?: { signal?: AbortSignal }) => {
+      passkeysSignal = opts?.signal;
+      return never();
+    }) as never);
+    vi.stubGlobal('fetch', vi.fn(async (_path: string, init?: RequestInit) => {
+      statusSignal = init?.signal;
+      return reply(200, AUTH);
+    }));
+    const r = visit();
+    await waitFor(() => expect(passkeysSignal).toBeInstanceOf(AbortSignal));
+    expect(statusSignal).toBeInstanceOf(AbortSignal);
+    expect([statusSignal!.aborted, passkeysSignal!.aborted]).toEqual([false, false]);
+    r.unmount();
+    expect([statusSignal!.aborted, passkeysSignal!.aborted]).toEqual([true, true]);
+  });
+});

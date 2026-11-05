@@ -34,7 +34,7 @@ export function useDispatchAbandonView(pollMs: number = DISPATCH_ABANDON_POLL_MS
     () => ({ view: asDispatchAbandonView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
-    request: () => api.dispatchAbandon(),
+    request: (signal) => api.dispatchAbandon({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asDispatchAbandonView(outcome.raw);

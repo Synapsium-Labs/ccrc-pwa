@@ -122,7 +122,7 @@ export function useTestboxView(pollMs: number = TESTBOX_POLL_MS): TestboxPoll {
     () => ({ view: asTestboxRead(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load } = usePoll({
     pollMs,
-    request: () => api.testbox(),
+    request: (signal) => api.testbox({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asTestboxRead(outcome.raw);

@@ -35,7 +35,7 @@ export function useLinearWorkspaces(): LinearWorkspacesPoll {
     () => ({ view: readLinearWorkspaces(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs: null,
-    request: () => api.linearWorkspaces(),
+    request: (signal) => api.linearWorkspaces({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const v = outcome.raw as LinearWorkspacesRead | 'unreadable';

@@ -116,7 +116,7 @@ export function useCollectLaneView(pollMs: number = COLLECT_LANE_POLL_MS): Colle
     () => ({ view: asCollectLaneView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
-    request: () => api.collectLane(),
+    request: (signal) => api.collectLane({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asCollectLaneView(outcome.raw);

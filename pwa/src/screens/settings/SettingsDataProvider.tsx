@@ -161,20 +161,23 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const [authAsk, setAuthAsk] = useState(0);
   useEffect(() => {
     let live = true;
-    void readAuthStatus().then(
+    // Leaving Settings (or a newer refresh) aborts both reads in flight, as `usePoll` does for the six polls.
+    const ctl = new AbortController();
+    const signalled: typeof fetch = (input, init) => fetch(input, { ...init, signal: ctl.signal });
+    void readAuthStatus(signalled).then(
       (status) => {
         if (!live) return;
         put(AUTH_KEY, status, Date.now());
         setAuth({ kind: 'read', status });
         if (!armedMode(status.mode)) { forget(PASSKEYS_KEY); setPasskeys({ kind: 'unasked' }); return; }
-        void api.passkeys().then(
+        void api.passkeys({ signal: ctl.signal }).then(
           (list) => { if (!live) return; put(PASSKEYS_KEY, list, Date.now()); setPasskeys({ kind: 'read', list }); },
           () => { if (live) setPasskeys({ kind: 'failed' }); },
         );
       },
       () => { if (live) { setAuth({ kind: 'failed' }); setPasskeys({ kind: 'unasked' }); } },
     );
-    return () => { live = false; };
+    return () => { live = false; ctl.abort(); };
   }, [authAsk]);
   // A re-read after the operator's own write (an Add or a Revoke): the kept answers are from before it, so they go.
   const refreshAuth = useCallback(() => { forget(AUTH_KEY); forget(PASSKEYS_KEY); setAuthAsk((n) => n + 1); }, []);

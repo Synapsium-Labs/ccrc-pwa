@@ -90,7 +90,7 @@ export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWa
     () => ({ view: asStallWatchView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
-    request: () => api.stallWatch(),
+    request: (signal) => api.stallWatch({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asStallWatchView(outcome.raw);

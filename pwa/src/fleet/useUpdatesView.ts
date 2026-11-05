@@ -85,7 +85,7 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
     () => ({ view: asUpdatesView(peek(CACHE_KEY)?.raw), failure: null, seq: 0 }));
   const { reload } = usePoll({
     pollMs,
-    request: () => api.updates(),
+    request: (signal) => api.updates({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome, issue) => {
       if (outcome.ok) {
         const view = asUpdatesView(outcome.raw);
