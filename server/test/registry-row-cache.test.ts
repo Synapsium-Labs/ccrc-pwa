@@ -104,6 +104,22 @@ describe('readRegistryMeasured over a cache', () => {
     expect(c.requests.slice(before3).some((q) => q.path.includes(`${stoppedId}.`))).toBe(true);
   });
 
+  it('a cold row reused at +20 s is still read in full at +40 s from its first read', async () => {
+    const reg = fleetFixture(20);
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const verdicts = (): SessionVerdict => gone;
+    const stoppedId = 'lane-a-project-017';
+    await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 });
+    const mid = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 21_000 });
+    expect(mid.listed && mid.cold.has(stoppedId)).toBe(true);
+    const before = c.requests.length;
+    const late = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 41_000 });
+    // age since the FIRST full read is 40 s: a reuse must not have refreshed it
+    expect(late.listed && late.cold.has(stoppedId)).toBe(false);
+    expect(c.requests.slice(before).some((q) => q.path.includes(`${stoppedId}.`))).toBe(true);
+  });
+
   it('a cold row whose .stopped left the listing is read in full', async () => {
     const reg = fleetFixture(20);
     const dir = fixtureConfig().registryDir;
