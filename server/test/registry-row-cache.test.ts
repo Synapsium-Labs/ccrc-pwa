@@ -120,6 +120,25 @@ describe('readRegistryMeasured over a cache', () => {
     expect(c.requests.slice(before).some((q) => q.path.includes(`${stoppedId}.`))).toBe(true);
   });
 
+  it('a row whose plain field read came back unreadable is not stored, so the next tick reads it again', async () => {
+    const reg = fleetFixture(20);
+    const dir = fixtureConfig().registryDir;
+    const id = 'lane-a-project-005';   // carries a `.base`, a plain field
+    reg.unreadable = new Set([path.join(dir, `${id}.base`)]);
+    const c = countingIO(reg);
+    const cache = new RegistryRowCache();
+    const verdicts = (): SessionVerdict => ({ verdict: 'live' });
+    const first = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 1000 });
+    expect(first.listed && first.records.find((r) => r.id === id)?.base).toBeNull();
+    expect(cache.get(id)).toBeUndefined();
+    const before = c.requests.length;
+    const second = await readRegistryMeasured(c.io, fixtureConfig(), { cache, verdicts, nowMs: 2000 });
+    expect(second.listed && second.reused.has(id)).toBe(false);
+    expect(c.requests.slice(before).some((q) => q.path.includes(`${id}.`))).toBe(true);
+    // the flag is the record's own and never reaches the wire shape: a readable row carries none
+    expect(first.listed && first.records.find((r) => r.id === 'lane-a-project-001')).not.toHaveProperty('plainFieldUnreadable');
+  });
+
   it('a cold row whose .stopped left the listing is read in full', async () => {
     const reg = fleetFixture(20);
     const dir = fixtureConfig().registryDir;

@@ -227,6 +227,10 @@ export interface SessionRecord {
    *  not a fact about identity, which is exactly why this array — not the
    *  empty string — is the thing a caller must check: see `measuredIdentity`. */
   unmeasured: readonly IdentityField[];
+  /** SERVER-SIDE ONLY, never on a wire type: set when a plain field (`.archived`, `.prphase`, `.workspace` and the like,
+   *  read through `listedField`) came back `unreadable` and folded to null. Absent on every clean record. The row cache
+   *  reads it through `isCleanRecord`, so such a record is never stored. */
+  plainFieldUnreadable?: true;
   /** `$REG/<id>.stopped` — `<epoch> <surface>`, written by `_ws_unsupervise`
    *  (the single choke point every deliberate unsupervise reaches systemd
    *  through: `cmd_stop`, `ws-rm`, `ws-archive`, `ws-reap`, `forget`) and
@@ -556,20 +560,14 @@ export const SUBSTRATE_UNREADABLE = '<substrate marker unreadable>';
  */
 export const SUBSTRATE_NO_REASON = '<substrate marker empty — reason lost>';
 
-async function field(io: FleetIO, dir: string, id: string, name: string): Promise<string | null> {
-  const content = await io.readFile(path.join(dir, `${id}.${name}`));
-  return content !== null ? content.trim() : null;
-}
-
 /**
- * `field()`'s measured twin (Task 5): reads through `io.readFileMeasured`
- * instead of `io.readFile`, so a caller gets `absent`/`unreadable` apart
- * rather than collapsed to one `null`. `field()` itself is UNCHANGED and
- * keeps calling `io.readFile` — it stays the reader for every registry field
- * that has not migrated to the measured ladder (see the per-site ruling in
- * the plan; `field()` still backs `home`/`pool`/`lastswap`/
- * `workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/`archived`/
- * `archivemanifest`/`swapblocked`/`spawn`).
+ * The registry's field reader (Task 5): reads through `io.readFileMeasured`,
+ * so a caller gets `absent`/`unreadable` apart rather than collapsed to one
+ * `null`. The fields that have not migrated to the measured ladder (`home`/
+ * `pool`/`lastswap`/`workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/
+ * `archived`/`archivemanifest`/`swapblocked`/`spawn`) still fold a failure
+ * to null, in `buildRecord`'s `listedField`, which also marks the record
+ * (`plainFieldUnreadable`) when the read was `unreadable`.
  *
  * Trims INSIDE the `ok` arm, deliberately, so `r.content` on a hit is
  * ALREADY what `field()`'s callers have always received: `field()`'s own
@@ -831,8 +829,17 @@ async function buildRecord(
   // the listing alone and costs no agent request: a measured read answers `absent` (a synthesized absence, presence
   // as of the listing), a plain read answers `null`. A LISTED field is read exactly as before, so a listed read that
   // fails stays `unreadable` (never folded to `absent`), and a listed read that answers `absent` is a raced removal.
-  const listedField = (f: string): Promise<string | null> =>
-    names.has(`${id}.${f}`) ? field(io, cfg.registryDir, id, f) : Promise.resolve(null);
+  // A failed plain-field read still answers null (as on main, and as `field()` does), but it is remembered: the record
+  // then carries `plainFieldUnreadable` and is not cacheable (`isCleanRecord`), so the row cache cannot stretch a
+  // one-tick read glitch to its 30 s bound. Measured and plain reads are one request each, so the count is unchanged.
+  let plainUnreadable = false;
+  const listedField = async (f: string): Promise<string | null> => {
+    if (!names.has(`${id}.${f}`)) return null;
+    const r = await fieldMeasured(io, cfg.registryDir, id, f);
+    if (r.ok) return r.content;
+    if (r.reason === 'unreadable') plainUnreadable = true;
+    return null;
+  };
   const listedMeasured = (f: string, as?: 'trimmed' | 'shell'): Promise<MeasuredRead> =>
     names.has(`${id}.${f}`)
       ? fieldMeasured(io, cfg.registryDir, id, f, as)
@@ -1100,6 +1107,7 @@ async function buildRecord(
   const route: SessionRecord['route'] = allAbsent ? null : { fields: routeFields, degraded, inert, unreadable };
 
   return {
+    ...(plainUnreadable ? { plainFieldUnreadable: true as const } : {}),
     id, wrapper: measured.wrapper, project: projectRead.ok ? projectRead.content : id,
     projectEvidence: projectRead.ok ? 'measured' : projectRead.reason, workdir: measured.workdir, uuid: measured.uuid,
     started: startedRead.ok && startedRead.content === '1',
@@ -1639,12 +1647,13 @@ export function parseHibernated(raw: string | null): number | null {
 
 /** A record NO field of which is unmeasured or unreadable (spec §2.1: "no unmeasured or unreadable field"): nothing
  *  unmeasured, no lifecycle field unmeasured, a project and a branch that did not read as `unreadable` (a MEASURED
- *  absence, a main checkout's ordinary state, is clean), no unreadable route field, a readable hold,
+ *  absence, a main checkout's ordinary state, is clean), no plain field (`listedField`) that failed to read, no unreadable route field, a readable hold,
  *  substrate and strand marker, and no `unreadable` child, deny-settings or child-shell mark. The one predicate for "may be reused or cached" (the row cache uses this too).
  *  `namedByOperator` is a boolean that is true for a readable AND an unreadable operator-name read, so the record
  *  cannot tell them apart and no clause can be written for it. */
 export function isCleanRecord(rec: SessionRecord): boolean {
-  return rec.unmeasured.length === 0
+  return rec.plainFieldUnreadable !== true
+    && rec.unmeasured.length === 0
     && rec.lifecycleUnmeasured.length === 0
     && rec.projectEvidence !== 'unreadable'
     && rec.branchEvidence !== 'unreadable'
