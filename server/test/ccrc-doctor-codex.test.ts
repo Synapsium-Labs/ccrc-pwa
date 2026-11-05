@@ -21,7 +21,7 @@ import { PRELOADS, preloadOptions } from './historyHelpers.js';
 import { plantDirectLane, plantRunningBridge, writeBridgeRecord } from './ccrc-doctorFixture.js';
 import { runBridgeDriver } from './codexBridgeFixture.js';
 import { SW_DENYLIST_DEFAULT, swJs } from './swFixtures.js';
-import { SERVER_CAPS_LEASE_S } from '../../shared/api.js';
+import { SERVER_CAPS_LEASE_S, BOX_SETTING_SPECS, BOX_SETTINGS_SHOWN } from '../../shared/api.js';
 import { installDoctorHooks, here, REPO, CCRC_SRC, CHECKS_SRC, BASH, realPath, Result, installCcrc, writeChecks, stubBin, stub, unstub, linkReal, stubNode, RosterEntry, UPSTREAM, writeRoster, writeRawRoster, entry, binDir, shq, writeCcrcEnv, stubLaunchctl, unitDirOf, unitFileOf, writeUnitFile, removeUnitFile, containedPath, doctorEnv, OOM_DROPIN, plantOomPolicy, DOCTOR_DEADLINE_BIN, runDoctorBounded, runDoctor, DH_INSTALLER, installerEvents, installerHook, plantHookRegistration, plantSpoolDir, BT_PY_ARM, healthy, PY, describeCodex, itCodex, writeLaneModels, renderLane, startedJson, lanePorts, editRosterRow, healthyCodexBox, broken, tableNames, lineFor, anyVerdictFor, HEALTHY_SKIPS, noRunnerBugLine, plantSession, checksDecl, FixCodexCase, AGED, laneFileText, SHARED_PORT_REFUSAL, FIX_TRIPWIRES, plantHistoryShim, historyBox } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
@@ -6626,6 +6626,12 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
   };
   const out = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
   const verdict = (r: Result): string => out(r).find((l) => /^(PASS|WARN|FAIL|SKIP) box-settings: /.test(l)) ?? '';
+  // On macOS `_ccrc_knob` reads ccrc.env by its own rule: the launchd job sources both env files with bash, so ONE line that
+  // is not a plain NAME=value line makes every key that file names (and CCRC_BACKUP_DATA_KEEP, always) unmeasured, with the
+  // launchd sentence. The rows below that plant a space, a `?` or the like therefore assert that sentence on macOS and
+  // keep their leak checks on both platforms; the `plain` fixtures carry the Linux shape on macOS too.
+  const MAC = process.platform === 'darwin';
+  const LAUNCHD = /cannot be measured: ~\/\.ccrc\/ccrc\.env line \d+ is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set/;
 
   it('W24-S1: nothing set', () => {
     const r = runBs(settingsBox('ccrc-doctor-bs-none-', ['CCRC_FLEET=local']));
@@ -6658,7 +6664,8 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
 
   it('W24-S4: a mirror\'s credentials never print', () => {
     const r = runBs(settingsBox('ccrc-doctor-bs-url-', ['CCRC_RELEASE_BASE_URL=https://u:hunter2@mirror.example/releases']));
-    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=https:\/\/mirror\.example\/releases;/);
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=custom https:\/\/mirror\.example;/);
+    expect(r.stdout, 'D-7918: the origin only, never the path').not.toContain('/releases');
     expect(r.stdout).not.toContain('hunter2');
     expect(r.code).toBe(0);
   });
@@ -6673,8 +6680,7 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
 
   it('W24-S6: a scheme-less mirror base\'s credentials never print either (curl reads it as http)', () => {
     const r = runBs(settingsBox('ccrc-doctor-bs-url-bare-', ['CCRC_RELEASE_BASE_URL=u:hunter2@mirror.example/r']));
-    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=mirror\.example\/r;/);
-    expect(r.stdout).toContain('mirror.example');
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=custom;/);   // D-7923: no scheme shows `custom` alone; it read `custom mirror.example` before
     expect(r.stdout).not.toContain('hunter2');
     expect(r.code).toBe(0);
   });
@@ -6775,9 +6781,10 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
 
-  it.each([['W24-S13', 'one slash', 'http:/'], ['W24-S14', 'three slashes', 'https:///']] as const)('%s: a mirror base whose scheme has %s (`%s`, which curl authenticates with) prints no credential (D-6748, fix round 4)', (id, _what, scheme) => {
+  it.each([['W24-S13', 'one slash', 'http:/'], ['W24-S14', 'three slashes', 'https:///']] as const)('%s: a mirror base whose scheme has %s (`%s`, which curl authenticates with) prints no credential and no origin (D-6748, D-7918)', (id, _what, scheme) => {
     const home = settingsBox(`ccrc-doctor-bs-url-${id === 'W24-S13' ? 1 : 3}slash-`, [`CCRC_RELEASE_BASE_URL=${scheme}u:hunter2@mirror.example/r`]);
-    const want = `PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=${scheme}mirror.example/r; `;
+    // `_upd_url_origin` answers rc 1 for a `/` before the last `@` (the userinfo is not decidable), so the line holds `custom` alone (D-7918).
+    const want = `PASS box-settings: the box's ccrc.env sets CCRC_RELEASE_BASE_URL=custom; `;
     for (const [how, r] of [['as doctor runs it', runBs(home)], ['the check\'s own mask alone', runBsOwnMask(home)]] as const) {
       expect(verdict(r).startsWith(want), `${how}: ${r.stdout}${r.stderr}`).toBe(true);
       expect(r.stdout, how).not.toContain('hunter2');
@@ -6818,5 +6825,174 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
     expect(verdict(r), r.stdout + r.stderr).toMatch(
       /^PASS box-settings: the box's ccrc.env sets CCRC_BACKUP_KEEP=5, CCRC_USAGE_SWEEP_DAYS=4 \(read by the ccd-\* sweeps, which do not run on a server-role box\); not set there/);
     expect(r.code).toBe(0);
+  });
+
+  // ── box settings wave 2, Task 7 (D18; D-7918, D-7919): doctor reads the class table ──────────────────────────────
+  /** The closed-set words of `_set_says <KEY>`, read from bash in the box's own HOME (never a pasted copy). */
+  const says = (home: string, key: string): string => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; _set_libs; _set_says ${key}`], { env: doctorEnv(home), encoding: 'utf8' });
+    return (r.stdout ?? '').replace(/\n$/, '');
+  };
+  const fleetBox = (prefix: string, lines: string[]): string => roleBox(prefix, 'fleet', lines);
+  const OMIT_KEYS = (Object.keys(BOX_SETTING_SPECS) as (keyof typeof BOX_SETTING_SPECS)[]).filter((k) => BOX_SETTING_SPECS[k].cls === 'omit');
+
+  it('W2-D1: a passing value prints its value', () => {
+    const r = runBs(fleetBox('ccrc-doctor-bs-d1-', ['CCRC_GRAPH_BUDGET=4', 'CCRC_SESSION_SLICE_MEMORY_MAX=20G']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(r)).toContain('CCRC_GRAPH_BUDGET=4');
+    expect(verdict(r)).toContain('CCRC_SESSION_SLICE_MEMORY_MAX=20G');
+    expect(r.code).toBe(0);
+  });
+
+  it.each([['CCRC_BACKUP_KEEP'], ['CCRC_SESSION_SLICE_MEMORY_MAX'], ['CCRC_TEST_SLICE_CPU_WEIGHT'], ['CCRC_GRAPH_FETCH_SECS'],
+    ['CCRC_TESTBOX_QUEUE_LIMIT'], ['CCRC_KEEPALIVE_FRESH'], ['CCRC_USAGE_SWEEP_DAYS'], ['CCRC_CARRY_COPY_WARN_BYTES']])(
+    'W2-D2: a refused %s prints the words, never the value', (key) => {
+    const home = fleetBox('ccrc-doctor-bs-d2-', [`${key}=zz-mark-${key.length}`]);
+    const words = says(home, key);
+    expect(words, 'the words come from bash').not.toBe('');
+    const r = runBs(home);
+    expect(verdict(r), r.stdout + r.stderr).toContain(`${key} (refused: ${words})`);
+    expect(r.stdout + r.stderr).not.toContain('zz-mark');
+    expect(verdict(r)).not.toContain(`${key}=`);
+    expect(r.code).toBe(0);
+  });
+
+  it('W2-D3: an is-set setting (the spec\'s presence, D12) prints as set, never its value', () => {
+    const shape = (prompt: string): Result => runBs(fleetBox('ccrc-doctor-bs-d3-', ['CCRC_TESTBOX_URL=https://tb.zz-mark.invalid:8443/zz-path', 'CCRC_GRAPH_STORE=/srv/zz-mark-store', `CCRC_KEEPALIVE_PROMPT=${prompt}`]));
+    // The prompt's space is not a plain line: on macOS it is the one line the launchd rule refuses, so the shape is checked
+    // on a plain prompt there, and the spaced one asserts the launchd sentence (the leak checks hold for both).
+    const r = shape(MAC ? 'zz-mark-prompt' : 'zz-mark prompt');
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    for (const k of ['CCRC_TESTBOX_URL', 'CCRC_GRAPH_STORE', 'CCRC_KEEPALIVE_PROMPT']) expect(verdict(r)).toContain(`${k} (set)`);
+    expect(r.stdout + r.stderr).not.toContain('zz-');
+    expect(r.code).toBe(0);
+    if (MAC) {
+      const w = shape('zz-mark prompt');
+      expect(verdict(w), w.stdout + w.stderr).toMatch(/^WARN box-settings: /);
+      for (const k of ['CCRC_BACKUP_DATA_KEEP', 'CCRC_TESTBOX_URL', 'CCRC_GRAPH_STORE', 'CCRC_KEEPALIVE_PROMPT']) expect(verdict(w)).toMatch(new RegExp(`${k} ${LAUNCHD.source}`));
+      expect(w.stdout + w.stderr).not.toContain('zz-');
+      expect(w.code).toBe(2);
+    }
+  });
+
+  it('W2-D4: a refused is-set setting prints its words, not its value', () => {
+    // `zz-mark not a url` holds spaces: on macOS the launchd rule makes that line unmeasured, so the words are checked on
+    // the plain `zz-mark` there (also not a URL), and the spaced one asserts the launchd sentence.
+    const home = fleetBox('ccrc-doctor-bs-d4-', [`CCRC_TESTBOX_URL=${MAC ? 'zz-mark' : 'zz-mark not a url'}`]);
+    const words = says(home, 'CCRC_TESTBOX_URL');
+    expect(words).not.toBe('');
+    const r = runBs(home);
+    expect(verdict(r), r.stdout + r.stderr).toContain(`CCRC_TESTBOX_URL (refused: ${words})`);
+    expect(r.stdout + r.stderr).not.toContain('zz-mark');
+    expect(r.code).toBe(0);
+    if (MAC) {
+      const w = runBs(fleetBox('ccrc-doctor-bs-d4w-', ['CCRC_TESTBOX_URL=zz-mark not a url']));
+      expect(verdict(w), w.stdout + w.stderr).toMatch(new RegExp(`^WARN box-settings: .*CCRC_TESTBOX_URL ${LAUNCHD.source}`));
+      expect(w.stdout + w.stderr).not.toContain('zz-mark');
+      expect(w.code).toBe(2);
+    }
+  });
+
+  it('W2-D5: an omit setting is read but not printed, and never listed as unset', () => {
+    const r = runBs(fleetBox('ccrc-doctor-bs-d5-', ['CCRC_TESTBOX_RUNS=4', 'CCRC_TESTBOX_LISTEN=zz-mark:1']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(r)).not.toContain('CCRC_TESTBOX_RUNS');
+    expect(verdict(r)).not.toContain('zz-mark');
+    expect(r.code).toBe(0);
+    expect(OMIT_KEYS).toHaveLength(28);
+    const none = runBs(fleetBox('ccrc-doctor-bs-d5-none-', ['CCRC_FLEET=local']));
+    for (const k of OMIT_KEYS) expect(verdict(none), k).not.toContain(k);
+  });
+
+  it('W2-D6: an omit key\'s reader refusal still WARNs, naming the key and never the value', () => {
+    const r = runBs(fleetBox('ccrc-doctor-bs-d6-', ['export CCRC_TESTBOX_RUNS=4']));
+    expect(r.stdout, r.stderr).toMatch(/^WARN box-settings: CCRC_TESTBOX_RUNS cannot be measured: ~\/\.ccrc\/ccrc\.env names it on a line this reader does not take/m);
+    expect(r.stdout).not.toContain('=4');
+    expect(r.code).toBe(2);
+  });
+
+  it.each(['zz-leak-tok-0123456789abcdef', 'mirror.example.invalid/r', 'user:pw@mirror.example.invalid/r'])('W2-D7923: a release base with no http(s) scheme (%s) prints custom alone', (v) => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-d7923-', [`CCRC_RELEASE_BASE_URL=${v}`]));
+    expect(verdict(r), r.stdout + r.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');
+    for (const t of ['zz-leak', 'mirror.example', 'user:pw']) expect(r.stdout + r.stderr).not.toContain(t);
+  });
+
+  // Review 1496 F1: userinfo BEFORE a scheme passes `_upd_url_origin` (it redacts, then tests the scheme again) and fits the envelope,
+  // so only the doctor check's own gate on the raw value keeps these at `custom` alone.
+  it.each(['tok@https://mirror.example.invalid', 'u:pw@https://mirror.example.invalid/r', 'u@HTTPS://mirror.example.invalid'])('W2-D7923: userinfo before a scheme (%s) prints custom alone', (v) => {
+    const r = runBs(settingsBox('ccrc-doctor-bs-d7923u-', [`CCRC_RELEASE_BASE_URL=${v}`]));
+    expect(verdict(r), r.stdout + r.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');
+    for (const t of ['tok@', 'u:pw', 'u@HTTPS', 'mirror.example']) expect(r.stdout + r.stderr).not.toContain(t);
+  });
+
+  it('W2-D7: the release base shows its origin only', () => {
+    const base = (v: string): Result => runBs(settingsBox('ccrc-doctor-bs-d7-', [`CCRC_RELEASE_BASE_URL=${v}`]));
+    const a = base('https://u:hunter2@mirror.example/releases');
+    expect(verdict(a), a.stdout + a.stderr).toContain('CCRC_RELEASE_BASE_URL=custom https://mirror.example;');
+    const b = base('u:hunter2@mirror.example/r');
+    expect(verdict(b), b.stdout + b.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');   // D-7923
+    for (const bad of ['http:/u:hunter2@mirror.example/r', 'https:///u:hunter2@mirror.example/r']) {
+      const c = base(bad);
+      expect(verdict(c), c.stdout + c.stderr).toContain('CCRC_RELEASE_BASE_URL=custom;');
+    }
+    const own = runBsOwnMask(settingsBox('ccrc-doctor-bs-d7-own-', ['CCRC_RELEASE_BASE_URL=https://u:hunter2@mirror.example/releases']));
+    expect(own.stdout + own.stderr, 'the check\'s own mask, `_upd_redact` an identity').not.toContain('hunter2');
+    // Measured: with `_upd_redact` an identity, `_upd_url_origin`'s own `@` check answers rc 1, so the line holds `custom` alone.
+    expect(verdict(own)).toContain('CCRC_RELEASE_BASE_URL=custom;');
+    for (const r of [a, b]) expect(r.stdout + r.stderr).not.toContain('hunter2');
+  });
+
+  it('W2-D8: a refused value is still a PASS at rc 0', () => {
+    const r = runBs(fleetBox('ccrc-doctor-bs-d8-', ['CCRC_GRAPH_BUDGET=zz']));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(r)).toContain('CCRC_GRAPH_BUDGET (refused: ');
+    expect(r.code).toBe(0);
+  });
+
+  it('W2-D9: a check that cannot load is unmeasured, never refused', () => {
+    const home = fleetBox('ccrc-doctor-bs-d9-', ['CCRC_TESTBOX_QUEUE_LIMIT=5']);
+    rmSync(join(home, 'ccrc', 'ccd', 'testbox-knobs'));
+    const ccd = join(home, 'ccrc', 'ccd');
+    const w = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; _set_libs; printf %s "$SET_TB_WHY"`], { env: doctorEnv(home), encoding: 'utf8' });
+    const why = w.stdout ?? '';
+    expect(why, 'the sentence comes from bash').not.toBe('');
+    const r = runBs(home);
+    expect(r.stdout, r.stderr).toContain(`WARN box-settings: CCRC_TESTBOX_QUEUE_LIMIT cannot be measured: ${why}`);
+    expect(r.stdout).not.toContain('CCRC_TESTBOX_QUEUE_LIMIT (refused:');
+    expect(r.stdout).not.toContain('=5');
+    expect(r.code).toBe(2);
+  });
+
+  it('W2-D10: the no-leak sweep: no value of any setting prints, but the release base\'s origin', () => {
+    const keys = BOX_SETTINGS_SHOWN.filter((k) => BOX_SETTING_SPECS[k].cls !== 'origin');
+    const lines = (url: string): string[] => [...keys.map((k, i) => `${k}=zz-leak-${i}`), `CCRC_RELEASE_BASE_URL=${url}`];
+    // The `?` of the release base's query is not a plain line: on macOS it makes every key unmeasured, so the origin and the
+    // PASS are checked on the plain URL there, and the query one asserts the launchd WARN. No leak on either, on any platform.
+    const r = runBs(fleetBox('ccrc-doctor-bs-d10-', lines(MAC ? 'https://mirror.example.invalid/zz-leak-path' : 'https://mirror.example.invalid/zz-leak-path?zz-leak-q')));
+    expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(r)).toContain('CCRC_RELEASE_BASE_URL=custom https://mirror.example.invalid');
+    expect(r.stdout + r.stderr, 'no value of any setting leaks').not.toContain('zz-leak');
+    expect(r.code).toBe(0);
+    if (MAC) {
+      const w = runBs(fleetBox('ccrc-doctor-bs-d10w-', lines('https://mirror.example.invalid/zz-leak-path?zz-leak-q')));
+      expect(verdict(w), w.stdout + w.stderr).toMatch(new RegExp(`^WARN box-settings: .*CCRC_RELEASE_BASE_URL ${LAUNCHD.source}`));
+      expect(w.stdout + w.stderr, 'no value of any setting leaks').not.toContain('zz-leak');
+      expect(w.code).toBe(2);
+    }
+  });
+
+  it('W2-D11: doctor holds the envelope: an origin or a value too wide for the view', () => {
+    const o = runBs(fleetBox('ccrc-doctor-bs-d11-o-', ['CCRC_RELEASE_BASE_URL=https://h:zz-abc/r']));
+    expect(verdict(o), o.stdout + o.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(o)).toMatch(/CCRC_RELEASE_BASE_URL=custom[,;]/);
+    expect(o.stdout + o.stderr).not.toContain('zz-abc');
+    expect(o.code).toBe(0);
+    const wide = `1${'9'.repeat(39)}M`;
+    const v = runBs(fleetBox('ccrc-doctor-bs-d11-v-', [`CCRC_TESTBOX_SNAPSHOT_MAX=${wide}`]));
+    expect(verdict(v), v.stdout + v.stderr).toMatch(/^PASS box-settings: /);
+    expect(verdict(v)).toContain('CCRC_TESTBOX_SNAPSHOT_MAX (wider than this view records)');
+    expect(v.stdout + v.stderr).not.toContain('9'.repeat(39));
+    expect(v.code).toBe(0);
   });
 });

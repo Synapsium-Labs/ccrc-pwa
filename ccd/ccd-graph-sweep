@@ -14,7 +14,7 @@
 #      GRAPH_LIB without all four is pass status `failed`, naming the missing file. The sweep sources ccd/ccrc's body
 #      (whose dispatch runs only when it is executed) for `_graph_knobs`, the platform shims and
 #      `_graph_exclude_common`, and ccd/graph-resolve for `_gr_knobs`, the store, the repository key and the source
-#      ref (D-7500, D-7650: the generated settings library carries `_ccrc_knob` and its closure only, so it cannot
+#      ref (D-7500, D-7650: the generated settings library carries `_ccrc_knob`, its closure and two sweeps' checks only, so it cannot
 #      stand in);
 #   3. the store (`_gr_store_init`: its realpath and its marker), then the trees (`_gs_trees`), grouped by the realpath
 #      of their git common dir: one repository each;

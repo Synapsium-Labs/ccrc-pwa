@@ -226,10 +226,10 @@ describe('ccrc: dispatch and usage', () => {
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
     expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|coordination-snapshot\|settings\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\|test\}/);
-    // `settings` joined it with the box settings view (D-6914): the read-only verb that prints and records what the box's seven
-    // settings resolve to. It sits after `coordination-snapshot`, which `install-census` pins right after `backup`.
+    // `settings` joined it with the box settings view (D-6914): the read-only verb that prints and records what the box's
+    // settings resolve to, by display class. It sits after `coordination-snapshot`, which `install-census` pins right after `backup`.
     // `server/test/ccrc-settings-verb.test.ts` owns what it does; this row owns that an operator can find it.
-    expect(r.stdout).toMatch(/^ {2}settings {2}print what this box's seven settings read as \(CCRC_BACKUP_KEEP,$/m);
+    expect(r.stdout).toMatch(/^ {2}settings {2}print what each setting a fleet or server node reads resolves to$/m);
     expect(r.stdout.replace(/\s+/g, ' ')).toContain('[--json] prints one JSON document; [--write] records it as ~/.ccrc/box-settings.json');
     // `test` joined it with test containment (D-7298) — the one dispatch line that execs
     // ccd/ccrc-test, joined in place, last, with its paragraph (_usage_test_paragraph) reached beside history's.

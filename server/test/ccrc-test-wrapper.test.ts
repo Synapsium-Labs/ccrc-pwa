@@ -208,6 +208,41 @@ describe('ccrc test: the slice (D-7298)', () => {
     expect(r.stderr).toMatch(/; using its default \S+\n/);
   });
 
+  // W2 characterization (box settings wave 2): the exact WARN sentence of `_tshape` / `_tshape_says`, before the checks move.
+  const WORDS_SUFFIX = 'a whole number with a K, M, G or T suffix, or 1% to 100%';
+  const WORDS_WEIGHT = 'a whole number from 1 to 10000';
+  it.each([
+    ['CCRC_TEST_SLICE_MEMORY_MAX', '0G', WORDS_SUFFIX, '6G'],
+    ['CCRC_TEST_SLICE_SWAP_MAX', '0K', '0, or a whole number with a K, M, G or T suffix', '1G'],
+    ['CCRC_TEST_SLICE_CPU_WEIGHT', '01', WORDS_WEIGHT, '20'],
+    ['CCRC_TEST_SLICE_IO_WEIGHT', '10001', WORDS_WEIGHT, '20'],
+    ['CCRC_TEST_SLICE_CPU_QUOTA', '1000000%', 'a whole percentage such as 400%', '400%'],
+    ['CCRC_TEST_HEAVY_SLOTS', '100', 'a whole number from 1 to 99', '2'],
+    ['CCRC_TEST_WIDE_FILES', '1000', 'a whole number from 0 to 999', '3'],
+  ])('%s=%s warns with exactly its words and default (characterization)', (key, value, words, dflt) => {
+    const r = run(box({}, { [key]: value }), ['--classify', '--', 'true']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain(`ccrc test: WARN: ${key}=${value} (from the ~/.ccrc/ccrc.env) is not ${words}; using its default ${dflt}\n`);
+  });
+  it('CCRC_TEST_PRESSURE_MAX=100 warns with exactly its words and default (characterization)', () => {
+    const r = run(box(), ['--classify', '--', 'true'], { CCRC_TEST_PRESSURE_MAX: '100' });
+    expect(r.stderr).toContain('ccrc test: WARN: CCRC_TEST_PRESSURE_MAX=100 (from the environment) is not a whole number from 0 (off) to 99; using its default 0\n');
+  });
+  it.each([
+    ['CCRC_TEST_SLICE_MEMORY_MAX', '1K'], ['CCRC_TEST_SLICE_MEMORY_MAX', '100%'], ['CCRC_TEST_SLICE_SWAP_MAX', '0'],
+    ['CCRC_TEST_SLICE_CPU_WEIGHT', '10000'], ['CCRC_TEST_SLICE_CPU_QUOTA', '999999%'], ['CCRC_TEST_HEAVY_SLOTS', '99'],
+    ['CCRC_TEST_WIDE_FILES', '0'], ['CCRC_TEST_WIDE_FILES', '999'],
+  ])('%s=%s is accepted: no WARN names the key (characterization)', (key, value) => {
+    const r = run(box({}, { [key]: value }), ['--classify', '--', 'true']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain(key);
+  });
+  it('CCRC_TEST_PRESSURE_MAX=99 is accepted: no WARN names the key (characterization)', () => {
+    const r = run(box(), ['--classify', '--', 'true'], { CCRC_TEST_PRESSURE_MAX: '99' });
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain('CCRC_TEST_PRESSURE_MAX');
+  });
+
   itLinux('a bad limit never removes a cap: the default is applied in its place', () => {
     const b = box();
     mkdirSync(path.join(b.home, '.ccrc'), { recursive: true });
