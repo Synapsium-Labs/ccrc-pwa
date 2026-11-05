@@ -200,7 +200,7 @@ describe.each(SKINS)('Goals from inside a session in %s', (skin) => {
         expect(await page.textContent('.pv .pv-title')).toBe('Programme A');
         // The Goals page draws no list of its own, and links the filtered one.
         expect(await page.locator('.pv .wl-item').count()).toBe(0);
-        expect(await page.getAttribute('.pv .pv-waiting a', 'href')).toBe('/waiting?programme=prog-a');
+        expect(await page.getAttribute('.pv a.pv-waiting', 'href')).toBe('/waiting?programme=prog-a');
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

@@ -28,7 +28,7 @@
 // not read says so; it is never drawn as a programme with no secrets.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { TextLink } from '@ccrc/ui';
+import { cn } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
   WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
@@ -40,6 +40,7 @@ import { programWave, programmeTitle, waveOfWords } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { WAITING_BADGE_UNIT } from '../fleet/navBadges';
 import { inAppClick } from '../fleet/settingsText';
+import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { ROUTES, waitingPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel, SpecLink } from './GoalsPanel';
@@ -206,9 +207,8 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, stored }: {
       {waiting === 0
         ? <p className="pv-none">{waitsOnSentence(waitsOn)}</p>
         : (
-          <p className="pv-waiting">
-            <TextLink className="pv-waiting-link" href={href} onClick={inAppClick(href)}>{`${waiting} ${WAITING_BADGE_UNIT}`}</TextLink>
-          </p>
+          // A link that stands alone is a control: `buttonVariants` on an anchor (`GHOST_ANCHOR`), never a bare TextLink.
+          <a className={cn(GHOST_ANCHOR, 'pv-waiting')} href={href} onClick={inAppClick(href)}>{`${waiting} ${WAITING_BADGE_UNIT}`}</a>
         )}
       {stored}
     </section>

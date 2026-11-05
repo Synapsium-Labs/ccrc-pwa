@@ -464,7 +464,7 @@ describe('ROUTES and the ladder, both ways', () => {
       list.unmount();
     });
 
-    it('`/programmes/<slug>` renders that programme\'s view in the detail pane, with a way back to the fleet', () => {
+    it('`/programmes/<slug>` renders that programme\'s Goals page in the detail pane, linking the one list filtered to it (PL11)', () => {
       vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
       act(() => useFleetStore.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 7, title: 'Pick the order' })] }) }));
       navigate('/programmes/prog-a');
@@ -472,8 +472,9 @@ describe('ROUTES and the ladder, both ways', () => {
       const detail = document.querySelector('.shell-detail') as HTMLElement;
       expect(within(detail).getByRole('heading', { level: 1, name: 'prog-a' })).toBeInTheDocument();
       expect(within(detail).getByRole('region', { name: 'Goals' })).toBeInTheDocument();
-      fireEvent.click(within(detail).getByRole('button', { name: /Pick the order/ }));
-      expect(location.pathname).toBe('/waiting/7');
+      expect(within(detail).queryByRole('button', { name: /Pick the order/ })).toBeNull();
+      fireEvent.click(within(detail).getByRole('link', { name: '1 waiting on you' }));
+      expect(location.pathname + location.search).toBe('/waiting?programme=prog-a');
     });
 
     it.each(['Build_4', 'pA', '-a'])('`/programmes/%s`, a slug the server accepts, renders that programme\'s view', (slug) => {
