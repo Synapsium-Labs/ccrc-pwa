@@ -2,8 +2,8 @@
 // and its failed write share, and the ONE reader of that failure. Both doors answer through `refuseRoute`, so a rejection
 // is either the route's own refusal, which moved nothing, or an answer that proves nothing about the write.
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
-import { ApiError, apiErrorText } from '../lib/api';
-import { COORD_UNSUPPORTED_TEXT } from '../lib/refusalWords';
+import { ApiError } from '../lib/apiError';
+import { COORD_UNSUPPORTED_TEXT, apiErrorText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 
 export const VERB_WRITE_TEXT = {
