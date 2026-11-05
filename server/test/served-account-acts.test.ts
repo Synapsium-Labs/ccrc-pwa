@@ -3,9 +3,10 @@
 // for itself until a watcher tick that BEGAN after the act lands; only then is the watcher's tick served again. The act
 // here is a fake `AccountOps` that moves the box's markers the way the real verbs do (`enable` removes
 // `<id>-disabled`, `check` clears `<id>-authdead`), so the answer's `disabled` and `authDead` are read off the files.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
 import type { FastifyInstance } from 'fastify';
 import type { AccountsResponse } from '../../shared/api.js';
 import { buildServer, type Deps } from '../src/server.js';
@@ -16,7 +17,8 @@ import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { AccountOps, AccountOpResult } from '../src/accounts/ops.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { PtyLike } from '../src/pty.js';
-import { accountActRoute, takenAfter } from '../src/servedRead.js';
+import { operatorActRoute, takenAfter } from '../src/servedRead.js';
+import type { CcdResult } from '../src/coord/ports.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -50,6 +52,7 @@ async function rig(): Promise<Rig> {
   const t = Math.floor(Date.now() / 1000);
   writeFileSync(path.join(limits, `${LANE}.json`), JSON.stringify({ five: 12, seven: 34, ts: t - 30, fiveResetAt: t + 3600, sevenResetAt: t + 200000 }));
   mkdirSync(reg, { recursive: true });
+  mkdirSync(path.join(home, 'projects', 'project-a', '.git'), { recursive: true });
   writeFileSync(path.join(reg, `${LANE}-disabled`), '');
   writeFileSync(path.join(reg, `${LANE}-authdead`), `${t - 60} 401\n`);
   const acts: string[] = [];
@@ -73,8 +76,19 @@ async function rig(): Promise<Rig> {
     ...base, io: io as unknown as FleetIO,
     cfg: { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: 'localhost', origin: 'http://localhost:7788' },
     spawnPty: stubPty,
-    fleetState: { ccdVerbs: ['account-v2'] } as unknown as FleetState,
+    fleetState: { ccdVerbs: ['account-v2', 'project-pool'] } as unknown as FleetState,
     accountOps: ops,
+    // The project-pool write's ccd verb, faked: it writes the pool marker the way `ccd project-pool` does.
+    runCcd: async (argv) => {
+      const at = argv.indexOf('--project');
+      const pool = argv.indexOf('--pool');
+      if (argv[0] === 'project-pool' && at >= 0 && pool >= 0) {
+        mkdirSync(path.join(reg, 'pools'), { recursive: true });
+        writeFileSync(path.join(reg, 'pools', argv[at + 1]!), `${argv[pool + 1]}\n`);
+        acts.push(`project-pool ${argv[at + 1]} ${argv[pool + 1]}`);
+      }
+      return { ran: true, ok: true, code: 0, stdout: '', stderr: '' } as unknown as CcdResult;
+    },
   });
   const bus = new Bus();
   const w = new FleetWatcher(deps, bus, 2000);
@@ -165,6 +179,31 @@ describe('an account act is never undone by a served GET /api/accounts (console 
     expect(await act).toBe(200);
   });
 
+  it('an act the client aborts stays in flight until its handler settles; a tick in the gap is not served (fix round 2, F1)', async () => {
+    const r = await rig();
+    expect(lane(await r.accounts()), 'control: served, the lane off').toMatchObject({ disabled: true });
+    await app!.listen({ host: '127.0.0.1', port: 0 });
+    const addr = app!.server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    let release: () => void = () => undefined;
+    held = new Promise<void>((res) => { release = res; });
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: `/api/accounts/${LANE}/enable`, headers: { cookie: r.cookie } });
+    req.on('error', () => undefined);
+    req.end();
+    await vi.waitFor(() => expect(r.acts).toEqual([`enable ${LANE}`]));   // the handler waits in its op
+    req.destroy();                                                        // the phone drops the connection
+    await new Promise((res) => setTimeout(res, 50));                      // the server sees the close
+    await nextMs();
+    await r.w.tick();                                                     // a tick in the gap: the marker not yet written
+    expect('ageMs' in (await r.accounts()), 'an aborted act whose handler still runs is in flight').toBe(false);
+    held = null; release();                                               // the box writes, the handler settles
+    await vi.waitFor(() => expect(existsSync(path.join(r.reg, `${LANE}-disabled`))).toBe(false));
+    await new Promise((res) => setTimeout(res, 50));
+    const after = await r.accounts();
+    expect('ageMs' in after, 'the gap tick began before the act ended').toBe(false);
+    expect(lane(after).disabled).toBe(false);
+  });
+
   it('GET /api/projects, which places on the same limits, is not served from before the act either', async () => {
     const r = await rig();
     const get = async (): Promise<Record<string, unknown>> =>
@@ -172,6 +211,23 @@ describe('an account act is never undone by a served GET /api/accounts (console 
     expect(typeof (await get()).ageMs, 'control: served before the act').toBe('number');
     expect(await r.post('enable')).toBe(200);
     expect('ageMs' in (await get())).toBe(false);
+  });
+
+  it('a project-pool write: the next GET /api/projects and /api/fleet read for themselves (fix round 2, F2)', async () => {
+    const r = await rig();
+    const get = async (url: string): Promise<Record<string, unknown>> =>
+      (await app!.inject({ method: 'GET', url, headers: { cookie: r.cookie } })).json() as Record<string, unknown>;
+    const projects = await get('/api/projects');
+    expect(typeof projects.ageMs, 'control: served before the write').toBe('number');
+    expect((projects.projects as { name: string; pool: unknown }[]).find((p) => p.name === 'project-a')?.pool).toEqual({ state: 'untagged' });
+    expect(typeof (await get('/api/fleet')).ageMs, 'control: /api/fleet served before the write').toBe('number');
+    const res = await app!.inject({ method: 'POST', url: '/api/projects/project-a/pool', headers: { cookie: r.cookie }, payload: { pool: 'pool-a' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.acts).toEqual(['project-pool project-a pool-a']);
+    const after = await get('/api/projects');
+    expect('ageMs' in after, 'the pools half is not served from before the write').toBe(false);
+    expect((after.projects as { name: string; pool: unknown }[]).find((p) => p.name === 'project-a')?.pool).toEqual({ state: 'tagged', name: 'pool-a' });
+    expect('ageMs' in (await get('/api/fleet')), '/api/fleet\'s pools are not served from before the write').toBe(false);
   });
 
   it('a refused act also stops the served read until the next tick (the box may have acted)', async () => {
@@ -185,18 +241,21 @@ describe('an account act is never undone by a served GET /api/accounts (console 
 });
 
 describe('the act deciders (console speed S2, F1)', () => {
-  it('accountActRoute: every route under /api/accounts/ and every write to /api/accounts, never the list read', () => {
-    expect(accountActRoute('GET', '/api/accounts')).toBe(false);
-    expect(accountActRoute('HEAD', '/api/accounts')).toBe(false);
-    expect(accountActRoute('POST', '/api/accounts')).toBe(true);
+  it('operatorActRoute: every route under /api/accounts/, every write to /api/accounts, and the project-pool write', () => {
+    expect(operatorActRoute('GET', '/api/accounts')).toBe(false);
+    expect(operatorActRoute('HEAD', '/api/accounts')).toBe(false);
+    expect(operatorActRoute('POST', '/api/accounts')).toBe(true);
     for (const sub of ['check', 'enable', 'disable', 'credential', 'set', 'remove', 'auth/start', 'auth/code', 'auth/cancel']) {
-      expect(accountActRoute('POST', `/api/accounts/:id/${sub}`), sub).toBe(true);
+      expect(operatorActRoute('POST', `/api/accounts/:id/${sub}`), sub).toBe(true);
     }
-    expect(accountActRoute('POST', '/api/accounts/revoke-ack')).toBe(true);
-    expect(accountActRoute('GET', '/api/accounts/:id/auth'), 'the sign-in status read observes its end').toBe(true);
-    expect(accountActRoute('GET', '/api/fleet')).toBe(false);
-    expect(accountActRoute('POST', '/api/accountsx')).toBe(false);
-    expect(accountActRoute('GET', undefined)).toBe(false);
+    expect(operatorActRoute('POST', '/api/accounts/revoke-ack')).toBe(true);
+    expect(operatorActRoute('GET', '/api/accounts/:id/auth'), 'the sign-in status read observes its end').toBe(true);
+    expect(operatorActRoute('GET', '/api/fleet')).toBe(false);
+    expect(operatorActRoute('POST', '/api/accountsx')).toBe(false);
+    expect(operatorActRoute('GET', undefined)).toBe(false);
+    expect(operatorActRoute('POST', '/api/projects/:project/pool')).toBe(true);
+    expect(operatorActRoute('GET', '/api/projects')).toBe(false);
+    expect(operatorActRoute('POST', '/api/projects'), 'no other project route in this round').toBe(false);
   });
 
   it('takenAfter: a measurement whose tick began at or before the last act is not handed over', () => {

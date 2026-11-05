@@ -75,7 +75,7 @@ import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '.
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
-import { accountActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
+import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
@@ -557,15 +557,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     deps.perf?.route(req.method, req.routeOptions.url ?? '<unmatched>', reply.elapsedTime);
     done();
   });
-  // Fix round 1 (F1): account acts in flight, and when the last one's response closed (finished or aborted), so a served
-  // limits read never predates the operator's own act (`takenAfter`); one in flight counts as ending now. A refused act
-  // counts too: the box may have acted. Not an `onSend` hook: those are the masking backstop's, counted in secret-mask.
-  let accountActAt: number | null = null;
-  let accountActs = 0;
-  const lastAccountAct = (): number | null => (accountActs > 0 ? Date.now() : accountActAt);
-  app.addHook('onRequest', (req, reply, done) => {
-    if (accountActRoute(req.method, req.routeOptions.url)) { accountActs += 1; reply.raw.once('close', () => { accountActs -= 1; accountActAt = Date.now(); }); }
-    done();
+  // Fix rounds 1-2 (F1, F2): operator acts (`operatorActRoute`) in flight, and when the last one ENDED, so a served read
+  // never predates the operator's own act (`takenAfter`); one in flight counts as ending now. An act ends at the later of
+  // its handler settling and its response closing: a client that aborts leaves it in flight until the box has answered. A
+  // refusal inside the handler counts (the box may have acted); one the auth gate sends first ran nothing. Wrapped at
+  // `onRoute`, not `onSend`: those are the masking backstop's, counted in secret-mask.
+  let operatorActAt: number | null = null;
+  let operatorActs = 0;
+  const lastOperatorAct = (): number | null => (operatorActs > 0 ? Date.now() : operatorActAt);
+  app.addHook('onRoute', (route) => {
+    if (![route.method].flat().some((m) => operatorActRoute(m, route.url))) return;
+    const inner = route.handler;
+    route.handler = function (req, reply) {
+      operatorActs += 1;
+      let open = 2;   // the handler and the response
+      const end = (): void => { open -= 1; if (open === 0) { operatorActs -= 1; operatorActAt = Date.now(); } };
+      reply.raw.once('close', end);
+      try { return Promise.resolve(inner.call(this, req, reply)).finally(end); } catch (err) { end(); throw err; }
+    };
   });
 
   /**
@@ -1223,7 +1232,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // Console speed S2: the watcher's last listed tick answers whole with its age (no registry read, no pools read, no
     // assembly) while BOTH the listing and the pools read beside its wire are fresh (`servedFleetReads`). Anything less
     // falls to the reads below, which are today's, and so does a link that is down with no snapshot (F3).
-    const servedFleet = servedFleetReads(watcher?.currentFleetListing() ?? null, watcher?.currentProjectPoolsRead() ?? null, Date.now());
+    const servedFleet = servedFleetReads(watcher?.currentFleetListing() ?? null, takenAfter(watcher?.currentProjectPoolsRead() ?? null, lastOperatorAct()), Date.now());
     const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
     if (servedFleet.serve && servedPools !== null && !linkDown) return { sessions: dropStaleLandings(servedFleet.listing.sessions, Date.now()), pools: servedPools, ageMs: servedFleet.ageMs };
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
@@ -1471,7 +1480,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `no-store` on every answer (accounts plan Task A12): a session reader's carries identities and key hints.
     reply.header('cache-control', 'no-store');
     // Console speed S2: the watcher's last tick of the limits while it is fresh, with its age on the answer; else the read as before.
-    const servedLimits = servedFromWatcher(takenAfter(watcher?.currentLimits() ?? null, lastAccountAct()), Date.now());
+    const servedLimits = servedFromWatcher(takenAfter(watcher?.currentLimits() ?? null, lastOperatorAct()), Date.now());
     const limits = servedLimits.serve ? servedLimits.value.limits : await readLimits(deps.io, deps.cfg);
     // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
     // exactly the way `shares`/`limits` are each one read for every row below
@@ -2907,7 +2916,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // unlistable one (`pools.ts`, spec §5.4.4). This request uses the shared
     // request-lane budget rather than inheriting the watcher's cadence slice.
     // Console speed S2: both from the watcher's last tick while both are fresh (`servedProjectReads`), else read as before.
-    const servedReads = servedProjectReads(watcher?.currentProjectPoolsRead() ?? null, takenAfter(watcher?.currentLimits() ?? null, lastAccountAct()), Date.now());
+    const servedReads = servedProjectReads(takenAfter(watcher?.currentProjectPoolsRead() ?? null, lastOperatorAct()), takenAfter(watcher?.currentLimits() ?? null, lastOperatorAct()), Date.now());
     const poolsRead = servedReads.serve ? servedReads.pools.read : await readProjectPools(
       deps.io,
       deps.cfg,

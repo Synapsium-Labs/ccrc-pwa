@@ -22,20 +22,21 @@ export function servedFromWatcher<T extends { listedAt: number }>(
 }
 
 /**
- * Whether a request may change what the limits say about a lane (console speed S2, fix round 1: an operator's own act is
- * never undone by a served read). Every route under `/api/accounts/`, of any method: the lane acts, the write routes and
- * the sign-in, whose status read (`GET …/auth`) is where the server sees a sign-in end. And every write to
- * `/api/accounts` itself (adding a lane). Never the list read. `route` is the matched PATTERN, `undefined` when none
- * matched. Pure.
+ * Whether a request is an operator act that a served read must never undo (console speed S2, fix rounds 1-2). Every
+ * route under `/api/accounts/`, of any method: the lane acts, the write routes and the sign-in, whose status read
+ * (`GET …/auth`) is where the server sees a sign-in end. Every write to `/api/accounts` itself (adding a lane). And the
+ * project-pool write (`POST /api/projects/:project/pool`), whose tag the served pools half carries. Never a list read.
+ * `route` is the matched PATTERN, `undefined` when none matched. Pure.
  */
-export function accountActRoute(method: string, route: string | undefined): boolean {
+export function operatorActRoute(method: string, route: string | undefined): boolean {
   if (route === undefined) return false;
+  if (route === '/api/projects/:project/pool') return method === 'POST';
   return route === '/api/accounts' ? method !== 'GET' && method !== 'HEAD' : route.startsWith('/api/accounts/');
 }
 
 /**
- * The watcher's measurement only when its tick BEGAN after the operator's last account act (`actAt`, the end of that
- * act's handler; `null` when there has been none), else `null`, which every serve decider reads as "read it yourself".
+ * The watcher's measurement only when its tick BEGAN after the operator's last act (`actAt`, when that act ended, or
+ * now while one is in flight; `null` when there has been none), else `null`, which every serve decider reads as "read it yourself".
  * A tick stamped at or before the act may have read the files before the act wrote them. Pure.
  */
 export function takenAfter<T extends { listedAt: number }>(stamped: T | null, actAt: number | null): T | null {
