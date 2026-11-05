@@ -106,6 +106,13 @@ function ccrcState(home: string): Record<string, string> {
 }
 
 const US = '\u001f';
+// On macOS `_ccrc_knob` reads ccrc.env by its own rule: the launchd job sources both env files with bash, so ONE line that is
+// not a plain NAME=value line (a space, a control byte, a `?`) makes every key the file names, and CCRC_BACKUP_DATA_KEEP
+// always, unmeasured with the launchd sentence. Rows that plant such a line assert that sentence on macOS and keep every leak
+// check (a row with a fallback adds its own words after the sentence, so the sentence is matched as a prefix); the Linux-shaped assertions run on a plain fixture there.
+const MAC = process.platform === 'darwin';
+const LAUNCHD = (k: string): RegExp => new RegExp(`^${k} cannot be measured: ~/\\.ccrc/ccrc\\.env line \\d+ is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set`);
+const PLAIN = /^[A-Za-z0-9_./:@%+,=-]+$/;
 /** Every key in CCRC_SETTINGS, for the environment of a case (the verb reads 61 of them, wave 1's seven from the environment too). */
 const ALL: string[] = ccrcSettingsNames(SRC) ?? [];
 const CLS = (k: string): string => BOX_SETTING_SPECS[k as keyof typeof BOX_SETTING_SPECS].cls;
@@ -242,14 +249,32 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     expect(rcs.stdout.trim().split('\n').filter((l) => !l.endsWith(' 1')), 'a sample the check does not refuse').toEqual([]);
     const s = surfaces(home);
     const d = docOf(s.json);
-    for (const [k, words] of keys) {
-      expect(rowOf(d, k), k).toEqual({ key: k, state: 'refused', from: 'file', why: words.replace(/\n$/, '') });
-      expect(rowOf(d, k), k).not.toHaveProperty('value');
-    }
-    expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(58);
-    expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
-    for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
+    const refusedRows = (doc: Doc, ks: [string, string][]): void => {
+      for (const [k, words] of ks) {
+        expect(rowOf(doc, k), k).toEqual({ key: k, state: 'refused', from: 'file', why: words.replace(/\n$/, '') });
+        expect(rowOf(doc, k), k).not.toHaveProperty('value');
+      }
+    };
     const needles = keys.flatMap(([k], i) => [...sample(k, i).split(/[\t/]/), sample(k, i)]).filter((t) => t.length >= 4);
+    if (!MAC) {
+      refusedRows(d, keys);
+      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(58);
+      expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
+      for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
+    } else {
+      // Some sample is not a plain line, so the launchd rule makes every key the file names unmeasured; the refused rows are
+      // then measured on a file of the plain samples alone.
+      expect(keys.some(([k], i) => !PLAIN.test(sample(k, i))), 'the fixture holds a non-plain line').toBe(true);
+      for (const [k] of keys) expect(rowOf(d, k), k).toEqual({ key: k, state: 'unmeasured', why: expect.stringMatching(LAUNCHD(k)) });
+      const plain = keys.filter(([k], i) => PLAIN.test(sample(k, i)));
+      expect(plain.length).toBeGreaterThan(0);
+      const home2 = boxWith('ccrc-sv-v4p-', keys.map(([k], i) => (PLAIN.test(sample(k, i)) ? `${k}=${sample(k, i)}\n` : '')).join(''));
+      const s2 = surfaces(home2);
+      const d2 = docOf(s2.json);
+      refusedRows(d2, plain);
+      for (const r of d2.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
+      expectAbsent(s2, needles, 'V4 plain');
+    }
     expectAbsent(s, needles, 'V4');
   });
 
@@ -313,9 +338,12 @@ describe('ccrc settings: a ccrc.env the reader cannot take is unmeasured, never 
     const d = json(boxWith('ccrc-sv-cr-', 'CCRC_BACKUP_KEEP=5\rjunk\nNOTE=1\n'));
     expect(rowOf(d, 'CCRC_BACKUP_KEEP').state).toBe('unmeasured');
     const unm = d.settings.filter((s) => s.state === 'unmeasured').map((s) => s.key);
-    if (process.platform === 'darwin') expect(unm).toContain('CCRC_BACKUP_DATA_KEEP');
+    // macOS: the keys the file names (CCRC_BACKUP_KEEP) plus CCRC_BACKUP_DATA_KEEP, which `_ccrc_knob` always reads through the
+    // launchd model there. A key the file never names (CCRC_VERSIONS_KEEP) reads as before, ok: wave 2's rows that read in file
+    // mode (`_ccrc_knob ... file`) are read only for keys the file names, so none of them changes this.
+    if (MAC) expect(unm).toEqual(['CCRC_BACKUP_KEEP', 'CCRC_BACKUP_DATA_KEEP']);
     else expect(unm).toEqual(['CCRC_BACKUP_KEEP']);
-    expect(rowOf(d, 'CCRC_VERSIONS_KEEP').state).toBe(process.platform === 'darwin' ? 'unmeasured' : 'ok');
+    expect(rowOf(d, 'CCRC_VERSIONS_KEEP').state).toBe('ok');
   });
 
   it('V6: a reader sentence over 240 bytes is cut at 240 and ends with three dots', () => {
@@ -380,8 +408,15 @@ describe('ccrc settings: a unit separator in a value is never split into a why (
     const home = boxWith('ccrc-sv-v11-', Buffer.from(`${k}=${head}${US}zz-secret\n`, 'latin1'));
     const s = surfaces(home);
     const d = docOf(s.json);
-    expect(rowOf(d, k)).toEqual({ key: k, state: 'unmeasured', why: sentence(k) });
-    expect(d.settings.filter((r) => r.state !== 'ok').map((r) => r.key)).toEqual([k]);
+    if (MAC) {
+      // The launchd rule pre-empts the control-byte sentence: the line is not plain, so the keys the file names and
+      // CCRC_BACKUP_DATA_KEEP read unmeasured with the launchd sentence. The fixed sentence is Linux's; the leak half is both.
+      expect(rowOf(d, k)).toEqual({ key: k, state: 'unmeasured', why: expect.stringMatching(LAUNCHD(k)) });
+      expect(d.settings.filter((r) => r.state !== 'ok').map((r) => r.key).sort()).toEqual([k, 'CCRC_BACKUP_DATA_KEEP'].sort());
+    } else {
+      expect(rowOf(d, k)).toEqual({ key: k, state: 'unmeasured', why: sentence(k) });
+      expect(d.settings.filter((r) => r.state !== 'ok').map((r) => r.key)).toEqual([k]);
+    }
     expectAbsent(s, ['zz-secret', US], k);
   });
 });
@@ -790,14 +825,27 @@ describe('ccrc settings: usage', () => {
 
 describe('ccrc settings: an is-set row (the spec\'s presence, D12) records whether a setting is set, never what it is set to (D-7910, V3)', () => {
   it('V3: a URL, a key path, a prompt and an empty list read set, set, set and set to empty, and none of their text is anywhere', () => {
-    const home = boxWith('ccrc-sv-v3-', 'CCRC_TESTBOX_URL=https://secret-host.invalid:9000/x?token=abc\nCCRC_TESTBOX_GIT_KEY=~/k/push.key\nCCRC_KEEPALIVE_PROMPT=say hi\nCCRC_GRAPH_REPOS_EXCLUDE=\n');
-    const s = surfaces(home);
+    const needles = ['secret-host', 'token=abc', 'invalid:9000', 'push.key', 'say hi', 'say-hi'];
+    const check = (text: string): void => {
+      const s = surfaces(boxWith('ccrc-sv-v3-', text));
+      const d = docOf(s.json);
+      expect(rowOf(d, 'CCRC_TESTBOX_URL')).toEqual({ key: 'CCRC_TESTBOX_URL', state: 'ok', from: 'file' });
+      expect(rowOf(d, 'CCRC_TESTBOX_GIT_KEY')).toEqual({ key: 'CCRC_TESTBOX_GIT_KEY', state: 'ok', from: 'file' });
+      expect(rowOf(d, 'CCRC_KEEPALIVE_PROMPT')).toEqual({ key: 'CCRC_KEEPALIVE_PROMPT', state: 'ok', from: 'file' });
+      expect(rowOf(d, 'CCRC_GRAPH_REPOS_EXCLUDE')).toEqual({ key: 'CCRC_GRAPH_REPOS_EXCLUDE', state: 'ok', from: 'empty' });
+      expectAbsent(s, needles, 'V3');
+    };
+    const spaced = 'CCRC_TESTBOX_URL=https://secret-host.invalid:9000/x?token=abc\nCCRC_TESTBOX_GIT_KEY=~/k/push.key\nCCRC_KEEPALIVE_PROMPT=say hi\nCCRC_GRAPH_REPOS_EXCLUDE=\n';
+    if (!MAC) { check(spaced); return; }
+    // macOS: a `?`, a `~` and a space are not plain lines, so the four named keys read unmeasured (launchd sentence); the
+    // is-set shapes are then measured on a plain file.
+    const s = surfaces(boxWith('ccrc-sv-v3m-', spaced));
     const d = docOf(s.json);
-    expect(rowOf(d, 'CCRC_TESTBOX_URL')).toEqual({ key: 'CCRC_TESTBOX_URL', state: 'ok', from: 'file' });
-    expect(rowOf(d, 'CCRC_TESTBOX_GIT_KEY')).toEqual({ key: 'CCRC_TESTBOX_GIT_KEY', state: 'ok', from: 'file' });
-    expect(rowOf(d, 'CCRC_KEEPALIVE_PROMPT')).toEqual({ key: 'CCRC_KEEPALIVE_PROMPT', state: 'ok', from: 'file' });
-    expect(rowOf(d, 'CCRC_GRAPH_REPOS_EXCLUDE')).toEqual({ key: 'CCRC_GRAPH_REPOS_EXCLUDE', state: 'ok', from: 'empty' });
-    expectAbsent(s, ['secret-host', 'token=abc', 'invalid:9000', 'push.key', 'say hi'], 'V3');
+    for (const k of ['CCRC_TESTBOX_URL', 'CCRC_TESTBOX_GIT_KEY', 'CCRC_KEEPALIVE_PROMPT', 'CCRC_GRAPH_REPOS_EXCLUDE']) {
+      expect(rowOf(d, k), k).toEqual({ key: k, state: 'unmeasured', why: expect.stringMatching(LAUNCHD(k)) });
+    }
+    expectAbsent(s, needles, 'V3 spaced');
+    check('CCRC_TESTBOX_URL=https://secret-host.invalid:9000/x\nCCRC_TESTBOX_GIT_KEY=/k/push.key\nCCRC_KEEPALIVE_PROMPT=say-hi\nCCRC_GRAPH_REPOS_EXCLUDE=\n');
   });
 });
 

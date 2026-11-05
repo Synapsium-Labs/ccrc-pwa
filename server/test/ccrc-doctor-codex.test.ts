@@ -6626,6 +6626,12 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
   };
   const out = (r: Result): string[] => r.stdout.split('\n').filter((l) => l !== '');
   const verdict = (r: Result): string => out(r).find((l) => /^(PASS|WARN|FAIL|SKIP) box-settings: /.test(l)) ?? '';
+  // On macOS `_ccrc_knob` reads ccrc.env by its own rule: the launchd job sources both env files with bash, so ONE line that
+  // is not a plain NAME=value line makes every key that file names (and CCRC_BACKUP_DATA_KEEP, always) unmeasured, with the
+  // launchd sentence. The rows below that plant a space, a `?` or the like therefore assert that sentence on macOS and
+  // keep their leak checks on both platforms; the `plain` fixtures carry the Linux shape on macOS too.
+  const MAC = process.platform === 'darwin';
+  const LAUNCHD = /cannot be measured: ~\/\.ccrc\/ccrc\.env line \d+ is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set/;
 
   it('W24-S1: nothing set', () => {
     const r = runBs(settingsBox('ccrc-doctor-bs-none-', ['CCRC_FLEET=local']));
@@ -6854,21 +6860,39 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
   });
 
   it('W2-D3: an is-set setting (the spec\'s presence, D12) prints as set, never its value', () => {
-    const r = runBs(fleetBox('ccrc-doctor-bs-d3-', ['CCRC_TESTBOX_URL=https://tb.zz-mark.invalid:8443/zz-path', 'CCRC_GRAPH_STORE=/srv/zz-mark-store', 'CCRC_KEEPALIVE_PROMPT=zz-mark prompt']));
+    const shape = (prompt: string): Result => runBs(fleetBox('ccrc-doctor-bs-d3-', ['CCRC_TESTBOX_URL=https://tb.zz-mark.invalid:8443/zz-path', 'CCRC_GRAPH_STORE=/srv/zz-mark-store', `CCRC_KEEPALIVE_PROMPT=${prompt}`]));
+    // The prompt's space is not a plain line: on macOS it is the one line the launchd rule refuses, so the shape is checked
+    // on a plain prompt there, and the spaced one asserts the launchd sentence (the leak checks hold for both).
+    const r = shape(MAC ? 'zz-mark-prompt' : 'zz-mark prompt');
     expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
     for (const k of ['CCRC_TESTBOX_URL', 'CCRC_GRAPH_STORE', 'CCRC_KEEPALIVE_PROMPT']) expect(verdict(r)).toContain(`${k} (set)`);
     expect(r.stdout + r.stderr).not.toContain('zz-');
     expect(r.code).toBe(0);
+    if (MAC) {
+      const w = shape('zz-mark prompt');
+      expect(verdict(w), w.stdout + w.stderr).toMatch(/^WARN box-settings: /);
+      for (const k of ['CCRC_BACKUP_DATA_KEEP', 'CCRC_TESTBOX_URL', 'CCRC_GRAPH_STORE', 'CCRC_KEEPALIVE_PROMPT']) expect(verdict(w)).toMatch(new RegExp(`${k} ${LAUNCHD.source}`));
+      expect(w.stdout + w.stderr).not.toContain('zz-');
+      expect(w.code).toBe(2);
+    }
   });
 
   it('W2-D4: a refused is-set setting prints its words, not its value', () => {
-    const home = fleetBox('ccrc-doctor-bs-d4-', ['CCRC_TESTBOX_URL=zz-mark not a url']);
+    // `zz-mark not a url` holds spaces: on macOS the launchd rule makes that line unmeasured, so the words are checked on
+    // the plain `zz-mark` there (also not a URL), and the spaced one asserts the launchd sentence.
+    const home = fleetBox('ccrc-doctor-bs-d4-', [`CCRC_TESTBOX_URL=${MAC ? 'zz-mark' : 'zz-mark not a url'}`]);
     const words = says(home, 'CCRC_TESTBOX_URL');
     expect(words).not.toBe('');
     const r = runBs(home);
     expect(verdict(r), r.stdout + r.stderr).toContain(`CCRC_TESTBOX_URL (refused: ${words})`);
     expect(r.stdout + r.stderr).not.toContain('zz-mark');
     expect(r.code).toBe(0);
+    if (MAC) {
+      const w = runBs(fleetBox('ccrc-doctor-bs-d4w-', ['CCRC_TESTBOX_URL=zz-mark not a url']));
+      expect(verdict(w), w.stdout + w.stderr).toMatch(new RegExp(`^WARN box-settings: .*CCRC_TESTBOX_URL ${LAUNCHD.source}`));
+      expect(w.stdout + w.stderr).not.toContain('zz-mark');
+      expect(w.code).toBe(2);
+    }
   });
 
   it('W2-D5: an omit setting is read but not printed, and never listed as unset', () => {
@@ -6929,13 +6953,20 @@ describe('ccrc doctor: box-settings reads the box\'s ccrc.env alone (wave 24, D-
 
   it('W2-D10: the no-leak sweep: no value of any setting prints, but the release base\'s origin', () => {
     const keys = BOX_SETTINGS_SHOWN.filter((k) => BOX_SETTING_SPECS[k].cls !== 'origin');
-    const lines = keys.map((k, i) => `${k}=zz-leak-${i}`);
-    lines.push('CCRC_RELEASE_BASE_URL=https://mirror.example.invalid/zz-leak-path?zz-leak-q');
-    const r = runBs(fleetBox('ccrc-doctor-bs-d10-', lines));
+    const lines = (url: string): string[] => [...keys.map((k, i) => `${k}=zz-leak-${i}`), `CCRC_RELEASE_BASE_URL=${url}`];
+    // The `?` of the release base's query is not a plain line: on macOS it makes every key unmeasured, so the origin and the
+    // PASS are checked on the plain URL there, and the query one asserts the launchd WARN. No leak on either, on any platform.
+    const r = runBs(fleetBox('ccrc-doctor-bs-d10-', lines(MAC ? 'https://mirror.example.invalid/zz-leak-path' : 'https://mirror.example.invalid/zz-leak-path?zz-leak-q')));
     expect(verdict(r), r.stdout + r.stderr).toMatch(/^PASS box-settings: /);
     expect(verdict(r)).toContain('CCRC_RELEASE_BASE_URL=custom https://mirror.example.invalid');
     expect(r.stdout + r.stderr, 'no value of any setting leaks').not.toContain('zz-leak');
     expect(r.code).toBe(0);
+    if (MAC) {
+      const w = runBs(fleetBox('ccrc-doctor-bs-d10w-', lines('https://mirror.example.invalid/zz-leak-path?zz-leak-q')));
+      expect(verdict(w), w.stdout + w.stderr).toMatch(new RegExp(`^WARN box-settings: .*CCRC_RELEASE_BASE_URL ${LAUNCHD.source}`));
+      expect(w.stdout + w.stderr, 'no value of any setting leaks').not.toContain('zz-leak');
+      expect(w.code).toBe(2);
+    }
   });
 
   it('W2-D11: doctor holds the envelope: an origin or a value too wide for the view', () => {
