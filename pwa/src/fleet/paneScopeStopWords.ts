@@ -1,7 +1,7 @@
 // D-7902: the Settings card "Stop leftovers", its pure half: the card's words, the ONE reader of the coord frame's
 // `paneScopeStop` and the radio that reading checks. `PaneScopeStopSection.tsx` has no words of its own.
 import { isMarkerState, type MarkerState } from '../../../shared/api';
-import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
+import { VERB_WRITE_TEXT } from './verbWriteFailure';
 
 /** ccd's own vocabulary, as `POST /api/coord/pane-scope-stop` takes it. */
 export type PaneScopeStopState = 'live' | 'shadow';
@@ -18,11 +18,11 @@ export const PANE_SCOPE_STOP_TEXT = {
     + 'another live session shares is held and stays running.',
   when: 'Turn it on once the swap log\'s "would stop" lines name only what you want gone. A stop, a hibernation, a '
     + 'finished worker and a roll all count; an account swap is not a stop.',
-  asked: 'Asked the fleet box; this card changes when the fleet confirms it.',
-  unconfirmed: 'The fleet has not confirmed the change yet, so the choice above is the last one it reported.',
+  asked: VERB_WRITE_TEXT.asked,
+  unconfirmed: VERB_WRITE_TEXT.unconfirmed,
   unmeasurable: 'The server could not read the switch, so this card cannot say which choice stands. Choose one to set it.',
-  refused: DISPATCH_ABANDON_TEXT.refused,
-  unanswered: 'No answer from the server, so the choice may have been saved; this card changes if the fleet confirms it.',
+  refused: VERB_WRITE_TEXT.refused,
+  unanswered: VERB_WRITE_TEXT.unanswered,
 } as const;
 
 /** THE ONE READER of `CoordStatus.paneScopeStop`, `childReclaimMarker`'s posture. Null: the frame carries no such field,
@@ -38,14 +38,3 @@ export function paneScopeStopMarker(coord: unknown): MarkerState | null {
 export function paneScopeStopChecked(marker: MarkerState): PaneScopeStopState | null {
   return marker === 'set' ? 'live' : marker === 'clear' ? 'shadow' : null;
 }
-
-/** `fleetFailed` carries two answers, and only `stderr` tells them apart. With it, ccd ran and died before moving the
- *  marker. Without it, the route's not-ran arm: its `detail` says the verb went unanswered, so whether the marker moved
- *  is unknown. */
-export const isPaneScopeStopNotRan = (body: Readonly<Record<string, unknown>>): boolean =>
-  body.error === 'fleetFailed' && typeof body.stderr !== 'string';
-
-/** The answers that prove the verb moved nothing, spelled once. Any other failure proves nothing about the write. */
-const PANE_SCOPE_STOP_REFUSALS: readonly unknown[] = ['bad-request', 'unsupported', 'fleetFailed'];
-export const isPaneScopeStopRefusal = (body: Readonly<Record<string, unknown>>): boolean =>
-  PANE_SCOPE_STOP_REFUSALS.includes(body.error) && !isPaneScopeStopNotRan(body);

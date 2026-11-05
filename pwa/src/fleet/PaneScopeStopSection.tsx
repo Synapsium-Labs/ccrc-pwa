@@ -11,19 +11,15 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Section, Skeleton } from '@ccrc/ui';
 import type { MarkerState } from '../../../shared/api';
-import { ApiError, api, apiErrorText } from '../lib/api';
-import { COORD_UNSUPPORTED_TEXT } from '../lib/refusalWords';
-import { isRecord } from '../lib/wire';
+import { api } from '../lib/api';
 import { useFleetStore } from '../stores/fleet';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { COORD_CONFIRM_MS } from './coordWords';
-import {
-  PANE_SCOPE_STOP_TEXT, isPaneScopeStopNotRan, isPaneScopeStopRefusal, paneScopeStopChecked, paneScopeStopMarker,
-  type PaneScopeStopState,
-} from './paneScopeStopWords';
+import { PANE_SCOPE_STOP_TEXT, paneScopeStopChecked, paneScopeStopMarker, type PaneScopeStopState } from './paneScopeStopWords';
 import {
   NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_WHEN, UNCONFIRMED_TEXT, useResultLine,
 } from './settingsText';
+import { verbWriteFailure } from './verbWriteFailure';
 
 const T = PANE_SCOPE_STOP_TEXT;
 
@@ -43,19 +39,6 @@ export function PaneScopeStopSection({ store = useFleetStore }: { store?: typeof
       )}
     </Section>
   );
-}
-
-/** A write's rejection, as its line: the route's own refusal moved nothing; anything else proves nothing about the write.
- *  The not-ran arm's sentence is left out: it promises a later pass, and nothing retries this write. */
-function failureLine(err: unknown): { text: string; tone: 'refusal' | 'answer' } {
-  if (!(err instanceof ApiError)) return { text: T.unanswered, tone: 'answer' };
-  const body = isRecord(err.body) ? err.body : {};
-  if (isPaneScopeStopNotRan(body)) return { text: T.unanswered, tone: 'answer' };
-  const said = typeof body.detail === 'string' && body.detail.trim() !== '' ? body.detail.trim() : apiErrorText(err);
-  const detail = err.status === 501 ? COORD_UNSUPPORTED_TEXT : said;
-  return isPaneScopeStopRefusal(body)
-    ? { text: `${T.refused} (${detail})`, tone: 'refusal' }
-    : { text: `${T.unanswered} (${detail})`, tone: 'answer' };
 }
 
 function PaneScopeStopBody({ marker }: { marker: MarkerState }): ReactNode {
@@ -102,7 +85,7 @@ function PaneScopeStopBody({ marker }: { marker: MarkerState }): ReactNode {
         tap.current = null;
         clearTimer();
         setAsked(null);
-        const failed = failureLine(err);
+        const failed = verbWriteFailure(err);
         line.say(failed.text, failed.tone);
       },
     );

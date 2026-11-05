@@ -7,8 +7,9 @@ import type { CoordStatus, MarkerState } from '../../shared/api';
 import { PaneScopeStopSection } from '../src/fleet/PaneScopeStopSection';
 import { COLLECT_SECTION_TEXT } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
-import { PANE_SCOPE_STOP_TEXT as T, isPaneScopeStopRefusal, paneScopeStopChecked, paneScopeStopMarker } from '../src/fleet/paneScopeStopWords';
+import { PANE_SCOPE_STOP_TEXT as T, paneScopeStopChecked, paneScopeStopMarker } from '../src/fleet/paneScopeStopWords';
 import { SETTINGS_CARDS, UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
+import { isVerbRefusal } from '../src/fleet/verbWriteFailure';
 import { ApiError, api } from '../src/lib/api';
 import { COORD_UNSUPPORTED_TEXT } from '../src/lib/refusalWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -211,10 +212,10 @@ describe('the write (D-7902)', () => {
   });
 
   it('stderr alone tells the two fleetFailed answers apart, an empty one included', () => {
-    expect(isPaneScopeStopRefusal({ error: 'fleetFailed', detail: 'not answered' })).toBe(false);
-    expect(isPaneScopeStopRefusal({ error: 'fleetFailed', stderr: '' })).toBe(true);
-    expect(isPaneScopeStopRefusal({ error: 'fleetFailed', stderr: 'no registry' })).toBe(true);
-    expect(isPaneScopeStopRefusal({ error: 'unsupported' })).toBe(true);
+    expect(isVerbRefusal({ error: 'fleetFailed', detail: 'not answered' })).toBe(false);
+    expect(isVerbRefusal({ error: 'fleetFailed', stderr: '' })).toBe(true);
+    expect(isVerbRefusal({ error: 'fleetFailed', stderr: 'no registry' })).toBe(true);
+    expect(isVerbRefusal({ error: 'unsupported' })).toBe(true);
   });
 
   it('a lost answer after a frame read the tap says nothing under the armed switch', async () => {
@@ -301,7 +302,7 @@ describe('the write (D-7902)', () => {
     await settle();
     expect(screen.getByRole('status')).toHaveTextContent(T.unanswered);
     expect(screen.queryByText(new RegExp(T.refused))).toBeNull();
-    expect(isPaneScopeStopRefusal({ error: 'gateway-timeout' })).toBe(false);
+    expect(isVerbRefusal({ error: 'gateway-timeout' })).toBe(false);
   });
 
   it('a tap while one is waiting asks nothing', async () => {
