@@ -326,7 +326,9 @@ describe('the source', () => {
     expect(mc.match(/\b_ws_ident_eq\b/g) ?? [], 'one rule').toHaveLength(1);
     expect(mc, 'no second spelling of the measure or the rule').not.toMatch(/_ws_collect_ident|_plat_devino|_plat_btime/);
     const rung = code('_ws_reclaim_workdir_shared');
-    expect(rung.match(/_WS_RECORDED_IDS\+=/g) ?? [], 'one recording site').toHaveLength(1);
-    expect(rung).toContain(`[[ "$efst" != valid ]] || _WS_RECORDED_IDS+="$o"$'\\t'"$efid"$'\\n'`);
+    const keep = code('_ws_reclaim_recorded_keep');
+    expect(rung.match(/_WS_RECORDED_IDS\+=/g) ?? [], 'the rung records through one keeper').toEqual([]);
+    expect(keep.match(/_WS_RECORDED_IDS\+=/g) ?? [], 'one recording site').toHaveLength(1);
+    expect(keep).toContain(`[[ "$efst" != valid ]] || _WS_RECORDED_IDS+="$o"$'\\t'"$efid"$'\\n'`);
   });
 });

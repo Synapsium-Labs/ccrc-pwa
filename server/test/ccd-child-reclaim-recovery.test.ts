@@ -16,6 +16,9 @@
 // `_ws_reclaim_owned`. Every item of the recovery's never-list (spec §5.5) has a case here or a line in the scan
 // at the foot.
 //
+// EVERY OTHER ROW'S PANE IS UP HERE. A gone row nothing runs for may stop holding without any record at all (#2294,
+// `ccd-reclaim-gone-quiet.test.ts`), so a case about what these two arms prove keeps something running for the row.
+//
 // FIXTURE HOME ONLY. `makePrHarness`'s HOME is the isolation boundary: every repository, worktree, registry row,
 // tombstone and the git shim live under it, and the verb runs under `CHILD_STUBS`, so no unit or pane is touched.
 // A new file, not cases added to the ladder suite, so that no one suite outgrows the 600 s ceiling of a foreground run.
@@ -27,12 +30,15 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import {
-  CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child, type LadderAnswer,
+  CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
-beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-recovery-'); });
+beforeEach(() => {
+  h = makePrHarness('ccrc-child-reclaim-recovery-');
+  plantTmux(h, { sessions: [`cc-${SIB}`, `cc-${FOREIGN}`] });
+});
 afterEach(() => { h.cleanup(); });
 
 /** `_ws_reclaim_workdir_shared`'s cannot-be-placed sentence: the row holds the child. */

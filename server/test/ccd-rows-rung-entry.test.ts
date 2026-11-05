@@ -25,7 +25,7 @@ import path from 'node:path';
 import { GH_STUB, makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { WS_ADD, ccdSource } from './ccdWsHelpers.js';
 import {
-  CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type Child, type LadderAnswer,
+  CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, plantTmux, type Child, type LadderAnswer,
 } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 import { EXP_ID, expireAudit, makeArchived } from './wsExpireFixture.js';
@@ -293,9 +293,10 @@ describe('a valid field places its row, and only adds (path-identity spec §4.5 
     answers(evalOf(h), 'containment-unproven', NESTED_BY('demo-inside'));
   }, 90_000);
 
-  it('I5: a gone row whose field records a path outside, beside a blank admin entry, still holds the child', () => {
+  it('I5: a gone row whose field records a path outside, beside a blank admin entry, still holds the child while its pane is up', () => {
     const c = makeChild(h);
     const s = sibling();
+    plantTmux(h, { sessions: [`cc-${SIB}`] });   // nothing running, the row stops holding, unplaced (#2294)
     blankAdminEntry(c.main);
     fs.rmSync(s.wt, { recursive: true, force: true });
     answers(evalOf(h), 'unmeasured', `registry row(s) ${SIB} ${HELD}`, 'the CONTROL: the seed alone');
@@ -520,9 +521,10 @@ describe('ws-expire and the collector share the rows rung', () => {
     expect(String(r.doc['detail'])).toContain(NESTED_BY(ALT));
   }, 120_000);
 
-  it('X, I5: a gone row with a field outside, beside a blank admin entry, still holds the expiry', () => {
+  it('X, I5: a gone row with a field outside, beside a blank admin entry, still holds the expiry while its pane is up', () => {
     const e = makeArchived(h);
     const s = sibling(false);
+    plantTmux(h, { sessions: [`cc-${SIB}`] });
     blankAdminEntry(e.main);
     fs.rmSync(s.wt, { recursive: true, force: true });
     const outside = mk('outside');

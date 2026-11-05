@@ -1982,8 +1982,9 @@ describe('resolution basis — how the resolver formed its answer (D-3731)', () 
     expect(after, 'and so is a complete one').toBe('1\x1f\x1funmeasured');
   }, 60_000);
 
-  it('removed ancestor alias is unmeasured', () => {
+  it('removed ancestor alias is unmeasured, while its pane is up', () => {
     const c = makeChild(h);
+    plantTmux(h, { sessions: [`cc-${PLACEMENT_ALT}`] });   // the measured shape: a pane still in the tree (#2294)
     fs.mkdirSync(path.join(c.wt, 'server'));
     fs.writeFileSync(path.join(c.wt, 'server', 'live.txt'), 'another session’s uncommitted work\n');
     const alias = path.join(h.home, 'alias');
@@ -2115,7 +2116,7 @@ const evalAs = (id: string): LadderAnswer => {
   return { verdict, token, detail };
 };
 
-it('a complete row listed before a projected row lends it no placement proof', () => {
+it('a complete row listed before a projected row whose pane is up lends it no placement proof', () => {
   const c = makeChild(h);
   fs.mkdirSync(path.join(c.wt, 'server'));
   const complete = path.join(h.home, 'outside', 'server');
@@ -2134,6 +2135,7 @@ it('a complete row listed before a projected row lends it no placement proof', (
     const proj = `demo-p${i}-proj`;
     if (i % 2 === 0) { plainRow(done, complete); plainRow(proj, projected); }
     else { plainRow(proj, projected); plainRow(done, complete); }
+    plantTmux(h, { sessions: [`cc-${proj}`] });
     const listed = h.sh(`find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*'`).split('\n');
     const iDone = listed.indexOf(path.join(h.home, '.cc-sessions', `${done}.workdir`));
     const iProj = listed.indexOf(path.join(h.home, '.cc-sessions', `${proj}.workdir`));
@@ -2152,11 +2154,14 @@ it('a complete row listed before a projected row lends it no placement proof', (
 }, 180_000);
 
 // THE HOLD IS D-3731'S COST, PINNED (review 212, F1; D-3734). A row whose directory is gone resolves only as a
-// projection, so it holds EVERY child's reclaim at `unmeasured` — a present child, a vanished one, and two vanished
-// children each other. R19's own arm is unchanged: each vanished child alone still reclaims. Spec §5.5's recovery
-// needs positive evidence, and these rows carry none (ccd-child-reclaim-recovery.test.ts).
-it('ambiguous row hold: a present child beside an unrelated gone-directory row is unmeasured', () => {
+// projection, so while something runs for it it holds EVERY child's reclaim at `unmeasured` — a present child, a
+// vanished one, and two vanished children each other. R19's own arm is unchanged: each vanished child alone still
+// reclaims. Spec §5.5's recovery needs positive evidence, and these rows carry none
+// (ccd-child-reclaim-recovery.test.ts). A row nothing runs for stops holding, unplaced (#2294;
+// ccd-reclaim-gone-quiet.test.ts), so each case here keeps its pane up.
+it('ambiguous row hold: a present child beside an unrelated gone-directory row whose pane is up is unmeasured', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: ['cc-demo-stale'] });
   const retired = path.join(h.home, 'projects', 'retired', 'x');
   fs.mkdirSync(retired, { recursive: true });
   plainRow('demo-stale', retired);
@@ -2178,8 +2183,9 @@ it('ambiguous row hold: a present child beside an unrelated gone-directory row i
   expect(fs.existsSync(c.wt)).toBe(true);
 }, 60_000);
 
-it('ambiguous row hold: a vanished subject beside a vanished sibling row is unmeasured', () => {
+it('ambiguous row hold: a vanished subject beside a vanished sibling row whose pane is up is unmeasured', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: ['cc-demo-sibling'] });
   const sibling = path.join(h.home, 'worktrees', 'demo', 'sibling');
   fs.mkdirSync(sibling, { recursive: true });
   plainRow('demo-sibling', sibling);
@@ -2195,7 +2201,7 @@ it('ambiguous row hold: a vanished subject beside a vanished sibling row is unme
   expect(r.token).toBe('');
 }, 60_000);
 
-it('ambiguous row hold: two vanished children hold each other', () => {
+it('ambiguous row hold: two vanished children whose panes are up hold each other', () => {
   const c = makeChild(h);
   h.sh(`${WS_ADD} CCD_WS_SLUG=still-harbor cmd_ws_add --child ${CHILD_RUN} demo`);
   const other = 'demo-still-harbor';
@@ -2214,10 +2220,12 @@ it('ambiguous row hold: two vanished children hold each other', () => {
     .not.toContain('still-harbor');
   expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'the CONTROL: git records neither tree')
     .not.toContain('quiet-basin');
+  plantTmux(h, { sessions: [`cc-${other}`] });
   const mine = evalOf(h);
   expect(mine.verdict, mine.detail).toBe('unmeasured');
   expect(mine.detail).toContain(`registry row(s) ${other} ${PROJECTED_WHY}`);
   expect(mine.token).toBe('');
+  plantTmux(h, { sessions: [`cc-${CHILD_ID}`] });
   const theirs = evalAs(other);
   expect(theirs.verdict, theirs.detail).toBe('unmeasured');
   expect(theirs.detail).toContain(`registry row(s) ${CHILD_ID} ${PROJECTED_WHY}`);

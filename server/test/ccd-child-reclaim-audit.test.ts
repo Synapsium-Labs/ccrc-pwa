@@ -360,6 +360,7 @@ it('absent-suffix alternate row is unmeasured and mints no token', () => {
 
 it('alternate projection diagnostics omit raw workdir and newline payload', () => {
   const c = makeChild(h);
+  plantTmux(h, { sessions: [`cc-${PROJECTED}`] });   // a row nothing runs for would be released (#2294)
   const raw = plantProjectedRow(c);
   // A second row whose `.workdir` carries a newline and a forged `ccd:` line of its own.
   const payload = `${h.home}/alias/server\nccd: ws-reclaim reclaimed ${CHILD_ID} — INJECTED-PAYLOAD`;

@@ -906,8 +906,10 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     // A row is placed only on a `complete` resolution: below a proven-absent
     // component the rest is re-attached as text, which is how the namespace
     // reads now, not where that session is. So a stale row outside holds every
-    // child until it is purged — the stated cost of that rule.
+    // child until it is purged — the stated cost of that rule — while its pane
+    // is up: one nothing runs for only stops holding, unplaced (#2294).
     makeChild(h);
+    plantTmux(h, { sessions: ['cc-demo-gone'] });
     const row = path.join(h.home, 'deleted', 'long', 'ago');
     expect(h.sh(`_ws_reclaim_resolve "${row}"; printf '%s\\x1f%s' "$?" "$_WS_RESOLVE_BASIS"`), 'the CONTROL: it resolves, by projection')
       .toBe('0\x1fabsent-suffix');
@@ -1052,6 +1054,7 @@ describe('rung 9’s row placement: the two `//` shapes stated, and a row that c
     // A row is placed only on a `complete` resolution, so each is unmeasured — never a token — rather than outside.
     controls.forEach((p, i) => {
       otherRowOf(`demo-ctl${i}`, p);
+      plantTmux(h, { sessions: [`cc-demo-ctl${i}`] });   // something runs for it: one nothing runs for is released (#2294)
       const r = evalOf(h);
       expect(r.verdict, `${p}: ${r.detail}`).toBe('unmeasured');
       expect(r.token).toBe('');

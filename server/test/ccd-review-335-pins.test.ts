@@ -24,7 +24,7 @@ import { WS_ADD } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf, measOf } from './lifecycleHelpers.js';
 import {
-  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, type LadderAnswer,
+  CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, childReclaimVerb, evalOf, makeChild, plantTmux, type LadderAnswer,
 } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
 
@@ -73,6 +73,7 @@ describe('F8: the breadcrumb arm’s tombstone must be this row’s own file (sp
   it('a tombstone replaced by a LINK to a byte-identical copy keeps the hold; restored, it places the row', () => {
     const c = makeChild(h);
     interruptedSibling(c.main);
+    plantTmux(h, { sessions: [`cc-${SIB}`] });   // something runs for it: a quiet row stops holding unrecorded (#2294)
     placed(evalOf(h), 'the CONTROL: the breadcrumb and its tombstone place the sibling');
     const tomb = tombFile(SIB);
     const copy = path.join(h.home, 'tomb-copy.json');
@@ -90,6 +91,7 @@ describe('F8: the breadcrumb arm’s tombstone must be this row’s own file (sp
   it('an EMPTY uuid on both the row and its tombstone proves nothing — the hold stays', () => {
     const c = makeChild(h);
     interruptedSibling(c.main);
+    plantTmux(h, { sessions: [`cc-${SIB}`] });
     placed(evalOf(h), 'the CONTROL: the breadcrumb and its tombstone place the sibling');
     const uuid = h.reg(SIB, 'uuid')!;
     h.sh(`_ws_tombstone_patch ${SIB} '{"uuid":""}'`);
