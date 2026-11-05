@@ -2,10 +2,13 @@
 // "Goals from inside a session", D29 and D30), measured in a real Chrome over the production build at 390 and 1280 in both
 // skins. The jsdom suites (test/waiting-routes.test.tsx, programme-screen.test.tsx, programme-box-card.test.tsx,
 // session-header-view.test.ts, skin-switch.test.tsx) pin the markup and the paths; this file walks what an operator walks:
-//   - a programme box's chip opens the one list filtered to its programme, an item opened there steps along that filtered list,
-//     its way back returns to the filtered list with the rail's filter set, and clearing the filter shows every programme;
-//   - a session in a programme shows the Goals icon in its chrome (a 44 px door on a phone, its word beside it at a desk), and
-//     it opens that programme's Goals page; a session in no programme shows none; nothing scrolls sideways or throws.
+//   - a programme box's chip opens the one list filtered to its programme, an item opened there steps along that filtered list
+//     (Next, Previous, and Next disabled at the filtered list's end, where the combined list would go on), its way back returns
+//     to the filtered list with the rail's filter set, and clearing the filter shows every programme (review 1537 A4: prog-b,
+//     the combined list's FIRST group, so a Next that stops at its end proves the filter);
+//   - a session in a programme shows the Goals icon in its chrome, and it opens that programme's Goals page, whose link opens the
+//     filtered list, and the navigation's Waiting on you opens the whole one; a session in no programme shows none; nothing
+//     scrolls sideways or throws. Where the door stands and what height it costs are goals-door-height.browser.test.ts's.
 //
 // The fixture is two programmes in project-a: `prog-b` holds the blocking item and two more, `prog-a` holds two; each has a
 // coordinator and one worker. `solo` is a session in no programme. Names are neutral: the repository is public.
@@ -123,28 +126,36 @@ describe.each(SKINS)('one Waiting on you page in %s', (skin) => {
     it(`at ${width}: a programme chip opens the filtered list; an item steps along it and goes back to it; clearing shows every programme`, async () => {
       const { ctx, page, errors } = await open(skin, width, '/', 'section.pg-box .pg-waiting');
       try {
-        await page.locator('section.pg-box', { hasText: 'Programme A' }).locator('.pg-waiting').click();
+        await page.locator('section.pg-box', { hasText: 'Programme B' }).locator('.pg-waiting').click();
         await page.waitForSelector('.wl-groups .wl-item');
-        expect(await here(page)).toBe('/waiting?programme=prog-a');
-        expect(await listed(page)).toEqual(['4', '5']);
-        expect(await page.textContent('.wl-rail [aria-pressed="true"] .wl-rail-name')).toBe('Programme A');
+        expect(await here(page)).toBe('/waiting?programme=prog-b');
+        expect(await listed(page)).toEqual(['1', '2', '3']);
+        expect(await page.textContent('.wl-rail [aria-pressed="true"] .wl-rail-name')).toBe('Programme B');
         expect(await sideScroll(page), 'sideways scroll on the filtered list').toBe(0);
 
-        await page.click('.wl-groups .wl-item[data-item="4"]');
+        await page.click('.wl-groups .wl-item[data-item="1"]');
         await page.waitForSelector('.wi');
-        expect(await here(page)).toBe('/waiting/4?from=waiting:prog-a');
-        expect(await page.textContent('.wi-nav .wi-pos')).toBe('1 of 2');
+        expect(await here(page)).toBe('/waiting/1?from=waiting:prog-b');
+        expect(await page.textContent('.wi-nav .wi-pos')).toBe('1 of 3');
         await page.click('.wi-nav [aria-label="Next item"]');
-        await page.waitForFunction(() => location.pathname === '/waiting/5');
-        expect(await page.textContent('.wi-nav .wi-pos')).toBe('2 of 2');
+        await page.waitForFunction(() => location.pathname === '/waiting/2');
+        expect(await page.textContent('.wi-nav .wi-pos')).toBe('2 of 3');
+        await page.click('.wi-nav [aria-label="Next item"]');
+        await page.waitForFunction(() => location.pathname === '/waiting/3');
+        expect(await page.textContent('.wi-nav .wi-pos')).toBe('3 of 3');
+        // prog-b is the combined list's first group: its Next would go on to prog-a's 4; the filtered list's ends here.
         expect(await page.isDisabled('.wi-nav [aria-label="Next item"]'), 'the filtered list ends at its last item').toBe(true);
+        await page.click('.wi-nav [aria-label="Previous item"]');
+        await page.waitForFunction(() => location.pathname === '/waiting/2');
+        expect(await page.textContent('.wi-nav .wi-pos')).toBe('2 of 3');
+        expect(await here(page)).toBe('/waiting/2?from=waiting:prog-b');
         expect(await sideScroll(page), 'sideways scroll on the item').toBe(0);
 
         await page.click('.wi-nav .wi-back');
         await page.waitForSelector('.wl-groups .wl-item');
-        expect(await here(page)).toBe('/waiting?programme=prog-a');
-        expect(await listed(page)).toEqual(['4', '5']);
-        expect(await page.textContent('.wl-rail [aria-pressed="true"] .wl-rail-name')).toBe('Programme A');
+        expect(await here(page)).toBe('/waiting?programme=prog-b');
+        expect(await listed(page)).toEqual(['1', '2', '3']);
+        expect(await page.textContent('.wl-rail [aria-pressed="true"] .wl-rail-name')).toBe('Programme B');
 
         await page.click('.wl-rail .wl-rail-btn:has-text("All programmes")');
         await page.waitForFunction(() => location.search === '');
@@ -158,49 +169,71 @@ describe.each(SKINS)('one Waiting on you page in %s', (skin) => {
   }
 });
 
-/** The Goals door in the session's header, as drawn: its box, whether it is inside the viewport, and its visible word. */
+/** The Goals door in the session's header, as drawn: the one drawn door's box, whether it is inside the viewport, and its word
+ *  when the word is displayed, with whether it is visible (computed visibility and opacity), inside the door's box and beside the
+ *  glyph (review 1537 A5). */
 const goalsDoor = (page: Page) => page.evaluate(() => {
-  const el = document.querySelector<HTMLElement>('.chat-head .keycap--goals');
-  if (el === null) return null;
-  const r = el.getBoundingClientRect();
-  const word = el.querySelector<HTMLElement>('.keycap-word');
-  const glyph = el.querySelector('svg')!.getBoundingClientRect();
   const head = document.querySelector<HTMLElement>('.chat-head')!;
-  const shown = word !== null && getComputedStyle(word).display !== 'none';
+  const drawn = [...head.querySelectorAll<HTMLElement>('.chat-coord-goals, .keycap--goals')]
+    .filter((e) => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0);
+  if (drawn.length !== 1) return drawn.length === 0 ? null : { several: drawn.length };
+  const el = drawn[0]!;
+  const r = el.getBoundingClientRect();
+  const word = el.querySelector<HTMLElement>('.chat-coord-goals-word, .keycap-word');
+  const glyph = el.querySelector('svg')!.getBoundingClientRect();
+  const displayed = word !== null && getComputedStyle(word).display !== 'none';
+  const cs = displayed ? getComputedStyle(word) : null;
   const wr = word?.getBoundingClientRect();
   return {
     w: r.width, h: r.height, inside: r.left >= 0 && r.right <= innerWidth + 0.5 && r.width > 0,
-    word: shown ? word.textContent : null,
-    // Beside the glyph, on its row, as the other doors' words sit (chat.css's from-900 rule): never under it.
-    beside: shown && wr !== undefined && wr.left >= glyph.right - 0.5 && wr.top < glyph.bottom && wr.bottom > glyph.top,
+    name: el.getAttribute('aria-label'),
+    word: displayed ? word.textContent : null,
+    visible: cs !== null && cs.visibility === 'visible' && Number(cs.opacity) === 1 && wr !== undefined && wr.width > 0
+      && wr.left >= r.left - 0.5 && wr.right <= r.right + 0.5 && wr.top >= r.top - 0.5 && wr.bottom <= r.bottom + 0.5,
+    // Beside the glyph, on its row, as the line's links carry their words: never under it.
+    beside: displayed && wr !== undefined && wr.left >= glyph.right - 0.5 && wr.top < glyph.bottom && wr.bottom > glyph.top,
     headFits: head.scrollWidth <= head.clientWidth + 1,
   };
 });
 
 describe.each(SKINS)('Goals from inside a session in %s', (skin) => {
   for (const width of WIDTHS) {
-    it(`at ${width}: a session in a programme shows the Goals icon at phone and desk widths, and it opens that programme's Goals page`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/s/prog-a-w1', '.chat-head .keycap--goals');
+    it(`at ${width}: a session in a programme shows the Goals icon, which opens that programme's Goals page; its link opens the filtered list, and the navigation's Waiting on you the whole one`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/s/prog-a-w1', '.chat-head :is(.chat-coord-goals, .keycap--goals)');
       try {
         const door = await goalsDoor(page);
-        expect(door, 'the Goals door').not.toBeNull();
-        expect(door!.inside, 'inside the viewport').toBe(true);
-        expect(door!.headFits, 'the header does not overflow').toBe(true);
+        expect(door, 'one Goals door').not.toBeNull();
+        expect(door).not.toHaveProperty('several');
+        const d = door as Exclude<typeof door, null | { several: number }>;
+        expect(d.inside, 'inside the viewport').toBe(true);
+        expect(d.headFits, 'the header does not overflow').toBe(true);
+        expect(d.name, 'named by its programme').toBe('Goals: Programme A');
         if (width < 900) {
-          expect(Math.min(door!.w, door!.h), 'a 44 px door on a phone').toBeGreaterThanOrEqual(43.5);
-          expect(door!.word, 'a glyph alone on a phone').toBeNull();
+          // A phone's pointer is coarse: the door takes the tap floor, as every door there does.
+          expect(Math.min(d.w, d.h), 'a 44 px door on a phone').toBeGreaterThanOrEqual(43.5);
+          expect(d.word, 'a glyph alone on a phone').toBeNull();
         } else {
-          expect(door!.word, 'its word at a desk').toBe('Goals');
-          expect(door!.beside, 'the word beside the glyph, on its row').toBe(true);
+          expect(d.word, 'its word at the desk').toBe('Goals');
+          expect(d.visible, 'the word visible, inside the door').toBe(true);
+          expect(d.beside, 'the word beside the glyph, on its row').toBe(true);
         }
         expect(await sideScroll(page), 'sideways scroll').toBe(0);
-        await page.click('.chat-head .keycap--goals');
+        await page.click('.chat-head :is(.chat-coord-goals, .keycap--goals) >> visible=true');
         await page.waitForSelector('.pv .pv-title');
         expect(await here(page)).toBe('/programmes/prog-a');
         expect(await page.textContent('.pv .pv-title')).toBe('Programme A');
-        // The Goals page draws no list of its own, and links the filtered one.
+        // The Goals page draws no list of its own; its link opens the filtered list.
         expect(await page.locator('.pv .wl-item').count()).toBe(0);
-        expect(await page.getAttribute('.pv a.pv-waiting', 'href')).toBe('/waiting?programme=prog-a');
+        await page.click('.pv a.pv-waiting');
+        await page.waitForSelector('.wl-groups .wl-item');
+        expect(await here(page)).toBe('/waiting?programme=prog-a');
+        expect(await listed(page)).toEqual(['4', '5']);
+        // The navigation's Waiting on you opens the one list, every programme.
+        await page.locator('[data-command="go-waiting"] >> visible=true').first().click();
+        await page.waitForFunction(() => location.search === '');
+        expect(await here(page)).toBe('/waiting');
+        await page.waitForFunction(() => document.querySelectorAll('.wl-groups .wl-item[data-item]').length === 5);
+        expect(await listed(page)).toEqual(['1', '2', '3', '4', '5']);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
@@ -211,7 +244,7 @@ describe.each(SKINS)('Goals from inside a session in %s', (skin) => {
       const { ctx, page, errors } = await open(skin, width, '/s/solo', '.chat-head .keycap--more');
       try {
         await page.waitForTimeout(300); // the runs frame has landed: a door that would come, would have come
-        expect(await page.locator('.chat-head .keycap--goals').count()).toBe(0);
+        expect(await page.locator('.chat-head :is(.chat-coord-goals, .keycap--goals)').count()).toBe(0);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
