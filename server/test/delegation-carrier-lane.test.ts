@@ -24,6 +24,8 @@ import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import * as F from './leaseFixture.js';
+import { markLeaseCarrier } from '../src/coord/delegationCarrierMark.js';
+import { checkpointWithLease } from './delegationLeaseFixture.js';
 
 const NOW = Date.UTC(2026, 9, 15, 10, 30, 0);
 const INC = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -258,6 +260,25 @@ describe('PR6: the lane marks carriers, reads them back, and counts what it cann
     expect(marks(w).slice(seenBefore).map(named)).toEqual([fresh]);
     expect(w.watcher.currentDelegationHealth()?.carriers).toMatchObject({ refused: 9, pending: 0 });
   }, ROW_MS);
+});
+
+describe('PR6: markLeaseCarrier asks the capability itself', () => {
+  it('W5-K12b: with no carrier-mark capability, or no evidence at all, the composer composes and runs nothing', async () => {
+    const cp = checkpointWithLease({ generation: 1, parentIncarnation: INC });
+    const lease = cp.leases[0]!;
+    const argvs: string[][] = [];
+    const deps = (ccdVerbs: string[] | null) => ({
+      io: { readFileMeasured: async () => ({ ok: false as const, reason: 'absent' as const }), readdirMeasured: async () => ({ ok: false as const, reason: 'absent' as const }) },
+      registryDir: '/nowhere', runCcd: async (argv: readonly string[]): Promise<CcdResult> => { argvs.push([...argv]); return written(argv); },
+      fleetState: { ccdVerbs }, durable: { noteCarrierSeen: async () => { throw new Error('never asked'); } }, nowMs: () => NOW,
+    });
+    for (const verbs of [['caps', DELEGATION_EVENTS_CAP], null]) {
+      expect(await markLeaseCarrier(deps(verbs) as never, lease, cp)).toMatchObject({ kind: 'refused', word: 'unmeasured' });
+    }
+    expect(argvs, 'nothing composed on no evidence').toEqual([]);
+    expect(await markLeaseCarrier(deps(['caps', LEASE_MARK_CAP]) as never, lease, cp)).toMatchObject({ kind: 'marked', seen: false });
+    expect(argvs.map((a) => a[0]), 'the capability present: one mark').toEqual(['ws-lease-mark']);
+  });
 });
 
 describe('PR6 on a fixture box: the real ws-lease-mark answers the lane', () => {

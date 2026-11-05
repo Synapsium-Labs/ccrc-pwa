@@ -10941,7 +10941,7 @@ class DelegationLane {
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();
           if (cs.phase === 'ready' && !pass.signal.aborted) {
-            const d = { io: this.deps.io, registryDir: this.deps.cfg.registryDir, signal: pass.signal, runCcd: this.deps.runCcd, durable, nowMs: () => Date.now() };
+            const d = { io: this.deps.io, registryDir: this.deps.cfg.registryDir, signal: pass.signal, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, durable, nowMs: () => Date.now() };
             const { steps, censusRow } = await planCarrierPass(d, cs.checkpoint as DelegationCheckpointV1, this.carrierMemory, { supported: ccdCan(this.deps.fleetState, 'leaseMark'),
               nowMs: pass.now, census: flat, workdirs: pass.records.flatMap((r) => (typeof r.workdir === 'string' ? [r.workdir] : [])) });
             for (const step of steps) {

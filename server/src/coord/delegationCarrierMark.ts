@@ -12,7 +12,8 @@
 // restart loses it and retries each standing refusal once. The agent's write allowlist is untouched: the carrier's only writer is
 // verb `CCD_ARGV.leaseMark` composes, reached through `EXEC_COMMANDS`.
 import { LEASE_MARK_REFUSALS, type DelegationCarrierHealth, type LeaseMarkRefusal } from '../../../shared/api.js';
-import { CCD_ARGV } from '../ccdargv.js';
+import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { RunCcd } from './ports.js';
 import type { DelegationDurability } from './delegation-checkpoint.js';
@@ -140,6 +141,8 @@ export async function applyCarrierJournalStep(durable: Pick<DelegationDurability
 
 export interface CarrierMarkDeps extends CarrierReadDeps {
   readonly runCcd: RunCcd;
+  /** The box's capability words: the composer asks them itself, so no caller (the lane, PR9's dispatch) composes on no evidence. */
+  readonly fleetState: Pick<FleetState, 'ccdVerbs'> | undefined;
   readonly durable: Pick<DelegationDurability, 'noteCarrierSeen'>;
   readonly nowMs: () => number;
 }
@@ -161,18 +164,19 @@ const markAnswer = (stdout: string): CarrierMarkOutcome => {
 
 /**
  * Marks one lease's carrier at the generation the checkpoint journals, then reads that carrier back and journals `seen` only when the
- * read-back equals the lease (`carrierReadBackVersus`). A builder refusal (a lease field outside the verb's grammar) is `usage`; a
+ * read-back equals the lease (`carrierReadBackVersus`). With no capability evidence it composes nothing (`unmeasured`). A builder refusal (a lease field outside the verb's grammar) is `usage`; a
  * transport failure, a throw or an answer outside the grammar is `unmeasured`, retried next pass.
  */
 export async function markLeaseCarrier(d: CarrierMarkDeps, lease: DelegationLeaseRow, cp: DelegationCheckpointV1): Promise<CarrierMarkOutcome> {
   const row = (cp.leaseCarriers ?? []).find((c) => c.leaseId === lease.leaseId);
+  if (!ccdCan(d.fleetState, 'leaseMark')) return { kind: 'refused', word: 'unmeasured', detail: 'the box reports no carrier-mark capability' };
   let argv;
   try { argv = CCD_ARGV.leaseMark(carrierMarkArgs(lease, row)); } catch (err) {
     return { kind: 'refused', word: 'usage', detail: err instanceof Error ? err.message : String(err) };
   }
   try {
     const res = await d.runCcd(argv);
-    if (!res.ran) return { kind: 'refused', word: 'unmeasured', detail: `ccd did not run: ${res.stderr}` };
+    if (res.ran === false) return { kind: 'refused', word: 'unmeasured', detail: `ccd did not run (${res.reason}): ${res.detail}` };
     const out = markAnswer(res.stdout);
     if (out.kind === 'refused') return out;
     const rb = await readDelegationCarrier(d, lease.leaseId);
