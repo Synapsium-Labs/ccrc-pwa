@@ -1,14 +1,22 @@
 // Offline shell state. The service worker (vite.config.ts) makes the app
-// shell load without a network; this module makes it load with *content*: the
-// last fleet snapshot persists to localStorage and the fleet store hydrates
-// from it at boot, so a cold start — installed-app launch in a tunnel, on a
-// plane — renders the fleet instantly. The data is clearly last-known: the
-// store keeps conn 'connecting' until the socket opens, and FleetScreen
-// stale-marks everything under that state. /api and /ws are never cached
-// (network-only) — this snapshot is the only offline data, by design.
+// shell load without a network; this module makes it load with *content*. It
+// keeps two copies, each under its own key:
+// - the last fleet snapshot: the fleet store hydrates `sessions` from it at
+//   boot, so a cold start — installed-app launch in a tunnel, on a plane —
+//   renders the fleet instantly. The data is clearly last-known: the store
+//   keeps conn 'connecting' until the socket opens, and FleetScreen
+//   stale-marks everything under that state.
+// - the last Waiting on you list (console speed, Task C4; spec §2.6, D16): the
+//   store hydrates `waitingSaved` from it, never `waiting`, and the Waiting
+//   page draws it marked as not current, with acting blocked, until the live
+//   list lands (`ledgers/savedCopy.ts` decides which to draw).
+// /api and /ws are never cached (network-only) — these two copies are the only
+// offline data, by design.
 import { reviveFleetSessions, unmeasuredFields, type FleetSession, type RosterWire } from '../../../shared/api';
+import type { WaitingView } from '../../../shared/ledgers';
 import { HUES } from '../../../shared/roster';
-import { readKey, writeKey } from './storage';
+import { isWaitingView } from '../ledgers/waitingView';
+import { readKey, writeKey, type StorageSource } from './storage';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -143,6 +151,42 @@ export function loadFleetSnapshot(): FleetSnapshot | null {
     if (revived === null) return null;
     const revivedRoster = Array.isArray(roster) ? roster.filter(isRosterWireLike) : [];
     return { savedAt, sessions: revived, roster: revivedRoster };
+  } catch {
+    return null;
+  }
+}
+
+/** The key of the device's copy of the Waiting on you list, beside the fleet snapshot's. Versioned like it: a later
+ *  shape that cannot be read as today's is a new key, and the old copy simply stops being drawn. */
+export const WAITING_SNAPSHOT_KEY = 'ccrc.waiting-snapshot.v1';
+
+/** The Waiting on you list as this device last heard it, and when (epoch ms) it was saved. */
+export interface WaitingSnapshot {
+  readonly savedAt: number;
+  readonly view: WaitingView;
+}
+
+/** Keep `view` as the device's copy of the list. Best effort, like the fleet snapshot: the answer is `writeKey`'s,
+ *  `false` when the store is absent, full or throws, and nothing else changes then. The store calls it after each
+ *  `waiting` write (`stores/fleet.ts`), so the copy is always a list the page has heard. */
+export function saveWaitingSnapshot(view: WaitingView, now: number = Date.now(), from?: StorageSource): boolean {
+  const snap: WaitingSnapshot = { savedAt: now, view };
+  return writeKey(WAITING_SNAPSHOT_KEY, JSON.stringify(snap), from);
+}
+
+/** The device's copy of the list, or `null` when there is no copy to draw. ONE `null`, deliberately, for every such
+ *  case: nothing stored, a store that is absent or throws, bad JSON, a `savedAt` that is not a number, and a `view`
+ *  that the one list reader (`isWaitingView`) refuses. Every caller handles them the same way (the page draws what it
+ *  draws with no copy), so there is no distinction here for a caller to lose. */
+export function loadWaitingSnapshot(from?: StorageSource): WaitingSnapshot | null {
+  const raw = readKey(WAITING_SNAPSHOT_KEY, from);
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { savedAt, view } = parsed as { savedAt?: unknown; view?: unknown };
+    if (typeof savedAt !== 'number' || !isWaitingView(view)) return null;
+    return { savedAt, view };
   } catch {
     return null;
   }

@@ -15,7 +15,7 @@ import { dismissRelease, readDismissed, resetDismissalForTests } from '../src/fl
 import { setStripExpanded, useStripExpanded } from '../src/fleet/stripExpanded';
 import { inspectorHidden, resetInspectorChoiceForTests, setInspectorHidden } from '../src/inspector/inspectorShown';
 import { loadMark, saveMark } from '../src/lib/notifymark';
-import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
+import { loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot } from '../src/lib/offline';
 import { ack, loadAcks } from '../src/lib/seen';
 import { rememberSkin, storedSkin } from '../src/lib/skin';
 import { rememberTheme, storedTheme } from '../src/lib/theme';
@@ -78,8 +78,11 @@ describe('each storage owner\'s keys (read and write), byte for byte', () => {
   it('lib/notifymark.ts', async () => {
     expect(await keysTouched(() => { saveMark({ epoch: 'epoch-a', seq: 3 }); loadMark(); })).toEqual(['ccrc:notify:v1']);
   });
-  it('lib/offline.ts', async () => {
-    expect(await keysTouched(() => { saveFleetSnapshot([fleetSession({ id: 'session-a' })]); loadFleetSnapshot(); })).toEqual(['ccrc.fleet-snapshot.v1']);
+  it('lib/offline.ts (the fleet snapshot and the saved Waiting list)', async () => {
+    expect(await keysTouched(() => {
+      saveFleetSnapshot([fleetSession({ id: 'session-a' })]); loadFleetSnapshot();
+      saveWaitingSnapshot({ items: [], cleared: [], goals: [] }); loadWaitingSnapshot();
+    })).toEqual(['ccrc.fleet-snapshot.v1', 'ccrc.waiting-snapshot.v1']);
   });
   it('lib/seen.ts', async () => {
     expect(await keysTouched(() => { ack('session-a', 1_784_500_000_000); loadAcks(); })).toEqual(['ccrc:seen:v1']);
@@ -121,7 +124,7 @@ describe('every key, across the twelve owners, as one sorted list', () => {
     expect([...ALL].sort()).toEqual([
       'ccrc-accounts-strip', 'ccrc-fleet-group', 'ccrc-inspector', 'ccrc-release-dismissed', 'ccrc-skin', 'ccrc-theme',
       'ccrc.drawer-view.v1', 'ccrc.fleet-folded.v1', 'ccrc.fleet-rollup.v1', 'ccrc.fleet-snapshot.v1',
-      'ccrc:chat-row-samples', 'ccrc:chat-row-samples-v2', 'ccrc:notify:v1', 'ccrc:seen:v1',
+      'ccrc.waiting-snapshot.v1', 'ccrc:chat-row-samples', 'ccrc:chat-row-samples-v2', 'ccrc:notify:v1', 'ccrc:seen:v1',
     ]);
   });
 });
