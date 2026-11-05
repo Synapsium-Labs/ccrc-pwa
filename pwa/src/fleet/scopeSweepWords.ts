@@ -21,7 +21,8 @@ export const SCOPE_SWEEP_TEXT = {
   offNote: 'Loops and servers left by a dead session are listed by ccrc doctor, with what would be stopped. Nothing is stopped.',
   on: 'Stop them',
   onNote: 'Busy leftovers are stopped once their session has been stopped or gone for six hours. A session that is running '
-    + 'or asleep, and anything another session is connected to, are left alone.',
+    + 'or asleep is left alone. So is a leftover with an outside connection over loopback TCP or a named Unix socket. Any '
+    + 'other connection is not seen, and the stop cuts it.',
   when: 'Read the scope-sweep lines in ccrc doctor for about a week before turning this on.',
   needsIdle: 'This has no effect until idle leftovers are being stopped.',
   unmeasured: 'The server could not read the switches, so this card cannot say which choice stands. Choose one to set it.',
