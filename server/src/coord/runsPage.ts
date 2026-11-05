@@ -3,9 +3,15 @@
 // A query over the coord db, SYNCHRONOUS like the store it serves (no async surface over `CoordStore`). The row
 // columns, the terminal-state list and the row hydration are the STORE's and arrive as arguments (the store's delegate
 // passes its own), so this file names no second copy of any of them. It declares no ring: its ring follows its facts.
-import type { DatabaseSync } from 'node:sqlite';
 import type { ChildReclaimAttention } from '../../../shared/api.js';
 import type { RunsReadResult } from './store.js';
+
+/** The one thing this file asks of the coord db handle: prepare a statement and read all its rows. A structural port, so
+ *  the store's `DatabaseSync` satisfies it and this file names no sqlite module (only the store and the route files
+ *  that own the handle may). Method syntax, so a statement taking narrower bound-parameter types still fits. */
+export interface RunsDb {
+  prepare(sql: string): { all(...args: unknown[]): unknown[] };
+}
 
 /** The most terminal runs one page may ask for (the route refuses a larger `limit`). */
 export const RUNS_PAGE_LIMIT_MAX = 500;
@@ -37,7 +43,7 @@ export function reclaimAttentionRunIds(items: readonly ChildReclaimAttention[] |
  * pinned id.
  */
 export function runsPage(
-  db: DatabaseSync,
+  db: RunsDb,
   opts: { limit: number; before?: number; pinned: readonly number[] },
   sql: { columns: string; terminalStatesSql: string },
   hydrate: (rows: readonly unknown[]) => RunsReadResult,
