@@ -16,7 +16,7 @@ import {
 } from './coord/collectOrphanTree.js';
 import {
   ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_QUEUE_KEY,
-  ORPHAN_LEASE_STOPS, ORPHAN_RETRY_MS, isAuditedClass, orphanPathOfHex, orphanCensusDue, orphanCensusRetryAt, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
+  ORPHAN_LEASE_STOPS, ORPHAN_RETRY_MS, isAuditedClass, orphanAuditEndsHoldWait, orphanPathOfHex, orphanCensusDue, orphanCensusRetryAt, orphanTruncatedRow, orphanTruncatedWaitMs, orphanGoesWithRow, orphanHeldBack, orphanInsideVerdict, orphanFeedRow, orphanFoldAudit, orphanFoldJob, orphanOffers, orphanPopulate,
   orphanRemember, orphanRescueArmed, orphanTreesHealth,
   type OrphanCensusNext, type OrphanFold, type OrphanMemory, type OrphanRow, type OrphanTreeMemory,
 } from './orphanTreeLane.js';
@@ -57,8 +57,9 @@ export class OrphanTreeSweep {
   private unreadableSaid = false;
   /** Truncated censuses in a row (D-6987): a whole census resets it; an unreadable one leaves it. */
   private truncatedStreak = 0;
-  /** The trees whose last outcome was the act job's `lease-unready` stop (delegation PR4), counted in the health block. A tree
-   *  leaves on any later outcome (an act or a learning audit) and when a whole census no longer lists it. */
+  /** The trees whose last delegation hold answer was the act job's `lease-unready` stop (delegation PR4), counted in the health
+   *  block. A tree leaves on any later act outcome, on a learning audit after which no act follows (`orphanAuditEndsHoldWait`),
+   *  and when a whole census no longer lists it. */
   private leaseUnready = new Set<string>();
 
   constructor(private readonly deps: OrphanSweepDeps) {}
@@ -204,7 +205,7 @@ export class OrphanTreeSweep {
     try {
       const a = await d.queue.run(ORPHAN_QUEUE_KEY, () => auditOrphan(this.ccd(), hex));
       if (a.kind === 'not-asked') return false;
-      this.leaseUnready.delete(hex);
+      if (orphanAuditEndsHoldWait(a, rescueArmed)) this.leaseUnready.delete(hex);
       const cur = this.memory.get(hex);
       if (cur !== undefined) this.put(hex, orphanFoldAudit(cur, a, d.mono(), rescueArmed, censusMs));
     } catch {

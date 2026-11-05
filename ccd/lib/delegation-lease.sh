@@ -776,7 +776,8 @@ _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leas
   # shellcheck disable=SC2154  # DL_C_expiresAt is set by _dl_carrier_read through printf -v
   [[ "$DL_C_expiresAt" =~ ^[1-9][0-9]{0,15}$ ]] || { DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) with no expiry"; return 4; }
   _now_s_to now
-  [[ "$now" =~ ^[0-9]+$ ]] || { DL_WHY="the clock answered '$now', not a whole number of seconds, so the hold's expiry cannot be compared"; return 4; }
+  # no leading zero: bash would read `08` in base 8 and the compare would fail, which reads as not held
+  [[ "$now" =~ ^[1-9][0-9]*$ ]] || { DL_WHY="the clock answered '$now', not a whole number of seconds, so the hold's expiry cannot be compared"; return 4; }
   if (( now * 1000 <= DL_C_expiresAt + __DL_HOLD_MARGIN_S * 1000 )); then
     TZ=UTC0 printf -v until '%(%Y-%m-%dT%H:%M:%S)T' "$(( DL_C_expiresAt / 1000 ))"
     printf -v until '%s.%03dZ' "$until" "$(( DL_C_expiresAt % 1000 ))"   # the ISO instant, as the server's feed says every time

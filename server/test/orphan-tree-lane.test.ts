@@ -7,7 +7,7 @@ import { collectOrphanTree } from '../src/coord/collectOrphanTree.js';
 import { OrphanTreeSweep, type OrphanSweepDeps } from '../src/orphanTreeSweep.js';
 import {
   ORPHAN_LICENCE_MS, ORPHAN_CENSUS_MS, ORPHAN_CENSUS_PRESSURE_MS, ORPHAN_RETRY_MS, ORPHAN_AUDITS_PER_PASS, ORPHAN_AUDITS_PER_PASS_PRESSURE, orphanPressure, orphanCensusRetryAt, orphanCensusDue, orphanInsideVerdict, orphanLicence,
-  orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus,
+  orphanCoordinatorSet, orphanTruncatedRow, orphanTruncatedWaitMs, parseOrphanAudit, parseOrphanCensus, orphanAuditEndsHoldWait,
 } from '../src/orphanTreeLane.js';
 import { readDiskHealth } from '../../shared/disk.js';
 import { ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, RECLAIM_PAUSE_MARKER } from '../../shared/switches.js';
@@ -769,7 +769,7 @@ describe('the delegation hold', () => {
     r.hold(beatLeaseHold(() => null));
     await settle(r);
     expect(r.acts().map((a) => a[a.indexOf('--tree-hex') + 1])).toEqual([w]);
-    expect(r.acts()[0]!.slice(0, 5)).toEqual(['ws-orphan', '--expect', tok('c'), '--tree-hex', w]);
+    expect(r.acts()).toEqual([['ws-orphan', '--expect', tok('c'), '--tree-hex', w, '--surface', 'agent', '--actor', 'orphan-tree sweep']]);
     expect(r.trees.has(c)).toBe(true);
     expect(r.holdAsks.map((a) => a.cls).sort()).toEqual(['ccd-root', 'claude']);
     expect(r.sweep.health()!.leaseUnready).toBe(1);
@@ -812,6 +812,32 @@ describe('the delegation hold', () => {
     expect(r.sweep.health()!.leaseUnready, 'a returning tree is not counted before it is stopped again').toBeUndefined();
     r.advance(1); await settle(r);
     expect(r.sweep.health()!.leaseUnready, 'and once after').toBe(1);
+  });
+
+  it('W5-O13h: a learning audit after which an act follows leaves the lease-unready count; the act that follows decides it', async () => {
+    const r = rig(); r.markers.add(ORPHAN_TREE_LIVE_MARKER);
+    const h = r.add('/p/.claude/worktrees/a', 'claude', clean('a'));
+    r.hold(beatLeaseHold(() => null));
+    await settle(r);
+    expect(r.sweep.health()!.leaseUnready).toBe(1);
+    const audits = (): number => r.calls.filter((c) => c[1] === '--orphan-hex').length;
+    const before = audits();
+    r.advance(ORPHAN_RETRY_MS); await r.sweep.pass();                     // the learning audit answers `token`: an act follows
+    expect(audits()).toBe(before + 1);
+    expect(r.sweep.health()!.leaseUnready, 'a token audit measures nothing about readiness').toBe(1);
+    r.trees.set(h, { cls: 'claude', audit: refused('dirty', 'one modified file') });
+    r.advance(ORPHAN_LICENCE_MS); await r.sweep.pass();                   // the act that follows: its audit refuses, an outcome other
+                                                                          // than lease-unready, so the entry goes (W5-O13d has the
+                                                                          // learning audit's own refusal, the box's `leased`)
+    expect(audits()).toBe(before + 2);
+    expect(r.sweep.health()!.leaseUnready).toBeUndefined();
+    // the rule itself (L1): only a refusal or an unarmed rescuable ends the wait
+    const answers = [
+      { kind: 'token', token: tok('a') }, { kind: 'rescuable', word: 'head-not-on-remote', rescueToken: tok('b'), detail: '' },
+      { kind: 'refused', word: 'leased', detail: '' }, { kind: 'unmeasured', detail: '' }, { kind: 'unreadable', detail: '' },
+    ] as const;
+    expect(answers.map((a) => [orphanAuditEndsHoldWait(a as never, false), orphanAuditEndsHoldWait(a as never, true)]))
+      .toEqual([[false, false], [true, false], [true, true], [false, false], [false, false]]);
   });
 
   it('W5-O13e: the box\'s `leased` refusal is said as a sentence, its expiry an ISO instant', async () => {

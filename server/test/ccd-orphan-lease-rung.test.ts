@@ -66,6 +66,10 @@ describe('the lease rung refuses a held tree', () => {
     expect(a).toMatchObject({ verdict: 'refused', refusal: 'leased' });
     expect(a.detail).toContain(`until ${new Date(until).toISOString()},`);   // the expiry as an ISO instant, never epoch ms (F7)
     expect(a.detail).not.toMatch(/epoch ms|until \d+[ ,]/);
+    // the instant is UTC whatever the box's zone (the rung prints it with TZ=UTC0)
+    const ny = audit(t, `${STUBS} export TZ=America/New_York;`);
+    expect(ny).toMatchObject({ verdict: 'refused', refusal: 'leased' });
+    expect(ny.detail).toContain(`until ${new Date(until).toISOString()},`);
     expect(a.token).toBeNull();
     expect(a.rescueToken).toBeNull();
     expect(fs.existsSync(t)).toBe(true);
@@ -163,6 +167,26 @@ describe('the lease rung fails shut: every unreadable answer is unmeasured', () 
     expect(fs.existsSync(t)).toBe(true);
   }, 60_000);
 
+  it('W5-O3: the by-tree directory is a link, or searchable but not listable, while a carrier stands: unmeasured, tree kept', () => {
+    const t = agentTree(h); mark();
+    const saved = path.join(h.home, 'by-tree-saved'); const empty = path.join(h.home, 'empty-dir');
+    fs.renameSync(byTree(), saved); fs.mkdirSync(empty); fs.symlinkSync(empty, byTree());
+    const linked = audit(t);
+    expect(linked, linked.detail).toMatchObject({ verdict: 'unmeasured', token: null, rescueToken: null });
+    expect(linked.detail).toMatch(/link/);
+    fs.rmSync(byTree()); fs.renameSync(saved, byTree());
+    expect(audit(t).verdict).toBe('token');                               // CONTROL: the index restored, the ephemeral carrier frees it
+    if (!ROOT) {
+      fs.chmodSync(byTree(), 0o300);                                      // searchable, not listable
+      try {
+        const a = audit(t);
+        expect(a, a.detail).toMatchObject({ verdict: 'unmeasured', token: null, rescueToken: null });
+        expect(a.detail).toMatch(/cannot be listed/);
+      } finally { fs.chmodSync(byTree(), 0o700); }
+    }
+    expect(fs.existsSync(t)).toBe(true);
+  }, 60_000);
+
   it('W5-O3b: no by-tree directory while a carrier stands is unmeasured; with no carrier it is not held', () => {
     const t = agentTree(h); mark();
     fs.rmSync(byTree(), { recursive: true });
@@ -247,7 +271,7 @@ describe('the lease rung fails shut: every unreadable answer is unmeasured', () 
   it('W5-O4d: a clock that answers no whole number of seconds is unmeasured, never not held', () => {
     const t = agentTree(h); mark();
     mark(adopted('2', Date.now() + DAY));
-    for (const bad of ['1.5', '12x', '']) {
+    for (const bad of ['1.5', '12x', '', '08', '0999999999']) {
       const clock = `_now_s_to() { printf -v "$1" '%s' '${bad}'; };`;
       const a = audit(t, `${STUBS} ${clock}`);
       expect(a, JSON.stringify(bad)).toMatchObject({ verdict: 'unmeasured', token: null });

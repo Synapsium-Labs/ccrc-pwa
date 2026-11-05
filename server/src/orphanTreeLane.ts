@@ -369,6 +369,13 @@ export function orphanFoldAudit(m: OrphanTreeMemory, audit: OrphanAudit, nowMono
   }
 }
 
+/** Whether a learning audit's answer ends a tree's `lease-unready` count (delegation PR4, D-8010; the coordinator's fix-round-2
+ *  ruling). Only the act job asks the delegation hold, so only an answer after which no act follows may clear it: a refusal (the
+ *  box's own `leased` among them) or a `rescuable` while the rescue arm is not armed. A `token`, an armed `rescuable`, an
+ *  `unmeasured` or an `unreadable` answer leaves the count, because the act that follows asks the hold again. */
+export const orphanAuditEndsHoldWait = (audit: OrphanAudit, rescueArmed: boolean): boolean =>
+  audit.kind === 'refused' || (audit.kind === 'rescuable' && !rescueArmed);
+
 function observe(m: OrphanTreeMemory, token: string, rescue: boolean, nowMono: number): OrphanTreeMemory {
   const lic = orphanLicence(m.obs, token, nowMono);
   const obs: OrphanObservation = (lic === 'early' || lic === 'licensed') && m.obs !== null ? m.obs : { token, rescue, atMono: nowMono };
