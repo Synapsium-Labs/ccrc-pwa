@@ -49,7 +49,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # A full analysis of main took at most 33 minutes under default setup; a pull request's, about 6 to 9.
     timeout-minutes: 45
     # security-events: write — the upload of the results. (`actions: read` is
@@ -80,7 +80,7 @@ jobs:
     name: prune overlay-base caches
     needs: analyze
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # actions: write — deleting a cache entry.
     permissions:
