@@ -272,6 +272,19 @@ describe('document links go only to the Docs reader (plan PL10, spec D28)', () =
     // Decoded until it is stable, and a decoded backslash is a separator, as some servers read it (fix round 1's hardening).
     ['a double-encoded artifact segment', { why: 'See https://claude.ai/%2561rtifact/abc first.' }],
     ['encoded backslashes between the section directories', { why: 'See https://github.com/o/r/blob/main/docs%5Csuperpowers%5Cspecs%5Cx.md now.' }],
+    // Fix round 2 (review 1481 F1 to F3): a stray percent sign hides nothing, an empty segment or an encoded dot-segment
+    // hides nothing, and a segment still changing after four rounds of decoding counts as outside.
+    ['a stray percent before a double-encoded artifact segment', { why: 'See https://h.example/%25zz%252Fartifact now.' }],
+    ['a stray percent before double-encoded section directories', { why: 'See https://github.com/o/r/blob/main/a%25zz%252Fdocs%252Fsuperpowers%252Fspecs%252Fb now.' }],
+    ['an empty segment inside public artifacts', { why: 'See https://claude.ai/public//artifacts/abc now.' }],
+    ['an empty segment after docs on a document server', { why: 'See https://b.example/docs//p/specs/a.md now.' }],
+    ['an empty segment before docs on a document server', { why: 'See https://b.example//docs/p/specs/a.md now.' }],
+    ['an empty segment between the section directories', { why: 'See https://github.com/o/r/blob/main/docs/superpowers//specs/x.md now.' }],
+    ['an encoded slash after a dot-dot', { why: 'See https://b.example/docs/p/x/..%2fspecs/a.md now.' }],
+    ['an encoded backslash after a dot-dot', { why: 'See https://b.example/docs/p/x/..%5cspecs/a.md now.' }],
+    ['a double-encoded dot-dot', { why: 'See https://b.example/docs/p/x/%252e%252e/specs/a.md now.' }],
+    ['a segment still changing after four rounds', { why: 'See https://a.example/%2525252541bc now.' }],
+    ['a five-deep artifact segment', { why: 'See https://claude.ai/%2525252561rtifact/abc now.' }],
   ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
     const r = await rig();
     const res = await post(r, '/api/programmes/prog-a/items', { ...as('lane-a'), ...RAISE, ...over });
@@ -287,6 +300,15 @@ describe('document links go only to the Docs reader (plan PL10, spec D28)', () =
     const id = await raise(r, {
       why: 'Sign in at https://github.com/settings/applications/new and read docs/superpowers/specs/a-design.md.',
       how: ['Open https://console.example.com/sign-in', 'Download https://github.com/org-a/repo-a/actions/runs/1/artifacts/2', 'Open /docs/project-a/specs/a-design.md'],
+    });
+    expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
+  });
+
+  it('a literal percent sign is an ordinary link, and four encodings deep is judged by its last spelling (review 1481 F1)', async () => {
+    const r = await rig();
+    const id = await raise(r, {
+      why: 'See https://en.wikipedia.org/wiki/100%25 and https://a.example/discount-50%25-off.',
+      how: ['Open https://a.example/50%-off', 'Open https://a.example/%25252541bc'],
     });
     expect(r.coord.itemById(id)).toMatchObject({ state: 'open' });
   });

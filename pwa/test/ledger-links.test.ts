@@ -102,6 +102,29 @@ describe('linkRuns: the D28 boundary, and paths the console would not open as wr
       .toEqual(['https://github.com/org-a/repo-a/actions/runs/1/artifacts/2']);
   });
 
+  // Fix round 2 (review 1481 F1 to F3): a segment is decoded leniently (each valid `%XX`, a stray `%` left alone) until it is
+  // stable, and the path is judged twice, as written and with empty segments and `.` dropped and `..` popped.
+  it('a literal percent sign stays a link; a stray percent, an empty segment or an encoded dot-segment hides no document', () => {
+    for (const t of [
+      'https://en.wikipedia.org/wiki/100%25', 'https://a.example/discount-50%25-off', 'https://a.example/50%-off',
+      // Four encodings deep decodes to its last spelling and is judged by it.
+      'https://a.example/%25252541bc',
+    ]) {
+      expect(links(linkRuns(`see ${t} now`, HOME)).map((r) => r.href), t).toEqual([new URL(t).href]);
+    }
+    for (const t of [
+      'https://h.example/%25zz%252Fartifact', 'https://github.com/o/r/blob/main/a%25zz%252Fdocs%252Fsuperpowers%252Fspecs%252Fb',
+      'https://claude.ai/public//artifacts/abc', 'https://b.example/docs//p/specs/a.md', 'https://b.example//docs/p/specs/a.md',
+      'https://github.com/o/r/blob/main/docs/superpowers//specs/x.md',
+      'https://b.example/docs/p/x/..%2fspecs/a.md', 'https://b.example/docs/p/x/..%5cspecs/a.md', 'https://b.example/docs/p/x/%252e%252e/specs/a.md',
+      'https://claude.ai/public/x/..%2fartifacts/abc',
+      // Still changing after four rounds counts as outside, whatever it would decode to.
+      'https://a.example/%2525252541bc', 'https://claude.ai/%2525252561rtifact/abc',
+    ]) {
+      expect(links(linkRuns(`see ${t} now`, HOME)), t).toEqual([]);
+    }
+  });
+
   it('F7: a console or document path inside a non-https address stays text', () => {
     for (const t of ['http://a.example/[docs/superpowers/specs/a.md]', 'http://a.example/x(/waiting)', 'ftp://a.example/x(/runs)']) {
       expect(links(linkRuns(`see ${t} now`, HOME)), t).toEqual([]);

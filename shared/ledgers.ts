@@ -476,14 +476,44 @@ const DOC_SERVER_SECTION = new RegExp(`^/docs/[^/]+/(?:${[...DOC_SECTION_SLUGS, 
 /** How many times `linksDocumentOutside` decodes one path segment before it stops trusting it. */
 const DECODE_ROUNDS = 4;
 
+/** One valid percent escape. A `%` not followed by two hex digits is a literal percent sign and is left alone. */
+const PERCENT_ESCAPE = /%([0-9a-f]{2})/gi;
+
+/** One round of a lenient decode: each valid `%XX` becomes its byte, read as one character, and a stray `%` stays. The words
+ *  the decider looks for are ASCII, which every server decodes alike, so a byte of a longer UTF-8 character never forms one. */
+function decodeEscapes(seg: string): string {
+  return seg.replace(PERCENT_ESCAPE, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+/** A path's segments with empty segments and `.` dropped and `..` popped, as a server that merges slashes resolves them. */
+function normalisedSegments(segs: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const seg of segs) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return out;
+}
+
+/** Whether one reading of a path (its segments, from the root) names an artifact page or a document. */
+function segmentsNameADocument(segs: readonly string[]): boolean {
+  if (segs.includes('artifact') || segs.some((seg, i) => seg === 'public' && segs[i + 1] === 'artifacts')) return true;
+  const path = `/${segs.join('/')}`;
+  if (Object.values(DOC_SECTIONS).some((dir) => path.includes(`/${dir}/`) || path.endsWith(`/${dir}`))) return true;
+  return DOC_SERVER_SECTION.test(path);
+}
+
 /** Whether `address` links a document other than through the console's Docs reader: an artifact page (a path segment
  *  `artifact`, or the artifact host's `public/artifacts`), a repository document on any host (a path through one of the Docs
  *  reader's section directories, as a code host's file or directory view has), or a document server's page
- *  (`/docs/<project>/<section>/…`). The path is read as a server reads it: each segment percent-decoded until it is stable
- *  (so `%61rtifact`, `%2561rtifact`, `%73pecs`, `superpowers%2Fspecs` and `%5C` are what they spell), split on `/` and `\`,
- *  and folded to lower case; a segment that does not decode, or still changes after `DECODE_ROUNDS`, counts as one (review
- *  1466 F6). An address that is none of these, an outside service's own page (a sign-in or settings page, a run's artifacts
- *  on a code host), is an ordinary link. */
+ *  (`/docs/<project>/<section>/…`). The path is read as a server reads it: each segment decoded leniently until it is stable
+ *  (each valid `%XX`, a stray `%` left alone, so `%61rtifact`, `%2561rtifact`, `%73pecs`, `superpowers%2Fspecs` and `%5C` are
+ *  what they spell and `100%25` is a literal percent sign), split on `/` and `\`, and folded to lower case; a segment still
+ *  changing after `DECODE_ROUNDS` counts as one (reviews 1466 F6 and 1481 F1, F3). The segments are judged as written and again
+ *  with empty segments and `.` dropped and `..` popped, and either reading naming one is enough (review 1481 F2). An address
+ *  that is none of these, an outside service's own page (a sign-in or settings page, a run's artifacts on a code host), is an
+ *  ordinary link. */
 export function linksDocumentOutside(address: string): boolean {
   let pathname: string;
   try {
@@ -492,23 +522,19 @@ export function linksDocumentOutside(address: string): boolean {
     return false;
   }
   const segs: string[] = [];
-  for (const raw of pathname.split('/')) {
+  for (const raw of pathname.replace(/^\//, '').split('/')) {
     // Decoded until it is stable (a double-encoded `%2561rtifact` too, at most `DECODE_ROUNDS` times; one still changing
     // after that counts as outside), then split on `/` and `\`, which some servers read as one.
     let seg = raw;
     for (let round = 0; ; round++) {
-      let next: string;
-      try { next = decodeURIComponent(seg); } catch { return true; }
+      const next = decodeEscapes(seg);
       if (next === seg) break;
       if (round === DECODE_ROUNDS) return true;
       seg = next;
     }
     segs.push(...seg.toLowerCase().split(/[\\/]/));
   }
-  if (segs.includes('artifact') || segs.some((seg, i) => seg === 'public' && segs[i + 1] === 'artifacts')) return true;
-  const path = segs.join('/');
-  if (Object.values(DOC_SECTIONS).some((dir) => path.includes(`/${dir}/`) || path.endsWith(`/${dir}`))) return true;
-  return DOC_SERVER_SECTION.test(path);
+  return segmentsNameADocument(segs) || segmentsNameADocument(normalisedSegments(segs));
 }
 
 /** The first address in `texts` that links a document outside the console (`linksDocumentOutside`, trimmed as the console
