@@ -13,6 +13,7 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
+import type { PerfHealth } from './perf.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
@@ -3746,6 +3747,12 @@ export interface FleetHealth {
    * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
    */
   archivedHeld?: ArchivedHeld;
+  /**
+   * The console's own timers (console speed S1): the tick's phases, the link's round trips, the event-loop delay and the
+   * slowest routes. Optional like the blocks above: absent when the server runs no recorder, and a reader treats that as
+   * unmeasured, never as fast.
+   */
+  perf?: PerfHealth;
 }
 
 /**

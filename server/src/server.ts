@@ -551,6 +551,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  so nothing touches the disk on a box whose gate is dark. */
   const secretNow = () => (deps.cfg.authEnabled ? measureSecret(deps.cfg.authSecretPath) : SECRET_UNREAD);
 
+  // Console speed S2: every route is timed from its response. The PATTERN is recorded (`/api/sessions/:id/...`), never the URL,
+  // so an id or a nonce never reaches the recorder. It changes no answer and adds no header.
+  app.addHook('onResponse', (req, reply, done) => {
+    deps.perf?.route(req.method, req.routeOptions.url ?? '<unmatched>', reply.elapsedTime);
+    done();
+  });
+
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
    * the EXEMPT-BUT-AUTHENTICATED coordination GETs need the whole decision,
@@ -1310,6 +1317,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const psi = watcher?.pressure(deps.cfg.fleetMode !== 'remote' || deps.fleetState?.connected === true) ?? undefined;
     // The fleet box's backup health (D-7858), judged now from the last read. Absent before one landed: UNKNOWN.
     const backup = watcher?.backup() ?? undefined;
+    // The console's own timers (console speed S1/S2): absent when no recorder is wired, which a reader treats as unknown.
+    const perfBlock = deps.perf ? { perf: deps.perf.health(Date.now()) } : {};
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1336,6 +1345,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(disk ? { disk } : {}),
         ...(psi ? { psi } : {}),
         ...(backup ? { backup } : {}),
+        ...perfBlock,
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1361,6 +1371,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(disk ? { disk } : {}),
       ...(psi ? { psi } : {}),
       ...(backup ? { backup } : {}),
+      ...perfBlock,
     };
   });
 

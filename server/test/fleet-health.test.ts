@@ -17,6 +17,7 @@ import type { FleetHealth, FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { PerfRecorder } from '../src/perf/recorder.js';
 import { readDiskHealth } from '../../shared/disk.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -939,5 +940,38 @@ describe('the orphan lane\'s counts in the watcher', () => {
 
   it('keeps a tree whose containing row\'s .workspace is unreadable: no audit', async () => {
     expect((await nested((reg) => row(reg, 'ws-1'), new Map(), unreadableWorkspace)).audited).toBe(false);
+  });
+});
+
+describe('GET /api/fleet/health: the console timers (console speed S2, Step 7)', () => {
+  it('perf is present when the recorder is wired, absent otherwise', async () => {
+    const bare = await buildServer(testDeps());
+    const without = (await bare.inject({ method: 'GET', url: '/api/fleet/health' })).json() as FleetHealth;
+    expect('perf' in without).toBe(false);
+    await bare.close();
+
+    const perf = new PerfRecorder();
+    perf.phase('registry', 12);
+    const app = await buildServer({ ...testDeps(), perf });
+    const withPerf = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as FleetHealth;
+    expect(withPerf.perf?.tick.phases.registry?.lastMs).toBe(12);
+    expect(typeof withPerf.perf?.since).toBe('number');
+    await app.close();
+  });
+
+  it('the onResponse hook records the route pattern, never the id in the URL', async () => {
+    const perf = new PerfRecorder();
+    const seen: [string, string, number][] = [];
+    vi.spyOn(perf, 'route').mockImplementation((method, route, ms) => { seen.push([method, route, ms]); });
+    const app = await buildServer({ ...testDeps(), perf });
+    await app.inject({ method: 'GET', url: '/api/sessions/lane-a-project-a/pr' });
+    await app.inject({ method: 'GET', url: '/api/no-such-route/lane-a-project-a' });
+    await vi.waitFor(() => { expect(seen.length).toBe(2); });
+    expect(seen[0]![0]).toBe('GET');
+    expect(seen[0]![1]).toBe('/api/sessions/:id/pr');
+    expect(typeof seen[0]![2]).toBe('number');
+    expect(seen[1]![1], 'a request no route matched').toBe('<unmatched>');
+    expect(JSON.stringify(seen)).not.toContain('lane-a-project-a');
+    await app.close();
   });
 });
