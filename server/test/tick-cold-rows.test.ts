@@ -88,4 +88,43 @@ describe('FleetWatcher.tick cold rows (console speed S1)', () => {
     expect(h.readsOf(b)).toEqual([]);   // cold: the sidecar was not read
     expect(h.watcher.currentUsage().get(b)!.stale).toBe(true);
   });
+
+  const writeUsage = (h: ReturnType<typeof makeHarness>, id: string, cost: number): void => {
+    mkdirSync(path.dirname(usageSidecarPath(h.reg, id)), { recursive: true });
+    writeFileSync(usageSidecarPath(h.reg, id), JSON.stringify({ ts: Math.floor(Date.now() / 1000), model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost }));
+  };
+
+  it('a stopped row\'s changed usage sidecar shows within one usage tick once 30 s have passed since its last read', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    const h = makeHarness();
+    const b = STOPPED[1]!;
+    writeUsage(h, b, 1.25);
+    await h.watcher.tick();      // the usage lane's first run reads the sidecar
+    await h.watcher.tick();      // the row is cold from here
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(1.25);
+    writeUsage(h, b, 9.5);       // the final statusline write lands while the row is cold
+    vi.setSystemTime(Date.now() + 31_000);
+    await h.watcher.tick();      // the row's 30 s re-read is hot, but the usage lane is not due on this tick
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(1.25);
+    vi.setSystemTime(Date.now() + 1_000);
+    h.watcher.kick('usage');
+    await h.watcher.tick();      // the row is cold again; the lane runs; the carried entry is 32 s old
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(9.5);
+  });
+
+  it('inside 30 s of its last read a cold row\'s sidecar is not read again by a lane run', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] });
+    const h = makeHarness();
+    const b = STOPPED[1]!;
+    writeUsage(h, b, 1.25);
+    await h.watcher.tick();
+    await h.watcher.tick();
+    writeUsage(h, b, 9.5);
+    vi.setSystemTime(Date.now() + 10_000);
+    h.watcher.kick('usage');
+    h.reset();
+    await h.watcher.tick();
+    expect(h.readsOf(b)).toEqual([]);
+    expect(h.watcher.currentUsage().get(b)!.cost).toBe(1.25);
+  });
 });

@@ -11,7 +11,7 @@ import { askPushBody, withCoordinatorBody } from './askbody.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import { buildFleetReadModel, type FleetReadModel } from './fleetReadModel.js';
 import { RegistryRowCache } from './registryRowCache.js';
-import { carriedUsage, changedRows, listingNotice, planTick, rejectedListing, rowFactsOf, rowSignatures, verdictsOf, type TickFacts } from './tickPlan.js';
+import { carriedUsage, changedRows, usageReadIds, listingNotice, planTick, rejectedListing, rowFactsOf, rowSignatures, verdictsOf, type TickFacts } from './tickPlan.js';
 import { readLimits } from './limits.js';
 import { mapBounded } from './bounded.js';
 import {
@@ -3575,14 +3575,19 @@ export class FleetWatcher {
     await this.runLane('usage', () => this.usagePass(records, readIds));
   }
 
-  private async usagePass(records: SessionRecord[], readIds?: ReadonlySet<string>): Promise<void> {
+  private async usagePass(records: SessionRecord[], hotIds?: ReadonlySet<string>): Promise<void> {
     const now = Date.now();
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
+    const readAt = new Map<string, number>();   // the lane's own wall clock; rebuilt, so a purged row ages out
+    // A cold row (console speed S1) carries its entry, but only while that was read within the re-read bound.
+    const readIds = hotIds === undefined ? undefined : usageReadIds(records, hotIds, this.usageReadAt, now);
     await Promise.all(records.map(async (r) => {
-      if (readIds?.has(r.id) === false) {   // a cold row (console speed S1) carries its entry
+      if (readIds?.has(r.id) === false) {
         const kept = this.usage.get(r.id);
         if (kept) next.set(r.id, carriedUsage(kept, nowS));
+        const at = this.usageReadAt.get(r.id);
+        if (at !== undefined) readAt.set(r.id, at);
         return;
       }
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
@@ -3590,10 +3595,18 @@ export class FleetWatcher {
       else if (read.kind === 'unreadable') {
         const prev = this.usage.get(r.id);
         if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S });
+        const at = this.usageReadAt.get(r.id);   // a failed read is no read: the row stays due
+        if (at !== undefined) readAt.set(r.id, at);
+        return;
       }
+      readAt.set(r.id, now);
     }));
     this.usage = next;
+    this.usageReadAt = readAt;
   }
+
+  /** When each row's usage sidecar was last read (ms, `Date.now`), by `usagePass` alone. */
+  private usageReadAt = new Map<string, number>();
 
   currentUsage(): Map<string, SessionUsage> { return this.usage; }
 

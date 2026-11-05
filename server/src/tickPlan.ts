@@ -11,6 +11,7 @@ import type { SessionRecord } from './registry.js';
 import type { AccountLimits } from './limits.js';
 import type { SessionUsage } from '../../shared/api.js';
 import { USAGE_FRESH_S } from './usage.js';
+import { COLD_ROW_REREAD_MS } from './rowTemperature.js';
 
 /** One whole-server pane listing. `panes` is keyed by the tmux SESSION NAME (`tmuxName(id)`), never by id: the name
  *  replaces `.` and `:`, so the map is read id to name (`verdictFromListing`) and never name to id.
@@ -53,6 +54,20 @@ export function planTick(records: readonly SessionRecord[], cold: ReadonlySet<st
 export function listingNotice(prevFailed: boolean, l: PaneListing): { failed: boolean; warn: string | null } {
   if (l.ok) return { failed: false, warn: null };
   return { failed: true, warn: prevFailed ? null : `ccrc-server: tmux list-panes failed, asking each row the old way: ${l.detail}` };
+}
+
+/** The rows one usage lane run reads: every hot row, and any row (cold included) with no recorded read or whose last
+ *  read is `COLD_ROW_REREAD_MS` or more old. A negative age reads. So a cold row's carried entry is never older than
+ *  the re-read bound at a lane run, and a cold row is read no more often than that bound. */
+export function usageReadIds(
+  records: readonly SessionRecord[], hot: ReadonlySet<string>, lastReadAt: ReadonlyMap<string, number>, nowMs: number,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const r of records) {
+    const at = lastReadAt.get(r.id);
+    if (hot.has(r.id) || at === undefined || nowMs - at < 0 || nowMs - at >= COLD_ROW_REREAD_MS) ids.add(r.id);
+  }
+  return ids;
 }
 
 /** A usage entry carried over a sweep that did not read it (a cold row): `stale` is this sweep's own verdict, so it is
