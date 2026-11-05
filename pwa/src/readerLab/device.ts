@@ -23,10 +23,10 @@ export interface LabDevice extends LabFeatures {
 
 /** The features, read from `win` (the page hands it `window`): presence tests, nothing called. */
 export function labFeaturesOf(win: unknown): LabFeatures {
-  const w = (typeof win === 'object' && win !== null ? win : {}) as { readonly Worker?: unknown; readonly HTMLIFrameElement?: { readonly prototype?: unknown } };
+  const w = (typeof win === 'object' && win !== null ? win : {}) as { readonly 'Worker'?: unknown; readonly HTMLIFrameElement?: { readonly prototype?: unknown } };
   const proto = w.HTMLIFrameElement?.prototype;
   const has = (k: string): boolean => typeof proto === 'object' && proto !== null && k in proto;
-  return { worker: typeof w.Worker === 'function', frameSandbox: has('sandbox'), cspAttribute: has('csp') };
+  return { worker: typeof w['Worker'] === 'function', frameSandbox: has('sandbox'), cspAttribute: has('csp') };
 }
 
 /** The device line's facts. Every browser on iOS is WebKit, whatever its name. */

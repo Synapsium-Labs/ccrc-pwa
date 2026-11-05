@@ -4,15 +4,16 @@
 //   1. The lab's modules (`screens/ReaderLab.tsx`, `docs/reader/labPolicy.ts`, every file under `readerLab/`) import no
 //      `lib/storage`, name no `localStorage`, `sessionStorage`, `indexedDB` or `caches`, read no `clipboard`, call no
 //      `fetch`, `sendBeacon`, `postMessage` or `window.open`, name no `XMLHttpRequest`, `WebSocket`, `EventSource` or
-//      `MessageChannel`, read `api` only as `api.readerLab`, and spell no URL but the SVG namespace. The frame scripts'
-//      TEXT names several of these on purpose; it runs only inside opaque frames, and a string is not an identifier.
+//      `MessageChannel`, `BroadcastChannel`, `MessagePort`, `Worker` or `SharedWorker`, access no `onmessage` member,
+//      read `api` only as `api.readerLab`, and spell no URL but the SVG namespace. The frame scripts' TEXT names several
+//      of these on purpose; it runs only inside opaque frames, and a string is not an identifier.
 //   2. Outside `pwa/src/docs` (whose own clause W8a holds that tree), an iframe or a srcdoc is built in
 //      `readerLab/frames.ts` alone.
 //   3. No string in `pwa/src` holds a sandbox token beyond `allow-scripts`, and `frames.ts` sets `sandbox` only from
 //      `LAB_SANDBOX`.
 //   4. `'lab-draw'` is spelled only in `docs/reader/policy.ts` and `readerLab/run.ts`.
-// NOT EXHAUSTIVE. An alias (`const s = localStorage`), a computed member, `globalThis[…]`, `eval` and a name built from
-// pieces are not seen; the held-out review reads for them, and the browser case checks what the frames do.
+// NOT EXHAUSTIVE. Dynamically computed members, `globalThis[…]`, `eval` and names built from pieces can evade these
+// checks; the held-out review reads for them, and the browser case checks what the frames do.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
@@ -70,7 +71,8 @@ function labFindings(source: string, file: string): string[] {
     if ((ts.isImportDeclaration(n) || ts.isExportDeclaration(n)) && n.moduleSpecifier !== undefined && ts.isStringLiteral(n.moduleSpecifier)
       && /(?:^|\/)lib\/storage$/.test(n.moduleSpecifier.text)) out.add('storage');
     if (ts.isIdentifier(n) && ['localStorage', 'sessionStorage', 'indexedDB', 'caches'].includes(n.text)) out.add('storage');
-    if (ts.isIdentifier(n) && ['XMLHttpRequest', 'WebSocket', 'EventSource', 'MessageChannel'].includes(n.text)) out.add('channel');
+    if (ts.isIdentifier(n) && ['XMLHttpRequest', 'WebSocket', 'EventSource', 'MessageChannel', 'BroadcastChannel', 'MessagePort', 'Worker', 'SharedWorker'].includes(n.text)) out.add('channel');
+    if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'onmessage') out.add('onmessage');
     if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && memberName(n) === 'clipboard') out.add('clipboard');
     if (ts.isCallExpression(n)) {
       const callee = unwrap(n.expression);
@@ -151,6 +153,12 @@ describe('what the reader lab never does (reader lab plan, Task 11)', () => {
     ['a fetch of its own', "export const planted = () => fetch('/api/x');", 'fetch'],
     ['a beacon', "export const planted = () => navigator.sendBeacon('/api/x', 'x');", 'fetch'],
     ['a port', 'export const planted = () => new MessageChannel();', 'channel'],
+    ['a broadcast channel', 'export const planted = () => new BroadcastChannel();', 'channel'],
+    ['a message port', 'export const planted = () => MessagePort;', 'channel'],
+    ['a worker', 'export const planted = () => Worker;', 'channel'],
+    ['a shared worker', 'export const planted = () => SharedWorker;', 'channel'],
+    ['an onmessage property', 'export const planted = () => target.onmessage;', 'onmessage'],
+    ['an onmessage element', "export const planted = () => target['onmessage'];", 'onmessage'],
     ['a post', "export const planted = () => window.parent.postMessage('x', '*');", 'postMessage'],
     ['another api read', 'export const planted = () => api.docs;', 'api'],
     ['a URL of its own', "export const planted = 'https://elsewhere.example/x';", 'url'],
