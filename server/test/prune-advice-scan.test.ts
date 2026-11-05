@@ -3,7 +3,8 @@
 // the rows rung's git arm reads those records, so advice naming it is how the box's cleanup wedged. The scoped act is
 // `git -C <main> worktree remove <path>`, which removes one stale record. The one repository-wide prune left in ccd
 // is the operator's own verb, `ws-gc --prune`: the scan allows its one call inside `_ws_gc_prune_row`, matched by its
-// text so a moved line never reds, and nothing else in that function.
+// whole line, trimmed, so a moved line never reds and nothing appended to it rides along, and nothing else in that
+// function.
 //
 // A text scan: no ccd runs and nothing is executed.
 import { describe, it, expect } from 'vitest';
@@ -19,9 +20,12 @@ const PRUNE = /worktree["']?\s+["']?prune\b/;
 /** The one hit the scan allows: the operator's `ws-gc --prune` row's own call, exactly once, inside that function. */
 const ALLOWED_FN = '_ws_gc_prune_row';
 const ALLOWED_CALL = 'git -C "$main" worktree prune';
+/** That call's whole line, trimmed, matched exactly as `CLASSIFIER_ROW` is: nothing appended to it rides along. */
+const ALLOWED_LINE = `elif ${ALLOWED_CALL} 2>/dev/null; then`;
 
-/** Every non-comment line of a ccd source that names the prune, but the allowed call; and a line saying so when that
- *  call is not there exactly once. Lines continued with a trailing backslash are read as one, at their first line. */
+/** Every non-comment line of a ccd source that names the prune, but the allowed call's line; and a line saying so when
+ *  that line is not there exactly once. A comment is skipped before any join, since bash never continues a comment;
+ *  other lines continued with a trailing backslash are read as one, at their first line. */
 const pruneHits = (src: string): string[] => {
   const hits: string[] = [];
   const lines = src.split('\n');
@@ -30,14 +34,15 @@ const pruneHits = (src: string): string[] => {
   for (let i = 0; i < lines.length; i++) {
     const at = i;
     let line = lines[i]!;
+    if (/^\s*#/.test(line)) continue;
     while (line.endsWith('\\') && i + 1 < lines.length) line = `${line.slice(0, -1)} ${lines[++i]!.trimStart()}`;
     const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(line);
     if (def) fn = def[1]!;
-    if (/^\s*#/.test(line) || !PRUNE.test(line)) continue;
-    if (fn === ALLOWED_FN && line.includes(ALLOWED_CALL) && allowed++ === 0) continue;
+    if (!PRUNE.test(line)) continue;
+    if (fn === ALLOWED_FN && line.trim() === ALLOWED_LINE && allowed++ === 0) continue;
     hits.push(`ccd/ccd:${at + 1} (${fn || 'top level'}): ${line.trim().slice(0, 160)}`);
   }
-  if (allowed !== 1) hits.push(`${ALLOWED_FN}'s own call (${ALLOWED_CALL}) stands ${allowed} times, not once`);
+  if (allowed !== 1) hits.push(`${ALLOWED_FN}'s own call (${ALLOWED_LINE}) stands ${allowed} times, not once`);
   return hits;
 };
 
@@ -95,9 +100,20 @@ describe('no advice names a repository-wide git worktree prune', () => {
   });
 
   it('the row’s call missing, or standing twice, reds', () => {
-    expect(pruneHits(ROW('  :'))).toEqual([`${ALLOWED_FN}'s own call (${ALLOWED_CALL}) stands 0 times, not once`]);
+    expect(pruneHits(ROW('  :'))).toEqual([`${ALLOWED_FN}'s own call (${ALLOWED_LINE}) stands 0 times, not once`]);
     expect(pruneHits(ROW(`${CALL}\n${CALL}`))).toEqual([`ccd/ccd:3 (${ALLOWED_FN}): ${CALL.trim()}`,
-      `${ALLOWED_FN}'s own call (${ALLOWED_CALL}) stands 2 times, not once`]);
+      `${ALLOWED_FN}'s own call (${ALLOWED_LINE}) stands 2 times, not once`]);
+  });
+
+  it('advice appended to the call’s own line reds: the allowance is the call’s whole line (review 1521, F2)', () => {
+    const line = `  elif ${ALLOWED_CALL} 2>/dev/null; then echo "also: git worktree prune"`;
+    expect(pruneHits(ROW(line))).toEqual([`ccd/ccd:2 (${ALLOWED_FN}): ${line.trim()}`,
+      `${ALLOWED_FN}'s own call (${ALLOWED_LINE}) stands 0 times, not once`]);
+  });
+
+  it('a comment ending in a backslash does not swallow the next line: bash never continues a comment (review 1521, F5)', () => {
+    expect(pruneHits(`f() {\n  # a note \\\n  git -C "$main" worktree prune\n}\n${ROW(CALL)}`))
+      .toEqual(['ccd/ccd:3 (f): git -C "$main" worktree prune']);
   });
 
   it('the CONTROL: a comment line and the clean fixture are not hits', () => {
