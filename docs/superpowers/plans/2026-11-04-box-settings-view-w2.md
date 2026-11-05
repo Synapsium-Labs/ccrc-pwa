@@ -5,7 +5,7 @@
 
 > **Sequencing.**
 > - Dispatch only after spec revision 5 is on `main`. It is: the ledger PR #2245 merged it at `745296e45`.
-> - One PR, with ordered commits, every commit green. The tasks below are numbered in commit order; do them in that
+> - One PR, with ordered commits, each task's wave-done green (two gate-sweep reds are recorded in As built, D-7921 and the slice defaults row). The tasks below are numbered in commit order; do them in that
 >   order. Task 4 (the server reads version 2) lands before Task 5 (the verb writes version 2).
 > - The reader-before-writer constraint is a rollout constraint, not a PR one: the PR ships as one release, and the
 >   fleet moves with `ccrc rollout --server-first`. The PR body says so (Task 8).
@@ -1346,8 +1346,8 @@ the refused literal `:100` and `:107-108` only).
 
   | Row | Forgery |
   |---|---|
-  | `a presence row carrying a value` | `CCRC_GRAPH_STORE` ok with `value:'/srv/g'` |
-  | `a presence row carrying an empty value` (review L6) | `CCRC_GRAPH_STORE` ok with `value:''` |
+  | `an is-set row carrying a value` | `CCRC_GRAPH_STORE` ok with `value:'/srv/g'` |
+  | `an is-set row carrying an empty value` (review L6) | `CCRC_GRAPH_STORE` ok with `value:''` |
   | `a refused version-2 row carrying a value` | a refused `CCRC_GRAPH_BUDGET` with `value:'x'` and a set why |
   | `a refused version-2 row carrying an empty value` (review L6) | a refused `CCRC_GRAPH_BUDGET`, and a refused `CCRC_GRAPH_STORE`, each with `value:''` and a set why |
   | `an unmeasured row carrying a value or a from` | each, separately |
@@ -1454,7 +1454,7 @@ the refused literal `:100` and `:107-108` only).
 
   | # | Mutant | Rows that must go red |
   |---|---|---|
-  | M1 | the presence arm admits `[key,state,value,from]` | `a presence row carrying a value`, `malformed--v2-presence-with-value.json` |
+  | M1 | the presence arm admits `[key,state,value,from]` | `an is-set row carrying a value`, `malformed--v2-presence-with-value.json` |
   | M2 | the refused why check becomes `isStr` | `a refused why outside the closed set`, `malformed--v2-why-outside-set.json` |
   | M3 | the refused v2 arm admits `value` | `a refused version-2 row carrying a value` |
   | M4 | `rowOfV1` keeps `value` | Step 2's parse, lane and route rows |
@@ -1467,7 +1467,7 @@ the refused literal `:100` and `:107-108` only).
   | M11 | the v2 length check removed | `a version-2 document missing one row` |
   | M12 | the key check admits omit keys | `the same, in place of a real row` |
   | M13 | the why bound raised to 512 | `a why of 241 characters` |
-  | M14 | the presence and refused arms test `o['value']` for truthiness (`if (o['value']) return null`) in place of the exact key set (review L6) | `a presence row carrying an empty value`, `a refused version-2 row carrying an empty value` |
+  | M14 | the presence and refused arms test `o['value']` for truthiness (`if (o['value']) return null`) in place of the exact key set (review L6) | `an is-set row carrying an empty value`, `a refused version-2 row carrying an empty value` |
   | M15 | `rowOfV1` skips `fitsClass` on an `ok` row (review L4) | `a version-1 ok row outside the envelope is rewritten unmeasured`, the lane row's `zz-leak` case |
   | M16 | `rowOfV1` forwards a long unmeasured why whole (review L4) | `a version-1 unmeasured why is bounded at 240 by a cut` |
   | M17 | `fitsClass` drops its length bound | the 481-byte origin entry of `the writer and the server agree on the envelope` |
@@ -2311,7 +2311,7 @@ takes the next spare and is named in the wave-done.
 - **D-7920.** The plan's six one-line `( BOX_ENV_FILE="$BOX_ENV_FILE/." KEY="$v" _resolver … )` forms tripped census C8(c), which allows no setting
   name beside BOX_ENV_FILE outside `_ccrc_knob`; the mask moved to its own line as the first statement of one subshell holding all six resolver
   calls, with the same behaviour; ruled by the coordinator (option A). Each of the six resolvers reads only its own setting, measured.
-- **D-7921.** The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence.
+- **D-7921.** The D12 class `presence` is spelled `is-set` in code, because C7o (OA-C18 (a), #1371) reserves `presence` in TS for session presence. The census-w7 `persistedPresenceWords` red began at Task 3's `2606db945` (32 against 20), not only at the 33 the sweep last read.
 
 | Number | Task | What it records |
 |---|---|---|
@@ -2390,13 +2390,13 @@ All three stand as the spec agreed them.
 - The reviewer's out-of-task note on the origin shape (see Corrections and Later) is parked for the wave-done and the final review, not fixed here.
 - Task 6's F1 expected family order follows L0's first-appearance order, not the plan's literal list.
 - A not-used row keeps "not used on this role" in its value slot but shows its refused or not-measured why (closed words or bounded text, never a value).
-- The `log-line-redact-corpus` pin (`CALLS` for `ccd/ccrc` 21 to 20, `_set_keep_why` retired) was folded into Task 5's commit by a local autosquash, so every commit stays green; SHAs changed locally only.
+- The `log-line-redact-corpus` pin (`CALLS` for `ccd/ccrc` 21 to 20, `_set_keep_why` retired) was folded into Task 5's commit by a local autosquash, so that pin never reddened a task's commit; SHAs changed locally only. Green at each task's wave-done is what held, not at every commit: two gate-sweep reds stood between wave-dones (census-w7 `persistedPresenceWords`, red from Task 3's `2606db945` at 32 against 20 until `bde598a65`, D-7921; slice-limits-config, red from Task 5's `8e19e43e9` until `c6d9c83a4`) (review 1487 F1).
 - The coordinator ruled option A for census C8(c) (D-7920): one subshell, the mask as its first statement, census unedited.
 - README leave: edit only the box-settings hunks (claim 3395 held by another programme); the session gate's opening paragraph is excluded; the leave on `ccd/ccrc-doctor-checks` was extended under claim 3417 for Task 7's doctor hunks.
 
 ### Interfaces as built
 
-No task renamed an interface of the plan. As built: L0 (`shared/api.ts`) holds `BOX_SETTINGS_TABLE`-derived `BOX_SETTING_SPECS`
+No task renamed an interface of the plan, except the one D-7921 records (the class token `presence` became `is-set`). As built: L0 (`shared/api.ts`) holds `BOX_SETTINGS_TABLE`-derived `BOX_SETTING_SPECS`
 and `BOX_SETTINGS_SHOWN` (61), `BOX_SETTING_FAMILIES` (first-appearance order), `BOX_SETTING_VALUE_SHAPE`,
 `BOX_SETTING_ORIGIN_SHAPE`, `BOX_SETTINGS_TEXT_MAX`, `BOX_SETTING_VALUE_WORDS`, `BOX_SETTING_REFUSAL_WORDS`,
 `BOX_SETTINGS_V1_REFUSED_WHY` and `BOX_SETTINGS_V1_UNFIT_WHY`. `ccd/ccrc` holds `BOX_SETTINGS_TABLE` (bash), `_set_spec`,
@@ -2466,9 +2466,9 @@ Every mutant was killed; none survived.
 |---|---|---|
 | W2-M1 | one `value` key to `presence` in the bash table only | `box-settings-table` T2, T3, CONTROL; `ccrc-settings-verb` V1 |
 | W2-M2 | a word added to bash only (`_tshape_says`) | `box-settings-table` W1 |
-| W2-M2 | the server accepts a `why` outside the set | `box-settings-read` "a refused why outside the closed set", and the corpus and lane rows for `malformed--v2-why-outside-set.json` |
+| W2-M2b | the server accepts a `why` outside the set | `box-settings-read` "a refused why outside the closed set", and the corpus and lane rows for `malformed--v2-why-outside-set.json` |
 | W2-M3 | the verb writes `value` on a refused row | `ccrc-settings-verb` V4 (whole, nine named, wave 1), the `$HOME` row; `box-settings-read` "the corpus regenerates from the real verb" (the document parses `malformed`) |
-| W2-M4 | the parse accepts a value on a `presence` row | `box-settings-read` "a presence row carrying a value" and "carrying an empty value", and `malformed--v2-presence-with-value.json` (file and lane) |
+| W2-M4 | the parse accepts a value on a `presence` row | `box-settings-read` "an is-set row carrying a value" and "an is-set row carrying an empty value", and `malformed--v2-presence-with-value.json` (file and lane) |
 | W2-M5 | the server keeps a refused version-1 row's value | `box-settings-read` the frozen v1 corpus, "parses with no value and the server's own sentence", "no raw text survives", the lane row, the `GET /api/updates` row |
 | W2-M6 | the verb reads a test-box host key through `_tb_load` | `ccrc-settings-verb` V4 (whole and the `CCRC_TESTBOX_GIT_KEY` row), V5 (NUL, mode 000, hidden libraries), V9 (both rows) |
 | W2-M7 | `_tshape`'s CPU and I/O weight bound 10000 to 10001 | `ccrc-test-wrapper` "CCRC_TEST_SLICE_CPU_WEIGHT=10001 is not its shape" and "IO_WEIGHT=10001 warns with exactly its words" (the two rows red beyond the 16 environmental ones); `ccrc-settings-carveouts` stays green (no row pins that bound) |
@@ -2476,7 +2476,7 @@ Every mutant was killed; none survived.
 | W2-M9 | the 240 why cut skipped (cut at 2000) | `ccrc-settings-verb` V7 and V6 "a reader sentence over 240 bytes" |
 | W2-M10 | `_set_fits` always passes | `ccrc-settings-verb` V6 (four rows); `box-settings-table` E2 |
 | W2-M11 | a family with a refused row folds | `box-settings-card` F4, F5, S4 |
-| W2-M11 | a `button` in place of `summary` | `box-settings-card` A1, F1, F3, F4, F5, R2, S4 and "renders no button and no input" |
+| W2-M11b | a `button` in place of `summary` | `box-settings-card` A1, F1, F3, F4, F5, R2, S4 and "renders no button and no input" |
 | W2-M12 | a server-role node renders the 54 fleet rows | `box-settings-card` S1, S3 |
 | W2-M13 | the redacted scheme's http(s) test dropped | `ccrc-settings-verb` the `_upd_url_origin` rc-1 row and the `user:pw@ftp://...` and `tok@ftp://...` rows |
 | W2-M14 | `_set_check` folds rc 2 into 1 | `box-settings-table` C (four hidden-library rows), `ccrc-settings-verb` V5 (hidden libraries), `ccrc-doctor-codex` W2-D9 |
@@ -2514,7 +2514,7 @@ Unchanged from the plan:
 
 Added by the build:
 - The rc 2 WARN from doctor's box-settings check when a library failed to load carries the generic plain-line remedy, not one for the library.
-- The L0 origin shape admits a schemeless host, so a token pasted as `CCRC_RELEASE_BASE_URL` could show as `custom <token>` unless `_upd_redact` catches it. (The comment in `boxSettings.ts` that overclaimed this was corrected by the final review; the residual itself stays here.)
+- The L0 origin shape admits a schemeless host: a value with no scheme, such as a pasted token, shows as `custom <value>`. This is identical on the merge base, and wave 1's agreed design shows the host of a schemeless base on purpose (D-6914, D-7873), so closing it is the operator's decision (a console item); this wave does not change the origin shape or `_upd_url_origin` (review 1487). (The comment in `boxSettings.ts` that overclaimed this was corrected by the final review; the residual itself stays here.)
 - The human form of `ccrc settings` cuts an unmeasured why at 480 while the JSON record cuts at 240.
 - V10's keepalive, usage and carry rows re-run the verb's own literal read, not each consumer's.
 - The dead `*) return 0 ;;` arm in `_set_check`'s updates subshell (final review).
