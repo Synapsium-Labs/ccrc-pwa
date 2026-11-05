@@ -26,6 +26,7 @@ import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { holdCwd } from './wsExpireFixture.js';
+import { collectForkOf } from './collectFixture.js';
 import {
   COL_ID, MOUNTS_SEAM, collectAudit, collectVerb, crashAt, docOf, leafOf, makeOrphan, quarantineOf, records,
   recordsDir, realMounts, slots, witnessOf, type Orphan, type Run,
@@ -339,8 +340,10 @@ describe.runIf(LINUX)('a crash inside a released collection: the record names th
     moved();
     expect(collectVerb(h, String(auditDoc(audit())['token']), { pre: `${MOUNTS_SEAM} ${crashAt('moved')}` }).code).toBe(137);
     const SAME = '_ws_collect_ident() { [[ "$1" == */leaf ]] && return 0; return 1; };';
-    const forkToken = (): string => h.sh(`${MOUNTS_SEAM} ${SAME} exec {l}>>"$REG/.reap-${COL_ID}.lock"; flock -n "$l" || exit 99;`
-      + ` _t() { _ws_collect_fork ${COL_ID} >/dev/null; printf '%s|%s' "$REAP_VERDICT" "$REAP_TOKEN"; }; _ws_reclaim_contained _t`);
+    const forkToken = (): string => {
+      const f = collectForkOf(h, { id: COL_ID, pre: `${MOUNTS_SEAM} ${SAME}` });
+      return `${f.verdict}|${f.token}`;
+    };
     const before = forkToken();
     expect(before).toMatch(/^collectable\|[0-9a-f]{64}$/);
     const rec = path.join(recordsDir(h), records(h)[0]!);
