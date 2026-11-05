@@ -270,6 +270,7 @@ _ws_reclaim_fork_contained -> _reg_get
 _ws_reclaim_generation -> _compact_lock_acquire
 _ws_reclaim_generation -> _compact_lock_release
 _ws_reclaim_generation -> _reg_generation_read
+_ws_reclaim_gone_quiet -> _session_probe
 _ws_reclaim_ladder -> _reg_get
 _ws_reclaim_ladder -> _session_probe
 _ws_reclaim_ladder -> _tmux

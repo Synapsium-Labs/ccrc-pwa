@@ -31646,8 +31646,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # collected as one that cannot be placed — retryable, by id only — and the
   # same proof is asked at every seam that reaches this helper: the audit's
   # evaluation, the verb's locked recomputation, and `_ws_reclaim_owned` on the
-  # fresh and the resumed tail. Liveness is no input here: a modelled pane, up
-  # or gone or unaskable, never makes a projection evidence. The CHILD's own
+  # fresh and the resumed tail. Liveness places nothing: a modelled pane, up
+  # or gone or unaskable, never makes a projection evidence. It only lets a
+  # gone row stop holding (A GONE ROW NOTHING RUNS FOR, below). The CHILD's own
   # `mine` is not held to it: its vanished worktree is R19's arm, decided by
   # the eval's vanished fork (`_ws_reclaim_absent`), which the eval asks right
   # AFTER this helper (review 214, F8), and a row literally at or below it
@@ -31681,6 +31682,33 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # _WS_RECORDED_IDS (`id<TAB>identity` lines, reset beside it; path-identity
   # spec §4.5, step 4); the ladder after its nested scan, and
   # `_ws_reclaim_owned`, ask `_ws_reclaim_moved_check` of both.
+  #
+  # A GONE ROW NOTHING RUNS FOR HOLDS ONLY WHAT IT COULD OVERLAP (#2294). One
+  # row that no arm could place stopped every child on the fleet, each failure
+  # worded as that child's own. A row can overlap the child in four ways: its
+  # spelling is at, in or through it (the literal arms, gone or not); a component
+  # now gone was a link into it; its tree was moved into it or a leaf; or its
+  # session is alive somewhere unknown. The middle two cannot be excluded from the
+  # spelling, so such a row is never PLACED. It is RELEASED, on a stronger
+  # question than the moved-check, whose negatives prove little (it misses a
+  # subdirectory of a moved tree, never looks in a leaf, and finds nothing with a
+  # blank admin entry): nothing runs for the row (`_ws_reclaim_gone_quiet`), and
+  # no checkout at all stands under the child or either leaf
+  # (`_ws_reclaim_no_checkout`). With no checkout there, no moved tree is; with
+  # nothing running, no tree is in use. Its entry field must be `valid` or
+  # `legacy-*` (a pending or unmeasured field holds by its own bucket), and its
+  # spelling must lie at or under neither `mine` nor a resolved leaf, which `lit`
+  # and `llit` miss when the child's own spelling goes through a link. The release
+  # only skips `unres`, and the checkout scan is asked after the walk, in this one
+  # helper, so every seam that reaches it asks it: the audit, the verb's locked
+  # recomputation, `_ws_reclaim_owned` on every arm, the collector and the loose
+  # sweep. A checkout, or a scan that did not finish, keeps the row holding
+  # (`unquiet`), retryable and by id, and a child's own nested checkout counts: a
+  # checkout is not told from a moved tree here. Nothing is kept for the moved-check.
+  # WHAT THIS DOES NOT SEE, a stated residual (`gone-row-release-misses-a-tree-with-no-git`):
+  # a stopped row's tree that was no checkout, moved inside the child, has no `.git`
+  # to find, and goes with the child. The release needs nothing to run for it, so no
+  # session loses a tree it is in.
   #
   # NOR AT, INSIDE OR THROUGH A LEAF THE TAIL REMOVES WITH IT (spec §5.5,
   # §5.6). "Inside the child" is all three trees the tail deletes: the
@@ -31743,9 +31771,10 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   # A LEGACY row keeps that residual until a spawn records its field
   # (path-identity spec §4.4).
   # NO FIELD RELEASES A ROW. A gone row is released only by the git-record and
-  # breadcrumb arms (`_ws_reclaim_recorded`), as before: a recorded path
-  # outside the child is negative evidence, never a licence, so a blank admin
-  # entry still holds every child while a gone row of its repository exists
+  # breadcrumb arms (`_ws_reclaim_recorded`), or because nothing runs for it
+  # (A GONE ROW NOTHING RUNS FOR, above): a recorded path outside the child is
+  # negative evidence, never a licence, so a blank admin entry still holds every
+  # child while a gone row of its repository has something running
   # (`_ws_reclaim_admin_entries`).
   # THE COUNTS. `_WS_LEGACY_ROWS` counts the OTHER rows whose `.workdir` read
   # and whose field is in a `legacy-*` state, and `_WS_PENDING_ROWS` those
@@ -31806,7 +31835,9 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local llit lhit lw lr k unleaf=''
   local -a lspell=() lres=()
   local minebasis='' mi='' mreq=0 nbt=0 jb t0='' ri hk hi hw ha hrest q unwalk='' unmount=''
-  local -a rid=() req=()
+  local quiet='' unquiet='' own=1
+  local -a rid=() req=() rspell=() rfst=() rfid=() rgone=()
+  local -A rdrop=()
   local _WS_IDWALK_OUT='' _WS_IDWALK_WHY=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''; _WS_RECORDED_IDS=''
   # The entry field's state for this ONE call (AND WHERE EACH ROW ENTERED, above); `efst` and `efid` are the
@@ -31877,7 +31908,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       legacy-*) nlegacy=$(( nlegacy + 1 )) ;;
       *) unfield+="${unfield:+, }$o" ;;
     esac
-    ri=${#rid[@]}; rid+=("$o")   # this row's index in the identity walk's requests and answers
+    ri=${#rid[@]}; rid+=("$o"); rspell+=("$w"); rfst+=("$efst"); rfid+=("$efid")   # this row's index in the identity walk's requests and answers, and what a re-ask of it reads
     [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
     # NOR ONE UNDER `/proc`, however many slashes open it: absolute in form,
     # but `/proc/self/cwd/<rel>` names each reader's own cwd, as a relative
@@ -31899,17 +31930,18 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     (( lit || llit )) || [[ -z "$minewhy" ]] || { unmine+="${unmine:+, }$o"; continue; }
     if (( ! lit && ! llit && ! rok )); then
       # A GONE ROW IS PLACED ONLY ON RECORDED EVIDENCE (spec §5.5): never a
-      # projection, and never a row that could not be resolved at all.
-      [[ "$basis" == absent-suffix ]] && _ws_reclaim_recorded "$o" "$w" \
-        || { unres+="${unres:+, }$o"; continue; }
+      # projection, and never a row that could not be resolved at all. One no
+      # arm places may still be released, unplaced (A GONE ROW NOTHING RUNS FOR).
+      if [[ "$basis" != absent-suffix ]] || ! _ws_reclaim_recorded "$o" "$w"; then
+        if [[ "$basis" == absent-suffix ]] && _ws_reclaim_quiet_row "$o" "$w" "$efst" "$mine" ${lres[@]+"${lres[@]}"}; then
+          quiet+="${quiet:+, }$o"
+        else
+          unres+="${unres:+, }$o"
+        fi
+        continue
+      fi
       wr="$_WS_RECORDED_AT"; rok=1
-      [[ -z "$_WS_RECORDED_G" ]] || _WS_RECORDED_GDIRS+="$o"$'\t'"$_WS_RECORDED_G"$'\n'
-      # And the identity of the directory it entered, when its entry field is
-      # valid (`_ws_workdirid_read`, asked of this row above, kept as efst and
-      # efid): a checkout inside the child that IS that directory is its moved
-      # tree, and holds it (`_ws_reclaim_moved_check`; path-identity spec §4.5,
-      # step 4).
-      [[ "$efst" != valid ]] || _WS_RECORDED_IDS+="$o"$'\t'"$efid"$'\n'
+      _ws_reclaim_recorded_keep "$o" "$efst" "$efid"
     fi
     # The THROUGH arm's RESOLVED disjunct (the last `elif`'s second half) is
     # defence in depth that no realistic row reaches since D-3731 (review 213,
@@ -32003,7 +32035,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
                  in:0|eq:[12]|in:[12]) _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o" ;;
                esac ;;
           esac ;;
-        "A gone"|"A un"|"P un") unwalk+="${unwalk:+, }row $o (${ha:-gone})" ;;
+        "A gone") rgone+=("$hi") ;;   # asked again below, off this loop's stdin. `P` never answers gone: ENOENT is `P clean`
+        "A un"|"P un") unwalk+="${unwalk:+, }row $o (${ha:-gone})" ;;
         "P proc") unproc+="${unproc:+, }$o" ;;
         "T gone"|"T un")
           if [[ "$hi" == 0 ]]; then unwalk+="${unwalk:+, }$id's own tree (${ha:-gone})"
@@ -32021,6 +32054,40 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       esac
     done <<< "$_WS_IDWALK_OUT"
   fi
+  # A ROW THE WALK FOUND GONE WENT AFTER THE PASS RESOLVED IT (#2294, its comment: a reclaim purging that row is the
+  # likely cause). The walk's `gone` says nothing of where the row was, so it is asked again. A `.workdir` gone too is
+  # the listing arm's own answer, and the row is dropped, entry rules included. One that reads another spelling, or
+  # resolves whole again, was never asked, and holds. What is left is the gone row the pass above would have met: its
+  # recorded arms, then the quiet arm, on its own conditions. A row a bucket already holds needs no answer from it.
+  for hi in ${rgone[@]+"${rgone[@]}"}; do
+    o="${rid[hi]-}"
+    case ", $_WS_SHARED_ROWS, $_WS_NESTED_ROWS, $_WS_THROUGH_ROWS, " in *", $o, "*) continue ;; esac
+    w=$(_reg_read "$o" workdir); rc=$?
+    if (( rc == 1 )); then rdrop["$o"]=1; continue; fi
+    (( rc == 0 )) || { unread+="${unread:+, }$REG/$o.workdir"; continue; }
+    basis=''
+    [[ "$w" != "${rspell[hi]}" ]] || { _ws_reclaim_resolve "$w" && basis="$_WS_RESOLVE_BASIS"; }
+    if [[ "$basis" != absent-suffix ]]; then
+      unwalk+="${unwalk:+, }row $o (gone)"
+    elif _ws_reclaim_recorded "$o" "$w"; then
+      wr="$_WS_RECORDED_AT"
+      _ws_reclaim_recorded_keep "$o" "${rfst[hi]}" "${rfid[hi]}"
+      # Compared as the pass compares a row its recorded arms placed. Only ever adds, and a child that cannot be
+      # compared has this row in `unmine` already.
+      lhit=0
+      for (( k = 0; k < ${#lres[@]}; k++ )); do
+        lr="${lres[k]}"
+        [[ -n "$lr" ]] && [[ "$wr" == "$lr" || "$wr" == "${lr%/}/"* ]] && lhit=1
+      done
+      if [[ -n "$mine" && -z "$minewhy" && "$wr" == "$mine" ]]; then _WS_SHARED_ROWS+="${_WS_SHARED_ROWS:+, }$o"
+      elif { [[ -n "$mine" && -z "$minewhy" && "$wr" == "${mine%/}/"* ]]; } || (( lhit )); then _WS_NESTED_ROWS+="${_WS_NESTED_ROWS:+, }$o"
+      fi
+    elif _ws_reclaim_quiet_row "$o" "$w" "${rfst[hi]}" "$mine" ${lres[@]+"${lres[@]}"}; then
+      quiet+="${quiet:+, }$o"
+    else
+      unwalk+="${unwalk:+, }row $o (gone)"
+    fi
+  done
   # AND WHERE EACH ROW ENTERED: rules (a) to (d) of the header, each only ever ADDING (path-identity spec §4.5).
   if (( ${#efo[@]} )); then
     efok=0; efx="${_WS_IDWALK_OUT-}"; efx="${efx%$'\n'}"
@@ -32045,6 +32112,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       [[ "$efb" == un ]] || efc0=$(_ws_ident_compose "${efy%% *}" "$efb") || efc0=""
     fi
     for (( eff = 0; eff < ${#efo[@]}; eff++ )); do
+      [[ -z "${rdrop[${efo[eff]}]-}" ]] || continue   # the row went during the walk: nothing it entered is asked
       efr1="${efi[eff]}"; efp1="${efp[eff]}"; efhit=""
       # (a) the child's own identity, or its own physical path: SHARED (PI7 P2)
       if [[ -n "$mine" && -z "$minewhy" && "$efp1" == "$mine" ]]; then efhit=SHARED
@@ -32127,6 +32195,13 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     done
   fi
   [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
+  # THE RELEASE'S OTHER HALF (A GONE ROW NOTHING RUNS FOR, above), asked once a refusal cannot outrank it. The child's
+  # own root is its own checkout. The collector's leaf and the loose sweep's entry are nobody's, so theirs counts.
+  if [[ -n "$quiet" ]]; then
+    [[ -z "${3-}" ]] || own=''
+    for lw in ${lspell[@]+"${lspell[@]}"}; do [[ "$wd" != "$lw" ]] || own=''; done
+    _ws_reclaim_no_checkout "$wd" "$own" ${lres[@]+"${lres[@]}"} || unquiet="$quiet"
+  fi
   [[ -z "$unmine" ]] \
     || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir $minewhy"
   [[ -z "$unread" ]] || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }could not read $unread"
@@ -32138,6 +32213,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }a leaf the act removes with $id cannot be measured ($unleaf), so whether a registry row lies at, inside or through it was never asked — make it searchable, or restore its root"
   [[ -z "$unres" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unres name a workdir that cannot be resolved completely (a directory or link on its path cannot be entered or followed, or no longer exists, so its spelling no longer says where that session lives; a '..' in it could not be walked the way that session's own cd walked it (it follows a directory that does not exist now, or a path ccd could not enter logically), so where it leads was never placed, even if it names this child; or it holds a control character), so ccd cannot place them against this child — make it searchable if a directory on its path cannot be searched, restore a link on its path to its original target (never create a directory in a link's place), or purge the row once its session has ended"
+  [[ -z "$unquiet" ]] \
+    || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unquiet name a workdir that is gone, and nothing runs for them, but $_WS_CHECKOUT_WHY, so ccd cannot prove that is not their moved tree — restore each row's tree at its workdir, or purge the row once its session has ended"
   [[ -z "$unwalk" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }the identity walk of the registry rows did not answer for $unwalk, so whether a row lies at, inside or through $id's tree by device and inode, or a mount stands under it, was never asked — retry"
   [[ -z "$unmount" ]] \
@@ -32188,6 +32265,74 @@ _ws_reclaim_recorded() {   # id workdir -> rc 0 when the OTHER row id, whose wor
     return 0
   fi
   return 1
+}
+
+_ws_reclaim_recorded_keep() {   # id field-state field-identity -> keeps, for `_ws_reclaim_moved_check`, what the row
+  #                                  `_ws_reclaim_recorded` just placed left: the admin directory git records for it
+  local o="$1" efst="$2" efid="$3"
+  [[ -z "$_WS_RECORDED_G" ]] || _WS_RECORDED_GDIRS+="$o"$'\t'"$_WS_RECORDED_G"$'\n'
+  # And the identity of the directory it entered, when its entry field is
+  # valid (`_ws_workdirid_read`, asked of this row by the rows rung): a
+  # checkout inside the child that IS that directory is its moved tree, and
+  # holds it (`_ws_reclaim_moved_check`; path-identity spec §4.5, step 4).
+  [[ "$efst" != valid ]] || _WS_RECORDED_IDS+="$o"$'\t'"$efid"$'\n'
+}
+
+_ws_reclaim_gone_quiet() {   # id workdir -> rc 0 when the OTHER row id's workdir is gone, its spelling plain, what
+  #                               stands of it no link, and nothing runs for it; rc 1 otherwise
+  # WHAT A GONE ROW NEEDS TO STOP HOLDING WHEN NOTHING RECORDS IT (#2294; `_ws_reclaim_workdir_shared`, A GONE ROW
+  # NOTHING RUNS FOR). Four questions, all required:
+  #   - `_ws_reclaim_recorded`'s guards: no control character, one plain spelling, its absence PROVEN;
+  #   - the deepest ancestor that is not proven absent resolves `complete` to its own spelling, so no link stands on
+  #     what is left of the path, a dangling one included;
+  #   - the pane is positively `gone` (`live` and `unknown` both hold: only `gone` is proof, D-308);
+  #   - the unit is positively stopped (`_ws_unit_stopped`: an empty answer holds).
+  # Kept apart from the recorded arms, which read no process, pane or unit state. It reads and only reads: it creates,
+  # prunes, purges and writes nothing. The probe's globals are shadowed, as the recorded arms shadow the record's, so
+  # asking this never changes what the ladder read of the child's own pane.
+  local o="$1" w="$2" up PROBE_VERDICT='' PROBE_DETAIL='' PROBE_SUBSTRATE=''
+  [[ "$w" != *[[:cntrl:]]* ]] && _ws_reclaim_plain_path "$w" || return 1
+  _ws_reclaim_absent "$w" || return 1
+  up="$w"
+  while up="${up%/*}"; [[ -n "$up" ]] || up=/; _ws_reclaim_absent "$up"; do :; done
+  _ws_reclaim_resolve "$up" && [[ "$_WS_RESOLVE_BASIS" == complete && "$_WS_RESOLVED" == "$up" ]] || return 1
+  _session_probe "$o" anchored
+  [[ "$PROBE_VERDICT" == gone ]] || return 1
+  _ws_unit_stopped "$o" || return 1
+}
+
+_ws_reclaim_quiet_row() {   # id workdir field-state mine [resolved-leaf...] -> rc 0 when the rows rung may release
+  #                              the gone row; rc 1 when it keeps holding
+  # THE ONE TEST BOTH SITES OF THE RELEASE ASK (the rows pass, and the re-ask of a row the walk found gone). `mine`
+  # and the leaves are the child's RESOLVED spellings, which `lit` and `llit` miss when the child's own goes through
+  # a link. An empty one was never resolved: a row against such a child is `unmine`, and a leaf's holds as `unleaf`.
+  local o="$1" w="$2" st="$3" r
+  shift 3
+  [[ "$st" == valid || "$st" == legacy-* ]] || return 1
+  for r in "$@"; do
+    [[ -z "$r" ]] || [[ "$w" != "$r" && "$w" != "${r%/}/"* ]] || return 1
+  done
+  _ws_reclaim_gone_quiet "$o" "$w"
+}
+
+_WS_CHECKOUT_WHY=''
+_ws_reclaim_no_checkout() {   # workdir own [resolved-leaf...] -> rc 0 when no checkout stands under workdir, nor at or
+  #                                under a leaf; rc 1 (_WS_CHECKOUT_WHY) when one does, or a tree could not be
+  #                                scanned. `own` non-empty says workdir's root is the child's own checkout
+  # A `.git` OF ANY KIND IS A CHECKOUT HERE (`_ws_nested_checkouts`, which asks from depth two, and the root's own
+  # below it), a dangling link at the name included. An empty leaf is one that does not stand as a directory: a link
+  # is unlinked by the removal helper, never followed. Answers by path, never by a row's value.
+  local wd="$1" own="$2" p found
+  shift 2
+  _WS_CHECKOUT_WHY=''
+  for p in "$wd" "$@"; do
+    [[ -n "$p" && -d "$p" && ! -L "$p" ]] || continue
+    if [[ "$p" != "$wd" || -z "$own" ]] && [[ -e "$p/.git" || -L "$p/.git" ]]; then
+      _WS_CHECKOUT_WHY="a checkout stands at $p"; return 1
+    fi
+    found=$(_ws_nested_checkouts "$p") || { _WS_CHECKOUT_WHY="$p could not be scanned for a checkout"; return 1; }
+    [[ -z "$found" ]] || { _WS_CHECKOUT_WHY="a checkout stands under $p"; return 1; }
+  done
 }
 
 _ws_reclaim_recorded_git() {   # id workdir -> rc 0 with _WS_RECORDED_G when git's own record places the gone
