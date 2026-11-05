@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { STUBS, LEASE, BASE, agentTree, carrierPath, hex, leasesDir, main, mark as markOf, reg, type Flags } from './leaseFixture.js';
+import { LADDER_CASES, characterise, ladderFixture, type LadderDoc } from './orphanLadderFixture.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-orphan-lease-'); h.makeRepo('demo'); });
@@ -106,6 +107,22 @@ describe('the lease rung refuses a held tree', () => {
     mark({ generation: '2', state: 'transferring', 'journal-seq': '9' });
     expect(audit(t)).toMatchObject({ verdict: 'refused', refusal: 'leased' });
   }, 60_000);
+
+  it('W5-O6b: adopted or retained at this tree with no expiresAt is unmeasured, never not held', () => {
+    for (const state of ['adopted', 'retained']) {
+      const t = agentTree(h); mark();
+      mark({ generation: '2', state, 'expires-at': String(Date.now() + DAY), 'journal-seq': '9' });
+      editCarrier((c) => { c['expiresAt'] = null; });                     // a carrier the mark could also write (its flag is optional)
+      const a = audit(t);
+      expect(a, state).toMatchObject({ verdict: 'unmeasured', token: null, rescueToken: null });
+      expect(a.detail, state).toMatch(/holds this tree \((adopted|retained)\) with no expiry/);
+      expect(fs.existsSync(t), state).toBe(true);
+      h.git(main(h), 'worktree', 'remove', '--force', t);
+      h.git(main(h), 'worktree', 'prune');
+      h.git(main(h), 'branch', '-D', 'claude/agent-a');
+      fs.rmSync(path.join(reg(h), 'delegation'), { recursive: true });
+    }
+  }, 120_000);
 
   it('W5-O8: the rung runs inside the lock (the carrier moves to adopted after the audit\'s rung, before the lock)', () => {
     const t = agentTree(h); mark();
@@ -223,23 +240,82 @@ describe('the lease rung fails shut: every unreadable answer is unmeasured', () 
       fs.rmSync(path.join(reg(h), 'delegation'), { recursive: true });
     }
   }, 120_000);
+
+  it('W5-O4d: a clock that answers no whole number of seconds is unmeasured, never not held', () => {
+    const t = agentTree(h); mark();
+    mark(adopted('2', Date.now() + DAY));
+    for (const bad of ['1.5', '12x', '']) {
+      const clock = `_now_s_to() { printf -v "$1" '%s' '${bad}'; };`;
+      const a = audit(t, `${STUBS} ${clock}`);
+      expect(a, JSON.stringify(bad)).toMatchObject({ verdict: 'unmeasured', token: null });
+      expect(a.detail, JSON.stringify(bad)).toMatch(/clock/);
+    }
+    expect(audit(t)).toMatchObject({ verdict: 'refused', refusal: 'leased' });   // CONTROL: the real clock holds it
+    expect(fs.existsSync(t)).toBe(true);
+  }, 60_000);
 });
 
 describe('the lease rung is inert where no carrier holds', () => {
-  it('W5-O7: no $REG/delegation at all, and an ephemeral, promoted or released carrier: not held, with three new token inputs', () => {
+  /** The six W5-O0 trees, each built in a fresh fixture HOME with `before` laid on its registry, characterised. */
+  const sixUnder = (before: (t: string, record: string) => void): Record<string, LadderDoc> => {
+    const out: Record<string, LadderDoc> = {};
+    for (const [name, c] of Object.entries(LADDER_CASES)) {
+      const hh = makeCcdHarness('ccrc-orphan-lease-six-');
+      try {
+        hh.makeRepo('demo');
+        const prev = h; h = hh;
+        try { const t = c.build(hh); before(t, c.record); out[name] = characterise(hh, t); } finally { h = prev; }
+      } finally { hh.cleanup(); }
+    }
+    return out;
+  };
+  /** The carrier's marks, at the tree's own admin record. The mark refuses a locked or registered tree, so the locked case is
+   *  unlocked and the registry row inside is set aside for them, each restored before the tree is characterised. */
+  const marks = (t: string, record: string, ...overs: Flags[]): void => {
+    const locked = /locked/.test(h.git(main(h), 'worktree', 'list', '--porcelain').split('\n\n').find((b) => b.startsWith(`worktree ${t}\n`)) ?? '');
+    const row = path.join(reg(h), 'plain-a.workdir'); const aside = path.join(h.home, 'plain-a.workdir.aside');
+    const registered = fs.existsSync(row);
+    if (locked) h.git(main(h), 'worktree', 'unlock', t);
+    if (registered) fs.renameSync(row, aside);
+    try {
+      for (const over of [{}, ...overs]) mark({ 'admin-record-hex': hex(record), ...over });
+    } finally {
+      if (registered) fs.renameSync(aside, row);
+      if (locked) h.git(main(h), 'worktree', 'lock', t);
+    }
+  };
+
+  it('W5-O7: no $REG/delegation at all: the six W5-O0 documents equal the fixture, the three new input names last', () => {
     const t = agentTree(h);
     expect(fs.existsSync(path.join(reg(h), 'delegation'))).toBe(false);
-    expect(audit(t).verdict).toBe('token');
-    const names = inputNames(t);
-    expect(names.slice(-3)).toEqual(['lease', 'leasegen', 'leasestate']);
-    mark();
-    expect(audit(t).verdict).toBe('token');
-    mark({ generation: '2', state: 'promoted', 'promoted-run': '41', 'promoted-session': 'lane-a-demo', 'journal-seq': '9' });
-    expect(audit(t).verdict).toBe('token');
-    mark({ generation: '3', state: 'released', 'release-reason': 'native-removed', 'journal-seq': '10' });
-    expect(audit(t).verdict).toBe('token');
-    expect(inputNames(t)).toEqual(names);
-  }, 60_000);
+    expect(inputNames(t).slice(-3)).toEqual(['lease', 'leasegen', 'leasestate']);
+    expect(sixUnder(() => { expect(fs.existsSync(path.join(reg(h), 'delegation'))).toBe(false); })).toEqual(ladderFixture());
+  }, 240_000);
+
+  for (const [label, overs] of [
+    ['ephemeral', []],
+    ['promoted', [{ generation: '2', state: 'promoted', 'promoted-run': '41', 'promoted-session': 'lane-a-demo', 'journal-seq': '9' }]],
+    ['released', [{ generation: '2', state: 'released', 'release-reason': 'native-removed', 'journal-seq': '9' }]],
+  ] as Array<[string, Flags[]]>) {
+    it(`W5-O7: a carrier ${label} at each tree: the six W5-O0 documents equal the fixture`, () => {
+      expect(sixUnder((t, record) => { marks(t, record, ...overs); expect(fs.existsSync(carrierPath(h))).toBe(true); })).toEqual(ladderFixture());
+    }, 240_000);
+  }
+
+  it('W5-O7b: a registry holding only the spool: the six documents equal the fixture, and the key is never derived', () => {
+    const spoolOnly = (): void => { fs.mkdirSync(path.join(reg(h), 'delegation', 'spool', 'lane-a-demo'), { recursive: true }); };
+    expect(sixUnder(() => { spoolOnly(); })).toEqual(ladderFixture());
+    // a leaseless tree whose gitfile is unreadable, or names no admin record of this repository: main's later rung answers, not
+    // the rung's `unmeasured` (the key, which needs the gitfile, is never derived while leases/ does not stand)
+    const breakings: Array<[string, (t: string) => void]> = [
+      ['a gitfile naming a record outside <common>/worktrees', (t) => { fs.writeFileSync(path.join(t, '.git'), `gitdir: ${path.join(h.home, 'elsewhere')}\n`); }],
+    ];
+    if (!ROOT) breakings.push(['an unreadable gitfile', (t) => { fs.chmodSync(path.join(t, '.git'), 0o000); }]);
+    for (const [label, breakIt] of breakings) {
+      const none = sixUnder((t) => { breakIt(t); });
+      expect(sixUnder((t) => { spoolOnly(); breakIt(t); }), label).toEqual(none);
+    }
+  }, 480_000);
 
   it('W5-O9b: cmd_caps prints orphan-lease-v1', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('orphan-lease-v1');

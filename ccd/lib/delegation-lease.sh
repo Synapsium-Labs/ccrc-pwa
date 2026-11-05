@@ -713,11 +713,26 @@ __DL_HOLD_MARGIN_S=3600     # the box keeps skipping for one hour past expiresAt
 
 _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leased`); rc 4 unmeasured (refusal `unmeasured`);
                       #    DL_WHY says why. Sets DL_HOLD_LEASE DL_HOLD_GEN DL_HOLD_STATE for the token: the carrier the by-tree
-                      #    entry names, or `none` when no entry names one. Inert (rc 0, `none`) while no $REG/delegation stands.
-  local LC_ALL=C main="${1-}" tree="${2-}" common ci l gf adm rec key now d f
+                      #    entry names, or `none` when no entry names one. Inert (rc 0, `none`, the tree's key never derived) while
+                      #    no carrier and no index entry can stand: no $REG/delegation, no leases/ under it (wave 3's spool makes
+                      #    $REG/delegation at every spawn), or a leases/ holding neither a carrier nor a by-tree entry.
+  local LC_ALL=C main="${1-}" tree="${2-}" common ci l gf adm rec key now d f bt carriers=0 entries=0
   DL_HOLD_LEASE=none; DL_HOLD_GEN=none; DL_HOLD_STATE=none; DL_WHY=''
-  _dl_dirs_measured "$REG/delegation"
+  d="$REG/delegation/leases"; bt="$d/by-tree"
+  _dl_dirs_measured "$REG/delegation" "$d"
   case $? in 0) ;; 3) return 0 ;; *) return 4 ;; esac
+  [[ -r "$d" ]] || { DL_WHY="$d cannot be listed, so no carrier can be ruled out"; return 4; }
+  for f in "$d"/*.json; do [[ -e "$f" || -L "$f" ]] && { carriers=1; break; }; done
+  _dl_dirs_measured "$REG/delegation" "$d" "$bt"
+  case $? in
+    0) [[ -r "$bt" ]] || { DL_WHY="the lease index $bt cannot be listed"; return 4; }
+       for f in "$bt"/* "$bt"/.[!.]* "$bt"/..?*; do [[ -e "$f" || -L "$f" ]] && { entries=1; break; }; done ;;
+    3) # A-e: no by-tree index. Not held when no carrier stands; while one does, the index's absence cannot be trusted
+       (( carriers )) || return 0
+       DL_WHY="the lease index is missing while carriers exist ($d holds ${f##*/})"; return 4 ;;
+    *) return 4 ;;
+  esac
+  (( carriers || entries )) || return 0   # rule 1: leases/ proven empty, no key needed
   # the tree's by-tree key, as the mark computes it: the common git directory's identity and the admin record's name
   common=$(_ws_common_dir "$main") && _ws_dir_physical "$common" \
     || { DL_WHY="the common git directory of $main could not be resolved"; return 4; }
@@ -734,18 +749,9 @@ _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leas
   _dl_tree_owner "$key"
   case $? in
     0) ;;
-    3) # rule 1: proven absent. The entry alone is "no lease"; a missing by-tree directory is only when no carrier can exist (A-e)
-       d="$REG/delegation/leases"
-       _dl_dirs_measured "$REG/delegation" "$d" "$d/by-tree"
-       case $? in 0) return 0 ;; 3) ;; *) return 4 ;; esac
-       _dl_dirs_measured "$REG/delegation" "$d"
-       case $? in 0) ;; 3) return 0 ;; *) return 4 ;; esac
-       [[ -r "$d" ]] || { DL_WHY="the lease index is missing while $d cannot be listed, so no carrier can be ruled out"; return 4; }
-       for f in "$d"/*.json; do
-         [[ -e "$f" || -L "$f" ]] || continue
-         DL_WHY="the lease index is missing while carriers exist ($d holds ${f##*/})"; return 4
-       done
-       return 0 ;;
+    3) # rule 1: proven absent. The entry alone is "no lease" only while the index still stands (it stood above)
+       _dl_dirs_measured "$REG/delegation" "$d" "$bt" && return 0
+       DL_WHY="the lease index $bt vanished while the tree's entry was read"; return 4 ;;
     *) return 4 ;;   # rule 2: the entry could not be read
   esac
   # rule 3: an index entry without a readable carrier is never free (the half-write ends through the mark's heal)
@@ -763,6 +769,7 @@ _dl_orphan_rung() {   # <main> <tree> -> rc 0 not held; rc 1 held (refusal `leas
   [[ "$DL_C_state" != transferring ]] || { DL_WHY="lease $DL_OWNER holds this tree (transferring)"; return 1; }
   [[ "$DL_C_expiresAt" =~ ^[1-9][0-9]{0,15}$ ]] || { DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) with no expiry"; return 4; }
   _now_s_to now
+  [[ "$now" =~ ^[0-9]+$ ]] || { DL_WHY="the clock answered '$now', not a whole number of seconds, so the hold's expiry cannot be compared"; return 4; }
   if (( now * 1000 <= DL_C_expiresAt + __DL_HOLD_MARGIN_S * 1000 )); then
     DL_WHY="lease $DL_OWNER holds this tree ($DL_C_state) until $DL_C_expiresAt (epoch ms), and for ${__DL_HOLD_MARGIN_S} s after"; return 1
   fi
