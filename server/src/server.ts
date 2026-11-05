@@ -557,10 +557,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     deps.perf?.route(req.method, req.routeOptions.url ?? '<unmatched>', reply.elapsedTime);
     done();
   });
-  // Fix round 1 (F1): when the last account act's handler ended, stamped before its answer leaves, so a served limits
-  // read never predates the operator's own act (`takenAfter`). A refused act counts too: the box may have acted.
+  // Fix round 1 (F1): account acts in flight, and when the last one's response closed (finished or aborted), so a served
+  // limits read never predates the operator's own act (`takenAfter`); one in flight counts as ending now. A refused act
+  // counts too: the box may have acted. Not an `onSend` hook: those are the masking backstop's, counted in secret-mask.
   let accountActAt: number | null = null;
-  app.addHook('onSend', (req, _reply, payload, done) => { if (accountActRoute(req.method, req.routeOptions.url)) accountActAt = Date.now(); done(null, payload); });
+  let accountActs = 0;
+  const lastAccountAct = (): number | null => (accountActs > 0 ? Date.now() : accountActAt);
+  app.addHook('onRequest', (req, reply, done) => {
+    if (accountActRoute(req.method, req.routeOptions.url)) { accountActs += 1; reply.raw.once('close', () => { accountActs -= 1; accountActAt = Date.now(); }); }
+    done();
+  });
 
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
@@ -1465,7 +1471,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `no-store` on every answer (accounts plan Task A12): a session reader's carries identities and key hints.
     reply.header('cache-control', 'no-store');
     // Console speed S2: the watcher's last tick of the limits while it is fresh, with its age on the answer; else the read as before.
-    const servedLimits = servedFromWatcher(takenAfter(watcher?.currentLimits() ?? null, accountActAt), Date.now());
+    const servedLimits = servedFromWatcher(takenAfter(watcher?.currentLimits() ?? null, lastAccountAct()), Date.now());
     const limits = servedLimits.serve ? servedLimits.value.limits : await readLimits(deps.io, deps.cfg);
     // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
     // exactly the way `shares`/`limits` are each one read for every row below
@@ -2901,7 +2907,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // unlistable one (`pools.ts`, spec §5.4.4). This request uses the shared
     // request-lane budget rather than inheriting the watcher's cadence slice.
     // Console speed S2: both from the watcher's last tick while both are fresh (`servedProjectReads`), else read as before.
-    const servedReads = servedProjectReads(watcher?.currentProjectPoolsRead() ?? null, takenAfter(watcher?.currentLimits() ?? null, accountActAt), Date.now());
+    const servedReads = servedProjectReads(watcher?.currentProjectPoolsRead() ?? null, takenAfter(watcher?.currentLimits() ?? null, lastAccountAct()), Date.now());
     const poolsRead = servedReads.serve ? servedReads.pools.read : await readProjectPools(
       deps.io,
       deps.cfg,

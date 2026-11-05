@@ -26,8 +26,10 @@ const LANE = 'claude-a';
 const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
 
 let app: FastifyInstance | null = null;
+/** While set, the fake account op waits on it: an act held in flight. */
+let held: Promise<void> | null = null;
 let watcher: FleetWatcher | null = null;
-afterEach(async () => { await app?.close(); app = null; watcher?.stop(); watcher = null; });
+afterEach(async () => { held = null; await app?.close(); app = null; watcher?.stop(); watcher = null; });
 
 interface Rig {
   home: string; reg: string; acts: string[]; requests: string[]; w: FleetWatcher; cookie: string;
@@ -55,6 +57,7 @@ async function rig(): Promise<Rig> {
     arm: 'local',
     run: async (sub, id): Promise<AccountOpResult> => {
       acts.push(`${sub} ${id}`);
+      if (held) await held;
       if (sub === 'enable') rmSync(path.join(reg, `${id}-disabled`), { force: true });
       if (sub === 'check') rmSync(path.join(reg, `${id}-authdead`), { force: true });
       return { kind: 'exited', code: 0, stdout: '{}' };
@@ -147,6 +150,19 @@ describe('an account act is never undone by a served GET /api/accounts (console 
     expect('ageMs' in after).toBe(false);
     expect(lane(after).authDead).toBe(false);
     expect(limitReads(r.requests).length).toBeGreaterThan(0);
+  });
+
+  it('a GET while an act is still in flight is not served either', async () => {
+    const r = await rig();
+    expect(typeof (await r.accounts()).ageMs, 'control: served before the act').toBe('number');
+    let release: () => void = () => undefined;
+    held = new Promise<void>((res) => { release = res; });
+    const act = r.post('enable');                                   // the act starts and waits in its op
+    await new Promise((res) => setTimeout(res, 20));
+    expect(r.acts).toEqual([`enable ${LANE}`]);
+    expect('ageMs' in (await r.accounts()), 'an act in flight counts as ending now').toBe(false);
+    held = null; release();
+    expect(await act).toBe(200);
   });
 
   it('GET /api/projects, which places on the same limits, is not served from before the act either', async () => {
