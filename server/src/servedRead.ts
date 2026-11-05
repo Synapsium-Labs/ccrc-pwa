@@ -21,6 +21,27 @@ export function servedFromWatcher<T extends { listedAt: number }>(
   return ageMs >= 0 && ageMs < boundMs ? { serve: true, value: stamped, ageMs } : { serve: false };
 }
 
+/**
+ * Whether a request may change what the limits say about a lane (console speed S2, fix round 1: an operator's own act is
+ * never undone by a served read). Every route under `/api/accounts/`, of any method: the lane acts, the write routes and
+ * the sign-in, whose status read (`GET …/auth`) is where the server sees a sign-in end. And every write to
+ * `/api/accounts` itself (adding a lane). Never the list read. `route` is the matched PATTERN, `undefined` when none
+ * matched. Pure.
+ */
+export function accountActRoute(method: string, route: string | undefined): boolean {
+  if (route === undefined) return false;
+  return route === '/api/accounts' ? method !== 'GET' && method !== 'HEAD' : route.startsWith('/api/accounts/');
+}
+
+/**
+ * The watcher's measurement only when its tick BEGAN after the operator's last account act (`actAt`, the end of that
+ * act's handler; `null` when there has been none), else `null`, which every serve decider reads as "read it yourself".
+ * A tick stamped at or before the act may have read the files before the act wrote them. Pure.
+ */
+export function takenAfter<T extends { listedAt: number }>(stamped: T | null, actAt: number | null): T | null {
+  return stamped === null || actAt === null || stamped.listedAt > actAt ? stamped : null;
+}
+
 /** Two stamped measurements served together or not at all, with the older age. Pure. */
 function servedPair<A extends { listedAt: number }, B extends { listedAt: number }>(
   a: A | null,
