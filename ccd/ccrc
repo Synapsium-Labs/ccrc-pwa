@@ -9717,9 +9717,11 @@ _acct_remove() {
       || _acct_refuse 1 codex-reap-failed "codex lane $id's credential lock (the auth library's) could not be taken, so its tiers cannot be stopped without cutting a token refresh short - the reason is on stderr. The roster, projection, launcher, registry rows and every account artifact still stand.$usage_note Retry the removal once the lane's refresh or sign-in has ended."
     codex_auth="$CX_AUTH"   # `_codex_auth_hold` just read the row, and after the drop nothing can
     # A lane `add` made and nobody signed in holds no sign-in, so the answer must not list one as authorised at the
-    # provider. Only the library's `absent` says so: `incomplete` may hold a refresh token, and a library that cannot
-    # answer has said nothing, so both keep the row.
-    if _codex_auth_status "$id" 2>/dev/null && [ "$CX_AUTH_CRED" = absent ]; then codex_sign_in=none; fi
+    # provider. Only the library's `absent` with nothing at the checkpoint path says so: `read` looks at auth.json alone,
+    # so a crash on a first sign-in reads `absent` beside a whole sign-in (`secret-files` names the checkpoint last).
+    # `incomplete` may hold a refresh token, and a library that cannot answer has said nothing, so both keep the row.
+    f="$(_codex_auth secret-files --auth-dir "$HOME/$CX_AUTH" 2>/dev/null | tail -n 1)" || f=""
+    if _codex_auth_status "$id" 2>/dev/null && [ "$CX_AUTH_CRED" = absent ] && [ -n "$f" ] && [ ! -e "$f" ] && [ ! -L "$f" ]; then codex_sign_in=none; fi
     _codex_stop_lane "$id" >&2 || :
     _codex_auth_release
     # `_codex_stop_order`'s walk (the whole-wave addendum, LB-2 part a): the
@@ -15724,12 +15726,13 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # in once it passes its check. The row is still read, so no folder is ever made
 # for a lane the roster does not name as a codex lane. The library reads the
 # lane's folder first (`--over`), and rc 5, this flag's alone, is that refusal:
-# a lane's file no sign-in can land on, before any code is asked for.
+# a lane's file no sign-in can land on, before any code is asked for. Any other
+# failure ends in scratch, so it says nothing of the lane's own sign-in.
 _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff the auth library's sign-in exited 0
-  local id="$1" dir res rc word over='' re='^ccgpt-auth: ([a-z][a-z-]*): '
+  local id="$1" dir res rc word over='' re='^ccgpt-auth: ([a-z][a-z-]*): ' left="$1 is not logged in. Retry with: ccrc codex login $1"
   _codex_row "$id" || return $?
   dir="$HOME/$CX_AUTH"
-  if [ "${2:-}" = --scratch ]; then dir="$(_codex_scratch_dir "$id")"; over="$HOME/$CX_AUTH"; fi
+  if [ "${2:-}" = --scratch ]; then dir="$(_codex_scratch_dir "$id")"; over="$HOME/$CX_AUTH"; left="nothing reached $id's folder, which is as it was"; fi
   # stdout straight through (fd 3, this function's stdout). stderr goes down
   # the pipe to the relay, which prints each line to stderr as it arrives and,
   # once the library has closed it, the last refusal word to the capture; the
@@ -15747,7 +15750,7 @@ _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff th
     3) return 1 ;;   # `_codex_auth` has said auth-library-absent
     5) _codex_say lane-credential-refused "$id's own file in ~/$CX_AUTH cannot be signed in over (the auth library's line above says why), so no code was asked for and the lane is as it was. Run 'ccrc doctor', then sign in again."; return 5 ;;
   esac
-  _codex_say login-failed "the auth library's sign-in for $id failed${word:+ ($word)} and exited $rc (its own line is above), so $id is not logged in. Retry with: ccrc codex login $id"
+  _codex_say login-failed "the auth library's sign-in for $id failed${word:+ ($word)} and exited $rc (its own line is above), so $left"
   return 1
 }
 

@@ -2016,7 +2016,9 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   read), `codex-runtime-absent` (run `ccrc install`, then sign in again), `codex-check-unrun` (the check could not
   run here, which says nothing of the sign-in; `ccrc doctor` names what is missing) and `lane-credential-refused` (the
   lane's own `auth.json` is unreadable or another family's, so no sign-in can land on it; `ccrc doctor` names it). That
-  last one is read before the device flow, so the operator approves no code, and again at the install. A refused, cancelled or expired
+  last one is read before the device flow, so the operator approves no code, and again at the install. It means that
+  file and nothing else: a lane folder or lock the library could not make is `credential-write`, and a scratch folder
+  that fails after the code ends the attempt as a failed sign-in, each with the library's own line. A refused, cancelled or expired
   attempt leaves the lane as it was, and every attempt's end kills its tmux server and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
   --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
   ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`
@@ -2047,7 +2049,7 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   `sleeping-sessions` (with their ids) for hibernated rows, which a removal would move to upstream to wake there;
   `--rehome-sleeping` moves them anyway. `~/.ccrc/auth-scratch/<id>` is deleted, and the answer's `atProvider`
   says, per credential kind, what is still valid at the provider: deleting a Codex folder ends nothing there, so a
-  lane that held a sign-in lists it, and one whose folder holds none (the auth library reads `absent`) lists nothing. `--mode discard` is the same removal for a lane
+  lane that held a sign-in lists it, and one whose folder holds none (the auth library reads `absent` and nothing stands at its checkpoint path, `auth.pending.json`) lists nothing. `--mode discard` is the same removal for a lane
   `add` made that was never switched on and has no session; anything else refuses `not-discardable`.
   `--dry-run` takes no lock, writes nothing and answers what a removal would meet: live, sleeping and archived
   sessions, upstream, the other placeable lanes, a sign-in in progress, and whether Discard applies.

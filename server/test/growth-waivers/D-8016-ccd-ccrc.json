@@ -2,6 +2,6 @@
   "file": "ccd/ccrc",
   "maxDelta": 110,
   "d": "D-8016",
-  "reason": "accounts plan Task A24, the Codex lane's add arm: picking a free port pair and a fresh authDir, the install of a checked sign-in with one refusal per way its check can end, remove's delete of the lane's sign-in folder and its measure of whether the folder held one, and the usage text; the row, its judgement and the credential's write live in deploy/account-op.mjs and ccd/ccgpt-auth.py, and bash measures and orders the steps, measured +108 net code lines against the merge-base",
+  "reason": "accounts plan Task A24, the Codex lane's add arm: picking a free port pair and a fresh authDir, the install of a checked sign-in with one refusal per way its check can end, remove's delete of the lane's sign-in folder and its measure of whether the folder held one, and the usage text; the row, its judgement and the credential's write live in deploy/account-op.mjs and ccd/ccgpt-auth.py, and bash measures and orders the steps, measured +109 net code lines against the merge-base",
   "added": "2026-11-04"
 }

@@ -4,7 +4,7 @@
 // check moves into the lane. Every case runs in a fixture HOME; the sign-in talks to `fakeAuthServer`, never a provider.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { buildAccountArgv } from '../../shared/account-argv.js';
@@ -250,6 +250,58 @@ describe('remove and the lane\'s sign-in folder (spec §11 step 4; G20, Q11)', (
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(answerOf(r)['atProvider']).toEqual([]);
   }, 120_000);
+
+  // A crash between a checkpoint's fsync and its rename, on a first sign-in, leaves a whole sign-in the library's `read`
+  // does not see: it reads `auth.json` alone, and only a settle under the lock promotes the checkpoint (D-8016 (12)).
+  it.each<[string, string, string[]]>([
+    ['--mode remove', 'remove', []],
+    ['--mode discard', 'discard', []],
+    ['--keep-codex-auth', 'remove', ['--keep-codex-auth']],
+  ])('a folder holding only a crash checkpoint keeps the provider row, though the library reads `absent`: %s', async (_name, mode, extra) => {
+    const { home, authDir } = await signedInLane('ccrc-codex-remove-checkpoint-');
+    renameSync(join(authDir, 'auth.json'), join(authDir, 'auth.pending.json'));
+    const read = spawnSync('python3', ['-IS', join(REPO, 'ccd', 'ccgpt-auth.py'), 'status', '--auth-dir', authDir], { encoding: 'utf8' });
+    expect(JSON.parse(read.stdout)['credential'], 'the premise').toBe('absent');
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g', '--mode', mode, ...extra], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(answerOf(r)[extra.length > 0 ? 'kept' : 'removed']).toContain(authDir);
+    expect(answerOf(r)['atProvider']).toEqual([{ kind: 'codex', state: 'still-valid', revokeAt: 'chatgpt-settings' }]);
+  }, 60_000);
+
+  it('anything at the checkpoint path keeps the row, a link to nothing included: the library would have to settle it to say', async () => {
+    const { home, authDir } = await signedInLane('ccrc-codex-remove-checkpoint-link-');
+    rmSync(join(authDir, 'auth.json'));
+    symlinkSync(join(home, 'nothing-here'), join(authDir, 'auth.pending.json'));
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(answerOf(r)['atProvider']).toEqual([expect.objectContaining({ kind: 'codex' })]);
+  }, 60_000);
+
+  it('a library that names no checkpoint path has said nothing, so the row stays', async () => {
+    const { home, authDir } = await signedInLane('ccrc-codex-remove-nopath-');
+    rmSync(join(authDir, 'auth.json'));
+    const lib = join(home, '.local', 'bin', 'ccgpt-auth.py');
+    rmSync(lib);  // a link into this tree: written through, it would change the real library
+    writeFileSync(lib, [
+      'import subprocess, sys',
+      'if sys.argv[1] == "secret-files": sys.exit(1)',
+      `sys.exit(subprocess.call([sys.executable, "-IS", ${JSON.stringify(join(REPO, 'ccd', 'ccgpt-auth.py'))}] + sys.argv[1:]))`,
+    ].join('\n'));
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(answerOf(r)['atProvider']).toEqual([expect.objectContaining({ kind: 'codex' })]);
+  }, 60_000);
+
+  it('a folder that holds neither lists nothing: its lock and status are not a sign-in', async () => {
+    const { home, authDir } = await signedInLane('ccrc-codex-remove-emptied-');
+    rmSync(join(authDir, 'auth.json'));
+    writeFileSync(join(authDir, 'auth.json.lock'), '', { mode: 0o600 });
+    writeFileSync(join(authDir, 'auth.status.json'), '{}', { mode: 0o600 });
+    const r = ccrcAuth(home, ['account', 'remove', '--id', 'lane-g'], '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(answerOf(r)['removed']).toContain(authDir);
+    expect(answerOf(r)['atProvider']).toEqual([]);
+  }, 60_000);
 
   it('a folder the library cannot call empty keeps the provider row: an unfinished sign-in, and a library that cannot answer', async () => {
     const unfinished = await signedInLane('ccrc-codex-remove-unfinished-');
@@ -554,6 +606,58 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
     expect(answerOf(r)['error']).toBe('lane-credential-refused');
     expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).toBe('{"access_token": ');
   }, 60_000);
+
+  // `lane-credential-refused` says the lane's own file is bad and that no code was asked for. A folder that cannot be
+  // made says neither, and `ccrc doctor` would have no file to name (D-8016 (16)).
+  it.skipIf(process.getuid?.() === 0)('a first sign-in whose lane folder cannot be made is a write failure: the lane has no file to blame', async () => {
+    const { home } = await codexBox('ccrc-codex-reauth-nofolder-', { roster: CODEX_ROSTER(await freePorts(2)) });
+    const above = join(home, AUTH_ROOT);
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    mkdirSync(above, { recursive: true });
+    chmodSync(above, 0o555);
+    try {
+      const r = setCodex(home);
+      expect(r.code).toBe(1);
+      expect(answerOf(r)['error']).toBe('credential-write');
+      expect(String(answerOf(r)['detail'])).not.toContain('will not write over');
+      expect(r.stderr).toContain('cannot be created (EACCES)');
+    } finally {
+      chmodSync(above, 0o755);
+    }
+  }, 60_000);
+
+  it.skipIf(process.getuid?.() === 0)('a scratch root that refuses the sign-in, after the operator approved the code, blames neither the lane nor the code', async () => {
+    const { home, authDir, old } = await codexLane('ccrc-codex-reauth-noscratch-');
+    const root = join(home, '.ccrc', 'auth-scratch');
+    mkdirSync(root, { recursive: true });
+    chmodSync(root, 0o500);
+    const fresh = syntheticJwt({ exp: Math.floor(Date.now() / 1000) + 3600, jti: 'fresh-sign-in' });
+    const srv = await fakeAuthServer({
+      usercode: [{ status: 200, body: { device_auth_id: 'dev-1', user_code: 'ABCD-5678', interval: 1 } }],
+      deviceToken: [{ status: 200, body: { authorization_code: 'code-1', code_challenge: 'challenge-1', code_verifier: 'verifier-1' } }],
+      token: [{ status: 200, body: { access_token: fresh, refresh_token: 'rtok-fresh', id_token: fresh } }],
+    });
+    try {
+      expect(ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-c', '--method', 'openai-login', '--attempt', ATTEMPT], '',
+        { CCRC_CODEX_AUTH_BASE: srv.base, CCRC_AUTH_TIMEOUT: '60', ...fetched }).code).toBe(0);
+      expect(await waitState(home, 'lane-c', ['done', 'failed'], 60_000), JSON.stringify(scrollbacks(home))).toBe('failed');
+      await waitQuiet(home);
+      const status = statusOf(home, 'lane-c');
+      expect(status?.['userCode']).toBe('ABCD-5678');
+      expect(status?.['error']).not.toBe('lane-credential-refused');
+      expect(status?.['error']).toMatch(/exited 1 /);
+      const pane = Object.values(scrollbacks(home)).join('\n');
+      expect(pane).toContain('cannot be created (EACCES)');
+      expect(pane, 'the lane is signed in').not.toContain('is not logged in');
+      expect(pane).not.toContain('no code was asked for');
+      expect(readFileSync(join(authDir, 'auth.json'), 'utf8')).toBe(old);
+      expect(readdirSync(authDir)).toEqual(['auth.json']);
+    } finally {
+      chmodSync(root, 0o700);
+      await srv.close();
+    }
+  }, 120_000);
 
   it('no sign-in in scratch refuses `no-credential`, and another attempt\'s refuses `no-auth-attempt`', async () => {
     const { home, authDir, old } = await codexLane('ccrc-codex-reauth-none-');

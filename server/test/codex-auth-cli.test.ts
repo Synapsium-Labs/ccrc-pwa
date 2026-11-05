@@ -339,6 +339,63 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
     }
   });
 
+  // Exit 5 names the lane's own file. A folder or a lock that fails, or a bad file in the scratch folder, says nothing
+  // of that file, so each of these is an ordinary refusal, whatever the lane's file reads (D-8016 (16)).
+  it.skipIf(process.getuid?.() === 0)('signin --over into a scratch folder that cannot be made is rc 1, after the code it did show', async () => {
+    const home = mkTmp('codex-auth-over-scratch-');
+    const root = join(home, 'scratch');
+    const dir = join(root, 'lane', 'codex');
+    const lane = laneDir(home);
+    plantBackendCredential(lane);
+    const before = dirState(lane);
+    mkdirSync(root, { mode: 0o500 });
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: the authDir .* cannot be created \(EACCES\)/m);
+      expect(r.stdout).toMatch(CODE_RUN);
+      expect(dirState(lane)).toEqual(before);
+    } finally {
+      chmodSync(root, 0o700);
+      await srv.close();
+    }
+  });
+
+  it('signin --over with a lock in the scratch folder it will not open is rc 1', async () => {
+    const home = mkTmp('codex-auth-over-lock-');
+    const dir = join(home, 'scratch', 'codex');
+    const lane = laneDir(home);
+    plantBackendCredential(lane);
+    mkdirSync(dir, { recursive: true });
+    symlinkSync(join(home, 'elsewhere'), lockPath(dir));
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: the credential lock /m);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it.each(['codex-cli', 'unreadable'])('signin --over with a %s file in the scratch folder is rc 1: that file is not the lane\'s', async (kind) => {
+    const home = mkTmp('codex-auth-over-scratchfile-');
+    const dir = join(home, 'scratch', 'codex');
+    const lane = laneDir(home);
+    plantBackendCredential(lane);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(credPath(dir), kind === 'unreadable' ? '{"access_token": ' : JSON.stringify({ tokens: { access_token: 'x' } }), { mode: 0o600 });
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(1);
+      expect(srv.requests).toHaveLength(0);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it('signin: a relative --over is usage', async () => {
     const home = mkTmp('codex-auth-over-usage-');
     const r = await runCli(home, ['signin', '--auth-dir', laneDir(home), '--lane', 'codex-a', '--over', 'relative/dir']);
@@ -789,6 +846,63 @@ describe.skipIf(!PY)('install: a checked sign-in moves over the lane\'s credenti
     expect(r.status).toBe(5);
     expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: /);
     expect(lstatKey(credPath(dir))).toBe(before);
+  });
+
+  it.each<[string, string]>([
+    ['another family\'s', JSON.stringify({ tokens: { access_token: 'x' } })],
+    ['unreadable', '{"access_token": '],
+  ])('a checkpoint beside a lane file that reads %s does not hide the file: the same status, both kept', async (_name, body) => {
+    const { home, dir, from } = lanes('codex-install-double-');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(credPath(dir), body, { mode: 0o600 });
+    plantBackendCredential(`${dir}-next`);  // written after the file, so a settle would try to promote it
+    renameSync(credPath(`${dir}-next`), pendingPath(dir));
+    plantBackendCredential(from);
+    const r = await install(home, dir, from);
+    expect(r.status, r.stderr).toBe(5);
+    expect(readFileSync(credPath(dir), 'utf8')).toBe(body);
+    expect(existsSync(pendingPath(dir))).toBe(true);
+  });
+
+  // Exit 5 names the lane's own file, and each of these lanes has a good one or none (D-8016 (16)).
+  it.skipIf(process.getuid?.() === 0)('a lane folder that cannot be made is rc 1, not a lane file it will not write over', async () => {
+    const { home, dir, from } = lanes('codex-install-nofolder-');
+    const above = join(dir, '..');
+    plantBackendCredential(from);
+    mkdirSync(above, { recursive: true });
+    chmodSync(above, 0o555);
+    try {
+      const r = await install(home, dir, from);
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: the authDir .* cannot be created \(EACCES\)/m);
+    } finally {
+      chmodSync(above, 0o700);
+    }
+  });
+
+  it('a lock it will not open beside a good lane file is rc 1, the file as it was', async () => {
+    const { home, dir, from } = lanes('codex-install-lock-');
+    plantBackendCredential(dir);
+    const before = lstatKey(credPath(dir));
+    symlinkSync(join(home, 'elsewhere'), lockPath(dir));
+    plantBackendCredential(from);
+    const r = await install(home, dir, from);
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: the credential lock /m);
+    expect(lstatKey(credPath(dir))).toBe(before);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a checkpoint it cannot read beside a good lane file is rc 1, both kept', async () => {
+    const { home, dir, from } = lanes('codex-install-checkpoint-');
+    plantBackendCredential(dir);
+    const before = lstatKey(credPath(dir));
+    writeFileSync(pendingPath(dir), '{}', { mode: 0o000 });
+    plantBackendCredential(from);
+    const r = await install(home, dir, from);
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: the checkpoint /m);
+    expect(lstatKey(credPath(dir))).toBe(before);
+    expect(existsSync(pendingPath(dir))).toBe(true);
   });
 
   it('a relative --from is usage', async () => {

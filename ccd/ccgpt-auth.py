@@ -174,6 +174,16 @@ class Unreadable(AuthError):
     word = "credential-unusable"
 
 
+class LaneFileForeign(ForeignFamily):
+    """`_refuse_signin`'s reading of the lane's own file, for a sign-in held apart from it. Its parent to every reader;
+    `main` alone tells it apart, by its exit status, because the caller answers it with a code of its own."""
+
+
+class LaneFileUnreadable(Unreadable):
+    """As LaneFileForeign. A plain Unreadable says nothing of that file: `held` raises one for a folder or a lock it
+    could not make, on any folder, and `recover_pending` for a checkpoint."""
+
+
 class RefreshFailed(AuthError):
     """Transient: a network failure, a timeout, a redirect, or a rejection classified transient."""
 
@@ -1743,13 +1753,14 @@ def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Opt
     return _merge(_empty("absent", ""), None, answer, rid), rid
 
 
-def _refuse_signin(r: Reading) -> None:
+def _refuse_signin(r: Reading, lane_file: bool = False) -> None:
     """A sign-in never writes over a file that reads `unreadable` nor over another family's file, and refuses them
-    before any request, so an operator who cannot keep the result never approves a code."""
+    before any request, so an operator who cannot keep the result never approves a code. `lane_file` says the reading
+    is of the lane's own file while the sign-in is held in another folder (`--over`, `install`)."""
     if r.credential == "unreadable":
-        raise Unreadable("ccrc will not sign in over it: " + r.detail)
+        raise (LaneFileUnreadable if lane_file else Unreadable)("ccrc will not sign in over it: " + r.detail)
     if r.credential == "foreign-family":
-        raise ForeignFamily(r.detail)
+        raise (LaneFileForeign if lane_file else ForeignFamily)(r.detail)
 
 
 def _pending_exists(auth_dir: str) -> bool:
@@ -1793,7 +1804,7 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     stream = sys.stdout if out is None else out
     wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
     if over is not None:
-        _refuse_signin(read(over))
+        _refuse_signin(read(over), lane_file=True)
     r = read(auth_dir)
     _refuse_signin(r)
     if _pending_exists(auth_dir):
@@ -1872,7 +1883,11 @@ def install_signin(auth_dir: str, *, source: str, lane: str) -> str:
     provider nothing: that is the caller's check, a real request on `source` made before this runs. This is a verb of
     its own, so it holds these gates itself, and after that request a mode or owner failure is what they meet. Anything
     else is SigninUnusable, with `auth_dir` untouched. `source` is left in place for the caller to delete. Answers
-    `"installed"`."""
+    `"installed"`.
+
+    The lane's file is read first, with no lock, as `sign_in_device` reads it: under `held`, a checkpoint's settle would
+    refuse the same file with a plain Unreadable. The commit reads it again under the lock, and a file that goes bad
+    between the two is then an ordinary refusal, exit 1, whose line still names it."""
     report = status_report(source)
     r, raw = _read_raw(source)
     if r.credential != "present" or not isinstance(raw, dict):
@@ -1881,6 +1896,7 @@ def install_signin(auth_dir: str, *, source: str, lane: str) -> str:
     if expired(r) or _bars(read_status(source)) or report["modeOk"] is not True or report["ownerOk"] is not True:
         raise SigninUnusable("the sign-in at " + source + " is expired, barred, or not private to this user, so it was "
                              "not installed; " + _again(lane))
+    _refuse_signin(read(auth_dir), lane_file=True)
     _commit_signin(auth_dir, dict(raw), None, lane)
     return "installed"
 
@@ -1976,12 +1992,12 @@ def main(argv: List[str]) -> int:
       signin --lane <id> [--over <absolute>]
                             the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
                             `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
-                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1; with --over, rc 5 for a file it
-                            will not sign in over
+                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1; with --over, rc 5 for a file there
+                            it will not sign in over, always before any request
       install --from <absolute> --lane <id>
                             `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; the refusal line above, rc 1;
                             or that line and rc 4 when the sign-in at --from fails its check, or rc 5 when
-                            --auth-dir holds a file it will not write over
+                            --auth-dir holds a file it will not write over. A folder or a lock that fails is rc 1
       paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
       secret-files          the credential and checkpoint paths, one per line, rc 0"""
     if not argv or argv[0] not in _VERBS:
@@ -2027,7 +2043,7 @@ def main(argv: List[str]) -> int:
         if isinstance(e, SigninUnusable):
             return 4
         # A sign-in held apart from the lane: the caller answers a lane's file that bars it with a code of its own.
-        return 5 if isinstance(e, (Unreadable, ForeignFamily)) and (verb == "install" or "--over" in opts) else 1
+        return 5 if isinstance(e, (LaneFileUnreadable, LaneFileForeign)) else 1
     line = "ccgpt-auth: " + lane + ": " + result
     if result == "already-signed-in":
         line += ": " + ALREADY_SIGNED_IN

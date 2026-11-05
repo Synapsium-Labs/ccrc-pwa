@@ -1993,9 +1993,10 @@ const AT_PROVIDER = {
 };
 
 /** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. `codexSignIn` is
- *  bash's measure of a Codex lane's folder: `none` when the auth library read no sign-in there, as on a lane `add` made
- *  and nobody signed in. Such a lane has nothing to revoke, so it answers no kind. A folder deleted by hand reads the
- *  same, because nothing on the box records that a sign-in ever existed. Unset, the row stands: nobody could tell. */
+ *  bash's measure of a Codex lane's folder: `none` when the auth library read no sign-in there and nothing stands at
+ *  its checkpoint path, as on a lane `add` made and nobody signed in. Such a lane has nothing to revoke, so it answers
+ *  no kind. A folder deleted by hand reads the same, because nothing on the box records that a sign-in ever existed.
+ *  Unset, the row stands: nobody could tell. */
 function credentialKindOf(kind, provider, secretEnv, secrets, codexSignIn) {
   if (kind === 'codex') return codexSignIn === 'none' ? null : 'codex';
   if (kind === 'external' || kind === undefined) return null;
