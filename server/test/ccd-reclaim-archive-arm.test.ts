@@ -313,6 +313,53 @@ describe('the archive arm holds', () => {
   }, 120_000);
 });
 
+describe('a tree relocated with its record following it keeps the hold (review 1516, F1)', () => {
+  // git keeps a tree's admin directory, by its name, when the tree moves with its record: `git worktree move`, or
+  // `mv` then `git worktree repair` from the new place. Its stanza then names only the new path, so "git records
+  // nothing at the old path" and "no admin entry names <w>/.git" both hold for a tree that lives on inside the child.
+  // The record's `worktreeAdmin` names that directory, and the arm holds while it stands.
+  const relocatedHolds = (how: 'move' | 'repair'): void => {
+    const c = makeChild(h);
+    const s = archivedSibling();
+    const dest = path.join(c.wt, 'relocated');
+    if (how === 'move') h.git(s.main, 'worktree', 'move', s.wt, dest);
+    else { fs.renameSync(s.wt, dest); h.git(dest, 'worktree', 'repair'); }
+    expect(fs.existsSync(s.wt), 'the CONTROL: nothing at the row’s path').toBe(false);
+    expect(stanza(s.main, s.wt), 'the CONTROL: git records nothing at the old path').toBe('');
+    expect(stanza(s.main, dest), 'the CONTROL: git records the tree at its new place').not.toBe('');
+    expect(h.git(dest, 'rev-parse', '--absolute-git-dir'), 'the CONTROL: under the same admin directory').toBe(s.admin);
+    expect(manifestOf(s.id)['worktreeAdmin'], 'the CONTROL: the record names that directory').toBe(path.basename(s.admin));
+    held(evalOf(h), s.id, `relocated by ${how === 'move' ? 'git worktree move' : 'mv and git worktree repair'}`);
+    const owned = ownedOf(CHILD_ID, c.wt, c.main);
+    expect(owned.rc, `the tail holds it too: ${owned.why}`).toBe('2');
+    expect(owned.why).toContain(`registry row(s) ${s.id} ${HELD}`);
+    // CONTROL: git's own removal of the relocated tree takes its admin directory, and the record places the row.
+    h.git(s.main, 'worktree', 'remove', '--force', dest);
+    expect(fs.existsSync(s.admin)).toBe(false);
+    placesAgain('the relocated tree removed with its admin directory');
+  };
+
+  it('git worktree move into the child keeps the hold', () => { relocatedHolds('move'); }, 120_000);
+
+  it('mv into the child then git worktree repair keeps the hold', () => { relocatedHolds('repair'); }, 120_000);
+
+  it('a record whose worktreeAdmin is null, absent or not one plain name keeps the hold', () => {
+    const { s } = armed();
+    const m = manifestOf(s.id);
+    const { worktreeAdmin: _a, ...without } = m;
+    for (const [label, rec] of [
+      ['null', { ...m, worktreeAdmin: null }], ['absent', without], ['empty', { ...m, worktreeAdmin: '' }],
+      ['..', { ...m, worktreeAdmin: '..' }], ['a path', { ...m, worktreeAdmin: 'a/b' }],
+      ['a newline', { ...m, worktreeAdmin: 'still-harbor\n' }], ['a number', { ...m, worktreeAdmin: 7 }],
+    ] as const) {
+      writeManifest(s.id, rec as Record<string, unknown>);
+      held(evalOf(h), s.id, `worktreeAdmin ${label}`);
+    }
+    writeManifest(s.id, m);
+    placesAgain('the record restored');
+  }, 120_000);
+});
+
 describe('the moved-tree hole, for an archive-placed row', () => {
   it('an archived sibling’s tree moved inside the child keeps the child, at the ladder and in _ws_reclaim_owned', () => {
     const c = makeChild(h);

@@ -16,7 +16,7 @@ import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_C
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
 const SHA256_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 /** The three keys D-7999 (cleanup un-wedge R1) adds to the archive manifest, for the rows rung's archive arm. */
-const R1_MANIFEST_KEYS: readonly string[] = ['workdir', 'workdirReal', 'uuid'];
+const R1_MANIFEST_KEYS: readonly string[] = ['workdir', 'workdirReal', 'uuid', 'worktreeAdmin'];
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-arch-'); });
@@ -954,6 +954,19 @@ describe('ws-archive', () => {
     expect(m.workdirReal, 'a physical spelling records itself').toBe(wt);
     expect(m.uuid).toBe(h.reg('demo-quiet-basin', 'uuid'));
     expect(m.uuid).toMatch(/^[0-9a-f-]{36}$/);
+    // Fix round 1, F1: the name of git's admin directory for the tree, under the common directory's worktrees/.
+    const admin = h.git(wt, 'rev-parse', '--absolute-git-dir');
+    expect(path.basename(path.dirname(admin))).toBe('worktrees');
+    expect(m.worktreeAdmin).toBe(path.basename(admin));
+  });
+
+  it('a tree whose git directory is not one of the project’s linked admin directories records worktreeAdmin as null', () => {
+    workspace('demo', 'quiet-basin');
+    // `git rev-parse --git-dir` answers something outside `<common>/worktrees/`: the record names no admin directory.
+    h.sh(`${ARCH} git() { if [[ "$*" == *"rev-parse --path-format=absolute --git-dir"* ]]; then echo /elsewhere/x; return 0; fi;`
+      + ' command git "$@"; }; cmd_ws_archive --session demo-quiet-basin');
+    const m = JSON.parse(h.reg('demo-quiet-basin', 'archivemanifest')!) as Record<string, unknown>;
+    expect(m.worktreeAdmin).toBeNull();
   });
 
   it('a workspace reached through a link records workdirReal as its physical path', () => {
