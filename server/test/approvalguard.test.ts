@@ -364,13 +364,11 @@ describe('the prune row: git worktree prune is forbidden, a dry run and every ot
     expect(bash('git remote prune origin')).not.toBe('forbidden');
     expect(whys('git remote prune origin')).toEqual([]);
   });
-  it('every must-deny command is matched by the row, but one whose `prune` bash spells with quotes, which escalates', () => {
-    // The row reads the command as bash runs it (quotes and backslashes removed) once its raw text names `prune`, as
-    // the hook's class mode does; `pr""une` names no `prune` until bash removes the quotes, so here it is the strict
-    // grammar's, which never answers `ordinary` for it. The hook's deny and account modes read that form too.
-    const missed = PRUNE_DENY.filter((c) => !whys(c).includes('git worktree prune'));
-    expect(missed).toEqual(['git worktree pr""une']);
-    for (const c of PRUNE_DENY) expect(bash(c), c).not.toBe('ordinary');
+  it('every must-deny command is matched by the row, quotes split inside its words included', () => {
+    // The row reads the command quote-aware once its raw text names `prune`, letters split by quotes or a backslash
+    // included, so `pr""une` is forbidden here too (review 1479, F6).
+    expect(PRUNE_DENY.filter((c) => !whys(c).includes('git worktree prune'))).toEqual([]);
+    for (const c of PRUNE_DENY) expect(bash(c), c).toBe('forbidden');
   });
   it('no must-allow command is matched by the row', () => {
     expect(PRUNE_ALLOW.filter((c) => whys(c).includes('git worktree prune'))).toEqual([]);
@@ -380,7 +378,8 @@ describe('the prune row: git worktree prune is forbidden, a dry run and every ot
     expect(p).toBeDefined();
     const big = (unit: string): string => unit.repeat(Math.floor((256 * 1024) / unit.length));
     for (const u of ['(worktree prune ', '$(git worktree -x prune', 'git -C x -C ', 'env A=b ', 'sudo -x ', 'a/b/c/', '((((((((worktree prune',
-      'git --git-dir x worktree ', "g''it worktree prune -n ", 'git worktree -a -b -c ']) {
+      'git --git-dir x worktree ', "g''it worktree prune -n ", 'git worktree -a -b -c ', 'prune "a b" \'c\' \\d ', "<<'E'\nprune\n",
+      'bash -c "git worktree prune" ', "$'p' \"$(x)\" `y` "]) {
       const t0 = performance.now();
       p!.test(big(u));
       expect(performance.now() - t0, JSON.stringify(u)).toBeLessThan(250);

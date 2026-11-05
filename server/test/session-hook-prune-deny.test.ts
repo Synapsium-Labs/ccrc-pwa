@@ -122,6 +122,8 @@ describe('the prune deny refuses a repo-wide git worktree prune on every session
         expect(reason, MUST_DENY[i]).toContain('`git worktree prune`');
         expect(reason, MUST_DENY[i]).toContain('git -C <main> worktree remove <path>');
         expect(reason, MUST_DENY[i]).toContain('(`-n`) is allowed');
+        expect(reason, MUST_DENY[i]).toContain('`git commit -F <file>`');
+        expect(reason, MUST_DENY[i]).toContain('`gh pr create --body-file <file>`');
       }
     }, 120_000);
 
@@ -169,4 +171,48 @@ describe('the prune deny\'s budget: a payload naming no prune forks no jq for it
       expect(calls(id, 'git worktree prune'), 'the control: the prefilter lets prune through').toBe(1);
     });
   }
+});
+
+// Review 1479, F6: this PR's own body, in the two shapes a session sends it, is not refused by the prune row. The
+// account arm refuses both on every session for another reason (the body names a backticked `env`, which reads as
+// printing the whole environment), which is main's and outside this task, so the check is the prune row's alone.
+describe('this PR\'s own body is not refused by the prune row', () => {
+  const OWN: string[] = JSON.parse(fs.readFileSync(path.join(FIX, 'own-pr-body.json'), 'utf8'));
+  for (const [caller, id, extra] of CALLERS) {
+    it(`${caller}: no prune reason`, () => {
+      for (const c of OWN) expect(fire(home, id, c, extra) ?? '', c.slice(0, 60)).not.toContain('git -C <main> worktree remove <path>');
+    });
+  }
+});
+
+// Review 1479, F10(e): the quote-aware reading must cost no more than the tip's `norm` reading did. jq's global match and
+// `gsub` grow faster than linearly on a quote-dense payload, so both bounds are ratios measured in this run. Deny mode
+// is held against the same payload with the row's anchor spelled away (`prume`), so the ratio is the row's own share;
+// class mode, where the rest of the program is cheap, against the hook's `norm` over the same command. Measured on the
+// build box at 64 KB: the tip (33e521e07) 9.9 s in deny mode against 7.5 s without the row (1.32x), 2.7 s in class mode
+// against `norm`'s 3.0 s (0.9x); this program 7.8 s (1.04x) and 0.9 s (0.3x).
+describe('the prune row\'s cost on a 64 KB quote-dense payload naming prune', () => {
+  const hookSrc = fs.readFileSync(HOOK, 'utf8');
+  const prog = (/^APPROVAL_FORBIDDEN_JQ='([^']*)'$/m.exec(hookSrc) ?? [])[1] ?? '';
+  const normDef = (/^def norm: .*$/m.exec(prog) ?? [])[0] ?? '';
+  const unit = 'a "b c" \'d\' \\e ';
+  const command = `git fetch --prune ${unit.repeat(Math.floor((64 * 1024) / unit.length))}`;
+  const timed = (cmd: string, args: string[]): number => {
+    const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command: cmd } });
+    const t0 = process.hrtime.bigint();
+    const r = spawnSync('jq', args, { input, encoding: 'utf8', maxBuffer: 1 << 26, timeout: 120_000 });
+    expect(r.status, r.stderr).toBe(0);
+    return Number(process.hrtime.bigint() - t0) / 1e6;
+  };
+  const mode = (m: string): string[] => ['-r', '--arg', 'q', "'", '--arg', 'mode', m, prog];
+  it('deny mode costs at most 1.25x the same payload without the row; the row alone (class mode) at most 0.6x norm', () => {
+    expect(prog).not.toBe('');
+    expect(normDef).not.toBe('');
+    const normMs = timed(command, ['-r', '--arg', 'q', "'", `${normDef} .tool_input.command | norm | length`]);
+    const classMs = timed(command, mode('class'));
+    const withoutMs = timed(command.replace('--prune', '--prume'), mode('deny'));
+    const denyMs = timed(command, mode('deny'));
+    expect(classMs, `class ${classMs} ms, norm ${normMs} ms`).toBeLessThan(0.6 * normMs);
+    expect(denyMs, `deny ${denyMs} ms, without the row ${withoutMs} ms`).toBeLessThan(1.25 * withoutMs);
+  }, 300_000);
 });
