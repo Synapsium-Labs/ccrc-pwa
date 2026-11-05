@@ -105,6 +105,26 @@ export function rolloverCases(now: number): RolloverCase[] {
       why: 'a lapsed resetAt over an absent value stays unknown, not 0',
     },
     {
+      file: 'statusline-five-null.json',
+      // What the statusline writes for a payload with no 5h figure. The window
+      // exists and nothing read it, so this is NOT the `fiveWindowMinutes: 0`
+      // lane below: the weekly figure stands, and the row still does not rank.
+      content: compact({ five: null, seven: 40, ts: now - 60, fiveResetAt: null, sevenResetAt: now + 200000 }),
+      expect: { five: null, seven: 40, fiveRolledOver: false, sevenRolledOver: false },
+      score: null,
+      why: 'a null five is unknown, never 0, and one known half does not rank',
+    },
+    {
+      file: 'statusline-five-null-kept-reset.json',
+      // The same payload over a row whose 5h figure had lapsed: the writer keeps
+      // that window's `fiveResetAt` for its older-row check. A lapsed reset with
+      // no figure beside it is no rollover, so nothing here may turn it into 0.
+      content: compact({ five: null, seven: 40, ts: now - 60, fiveResetAt: now - 100, sevenResetAt: now + 200000 }),
+      expect: { five: null, seven: 40, fiveRolledOver: false, sevenRolledOver: false },
+      score: null,
+      why: 'a null five that keeps its lapsed resetAt stays unknown, not a rollover',
+    },
+    {
       // ── SINGLE-WINDOW LANES ─────────────────────────────────────────────
       // A ChatGPT/Codex Pro lane has NO 5h window: the backend answers
       // `x-codex-secondary-window-minutes: 0` and ccgpt-usage carries it through

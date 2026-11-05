@@ -12,9 +12,10 @@ import {
   ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, readSwitches,
 } from '../../../shared/switches.js';
 import {
-  orphanLicence, orphanRescueArmed, parseOrphanAudit, parseOrphanCensus, parseOrphanResult,
-  type OrphanAudit, type OrphanCensus, type OrphanJobOutcome, type OrphanObservation, type OrphanSwitches,
+  ORPHAN_LEASE_STOPS, orphanLicence, orphanRescueArmed, parseOrphanAudit, parseOrphanCensus, parseOrphanResult,
+  type OrphanAudit, type OrphanCensus, type OrphanClass, type OrphanJobOutcome, type OrphanObservation, type OrphanSwitches,
 } from '../orphanTreeLane.js';
+import type { OrphanLeaseHold } from './delegation-orphan-hold.js';
 
 export interface CollectOrphanDeps {
   readonly io: Pick<FleetIO, 'readdirMeasured'>;
@@ -24,6 +25,10 @@ export interface CollectOrphanDeps {
   /** The connection epoch (path-identity spec 2026-10-12 section 5.5): a reconnect between the queueing and the act
    *  composes nothing. */
   readonly epochNow: () => number;
+  /** The server skip (delegation PR4, D-7828): whether the delegation checkpoint holds the tree at `path` (its exact decoded
+   *  path, D-7850), for the census row's class (null: unknown). Asked after the audit and before the licence; `held` and `not-ready`
+   *  compose nothing. */
+  readonly leaseHold: (path: string, orphanClass: OrphanClass | null) => Promise<OrphanLeaseHold>;
 }
 
 /** A capability the box does not advertise: nothing was asked. */
@@ -56,9 +61,10 @@ export async function auditOrphan(deps: CollectOrphanDeps, hex: string): Promise
 
 /** The act job for one tree. `obs` is the lane's standing first sighting; `nowMono` is the monotonic clock, read when
  *  the audit's answer arrives. In SHADOW (`orphan-tree-live` absent) the job composes no verb and reports `would`. A
- *  tree whose only refusal was rung 9 is spent with its rescue token and `--rescue`, and only when both markers stand. */
+ *  tree whose only refusal was rung 9 is spent with its rescue token and `--rescue`, and only when both markers stand. `cls` is
+ *  the census row's class, which the lease hold reads (D-7850), or null when the lane holds no row for the tree. */
 export async function collectOrphanTree(
-  deps: CollectOrphanDeps, hex: string, obs: OrphanObservation | null, nowMono: () => number, epoch: number,
+  deps: CollectOrphanDeps, hex: string, cls: OrphanClass | null, obs: OrphanObservation | null, nowMono: () => number, epoch: number,
 ): Promise<OrphanJobOutcome> {
   if (!ccdCan(deps.fleetState, 'wsOrphanAudit') || !ccdCan(deps.fleetState, 'wsOrphan')) return { kind: 'stopped', why: 'caps' };
   const first = await orphanSwitches(deps.io, deps.registryDir);
@@ -68,6 +74,9 @@ export async function collectOrphanTree(
   const spend = audit.kind === 'token' ? { token: audit.token, rescue: false }
     : audit.kind === 'rescuable' && orphanRescueArmed(first) ? { token: audit.rescueToken, rescue: true } : null;
   if (spend === null) return { kind: 'audited', audit };
+  // The delegation hold, on the EXACT path (never `orphanPathOfHex`'s cleaned display form, D-7850).
+  const hold = await deps.leaseHold(Buffer.from(hex, 'hex').toString('utf8'), cls);
+  if (hold.kind !== 'free') return { kind: 'stopped', why: ORPHAN_LEASE_STOPS[hold.kind] };
   const arrived = nowMono();
   if (orphanLicence(obs, spend.token, arrived) !== 'licensed') return { kind: 'audited', audit };
   // The switches once more: the job's last await. A pause raised, an arm withdrawn or a moved connection stops it.

@@ -59,7 +59,7 @@ import type { AskMintReleaseReason, DelegationEventEnvelopeV1, DelegationHealthI
 // form is invisible to it.
 import { ASK_OPERATOR_PRINCIPAL, FLEET_SCOPE, IDLE_COMPACT_NUDGE_PROMPT, LEDGER_STALE_MS, RADAR_PROBE_FRESH_S, SERVER_CAPS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, freshWithin, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
-import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../shared/switches.js';
+import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, readSwitches } from '../../shared/switches.js';
 // The pause marker, reached through `rundefs.ts`'s re-export of its one definition, the `shared/switches.ts` row.
 // `single-definition.test.ts` pins that this file holds no copy.
 import {
@@ -1008,7 +1008,7 @@ export class FleetWatcher {
   private collectGen = 0;
   private collectLaneGen = 0;
   /** The orphan-worktree lane (D-6631): its pass, built on first use. Its cadence is the `orphanTrees` row of `LANE_SCHEDULE`. */
-  private readonly orphanBeat = new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs, () => this.diskAlarm.block());
+  private readonly orphanBeat = new OrphanTreeBeat(() => this.deps, () => this.childReclaimLaneNow().monoMs, () => this.delegationCheckpointIfReady(), () => this.diskAlarm.block());
   private collectState = new Map<string, CollectEntry>();
   private collectInFlight = new Map<string, CollectFlight>();
   private collectSlot: CollectSlot = { kind: 'free' };
@@ -2058,6 +2058,9 @@ export class FleetWatcher {
     return this.delegationLane().applier();
   }
 
+  /** The applier's checkpoint while its phase is `ready`, else null (delegation PR4, the orphan lane's hold). A read: opens nothing. */
+  delegationCheckpointIfReady(): DeepReadonly<DelegationCheckpointV1> | null { return this.delegationLaneMemo?.readyCheckpoint() ?? null; }
+
   /** Test seams of the delegation lane (see `DelegationLaneSeams`); production passes none. */
   setDelegationSeams(seams: DelegationLaneSeams): void {
     this.delegationLane().setSeams(seams);
@@ -3015,15 +3018,18 @@ export class FleetWatcher {
    *  (childReclaimDoneAt), omitted while there is none; the byte-equality guard
    *  re-emits the frame on the tick after it changes. */
   private emitCoord(names: readonly string[] | null): void {
+    // D-7902: the pane-scope stop's switch rides the same listing, through `readSwitches` (`unmeasurable` on null).
     const base: CoordStatus = names === null
       ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
           childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
-          deadCoordinatorAttention: this.deadCoordinatorAttentionList }
+          deadCoordinatorAttention: this.deadCoordinatorAttentionList,
+          paneScopeStop: readSwitches(null)[PANE_SCOPE_STOP_LIVE_MARKER] }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
           mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
           reclaim: readSwitches(names)[RECLAIM_PAUSE_MARKER],
           childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
-          deadCoordinatorAttention: this.deadCoordinatorAttentionList };
+          deadCoordinatorAttention: this.deadCoordinatorAttentionList,
+          paneScopeStop: readSwitches(names)[PANE_SCOPE_STOP_LIVE_MARKER] };
     // Wave 6 (spec §5.9): the mirror's newest committed reclaim end, on BOTH
     // arms, because it is the mirror's measurement and not the listing's.
     // OMITTED, never null, while there is none: absence is the one meaning
@@ -10419,6 +10425,7 @@ class DelegationLane {
   }
 
   setSeams(seams: DelegationLaneSeams): void { this.seams = seams; }
+  readyCheckpoint(): DeepReadonly<DelegationCheckpointV1> | null { const s = this.durable?.state(); return s?.phase === 'ready' ? s.checkpoint : null; }
 
   /** D-7878: close admission before aborting reads; drain actual producers, including their finally/log tails, before the applier. */
   close(): Promise<void> {

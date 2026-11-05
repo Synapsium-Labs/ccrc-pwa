@@ -795,6 +795,13 @@ export const CCD_ARGV = {
    *  two-member union, the on|off vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
    *  `ccd testbox-remote` is `$REG/testbox-remote-live`'s one shell writer. */
   testboxRemote: (state: 'on' | 'off') => argv(['testbox-remote', '--state', state]),
+  /** The pane-scope stop's switch writer (D-7902) — `testboxRemote`'s shape: `state` is a two-member union, the
+   *  live|shadow vocabulary is ccd's, and the flag LEADS, where the agent's two-token grant expects it.
+   *  `ccd pane-scope-stop` is `$REG/pane-scope-stop-live`'s one shell writer. */
+  paneScopeStop: (state: 'live' | 'shadow') => argv(['pane-scope-stop', '--state', state]),
+  /** The busy arm's switch (D-7994), `coordPause`'s shape exactly. `ccd scope-sweep-busy` is
+   *  `$REG/scope-sweep-busy-live`'s one shell writer. */
+  scopeSweepBusy: (state: 'on' | 'off') => argv(['scope-sweep-busy', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -1044,6 +1051,17 @@ export const POOLS_CAP = 'pools-v1';
  *  verb, so `accountPoolsEnforcement` (`pools.ts`) can answer `enforced`
  *  only against a box that actually took this deploy. */
 export const ACCOUNT_POOLS_CAP = 'account-pools';
+
+/** The two `ccd caps` words for one measured fact: whether this box has the
+ *  pool-sync timer unit (`_pool_sync_installed`, `ccd/ccd`), so whether anything
+ *  pulls the projection `_pool_ok` reads (D-8015). A current ccd prints exactly
+ *  one, and an older ccd prints neither, which is how `accountPoolsEnforcement`
+ *  (`pools.ts`) tells caps skew from a measured absence. Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo`s and
+ *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings,
+ *  held equal by that test's `toContain` lines. */
+export const POOL_SYNC_INSTALLED_CAP = 'pool-sync-installed';
+export const POOL_SYNC_ABSENT_CAP = 'pool-sync-absent';
 
 /** The `ccd caps` token that says this box implements `ccd route` and reads
  *  the routing record at settle (routing spec 2026-09-14 §5.3). Spelled ONCE
@@ -1451,6 +1469,9 @@ export const CCD_CAN = {
   coordPause: verbRow('coord-pause'), reclaimPause: capRow(RECLAIM_PAUSE_CAP),
   // A new verb: `ccd caps` names it, and a box whose list lacks it is refused 501 rather than sent a usage error.
   testboxRemote: verbRow('testbox-remote'),
+  // D-7902: a new verb, gated as `testboxRemote` is.
+  paneScopeStop: verbRow('pane-scope-stop'),
+  scopeSweepBusy: verbRow('scope-sweep-busy'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),

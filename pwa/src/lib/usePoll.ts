@@ -2,6 +2,10 @@
 // re-polls, and a write can drop every request issued before it". Four view hooks each carried a copy of it. The
 // caller owns the request, what an answer means and the state it lands in; this owns the issue counter and
 // the timer; the page becoming visible is the page clock's (`lib/pageClock.ts`, D-7191).
+//
+// Each read gets its own `AbortSignal` (console speed, task C1 "the link and the start"): the hook aborts every read in
+// flight when it unmounts and when `supersede()` drops them, so a screen that is left stops its fetches, and an aborted
+// read lands nothing. A newer poll does not abort an older read; the issue counter already keeps it from landing.
 import { useCallback, useEffect, useRef } from 'react';
 import { onPageVisible } from './pageClock';
 
@@ -12,8 +16,9 @@ export interface PollOptions {
   /** The cadence. `<= 0` is the injected mode: no request, no timer, no listener, `reload()` issues nothing. `null`
    *  asks once on mount and again on every return to the page, with no timer. */
   pollMs: number | null;
-  /** One read. */
-  request: () => Promise<unknown>;
+  /** One read. Its signal aborts when the hook unmounts or `supersede()` drops it; a request that ignores it still
+   *  works, and its answer is dropped as before. */
+  request: (signal: AbortSignal) => Promise<unknown>;
   /** Called with the outcome of a request that is still the newest issued and whose hook is still mounted. `issue` is
    *  that request's number (the one `reload()` returned for it). */
   onOutcome: (outcome: PollOutcome, issue: number) => void;
@@ -45,17 +50,23 @@ export function usePoll(options: PollOptions): PollControl {
   latest.current = options;
   const issued = useRef(0);
   const loadRef = useRef<() => number>(() => 0);
+  /** The reads in flight, each with its own controller; a read leaves the set when it settles. */
+  const inFlight = useRef(new Set<AbortController>());
 
   useEffect(() => {
     if (pollMs !== null && pollMs <= 0) return undefined;   // an injected consumer never polls
     let live = true;
+    const flights = inFlight.current;
     const load = (): number => {
       const mine = ++issued.current;
+      const ctl = new AbortController();
+      flights.add(ctl);
       const land = (outcome: PollOutcome): void => {
-        if (!live || mine !== issued.current) return;
+        flights.delete(ctl);
+        if (!live || ctl.signal.aborted || mine !== issued.current) return;
         latest.current.onOutcome(outcome, mine);
       };
-      void latest.current.request().then(
+      void latest.current.request(ctl.signal).then(
         (raw) => land({ ok: true, raw }),
         (err: unknown) => land({ ok: false, err }),
       );
@@ -68,12 +79,21 @@ export function usePoll(options: PollOptions): PollControl {
     return () => {
       live = false;
       loadRef.current = () => 0;
+      abortAll(flights);
       if (timer !== null) clearInterval(timer);
       stopVisible?.();
     };
   }, [pollMs, refetchOnVisible]);
 
   const reload = useCallback((): number => loadRef.current(), []);
-  const supersede = useCallback((): void => { issued.current += 1; }, []);
+  const supersede = useCallback((): void => {
+    issued.current += 1;
+    abortAll(inFlight.current);
+  }, []);
   return { reload, supersede };
+}
+
+function abortAll(flights: Set<AbortController>): void {
+  for (const ctl of [...flights]) ctl.abort();
+  flights.clear();
 }

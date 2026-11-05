@@ -9,6 +9,7 @@ import type { ReactNode } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { RenderBoundary, RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
 import { navigate } from '../src/lib/router';
+import { ScreenLoadError } from '../src/lib/lazyScreen';
 
 let warn: MockInstance<typeof console.warn>;
 let error: MockInstance<typeof console.error>;
@@ -141,5 +142,15 @@ describe('the two screen fallbacks', () => {
     expect(screen.getByText('This screen could not be shown.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to the fleet' }));
     expect(location.pathname + location.search).toBe('/');
+    expect(screen.queryByRole('button', { name: 'Reload' }), 'a render error offers no reload').toBeNull();
+  });
+
+  it('ScreenFallback offers Reload when the screen’s code could not be loaded (console speed C1, review 1464 F2)', () => {
+    const reload = vi.fn();
+    render(<ScreenFallback error={new ScreenLoadError(new TypeError('Failed to fetch dynamically imported module'))} reload={reload} />);
+    expect(screen.getByText('This screen could not be loaded.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Back to the fleet' }), 'and the way back stays').toBeInTheDocument();
   });
 });

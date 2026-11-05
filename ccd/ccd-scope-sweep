@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# ccd-scope-sweep — report every dead ccd pane scope, and stop only the inert
-# ones (session-continuity spec §5.6 item 2, ruling C11). A oneshot on its own
+# ccd-scope-sweep — report every dead ccd pane scope, and stop the inert ones
+# (session-continuity spec §5.6 item 2, ruling C11) and, behind a switch of its
+# own, the busy ones of a provably dead session (D-7993). A oneshot on its own
 # one-minute timer (ccd-scope-sweep.timer) BESIDE ccd-cap-scopes, never inside
 # it: a slow stop or a fault here must never delay capping a new scope.
 #
@@ -109,6 +110,50 @@
 # the next tick, so a misjudgment the shadow week missed costs three scopes a
 # minute, not every scope at once.
 #
+# THE BUSY ARM (D-7993). A dead session's busy orphans (a `while true` monitor, a
+# mock server, a `tail -f`) never pass predicates 2 to 4, so the inert path reports
+# them for ever. A dead scope that fails on one of those three reasons and on no
+# other hold is judged a second way, beside its `dead` line and never in its place:
+# is its SESSION provably dead? A dead scope alone says nothing about that: an account
+# swap kills a pane and the session goes on in a new one, its old scope's dev server
+# still in use. The facts, each measured here:
+#   * THE SESSION, from each process's own `CCRC_SESSION_GENERATION`. Both spawn
+#     lines export it and the row keeps it for life (`$REG/<id>.generation`, minted
+#     once, purged with the row, a uuid no later row reuses), so a process names its
+#     row without any marker. This sweep never reads `$REG/<id>.panescope` (the K16
+#     census pins it): that names a session's LAST pane only, never the swapped-away
+#     scope this arm exists for. A generation in no `$REG/*.generation` file is an
+#     ABSENT row; a row with `$REG/<id>.hibernated` is `session-asleep`, read first because
+#     `ccd hibernate` stamps `.stopped` too and asleep is not dead (D-5242): it wakes on mail
+#     or a send-back expecting its scope, and only `ccd stop` or an archive ends a sleep; a row
+#     with `$REG/<id>.stopped` is STOPPED; any other row is `session-live`. Live or asleep,
+#     the session's clock drops.
+#   * NO LIVE PANE carries that generation, whatever the registry says: a stop stamp
+#     beside a running pane is not a dead session.
+#   * NO CLAUDE CODE PROCESS in the scope, read as ccd-tmp-sweep reads one: argv[0]
+#     or the comm is `claude`, or lies under `claude/versions/` (a build's comm is its
+#     version number, so the comm alone never sees it).
+#   * ITS PANE IS GONE from its server: the Description's pane pid is no live pane.
+#   * NOTHING OUTSIDE USES IT: predicate 5 still holds, and so does `peer`, a loopback
+#     TCP connection whose other end is no socket of this scope, or an accepted
+#     connection on a named Unix socket. A connection between two dead scopes holds
+#     both: reported, the safe direction.
+# THE GRACE IS THE SESSION'S, not the scope's: SCOPE_SWEEP_DEAD_SEC from when this
+# sweep first saw the session provably dead (`first=` on the `busy` line). A scope
+# dead for a week whose session stopped a minute ago waits six hours, so a stop and
+# a restart cost nothing, and a session seen live drops the clock. Predicates 2 to 4
+# are what make a scope busy, so they are the only ones this arm does not ask.
+# A fact it cannot measure is `verdict=carry` with its reason (a process's environ or
+# cmdline it cannot read, no generation in any process, a registry it cannot list or a
+# generation file it cannot believe, a live pane's environ, a tmux that answers nothing),
+# and never a stop; the clock survives a carry, a `carry` row's included (a loop's
+# `sleep` exiting mid-tick reads as one, and must not put its six hours back to zero).
+# TWO SWITCHES. Every line above is shadow until BOTH `$REG/scope-sweep-live` and
+# `$REG/scope-sweep-busy-live` stand: a collectable scope then reads `would-stop`,
+# printed `would-stop (busy)`, with its process list, and the shadow week reads those.
+# Armed, an inert and a busy stop draw on ONE budget, SCOPE_SWEEP_MAX_STOPS a tick.
+# The operator arms it through `POST /api/coord/scope-sweep` (`ccd scope-sweep-busy`, its one writer).
+#
 # THE VERDICT RECORD, `$XDG_RUNTIME_DIR/ccd-scope-sweep.state`, rewritten whole
 # by rename every tick: a header `# ccd-scope-sweep v1 tick=<epoch> up=<s>
 # mode=<shadow|live>`, one `dead` line per dead ccd scope (first seen, CPU
@@ -119,12 +164,19 @@
 # than a day in a LIVE pane scope that is neither the pane's own process nor
 # one of its Claude Code's MCP servers (a direct child of the pane's process
 # started within SCOPE_SWEEP_MCP_SEC of it, and that child's descendants).
+# The busy arm ADDS two line kinds and changes none: `busy <unit> first=<n|none>
+# verdict=<report|carry|would-stop|held|stopped|stop-failed> why=<reasons|none>
+# session=<stopped row ids|-> n=<processes> procs=<pid:comm,…|->` after its scope's
+# `dead` line (or `carry` line, whose clock it keeps), at most SCOPE_SWEEP_BUSY_LIST
+# processes named; and `busy-mode live`, right under the header, only while both
+# switches stand, so a record without it is shadow. Neither is written where no busy
+# scope stands and the switch is down: such a record is the one before this arm.
 # `ccrc doctor` READS this record and never re-derives it.
 #
 # OUTPUT. Silent on an ordinary tick; one line when a scope is first seen dead, and one
 # when its measured verdict is `would-stop`, `held`, `stopped` or `stop-failed` and differs
 # from the previous record's (an unchanged verdict is silent, and `report` is never
-# announced on its own). A `carry` row keeps the bounded clock pair, never the verdict (it
+# announced on its own), the busy arm's the same, `(busy)` after its verdict. A `carry` row keeps the bounded clock pair, never the verdict (it
 # reads back as `carry`), so the next measured `would-stop` or `held` after a carry is
 # announced again on the carried clock: a re-announcement, not a first reach and not
 # "first seen now". Refusals go to stderr, exit 1. A paused sweep is silent (it runs
@@ -157,6 +209,9 @@ SCOPE_SWEEP_OLD_SEC=86400     # a process older than a day in a LIVE pane scope 
 SCOPE_SWEEP_MCP_SEC=120       # a direct child of the pane's Claude Code started this soon after it is one of its MCP servers
 SCOPE_SWEEP_MAX_STOPS=3       # armed: the most scopes one tick stops; the rest are `held` for the next
 SCOPE_SWEEP_MAX_HOPS=64       # the parent-chain walk's cap: past it the scope is unmeasurable (a pid-reuse cycle)
+SCOPE_SWEEP_BUSY_LIST=16      # the most processes a `busy` line names; `n=` counts them all
+CLAUDE_RE='(^|/)claude$|/claude/versions/[^/]+$'   # ccd-tmp-sweep's CCD_TMP_SWEEP_CLAUDE_RE: argv[0] or the comm of a Claude Code process
+GEN_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'   # ccd's `_reg_generation_valid`
 DESC_RE='^tmux child pane ([1-9][0-9]*) launched by process ([1-9][0-9]*)$'
 
 _ss_die() { echo "scope-sweep: $*" >&2; exit 1; }
@@ -175,12 +230,15 @@ NETNS=$(readlink "$PROC/self/ns/net" 2>/dev/null) || NETNS=""   # this sweep's o
 MODE=shadow
 # The ONE read of the arming file, here and nowhere else in the tree (single-definition.test.ts).
 [ -e "$REG/scope-sweep-live" ] && MODE=live
+BUSY_MODE=shadow
+# The ONE read of the busy arm's switch. It means nothing unless the sweep itself is armed.
+[[ "$MODE" == live ]] && [ -e "$REG/scope-sweep-busy-live" ] && BUSY_MODE=live
 
 # ── the previous record: first-seen clocks, the CPU then ──────────────────────
 # A `dead` line hands forward its bounded clock pair AND its verdict (PREVV: an unchanged verdict is not announced
 # again); a `carry` line hands forward only its pair, and its verdict reads back as `carry` (a carried line is never
 # copied: it was one tick's inability to measure).
-declare -A FIRST=() CPU0=() PREVV=()
+declare -A FIRST=() CPU0=() PREVV=() BFIRST=() PREVB=()
 CARRY_RE='^carry (tmux-spawn-[^[:space:]]+\.scope) state=(dead|live|unknown) first=(none|[1-9][0-9]{0,15}) cpu0=(none|0|[1-9][0-9]{0,19}) why=(unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)$'
 _ss_prev_clock() {
   local unit="$1" first="$2" cpu0="$3"
@@ -206,6 +264,9 @@ if [ -r "$STATE" ]; then
       _ss_carry_pair "${saved[2]}" "${saved[5]}" || continue
       _ss_prev_clock "${saved[1]}" "${saved[3]}" "${saved[4]}" || continue
       PREVV["${saved[1]}"]=carry
+    elif [[ "$line" =~ ^busy\ (tmux-spawn-[^[:space:]]+\.scope)\ first=(none|[1-9][0-9]{0,15})\ verdict=(report|carry|would-stop|held|stopped|stop-failed)\  ]]; then
+      PREVB["${BASH_REMATCH[1]}"]=${BASH_REMATCH[3]}      # the busy arm's own clock, the session's, and its verdict
+      [[ "${BASH_REMATCH[2]}" == none ]] || BFIRST["${BASH_REMATCH[1]}"]=${BASH_REMATCH[2]}
     fi
   done < "$STATE"
 fi
@@ -295,16 +356,151 @@ _ss_box() {   # rc 1 unmeasurable: a process that still exists but whose stat ca
   (( ! BOX_BAD ))
 }
 
+# ── the busy arm's measures, read only when a busy dead scope stands ──────────
+_ss_loopback() {   # a /proc/net/tcp* address `HEX:PORT` -> rc 0 for 127.0.0.0/8, ::1 and v4-mapped 127/8
+  case "${1%%:*}" in ??????7F|00000000000000000000000001000000|0000000000000000FFFF0000??????7F) return 0 ;; esac
+  return 1
+}
+_ss_peers() {   # pid... -> PEERS=1 when something outside these processes is connected to them; rc 1 unmeasurable
+  local p fd t f r ino st path
+  local -a a
+  local -A mine=() locals=() remotes=()
+  PEERS=0
+  for p in "$@"; do
+    for fd in "$PROC/$p/fd"/*; do
+      t=$(readlink "$fd" 2>/dev/null) || continue
+      [[ "$t" =~ ^socket:\[([0-9]+)\]$ ]] && mine[${BASH_REMATCH[1]}]=1
+    done
+  done
+  (( ${#mine[@]} )) || return 0
+  for f in tcp tcp6; do
+    [ -r "$PROC/net/$f" ] || return 1
+    while read -r -a a; do                                 # sl local remote st … inode at [9]
+      [[ "${a[9]:-}" =~ ^[0-9]+$ && -n "${mine[${a[9]}]+x}" ]] || continue
+      locals[${a[1]}]=1
+      [[ "${a[3]}" == 01 ]] && _ss_loopback "${a[2]}" && remotes[${a[2]}]=1   # 01: ESTABLISHED
+    done < "$PROC/net/$f"
+  done
+  for r in "${!remotes[@]}"; do [[ -n "${locals[$r]+x}" ]] || PEERS=1; done   # the far end is a socket of this scope, or someone else
+  [ -r "$PROC/net/unix" ] || return 1
+  while read -r _ _ _ _ _ st ino path; do                  # Num RefCount Protocol Flags Type St Inode Path
+    # 03: CONNECTED. Only an ACCEPTED socket has a Path, the listener's, so a client is on it; a client's own socket has none.
+    [[ "$st" == 03 && -n "$path" && "$ino" =~ ^[0-9]+$ && -n "${mine[$ino]+x}" ]] && PEERS=1
+  done < "$PROC/net/unix"
+  return 0
+}
+_ss_env_generation() {   # pid -> GEN, its CCRC_SESSION_GENERATION or empty; rc 1 unreadable. The rest of the environment is never kept.
+  local v
+  local -a e=()
+  GEN=""
+  { mapfile -d '' -t e < "$PROC/$1/environ"; } 2>/dev/null || return 1
+  for v in ${e[@]+"${e[@]}"}; do
+    [[ "$v" == CCRC_SESSION_GENERATION=* ]] && { GEN=${v#*=}; break; }
+  done
+  return 0
+}
+# Every row's generation, read once. A generation it cannot believe is never "names no row": unmeasurable, for every scope.
+declare -A ROWGEN=() PANEGEN=()
+ROWS_READ=0 ROWS_BAD=0 PANES_READ=0 PANES_BAD=0
+_ss_rows() {   # rc 1 unmeasurable
+  local f v id
+  if (( ! ROWS_READ )); then
+    ROWS_READ=1
+    if [ -d "$REG" ] && [ -r "$REG" ] && [ -x "$REG" ]; then
+      shopt -s nullglob
+      for f in "$REG"/*.generation; do
+        [ -e "$f" ] || [ -L "$f" ] || continue                 # purged since the glob
+        [[ -f "$f" && ! -L "$f" ]] || { ROWS_BAD=1; continue; }
+        { v=$(<"$f"); } 2>/dev/null || { [ -e "$f" ] && ROWS_BAD=1; continue; }
+        [[ "$v" =~ $GEN_RE ]] || { ROWS_BAD=1; continue; }
+        id=${f##*/}; ROWGEN[$v]=${id%.generation}
+      done
+      shopt -u nullglob
+    else ROWS_BAD=1
+    fi
+  fi
+  (( ! ROWS_BAD ))
+}
+_ss_pane_generations() {   # rc 1 unmeasurable: a live pane whose environ cannot be read could be any session's
+  local p
+  if (( ! PANES_READ )); then
+    PANES_READ=1
+    for p in "${!PANE[@]}"; do
+      [ -e "$PROC/$p" ] || continue                            # gone since `list-panes`
+      _ss_env_generation "$p" || { [ -e "$PROC/$p" ] && PANES_BAD=1; continue; }
+      [[ -n "$GEN" ]] && PANEGEN[$GEN]=1
+    done
+  fi
+  (( ! PANES_BAD ))
+}
+_ss_busy_candidate() {   # the current scope's `why`: at least one reason that makes it busy
+  local w
+  for w in "${why[@]}"; do case "$w" in cpu-moved|process-started-under-6h|socket) return 0 ;; esac; done
+  return 1
+}
+_ss_busy_carry() { BV=carry; BW=("$1"); [[ -n "$BF" ]] || BF=none; return 0; }
+# Judges the current scope. Sets BV (`collect`, `report` or `carry`), BW (its reasons), BF (the session's clock, or `none`), BS
+# (the stopped rows' ids) and BL (its process list). It only reads: the stop is the loop's one act, on the inert path's budget.
+_ss_busy_judge() {
+  local p c n g id
+  local -a a list=() ids=()
+  local -A gens=()
+  local claude=0 live=0 asleep=0
+  BV=report BW=() BS='-' BL='-'
+  BF=${BFIRST[$u]:-}
+  [[ -z "$BF" ]] || (( BF >= born && BF <= UP )) || BF=""        # a clock it cannot believe starts now, the `dead` line's rule
+  for p in "${procs[@]}"; do
+    [ -e "$PROC/$p" ] || continue                                 # exited since the scope was read
+    c=$(_ss_comm "$p") || c='?'
+    (( ${#list[@]} < SCOPE_SWEEP_BUSY_LIST )) && { n=${c//[[:space:]]/_}; list+=("$p:${n//,/_}"); }
+    a=()
+    { mapfile -d '' -t a < "$PROC/$p/cmdline"; } 2>/dev/null || { [ -e "$PROC/$p" ] && { _ss_busy_carry cmdline; return 0; }; continue; }
+    [[ "${a[0]:-}" =~ $CLAUDE_RE || "$c" =~ $CLAUDE_RE ]] && claude=1
+    _ss_env_generation "$p" || { [ -e "$PROC/$p" ] && { _ss_busy_carry env; return 0; }; continue; }
+    [[ -z "$GEN" ]] && continue
+    [[ "$GEN" =~ $GEN_RE ]] || { _ss_busy_carry env; return 0; }
+    gens[$GEN]=1
+  done
+  c="${list[*]:-}"; [[ -z "$c" ]] || BL=${c// /,}
+  [[ -n "$SERVER" ]] || { _ss_busy_carry tmux-unknown; return 0; }  # no pane could be asked after
+  (( ${#gens[@]} )) || { _ss_busy_carry session-env; return 0; }    # nothing names its session
+  _ss_rows || { _ss_busy_carry registry; return 0; }
+  _ss_pane_generations || { _ss_busy_carry pane-env; return 0; }
+  for g in "${!gens[@]}"; do
+    [[ -z "${PANEGEN[$g]+x}" ]] || live=1
+    id=${ROWGEN[$g]:-}
+    [[ -n "$id" ]] || continue                                     # no row names it: absent
+    if [ -e "$REG/$id.hibernated" ] || [ -L "$REG/$id.hibernated" ]; then asleep=1   # by presence, as `_hib_wake_clear`: every sleeping row reads stopped too
+    elif [ -e "$REG/$id.stopped" ]; then ids+=("$id")              # `-e`, ccd's own: a stamp present but unreadable is still a stop
+    else live=1; fi
+  done
+  if (( live )); then BW=(session-live); BF=none; return 0; fi     # its clock drops: dead again, it waits from zero
+  if (( asleep )); then BW=(session-asleep); BF=none; return 0; fi # the same hold: a live session is the stronger word
+  [[ -n "$BF" ]] || BF=$UP
+  (( ${#ids[@]} )) && { c="${ids[*]}"; BS=${c// /,}; }
+  (( claude )) && BW+=(claude-process)
+  [[ -z "${PANE[$pane]+x}" ]] || BW+=(pane-exists)
+  (( elsewhere == 0 )) || BW+=(parent-of-a-process-elsewhere)
+  _ss_peers "${procs[@]}" || { _ss_busy_carry socket-tables; return 0; }
+  (( PEERS == 0 )) || BW+=(peer)
+  (( UP - BF >= SCOPE_SWEEP_DEAD_SEC )) || BW+=(session-dead-under-6h)
+  (( ${#BW[@]} )) || BV=collect
+  return 0
+}
+
 # ── the scopes ────────────────────────────────────────────────────────────────
 units=$(systemctl --user list-units --no-legend --plain 'tmux-spawn-*.scope' 2>/dev/null) \
   || _ss_die "systemctl --user list-units did not answer, so no pane scope can be listed"
 OUT=() SAID=()
-STOPS=0
+[[ "$BUSY_MODE" == live ]] && OUT+=("busy-mode live")
+STOPS=0   # ONE budget: an inert stop and a busy stop both spend it
 declare -A P=() MINE=()
 _ss_carry() {   # reason state; current loop unit, never a measured verdict
   local why="$1" state="$2" first="${FIRST[$u]:-none}" cpu0="${CPU0[$u]:-none}"
   _ss_carry_pair "$state" "$why" || _ss_die "internal invalid carry $why/$state"
   OUT+=("carry $u state=$state first=$first cpu0=$cpu0 why=$why")
+  # The busy clock survives a carry, unless the scope is live (the hop cap's): then its session is too.
+  [[ "$state" == live || -z "${BFIRST[$u]:-}" ]] || OUT+=("busy $u first=${BFIRST[$u]} verdict=carry why=$why session=- n=0 procs=-")
   return 0
 }
 while read -r u _; do
@@ -408,17 +604,34 @@ while read -r u _; do
     (( socks == 0 )) || why+=(socket)
     (( elsewhere == 0 )) || why+=(parent-of-a-process-elsewhere)
   fi
-  if (( ${#why[@]} )); then verdict=report
-  elif [[ "$MODE" != live ]]; then verdict=would-stop
-  elif (( STOPS >= SCOPE_SWEEP_MAX_STOPS )); then verdict=held
+  # THE ONE ACT, for both arms (the K16 census pins a single stop line). An inert scope answers to MODE and its verdict is the
+  # `dead` line's. A busy one answers to BUSY_MODE, its `dead` line stays `report`, and its verdict is the `busy` line's. A
+  # `server-pid-reused` scope has none of the three busy reasons, so it is no candidate.
+  arm=none armed=shadow BV=""
+  if (( ${#why[@]} == 0 )); then arm=inert armed=$MODE
+  elif _ss_busy_candidate; then
+    _ss_busy_judge
+    [[ "$BV" != collect ]] || { arm=busy; armed=$BUSY_MODE; }
+  fi
+  if [[ "$arm" == none ]]; then act=report
+  elif [[ "$armed" != live ]]; then act=would-stop
+  elif (( STOPS >= SCOPE_SWEEP_MAX_STOPS )); then act=held
   else
     STOPS=$((STOPS + 1))
-    if systemctl --user stop --no-block "$u" 2>/dev/null; then verdict=stopped; else verdict=stop-failed; fi
+    if systemctl --user stop --no-block "$u" 2>/dev/null; then act=stopped; else act=stop-failed; fi
   fi
+  verdict=report
+  if [[ "$arm" == busy ]]; then BV=$act; elif [[ "$arm" == inert ]]; then verdict=$act; fi
   w="${why[*]:-none}" pl="${procs[*]}"
   OUT+=("dead $u first=$first cpu0=$cpu0 verdict=$verdict why=${w// /,} server=$state procs=${#procs[@]} mem=$mem sockets=$socks youngest=$youngest oldest=$oldest age=$sage pids=${pl// /,}")
   if (( ! had_clock )); then SAID+=("scope-sweep: $u is dead, its server $state, ${#procs[@]} process(es): first seen now")
   elif [[ "$verdict" != report && "$verdict" != "${PREVV[$u]:-}" ]]; then SAID+=("scope-sweep: $u $verdict — dead $(( (UP - first) / 60 )) min, ${#procs[@]} process(es), its CPU unmoved, no socket, nothing elsewhere")
+  fi
+  [[ -n "$BV" ]] || continue                                     # no busy judgment: no `busy` line
+  w="${BW[*]:-none}"
+  OUT+=("busy $u first=$BF verdict=$BV why=${w// /,} session=$BS n=${#procs[@]} procs=$BL")
+  if [[ "$BV" != report && "$BV" != carry && "$BV" != "${PREVB[$u]:-}" ]]; then
+    SAID+=("scope-sweep: $u $BV (busy) — its session dead $(( (UP - BF) / 60 )) min, ${#procs[@]} process(es): $BL")
   fi
 done <<<"$units"
 

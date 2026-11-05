@@ -17,7 +17,7 @@ import {
   POOLS_DIR_NAME, accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry,
   readProjectPools, readProjectPoolsWithRoot,
 } from '../src/pools.js';
-import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP } from '../src/ccdargv.js';
 import { absentReadIO, degradedReadIO } from './ioDoubles.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -626,9 +626,22 @@ describe('accountPoolsEnforcement — the same three-state shape, off the accoun
     expect(accountPoolsEnforcement(null)).toBe('unknown');
   });
 
-  it('the token present is enforced, the token absent is unavailable', () => {
-    expect(accountPoolsEnforcement([ACCOUNT_POOLS_CAP, 'swap'])).toBe('enforced');
+  it('no account-pools token is unavailable: this ccd has no account side to enforce', () => {
     expect(accountPoolsEnforcement(['swap', 'start'])).toBe('unavailable');
+  });
+
+  // D-8015. The token says this ccd CAN honour a central tag. Whether it does is the pool-sync timer's: with no unit on
+  // the box no projection is ever pulled, and `_acct_pool_state` reads only what the roster declares.
+  it('the token with the timer installed is enforced', () => {
+    expect(accountPoolsEnforcement([ACCOUNT_POOLS_CAP, POOL_SYNC_INSTALLED_CAP, 'swap'])).toBe('enforced');
+  });
+
+  it('the token with the timer measured absent is unavailable', () => {
+    expect(accountPoolsEnforcement([ACCOUNT_POOLS_CAP, POOL_SYNC_ABSENT_CAP, 'swap'])).toBe('unavailable');
+  });
+
+  it('the token with neither word is an older agent: unknown, never enforced', () => {
+    expect(accountPoolsEnforcement([ACCOUNT_POOLS_CAP, 'swap'])).toBe('unknown');
   });
 });
 

@@ -696,6 +696,15 @@ S6_CARRY = re.compile(
     r"why=(?P<why>unit-show|description|control-group|cpu|scope-start|procs|cgroup-dir|child-cgroup|server-stat|server-comm|tmux-unknown|parent-hop-cap|socket-tables|socket-fd|box-stat)",
     re.ASCII,
 )
+# The busy arm's two lines (D-7993): read so the record stays readable, and counted nowhere, because this instrument's
+# figures are the inert scopes'. `\S` in `session=` and `procs=` is the ASCII class above, a comm being folded the same way.
+S6_BUSY = re.compile(
+    rf"busy {S6_UNIT} first=(?:none|{S6_POS}) "
+    rf"verdict=(?:report|carry|would-stop|held|stopped|stop-failed) "
+    rf"why=[a-z0-9-]+(?:,[a-z0-9-]+)* session=\S+ n={S6_NUM} procs=\S+",
+    re.ASCII,
+)
+S6_BUSY_MODE = "busy-mode live"
 S6_UNKNOWN_REASONS = frozenset(("unit-show", "description", "control-group", "cpu", "scope-start", "procs", "cgroup-dir", "child-cgroup", "server-stat", "server-comm", "tmux-unknown"))
 
 
@@ -856,7 +865,7 @@ def s6_inert():
         if c and s6_carry_valid(c):
             carried[c.group("state")] += 1
             continue
-        if S6_OLD.fullmatch(line):
+        if S6_OLD.fullmatch(line) or S6_BUSY.fullmatch(line) or line == S6_BUSY_MODE:
             continue
         return {"record": "unreadable"}
     return {"mode": mode, "dead": dead, "inert": inert,

@@ -4382,6 +4382,11 @@ export interface CoordStatus {
   /** The dead-coordinator lane's own list (wave 4). OPTIONAL on the wire: an older server omits it, and the PWA's one
    *  reader (`pwa/src/fleet/deadCoordinatorWords.ts`) reads absence as no items. */
   deadCoordinatorAttention?: readonly DeadCoordinatorAttention[];
+  /** D-7902: `$REG/pane-scope-stop-live`, the switch that arms a deliberate stop's pane-scope stop, as the listing that
+   *  built this frame reads it (`unmeasurable` when the registry could not be listed). OPTIONAL on the wire: an older
+   *  server omits it, and the PWA's one reader (`paneScopeStopMarker`, `pwa/src/fleet/paneScopeStopWords.ts`) reads
+   *  absence as a server that does not offer the switch. */
+  paneScopeStop?: MarkerState;
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
@@ -9979,21 +9984,215 @@ export const BOX_SETTINGS_KEYS = [
 ] as const;
 export type BoxSettingKey = typeof BOX_SETTINGS_KEYS[number];
 
-/** One setting. `value` is what the act uses (ok) or the raw knob (refused); `why` is display text only: nothing branches on it. */
-export type BoxSettingRow =
+/** The box settings view's per-setting class table (spec 2026-10-25 5.1, D12, D16, D-7909). `value` shows what the act uses, `origin`
+ *  the release base's scheme and host, `is-set` (the spec's `presence`, D12; `presence` is reserved for session presence, D-7921) only that a value is set, `omit` is never shown (the test box's own keys). Each union
+ *  has its `Record<..., true>` map, the list derived from it. `server/test/box-settings-table.test.ts` holds this table, the value
+ *  words, the envelope and the refusal words equal, in both directions, to `BOX_SETTINGS_TABLE` and its neighbours in `ccd/ccrc`. */
+export type BoxSettingClass = 'value' | 'origin' | 'is-set' | 'omit';
+const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, origin: true, 'is-set': true, omit: true };
+export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
+
+/** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies';
+const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
+  updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
+};
+export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
+
+/** When a changed value takes effect: the next run, or the next update (the installer renders it). */
+export type BoxSettingApplies = 'run' | 'update';
+const BOX_SETTING_APPLIES_MAP: Record<BoxSettingApplies, true> = { run: true, update: true };
+export const BOX_SETTING_APPLIES: readonly BoxSettingApplies[] = Object.keys(BOX_SETTING_APPLIES_MAP) as BoxSettingApplies[];
+
+export interface BoxSettingSpec { cls: BoxSettingClass; family: BoxSettingFamily; roles: readonly NodeRole[]; applies: BoxSettingApplies }
+
+/** All 89 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
+export const BOX_SETTING_TABLE = {
+  CCRC_BACKUP_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_BACKUP_DATA_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_VERSIONS_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_UPDATE_HEALTH_S: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_UPDATE_DEADLINE_MS: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_RELEASE_BASE_URL: { cls: 'origin', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_MODELS_ADVANCE_BUDGET_S: { cls: 'value', family: 'updates', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_SESSION_SLICE_MEMORY_MAX: { cls: 'value', family: 'session-slice', roles: ['fleet', 'both'], applies: 'update' },
+  CCRC_SESSION_SLICE_SWAP_MAX: { cls: 'value', family: 'session-slice', roles: ['fleet', 'both'], applies: 'update' },
+  CCRC_TEST_SLICE_MEMORY_MAX: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_SLICE_SWAP_MAX: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_SLICE_CPU_WEIGHT: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_SLICE_CPU_QUOTA: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_SLICE_IO_WEIGHT: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_HEAVY_SLOTS: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_WIDE_FILES: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TEST_PRESSURE_MAX: { cls: 'value', family: 'test-runs', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_STORE: { cls: 'is-set', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_SOURCE_REF: { cls: 'is-set', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_REPOS_EXCLUDE: { cls: 'is-set', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_REFRESH_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'update' },
+  CCRC_GRAPH_FETCH_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_FULL_REBUILD_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_INCREMENTAL_MAX_FILES: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_FULL_FAIL_MAX: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_FAIL_BACKOFF_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_BUDGET: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'update' },
+  CCRC_GRAPH_BUILD_TIMEOUT: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'update' },
+  CCRC_GRAPH_SLOT_WAIT_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'update' },
+  CCRC_GRAPH_BUILD_NICE: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_MAX_WORKERS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_MAX_SHRINK_PCT: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_KEEP_BUILDS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_BUILD_GRACE_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_MIGRATE_BUDGET: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_HOOKSTATE_FRESH_SECS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_GATE_MAX_DIFF_PCT: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_GATE_MAX_DENIALS: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_CARD_DIFF_LIST_MAX: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_GRAPH_PRESSURE_MAX: { cls: 'value', family: 'graph', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_KEEPALIVE_MODEL: { cls: 'is-set', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_KEEPALIVE_PROMPT: { cls: 'is-set', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_KEEPALIVE_FRESH: { cls: 'value', family: 'keepalive', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_USAGE_SWEEP_DAYS: { cls: 'value', family: 'usage-sweep', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_URL: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_TOKEN_FILE: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_GIT_URL_BASE: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_GIT_KEY: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_UNTRACKED_FILE_MAX: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_SNAPSHOT_MAX: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_STATUS_DEADLINE: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_RECONNECT_DEADLINE: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_LOST_RUN: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_QUEUE_LIMIT: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_QUEUE_WAIT: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_BUDGET: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_DENY_GLOBS: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_POLL: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_FALLBACK_INSTALL: { cls: 'value', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_TIMES: { cls: 'is-set', family: 'testbox', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_TESTBOX_RUNS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_WORKERS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_RUN_TMPDIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_RUN_MEMORY_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_RUN_SWAP_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_RUN_CPU_QUOTA: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_ROOT: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_REPOS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_FETCH_EVERY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_RETENTION: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PRISTINE_KEEP: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PRISTINE_RETRY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_REPORT_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_TOOLS_DIR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_OS_MIRROR: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_EGRESS_ALLOW: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_PUSH_USER: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_ENV_FORWARD: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_RUN_USER_PREFIX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_REGISTRY_PROXY: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_REGISTRY_UPSTREAM: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_TMPFS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_LOG_TAIL: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_SESSION_RUNS: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_SERVICE_USER: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_LISTEN: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_SERVICE_TOKEN_FILE: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_TESTBOX_UNIT_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
+  CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
+} as const satisfies Record<string, BoxSettingSpec>;
+export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
+/** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
+export const BOX_SETTING_SPECS: Readonly<Record<BoxSettingName, BoxSettingSpec>> = BOX_SETTING_TABLE;
+/** Version 2's row list and order: every name the table does not omit (61). */
+export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SETTING_TABLE) as BoxSettingName[]).filter((k) => BOX_SETTING_SPECS[k].cls !== 'omit');
+
+/** The words a refused row's `why` is one of (D22): every sentence `_set_says` prints for the shown keys, de-duplicated. A list on
+ *  `CCD_REFUSAL_TOKENS`' precedent (the members are sentences). */
+export const BOX_SETTING_REFUSAL_WORDS = [
+  '0, or a whole number with a K, M, G or T suffix',
+  'a URL such as https://testbox.invalid',
+  'a list of file name patterns',
+  'a nice value from 0 to 19',
+  'a number of seconds (digits only, at most 18)',
+  'a positive whole number of milliseconds in canonical digits (at most 15, no lead zero)',
+  'a ref name such as origin/HEAD',
+  'a whole number from 0 (off) to 99',
+  'a whole number from 0 to 999',
+  'a whole number from 0 to 9999',
+  'a whole number from 1 to 10000',
+  'a whole number from 1 to 99',
+  'a whole number from 1 to 999',
+  'a whole number from 2 to 9999',
+  'a whole number of bytes from 1 to 18 digits',
+  'a whole number of seconds from 0 to 3600',
+  'a whole number of seconds from 0 to 9223372036854775807',
+  'a whole number of seconds, 0 or more',
+  'a whole number of seconds, 1 or more',
+  'a whole number with a K, M or G suffix',
+  'a whole number with a K, M, G or T suffix, or 1% to 100%',
+  'a whole number with an optional K, M, G, T, P or E suffix, at least 1G, or a whole percentage from 1% to 100%',
+  'a whole number with an optional K, M, G, T, P or E suffix, at least 1M, or 0',
+  'a whole number with an s, m, h or d suffix',
+  'a whole number, 0 or more',
+  'a whole number, 1 or more',
+  'a whole percentage from 0 to 100',
+  'a whole percentage such as 400%',
+  'an absolute path',
+  'an absolute path, or one starting ~/, with no . or .. part',
+  'install or refuse',
+  'local or fail',
+  'space-separated repository keys (<name>-<8 hex digits>)',
+] as const;
+export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
+
+/** The fixed words a setting's check admits beside the value shape, a key's own and no other's (D-7914). */
+export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, readonly string[]>>> = {
+  CCRC_TESTBOX_LOST_RUN: ['local', 'fail'], CCRC_TESTBOX_FALLBACK_INSTALL: ['install', 'refuse'],
+};
+/** The cut of a recorded text, and the most an `ok` value may be; a refusal's `why` is cut at the second. */
+export const BOX_SETTINGS_TEXT_MAX = 480;
+export const BOX_SETTINGS_WHY_MAX = 240;
+/** The envelope of an `ok` value and origin (D-7909), byte-equal to `BOX_SETTING_VALUE_SHAPE` and `BOX_SETTING_ORIGIN_SHAPE` in `ccd/ccrc`,
+ *  written in the subset bash's `[[ =~ ]]` and a `RegExp` without the `u` flag read alike. An origin's `custom <host>` arm requires an http or https
+ *  scheme (operator item 41, D-7923), so a scheme-less word cannot show. */
+export const BOX_SETTING_VALUE_SHAPE = '^[0123456789]{1,32}([KMGTPE]|[smhd]|%)?$';
+export const BOX_SETTING_ORIGIN_SHAPE = '^(default|custom|custom ([Hh][Tt][Tt][Pp][Ss]?://)(\\[[0123456789ABCDEFabcdef:.]+\\]|[ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~-]+)(:[0123456789]{1,5})?)$';
+
+/** One version-1 setting as the server serves it (D-7911, D-7912). The box's file carries `value` on a refused row too; the server drops it
+ *  and the box's `why`, so no console is sent a refused value. `why` is display text only: nothing branches on it. */
+export type BoxSettingRowV1 =
   | { key: BoxSettingKey; state: 'ok'; value: string; from: BoxSettingSource }
-  | { key: BoxSettingKey; state: 'refused'; value: string; from: BoxSettingSource; why: string }
+  | { key: BoxSettingKey; state: 'refused'; from: BoxSettingSource; why: string }
   | { key: BoxSettingKey; state: 'unmeasured'; why: string };
+/** What the server says in place of a version-1 refused row's own value and sentence (D-7911): this build's own words, naming no value. */
+export const BOX_SETTINGS_V1_REFUSED_WHY = 'refused by its check; this box\'s build words the refusal with the value, so it is not shown here until the box is updated';
+/** What the server says for a version-1 `ok` row whose value or origin is outside the envelope (D-7911, review L4). */
+export const BOX_SETTINGS_V1_UNFIT_WHY = 'recorded by an older ccrc in a form this view does not show';
+/** One version-2 setting (D-7913), by display class: only an `ok` row of class `value` or `origin` carries a `value`; an `is-set` row is the
+ *  second arm, told apart by `'value' in row`, and the parse admits an `ok` row without `value` only for an is-set-class key, so the absence
+ *  has one meaning. A refused row's `why` is one of the closed refusal words, never the value. */
+export type BoxSettingRowV2 =
+  | { key: BoxSettingName; state: 'ok'; value: string; from: BoxSettingSource }
+  | { key: BoxSettingName; state: 'ok'; from: BoxSettingSource }
+  | { key: BoxSettingName; state: 'refused'; from: BoxSettingSource; why: BoxSettingRefusalWord }
+  | { key: BoxSettingName; state: 'unmeasured'; why: string };
+/** What a node's document holds: the box's own version, never converted by the server. */
+export type BoxSettingRow = BoxSettingRowV1 | BoxSettingRowV2;
 /** The backups line and the disk line: measured, or why not. */
 export type BoxSettingsBackups = { state: 'ok'; kept: number; withData: number; bytes: number } | { state: 'unmeasured'; why: string };
 export type BoxSettingsDisk = { state: 'ok'; availBytes: number; sizeBytes: number } | { state: 'unmeasured'; why: string };
 /** `~/.ccrc/box-settings.json`, version 1 (`cmd_settings`). Every string is printable ASCII, at most 512 characters; every number a
  *  non-negative safe integer. */
-export interface BoxSettingsDoc {
-  v: 1; at: number; reader: BoxSettingsReader; settings: BoxSettingRow[];
+export interface BoxSettingsDocV1 {
+  v: 1; at: number; reader: BoxSettingsReader; settings: BoxSettingRowV1[];
   deadline: { plainMs: number; minMs: number; maxMs: number };
   backups: BoxSettingsBackups; disk: BoxSettingsDisk;
 }
+/** Version 2: the 61 shown names by display class, the same top-level keys. */
+export interface BoxSettingsDocV2 {
+  v: 2; at: number; reader: BoxSettingsReader; settings: BoxSettingRowV2[];
+  deadline: { plainMs: number; minMs: number; maxMs: number };
+  backups: BoxSettingsBackups; disk: BoxSettingsDisk;
+}
+export type BoxSettingsDoc = BoxSettingsDocV1 | BoxSettingsDocV2;
 /** `NodeWire.settings`: the document with its age at the request's clock, or the word for why none is shown. */
 export type BoxSettingsRead =
   | { state: 'ok'; doc: BoxSettingsDoc; ageS: number; stale: boolean }

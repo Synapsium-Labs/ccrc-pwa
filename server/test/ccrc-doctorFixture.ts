@@ -122,6 +122,8 @@ export function installCcrc(home: string): void {
   // GR7 (D-7353): `_check_graphify` sources the graph resolver beside ccrc and runs the engine wrapper's `--probe`.
   symlinkSync(join(REPO, 'ccd', 'graph-resolve'), join(ccd, 'graph-resolve'));
   symlinkSync(join(REPO, 'ccd', 'graph-build'), join(ccd, 'graph-build'));
+  // D18 (box settings wave 2): doctor's `_check_box-settings` calls `_set_libs`, which loads `testbox-knobs` beside ccrc.
+  symlinkSync(join(REPO, 'ccd', 'testbox-knobs'), join(ccd, 'testbox-knobs'));
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
@@ -1733,8 +1735,13 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *
  *  RAISED BY ONE AGAIN, on every platform (D-7857): `carry-copies` SKIPs - `healthy()`
  *  creates no `~/.cc-sessions`, so there is no swap carry to size.
- *  `ccrc-doctor-carry-copies.test.ts` plants the registry, swap.log and the record. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 15;
+ *  `ccrc-doctor-carry-copies.test.ts` plants the registry, swap.log and the record.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (D-7902): `pane-scope-stop` SKIPs - `healthy()`
+ *  creates no `~/.cc-sessions`, so no session has been started there to stop (and on
+ *  Darwin it SKIPs first, for the cgroups it has none of). `ccrc-doctor-pane-scope-stop.test.ts`
+ *  plants the registry and the switch. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 16;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

@@ -117,6 +117,8 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // CHILD RECLAMATION wave 4 — `coordPause`'s shape exactly.
   reclaimPause: ['on'],
   testboxRemote: ['on'],
+  paneScopeStop: ['live'],   // D-7902, `testboxRemote`'s shape
+  scopeSweepBusy: ['on'],
   // Two ENTRIES, not one parameterised by `pool: string | null` — the
   // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
   // picks between two words, the argv shapes differ in their tail, and layer
