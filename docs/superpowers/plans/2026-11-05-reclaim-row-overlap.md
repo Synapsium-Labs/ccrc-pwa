@@ -45,7 +45,8 @@ A released row keeps its `A` and `F` walk rules: only `unres` is skipped, and no
 - A child with a checkout of its own below its tree or in a leaf stays held while a gone row is released on it: here a checkout is not told from a moved tree. A temp root holding fixture clones is the common case. The hold is that child's alone, retryable, and names the rows by id.
 - `gone-row-release-misses-a-tree-with-no-git`: a stopped row's tree that was never a checkout, moved inside the child, has no `.git` to find and goes with the child. The release requires nothing to run for the row, so no session loses a tree it is in.
 - A row dropped during the walk may still sit in a not-asked bucket it joined in the pass, such as a pending field. The next attempt finds no row.
-- The review of the un-wedge spec (`2026-11-04-cleanup-unwedge-design.md`, D6) left "narrowing ccd's hold for unrecorded rows" open, pending a new proof and a ruling. #2294 asks for the narrowing, and this plan is that proof. Its archived-row arm and its naming of the hold are unaffected: a row this release cannot free stays in `unres`.
+- The un-wedge spec (`2026-11-04-cleanup-unwedge-design.md`, D6) left narrowing ccd's hold for unrecorded rows open, pending a new proof and a ruling. #2294 asks for the narrowing, and this plan is that proof. The spec's archived-row arm and its naming of the hold are unaffected: a row this release cannot free stays in `unres`.
+- `ccd/ccd` grows by 93 net code lines, past the growth limit, under the waiver `D-8019-ccd-ccd.json`: the rung has one home.
 
 ## Deviations found
 
