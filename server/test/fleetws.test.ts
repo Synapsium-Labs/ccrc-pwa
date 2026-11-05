@@ -974,7 +974,7 @@ describe('fleet REST + WS', () => {
       // the wire order every client relies on is hello, fleet, runs, coord.
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1004,7 +1004,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1013,11 +1013,22 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect();
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
+      ws.close();
+    });
+
+    it('reports set for pane-scope-stop-live off the same listing, independently of the other markers (D-7902)', async () => {
+      // The switch's one read for the PWA: armed is `set`, and arming it reads as no pause of any kind.
+      marker('pane-scope-stop-live');
+      const { ws, next } = await connect();
+      expect((await next()).type).toBe('hello');
+      expect((await next()).type).toBe('fleet');
+      expect((await next()).coord).toEqual(
+        { pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'set' });
       ws.close();
     });
 
@@ -1030,12 +1041,12 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
       expect((await next()).coord).toEqual(
-        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       marker('coordinator-paused');
       await watcher.tick();
       expect((await next()).coord).toEqual(
-        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 
@@ -1051,7 +1062,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'unmeasurable' });
       ws.close();
     });
 
@@ -1066,20 +1077,20 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect({ io: flaky });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
 
       listable = false;
       await watcher.tick();     // this tick returns early — and still reports
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'unmeasurable' });
 
       // And nothing ELSE was broadcast on that tick: the fail-shut return still
       // skips the fleet snapshot, exactly as it did before this frame existed.
       listable = true;
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [], paneScopeStop: 'clear' });
       ws.close();
     });
 

@@ -2145,6 +2145,30 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, requested: body.state });
   });
 
+  /** `POST /api/coord/pane-scope-stop` (D-7902): Settings › Automation's switch for the deliberate stop's pane-scope
+   *  stop. Body `{ state: 'live' | 'shadow' }`, ccd's own vocabulary passed through, and nothing else. It runs
+   *  `ccd pane-scope-stop --state <state>` through the agent's two-token grant, the marker's one writer; the act that
+   *  reads the marker is ccd's own (`_pane_scope_stop`, at a stop's kill), so this route only moves the file.
+   *
+   *  SESSION-ONLY (`coord-pause-route.test.ts`'s `SESSION_ONLY`), for `reclaim-pause`'s reason: the operator's switch,
+   *  never the box token's, so no coordinator can arm a stop of its children's leftovers. The skew gate is
+   *  `ccdCan(state, 'paneScopeStop')`: a box whose `ccd caps` lacks the verb is refused 501 rather than sent a usage
+   *  error. No `coordMutex` and no `notConfigured` arm: it writes no coordination row. `requested`, never the state:
+   *  the authoritative answer is the next `{type:'coord'}` frame's `paneScopeStop`, and the card settles on that. */
+  app.post('/api/coord/pane-scope-stop', async (req, reply) => {
+    const body = req.body as { state?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'state'
+      || (body.state !== 'live' && body.state !== 'shadow')) {
+      return refuseRoute(reply, 'bad-request');
+    }
+    if (!ccdCan(deps.fleetState, 'paneScopeStop')) return refuseRoute(reply, 'unsupported');
+    const res = await deps.runCcd(CCD_ARGV.paneScopeStop(body.state));
+    // D-6840: the not-ran arm FIRST, as the test box switch reads it: a verb that never ran said nothing.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd pane-scope-stop', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    return reply.code(200).send({ ok: true, requested: body.state });
+  });
+
   /** Test box plan TB9 (D-7411; spec 2026-10-28 §2.7): the test box's three doors.
    *  - `GET /api/testbox` answers the block the poll last decided (`testbox.ts`), `null` before its first pass.
    *  - `POST /api/testbox/switch` takes `{on: boolean}` and nothing else, and runs `ccd testbox-remote --state on|off`

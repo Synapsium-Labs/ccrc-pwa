@@ -4382,6 +4382,11 @@ export interface CoordStatus {
   /** The dead-coordinator lane's own list (wave 4). OPTIONAL on the wire: an older server omits it, and the PWA's one
    *  reader (`pwa/src/fleet/deadCoordinatorWords.ts`) reads absence as no items. */
   deadCoordinatorAttention?: readonly DeadCoordinatorAttention[];
+  /** D-7902: `$REG/pane-scope-stop-live`, the switch that arms a deliberate stop's pane-scope stop, as the listing that
+   *  built this frame reads it (`unmeasurable` when the registry could not be listed). OPTIONAL on the wire: an older
+   *  server omits it, and the PWA's one reader (`paneScopeStopMarker`, `pwa/src/fleet/paneScopeStopWords.ts`) reads
+   *  absence as a server that does not offer the switch. */
+  paneScopeStop?: MarkerState;
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed

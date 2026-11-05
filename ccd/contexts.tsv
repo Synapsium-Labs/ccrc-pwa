@@ -382,7 +382,16 @@ _accept_first_run_prompts	C3
 _ws_slug_git_state	C4
 _tmux_new_session	C2
 _panescope_proc_root	C2
+_pane_cgroup_of	C2
+_pane_scope_tmux	C2
+_pane_scope_of	C2
 _panescope_record	C2
+_panescope_cgroup_root	C2
+_pane_scope_sleep	C2
+_pane_scope_note	C2
+_pane_scope_detach	C2
+_pane_scope_stop	C2
+_pane_scope_reap	C2
 _end_cause	C2
 _end_record	C2
 _end_note_gone	C2
@@ -505,6 +514,7 @@ cmd_forget	C4
 cmd_ls	C1
 cmd_reclaim_pause	C4
 cmd_testbox_remote	C2
+cmd_pane_scope_stop	C2
 _tmux_at	C2
 _tmux_t	C2
 cmd_attach	C2
