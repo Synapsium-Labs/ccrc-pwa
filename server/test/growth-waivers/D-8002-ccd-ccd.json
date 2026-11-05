@@ -1,7 +1,7 @@
 {
   "file": "ccd/ccd",
-  "maxDelta": 112,
+  "maxDelta": 121,
   "d": "D-8002",
-  "reason": "the collector's box-move release (_ws_collect_moved_host, M1-M5, each refusal its own sentence), the leaf identity the quarantine record carries through write, read and every physical proof of the verb and its resume, and rung 8's read-only no-worktree-record diagnosis (_ws_reclaim_norecord_why); measured +112 net code lines against the merge-base; kept inline because every proof must be asked the same way at the audit, the verb's in-lock recomputation and the resume, beside the functions that ask it",
+  "reason": "the collector's box-move release (_ws_collect_moved_host, M1-M5, each refusal its own sentence), the leaf identity the quarantine record carries through write, read and every physical proof of the verb and its resume, and rung 8's read-only no-worktree-record diagnosis (_ws_reclaim_norecord_why); measured +121 net code lines (+112 at the first wave-done; review round 1 added the owner seam, the matcher reuse and the M4 wording) against the merge-base; kept inline because every proof must be asked the same way at the audit, the verb's in-lock recomputation and the resume, beside the functions that ask it",
   "added": "2026-11-05"
 }
