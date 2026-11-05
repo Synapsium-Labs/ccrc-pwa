@@ -59,8 +59,9 @@
 // THE PHONE'S PANEL (S5c, phone-strip-tap-panel). Below 900 px a folded strip has no hover and no stored choice, so its
 // control opens the SAME panel as the desk's flyout (`lanesPanel`: the lanes the line folds away, in `lanesByFree`'s
 // order, each card its lane's door) on a TAP, and on nothing else: not the pointer resting on the strip, not focus, not a tap on a line card
-// (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control (and, at the
-// desk, before All accounts), so Tab goes the control, the panel's cards, then All accounts at the desk; the stylesheet draws it over the content under
+// (a line card is a door and only navigates). It sits in the DOM inside the end cell, after the control, so Tab goes the
+// control, the panel's cards, then out of the strip. The panel is drawn below 900 px only and All accounts from 900 px only,
+// so the two never share the strip (review 1511 F2). The stylesheet draws it over the content under
 // the strip, and `--panel-room` (the room left under the strip, measured when it opens and when the window resizes)
 // bounds its height. The control names its state: `aria-expanded` is whether the panel is open, `aria-controls` is its
 // id. It closes on a second tap of the control, a tap outside the strip and the panel (a document `pointerdown`),
