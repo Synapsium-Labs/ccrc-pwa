@@ -1,8 +1,8 @@
 // Console speed, task C2 ("the last view kept"; spec 2026-11-04 §2.4): the Digest keeps each day's last answer in the
-// screen cache (`src/lib/screenCache.ts`), so a return to the same day draws it at once and re-reads, and a failed
-// re-read keeps it beside the error, as the screen already does across a day change.
+// screen cache (`src/lib/screenCache.ts`), so a visit to a kept day, on mount or by Previous and Next, draws it at once
+// and re-reads, and a failed re-read of that day keeps it beside the error.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { DigestAnswer, DigestLine } from '../../shared/api';
 import { DigestScreen } from '../src/screens/DigestScreen';
 import { digestKey, peek, put } from '../src/lib/screenCache';
@@ -150,5 +150,45 @@ describe('the digest keeps its last view: fix round 1', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect((peek(digestKey(DAY))?.raw as DigestAnswer).lines[0]!.text).toBe('Which colour?');
     expect(rowTexts()).toEqual(['questionWhich colour?']);
+  });
+});
+
+// Fix round 2 (review of the fix round 1 tip).
+describe('the digest keeps its last view: fix round 2', () => {
+  it('a correction from the default view forgets the named day too, and another day survives', async () => {
+    await firstVisit(DAY, digest(DAY, 'Which colour?'));
+    await firstVisit('2026-10-17', digest('2026-10-17', 'Another day'));
+    await firstVisit(null, digest(DAY, 'Which colour?'));
+    const load = vi.fn(never);
+    const correct = vi.fn().mockResolvedValue({ ok: true, mailId: 9, deliveryId: 11 });
+    render(<DigestScreen day={null} load={load} correct={correct} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Correct ask 1' }));
+    const form = screen.getByRole('form', { name: 'Correction for ask 1' });
+    fireEvent.change(within(form).getByRole('textbox'), { target: { value: 'Blue.' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Send correction' }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    expect(peek(digestKey(null))).toBeUndefined();
+    expect(peek(digestKey(DAY))).toBeUndefined();
+    expect(peek(digestKey('2026-10-17'))).toBeDefined();
+  });
+
+  it('a read that started before a correction never keeps its answer, even when it settles before the re-read starts', async () => {
+    await firstVisit(DAY, digest(DAY, 'Which colour?'));
+    let settleOld: (v: unknown) => void = () => undefined;
+    const load = vi.fn()
+      .mockImplementationOnce(() => new Promise((r) => { settleOld = r; }))   // the read in flight when Correct is tapped
+      .mockImplementation(never);                                           // the correction's re-read never lands
+    // The old read settles in the same turn the correction's answer lands, before React has run the effect cleanup
+    // that the correction's re-read starts with (the review lens's interleaving).
+    const correct = vi.fn(() => Promise.resolve({ ok: true, mailId: 9, deliveryId: 11 })
+      .then((a) => { queueMicrotask(() => settleOld(digest(DAY, 'Which colour?'))); return a; }));
+    render(<DigestScreen day={DAY} load={load} correct={correct as never} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Correct ask 1' }));
+    const form = screen.getByRole('form', { name: 'Correction for ask 1' });
+    fireEvent.change(within(form).getByRole('textbox'), { target: { value: 'Blue.' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Send correction' }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(peek(digestKey(DAY))).toBeUndefined();   // the pre-correction lines were not put back
   });
 });

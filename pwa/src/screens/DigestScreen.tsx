@@ -8,7 +8,7 @@
 //
 // Every text a line carries was redacted by the server when it built the digest. It is the children's words, shown
 // as text and never as markup.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import {
@@ -164,21 +164,27 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT }: {
   if (seededFor !== day) {
     setSeededFor(day);
     const kept = asDigestAnswer(peek(digestKey(day))?.raw);
-    if (kept !== null) { setDigest(kept); setState('ok'); setError(null); }
+    if (kept !== null) setDigest(kept);
   }
   const reload = useCallback(() => setGen((g) => g + 1), []);
+  // The correction generation: a read records it when it starts, and one that started before a correction neither
+  // keeps nor draws its answer, even when it settles before the re-read's effect has run (fix round 2).
+  const corrections = useRef(0);
   // A correction changes the day's lines on the server: forget every kept answer for that day, then re-read.
   const corrected = useCallback(() => {
+    corrections.current += 1;
     if (digest !== null) forgetDay(digest.day);
     forget(digestKey(day));
     reload();
   }, [digest, day, reload]);
   useEffect(() => {
     let live = true;
+    const started = corrections.current;
+    const current = (): boolean => live && corrections.current === started;
     setState((s) => (s === 'ok' ? s : 'loading'));
     load(day ?? undefined)
       .then((raw) => {
-        if (!live) return;
+        if (!current()) return;
         const d = asDigestAnswer(raw);
         if (d === null) { setState('error'); setError('This server answered in a shape this app cannot read.'); return; }
         put(digestKey(day), raw, Date.now());
@@ -186,7 +192,7 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT }: {
         setState('ok');
       })
       .catch((err: unknown) => {
-        if (!live) return;
+        if (!current()) return;
         setState('error');
         setError(err instanceof ApiError && err.status === 501
           ? 'This server keeps no coordination record, so there is no digest.'
