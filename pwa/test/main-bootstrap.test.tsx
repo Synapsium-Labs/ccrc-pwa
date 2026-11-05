@@ -65,6 +65,9 @@ beforeEach(async () => {
   gate.now = 1_000_000;
   gate.reload = 0;
   gate.go = [];
+  // The real swupdate behind the mock outlives resetModules: start each case from a fresh gate, so one case's latch
+  // or block screen never answers for the next.
+  (await import('../src/lib/swupdate')).resetReloadGateForTests();
   vi.resetModules();
   await import('../src/main');
 });
@@ -170,5 +173,32 @@ describe('main.tsx hands the release reload to the gate (console speed, Task C3)
     navigate('/runs');
     expect(gate.go).toEqual([['/runs', false]]);
     expect(location.pathname, 'nothing pushed: the new path loads as a full page').toBe('/');
+  });
+  it('a move holds while a send is unresolved, and reloads on the first move after (fix round 1, F4)', async () => {
+    const { navigate } = await import('../src/lib/router');
+    const { getSessionStore } = await import('../src/stores/session');
+    const store = getSessionStore('boot-hold');
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    captured.onNeedReload?.();
+    gate.now += 60_000;
+    store.setState({ pending: [{ key: 'p1', text: 'hello', state: 'failed', error: 'not sent' }] });
+    navigate('/runs');
+    expect(gate.go, 'a failed send showing Retry holds the reload').toEqual([]);
+    store.setState({ pending: [] });
+    navigate('/accounts');
+    expect(gate.go).toEqual([['/accounts', false]]);
+    history.replaceState(null, '', '/');
+  });
+
+  it('the block probe reads the fleet store: a block that lifted is no longer urgent (fix round 1, F5)', async () => {
+    const { requestUpdate } = await import('../src/lib/swupdate');
+    const { useFleetStore } = await import('../src/stores/fleet');
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    useFleetStore.setState({ blocked: false });
+    requestUpdate();
+    useFleetStore.setState({ blocked: true });
+    useFleetStore.setState({ blocked: false });
+    captured.onNeedReload?.();
+    expect(gate.reload, 'the block lifted: the release waits for a move').toBe(0);
   });
 });

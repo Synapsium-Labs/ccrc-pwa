@@ -13,9 +13,11 @@
 // worker's activation (`noteActivated`, handed to `registerSW` as
 // `onNeedReload`) only marks a reload as pending; `lib/reloadGate.ts` decides
 // when it runs, and this module acts on its answer: a move through `navigate`
-// loads the new path as a full page, back and forward reload in place, and a
-// failed lazy chunk while a reload is pending reloads at once.
-import { onPageHidden, onPageVisible } from './pageClock';
+// loads the new path as a full page, and back and forward reload in place, at
+// most once per page. Two probes beside `setUpdater`, registered by `main.tsx`,
+// keep this module free of the stores: whether a send is unresolved (the move
+// holds) and whether the block screen still stands.
+import { onPageHidden, onPageVisible, onWindowBlur, onWindowFocus } from './pageClock';
 import { RELOAD_IDLE, reloadStep, type ReloadEvent, type ReloadState } from './reloadGate';
 
 let updater: (() => void) | null = null;
@@ -35,24 +37,43 @@ export interface ReloadActs {
   reload(): void;
   /** A full page load of `href`, replacing the current history entry when `replace`. */
   go(href: string, replace: boolean): void;
+  /** A monotonic clock: a wall-clock step never moves the quiet window. */
   now(): number;
 }
 
 const PAGE_ACTS: ReloadActs = {
   reload: () => location.reload(),
   go: (href, replace) => (replace ? location.replace(href) : location.assign(href)),
-  now: () => Date.now(),
+  now: () => performance.now(),
 };
 
 let state: ReloadState = RELOAD_IDLE;
 let acts: ReloadActs = PAGE_ACTS;
 let stopGate: (() => void) | null = null;
+let hold: (() => boolean) | null = null;
+let blocked: (() => boolean) | null = null;
 
-/** Step the gate; true when the page reloads now. */
+/** Whether a send is unresolved, so a full page load would drop it: a move holds while this answers true. */
+export function setReloadHold(fn: () => boolean): void {
+  hold = fn;
+}
+
+/** Whether the block screen still stands: once it answers false, the gate is no longer urgent. */
+export function setBlockProbe(fn: () => boolean): void {
+  blocked = fn;
+}
+
+/** Step the gate; true when the page reloads now. A block that has lifted is stepped first, as `calm`. */
 function step(e: ReloadEvent): boolean {
+  if (blocked !== null && !blocked()) state = reloadStep(state, { kind: 'calm' }, acts.now()).state;
   const next = reloadStep(state, e, acts.now());
   state = next.state;
   return next.reload;
+}
+
+/** A move from `from` to `to`, held while a send is unresolved. */
+function stepMove(from: string, to: string): boolean {
+  return step({ kind: 'move', from, to, held: hold?.() ?? false });
 }
 
 /** A new worker took over this page (`registerSW`'s `onNeedReload`): a reload is pending. */
@@ -65,52 +86,53 @@ export function noteActivated(): void {
 export function reloadOnMove(href: string, replace: boolean): boolean {
   const q = href.indexOf('?');
   const to = q < 0 ? href : href.slice(0, q);
-  if (!step({ kind: 'move', from: location.pathname, to })) return false;
+  if (!stepMove(location.pathname, to)) return false;
   acts.go(href, replace);
   return true;
 }
 
-/** Start the gate at boot, once: a page loaded visible counts its load as the return. The answer stops it. */
-export function startReloadGate(given: ReloadActs = PAGE_ACTS): () => void {
+/** Start the gate at boot, once: a page loaded visible counts its load as the return. The answer stops it, and a
+ *  stopped gate never reloads. A test hands its own acts, or only some of them. */
+export function startReloadGate(given: Partial<ReloadActs> = {}): () => void {
   if (stopGate !== null) return stopGate;
-  acts = given;
+  acts = { ...PAGE_ACTS, ...given };
   if (document.visibilityState === 'visible') step({ kind: 'visible', at: acts.now() });
+  if (!document.hasFocus()) step({ kind: 'blurred', at: acts.now() });
   const stopVisible = onPageVisible(() => {
     if (step({ kind: 'visible', at: acts.now() })) acts.reload();
   });
   const stopHidden = onPageHidden(() => { step({ kind: 'hidden' }); });
-  // Back and forward: the browser has already moved the path, so a reload loads the new one. `navigate`'s own
-  // `popstate` after a push it was allowed is the same move asked again, with the same answer.
+  const stopFocus = onWindowFocus(() => { step({ kind: 'focused', at: acts.now() }); });
+  const stopBlur = onWindowBlur(() => { step({ kind: 'blurred', at: acts.now() }); });
+  // Back and forward: the browser has already moved the path, so a reload loads the new one (the router may draw the
+  // new path in this build until the page unloads). `navigate`'s own `popstate` after a push the gate allowed asks the
+  // same move again; once any reload has been answered, the latch answers no, so no second reload follows.
   let lastPath = location.pathname;
   const onPop = (): void => {
     const from = lastPath;
     lastPath = location.pathname;
-    if (step({ kind: 'move', from, to: lastPath })) acts.reload();
-  };
-  // A lazy chunk that fails while a reload is pending: the new worker dropped the old build's chunks, so reload now.
-  // With nothing pending the event is left alone, and the screen's boundary draws its fallback.
-  const onChunkFailed = (ev: Event): void => {
-    if (!step({ kind: 'chunk-failed' })) return;
-    ev.preventDefault();
-    acts.reload();
+    if (stepMove(from, lastPath)) acts.reload();
   };
   addEventListener('popstate', onPop);
-  addEventListener('vite:preloadError', onChunkFailed);
   const stop = (): void => {
     stopVisible();
     stopHidden();
+    stopFocus();
+    stopBlur();
     removeEventListener('popstate', onPop);
-    removeEventListener('vite:preloadError', onChunkFailed);
+    state = { ...state, visibleSince: null };
     if (stopGate === stop) stopGate = null;
   };
   stopGate = stop;
   return stop;
 }
 
-/** Tests only: stop the gate and forget its state and acts. */
+/** Tests only: stop the gate and forget its state, acts and probes. */
 export function resetReloadGateForTests(): void {
   stopGate?.();
   stopGate = null;
   state = RELOAD_IDLE;
   acts = PAGE_ACTS;
+  hold = null;
+  blocked = null;
 }

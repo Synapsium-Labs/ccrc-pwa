@@ -6,7 +6,9 @@ import { App } from './app';
 import { RenderBoundary, RootFallback } from './components/RenderBoundary';
 import { initTheme } from './lib/theme';
 import { initSkin } from './lib/skin';
-import { noteActivated, setUpdater, startReloadGate } from './lib/swupdate';
+import { noteActivated, setBlockProbe, setReloadHold, setUpdater, startReloadGate } from './lib/swupdate';
+import { anySendUnresolved } from './stores/session';
+import { useFleetStore } from './stores/fleet';
 import { onPageVisible } from './lib/pageClock';
 
 // Theme before first render (index.html pre-stamps the attribute so even the
@@ -37,7 +39,9 @@ createRoot(document.getElementById('root')!).render(
 // next move between screens, never in the first seconds back"): onNeedReload
 // replaces the plugin's own `location.reload()` and only marks a reload as
 // pending, and the gate started here runs it at the next move between screens
-// once the page has been visible for 15 s (`lib/reloadGate.ts`).
+// once the page has been back for 15 s (`lib/reloadGate.ts`), never while a
+// send is unresolved (a full page load would drop it), and treats the block
+// screen as urgent only while the fleet store still says blocked.
 //
 // The gap that leaves, and the reason this block exists: a browser only
 // re-fetches sw.js on NAVIGATION (or once a day). This app never navigates — it
@@ -49,6 +53,8 @@ createRoot(document.getElementById('root')!).render(
 // In dev, registerSW is an inert stub and onRegisteredSW never runs.
 const UPDATE_CHECK_MS = 15 * 60 * 1000;
 
+setReloadHold(anySendUnresolved);
+setBlockProbe(() => useFleetStore.getState().blocked);
 startReloadGate();
 
 registerSW({
