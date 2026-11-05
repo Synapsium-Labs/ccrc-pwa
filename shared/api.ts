@@ -12131,6 +12131,18 @@ export interface DelegationObservationHealth {
    * whether a heal happened that no report of this process covers is UNKNOWN, never "no heal". Absent when it was listed.
    */
   tailQuarantineUnmeasured?: true;
+  /**
+   * Wave 5 (PR5b, D-7852): how many unreleased leases sit in a project the lane's last census did not reach (no live session names the
+   * project, or its census answered unmeasured), so native-removed neither counted nor released them. Absent when there are none, and
+   * from an older server: absence says none was counted, never that every lease was reached by an older lane.
+   */
+  uncensusedLeases?: number;
+}
+
+/** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every
+ *  unreleased lease's project, or an older server's block, whose 0 never says an older lane reached them all). */
+export function delegationUncensusedLeasesOf(health: Pick<DelegationObservationHealth, 'uncensusedLeases'>): number {
+  return typeof health.uncensusedLeases === 'number' ? health.uncensusedLeases : 0;
 }
 
 /** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes

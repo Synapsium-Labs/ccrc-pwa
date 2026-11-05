@@ -10,8 +10,10 @@
 // They never write a cleanup state or a cleanup clock (wave 5 has no cleaner, D-7002), never write `unknown`, never close an
 // activity, and change nothing a lease does not own.
 import type { DelegationCarrierState, DelegationLeaseReleaseReason } from '../../../shared/api.js';
+import { delegationTreeKey } from './delegation-correlation.js';
 import type {
   DelegationAttemptMark,
+  DelegationCheckpointV1,
   DelegationJournalEntryV1,
   DelegationLeaseCarrierRow,
   DelegationLeaseRow,
@@ -118,6 +120,19 @@ export function decideLeaseTransition(lease: DelegationLeaseRow | undefined, car
       `${req.reason}: lease ${lease.leaseId}'s carrier was read back at ${String(lease.carrierGenerationSeen)}, behind generation ${lease.generation}`);
   }
   return { ok: true, to: row.to === 'prior' ? lease.disposition : row.to, generation: lease.generation + 1 };
+}
+
+/**
+ * PR5b, the live `promote` door's own request check (coordinator ruling on W5-J9c, D-8024): a promotion names the run its transfer named, so the
+ * door refuses unless the carrier row exists with a non-null `transferRun` equal to `runId`; the answer is the refusal's detail, or null.
+ * It is NOT part of `decideLeaseTransition` and no fold calls it: replay keeps PR5a's looser reading (D-7971), so a stricter writer never
+ * makes the floor refuse a journal. PR9's promote door relies on it.
+ */
+export function promoteRunMismatch(carrier: DelegationLeaseCarrierRow | undefined, runId: number | null): string | null {
+  if (carrier === undefined) return 'promote: the lease has no carrier row, so no transfer names a run';
+  if (carrier.transferRun === null) return `promote: lease ${carrier.leaseId}'s carrier row names no transfer run`;
+  if (carrier.transferRun !== runId) return `promote: lease ${carrier.leaseId} is transferring to run ${carrier.transferRun}, not run ${String(runId)}`;
+  return null;
 }
 
 /** The release's decision (its own entry kind, the table's last row): any unreleased state but `transferring`. */
@@ -253,4 +268,81 @@ export function foldLeaseCarrierSeen(lease: DelegationLeaseRow | undefined,
   }
   const seen = Math.max(lease.carrierGenerationSeen ?? 0, entry.generation);
   return { ok: true, lease: seen === lease.carrierGenerationSeen ? lease : { ...lease, carrierGenerationSeen: seen } };
+}
+
+// ── PR5b (Task 5.5.4): native-removed release ────────────────────────────────────────────────────────────────────────
+
+/** What `planNativeRemoved` reads: the checkpoint, and the census of THIS pass, each tree keyed by `delegationTreeKey(project,
+ *  adminRecord)` (a bare record name collides across projects, D-7852), and the lane's memory from the pass before. */
+export interface NativeRemovedInput {
+  checkpoint: DelegationCheckpointV1;
+  /** The projects whose census THIS pass is a measured success (`laneFlatCensus`'s `censused`). */
+  censused: ReadonlySet<string>;
+  /** The key of every record a censused project's listing names. */
+  listed: ReadonlySet<string>;
+  /** The listed keys whose census `state` is `absent` (gitdir, HEAD and locked each ENOENT). */
+  absent: ReadonlySet<string>;
+  /** The listed keys whose census `state` is `unreadable`. */
+  unreadable: ReadonlySet<string>;
+  /** D-8025: the head sha of each `present` listed record that has one, by key. */
+  heads: ReadonlyMap<string, string>;
+  /** leaseId -> consecutive successful listings absent (the lane's memory: a counter, not a clock). */
+  absentListings: ReadonlyMap<string, number>;
+  /** D-8025: leaseId -> the last head a census saw for its record (the lane's memory). */
+  lastHeads: ReadonlyMap<string, string>;
+}
+
+/** Two consecutive successful listings with the admin record absent release the lease (spec §5.5). */
+export const DELEGATION_NATIVE_REMOVED_LISTINGS = 2;
+
+/** One release `planNativeRemoved` asks for: the lease at the generation it read, why, and the last head a census saw (D-7796). */
+export interface NativeRemovedRelease {
+  leaseId: string;
+  expectGeneration: number;
+  releaseReason: 'native-removed' | 'transferred';
+  lastHeadSha: string | null;
+}
+
+/**
+ * Which unreleased leases' trees are gone (spec §5.5, D-7795, D-7852). For each unreleased lease that is not `transferring`: a lease
+ * whose project this pass did not census keeps its count and is counted `uncensused`, never absent; a censused one whose record is
+ * listed `unreadable` resets the count to 0 (unmeasured, never absence); one whose key is missing from the listing, or listed `absent`,
+ * counts one more listing absent; any other listed record (present, or an admin record that stands while its tree directory is gone)
+ * resets the count to 0. At `DELEGATION_NATIVE_REMOVED_LISTINGS` the lease is released: `transferred` for a `promoted` lease (D-7797),
+ * else `native-removed`, with the last head a census saw for its record (D-7796, D-8025). A `transferring` lease never releases and keeps
+ * its count. The returned memory holds every unreleased lease with a count above 0, and the last head seen, a release candidate included:
+ * the lane forgets a candidate only once its door answers `applied` or `unchanged` (D-8025, review 1498 F1), so a release that does
+ * not land is planned again at the next listing with the same head. `uncensused` is the lane's health count (decided here, D-8025).
+ */
+export function planNativeRemoved(input: NativeRemovedInput): {
+  release: readonly NativeRemovedRelease[];
+  absentListings: Map<string, number>;
+  lastHeads: Map<string, string>;
+  uncensused: number;
+} {
+  const carriers = new Map((input.checkpoint.leaseCarriers ?? []).map((c) => [c.leaseId, c] as const));
+  const release: NativeRemovedRelease[] = [];
+  const memory = new Map<string, number>();
+  const lastHeads = new Map<string, string>();
+  let uncensused = 0;
+  for (const lease of input.checkpoint.leases) {
+    if (lease.releasedAt !== null) continue;
+    const key = delegationTreeKey(lease.project, lease.adminRecord);
+    const head = (input.censused.has(lease.project) ? input.heads.get(key) : undefined) ?? input.lastHeads.get(lease.leaseId);
+    const prior = input.absentListings.get(lease.leaseId) ?? 0;
+    const keep = (count: number): void => {
+      if (count > 0) memory.set(lease.leaseId, count);
+      if (head !== undefined) lastHeads.set(lease.leaseId, head);
+    };
+    if (delegationCarrierStateOf(lease, carriers.get(lease.leaseId)) === 'transferring') { keep(prior); continue; }
+    if (!input.censused.has(lease.project)) { uncensused += 1; keep(prior); continue; }
+    if (input.unreadable.has(key)) { keep(0); continue; }                           // unmeasured: it resets, never counts (W5-JM7)
+    if (input.listed.has(key) && !input.absent.has(key)) { keep(0); continue; }   // present, or a record whose tree is gone
+    const count = prior + 1;
+    keep(count);                                                    // a candidate too, until its release lands (review 1498 F1)
+    if (count < DELEGATION_NATIVE_REMOVED_LISTINGS) continue;
+    release.push({ leaseId: lease.leaseId, expectGeneration: lease.generation,
+      releaseReason: lease.disposition === 'promoted' ? 'transferred' : 'native-removed', lastHeadSha: head ?? null });
+  }
+  return { release, absentListings: memory, lastHeads, uncensused };
 }

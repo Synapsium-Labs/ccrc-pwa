@@ -651,7 +651,7 @@ describe('D-5692 R1: a full pass writes one line whose keys are what ran and who
 
     // the key set is exactly what ran: the derived keys, the phases (no `recover`, `intervals`, `absence` or `repair`: they did not run),
     // and every size (the five `repair*` sizes are absent: no repair report came back)
-    const phases = ['noteSessions', 'open', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
+    const phases = ['noteSessions', 'open', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile', 'leaseActs',
       'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects', 'attempts', 'leases', 'rewrite'];
     expect([...m.keys()].sort()).toEqual(['block', 'cut', 'total', 'other', ...phases, ...Object.keys(expected)].sort());
 
@@ -962,7 +962,7 @@ type SlowLine = (fields: Readonly<Record<string, number>>, bound?: number) => st
 const SLOW_KEYS = [
   'block', 'cut', 'total', 'other',
   'blockCpu', 'stallMax', 'stallP99', 'cpuThread',                  // D-5832: right after `other`, so the bound drops them last
-  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile',
+  'noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile', 'leaseActs',
   'pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects',
   'attempts', 'leases', 'intervals', 'absence', 'repair',
   'rewrite', 'rewrites', 'rewriteEvents', 'projectDelta', 'projectFull', 'deltaRows',
@@ -1477,11 +1477,11 @@ describe('D-5832 R6 (review 677 F5): the production CPU clock: the runtime\'s th
 });
 
 describe('D-5832 (the bound): the new keys sit where the line\'s bound drops them last', () => {
-  it('RE2: (D-5832, D-6271, wave 4) the 117 input keys fill 2,038 bytes at seven digits (114 kept, dropped=3) and at the largest values (77 kept, dropped=40); compaction sizes survive and only a suffix drops', () => {
+  it('RE2: (D-5832, D-6271, wave 4, wave 5 PR5b) the 118 input keys fill 2,035 bytes at seven digits (114 kept, dropped=4) and 2,040 at the largest values (77 kept, dropped=41); compaction sizes survive and only a suffix drops', () => {
     const format = surface['delegationPassSlowLine'] as SlowLine | undefined;
     expect(typeof format, 'delegationPassSlowLine is exported').toBe('function');
     const keys = SLOW_KEYS.filter((k) => k !== 'dropped');
-    expect(keys, 'the 110 preceding keys plus compact and its six sizes').toHaveLength(117);
+    expect(keys, 'the 111 preceding keys (PR5b\'s leaseActs among them) plus compact and its six sizes').toHaveLength(118);
     const exported = surface['DELEGATION_PASS_SLOW_KEYS'] as readonly string[] | undefined;
     expect(Array.isArray(exported), 'DELEGATION_PASS_SLOW_KEYS is exported').toBe(true);
     const idx = (k: string): number => exported!.indexOf(k);
@@ -1491,22 +1491,22 @@ describe('D-5832 (the bound): the new keys sit where the line\'s bound drops the
     const compaction = ['cutRecords', 'cutBytes', 'carried', 'carriedBytes', 'eventsCut', 'rowsRetired'];
     expect(exported!.slice(idx('cpCandidates') + 1, idx('cpCandidates') + 7), 'the six compaction sizes follow cpCandidates').toEqual(compaction);
     expect(idx('rowsRetired') < idx('censusAge'), 'the new sizes sit before censusAge, so later keys drop first').toBe(true);
-    expect(exported!.filter((k) => k !== 'dropped'), 'the exported list holds exactly the 117 input keys').toHaveLength(117);
+    expect(exported!.filter((k) => k !== 'dropped'), 'the exported list holds exactly the 118 input keys').toHaveLength(118);
     const real = format!(Object.fromEntries(keys.map((k) => [k, 1234567])));
     const realPairs = parse(real);
     expect(realPairs.size, '114 kept keys and the dropped pair').toBe(115);
-    expect(realPairs.get('dropped'), 'three trailing keys drop when all 117 values have seven digits').toBe(3);
+    expect(realPairs.get('dropped'), 'four trailing keys drop when all 118 values have seven digits').toBe(4);
     expect(keys.filter((k) => realPairs.has(k))).toEqual(keys.slice(0, 114));
-    expect(keys.filter((k) => !realPairs.has(k))).toEqual(['cpMapping', 'repairSkipped', 'attemptsSkipped']);
-    expect(Buffer.byteLength(real)).toBe(2038);
+    expect(keys.filter((k) => !realPairs.has(k))).toEqual(['cpActivities', 'cpMapping', 'repairSkipped', 'attemptsSkipped']);
+    expect(Buffer.byteLength(real)).toBe(2035);
 
     const MAX = Number.MAX_SAFE_INTEGER;
     const big = format!(Object.fromEntries(keys.map((k) => [k, MAX])));
     expect(Buffer.byteLength(big)).toBeLessThanOrEqual(2048);
-    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2038);
+    expect(Buffer.byteLength(big), 'the greedy fill under the 2,048-byte bound ends at exactly this size').toBe(2040);
     const bp = parse(big);
     const present = keys.filter((k) => bp.has(k));
-    expect(present, 'exactly 77 of the 117 input keys are kept').toHaveLength(77);
+    expect(present, 'exactly 77 of the 118 input keys are kept').toHaveLength(77);
     expect(bp.size, 'the 77 kept keys and the dropped pair are the line\'s pairs').toBe(78);
     expect(present, 'with equal-width values the greedy fill keeps a prefix: the end of the list drops').toEqual(keys.slice(0, present.length));
     for (const k of ['blockCpu', 'stallMax', 'stallP99', 'cpuThread']) expect(bp.has(k), `${k} (right after other) is never the first to go`).toBe(true);
@@ -1514,7 +1514,7 @@ describe('D-5832 (the bound): the new keys sit where the line\'s bound drops the
       expect(bp.has(k), `${k} (after censusAge) drops at the largest values`).toBe(false);
     }
     expect(bp.get('dropped'), 'and the line counts them').toBe(keys.length - present.length);
-    expect(bp.get('dropped'), 'exactly 40 of them').toBe(40);
+    expect(bp.get('dropped'), 'exactly 41 of them').toBe(41);
     for (const k of ['projectDelta', 'projectFull', 'deltaRows', 'cpBytes', 'encodes', 'retired', 'pendingBash', 'cpCandidates', ...compaction]) expect(bp.has(k), `${k} survives the largest values`).toBe(true);
     for (const k of ['lostProjects', 'lostPrefixes', 'lossy', 'droppedMeasured', 'ladder', 'markCalls', 'windowCalls', 'lostCalls', 'vLinked', 'vRunChild', 'vUnresolved', 'vConflicting', 'vUnmeasured', 'eLease', 'eRunChild']) expect(bp.has(k), `${k} (an older key the new keys push out) drops at the largest values`).toBe(false);
     expect(keys.filter((k) => !bp.has(k)), 'the dropped keys, by name').toEqual(keys.slice(77));
