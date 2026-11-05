@@ -79,7 +79,7 @@ describe('api.collectLane and api.setCollectLane (path-identity spec §5.6)', ()
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit | undefined];
     expect(url).toBe('/api/coord/collect-lane');
-    expect(init).toBeUndefined();
+    expect(Object.keys(init ?? {})).toEqual(['signal']); expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("POST's method, headers and exact body, with no mail-token header", async () => {
