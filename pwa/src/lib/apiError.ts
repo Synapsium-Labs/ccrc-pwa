@@ -22,3 +22,11 @@ export class ApiError extends Error {
     this.contentType = contentType;
   }
 }
+
+/** A write's rejection whose outcome is unknown: no answer arrived (a dropped connection, a timeout, a throw), or the
+ *  answer is a 5xx, which can follow a commit. Such a write may have landed, so a screen that keeps its last view
+ *  forgets it as it would after a success (console speed C2). A 4xx is the route's own refusal and proves nothing was
+ *  written. */
+export function writeOutcomeUnknown(err: unknown): boolean {
+  return !(err instanceof ApiError) || err.status >= 500;
+}

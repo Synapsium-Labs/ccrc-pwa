@@ -382,6 +382,15 @@ describe('a workspace\'s Check again and Remove', () => {
     expect(box.sent.filter((s) => s.method === 'POST')).toEqual([{ method: 'POST', path: `/api/linear/workspaces/${ID_A}/check`, body: null }]);
   });
 
+  it('a check whose answer never arrives reads the list again: it may have landed (console speed C2)', async () => {
+    install({ list: () => list({ workspaces: [WS_A] }), check: () => { throw new TypeError('network connection was lost'); } });
+    await mount();
+    const gets = (): number => box.paths().filter((p) => p === 'GET /api/linear/workspaces').length;
+    const before = gets();
+    fireEvent.click(within(slotRow('Workspace A')).getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(gets()).toBe(before + 1));
+  });
+
   it('a check whose slot is gone shows the list its 409 carries', async () => {
     install({
       list: () => list({ workspaces: [WS_A, WS_B] }),

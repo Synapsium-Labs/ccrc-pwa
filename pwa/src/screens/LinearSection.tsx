@@ -38,6 +38,7 @@ import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import type { LinearWorkspacesPoll } from '../fleet/useLinearWorkspaces';
 import { LINEAR_READ_ONLY_NOTE, ResultLine, SETTINGS_CARDS, useResultLine } from '../fleet/settingsText';
 import { ApiError, api, apiErrorText, linearWorkspaceExistsOf, type LinearWorkspacesRead } from '../lib/api';
+import { writeOutcomeUnknown } from '../lib/apiError';
 import { onPageHidden } from '../lib/pageClock';
 
 /** The hook is told the session's step-up is fresh until an act proves otherwise: see the file's third rule. */
@@ -301,6 +302,8 @@ export function LinearSection({ poll, stepUpDeps }: { poll: LinearWorkspacesPoll
     } catch (err) {
       // A refusal the act answers itself (an Add's `workspace-exists`) says nothing here.
       if (refused?.(err) === true) return;
+      // An answer that never arrived may follow a stored change: re-read the truth, which forgets the kept list first.
+      if (writeOutcomeUnknown(err)) poll.reload();
       // A 401 raises the login screen, which is the answer: no stale line waits behind it.
       if (!(err instanceof ApiError && err.status === 401)) result.say(refusalText(err), 'refusal');
     } finally {

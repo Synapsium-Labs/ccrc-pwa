@@ -34,6 +34,8 @@ import { useUpdatesView, type UpdatesPoll } from '../../fleet/useUpdatesView';
 import { api } from '../../lib/api';
 import { armedMode, readAuthStatus } from '../../lib/auth';
 import { pushEnabled, pushSupported } from '../../lib/push';
+import { forget, peek, put, settingsKey } from '../../lib/screenCache';
+import { isRecord } from '../../lib/wire';
 import { useFleetStore } from '../../stores/fleet';
 
 /** The auth status read: not landed, failed (an older server, a proxy's 404, no network), or its answer. */
@@ -96,6 +98,34 @@ async function readPush(): Promise<PushState> {
   return (await pushEnabled()) ? 'on' : 'off';
 }
 
+// The auth status and the passkey list keep their last answers in the screen cache (console speed C2), so a return to
+// Settings draws them at once and re-reads. Push state is the browser's own and is not kept.
+const AUTH_KEY = settingsKey('auth');
+const PASSKEYS_KEY = settingsKey('passkeys');
+
+/** A kept status, read back: a JSON object, as `readAuthStatus` answers it; anything else is no status. */
+const authOf = (raw: unknown): Partial<AuthStatus> | null => (isRecord(raw) ? (raw as Partial<AuthStatus>) : null);
+
+/** A kept passkey list, read back: both of its fields, or no list. */
+const passkeysOf = (raw: unknown): PasskeyListResponse | null =>
+  (isRecord(raw) && Array.isArray(raw.credentials) && typeof raw.storeUnreadable === 'boolean'
+    ? (raw as unknown as PasskeyListResponse) : null);
+
+/** The status the last visit read, or pending. */
+function seedAuth(): AuthRead {
+  const status = authOf(peek(AUTH_KEY)?.raw);
+  return status === null ? { kind: 'pending' } : { kind: 'read', status };
+}
+
+/** The list the last visit read, under the same armed guard as a fresh read: a kept status that says the gate is off
+ *  asks nothing, and no kept status (or no kept list) is pending. */
+function seedPasskeys(auth: AuthRead): PasskeysRead {
+  if (auth.kind !== 'read') return { kind: 'pending' };
+  if (!armedMode(auth.status.mode)) return { kind: 'unasked' };
+  const list = passkeysOf(peek(PASSKEYS_KEY)?.raw);
+  return list === null ? { kind: 'pending' } : { kind: 'read', list };
+}
+
 function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => void }): null {
   // Each hook answers a fresh object per render, so each is held by its fields: the view changes only when a read
   // does, and handing it up never loops.
@@ -133,26 +163,31 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   // The status, then the passkey list only while that status says the gate is armed (D-5508). `AuthSection` asked
   // for the list unconditionally and let the 401 or 501 leave it empty; a box whose gate is off is not asked at all
   // now. `refreshAuth` re-runs both under the same guard, and the newest run wins (an older one stops writing).
-  const [auth, setAuth] = useState<AuthRead>({ kind: 'pending' });
-  const [passkeys, setPasskeys] = useState<PasskeysRead>({ kind: 'pending' });
+  const [auth, setAuth] = useState<AuthRead>(seedAuth);
+  const [passkeys, setPasskeys] = useState<PasskeysRead>(() => seedPasskeys(seedAuth()));
   const [authAsk, setAuthAsk] = useState(0);
   useEffect(() => {
     let live = true;
-    void readAuthStatus().then(
+    // Leaving Settings (or a newer refresh) aborts both reads in flight, as `usePoll` does for the six polls.
+    const ctl = new AbortController();
+    const signalled: typeof fetch = (input, init) => fetch(input, { ...init, signal: ctl.signal });
+    void readAuthStatus(signalled).then(
       (status) => {
         if (!live) return;
+        put(AUTH_KEY, status, Date.now());
         setAuth({ kind: 'read', status });
-        if (!armedMode(status.mode)) { setPasskeys({ kind: 'unasked' }); return; }
-        void api.passkeys().then(
-          (list) => { if (live) setPasskeys({ kind: 'read', list }); },
+        if (!armedMode(status.mode)) { forget(PASSKEYS_KEY); setPasskeys({ kind: 'unasked' }); return; }
+        void api.passkeys({ signal: ctl.signal }).then(
+          (list) => { if (!live) return; put(PASSKEYS_KEY, list, Date.now()); setPasskeys({ kind: 'read', list }); },
           () => { if (live) setPasskeys({ kind: 'failed' }); },
         );
       },
       () => { if (live) { setAuth({ kind: 'failed' }); setPasskeys({ kind: 'unasked' }); } },
     );
-    return () => { live = false; };
+    return () => { live = false; ctl.abort(); };
   }, [authAsk]);
-  const refreshAuth = useCallback(() => setAuthAsk((n) => n + 1), []);
+  // A re-read after the operator's own write (an Add or a Revoke): the kept answers are from before it, so they go.
+  const refreshAuth = useCallback(() => { forget(AUTH_KEY); forget(PASSKEYS_KEY); setAuthAsk((n) => n + 1); }, []);
 
   // Unsupported is known at once (no await), so a page never draws the Bell's row for a browser that has none.
   const [push, setPush] = useState<PushState>(() => (pushSupported() ? 'pending' : 'unsupported'));
