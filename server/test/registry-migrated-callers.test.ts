@@ -20,7 +20,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { saveSnapshot } from '../src/fleetstate.js';
-import { listProjects } from '../src/lifecycle.js';
+import { FLEET_ROWS_MAX_AGE_MS, listProjects } from '../src/lifecycle.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -93,6 +93,7 @@ describe('fleet, projects and peers report what they could not measure (spec §2
   afterEach(async () => {
     if (app) await app.close();
     app = undefined;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -133,11 +134,34 @@ describe('fleet, projects and peers report what they could not measure (spec §2
     const bus = new Bus();
     const watcher = new FleetWatcher(deps, bus);
     app = await buildServer(deps, bus, watcher);
+    // Console speed S2 moved this case: a tick younger than `FLEET_ROWS_MAX_AGE_MS` is now SERVED (its own case below), so the
+    // clock steps past the bound after the tick and the stale fallback this case pins is reached, which also pins the bound.
+    vi.useFakeTimers({ toFake: ['Date'] });
     await watcher.tick();
+    vi.setSystemTime(Date.now() + FLEET_ROWS_MAX_AGE_MS + 1_000);
     state.blind = true;
     const fromWatcher = (await app.inject({ method: 'GET', url: '/api/fleet' })).json() as { sessions: FleetSession[]; stale: boolean };
     expect(fromWatcher.stale).toBe(true);
     expect(fromWatcher.sessions.map((s) => s.id).sort()).toEqual(['demo-quiet-mesa', 'demo-still-pond']);
+  });
+
+  it('GET /api/fleet on a registry that went unlistable after a fresh tick answers the watcher\'s sessions with ageMs (console speed S2)', async () => {
+    const home = mkTmp('ccrc-s2-fleet-fresh-');
+    seed(home, 'demo-quiet-mesa', UUID_A);
+    const base = testDeps(home, aliveTmux);
+    const { io, state } = registryIO(base.cfg.registryDir);
+    const deps: Deps = { ...base, io, stateCachePath: cachePathOf(home) };
+    const bus = new Bus();
+    const watcher = new FleetWatcher(deps, bus);
+    app = await buildServer(deps, bus, watcher);
+    await watcher.tick();
+    state.blind = true;
+    const listingsBefore = state.listings;
+    const served = (await app.inject({ method: 'GET', url: '/api/fleet' })).json() as { sessions: FleetSession[]; stale?: boolean; ageMs?: number };
+    expect(served.stale, 'a fresh tick is served, not read, so the blind registry is never asked').toBeUndefined();
+    expect(typeof served.ageMs).toBe('number');
+    expect(served.sessions.map((s) => s.id)).toEqual(['demo-quiet-mesa']);
+    expect(state.listings, 'no registry listing for this request').toBe(listingsBefore);
   });
 
   it('the ws cold start with no watcher broadcast, on an unlistable registry, sends hello, then runs, and no fleet frame', async () => {

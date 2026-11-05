@@ -59,6 +59,8 @@ const withRepos = (repos: Record<string, ProjectRepoWire>): FleetWatcher =>
     currentReadiness: () => undefined,
     currentProjectRepos: () => new Map(Object.entries(repos)),
     currentFleetListing: () => null,   // D-6436: no listing, so the route reads the registry itself
+    currentLimits: () => null,
+    currentProjectPoolsRead: () => null,
     stop: () => {},
     serverCapsSettled: async () => {},
   } as unknown as FleetWatcher);
