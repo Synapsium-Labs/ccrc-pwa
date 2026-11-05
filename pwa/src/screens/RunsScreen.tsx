@@ -49,7 +49,7 @@ import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
 import { backToFleet } from '../command/door';
-import { Button, EmptyState, PageScaffold, SECTION_PURPOSE, useNow } from '@ccrc/ui';
+import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -425,7 +425,7 @@ export function RunsScreen({
                 </Button>
               )}
               {hasOlder && shownFinished >= finished.length && olderFailed && (
-                <p role="status" className={SECTION_PURPOSE}>Could not load older runs.</p>
+                <EmptyState data-state="error">Could not load older runs.</EmptyState>
               )}
             </div>
           ) : coldFailed ? (
