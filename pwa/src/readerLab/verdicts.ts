@@ -32,8 +32,12 @@ export interface LabLocal {
   readonly busy: { readonly longestGapMs: number; readonly timerLateMs: number; readonly spinMs: number } | null;
   /** The figure mounts, in run order; empty when that step did not run. */
   readonly mounts: readonly LabMount[];
-  /** The hostile page's mount: whether it became ready, and the host callbacks the stray messages reached. */
-  readonly hostile: { readonly ready: boolean; readonly effects: number; readonly addressChanged: boolean } | null;
+  /** The hostile page's mount: whether it became ready (`csp-27`'s condition). A fallback after ready is the library
+   *  failing closed on a figure the wall refused, and it is no effect of any stray message. */
+  readonly hostile: { readonly ready: boolean } | null;
+  /** The benign page's mount, which the stray messages are sent to: whether it became ready, and the host callbacks the
+   *  stray messages reached (a fallback after ready counts as one here). */
+  readonly strays: { readonly ready: boolean; readonly effects: number; readonly addressChanged: boolean } | null;
 }
 
 const ORIGIN_KEYS = ['parent', 'origin'] as const;
@@ -152,13 +156,13 @@ function selfNavTeardown(r: LabRunView, local: LabLocal): LabOutcome {
 
 /** The stray messages' broken signal, observed by the page itself and so independent of the door: `undefined` when none. */
 function straysBroke(local: LabLocal): LabOutcome | undefined {
-  const h = local.hostile;
+  const h = local.strays;
   return h !== null && (h.effects > 0 || h.addressChanged)
     ? broken(`${h.effects} effects${h.addressChanged ? '; the address changed' : ''}`) : undefined;
 }
 
 function strays(r: LabRunView, local: LabLocal): LabOutcome {
-  const h = local.hostile;
+  const h = local.strays;
   const bad = straysBroke(local);
   if (bad !== undefined) return bad;
   if (h === null || !h.ready) return unmeasured('the reader did not become ready');

@@ -25,7 +25,7 @@ class FakeFailure extends Error {
 }
 
 const HOLDS = Object.fromEntries(LAB_CHECKS.map((k) => [k, { verdict: 'holds', detail: '' }])) as unknown as LabResult['outcomes'];
-const RESULT = { outcomes: HOLDS, local: { selfNavLoads: 2, busy: null, mounts: [], hostile: null }, run: null, finalRead: 'read' } as LabResult;
+const RESULT = { outcomes: HOLDS, local: { selfNavLoads: 2, busy: null, mounts: [], hostile: null, strays: null }, run: null, finalRead: 'read' } as LabResult;
 
 /** A run module whose run is `run`; it records the deps it was handed. */
 function fakeModule(run: (deps: LabDeps, progress: (p: LabProgress) => void) => Promise<LabResult>): { mod: RunModule; handed: LabDeps[] } {

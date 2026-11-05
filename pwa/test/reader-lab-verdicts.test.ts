@@ -43,7 +43,8 @@ const LOCAL_OK: LabLocal = {
   busy: { longestGapMs: 30, timerLateMs: 5, spinMs: 3000 },
   mounts: [['none', 40], ['trivial', 120], ['f1', 30], ['f2', 20], ['f3', 50], ['f4', 60], ['f5', 70], ['f6', 25], ['all', 150]]
     .map(([label, gap]) => ({ label: String(label), outcome: 'ready' as const, longestGapMs: Number(gap), elapsedMs: 900 })),
-  hostile: { ready: true, effects: 0, addressChanged: false },
+  hostile: { ready: true },
+  strays: { ready: true, effects: 0, addressChanged: false },
 };
 
 const verdictsOf = (over: Over, local: LabLocal = LOCAL_OK) => labVerdicts(runWith({ ...HEALTHY, ...over }), local, 200);
@@ -102,7 +103,7 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
   });
 
   it('csp-27: a library mount that never became ready is not measured, never holds (F6)', () => {
-    for (const hostile of [null, { ready: false, effects: 0, addressChanged: false }]) {
+    for (const hostile of [null, { ready: false }]) {
       expect(verdictsOf({}, { ...LOCAL_OK, hostile })['csp-27'])
         .toEqual({ verdict: 'not-measured', detail: 'library not measured: the hostile mount never became ready' });
     }
@@ -139,9 +140,9 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
   });
 
   it('strays: an effect or an address change does not hold; a reader that never became ready is not measured', () => {
-    expect(verdictsOf({}, { ...LOCAL_OK, hostile: { ready: true, effects: 1, addressChanged: false } })['bridge-strays'].verdict).toBe('does-not-hold');
-    expect(verdictsOf({}, { ...LOCAL_OK, hostile: { ready: true, effects: 0, addressChanged: true } })['bridge-strays'].verdict).toBe('does-not-hold');
-    expect(verdictsOf({}, { ...LOCAL_OK, hostile: { ready: false, effects: 0, addressChanged: false } })['bridge-strays'].verdict).toBe('not-measured');
+    expect(verdictsOf({}, { ...LOCAL_OK, strays: { ready: true, effects: 1, addressChanged: false } })['bridge-strays'].verdict).toBe('does-not-hold');
+    expect(verdictsOf({}, { ...LOCAL_OK, strays: { ready: true, effects: 0, addressChanged: true } })['bridge-strays'].verdict).toBe('does-not-hold');
+    expect(verdictsOf({}, { ...LOCAL_OK, strays: { ready: false, effects: 0, addressChanged: false } })['bridge-strays'].verdict).toBe('not-measured');
     expect(verdictsOf({ 'strays-sent': { hits: 0 } })['bridge-strays'].verdict).toBe('not-measured');
   });
 
@@ -189,7 +190,7 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     expect(sat({ 'ambient-local-broke': one })['no-ambient-state'].verdict).toBe('does-not-hold');
     expect(sat({ 'popup-open': one })['no-popup-top-nav'].verdict).toBe('does-not-hold');
     expect(sat({})['csp-27']).toEqual({ verdict: 'not-measured', detail: 'the door counted more than a lab run sends' });
-    const effect = { ...LOCAL_OK, hostile: { ready: true, effects: 1, addressChanged: false } };
+    const effect = { ...LOCAL_OK, strays: { ready: true, effects: 1, addressChanged: false } };
     expect(sat({}, effect)['bridge-strays'].verdict).toBe('does-not-hold');
     expect(labVerdicts(null, effect, 200)['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
     expect(labVerdicts(null, LOCAL_OK, 200)['bridge-strays'].verdict).toBe('not-measured');

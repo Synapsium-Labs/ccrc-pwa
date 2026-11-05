@@ -173,48 +173,74 @@ async function timedMount(deps: LabDeps, label: string, text: string): Promise<L
   }
 }
 
-/** The hostile page under the lab profile, and, once it is ready, the stray frame's messages: the host callbacks they
- *  reach are counted as effects, and so is a fallback after ready. */
-async function hostileAndStrays(deps: LabDeps, base: string, read: () => Promise<void>): Promise<NonNullable<LabLocal['hostile']>> {
-  const text = hostileDoc(base);
+/** One page mounted under the lab profile for step 7, with no timing: `true` once it is ready (after `whileReady` has run
+ *  while it is up), `false` for a fallback or throw before ready, the cap or a stop. `onFallback` hears every fallback with
+ *  whether ready had come, and `effect` is every host callback the page's messages can reach. The mount and its host are
+ *  gone when this returns. */
+async function readyMount(deps: LabDeps, text: string, on: {
+  readonly onFallback: (afterReady: boolean) => void; readonly effect: () => void;
+}, whileReady: () => Promise<void>): Promise<boolean> {
   const bytes = utf8ByteLength(text);
   const out = await deps.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: deps.signal });
-  if (out.kind !== 'rendered') return { ready: false, effects: 0, addressChanged: false };
+  if (out.kind !== 'rendered') return false;
   const host = hostIn(deps.stage);
-  let effects = 0;
   let ready = false;
   let settle: (r: boolean) => void = noop;
   const settled = new Promise<boolean>((resolve) => { settle = resolve; });
   const onAbort = (): void => settle(false);
   deps.signal.addEventListener('abort', onAbort, { once: true });
   void deps.sleep(LAB_MOUNT_WAIT_MS).then(() => settle(false));
-  const effect = (): void => { effects += 1; };
   let mount: ReaderMount | null = null;
   try {
     try {
       mount = await deps.mountReader(host, mountInput(out, bytes, {
         onReady: () => { ready = true; settle(true); },
-        onFallback: () => { if (ready) effects += 1; settle(false); },
-        onLink: effect, onHash: effect, copy: effect,
+        onFallback: () => { on.onFallback(ready); settle(false); },
+        onLink: on.effect, onHash: on.effect, copy: on.effect,
       }));
     } catch {
-      return { ready: false, effects: 0, addressChanged: false };
+      return false;
     }
-    if (!(await settled)) return { ready: false, effects, addressChanged: false };
-    const before = deps.address();
-    const strays = deps.mountFrame(deps.stage, { script: STRAYS_SCRIPT, config: { base } });
-    try {
-      await deps.sleep(LAB_SETTLE_MS);
-    } finally {
-      strays.remove();
-    }
-    await read();
-    return { ready: true, effects, addressChanged: deps.address() !== before };
+    if (!(await settled)) return false;
+    await whileReady();
+    return true;
   } finally {
     deps.signal.removeEventListener('abort', onAbort);
     mount?.destroy();
     host.remove();
   }
+}
+
+/** Step 7, one mount at a time. First the hostile page under the lab profile: `csp-27` needs it ready, and a fallback after
+ *  ready is the library failing closed on a figure the wall refused, never an effect of a stray message. Then a benign
+ *  page (the step-8 "none" page, the same lab profile and caps), where `bridge-strays` is measured: while it is up and
+ *  ready the stray frame posts its messages, and any host callback they reach, a fallback after ready, or a change of the
+ *  console's address is an effect. Last, the step's one read of the door. */
+async function hostileAndStrays(deps: LabDeps, base: string, read: () => Promise<void>): Promise<{
+  readonly hostile: NonNullable<LabLocal['hostile']>; readonly strays: NonNullable<LabLocal['strays']>;
+}> {
+  const hostile = { ready: await readyMount(deps, hostileDoc(base), { onFallback: noop, effect: noop }, async () => undefined) };
+  const benign = LAB_PAGES.find((p) => p.label === 'none');
+  let effects = 0;
+  let addressChanged = false;
+  let readDone = false;
+  const effect = (): void => { effects += 1; };
+  const ready = benign !== undefined && await readyMount(deps, benign.text, {
+    onFallback: (afterReady) => { if (afterReady) effects += 1; }, effect,
+  }, async () => {
+    const before = deps.address();
+    const frame = deps.mountFrame(deps.stage, { script: STRAYS_SCRIPT, config: { base } });
+    try {
+      await deps.sleep(LAB_SETTLE_MS);
+    } finally {
+      frame.remove();
+    }
+    readDone = true;
+    await read();
+    addressChanged = deps.address() !== before;
+  });
+  if (!readDone) await read();
+  return { hostile, strays: { ready, effects, addressChanged } };
 }
 
 /** The run: nine steps, then the verdicts. Rejects with a LabFailure for the door's words up to step 7, and with `stopped`
@@ -228,8 +254,8 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
   const nonce = opened.nonce;
   const base = `${deps.origin}${readerLabProbeBase(nonce)}`;
   const counts: { view: LabRunView | null } = { view: null };
-  const local: { selfNavLoads: number | null; busy: LabLocal['busy']; mounts: LabMount[]; hostile: LabLocal['hostile'] } =
-    { selfNavLoads: null, busy: null, mounts: [], hostile: null };
+  const local: { selfNavLoads: number | null; busy: LabLocal['busy']; mounts: LabMount[]; hostile: LabLocal['hostile']; strays: LabLocal['strays'] } =
+    { selfNavLoads: null, busy: null, mounts: [], hostile: null, strays: null };
   let step = 0;
   const say = (line: string, tap = false): void => {
     progress({ step, of: LAB_STEPS, line, tap, outcomes: counts.view === null ? {} : labVerdicts(counts.view, local, LAB_STALL_BUDGET_MS) });
@@ -296,12 +322,12 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     const late = deps.sleep(LAB_WATCHDOG_PROBE_MS).then(() => Math.max(0, deps.now() - t0 - LAB_WATCHDOG_PROBE_MS));
     await withFrame({ script: BUSY_SCRIPT, config: { base, spinMs: LAB_BUSY_SPIN_MS } }, 0, () => spinOver);
     local.busy = { longestGapMs: await gap, timerLateMs: await late, spinMs: LAB_BUSY_SPIN_MS };
-    // 7. The real library on hostile figures, and stray messages while it is up: the last step whose arrivals decide a
-    // verdict, so its read is the last one that must succeed (the reader lab design, section 4.4).
+    // 7. The real library on hostile figures, then on a benign page with stray messages sent while it is up: the last step
+    // whose arrivals decide a verdict, so its read is the last one that must succeed (the reader lab design, section 4.4).
     step = 7;
     stop();
     say(LAB_TEXT.steps.strays);
-    local.hostile = await hostileAndStrays(deps, base, read);
+    ({ hostile: local.hostile, strays: local.strays } = await hostileAndStrays(deps, base, read));
     // 8. Mermaid drawn on open, one page at a time. Nothing here sends a probe.
     step = 8;
     for (const page of LAB_PAGES) {

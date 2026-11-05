@@ -53,6 +53,8 @@ interface RigOptions {
   /** The door forgets the run once this many reader mounts have started (a run whose life ran out mid-Mermaid). */
   loseAfterMounts?: number;
   gapWindow?: LabGapWindow;
+  /** Runs right after a reader mount became ready, with the mount's input and its place in the run (0: the hostile page). */
+  afterReady?: (input: ReaderMountInput, index: number) => void;
   onFrame?: (spec: LabFrameSpec, rig: Rig) => void;
 }
 interface Rig {
@@ -87,6 +89,7 @@ function rig(o: RigOptions = {}): Rig {
   const stage = document.createElement('div');
   document.body.append(stage);
   let live = 0;
+  let liveReaders = 0;
   let clock = 0;
   const names = new Map<string, string>([[POPUP_SCRIPT, 'popup'], [AMBIENT_SCRIPT, 'ambient'], [COOKIE_SCRIPT, 'cookie'],
     [BATTERY_SCRIPT, 'battery'], [SELF_NAV_SCRIPT, 'selfNav'], [BUSY_SCRIPT, 'busy'], [STRAYS_SCRIPT, 'strays']]);
@@ -120,9 +123,12 @@ function rig(o: RigOptions = {}): Rig {
         mermaid: { fences: 1, largestBytes: 10, totalBytes: 10, largestChars: 10, totalChars: 10 }, images: [],
       }) as unknown as ReaderRenderOutcome,
       mountReader: async (_el, input) => {
+        expect(liveReaders, 'a reader mount was still up when the next one mounted').toBe(0);
+        liveReaders += 1;
         inputs.push(input);
-        queueMicrotask(() => input.onReady());
-        return { destroy: vi.fn(), setPrefs: vi.fn() } satisfies ReaderMount;
+        const index = inputs.length - 1;
+        queueMicrotask(() => { input.onReady(); o.afterReady?.(input, index); });
+        return { destroy: vi.fn(() => { liveReaders -= 1; }), setPrefs: vi.fn() } satisfies ReaderMount;
       },
       frame: () => Promise.resolve((clock += 16)),
       now: () => clock,
@@ -164,7 +170,7 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
   it('every reader mount is the lab profile: lab-draw, no doc key, no images; there are as many as the caps count', async () => {
     const r = rig();
     await runReaderLab(r.deps, () => undefined);
-    expect(LAB_PAGES.length + 1, 'the pages and the hostile page').toBe(LAB_MOUNTS);
+    expect(LAB_PAGES.length + 2, 'the pages, the hostile page and the benign page the strays go to').toBe(LAB_MOUNTS);
     expect(r.inputs).toHaveLength(LAB_MOUNTS);
     for (const input of r.inputs) {
       expect(input.profile).toBe('lab-draw');
@@ -226,8 +232,32 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
     expect(result.outcomes['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
   });
 
+  it('the hostile page and the benign page mount one at a time, hostile first, and the strays go to the benign page', async () => {
+    const r = rig({ onFrame: (spec, rr) => { if (spec.script === STRAYS_SCRIPT) rr.order.push(`inputs:${rr.inputs.length}`); } });
+    await runReaderLab(r.deps, () => undefined);
+    expect(r.order.slice(-2), 'the stray frame mounts after both reader mounts of the step started').toEqual(['strays', 'inputs:2']);
+    expect(r.inputs[0]!.document.result.outcome).toBe('rendered');
+  });
+
+  it('a hostile fallback after ready is the library failing closed, not a stray effect: bridge-strays still holds, and csp-27 still reads the hostile mount ready', async () => {
+    const r = rig({ afterReady: (input, index) => { if (index === 0) input.onFallback('error'); } });
+    const result = await runReaderLab(r.deps, () => undefined);
+    expect(result.local.hostile).toEqual({ ready: true });
+    expect(result.local.strays).toEqual({ ready: true, effects: 0, addressChanged: false });
+    expect(result.outcomes['bridge-strays'].verdict).toBe('holds');
+    expect(result.outcomes['csp-27'].verdict).toBe('holds');
+  });
+
+  it('a benign fallback after ready counts as an effect: bridge-strays does not hold', async () => {
+    const r = rig({ afterReady: (input, index) => { if (index === 1) input.onFallback('error'); } });
+    const result = await runReaderLab(r.deps, () => undefined);
+    expect(result.local.strays).toEqual({ ready: true, effects: 1, addressChanged: false });
+    expect(result.outcomes['bridge-strays']).toEqual({ verdict: 'does-not-hold', detail: '1 effects' });
+    expect(result.outcomes['csp-27'].verdict).toBe('holds');
+  });
+
   it('a run lost after the hostile step keeps every count it read: the walls still decide, and the result says the final read failed', async () => {
-    const r = rig({ loseAfterMounts: 1 });
+    const r = rig({ loseAfterMounts: 2 });
     const result = await runReaderLab(r.deps, () => undefined);
     for (const k of LAB_WALLS) expect(result.outcomes[k].verdict, `${k}: ${result.outcomes[k].detail}`).toBe('holds');
     expect(result.finalRead).toBe('unknown-run');
