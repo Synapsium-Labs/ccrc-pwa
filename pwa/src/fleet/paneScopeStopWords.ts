@@ -39,7 +39,13 @@ export function paneScopeStopChecked(marker: MarkerState): PaneScopeStopState | 
   return marker === 'set' ? 'live' : marker === 'clear' ? 'shadow' : null;
 }
 
-/** The codes the POST refuses with, spelled once: each says the verb moved nothing. Any other failure proves nothing
- *  about the write. */
+/** `fleetFailed` carries two answers, and only `stderr` tells them apart. With it, ccd ran and died before moving the
+ *  marker. Without it, the route's not-ran arm: its `detail` says the verb went unanswered, so whether the marker moved
+ *  is unknown. */
+export const isPaneScopeStopNotRan = (body: Readonly<Record<string, unknown>>): boolean =>
+  body.error === 'fleetFailed' && typeof body.stderr !== 'string';
+
+/** The answers that prove the verb moved nothing, spelled once. Any other failure proves nothing about the write. */
 const PANE_SCOPE_STOP_REFUSALS: readonly unknown[] = ['bad-request', 'unsupported', 'fleetFailed'];
-export const isPaneScopeStopRefusal = (code: unknown): boolean => PANE_SCOPE_STOP_REFUSALS.includes(code);
+export const isPaneScopeStopRefusal = (body: Readonly<Record<string, unknown>>): boolean =>
+  PANE_SCOPE_STOP_REFUSALS.includes(body.error) && !isPaneScopeStopNotRan(body);

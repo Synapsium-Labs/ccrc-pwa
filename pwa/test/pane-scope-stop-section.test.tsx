@@ -32,6 +32,19 @@ const shown = (marker: MarkerState | undefined): FleetStore => {
 };
 const radio = (name: string): HTMLInputElement => screen.getByRole<HTMLInputElement>('radio', { name });
 const group = (): HTMLElement => screen.getByRole('group', { name: T.legend });
+/** The route's not-ran arm, its body exactly as `notRanSentence` writes it. */
+const notRan = (): ApiError => new ApiError(502, {
+  ok: false,
+  error: 'fleetFailed',
+  detail: 'ccd pane-scope-stop was not answered (timeout: no answer) — unmeasured, asked again on a later pass',
+});
+type SetAnswer = Awaited<ReturnType<typeof api.setPaneScopeStop>>;
+const deferred = (): { promise: Promise<SetAnswer>; resolve: (a: SetAnswer) => void; reject: (e: unknown) => void } => {
+  let resolve: (a: SetAnswer) => void = () => undefined;
+  let reject: (e: unknown) => void = () => undefined;
+  const promise = new Promise<SetAnswer>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+};
 
 describe('the read (D-7902)', () => {
   it('draws no choice before the first coord frame', () => {
@@ -177,18 +190,101 @@ describe('the write (D-7902)', () => {
     expect(group()).not.toBeDisabled();
   });
 
-  it('a verb that failed or never ran shows its own words as a refusal', async () => {
-    const set = vi.spyOn(api, 'setPaneScopeStop');
-    set.mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'fleetFailed', stderr: 'no registry' }));
+  it('a verb that ran and died shows its own words as a refusal', async () => {
+    vi.spyOn(api, 'setPaneScopeStop').mockRejectedValue(new ApiError(502, { ok: false, error: 'fleetFailed', stderr: 'no registry' }));
     shown('clear');
     fireEvent.click(radio(T.live));
     await settle();
     expect(screen.getByText(`${T.refused} (no registry)`)).toBeInTheDocument();
+    expect(group()).not.toBeDisabled();
+  });
 
-    set.mockRejectedValueOnce(new ApiError(502, { ok: false, error: 'fleetFailed', detail: 'the agent is down' }));
+  it('a verb that may never have run proves nothing: never a refusal, and no promise of a later pass', async () => {
+    vi.spyOn(api, 'setPaneScopeStop').mockRejectedValue(notRan());
+    shown('clear');
     fireEvent.click(radio(T.live));
     await settle();
-    expect(screen.getByText(`${T.refused} (the agent is down)`)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(new RegExp(`^${T.unanswered}$`));
+    expect(screen.queryByText(new RegExp(T.refused))).toBeNull();
+    expect(document.body.textContent ?? '').not.toMatch(/later pass/);
+    expect(group()).not.toBeDisabled();
+  });
+
+  it('stderr alone tells the two fleetFailed answers apart, an empty one included', () => {
+    expect(isPaneScopeStopRefusal({ error: 'fleetFailed', detail: 'not answered' })).toBe(false);
+    expect(isPaneScopeStopRefusal({ error: 'fleetFailed', stderr: '' })).toBe(true);
+    expect(isPaneScopeStopRefusal({ error: 'fleetFailed', stderr: 'no registry' })).toBe(true);
+    expect(isPaneScopeStopRefusal({ error: 'unsupported' })).toBe(true);
+  });
+
+  it('a lost answer after a frame read the tap says nothing under the armed switch', async () => {
+    const answer = deferred();
+    vi.spyOn(api, 'setPaneScopeStop').mockReturnValue(answer.promise);
+    const store = shown('clear');
+    fireEvent.click(radio(T.live));
+    await settle();
+    frame(store, coord('set'));
+    answer.reject(notRan());
+    await settle();
+    expect(radio(T.live)).toBeChecked();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('the same answer after the bound and a late frame says nothing either', async () => {
+    vi.useFakeTimers();
+    const answer = deferred();
+    vi.spyOn(api, 'setPaneScopeStop').mockReturnValue(answer.promise);
+    const store = shown('clear');
+    fireEvent.click(radio(T.live));
+    await settle();
+    act(() => { vi.advanceTimersByTime(COORD_CONFIRM_MS); });
+    frame(store, coord('set'));
+    answer.reject(new ApiError(502, { ok: false, error: 'fleetFailed', stderr: 'no registry' }));
+    await settle();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('an unreadable 2xx after a frame read the tap says nothing either', async () => {
+    const answer = deferred();
+    vi.spyOn(api, 'setPaneScopeStop').mockReturnValue(answer.promise);
+    const store = shown('clear');
+    fireEvent.click(radio(T.live));
+    await settle();
+    frame(store, coord('set'));
+    answer.resolve('unreadable');
+    await settle();
+    expect(screen.queryByText(UNCONFIRMED_TEXT)).toBeNull();
+  });
+
+  it('past the bound with no frame, the lost answer still speaks, in place of the unconfirmed line', async () => {
+    vi.useFakeTimers();
+    const answer = deferred();
+    vi.spyOn(api, 'setPaneScopeStop').mockReturnValue(answer.promise);
+    shown('clear');
+    fireEvent.click(radio(T.live));
+    await settle();
+    act(() => { vi.advanceTimersByTime(COORD_CONFIRM_MS); });
+    answer.reject(notRan());
+    await settle();
+    expect(screen.getByRole('status')).toHaveTextContent(new RegExp(`^${T.unanswered}$`));
+  });
+
+  it('an older tap\'s late answer leaves a newer tap\'s wait alone', async () => {
+    vi.useFakeTimers();
+    const first = deferred();
+    const set = vi.spyOn(api, 'setPaneScopeStop').mockReturnValueOnce(first.promise).mockReturnValueOnce(deferred().promise);
+    shown('clear');
+    fireEvent.click(radio(T.live));
+    await settle();
+    act(() => { vi.advanceTimersByTime(COORD_CONFIRM_MS); });
+    fireEvent.click(radio(T.live));
+    await settle();
+    expect(set).toHaveBeenCalledTimes(2);
+    first.reject(notRan());
+    await settle();
+    expect(group()).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent(T.asked);
+    expect(screen.queryByText(T.unanswered)).toBeNull();
   });
 
   it('a failure that proves nothing is never called a refusal', async () => {
@@ -205,7 +301,7 @@ describe('the write (D-7902)', () => {
     await settle();
     expect(screen.getByRole('status')).toHaveTextContent(T.unanswered);
     expect(screen.queryByText(new RegExp(T.refused))).toBeNull();
-    expect(isPaneScopeStopRefusal('gateway-timeout')).toBe(false);
+    expect(isPaneScopeStopRefusal({ error: 'gateway-timeout' })).toBe(false);
   });
 
   it('a tap while one is waiting asks nothing', async () => {

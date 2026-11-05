@@ -4,8 +4,9 @@
 // Its read is the coord frame (`paneScopeStopMarker`), so the card keeps Cleanup pause's conventions: a skeleton until the
 // first frame; a server older than the switch reads not available; the checked radio is the frame's reading, never the
 // tap, and `unmeasurable` checks neither. Its write is `POST /api/coord/pane-scope-stop`, which answers `requested`, so a
-// tap settles only on a later frame reading what it asked, and `COORD_CONFIRM_MS` bounds the wait. The radios are
-// `DispatchAbandonSection`'s, with the write's answer on a line under them. Nothing branches on the viewer's screen.
+// tap settles only on a later frame reading what it asked, and `COORD_CONFIRM_MS` bounds the wait. The write's answer can
+// come long after both, so it speaks only while no frame has read what it asked and no newer tap has replaced it. The
+// radios are `DispatchAbandonSection`'s, with that answer on a line under them. Nothing branches on the viewer's screen.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Section, Skeleton } from '@ccrc/ui';
@@ -17,7 +18,8 @@ import { useFleetStore } from '../stores/fleet';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { COORD_CONFIRM_MS } from './coordWords';
 import {
-  PANE_SCOPE_STOP_TEXT, isPaneScopeStopRefusal, paneScopeStopChecked, paneScopeStopMarker, type PaneScopeStopState,
+  PANE_SCOPE_STOP_TEXT, isPaneScopeStopNotRan, isPaneScopeStopRefusal, paneScopeStopChecked, paneScopeStopMarker,
+  type PaneScopeStopState,
 } from './paneScopeStopWords';
 import {
   NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_WHEN, UNCONFIRMED_TEXT, useResultLine,
@@ -43,13 +45,15 @@ export function PaneScopeStopSection({ store = useFleetStore }: { store?: typeof
   );
 }
 
-/** A write's rejection, as its line: the route's own refusal moved nothing; anything else proves nothing about the write. */
+/** A write's rejection, as its line: the route's own refusal moved nothing; anything else proves nothing about the write.
+ *  The not-ran arm's sentence is left out: it promises a later pass, and nothing retries this write. */
 function failureLine(err: unknown): { text: string; tone: 'refusal' | 'answer' } {
   if (!(err instanceof ApiError)) return { text: T.unanswered, tone: 'answer' };
   const body = isRecord(err.body) ? err.body : {};
+  if (isPaneScopeStopNotRan(body)) return { text: T.unanswered, tone: 'answer' };
   const said = typeof body.detail === 'string' && body.detail.trim() !== '' ? body.detail.trim() : apiErrorText(err);
   const detail = err.status === 501 ? COORD_UNSUPPORTED_TEXT : said;
-  return isPaneScopeStopRefusal(body.error)
+  return isPaneScopeStopRefusal(body)
     ? { text: `${T.refused} (${detail})`, tone: 'refusal' }
     : { text: `${T.unanswered} (${detail})`, tone: 'answer' };
 }
@@ -57,6 +61,8 @@ function failureLine(err: unknown): { text: string; tone: 'refusal' | 'answer' }
 function PaneScopeStopBody({ marker }: { marker: MarkerState }): ReactNode {
   const [asked, setAsked] = useState<PaneScopeStopState | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The tap whose write's answer may still speak. `asked` ends at the bound; this ends when a frame reads the tap.
+  const tap = useRef<{ readonly state: PaneScopeStopState } | null>(null);
   const line = useResultLine();
 
   const clearTimer = (): void => {
@@ -67,7 +73,9 @@ function PaneScopeStopBody({ marker }: { marker: MarkerState }): ReactNode {
   // A NEW reading retires any line about the old one; only the reading a tap asked for settles that tap.
   useEffect(() => {
     line.clear();
-    if (paneScopeStopChecked(marker) === asked) {
+    const reading = paneScopeStopChecked(marker);
+    if (reading === tap.current?.state) tap.current = null;
+    if (reading === asked) {
       clearTimer();
       setAsked(null);
     }
@@ -80,14 +88,18 @@ function PaneScopeStopBody({ marker }: { marker: MarkerState }): ReactNode {
     if (asked !== null) return;   // the disabled fieldset stops a finger; this stops a second call
     line.clear();
     setAsked(state);
+    const mine = { state };
+    tap.current = mine;
     timer.current = setTimeout(() => {
       timer.current = null;
       setAsked(null);
       line.say(T.unconfirmed);
     }, COORD_CONFIRM_MS);
     void api.setPaneScopeStop(state).then(
-      (answer) => { if (answer === 'unreadable') line.say(UNCONFIRMED_TEXT); },
+      (answer) => { if (answer === 'unreadable' && tap.current === mine) line.say(UNCONFIRMED_TEXT); },
       (err: unknown) => {
+        if (tap.current !== mine) return;
+        tap.current = null;
         clearTimer();
         setAsked(null);
         const failed = failureLine(err);
