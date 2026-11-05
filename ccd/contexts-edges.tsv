@@ -220,10 +220,6 @@ _ws_expire_locked -> _reg_get
 _ws_expire_locked -> _reg_set
 _ws_expire_not_child -> _child_runid_valid
 _ws_expire_not_child -> _reg_get
-_ws_expire_presence -> _svc_domain
-_ws_expire_presence -> _svc_is_active
-_ws_expire_presence -> _svc_label
-_ws_expire_presence -> _svc_launchctl
 _ws_expire_presence -> _tmux
 _ws_expire_refuse_return -> _lc_done
 _ws_expire_refuse_return -> _reg_get
@@ -322,6 +318,10 @@ _ws_tmproot_witness_parse -> _child_runid_valid
 _ws_tmproot_witness_write -> _child_runid_valid
 _ws_tombstone -> _reg_get
 _ws_tombstone -> _transcript_path
+_ws_unit_stopped -> _svc_domain
+_ws_unit_stopped -> _svc_is_active
+_ws_unit_stopped -> _svc_label
+_ws_unit_stopped -> _svc_launchctl
 _ws_unsupervise -> _lc_done
 _ws_unsupervise -> _lc_surface_norm
 _ws_unsupervise -> _reg_set

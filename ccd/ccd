@@ -38293,9 +38293,27 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
   # a process of ANOTHER UNIX user, or a SAME-user NON-DUMPABLE one (an
   # ssh-agent, anything that cleared its dumpable flag, a setuid or setgid
   # exec) — its cwd link cannot be read from here.
-  local id="$1" verdict="$2" workdir="$3" how="${4-}" unit out lrc
+  local id="$1" verdict="$2" workdir="$3" how="${4-}" urc
   [[ "$verdict" != live ]] \
     || { _ws_refuse live "$(_tmux "$id") is up$([[ "$how" == detached ]] && printf ' with no terminal attached') — an archived workspace whose pane runs is in use, and is never expired"; return 1; }
+  _ws_unit_stopped "$id"; urc=$?
+  case "$urc" in
+    0) : ;;
+    1) _ws_refuse live "claude-session@$id answered '$_WS_UNIT_WORD' — a supervised workspace respawns its pane, and is never expired"; return 1 ;;
+    *) _ws_reclaim_unmeasured "$_WS_UNIT_WHY"; return 1 ;;
+  esac
+  _ws_expire_cwd_users "$id" "$workdir"
+}
+
+_WS_UNIT_WORD=''; _WS_UNIT_WHY=''
+_ws_unit_stopped() {   # id -> 0 when id's unit answers positively stopped (`inactive`, or `failed`); 1 (_WS_UNIT_WORD)
+  #                        when it answers anything else; 2 (_WS_UNIT_WHY) when the question was never answered: an
+  #                        empty answer, or a Darwin `failed` stamp launchd could not stand behind. Clears both first
+  # THE ONE READ OF "IS THIS UNIT STOPPED", `_ws_expire_presence`'s header says how it is asked. Its callers want the
+  # same fact and answer it apart: the expiry refuses, and the rows rung's gone-row arm (`_ws_reclaim_gone_quiet`) only
+  # keeps holding, so the words stay with them and this says nothing to anybody.
+  local id="$1" unit out lrc
+  _WS_UNIT_WORD=''; _WS_UNIT_WHY=''
   unit=$(_svc_is_active "claude-session@$id")
   if [[ "$CCD_OS" == darwin && "$unit" == failed ]]; then
     out=$(_svc_launchctl print "$(_svc_domain)/$(_svc_label "claude-session@$id")" 2>/dev/null); lrc=$?
@@ -38304,16 +38322,15 @@ _ws_expire_presence() {   # id probe-verdict workdir [detached] -> 0 when nothin
       *) case "$lrc" in
            113) : ;;
            0) unit=loaded ;;
-           *) _ws_reclaim_unmeasured "claude-session@$id answered 'failed' from its stamp, and launchd could not say whether the job is loaded (print exit $lrc)"; return 1 ;;
+           *) _WS_UNIT_WHY="claude-session@$id answered 'failed' from its stamp, and launchd could not say whether the job is loaded (print exit $lrc)"; return 2 ;;
          esac ;;
     esac
   fi
   case "$unit" in
-    inactive|failed) : ;;
-    '') _ws_reclaim_unmeasured "whether claude-session@$id is running could not be asked — the service manager answered nothing"; return 1 ;;
-    *) _ws_refuse live "claude-session@$id answered '$unit' — a supervised workspace respawns its pane, and is never expired"; return 1 ;;
+    inactive|failed) return 0 ;;
+    '') _WS_UNIT_WHY="whether claude-session@$id is running could not be asked — the service manager answered nothing"; return 2 ;;
+    *) _WS_UNIT_WORD="$unit"; return 1 ;;
   esac
-  _ws_expire_cwd_users "$id" "$workdir"
 }
 
 # THE SEAMS of the working-directory question, as `_ws_expire_now` is the clock's: a test names another root, or a

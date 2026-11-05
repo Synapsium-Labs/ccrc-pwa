@@ -627,6 +627,7 @@ _ws_expire_epoch_ok	C4
 _ws_expire_archived	C4
 _ws_expire_not_child	C4
 _ws_expire_presence	C4
+_ws_unit_stopped	C4
 _ws_expire_proc_root	C4
 _ws_expire_lsof_fallback	C4
 _ws_expire_lsof	C4
