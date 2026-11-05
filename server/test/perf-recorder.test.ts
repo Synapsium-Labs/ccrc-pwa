@@ -35,6 +35,22 @@ describe('PerfRecorder (console speed S1)', () => {
     expect(p.health(Date.now()).slowRoutes).toHaveLength(11);
   });
 
+  it('the event-line window runs on the monotonic clock, not the wall clock', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let wall = 1_700_000_000_000;
+    let mono = 5_000;
+    const p = new PerfRecorder({ now: () => wall, monotonic: () => mono });
+    const burst = (n: number): void => { for (let i = 0; i < n; i++) p.route('GET', `/r${i}`, 700); };
+    burst(10);
+    expect(perfLines(warn)).toHaveLength(10);
+    wall -= 3_600_000;               // the wall clock steps back an hour
+    burst(5);
+    expect(perfLines(warn)).toHaveLength(10);   // still limited to ten per window
+    mono += 60_000;                  // 60 s of monotonic time: the window resets
+    burst(3);
+    expect(perfLines(warn)).toHaveLength(13);
+  });
+
   it('health() has every field after one tick', () => {
     vi.useFakeTimers();
     const p = new PerfRecorder();

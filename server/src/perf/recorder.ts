@@ -14,7 +14,9 @@ const SAMPLES_KEPT = 300;
 
 /** What the recorder needs of an event-loop-delay histogram (`perf_hooks.IntervalHistogram`, nanoseconds). */
 export interface LoopMonitor { enable(): unknown; disable(): unknown; reset(): void; readonly count?: number; percentile(p: number): number; readonly max: number }
-export interface PerfRecorderOptions { monitor?: () => LoopMonitor; now?: () => number }
+/** `now` is wall time (`since`, `at`); `monotonic` runs the event-line window, so a wall-clock step cannot freeze or
+ *  widen it. */
+export interface PerfRecorderOptions { monitor?: () => LoopMonitor; now?: () => number; monotonic?: () => number }
 
 const stat = (ring: NumberRing): { p50: number; p95: number; max: number; last: number } => {
   const v = ring.values();
@@ -23,6 +25,7 @@ const stat = (ring: NumberRing): { p50: number; p95: number; max: number; last: 
 
 export class PerfRecorder {
   private readonly now: () => number;
+  private readonly monotonic: () => number;
   private readonly makeMonitor: () => LoopMonitor;
   private readonly since: number;
   private tickRing = new NumberRing(SAMPLES_KEPT);
@@ -39,9 +42,10 @@ export class PerfRecorder {
 
   constructor(opts: PerfRecorderOptions = {}) {
     this.now = opts.now ?? Date.now;
+    this.monotonic = opts.monotonic ?? (() => performance.now());
     this.makeMonitor = opts.monitor ?? (() => monitorEventLoopDelay({ resolution: 20 }));
     this.since = this.now();
-    this.windowStart = this.since;
+    this.windowStart = this.monotonic();
   }
 
   phase(name: string, ms: number): void {
@@ -106,7 +110,7 @@ export class PerfRecorder {
 
   /** An event line, at most ten in a minute window; the rest are counted for the next summary. */
   private event(line: string): void {
-    const at = this.now();
+    const at = this.monotonic();
     if (at - this.windowStart >= SUMMARY_MS) { this.windowStart = at; this.windowLines = 0; }
     if (this.windowLines >= MAX_EVENT_LINES) { this.suppressed += 1; return; }
     this.windowLines += 1;
