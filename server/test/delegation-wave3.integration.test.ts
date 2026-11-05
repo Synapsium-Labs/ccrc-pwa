@@ -957,7 +957,7 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
     'ccd/ccd', 'ccd/lib/delegation-lease.sh', 'ccd/ccd-entry.py', 'agent/src/whitelist.ts', 'server/src/ccdargv.ts',
     'server/src/remote/runner.ts', 'shared/api.ts']],
   ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, ['ccd/ccd', 'server/src/ccdargv.ts']],
-  ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh']],
+  ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh', 'server/src/coord/delegationCarrierMark.ts']],
   ['delegation-adopt', /delegation-adopt/, []],
   ['promotesLease', /\bpromotesLease\b/, []],
 ];
@@ -1267,6 +1267,23 @@ describe('8. the closed scope census', () => {
       }
     } finally { h.cleanup(); }
     expect(DELEGATION_EVENTS_CAP).toBe('delegation-events-v1');
+  });
+
+  // W5-K15 (delegation wave 5 PR6): the carrier verb is composed in ONE place, `markLeaseCarrier`, and only the lane's `leaseActs`
+  // phase calls it (PR9 adds `server/src/coord/dispatch.ts` to this row; PR8 adds none: its doors leave the mark to the lane).
+  it('W5-K15: the carrier mark is composed only through markLeaseCarrier, and only the lane\'s leaseActs phase calls it', () => {
+    const SRC = filesUnder('server/src', /\.ts$/);
+    expect(SRC.filter((f) => /CCD_ARGV\.leaseMark\(/.test(code(read(f)))), 'the builder\'s one caller').toEqual(['server/src/coord/delegationCarrierMark.ts']);
+    const calls = (f: string): number => [...code(read(f)).replace(/export async function markLeaseCarrier\(/, '').matchAll(/\bmarkLeaseCarrier\(/g)].length;
+    expect(SRC.filter((f) => calls(f) > 0), 'markLeaseCarrier\'s callers').toEqual(['server/src/watch.ts']);
+    expect(calls('server/src/watch.ts'), 'one call site').toBe(1);
+    const watch = code(read('server/src/watch.ts'));
+    const lane = watch.slice(watch.indexOf('class DelegationLane {'));
+    const start = lane.indexOf("this.phase(pass, 'leaseActs')");
+    const end = lane.indexOf('endActs(); }', start);
+    expect(start, 'the leaseActs phase opens').toBeGreaterThan(-1);
+    expect(end, 'and closes').toBeGreaterThan(start);
+    expect(lane.slice(start, end), 'the call is inside the leaseActs phase of DelegationLane').toMatch(/\bmarkLeaseCarrier\(/);
   });
 
   it('the complete future-facing columns exist, and no wave-3 writer can transition or populate them beyond inert initialization', async () => {
