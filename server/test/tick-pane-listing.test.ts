@@ -82,6 +82,28 @@ describe('FleetWatcher.tick with one tmux listing (console speed S1)', () => {
     expect(JSON.stringify(listed.frames[0])).toBe(JSON.stringify(fallback.frames[0]));
   });
 
+  it('a listing that never answers is a failed listing after 10 s and the tick falls back per row', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const h = makeHarness({ listing: 'hang' });
+      const tick = h.watcher.tick();
+      let done = false;
+      void tick.then(() => { done = true; });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(h.calls.hasSession).toBe(0);   // the deadline has not fired: no row fell back yet
+      await vi.advanceTimersByTimeAsync(1);
+      await tick;
+      expect(done).toBe(true);
+      expect(h.calls.listPanesAll).toBe(1);
+      expect(h.calls.hasSession).toBe(6);
+      expect(h.calls.capture).toHaveLength(6);
+      expect(h.frames.at(-1)!.filter((s) => s.status !== 'dead').map((s) => s.id).sort()).toEqual([...LIVE].sort());
+      const notices = warn.mock.calls.filter((c) => String(c[0]).includes('list-panes') && String(c[0]).includes('did not answer within 10 s'));
+      expect(notices).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('the tick times the listing from its start and the Finished loop as a whole (health().tick.phases)', async () => {
     const h = makeHarness({ listingDelayMs: 60, perf: true });
     await h.watcher.tick();   // priming

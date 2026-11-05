@@ -29,7 +29,8 @@ const plant = (reg: string, id: string, extra: Record<string, string> = {}): voi
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
 };
 
-export type ListingMode = 'ok' | 'fail';
+/** `hang`: the listing never answers (a wedged tmux). */
+export type ListingMode = 'ok' | 'fail' | 'hang';
 
 export function makeHarness(opts: { listing?: ListingMode; listingDelayMs?: number; perf?: boolean; paneOf?: (id: string) => string; wrapIO?: (io: FleetIO) => FleetIO } = {}) {
   const home = mkTmp('ccrc-');
@@ -54,6 +55,7 @@ export function makeHarness(opts: { listing?: ListingMode; listingDelayMs?: numb
     if (cmd === 'tmux' && args[0] === 'list-panes' && args.includes('-a')) {
       calls.listPanesAll += 1;
       if (args[args.length - 1] !== PANE_LISTING_FORMAT) throw new Error('unexpected listing format');
+      if (state.listing === 'hang') return new Promise(() => {});
       if (opts.listingDelayMs) await new Promise((r) => setTimeout(r, opts.listingDelayMs));
       if (state.listing === 'fail') return { ran: true, code: 1, stdout: '', stderr: 'error connecting to tmux' };
       return { ran: true, code: 0, stdout: [...state.live].map((id) => `cc-${id} 1 0 ${pidOf(id)}\n`).join(''), stderr: '' };
