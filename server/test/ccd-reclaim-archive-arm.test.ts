@@ -360,6 +360,47 @@ describe('a tree relocated with its record following it keeps the hold (review 1
   }, 120_000);
 });
 
+describe('the review’s probes, each pinning a guard no case reached (review 1516, F6 to F8)', () => {
+  it('A6: git’s list omits the record while a readable admin entry names the tree, and the hold stands', () => {
+    makeChild(h);
+    const s = archivedSibling();
+    fs.rmSync(s.wt, { recursive: true, force: true });
+    // The entry stands under another name, so the record's own `worktreeAdmin` is gone and only the entry loop decides.
+    const renamed = `${s.admin}-renamed`;
+    fs.renameSync(s.admin, renamed);
+    expect(fs.readFileSync(path.join(renamed, 'gitdir'), 'utf8').trim(), 'the CONTROL: it names the tree').toBe(`${s.wt}/.git`);
+    // git's list, asked of this one path, answers "no record", as it does for an entry it skips; every other ask is real.
+    const pre = `eval "$(declare -f _ws_reclaim_record | sed '1s/^_ws_reclaim_record/_orig_record/')";`
+      + ` _ws_reclaim_record() { [[ "$2" == '${s.wt}' ]] && return 1; _orig_record "$@"; };`;
+    held(evalOf(h, { pre }), s.id, 'an admin entry names the tree that git’s list left out');
+    fs.rmSync(renamed, { recursive: true, force: true });
+    placed(evalOf(h, { pre }), 'the CONTROL: the entry gone, the record places the row');
+  }, 120_000);
+
+  it('A5: a parent that is gone too keeps the hold — the parent must resolve complete, not as a projection', () => {
+    makeChild(h);
+    const s = archivedSibling('demo2');
+    gone(s);
+    placed(evalOf(h), 'the CONTROL: the parent stands, the record places the row');
+    const parent = path.dirname(s.wt);
+    fs.rmSync(parent, { recursive: true, force: true });
+    held(evalOf(h), s.id, 'the parent is gone too');
+    fs.mkdirSync(parent);
+    placesAgain('the parent back');
+  }, 120_000);
+
+  it('the row’s project must be one plain name: a .project of ../projects/demo keeps the hold', () => {
+    const { s } = armed();
+    const f = reg(s.id, 'project');
+    fs.writeFileSync(f, '../projects/demo');
+    expect(fs.realpathSync(path.join(h.home, 'projects', '../projects/demo')), 'the CONTROL: the same repository')
+      .toBe(fs.realpathSync(s.main));
+    held(evalOf(h), s.id, 'a project spelled through ..');
+    fs.writeFileSync(f, 'demo');
+    placesAgain('the project plain again');
+  }, 120_000);
+});
+
 describe('the moved-tree hole, for an archive-placed row', () => {
   it('an archived sibling’s tree moved inside the child keeps the child, at the ladder and in _ws_reclaim_owned', () => {
     const c = makeChild(h);
