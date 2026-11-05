@@ -53,6 +53,7 @@ export const EXPIRE_TOKEN_KIND: Readonly<Record<ExpireToken, 'gone' | 'terminal'
   'tree-unreadable': 'terminal',
   'containment-unproven': 'terminal',
   'no-worktree-record': 'terminal',
+  'branch-gone-checked-out': 'terminal',
   'not-expired': 'retry',
   child: 'retry',
   paused: 'retry',

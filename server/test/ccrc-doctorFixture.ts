@@ -1733,8 +1733,13 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *
  *  RAISED BY ONE AGAIN, on every platform (D-7857): `carry-copies` SKIPs - `healthy()`
  *  creates no `~/.cc-sessions`, so there is no swap carry to size.
- *  `ccrc-doctor-carry-copies.test.ts` plants the registry, swap.log and the record. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 15;
+ *  `ccrc-doctor-carry-copies.test.ts` plants the registry, swap.log and the record.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (D-7902): `pane-scope-stop` SKIPs - `healthy()`
+ *  creates no `~/.cc-sessions`, so no session has been started there to stop (and on
+ *  Darwin it SKIPs first, for the cgroups it has none of). `ccrc-doctor-pane-scope-stop.test.ts`
+ *  plants the registry and the switch. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 16;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

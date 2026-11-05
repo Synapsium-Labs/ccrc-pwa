@@ -8,7 +8,7 @@ import {
 } from '../../../shared/api.js';
 import {
   AUTH_METHODS, AUTH_STATUS_STATES, AUTH_URL_HOSTS, authCodeShapeOk, isLaneIdentity, type AuthMethod, type AuthStatusState,
-  type LaneStateRead,
+  neverEnabled, type LaneStateRead,
 } from '../../../shared/accounts.js';
 import { isAccountLaneId, isAccountStdin } from '../../../shared/account-argv.js';
 import { PROVIDERS, PROVIDER_IDS, type ConnectMethod, type ProviderId } from '../../../shared/providers.js';
@@ -254,7 +254,7 @@ export type DiscardVerdict =
  * flight) under its lock. Pure.
  */
 export function discardVerdictOf(lane: LaneStateRead, disabled: boolean, sessions: readonly string[] | null): DiscardVerdict {
-  if (lane.kind !== 'read' || lane.state.addedAt === undefined || lane.state.enabledAt !== undefined || !disabled) {
+  if (lane.kind !== 'read' || !neverEnabled(lane.state) || !disabled) {
     return { ok: false, word: 'not-discardable' };
   }
   if (sessions === null) return { ok: false, word: 'unmeasured' };

@@ -203,6 +203,11 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the project create verb granted without --name',
     codes: ['TS2322'],
   },
+  // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g27-pane-scope-stop-without-state.ts': {
+    what: 'the pane-scope stop switch verb granted without --state',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -435,6 +440,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['testbox-remote', '--state']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'testbox-remote'), 'one testbox-remote grant, on --state')
       .toEqual([['testbox-remote', '--state']]);
+  });
+
+  it('throws on a pane-scope-stop without --state, and grants exactly the one prefix (D-7902)', () => {
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop', '--live']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['pane-scope-stop', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pane-scope-stop'), 'one pane-scope-stop grant, on --state')
+      .toEqual([['pane-scope-stop', '--state']]);
   });
 
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {

@@ -3,6 +3,7 @@
 // ccd-limits.test.ts does, so nothing here can touch the real registry.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, SCAN_LOOKBACK_LINES, seedAccountsSh, plantPoolEpoch, type CcdHarness } from './ccdWsHelpers.js';
@@ -806,6 +807,7 @@ describe('cmd_stop', () => {
       // before the disable/kill pair.
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@project-j-quiet-mesa',
+      'tmux list-panes -t =cc-project-j-quiet-mesa: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
       'tmux kill-session -t =cc-project-j-quiet-mesa:',
     ]);
   });
@@ -815,6 +817,7 @@ describe('cmd_stop', () => {
     expect(calls()).toEqual([
       'tmux list-panes -a -F #{session_name} #{pane_pid}',
       'systemctl --user disable --now claude-session@claude-a-demo',
+      'tmux list-panes -t =cc-claude-a-demo: -F #{pane_pid}',   // D-7902: the pane's scope, read after the disable and before the kill
       'tmux kill-session -t =cc-claude-a-demo:',
     ]);
   });
@@ -1462,6 +1465,7 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     const files = fs.readdirSync(dir).filter((f) => /^ccd.*\.ts$/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(7);
     let asked = 0;
+    let grouped = 0;
     for (const f of files) {
       const src = fs.readFileSync(path.join(dir, f), 'utf8').split('\n');
       src.forEach((ln, i) => {
@@ -1476,7 +1480,11 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         // must be observed mid-flight cannot be a synchronous call, and the
         // scan's claim is about every bash call site, not every convenient
         // one. Matched by the same alternation so a reader sees one rule.
-        if (!/(?:execFileSync|spawnSync|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
+        // `spawnSyncGroup` joined them when `spawn-group-pin.test.ts` began
+        // sending every timed shell spawn there (#896): it is `spawnSync` in a
+        // process group of its own, and a bash spawned that way reaches the same
+        // gh, systemctl and tmux.
+        if (!/(?:execFileSync|spawnSync(?:Group)?|spawn)\((?:'bash'|BASH)[,)]/.test(ln)) return;
         // Either side of the call: `ccd-archive`'s `runCcd` builds its `opts`
         // object several lines above the spawn.
         const window = src.slice(Math.max(0, i - SCAN_LOOKBACK_LINES), i + 8).join('\n');
@@ -1505,11 +1513,14 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
         expect.soft(window, `${f}:${i + 1} runs ccd without asking for tmux containment`)
           .toContain('tmux: true');
         asked++;
+        if (ln.includes('spawnSyncGroup(')) grouped++;
       });
     }
     // The scan is only worth anything if it is scanning something: a refactor
     // that renamed the spawn helper would otherwise pass by matching nothing.
     expect(asked, 'the scan matched no ccd bash spawn at all').toBeGreaterThanOrEqual(12);
+    // The same for the grouped spelling: the sweep only ever moves sites to it, so the count only ever rises.
+    expect(grouped, 'the scan stopped seeing ccd bash spawns through spawnSyncGroup').toBeGreaterThanOrEqual(29);
   });
 
   it('puts the harness bin FIRST on PATH, whatever the caller passes', () => {
@@ -1841,7 +1852,7 @@ describe('ws-add: --title, --wrapper and the named marker', () => {
 
     it('as the FINAL token it refuses with the usage line rather than hanging', () => {
       h.makeRepo('demo');
-      const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+      const r = spawnSyncGroup('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
         env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --title` } });
       expect(r.status, 'a valueless --title ran past the wall clock').toBe(1);
       expect(r.stderr).toContain('usage: ccd ws-add');
@@ -2043,7 +2054,7 @@ describe('ws-add: --title, --wrapper and the named marker', () => {
 
       it('as the FINAL token it refuses with the usage line rather than hanging', () => {
         h.makeRepo('demo');
-        const r = spawnSync('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
+        const r = spawnSyncGroup('bash', ['-c', 'source "$NWS_SRC"; eval "$NWS_SNIP"'], { encoding: 'utf8', cwd: h.home, timeout: 30_000,
           env: { ...ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }), NWS_SRC: CCD, NWS_SNIP: `${WS_ADD} cmd_ws_add demo eng-1234 --wrapper` } });
         expect(r.status, 'a valueless --wrapper ran past the wall clock').toBe(1);
         expect(r.stderr).toContain('usage: ccd ws-add');

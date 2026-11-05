@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, MailSummary, SessionStreamMsg } from '../../shared/api';
+import type { AccountsResponse, ChatEvent, Dialog, FleetSession, HookAsk, LaneWire, MailSummary, SessionStreamMsg } from '../../shared/api';
 import { fleetSession as baseSession } from './fleetFixture';
 import { FLEET_PROTO, SECRET_MASK } from '../../shared/api';
 import { ApiError, sendErrorText } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
-import { createFleetStore } from '../src/stores/fleet';
+import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
 import { saveFleetSnapshot } from '../src/lib/offline';
 import { TEST_ROSTER } from './rosterFixture';
@@ -1432,6 +1432,100 @@ describe('fleet store', () => {
 
       await vi.waitFor(() => expect(store.getState().roster).toEqual(TEST_ROSTER));
       store.getState().disconnect();
+    });
+
+    describe('a lane a sign-out may have changed (D-7992)', () => {
+      const KEPT: LaneWire = { state: { word: 'signed-in', source: 'checked 1h ago' }, ready: true, credential: 'held' };
+      const GONE: LaneWire = {
+        state: { word: 'signed-out', source: 'signed out on the fleet host' }, ready: false, notReadyReason: 'no-credential', credential: 'none',
+      };
+      const answer = (lane: LaneWire): AccountsResponse => ({ ...accountsResponse(TEST_ROSTER), lanes: { 'lane-a': lane } });
+      /** A store whose reads are answered only when the test says, in any order. */
+      function heldReads(): { store: FleetStore; reads: Array<{ ok: (r: AccountsResponse) => void; fail: () => void }> } {
+        const reads: Array<{ ok: (r: AccountsResponse) => void; fail: () => void }> = [];
+        const fetchAccounts = vi.fn(() => new Promise<AccountsResponse>((ok, no) => { reads.push({ ok, fail: () => no(new Error('offline')) }); }));
+        return { store: createFleetStore({ makeSocket, fetchAccounts }), reads };
+      }
+      const marked = (store: FleetStore): boolean => store.getState().lanesUnread['lane-a'] !== undefined;
+
+      it('a mark goes with the first good read that started after it', async () => {
+        const { store, reads } = heldReads();
+        store.getState().markLaneUnread('lane-a');
+        expect(marked(store)).toBe(true);
+        const read = store.getState().refreshAccounts();
+        reads[0]!.ok(answer(GONE));
+        await expect(read).resolves.toBe('ok');
+        expect(marked(store)).toBe(false);
+        expect(store.getState().lanes?.['lane-a']).toEqual(GONE);
+      });
+
+      it('a failed read leaves it, and so does an answer with no lanes', async () => {
+        const { store, reads } = heldReads();
+        store.getState().markLaneUnread('lane-a');
+        const failed = store.getState().refreshAccounts();
+        reads[0]!.fail();
+        await expect(failed).resolves.toBe('error');
+        expect(marked(store)).toBe(true);
+        const bare = store.getState().refreshAccounts();
+        reads[1]!.ok(accountsResponse(TEST_ROSTER));
+        await bare;
+        expect(marked(store)).toBe(true);
+      });
+
+      it('a read already in flight when the mark went on leaves it: its lanes are from before', async () => {
+        const { store, reads } = heldReads();
+        const poll = store.getState().refreshAccounts();
+        store.getState().markLaneUnread('lane-a');
+        reads[0]!.ok(answer(KEPT));
+        await poll;
+        expect(store.getState().lanes?.['lane-a']).toEqual(KEPT);
+        expect(marked(store)).toBe(true);
+      });
+
+      it('a poll that lands after the read a sign-out asked for is dropped: it cannot write the lanes from before back', async () => {
+        const { store, reads } = heldReads();
+        const poll = store.getState().refreshAccounts();
+        store.getState().markLaneUnread('lane-a');
+        const read = store.getState().refreshAccounts();
+        reads[1]!.ok(answer(GONE));
+        await read;
+        expect(marked(store)).toBe(false);
+        reads[0]!.ok(answer(KEPT));
+        await expect(poll).resolves.toBe('ok');
+        expect(store.getState().lanes?.['lane-a']).toEqual(GONE);
+      });
+
+      it('that read failing leaves the poll its answer, and the mark', async () => {
+        const { store, reads } = heldReads();
+        const poll = store.getState().refreshAccounts();
+        store.getState().markLaneUnread('lane-a');
+        const read = store.getState().refreshAccounts();
+        reads[1]!.fail();
+        await read;
+        reads[0]!.ok(answer(KEPT));
+        await poll;
+        expect(store.getState().lanes?.['lane-a']).toEqual(KEPT);
+        expect(marked(store)).toBe(true);
+      });
+
+      it('held for a sign-out with no answer: a read that starts while the verb may still run leaves the mark', async () => {
+        vi.useFakeTimers();
+        try {
+          const { store, reads } = heldReads();
+          store.getState().markLaneUnread('lane-a', 60_000);
+          const early = store.getState().refreshAccounts();
+          reads[0]!.ok(answer(KEPT));
+          await early;
+          expect(marked(store)).toBe(true);
+          vi.advanceTimersByTime(60_000);
+          const late = store.getState().refreshAccounts();
+          reads[1]!.ok(answer(GONE));
+          await late;
+          expect(marked(store)).toBe(false);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
 
     it('a later malformed response does NOT clobber an already-good roster', async () => {

@@ -60,7 +60,7 @@ import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import {
   defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
-import { noteSignOut } from './signOuts';
+import { readLaneAfterSignOut } from './useOldCredential';
 import { SignInLive, WrongAccountAct, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { ProviderRow } from '../../../shared/providers';
 import '../fleet/fleet.css';
@@ -403,9 +403,9 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     } catch (e) {
       failure = e;
     }
-    // The sheets opened on this lane later must not say it keeps its old sign-in on the check from before (D-7872 (10)):
-    // recorded whether or not this sheet is still open, on any answer that may have signed it out (an unknown one too).
-    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) noteSignOut(id, lane?.check?.at);
+    // The lane says what happened (D-7992), once it is read again: that is marked and asked for whether or not this sheet
+    // is still open, on any answer that may have signed it out (an unknown one too).
+    if (outcome === 'done' && (removed !== null || signOutUnknown(wordOf(failure)))) readLaneAfterSignOut(id, removed !== null, refresh);
     if (!live.current) return;
     try {
       if (outcome === 'step-up') { setNotice(STEP_UP_AGAIN_SIGN_OUT); alert(STEP_UP_AGAIN_SIGN_OUT); return; }

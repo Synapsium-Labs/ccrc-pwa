@@ -7,7 +7,7 @@
 // Measured, not guessed: `Composer.tsx` carried 19 uncovered statements at
 // 83.62%, and the slash lane was the bulk of them.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Composer } from '../src/session/Composer';
 import { api } from '../src/lib/api';
 
@@ -41,6 +41,21 @@ describe('the slash menu asks the box, once', () => {
     expect(commands).toHaveBeenCalledWith(ID);
     expect(screen.getByText('/compact')).toBeInTheDocument();
     expect(screen.getByText('/graphify')).toBeInTheDocument();
+  });
+
+  it('typing on while the first read is pending asks once (review 1473 F5)', async () => {
+    // What keeps this to one request is the effect's dependency on whether a `/` command is open, not on the query:
+    // a query dependency would ask again on every keystroke while the first answer is still on its way.
+    let answer: (v: typeof COMMANDS) => void = () => {};
+    commands.mockImplementation(() => new Promise((r) => { answer = r; }));
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    type('/');
+    type('/c');
+    type('/co');
+    await waitFor(() => expect(commands).toHaveBeenCalledTimes(1));
+    act(() => { answer(COMMANDS); });
+    expect(await screen.findByText('/compact')).toBeInTheDocument();
+    expect(commands).toHaveBeenCalledTimes(1);
   });
 
   it('marks a SKILL and leaves a builtin unmarked — they are not the same thing', async () => {
@@ -89,9 +104,9 @@ describe('what a tap leaves behind', () => {
 
 describe('when the box cannot answer', () => {
   it('renders no menu and does not retry on the next keystroke', async () => {
-    // The `.catch(() => setCommands([]))` arm: `[]` is "asked and got
-    // nothing", which is what stops the effect asking again — a retry per
-    // keystroke would be one agent round trip per character.
+    // The failure arm: a failed read stays unknown (never cached as `[]`),
+    // and it is not asked again while this `/` command is being typed — a
+    // retry per keystroke would be one agent round trip per character.
     commands.mockRejectedValue(new Error('501'));
     render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
     type('/');
@@ -99,6 +114,28 @@ describe('when the box cannot answer', () => {
     type('/co');
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
     expect(commands).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed read is asked again on the next `/`, once, and its answer is shown', async () => {
+    // A transient failure (a 502, or a read past its time limit) must not leave
+    // the session with no slash commands for the composer's whole life (review
+    // 1464 F6): the next `/` the reader starts asks once more.
+    commands.mockRejectedValueOnce(new Error('502'));
+    render(<Composer onSend={vi.fn()} pending={[]} id={ID} />);
+    type('/');
+    await waitFor(() => expect(commands).toHaveBeenCalledTimes(1));
+    type('/co');
+    type('/com');
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    expect(commands, 'no retry while the same `/` is typed').toHaveBeenCalledTimes(1);
+    type('hello');
+    type('/');
+    await screen.findByText('/compact');
+    expect(commands, 'one retry on the next `/`').toHaveBeenCalledTimes(2);
+    type('');
+    type('/');
+    await screen.findByText('/compact');
+    expect(commands, 'and cached once it answers').toHaveBeenCalledTimes(2);
   });
 
   it('asks nothing at all without a session id', () => {

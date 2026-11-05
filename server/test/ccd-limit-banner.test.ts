@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
 import { RATE_LIMIT_ERROR } from '../../shared/api.js';
 
@@ -193,7 +194,7 @@ BEGIN {
 1;
 `);
     try {
-      const r = spawnSync('bash', ['-c', `_leaky() { tail -n 1 -- "$1"; }; ${BOUNDED} 1 bash -c "$(declare -f _leaky); _leaky \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`],
+      const r = spawnSyncGroup('bash', ['-c', `_leaky() { tail -n 1 -- "$1"; }; ${BOUNDED} 1 bash -c "$(declare -f _leaky); _leaky \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`],
         { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL',
           env: ghContainedEnv(h.home, { PATH: process.env['PATH'] ?? '', HOME: h.home,
             BOUNDED_RACE_PID: pidFile,

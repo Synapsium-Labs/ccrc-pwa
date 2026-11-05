@@ -85,7 +85,8 @@ function socketBase(): string {
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null };
 
-/** The first line a child prints, as JSON — or a rejection naming its exit when it dies first. */
+/** The first line a child prints, as JSON — or a rejection naming its exit when it dies first. `exit` settles on the
+ *  child's `close`: `exit` itself can come before the data event of a line the child did print. */
 function firstJsonLine<T>(out: Readable, exit: Promise<Exit>): Promise<T> {
   return new Promise((resolve, reject) => {
     let buf = '';
@@ -120,7 +121,7 @@ async function startOwner(base: string, opts: { forkChild?: boolean } = {}): Pro
   ].join('\n');
   const c = spawn(process.execPath, ['--input-type=module', '-e', src, base], { stdio: ['ignore', 'pipe', 'inherit'] });
   spawned.push(c);
-  const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => r({ code, signal })));
+  const exit = new Promise<Exit>((r) => c.once('close', (code, signal) => r({ code, signal })));
   const line = await firstJsonLine<{ run?: string; refused?: string; childPid?: number }>(c.stdout!, exit);
   expect(line.refused, 'the owner\'s openRun refused').toBeUndefined();
   return { pid: c.pid!, run: line.run!, childPid: line.childPid, exit };
@@ -577,7 +578,7 @@ describe('armSignals — a persistent arm that collects the run and always exits
     let stderr = '';
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { stderr += d; });
     const watchdog = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* gone */ } }, 15_000);
-    const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
+    const exit = new Promise<Exit>((r) => c.once('close', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
     const line = await firstJsonLine<{ run: string }>(c.stdout!, exit)
       .catch((e: Error) => { throw new Error(`${e.message}\n--- child stderr ---\n${stderr}`); });
     return { child: c, pid: c.pid!, run: line.run, exit };
@@ -768,7 +769,7 @@ describe('end to end: a nested real vitest under the real globalSetup (T5)', () 
     c.stdout!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     c.stderr!.setEncoding('utf8').on('data', (d: string) => { out += d; });
     const watchdog = setTimeout(() => killGroup(c, 'SIGKILL'), 90_000);
-    const exit = new Promise<Exit>((r) => c.once('exit', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
+    const exit = new Promise<Exit>((r) => c.once('close', (code, signal) => { clearTimeout(watchdog); r({ code, signal }); }));
     return { child: c, pid: c.pid!, fx, exit, output: () => out };
   }
 

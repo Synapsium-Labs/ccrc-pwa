@@ -1871,6 +1871,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "name": "SKIP",
   "node": "PASS",
   "oom-policy": "PASS",
+  "pane-scope-stop": "PASS",
   "path": "PASS",
   "pool-sync": "WARN",
   "pools": "PASS",

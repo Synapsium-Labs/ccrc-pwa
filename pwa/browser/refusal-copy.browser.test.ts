@@ -180,6 +180,10 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
       const { page, errors, posts, close } = await boot(view, `/s/${WORKER}`);
       try {
         // ArchiveConflictSheet, through PrSheet's merged branch.
+        // The session screen loads on demand (console speed C1), and the eager inspector draws a PR keycap of its own:
+        // wait until the screen has drawn, so the click below meets its header's keycap.
+        await page.waitForFunction(() => document.querySelector('.shell-detail p.shell-placeholder-copy[role="status"]') === null
+          && document.querySelector('.shell-detail .keycap--pr') !== null, undefined, { timeout: 30_000 });
         await page.locator('.keycap--pr').first().click();
         await page.getByRole('button', { name: 'Archive now' }).click();
         await page.getByRole('button', { name: 'Archive anyway' }).click();

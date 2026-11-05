@@ -21,7 +21,7 @@
  * runs under `WS_ADD`.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, FIXTURE_MOUNTINFO, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
@@ -236,7 +236,7 @@ const STUBS = `_supervised_start() { echo "supervised_start $*" >> "$HOME/ccd-ca
 
 /** Captures all three streams, because the refusals under test exit non-zero. */
 const run = (snippet: string): { code: number; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; ${snippet}`], {
     encoding: 'utf8', cwd: h.home, timeout: 60000,
     env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home,
       CCD_MOUNTINFO: path.join(h.home, FIXTURE_MOUNTINFO) }, { systemd: true, tmux: true }),

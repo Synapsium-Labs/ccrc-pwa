@@ -61,6 +61,9 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // reason: the shape the dispatch path sends to a box advertising
   // `child-argv-v1` is the one `whitelist-subset.test.ts`'s layer 2 must prove crosses the bare grant.
   wsAddWorker: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7],
+  // Delegation broker wave 5 PR3 (W5-G18): a promoting dispatch's ws-add, `--child` and `--base` leading the project. The
+  // bare `['ws-add']` grant must cover it with no agent change.
+  wsAddWorkerBase: ['demo', { surface: 'agent', actor: 'run:7 dispatch', reason: null }, null, 7, 'a'.repeat(40), 'quiet-mesa', false],
   prStateSession: ['demo-quiet-basin'],
   prStateProject: ['demo'],
   prStatePr: ['demo', 41],
@@ -114,6 +117,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // CHILD RECLAMATION wave 4 — `coordPause`'s shape exactly.
   reclaimPause: ['on'],
   testboxRemote: ['on'],
+  paneScopeStop: ['live'],   // D-7902, `testboxRemote`'s shape
   // Two ENTRIES, not one parameterised by `pool: string | null` — the
   // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
   // picks between two words, the argv shapes differ in their tail, and layer

@@ -842,6 +842,10 @@ describe('the coordinator skill: linkage', () => {
       'GET /api/testbox',
       'POST /api/testbox/switch',
       'POST /api/testbox/tools-sync',
+      // THE PANE-SCOPE STOP'S SWITCH (D-7902) — the operator-dial shape once more: it arms a deliberate stop's stop of
+      // the stopped session's pane scope. A coordinator told about it would be told how to arm or disarm the stop of
+      // its own workers' leftovers. The forbid-mention case below forbids it.
+      'POST /api/coord/pane-scope-stop',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1921,6 +1925,13 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
     // only PERMITS the omission; this is what FORBIDS the mention.
     expect(allSkillText).not.toContain('/api/coord/stall-watch');
+  });
+
+  it('never names the pane-scope stop switch or its verb — a door that would tell a coordinator how to arm the stop of its own workers\' leftovers (D-7902)', () => {
+    // The caps dial's accounting: EXEMPT above only PERMITS the omission; this is what FORBIDS the mention, of the
+    // route and of the bare verb (ccd has no caller auth, so `ccd pane-scope-stop` from a shell is the shorter door).
+    expect(`${allSkillText}\nPOST /api/coord/pane-scope-stop\n`, 'CONTROL: a planted mention is seen').toContain('pane-scope-stop');
+    expect(allSkillText).not.toContain('pane-scope-stop');
   });
 
   it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {

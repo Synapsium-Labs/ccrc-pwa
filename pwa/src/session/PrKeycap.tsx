@@ -232,11 +232,14 @@ function checkText(pr: PrState): string {
 }
 
 export function PrKeycap(
-  { pr, onOpen, 'data-command': command }: {
+  { pr, onOpen, 'data-command': command, notYet }: {
     pr: PrState | null;
     onOpen: () => void;
     /** The registry command this cap is the door of (`session-pr`, W2 Task S2d), carried for the parity test. */
     'data-command'?: string;
+    /** Set while the door cannot act yet (the inspector's, before the session screen has loaded; console speed C1):
+     *  what it says instead of the PR's sentence, and the cap is drawn `aria-disabled`. */
+    notYet?: string;
   },
 ): ReactNode {
   // MUTATION SURVIVOR, disclosed: `??` here is swappable for `||` with the
@@ -256,7 +259,8 @@ export function PrKeycap(
       data-phase={state.phase}
       data-checks={state.checks ?? undefined}
       aria-label={prSentence(state)}
-      title={tooltipSentence(prSentence(state))}
+      title={notYet ?? tooltipSentence(prSentence(state))}
+      aria-disabled={notYet === undefined ? undefined : 'true'}
       data-command={command}
       onClick={onOpen}
     >
