@@ -1962,8 +1962,18 @@ button.metachip:active {
    names) keeps the chat's own measure, `--measure-chat-prose` (76ch Refined,
    88ch Instrument), from the column's left edge; code, tables, tool cards and
    images take the full column. The user's bubble sits at the column's right
-   edge, at most 70% of it. Below 900 none of this applies: the shared
-   `--measure-prose` and the 85% bubble hold. */
+   edge, at most 70% of it and never wider than the prose beside it, and its
+   attachments take the same cap. Below 900 none of this applies: the shared
+   `--measure-prose` and the 85% bubble hold.
+   The measure is resolved ONCE, on `.msg-assist`: `ch` resolves in each
+   element's own font, so a heading capped at `76ch` would run past the
+   paragraphs. `--chat-prose-cap` is a registered length, so it computes to px
+   where it is set and the children inherit that one length. */
+@property --chat-prose-cap {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
 @media (min-width: 900px) {
   .chat-item,
   .chat-strips,
@@ -1974,10 +1984,12 @@ button.metachip:active {
     max-width: min(var(--measure-chat), 100%);
     margin-inline: auto;
   }
+  .chat-item .msg-assist { --chat-prose-cap: var(--measure-chat-prose); }
   .chat-item .msg-assist > :is(p, ul, ol, blockquote, h1, h2, h3, h4, hr, .callout) {
-    max-width: var(--measure-chat-prose);
+    max-width: var(--chat-prose-cap);
   }
-  .msg-user { max-width: 70%; }
+  .msg-user,
+  .msg-attach { max-width: min(70%, var(--measure-chat-prose)); }
 }
 /* D-5100's 🤖 is `Icon bot` now: drawn at the glyph's own em, so the chip
    keeps the height the emoji gave it. */
