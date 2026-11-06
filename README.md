@@ -2017,8 +2017,9 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   run here, which says nothing of the sign-in; `ccrc doctor` names what is missing) and `lane-credential-refused` (the
   lane's own `auth.json` is unreadable or another family's, so no sign-in can land on it; `ccrc doctor` names it). That
   last one is read before the device flow, so the operator approves no code, and again at the install. It means that
-  file and nothing else: a lane folder or lock the library could not make is `credential-write`, and a scratch folder
-  that fails after the code ends the attempt as a failed sign-in, each with the library's own line. A refused, cancelled or expired
+  file and nothing else: a lane folder or lock the library could not make, or a lane folder it cannot see into (that
+  one also before the code), is `credential-write`, and a scratch folder that fails after the code ends the attempt as a
+  failed sign-in, each with the library's own line. A refused, cancelled or expired
   attempt leaves the lane as it was, and every attempt's end kills its tmux server and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
   --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
   ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`

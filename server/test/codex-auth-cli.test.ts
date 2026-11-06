@@ -17,8 +17,8 @@ import { join } from 'node:path';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  AUTH_LIB, AUTH_ROUTES, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, driverLines, fakeAuthServer, plantBackendCredential,
-  runAuthDriver, syntheticJwt, type AuthAnswer, type AuthScript,
+  AUTH_LIB, AUTH_ROUTES, CLOSED_AUTH_BASE, FIXTURE_ACCOUNT_ID, LANE_FOLDER_FAULTS, driverLines, fakeAuthServer,
+  plantBackendCredential, runAuthDriver, syntheticJwt, type AuthAnswer, type AuthScript,
 } from './codexAuthFixture.js';
 
 const PY = pythonOrSkip();
@@ -392,6 +392,44 @@ describe.skipIf(!PY)('the device-code sign-in (codex-bridge spec §2.6)', () => 
       expect(r.status, r.stderr).toBe(1);
       expect(srv.requests).toHaveLength(0);
     } finally {
+      await srv.close();
+    }
+  });
+
+  // Exit 5 says a file is there. A folder `lstat` cannot see into says no such thing, so it has a status of its own, and
+  // it still refuses before any request: a sign-in could not land there either (D-8016 (16)).
+  it.each(LANE_FOLDER_FAULTS)('signin --over where the lane folder %s is rc 6 before any request, never rc 5 (%s)', async (_name, word, plant) => {
+    const home = mkTmp('codex-auth-over-folder-');
+    const dir = join(home, 'scratch', 'codex');
+    const lane = laneDir(home);
+    const undo = plant(lane);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(6);
+      expect(r.stderr).toMatch(new RegExp(`^ccgpt-auth: credential-unusable: ccrc cannot reach the lane's folder: .* \\(${word}\\); `, 'm'));
+      expect(r.stdout).toBe('');
+      expect(srv.requests).toHaveLength(0);
+      expect(existsSync(dir), 'the scratch folder').toBe(false);
+    } finally {
+      undo();
+      await srv.close();
+    }
+  });
+
+  it.each(LANE_FOLDER_FAULTS)('signin --over where the scratch folder %s is rc 1: only the lane\'s folder has rc 6 (%s)', async (_name, _word, plant) => {
+    const home = mkTmp('codex-auth-over-scratchfolder-');
+    const dir = join(home, 'scratch', 'codex');
+    const lane = laneDir(home);
+    plantBackendCredential(lane);
+    const undo = plant(dir);
+    const srv = await fakeAuthServer(fullSignin(issued()));
+    try {
+      const r = await runCli(home, ['signin', '--auth-dir', dir, '--lane', 'codex-a', '--over', lane], { CCRC_CODEX_AUTH_BASE: srv.base });
+      expect(r.status, r.stderr).toBe(1);
+      expect(srv.requests).toHaveLength(0);
+    } finally {
+      undo();
       await srv.close();
     }
   });
@@ -877,6 +915,20 @@ describe.skipIf(!PY)('install: a checked sign-in moves over the lane\'s credenti
       expect(r.stderr).toMatch(/^ccgpt-auth: credential-unusable: the authDir .* cannot be created \(EACCES\)/m);
     } finally {
       chmodSync(above, 0o700);
+    }
+  });
+
+  it.each(LANE_FOLDER_FAULTS)('a lane folder that %s is rc 6, not a lane file it will not write over (%s)', async (_name, word, plant) => {
+    const { home, dir, from } = lanes('codex-install-folder-');
+    plantBackendCredential(from);
+    const undo = plant(dir);
+    try {
+      const r = await install(home, dir, from);
+      expect(r.status, r.stderr).toBe(6);
+      expect(r.stderr).toMatch(new RegExp(`^ccgpt-auth: credential-unusable: ccrc cannot reach the lane's folder: .* \\(${word}\\); `, 'm'));
+      expect(r.stdout).toBe('');
+    } finally {
+      undo();
     }
   });
 

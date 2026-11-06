@@ -15726,8 +15726,10 @@ _codex_cmd_status() {   # <id> <1 = --json>
 # in once it passes its check. The row is still read, so no folder is ever made
 # for a lane the roster does not name as a codex lane. The library reads the
 # lane's folder first (`--over`), and rc 5, this flag's alone, is that refusal:
-# a lane's file no sign-in can land on, before any code is asked for. Any other
-# failure ends in scratch, so it says nothing of the lane's own sign-in.
+# a lane's file no sign-in can land on, before any code is asked for. rc 6, also
+# this flag's alone, is the same read failing on the folder, with no file seen.
+# Any other failure ends in scratch, so it says nothing of the lane's own
+# sign-in.
 _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff the auth library's sign-in exited 0
   local id="$1" dir res rc word over='' re='^ccgpt-auth: ([a-z][a-z-]*): ' left="$1 is not logged in. Retry with: ccrc codex login $1"
   _codex_row "$id" || return $?
@@ -15749,6 +15751,7 @@ _codex_login() {   # <id> (one, parsed by cmd_codex) [--scratch] — rc 0 iff th
     0) printf '%s codex: %s: logged in\n' "$PROG" "$id"; return 0 ;;
     3) return 1 ;;   # `_codex_auth` has said auth-library-absent
     5) _codex_say lane-credential-refused "$id's own file in ~/$CX_AUTH cannot be signed in over (the auth library's line above says why), so no code was asked for and the lane is as it was. Run 'ccrc doctor', then sign in again."; return 5 ;;
+    6) _codex_say credential-write "$id's folder ~/$CX_AUTH cannot be reached (the auth library's line above says why), so no sign-in could land there: no code was asked for and the lane is as it was."; return 6 ;;
   esac
   _codex_say login-failed "the auth library's sign-in for $id failed${word:+ ($word)} and exited $rc (its own line is above), so $left"
   return 1

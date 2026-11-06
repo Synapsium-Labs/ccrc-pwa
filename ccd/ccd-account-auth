@@ -1275,6 +1275,7 @@ _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb ove
   [[ -n "$vrc" ]] \
     || _auth_die "ccrc codex login $AUTH_ID reported no exit status ($CCRC_AUTH_SCRIPT exited $rc), so the lane is not known to be signed in"
   [[ "$vrc" != 5 ]] || _auth_die lane-credential-refused   # `_codex_login`'s, an attempt's alone: no code was asked for
+  [[ "$vrc" != 6 ]] || _auth_die credential-write   # the same, on a lane folder the library saw no file in
   [[ "$vrc" == 0 ]] \
     || _auth_die "ccrc codex login $AUTH_ID exited $vrc (its reason is the last line in this pane)"
   [[ -z "$AUTH_ATTEMPT" ]] || _auth_install openai-login

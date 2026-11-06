@@ -12,7 +12,7 @@ import {
   ATTEMPT, AUTH_ROSTER, HOST_OSTYPE, answerOf, authBox, authEnv, ccrcAuth, plantAttempt, reapAll, scratchOf, scrollbacks, statusOf, waitQuiet,
   waitState,
 } from './authAttemptFixture.js';
-import { fakeAuthServer, plantBackendCredential, runAuthDriver, syntheticJwt } from './codexAuthFixture.js';
+import { LANE_FOLDER_FAULTS, fakeAuthServer, plantBackendCredential, runAuthDriver, syntheticJwt } from './codexAuthFixture.js';
 import { freePort, freePorts, plantCodexBins, plantFakeRuntime, probeRuntime, probeRuntimeCalls } from './codexLaneFixture.js';
 import { ACCOUNT_OP, BASH, HAVE_FLOCK, REPO, laneState, seedRoster } from './laneStateFixture.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
@@ -626,6 +626,51 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
       chmodSync(above, 0o755);
     }
   }, 60_000);
+
+  // No lane file is in question when `lstat` cannot see one, so neither the code nor its line may name one: there is no
+  // file for `ccrc doctor` to name (D-8016 (16)).
+  it.each(LANE_FOLDER_FAULTS)('an install where the lane folder %s is a write failure, never the lane\'s file (%s)', async (_name, word, plant) => {
+    const { home } = await codexBox('ccrc-codex-reauth-folder-', { roster: CODEX_ROSTER(await freePorts(2)) });
+    plantAttempt(home, 'lane-c', ATTEMPT);
+    plantBackendCredential(scratchDir(home));
+    const undo = plant(join(home, AUTH_ROOT, 'lane-c'));
+    try {
+      const r = setCodex(home);
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      expect(answerOf(r)['error']).toBe('credential-write');
+      expect(String(answerOf(r)['detail'])).not.toContain('will not write over');
+      expect(r.stderr).toContain(`(${word})`);
+    } finally {
+      undo();
+    }
+  }, 60_000);
+
+  it.each(LANE_FOLDER_FAULTS)('an attempt where the lane folder %s ends on a write failure before any code: nothing of a lane\'s file (%s)', async (_name, word, plant) => {
+    const { home } = await codexBox('ccrc-codex-reauth-folder-start-', { roster: CODEX_ROSTER(await freePorts(2)) });
+    const undo = plant(join(home, AUTH_ROOT, 'lane-c'));
+    const srv = await fakeAuthServer({
+      usercode: [{ status: 200, body: { device_auth_id: 'dev-1', user_code: 'ABCD-5678', interval: 1 } }],
+      deviceToken: [{ status: 200, body: { authorization_code: 'code-1', code_challenge: 'challenge-1', code_verifier: 'verifier-1' } }],
+    });
+    try {
+      expect(ccrcAuth(home, ['account', 'auth-start', '--id', 'lane-c', '--method', 'openai-login', '--attempt', ATTEMPT], '',
+        { CCRC_CODEX_AUTH_BASE: srv.base, CCRC_AUTH_TIMEOUT: '60', ...fetched }).code).toBe(0);
+      expect(await waitState(home, 'lane-c', ['done', 'failed'], 60_000), JSON.stringify(scrollbacks(home))).toBe('failed');
+      await waitQuiet(home);
+      const status = statusOf(home, 'lane-c');
+      expect(status?.['error']).toBe('credential-write');
+      expect(status?.['userCode'] ?? null, 'a code was published').toBeNull();
+      expect(srv.requests, 'a request went to the provider').toHaveLength(0);
+      const pane = Object.values(scrollbacks(home)).join('\n');
+      expect(pane).toContain(`(${word})`);
+      expect(pane).toContain('no code was asked for');
+      expect(pane, 'there is no file for it to name').not.toContain('ccrc doctor');
+      expect(existsSync(scratchOf(home, 'lane-c'))).toBe(false);
+    } finally {
+      undo();
+      await srv.close();
+    }
+  }, 120_000);
 
   it.skipIf(process.getuid?.() === 0)('a scratch root that refuses the sign-in, after the operator approved the code, blames neither the lane nor the code', async () => {
     const { home, authDir, old } = await codexLane('ccrc-codex-reauth-noscratch-');

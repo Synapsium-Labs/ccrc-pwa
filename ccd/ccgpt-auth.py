@@ -184,6 +184,11 @@ class LaneFileUnreadable(Unreadable):
     could not make, on any folder, and `recover_pending` for a checkpoint."""
 
 
+class LaneFolderUnreachable(Unreadable):
+    """As LaneFileForeign, for a reading of the lane's file whose `lstat` failed: the folder on the way is the fault, and
+    nothing says a file is there, so it is no LaneFileUnreadable."""
+
+
 class RefreshFailed(AuthError):
     """Transient: a network failure, a timeout, a redirect, or a rejection classified transient."""
 
@@ -355,6 +360,7 @@ class Reading(NamedTuple):
     family: Optional[str]
     identity: Optional[Identity]
     detail: str  # a sentence, never a token
+    found: bool = True  # False only when `lstat` could not measure the path, so nothing says a file is there
 
 
 # The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock,
@@ -518,7 +524,7 @@ def _parse_file(auth_dir: str) -> object:
             if e.errno == errno.ENOENT:
                 return _empty("absent", "no credential at " + where + "; sign the lane in")
             return _empty("unreadable", "the credential at " + where + " cannot be read (" + errno.errorcode.get(
-                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=False))
+                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=False))._replace(found=False)
         if not stat.S_ISREG(st.st_mode):
             return _empty("unreadable", "the credential path " + where + " is not a regular file; move it aside "
                           "and sign the lane in", _identity(st))
@@ -1756,7 +1762,10 @@ def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Opt
 def _refuse_signin(r: Reading, lane_file: bool = False) -> None:
     """A sign-in never writes over a file that reads `unreadable` nor over another family's file, and refuses them
     before any request, so an operator who cannot keep the result never approves a code. `lane_file` says the reading
-    is of the lane's own file while the sign-in is held in another folder (`--over`, `install`)."""
+    is of the lane's own file while the sign-in is held in another folder (`--over`, `install`); a reading that found
+    nothing at that path blames the folder, not a file."""
+    if r.credential == "unreadable" and lane_file and not r.found:
+        raise LaneFolderUnreachable("ccrc cannot reach the lane's folder: " + r.detail)
     if r.credential == "unreadable":
         raise (LaneFileUnreadable if lane_file else Unreadable)("ccrc will not sign in over it: " + r.detail)
     if r.credential == "foreign-family":
@@ -1781,7 +1790,7 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
 
     `over` is the folder this sign-in will be installed over, when `auth_dir` is a scratch folder (`install_signin`). It
     is read as step 1 reads `auth_dir`, with no lock and nothing written, so an operator whose sign-in could not land
-    there never approves a code. The install reads it again, under the lock.
+    there never approves a code. The install reads it again, with no lock, and its commit once more, under the lock.
 
     1. `read`, with no lock and nothing written: `unreadable` refuses Unreadable and `foreign-family` ForeignFamily,
        before any request.
@@ -1993,11 +2002,12 @@ def main(argv: List[str]) -> int:
                             the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
                             `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
                             `ccgpt-auth: <word>: <sentence>` on stderr, rc 1; with --over, rc 5 for a file there
-                            it will not sign in over, always before any request
+                            it will not sign in over, rc 6 for a folder it cannot see into, always before any request
       install --from <absolute> --lane <id>
                             `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; the refusal line above, rc 1;
-                            or that line and rc 4 when the sign-in at --from fails its check, or rc 5 when
-                            --auth-dir holds a file it will not write over. A folder or a lock that fails is rc 1
+                            or that line and rc 4 when the sign-in at --from fails its check, rc 5 when
+                            --auth-dir holds a file it will not write over, or rc 6 when it cannot see into
+                            --auth-dir. A folder or a lock it could not make is rc 1
       paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
       secret-files          the credential and checkpoint paths, one per line, rc 0"""
     if not argv or argv[0] not in _VERBS:
@@ -2042,6 +2052,8 @@ def main(argv: List[str]) -> int:
         sys.stderr.write("ccgpt-auth: " + e.word + ": " + str(e) + "\n")
         if isinstance(e, SigninUnusable):
             return 4
+        if isinstance(e, LaneFolderUnreachable):
+            return 6
         # A sign-in held apart from the lane: the caller answers a lane's file that bars it with a code of its own.
         return 5 if isinstance(e, (LaneFileUnreadable, LaneFileForeign)) else 1
     line = "ccgpt-auth: " + lane + ": " + result
