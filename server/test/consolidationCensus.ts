@@ -674,9 +674,10 @@ export function declaredDerivations(root: string = REPO): Array<{ name: string; 
  * - `tests-only`: a lane's own read when called with no model, reached by tests alone (`TESTS_ONLY_LISTING_METHODS`);
  *   the registry-refused census pins that `tick()` hands each lane its model.
  * A method not named in either list is `selection`, so a new lane that lists for itself is counted as one.
- * KNOWN WIDTH: `assembleFleet`'s marker listing inside `readLimits` (`limits.ts`) is another file's, reported in the PR body
- * and left to the request-time readers' work (ARCH-52, W2); a listing reached through an alias, a helper or a `readdir`
- * whose argument is a local that holds `registryDir` is not seen.
+ * KNOWN WIDTH: `readLimits`' marker listing (`limits.ts`) is another file's, so this census does not see it. The tick hands
+ * it the tick's names and a request-time caller lets it list (D-8069), which `fleet-listing-characterization.test.ts`
+ * counts at run time. A listing reached through an alias, a helper or a `readdir` whose argument is a local that holds
+ * `registryDir` is not seen.
  */
 export const ACT_LISTING_METHODS: readonly string[] = [
   'FleetWatcher.mailPass', 'FleetWatcher.divergencesPass', 'FleetWatcher.sleepRunDone', 'FleetWatcher.sleepIdleHours',

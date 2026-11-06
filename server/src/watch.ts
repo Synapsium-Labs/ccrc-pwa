@@ -2521,8 +2521,8 @@ export class FleetWatcher {
       // readRegistry() field is its own agent-WS round trip. Some lanes still list
       // the registry themselves on purpose, each for its own reason recorded at
       // its call site, among others: sweepDivergences, the mail lane's `mailPass`,
-      // the temp-root collector, sweepOrphanTrees, the snapshot re-check, and
-      // `readLimits` inside `assembleFleet`, every listed tick. The lifecycle mirror
+      // the temp-root collector, sweepOrphanTrees and the snapshot re-check. `readLimits`
+      // takes this listing's names (D-8069). The lifecycle mirror
       // lists none of the registry's rows: it reads its own `$REG/.lifecycle/`.
       //
       // `readRegistryMeasured`, not `readRegistry` (blocking review findings
@@ -2746,7 +2746,7 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg));   // read once a tick: published by `currentLimits`, handed to assembleFleet
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
       const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
