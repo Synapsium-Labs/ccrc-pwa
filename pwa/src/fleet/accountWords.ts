@@ -644,9 +644,10 @@ export function removeCheckLine(c: {
   ].join(' · ');
 }
 
-/** The Codex lane's line in Remove (spec §11 step 4, G20): on by default, and what its answer means when it is off. */
+/** The Codex lane's line in Remove (spec §11 step 4, G20): on by default, and what its answer means when it is off. The
+ *  second says only what the box guarantees, since this lane may be signed out or hold no sign-in at all. */
 export const CODEX_FOLDER_LINE = "Delete this lane's ChatGPT sign-in folder";
-export const CODEX_FOLDER_KEPT = 'The folder stays on the fleet host, and the sign-in in it keeps working from there.';
+export const CODEX_FOLDER_KEPT = 'The folder stays on the fleet host, and whatever sign-in it holds is not deleted.';
 
 /** The destructive button's words: it recounts as sessions move (spec §11.2). */
 export function removeButtonLabel(id: string, still: number): string {
@@ -914,6 +915,12 @@ export const DEVICE_CODE_NOTE = "Type this code on the page. It's not a secret; 
 export const COPY_CODE = 'Copy';
 /** A Codex lane's result line (spec §3.4): ccrc reads no identity from its sign-in, so none is shown unless one is stated. */
 export const CHATGPT_SIGNED_IN = 'Signed in with ChatGPT';
+/** That line, where the lane proves it. It reads the check, never the word: a new lane is off, and `stateWordFor` answers
+ *  Off first for a disabled lane whatever its check found (D-8051 (8)). Anything else the lane says of its sign-in beats
+ *  the check: a sign-out, no sign-in on the box, or the 401 that makes its word Signed out. */
+export const chatgptSignedInLine = (lane: LaneWire): string | null =>
+  (lane.check?.verdict === 'ok' && lane.signedOutAt === undefined && lane.credential !== 'none' && lane.state.word !== 'signed-out'
+    ? CHATGPT_SIGNED_IN : null);
 export const OPEN_LINK = 'Open';
 export const COPY_LINK = 'Copy link';
 export const COPIED = 'Copied';

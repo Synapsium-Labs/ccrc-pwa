@@ -10,7 +10,10 @@
 //    server's host in mono beside it.
 //  - The waiting line: "… waiting for you to approve" pulses, and the countdown is amber.
 //  - The ending (Cancel) offers Start again and Discard, with no link and no code on screen.
-//  - The result frame after `done`: Turn it on, the compromise disclosure, and no wrong-account act.
+//  - The result frame after `done`: the lane is still Off, as a new lane is on the real wire, it says it is signed in with
+//    ChatGPT from its check, with Turn it on, the compromise disclosure, and no wrong-account act.
+//
+// The fake box takes the add through the real argv builder, so a body the verb's list refuses is refused here too.
 //
 // Then Sign in again, in its own sixteen cells (spec §9 row 5): a Signed-out Codex lane's card holds it as the primary at
 // the tap floor, the sheet shows the same card, and the ending lists the lane's session with Restart beside the
@@ -21,6 +24,8 @@ import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 import { fleetSession } from '../test/fleetFixture';
+import { buildAccountArgv } from '../../shared/account-argv';
+import { stateWordFor } from '../../shared/accounts';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
@@ -35,9 +40,16 @@ const acct = (wrapper: string): Record<string, unknown> => ({
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
 });
 const rostered = (id: string, hue: string, provider = 'anthropic', kind = 'token'): Record<string, unknown> => ({
-  id, label: id, hue, homeAble: true, hidden: false, pool: null, provider, kind,
+  id, label: id, hue, homeAble: true, hidden: false, pool: null, provider, kind, ...(kind === 'codex' ? { managed: true } : {}),
 });
-const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
+const CHECK = { verdict: 'ok', at: now };
+const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, check: CHECK, ready: true };
+/** A new lane after its passing check, the word from the real derivation: a disabled lane is Off first, whatever its
+ *  check found, so nothing here can show a state the wire can't. */
+const CHECKED = {
+  state: stateWordFor({ disabled: true, authDead: false, five: null, seven: 12, provider: 'openai', kind: 'codex', lane: { kind: 'read', state: { check: CHECK } }, now }),
+  check: CHECK, ready: true,
+};
 const OFF = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
 const ROSTER = [rostered('lane-a', 'cyan'), rostered('lane-b', 'violet')];
 const ACCOUNTS = {
@@ -105,6 +117,11 @@ async function routes(ctx: BrowserContext, id = ID): Promise<{ phase: 'starting'
     ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   await ctx.route('**/api/accounts', async (route) => {
     if (route.request().method() !== 'POST') { await route.fallback(); return; }
+    const { id: lane, ...fields } = route.request().postDataJSON() as Record<string, unknown>;
+    if (!buildAccountArgv('add', lane, fields, false).ok) {
+      await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'bad-request' }) });
+      return;
+    }
     await route.fulfill(json({ ok: true, roster: [...ROSTER, rostered(ID, 'blue', 'openai', 'codex')], lane: OFF, fleetIdentity: null }));
   });
   await ctx.route(`**/api/accounts/${id}/**`, async (route) => {
@@ -117,7 +134,7 @@ async function routes(ctx: BrowserContext, id = ID): Promise<{ phase: 'starting'
         : { ok: true, state: box.phase, updatedAt: Date.now(), expiresAt }));
       return;
     }
-    if (p.endsWith('/check')) { await route.fulfill(json({ ok: true, lane: READY })); return; }
+    if (p.endsWith('/check')) { await route.fulfill(json({ ok: true, lane: id === ID ? CHECKED : READY })); return; }
     if (p.endsWith('/remove')) {
       await route.fulfill(json({
         ok: true, fleetIdentity: null,
@@ -274,10 +291,12 @@ describe('the ChatGPT device-code sheet at every width and skin (D-8051)', () =>
           wrong: [...document.querySelectorAll('[data-frame="result"] button')].some((b) => b.textContent === 'Sign this lane out and start again'),
           compromise: document.querySelector('.acct-compromise') !== null,
           line: document.querySelector('[data-frame="result"]')!.textContent ?? '',
+          word: document.querySelector('[data-frame="result"] .acct-result-word')!.getAttribute('data-state'),
         }));
         expect(r.turnOn).toBe(true);
         expect(r.wrong, 'a Codex lane has no sign-out act').toBe(false);
         expect(r.compromise).toBe(true);
+        expect(r.word, 'a new lane is off until it is turned on').toBe('off');
         expect(r.line).toContain('Signed in with ChatGPT');
         await step(page, 'the result frame');
         expect(errors).toEqual([]);

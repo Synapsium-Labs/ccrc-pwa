@@ -18,7 +18,8 @@
 //
 // A CODEX LANE (Task A25, D-8051 (3); spec §11 step 4, G20): **Delete this lane's ChatGPT sign-in folder**, on by default,
 // sits above the typed confirm, and the verb does what the line says: off sends `--keep-codex-auth`. The ledger says
-// which it did, and links chatgpt.com, where the sign-in stays authorised.
+// which it did, and links chatgpt.com, where the sign-in stays authorised. An OpenAI lane ccrc only records has no folder
+// step in the verb, so it has no such line and sends no such field (`managedCodex`, D-8051 (9)).
 //
 // THE LEDGER is the verb's answer, never guessed: Removed, Kept on the box, the archived sessions rehomed, and **Still
 // valid at the provider** with each kind's revoke link. A token's row carries the checklist item the operator ticks,
@@ -46,6 +47,7 @@ import { MoveSessionsSheet } from '../fleet/MoveSessionsSheet';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { ConfirmItsYou } from './ConfirmItsYou';
+import { managedCodex } from './connectFlow';
 import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
 
@@ -208,7 +210,7 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
   const [typed, setTyped] = useState('');
   /** The Codex line (spec §11 step 4): on by default. */
   const [deleteFolder, setDeleteFolder] = useState(true);
-  const codexLane = readRoster().some((r) => r.id === id && r.kind === 'codex');
+  const codexLane = managedCodex(readRoster().find((r) => r.id === id));
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ledger, setLedger] = useState<AccountRemoveAnswer | null>(null);

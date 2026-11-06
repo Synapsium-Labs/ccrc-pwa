@@ -27,9 +27,10 @@
 // check, the result and the sentences a new lane's terminal states say.
 //
 // THE CHATGPT LANE (Task A25, D-8051; spec §7.2): OpenAI has no method step, so the frame holds one line where the radio
-// would be, Confirm it's you and the primary. The attempt is the same one with no code to send: the run frame shows the
-// device-code card, the helper's `done` means the operator approved, and the check that follows starts the lane's
-// gateway. The result frame carries the compromise disclosure, and no wrong-account act: a Codex lane has no sign-out.
+// would be, Confirm it's you and the primary. Its add carries no method: `openai-login` is the attempt's, and `add` refuses
+// it. The attempt is the same one with no code to send: the run frame shows the device-code card, the helper's `done`
+// means the operator approved, and the check that follows starts the lane's gateway. The result frame carries the
+// compromise disclosure, and no wrong-account act: a Codex lane has no sign-out.
 //
 // RESUME (Task A23, D-7871 (2); spec §6.2): opened with `resume`, the sheet adopts the attempt the server holds for this
 // session on a lane it added, at the run frame, and the first poll brings back the URL and the code field.
@@ -63,7 +64,7 @@ import { RunFrame, type LedgerLine } from './RunFrame';
 import { SecretField, type SecretFieldHandle } from './SecretField';
 import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import {
-  defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
+  addMethodField, defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
 import { readLaneAfterSignOut } from './useOldCredential';
 import { SignInLive, WrongAccountAct, fieldOf, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
@@ -276,7 +277,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     try {
       outcome = await stepUp.runAct(async () => {
         got.answer = await client.accountAdd({
-          provider, id, label, hue, method, ...(value !== null ? { credential: value } : {}), ...(adopt ? { adopt: true as const } : {}),
+          provider, id, label, hue, ...addMethodField(method), ...(value !== null ? { credential: value } : {}), ...(adopt ? { adopt: true as const } : {}),
         });
       });
     } catch (e) {

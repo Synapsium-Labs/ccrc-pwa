@@ -2,7 +2,8 @@
 // box: OpenAI's frame with nothing to choose, the device-code card and its user code, the pair the server accepted or
 // nothing, each ending in the Codex flow's own words, the result frame, Sign in again on a Signed-out lane, a sign-in
 // that waits at `url` reaching the resume banner, and the remove sheet's folder line. A22's Anthropic sheets are
-// `sign-in-sheet.test.tsx`'s; what the server accepts is `auth-url-allowlist.test.ts`'s.
+// `sign-in-sheet.test.tsx`'s; what the server accepts is `auth-url-allowlist.test.ts`'s. The fake is held to the wire: its
+// add goes through the real argv builder, and its lanes' words come from the real `stateWordFor`.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
@@ -10,14 +11,16 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import {
   ACCOUNT_CAPS, type AccountAuthStatusAnswer, type AccountRemoveAnswer, type AccountRemoveCheckAnswer, type AccountsConnect, type FleetSession, type LaneWire, type RosterWire,
 } from '../../shared/api';
+import { buildAccountArgv } from '../../shared/account-argv';
+import { laneNotReadyReason, stateWordFor, type LaneState, type LaneStateRead } from '../../shared/accounts';
 import { AUTH_POLL_MS, ConnectSheet, type ConnectClient, type ConnectSheetProps, type SignInClient } from '../src/accounts/ConnectSheet';
 import { ReauthSheet, troubleActs, type ReauthClient } from '../src/accounts/ReauthSheet';
 import { RemoveSheet, type RemoveClient } from '../src/accounts/RemoveSheet';
-import { heldAttemptOf, resumableAttempt, resumeSheetFor, waitsOnOperator } from '../src/accounts/connectFlow';
+import { heldAttemptOf, managedCodex, resumableAttempt, resumeSheetFor, waitsOnOperator } from '../src/accounts/connectFlow';
 import {
   CANCEL_SIGN_IN, CHATGPT_MODELS, CHATGPT_SIGNED_IN, CODE_FIELD_LABEL, CODEX_FOLDER_KEPT, CODEX_FOLDER_LINE, COMPROMISE_TITLE, COME_BACK,
   COME_BACK_APPROVED, COPIED, COPY_CODE, COPY_LINK, DEVICE_CODE_LABEL, DEVICE_CODE_NOTE, LEDGER, OPEN_CHATGPT, OPEN_LINK, SIGN_IN_AGAIN, SIGN_OUT_RESTART,
-  START_AGAIN, chatgptEnd, clockHM, credentialUntouched, reauthEnd, reauthIntro, reauthRestartLead, resumeBannerText, signInLedger, signInStartRefusal, typedConfirmLabel,
+  START_AGAIN, chatgptEnd, chatgptSignedInLine, clockHM, credentialUntouched, reauthEnd, reauthIntro, reauthRestartLead, resumeBannerText, signInLedger, signInStartRefusal, typedConfirmLabel,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -28,14 +31,30 @@ import { fleetSession } from './fleetFixture';
 const lane = (id: string, over: Partial<RosterWire> = {}): RosterWire => ({
   id, label: id, hue: 'cyan', homeAble: true, hidden: false, pool: null, provider: 'openai', kind: 'codex', ...over,
 });
-const ROSTER: RosterWire[] = [lane('lane-a', { provider: 'anthropic', kind: 'token' }), lane('lane-g')];
+const ROSTER: RosterWire[] = [lane('lane-a', { provider: 'anthropic', kind: 'token' }), lane('lane-g', { managed: true })];
+/** An OpenAI lane ccrc only records (`ccrc account declare`): `kind: 'codex'` too, with no folder and no sign-in to install. */
+const EXTERNAL = lane('lane-x', { managed: false });
 /** The roster before the connect sheet adds lane-g. */
 const BEFORE: RosterWire[] = [ROSTER[0]!];
 const CONNECT = (): AccountsConnect => ({
   accountOps: 'available', gate: 'armed', origin: 'https', caps: [...ACCOUNT_CAPS], stepUpFreshUntil: Date.now() + 3_600_000,
 });
 const LANE_NEW: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
-const LANE_READY: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true };
+/** A lane as the server answers it, through `lanesWire`'s two derivations, so a fake here can't answer what the wire
+ *  can't: `stateWordFor` says Off first for a disabled lane, whatever its check found. */
+const wired = (disabled: boolean, verdict: string, over: Partial<LaneState> = {}, authDead = false): LaneWire => {
+  const check = { verdict, at: Date.now() };
+  const read: LaneStateRead = { kind: 'read', state: { check, seedVerifiedAt: 2, lastRunAt: 1, ...over } };
+  const notReadyReason = laneNotReadyReason(read);
+  return {
+    state: stateWordFor({ disabled, authDead, five: null, seven: 12, provider: 'openai', kind: 'codex', lane: read, now: Date.now() }),
+    check, ...over, ready: notReadyReason === null, ...(notReadyReason !== null ? { notReadyReason } : {}),
+  } as LaneWire;
+};
+/** A new lane after its passing check: still off, and ready to turn on (spec §7.2 steps 3, 7 and 9). */
+const LANE_CHECKED = wired(true, 'ok');
+/** The same lane once it is on. */
+const LANE_READY = wired(false, 'ok');
 const ATTEMPT = 'a'.repeat(32);
 // The host is a stand-in: the sheet shows what the server parsed, whatever it is, and names no host of its own.
 const HOST = 'auth.example.invalid';
@@ -64,8 +83,12 @@ function fakeBox(): {
   const box = { status: null as unknown as Status, expiresAt: Date.now() + 7 * 60_000 };
   box.status = { ok: true, state: 'starting', updatedAt: Date.now(), expiresAt: box.expiresAt };
   const client = {
-    accountAdd: vi.fn<ConnectClient['accountAdd']>(async () => ({ ok: true as const, roster: ROSTER, lane: LANE_NEW, fleetIdentity: null })),
-    accountCheck: vi.fn<ConnectClient['accountCheck']>(async () => ({ ok: true as const, lane: LANE_READY })),
+    // The route's own step: the body goes through the real builder, which refuses what the verb's list doesn't name.
+    accountAdd: vi.fn<ConnectClient['accountAdd']>(async ({ id, credential, ...fields }) => {
+      if (!buildAccountArgv('add', id, fields, credential !== undefined).ok) throw new ApiError(400, { error: 'bad-request' });
+      return { ok: true as const, roster: ROSTER, lane: LANE_NEW, fleetIdentity: null };
+    }),
+    accountCheck: vi.fn<ConnectClient['accountCheck']>(async () => ({ ok: true as const, lane: LANE_CHECKED })),
     accountEnable: vi.fn<ConnectClient['accountEnable']>(async () => ({ ok: true as const, roster: ROSTER, lane: LANE_READY })),
   };
   const sc = {
@@ -141,9 +164,20 @@ describe('OpenAI has no method step (spec §7.2 steps 1–4)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add lane and sign in' }));
     await settle();
     await settle();
-    expect(b.client.accountAdd).toHaveBeenCalledWith({ provider: 'openai', id: 'lane-g', label: 'Lane G', hue: expect.any(String), method: 'openai-login' });
+    expect(b.client.accountAdd).toHaveBeenCalledWith({ provider: 'openai', id: 'lane-g', label: 'Lane G', hue: expect.any(String) });
     expect(b.sc.accountAuthStart).toHaveBeenCalledWith('lane-g', { method: 'openai-login' });
     expect(ledgerText()).toContain(signInLedger('openai-login').starting);
+  });
+
+  it("the add's exact body is one the real builder writes: `openai-login` is the sign-in's method, and `add` refuses it", async () => {
+    const b = fakeBox();
+    sheet(b);
+    await start();
+    const { id, ...fields } = b.client.accountAdd.mock.calls[0]![0];
+    expect(buildAccountArgv('add', id, fields, false)).toEqual({
+      ok: true, argv: ['account', 'add', '--id=lane-g', '--provider=openai', '--label=Lane G', `--hue=${fields.hue}`],
+    });
+    expect(buildAccountArgv('add', id, { ...fields, method: 'openai-login' }, false)).toEqual({ ok: false, why: 'bad-field' });
   });
 
   it('narrows in place while the fleet does not offer its cap word', () => {
@@ -350,11 +384,43 @@ describe('the result frame (spec §7.2 steps 6–9)', () => {
     expect(b.client.accountCheck).toHaveBeenCalledWith('lane-g');
     expect(ledgerText()).toContain('✓ signed in');
     expect(document.querySelector('[data-frame="result"]')).not.toBeNull();
+    // A new lane is off until it is turned on, so Off is the word here, and the sign-in line reads the check.
+    expect(document.querySelector('.acct-result-word')).toHaveAttribute('data-state', 'off');
     expect(screen.getByText(CHATGPT_SIGNED_IN)).toBeInTheDocument();
     expect(screen.getByText(COMPROMISE_TITLE)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Turn it on' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: SIGN_OUT_RESTART })).toBeNull();
     expect(b.sc.accountAuthCode).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn it on' }));
+    await settle();
+    expect(document.querySelector('.acct-result-word')).toHaveAttribute('data-state', 'signed-in');
+    expect(screen.getByText(CHATGPT_SIGNED_IN)).toBeInTheDocument();
+  });
+
+  it('a check that did not pass never says the lane is signed in', async () => {
+    for (const verdict of ['auth-dead', 'unreachable']) {
+      const b = fakeBox();
+      b.client.accountCheck.mockResolvedValue({ ok: true, lane: wired(true, verdict) });
+      showing(b);
+      sheet(b);
+      await start();
+      at(b, 'done');
+      await poll();
+      await settle();
+      expect(document.querySelector('.acct-result-word'), verdict).toHaveAttribute('data-state', 'off');
+      expect(screen.queryByText(CHATGPT_SIGNED_IN), verdict).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('the line reads what the lane proves, and whatever else the lane says of its sign-in beats the check', () => {
+    expect(chatgptSignedInLine(LANE_CHECKED)).toBe(CHATGPT_SIGNED_IN);
+    expect(chatgptSignedInLine(LANE_READY)).toBe(CHATGPT_SIGNED_IN);
+    expect(chatgptSignedInLine(LANE_NEW)).toBeNull();
+    expect(chatgptSignedInLine(wired(false, 'auth-dead'))).toBeNull();
+    expect(chatgptSignedInLine(wired(false, 'ok', {}, true)), 'an HTTP 401 since the check').toBeNull();
+    expect(chatgptSignedInLine(wired(true, 'ok', { signedOutAt: 1 })), 'signed out on the box').toBeNull();
+    expect(chatgptSignedInLine(wired(true, 'ok', { credential: 'none' })), 'no sign-in on the box').toBeNull();
   });
 
   it('says the check starts the gateway while it runs', async () => {
@@ -368,17 +434,17 @@ describe('the result frame (spec §7.2 steps 6–9)', () => {
     await poll();
     expect(ledgerText()).toContain(LEDGER.checkingCodex('lane-g'));
     expect(ledgerText()).toContain("starts this lane's gateway");
-    await act(async () => { answer({ ok: true, lane: LANE_READY }); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { answer({ ok: true, lane: LANE_CHECKED }); await vi.advanceTimersByTimeAsync(0); });
   });
 });
 
 describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
   const OUT: LaneWire = { state: { word: 'signed-out', source: 'Signed out · HTTP 401 · checked 2h ago', at: Date.now() - 7_200_000 }, ready: false, notReadyReason: 'check-failed' };
   const card = (id: string): HTMLElement => document.querySelector(`.accounts-row[data-lane="${id}"]`) as HTMLElement;
-  const screenWith = (connect: AccountsConnect): void => {
+  const screenWith = (connect: AccountsConnect, roster: RosterWire[] = ROSTER, lanes: Record<string, LaneWire> = { 'lane-a': LANE_READY, 'lane-g': OUT }): void => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     act(() => useFleetStore.setState({
-      conn: 'open', usage: [], roster: ROSTER, accountsConnect: connect, lanes: { 'lane-a': LANE_READY, 'lane-g': OUT }, sessions: [], accountsReadAt: () => Date.now(),
+      conn: 'open', usage: [], roster, accountsConnect: connect, lanes, sessions: [], accountsReadAt: () => Date.now(),
     }));
     render(<AccountsScreen />);
   };
@@ -434,6 +500,34 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 
+  it('an Off lane signed in again says so from its check, and a check that failed does not', async () => {
+    const off = fakeBox();
+    showing(off);
+    reauth(off);
+    fireEvent.click(screen.getByRole('button', { name: /Start the sign-in|Sign in/ }));
+    await settle();
+    await settle();
+    at(off, 'done');
+    await poll();
+    await settle();
+    expect(document.querySelector('[data-frame="reauthed"] .acct-result-word')).toHaveAttribute('data-state', 'off');
+    expect(screen.getByText(CHATGPT_SIGNED_IN)).toBeInTheDocument();
+    cleanup();
+
+    const dead = fakeBox();
+    dead.client.accountCheck.mockResolvedValue({ ok: true, lane: wired(true, 'auth-dead') });
+    showing(dead);
+    reauth(dead);
+    fireEvent.click(screen.getByRole('button', { name: /Start the sign-in|Sign in/ }));
+    await settle();
+    await settle();
+    at(dead, 'done');
+    await poll();
+    await settle();
+    expect(document.querySelector('[data-frame="reauthed"]')).not.toBeNull();
+    expect(screen.queryByText(CHATGPT_SIGNED_IN)).toBeNull();
+  });
+
   it('a cancelled one says what the lane keeps, and a lane with none is offered no token', async () => {
     expect(reauthEnd('lane-g', 'openai-login', 'cancelled', undefined, 'kept')).toBe(`Cancelled. ${credentialUntouched('lane-g', 'openai-login')}`);
     expect(credentialUntouched('lane-g', 'openai-login')).toBe('Nothing changed: lane-g keeps its old sign-in.');
@@ -451,6 +545,20 @@ describe('Sign in again on a Codex lane (spec §9 row 5)', () => {
     expect(troubleActs('signed-in', 'codex', true, true)).toEqual([]);
     screenWith({ ...CONNECT(), caps: ['account-v2', 'account-auth-v1'] });
     expect(within(card('lane-g')).queryByRole('button', { name: SIGN_IN_AGAIN })).toBeNull();
+  });
+
+  it("neither offers it on an OpenAI lane ccrc only records: the verb's install step would refuse the sign-in", () => {
+    const roster = [...ROSTER, EXTERNAL, lane('lane-y')];
+    screenWith(CONNECT(), roster, { 'lane-a': LANE_READY, 'lane-g': LANE_READY, 'lane-x': OUT, 'lane-y': OUT });
+    expect(within(card('lane-g')).getAllByRole('button', { name: SIGN_IN_AGAIN })).toHaveLength(1);
+    for (const id of ['lane-x', 'lane-y']) {
+      expect(card(id).querySelector('.acct-trouble'), id).not.toBeNull();
+      expect(within(card(id)).queryByRole('button', { name: SIGN_IN_AGAIN }), id).toBeNull();
+    }
+    expect(managedCodex(EXTERNAL)).toBe(false);
+    expect(managedCodex(lane('lane-y')), 'an older server does not say').toBe(false);
+    expect(managedCodex(ROSTER[1])).toBe(true);
+    expect(managedCodex(undefined)).toBe(false);
   });
 });
 
@@ -496,18 +604,18 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
     ok: true, roster: [ROSTER[0]!], removed: ['~/.local/share/ccrc/codex/lane-g-abc123'], kept: [], rehomed: [],
     atProvider: [{ kind: 'codex', state: 'still-valid', revokeAt: 'chatgpt-settings' }],
   };
-  const open = async (id: string): Promise<{ [K in keyof RemoveClient]: Mock<RemoveClient[K]> }> => {
+  const open = async (id: string, onLane: LaneWire = LANE_READY): Promise<{ [K in keyof RemoveClient]: Mock<RemoveClient[K]> }> => {
     const client = {
       accountRemoveCheck: vi.fn<RemoveClient['accountRemoveCheck']>(async () => CHECK),
       accountRemove: vi.fn<RemoveClient['accountRemove']>(async () => REMOVED),
       accountRevokeAck: vi.fn<RemoveClient['accountRevokeAck']>(async () => ({ ok: true as const })),
     };
     const store = createFleetStore({ makeSocket: () => ({ close: () => {}, send: () => {} }) as never });
-    act(() => { store.setState({ conn: 'open', sessions: [], roster: ROSTER, usage: [] }); });
+    act(() => { store.setState({ conn: 'open', sessions: [], roster: [...ROSTER, EXTERNAL], usage: [] }); });
     render(
       <RemoveSheet
-        id={id} open onClose={vi.fn()} lane={LANE_READY} connect={CONNECT()} blocked={null} refresh={vi.fn(async () => 'ok' as const)}
-        readRoster={() => ROSTER} client={client} wake={vi.fn(async () => {})} fleet={store}
+        id={id} open onClose={vi.fn()} lane={onLane} connect={CONNECT()} blocked={null} refresh={vi.fn(async () => 'ok' as const)}
+        readRoster={() => [...ROSTER, EXTERNAL]} client={client} wake={vi.fn(async () => {})} fleet={store}
       />,
     );
     await settle();
@@ -534,6 +642,22 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
     expect(screen.getByText(CODEX_FOLDER_KEPT)).toBeInTheDocument();
     await remove('lane-g');
     expect(c.accountRemove).toHaveBeenCalledWith('lane-g', { mode: 'remove', confirmId: 'lane-g', codexAuth: 'keep' });
+  });
+
+  it("turned off, it promises only what the box does: on a Signed-out lane too, it never says the sign-in works", async () => {
+    await open('lane-g', wired(false, 'auth-dead'));
+    fireEvent.click(screen.getByRole('checkbox', { name: CODEX_FOLDER_LINE }));
+    expect(screen.getByText(CODEX_FOLDER_KEPT)).toBeInTheDocument();
+    expect(CODEX_FOLDER_KEPT).toBe('The folder stays on the fleet host, and whatever sign-in it holds is not deleted.');
+    expect(CODEX_FOLDER_KEPT).not.toMatch(/work|valid|signed in/i);
+  });
+
+  it('an OpenAI lane ccrc only records has no folder step, so it has no such line and sends no such field', async () => {
+    const c = await open('lane-x');
+    expect(screen.queryByRole('checkbox', { name: CODEX_FOLDER_LINE })).toBeNull();
+    expect(screen.queryByText(CODEX_FOLDER_KEPT)).toBeNull();
+    await remove('lane-x');
+    expect(c.accountRemove).toHaveBeenCalledWith('lane-x', { mode: 'remove', confirmId: 'lane-x' });
   });
 
   it('the ledger links chatgpt.com, and any other lane has no such line', async () => {

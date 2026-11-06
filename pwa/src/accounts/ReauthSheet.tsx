@@ -42,7 +42,7 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   CHECK_AGAIN_LABEL, CLOSE, DONE, LEDGER, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, signInLedger, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
-  SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, CHATGPT_SIGNED_IN, checkingLine, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
+  SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, chatgptSignedInLine, checkingLine, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
   reauthRestartLead, reauthSignOutConfirm, reauthStart, reauthStartRefusal, reauthTitle, reauthWasLine, revokeOldWords,
   signOutRefused, signOutUnknown, statedRefused,
 } from '../fleet/accountWords';
@@ -85,8 +85,9 @@ export interface CardAct { readonly act: CredentialAct; readonly primary: boolea
  *  - Signed out, sign-in lane: **Switch to a long-lived token** (primary, Q1; A23's sheet) · Sign in again.
  *  - Signed out, token lane: **Mint a new token** (primary) · Paste a token.
  *  - Expiring (a minted token): **Replace token** (the mint) · Switch to sign-in (A23's sheet).
- *  - Signed out, Codex lane: **Sign in again** (primary, Task A25, D-8051), where the fleet runs the ChatGPT sign-in
- *    (`codex`: `account-codex-v1` in `connect.caps`, which the server holds back until its host is measured).
+ *  - Signed out, Codex lane: **Sign in again** (primary, Task A25, D-8051), where the fleet runs the ChatGPT sign-in and
+ *    can install it (`codex`: `account-codex-v1` in `connect.caps`, which the server holds back until its host is
+ *    measured, on a lane ccrc owns: `managedCodex`).
  */
 export function troubleActs(word: AccountStateWord, kind: string | undefined, auth: boolean, codex = false): readonly CardAct[] {
   const acts: CredentialAct[] = [];
@@ -326,7 +327,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
     const word = (checked?.state.word ?? 'not-checked') as AccountStateWord;
     const lamp = STATE_LAMPS[word] ?? STATE_LAMPS['not-checked'];
     const identity = checked === null ? null
-      : identityLine(checked, word, Math.floor(Date.now() / 1000)) ?? (method === 'openai-login' && word === 'signed-in' ? CHATGPT_SIGNED_IN : null);
+      : identityLine(checked, word, Math.floor(Date.now() / 1000)) ?? (method === 'openai-login' ? chatgptSignedInLine(checked) : null);
     const revoke = revokeOldWords(id, old.now());
     body = (
       <>

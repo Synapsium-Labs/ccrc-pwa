@@ -44,7 +44,8 @@
 //
 // A CODEX LANE (accounts plan Task A25, D-8051; spec §9 row 5): where the fleet runs the ChatGPT sign-in (`account-codex-v1`
 // in `connect.caps`), its fold offers Sign in again, also a Signed-out one's primary fix, and it opens the re-auth sheet
-// with the lane's own method. The resume line and the banner follow that attempt too.
+// with the lane's own method. The resume line and the banner follow that attempt too. An OpenAI lane ccrc only records
+// wears the same kind and is offered neither: the verb would refuse to install what the attempt signed in (D-8051 (9)).
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ACCOUNT_AUTH_CAP, ACCOUNT_CODEX_CAP, isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
@@ -56,7 +57,7 @@ import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
 import { CREDENTIAL_ACT_LABEL, ReauthSheet, troubleActs, type CredentialAct } from '../accounts/ReauthSheet';
-import { heldAttemptOf, isPastAdding, resumeSheetFor, switchTargetOf, waitsOnOperator, type AnthropicSignIn, type SignInMethod } from '../accounts/connectFlow';
+import { heldAttemptOf, isPastAdding, managedCodex, resumeSheetFor, switchTargetOf, waitsOnOperator, type AnthropicSignIn, type SignInMethod } from '../accounts/connectFlow';
 import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
@@ -585,7 +586,7 @@ export function AccountsScreen(): ReactNode {
                   onCheck={canAct ? () => acts.check(wrapper) : undefined}
                   checking={acts.busy[wrapper] !== undefined}
                   acts={canAct && (entry?.provider === 'anthropic' || entry?.kind === 'codex')
-                    ? troubleActs(answer.word, entry.kind, canSwitch, canCodex).map((c) => ({
+                    ? troubleActs(answer.word, entry.kind, canSwitch, canCodex && managedCodex(entry)).map((c) => ({
                       label: CREDENTIAL_ACT_LABEL[c.act], primary: c.primary, onOpen: () => openAct(wrapper, c.act),
                     }))
                     : undefined}
@@ -663,7 +664,7 @@ export function AccountsScreen(): ReactNode {
                     </Button>
                   )}
                   {/* A Codex lane's Sign in again (spec §9 row 5; Task A25): where the fleet runs the ChatGPT sign-in. */}
-                  {entry?.kind === 'codex' && canCodex && (
+                  {managedCodex(entry) && canCodex && (
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}
                       aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}

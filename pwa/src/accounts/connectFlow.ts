@@ -53,6 +53,12 @@ export const showsDeviceCode = (m: SignInMethod): boolean => AUTH_DEVICE_CODE_ME
 export const waitsOnOperator = (m: SignInMethod, state: AuthStatusState | undefined): boolean =>
   state === 'waiting-code' || (showsDeviceCode(m) && state === 'url');
 export const sheetRuns = (provider: DoorProvider, method: ConnectMethod): boolean => SHEET_RUNS.has(`${provider}:${method}`);
+/** The add's `method` field. A ChatGPT lane's add has none (spec §7.2 step 3; D-8051 (7)): `openai-login` is what its
+ *  `auth/start` runs, and `add`'s own list refuses it `bad-field`, so sending it would stop every add before the verb. */
+export const addMethodField = (m: ConnectMethod): { method?: ConnectMethod } => (m === 'openai-login' ? {} : { method: m });
+/** Whether a lane is a Codex lane ccrc owns end to end. `kind: 'codex'` also covers an OpenAI lane ccrc only records, which
+ *  has no sign-in folder and no sign-in the box can install (D-8051 (9)). An older server's row doesn't say, so it isn't. */
+export const managedCodex = (row: Pick<RosterWire, 'kind' | 'managed'> | undefined): boolean => row?.kind === 'codex' && row.managed === true;
 
 /** One row of a choice: its value, and the reason it narrows in place (`null`: it may be chosen). */
 export interface Choice<T> { readonly value: T; readonly narrowed: string | null }

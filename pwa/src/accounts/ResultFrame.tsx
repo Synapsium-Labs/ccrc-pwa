@@ -4,8 +4,8 @@ import { isLaneIdentity, LANE_IDENTITY_MAX, type AccountStateWord } from '../../
 import type { LaneWire } from '../../../shared/api';
 import { FrameFoot } from './FrameFoot';
 import {
-  CHATGPT_SIGNED_IN, LEAVE_IT_OFF, SAVE_STATED, STATED_LABEL, STATED_NOTE, STATED_PROBLEM, WRONG_ACCOUNT, checkLatency, STATE_LAMPS, TURN_IT_ON,
-  identityLine, notReadyWords,
+  LEAVE_IT_OFF, SAVE_STATED, STATED_LABEL, STATED_NOTE, STATED_PROBLEM, WRONG_ACCOUNT, checkLatency, STATE_LAMPS, TURN_IT_ON,
+  chatgptSignedInLine, identityLine, notReadyWords,
 } from '../fleet/accountWords';
 import type { SignInMethod } from './connectFlow';
 
@@ -89,9 +89,10 @@ export function StatedField({ onSave, busy, notice, blocked, initial = '' }: {
 export function ResultFrame(p: ResultFrameProps): ReactNode {
   const word = (p.lane?.state.word ?? 'not-checked') as AccountStateWord;
   const lamp = STATE_LAMPS[word] ?? STATE_LAMPS['not-checked'];
-  // A Codex lane has no identity to read back (spec §3.4): it says how it is signed in, unless one was stated.
+  // A Codex lane has no identity to read back (spec §3.4): it says how it is signed in, unless one was stated. That
+  // reads the check, since this frame's word is Off until Turn it on.
   const identity = p.lane === null ? null
-    : identityLine(p.lane, word, p.nowSec) ?? (p.signIn?.method === 'openai-login' && word === 'signed-in' ? CHATGPT_SIGNED_IN : null);
+    : identityLine(p.lane, word, p.nowSec) ?? (p.signIn?.method === 'openai-login' ? chatgptSignedInLine(p.lane) : null);
   const unchecked = p.lane === null;
   // Why Turn it on is held: the box's not-ready reason, or, with no lane read, the check's refusal (or the box's word
   // for a lane never checked, should no sentence have been left).
