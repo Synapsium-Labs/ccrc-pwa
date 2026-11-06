@@ -65,9 +65,13 @@ const WORD_LEAVES: ReadonlySet<string> = new Set(['word', 'raw']);
 const LIVE_STATUS = /\b(?:live|liveFile)\.status\b/;
 const THE_READING = /\bturnWordOf\(|\.turn\.word\b/;
 
+const BARE_WORD = /^word\s|\sword$/;
+
 /** Whether a bare `word` in this comparison is the reading's: its binding was made by `turnWordOf` or read off a
- *  `SessionReading`, so the comparison is a caller's policy over a `Turn`, not a second read of the raw word. */
+ *  `SessionReading`, so the comparison is a caller's policy over a `Turn`, not a second read of the raw word. Only the bare
+ *  word is excused: a `live.status` or a `.word` leaf beside that binding is still a raw read. */
 function readsTheReading(p: ParsedFile, c: Comparison): boolean {
+  if (!BARE_WORD.test(c.text)) return false;
   return p.bindings.some((b) => b.name === 'word' && b.scopeStart <= c.start && c.start < b.scopeEnd && b.start < c.start && THE_READING.test(b.init));
 }
 

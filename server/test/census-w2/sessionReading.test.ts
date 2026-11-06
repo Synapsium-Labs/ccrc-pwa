@@ -32,6 +32,7 @@ describe('W2 census: FIXTURE rows', () => {
       "export function reversed(r: R) { return 'shell' === r.word.word; }",
       "export function viaTurnWordOf(live: L) { const word = turnWordOf(live.status); return word === 'idle'; }",
       "export function viaReading(r: R) { const word = r.turn.word; return word === 'busy'; }",
+      "export function rawBesideBinding(live: L) { const word = turnWordOf(live.status); if (live.status === 'busy') return 1; if (live.word === 'shell') return 2; return word === 'idle'; }",
       "export function statusWord(s: S) { return s.status === 'idle'; }",
       "export function otherLiteral(live: L) { return live.word === 'done'; }",
       "export function repeated(live: L) { if (live.word === 'busy') return 1; if (live.word === 'busy') return 2; return live.status === 'shell'; }",
@@ -55,9 +56,11 @@ describe('W2 census: FIXTURE rows', () => {
     ]);
   });
 
-  it('rawTurnWordReaders: each comparison of a raw word with idle, busy or shell is a row, a repeated one and one in a route handler too; a Turn from the reading, a plain status and another literal are none', () => {
+  it('rawTurnWordReaders: each comparison of a raw word with idle, busy or shell is a row, a repeated one and one in a route handler too; a raw read beside a Turn binding too; a Turn from the reading, a plain status and another literal are none', () => {
     expect(rawTurnWordReaders(tree)).toEqual([
       "server/src/words.ts#liveFile r.liveFile.status !== 'idle'",
+      "server/src/words.ts#rawBesideBinding live.status === 'busy'",
+      "server/src/words.ts#rawBesideBinding live.word === 'shell'",
       "server/src/words.ts#rawLeaf live.word === 'busy'",
       "server/src/words.ts#repeated live.status === 'shell'",
       "server/src/words.ts#repeated live.word === 'busy'",
