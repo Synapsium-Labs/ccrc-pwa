@@ -98,7 +98,9 @@ describe('decideAdoption', () => {
     const moved = new Map([[l.parentId, live(l, { incarnation: 'g2' })]]);
     expect(kinds(decideAdoption(base(cp, SETTLED, { parents: moved })))).toEqual(['adopt']);
     const nullInc = new Map([[l.parentId, live(l, { incarnation: null })]]);
-    expect(decideAdoption(base(cp, T0 + 30 * DAY, { parents: nullInc, watch: new Map() })).decisions).toEqual([]);
+    const unread = decideAdoption(base(cp, T0 + 30 * DAY, { parents: nullInc, watch: new Map() }));
+    expect(unread.decisions).toEqual([]);
+    expect(unread.watch.size, 'an unmeasured incarnation starts no watch').toBe(0);
     const dead = new Map([[l.parentId, live(l, { deadSince: iso(T0 - 120_000) })]]);
     expect(kinds(decideAdoption(base(cp, SETTLED, { parents: dead }))), 'dead for two passes outside its restart window').toEqual(['adopt']);
   });
