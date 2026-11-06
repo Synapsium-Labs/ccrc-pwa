@@ -26,7 +26,7 @@ import { decideAllocation } from './ledger.js';
 import type { CoordPlacementStamp } from './placement.js';
 import type { DelegationProjectionRun } from './delegation-projection.js';
 import type { LastRun } from './released.js';
-import type { BindingRun, Incarnation } from './runBinding.js';
+import type { BindingRun, Incarnation, StampedRun } from './runBinding.js';
 import { boundRows, openRows, type SeriesRow } from './bindingRows.js';
 import { bindingsOver, type SessionBindings } from './bindingReads.js';
 // Stall watch wave 1: the stall lane's row shapes are declared by their CONSUMER,
@@ -843,7 +843,7 @@ export type RunsReadResult =
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type BindingRunsResult =
-  | { ok: true; runs: BindingRun[] }
+  | { ok: true; runs: (BindingRun & Pick<StampedRun, 'closedAt'>)[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type OpenSiblingsResult =
@@ -2013,7 +2013,7 @@ export class CoordStore {
 
   /**
    * The series `coord/runBinding.ts` derives a binding from (ARCH-60, #795): every run `id` works on (`sessionId`) or
-   * claims (`claimedBy`), ANY state, by id, with the columns the binding reads and no more. The two roles are ONE read
+   * claims (`claimedBy`), ANY state, by id, with the columns the binding and `claimantAt` read (D-8042). The two roles are ONE read
    * because the binding's queries ask both ("whose worker is this?", "whose children are these?") of the same series,
    * and `runsTouching`'s reason for the OR holds. ALL-OR-FAILURE like every session-keyed read here (D-2545): an `id`
    * this process cannot represent fails the whole read, so a partial series never reads as "nothing else is bound".
@@ -2024,13 +2024,13 @@ export class CoordStore {
    * a run id (`claimantsOfSession`, a child's parent when the proven series fails). An ordinal is not a run id.
    */
   bindingRunsOf(id: string, ids: 'proven' | 'ordinal' = 'proven'): BindingRunsResult {
-    const runs: BindingRun[] = [];
+    const runs: (BindingRun & Pick<StampedRun, 'closedAt'>)[] = [];
     for (const [i, r] of this.seriesRows('either', id).entries()) {
       const n = ids === 'ordinal' ? { ok: true as const, value: i + 1 } : persistedInt(r.idText, 'run id');
       if (!n.ok) return { ok: false, kind: 'run-unreadable', detail: n.detail };
       runs.push({ id: n.value, sessionId: r.sessionId, claimedBy: r.claimedBy,
         state: isRunState(r.state) ? r.state : 'unknown', openedAt: r.openedAt,
-        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt });
+        sessionBornAt: r.sessionBornAt, sessionBornFor: r.sessionBornFor, dispatchStartedAt: r.dispatchStartedAt, closedAt: r.closedAt });
     }
     return { ok: true, runs };
   }
@@ -2050,13 +2050,13 @@ export class CoordStore {
    * needs, raw. Every session-keyed reader below projects this through `coord/bindingRows.ts`, so the rule for which run
    * is a session's is written once, in `coord/runBinding.ts`. Synchronous, like every read on this store.
    */
-  private seriesRows(column: 'sessionId' | 'claimedBy' | 'either', id: string): SeriesRow[] {
+  private seriesRows(column: 'sessionId' | 'claimedBy' | 'either', id: string): (SeriesRow & { readonly closedAt: number | null })[] {
     const where = column === 'either' ? 'sessionId = ? OR claimedBy = ?' : `${column} = ?`;
     return this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
       'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, state, sessionId, claimedBy, ' +
-      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt FROM runs WHERE ${where} ORDER BY id`,
-    ).all(...(column === 'either' ? [id, id] : [id])) as unknown as SeriesRow[];
+      `openedAt, sessionBornAt, sessionBornFor, dispatchStartedAt, closedAt FROM runs WHERE ${where} ORDER BY id`,
+    ).all(...(column === 'either' ? [id, id] : [id])) as unknown as (SeriesRow & { readonly closedAt: number | null })[];
   }
 
   /**

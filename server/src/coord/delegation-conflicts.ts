@@ -13,7 +13,7 @@
 //
 // The policy imports this module for `disownedTreeKeys`, and this module imports the policy for its classifier: each reads the other
 // only inside function bodies, so the cycle evaluates nothing at module load.
-import { delegationSha256Hex, type DelegationAttemptRow, type DelegationCheckpointV1 } from './delegation-model.js';
+import { delegationSha256Hex, parseDelegationInstant, type DelegationAttemptRow, type DelegationCheckpointV1, type DelegationLeaseRow } from './delegation-model.js';
 import { isUnownedWorkReason } from './delegation-policy.js';
 import { delegationTreeKey } from './delegation-correlation.js';
 import { attemptMarkAbove } from './delegation-lease-state.js';
@@ -60,6 +60,35 @@ export function disownedTreeKeys(cp: Resolutions): ReadonlySet<string> {
   const foreign = new Set((cp.leaseCarriers ?? []).filter((c) => c.releaseReason === 'foreign').map((c) => c.leaseId));
   return new Set(cp.leases.filter((l) => l.releasedAt !== null && foreign.has(l.leaseId))
     .map((l) => disownedTreeKey(l.project, l.adminRecord, l.creationBase)));
+}
+
+/** D-8043: the trees, keyed by `delegationTreeKey` (project and admin record, no base), that hold ANY disowned key, whatever its base.
+ *  Correlation holds a census record whose creation base is UNMEASURED (null) on such a tree until the base reads: an unread base is
+ *  never "another creation base". Built from `disownedTreeKeys`, so the two sets never disagree. */
+export function disownedTreeRecords(cp: Resolutions): ReadonlySet<string> {
+  return new Set([...disownedTreeKeys(cp)].map((k) => {
+    const [project, adminRecord] = JSON.parse(k) as [string, string, string | null];
+    return delegationTreeKey(project, adminRecord);
+  }));
+}
+
+/** Oldest first: first observed, then lease id. */
+const oldestFirst = (a: DelegationLeaseRow, b: DelegationLeaseRow): number =>
+  parseDelegationInstant(a.firstObservedAt) - parseDelegationInstant(b.firstObservedAt) || (a.leaseId < b.leaseId ? -1 : a.leaseId > b.leaseId ? 1 : 0);
+
+/**
+ * THE ONE derivation of the lease a tree names (F7 of review 1554), read by the projection (the unowned row's `leaseId`) and by the
+ * resolve of a `tree-<key>` (`delegation-lease-acts.ts#leaseOfTarget`), so the two always name the same lease. `treeKey` is
+ * `delegationTreeKey`; `conflicting` is `conflictingTreeKeys(cp)`. The lease the projection hides for a conflict (unreleased, not
+ * `raw`, on a conflicting tree) when there is one, the oldest of them; otherwise the oldest unreleased lease on the tree; null when the
+ * tree holds no unreleased lease. One unreleased lease per tree is not an invariant this relies on.
+ */
+export function treeLeaseOf(cp: Pick<DelegationCheckpointV1, 'leases'>, conflicting: ReadonlySet<string>, treeKey: string):
+  { lease: DelegationLeaseRow; hiddenForConflict: boolean } | null {
+  const onTree = cp.leases.filter((l) => l.releasedAt === null && delegationTreeKey(l.project, l.adminRecord) === treeKey).sort(oldestFirst);
+  const hidden = conflicting.has(treeKey) ? onTree.find((l) => l.sourceKind !== 'raw') : undefined;
+  if (hidden !== undefined) return { lease: hidden, hiddenForConflict: true };
+  return onTree[0] === undefined ? null : { lease: onTree[0], hiddenForConflict: false };
 }
 
 /** The ONE spelling of a tree in a URL (D-7837): the SHA-256 hex of `delegationTreeKey`, carried as `tree-<64 hex>`. The box's

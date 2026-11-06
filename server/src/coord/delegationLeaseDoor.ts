@@ -6,7 +6,7 @@
 // `delegation-lease-acts.ts`, acts through PR5b's `transitionLease` and `releaseLease`, re-reads the caller's incarnation, and answers a
 // `LeaseDoorAnswer`. It decides nothing itself. It never composes a ccd verb: the box's carrier is marked by the lane's next pass
 // (`delegationCarrierMark.ts`), so every answer says `carrier: 'pending'`. It renews nothing on a branch write.
-import type { DelegationCarrierState, LeaseDoorAnswer, LeaseDoorRefusal } from '../../../shared/api.js';
+import { isSessionIdShape, type DelegationCarrierState, type LeaseDoorAnswer, type LeaseDoorRefusal } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
 import { LEASE_MARK_LOCK_CAP, ORPHAN_LEASE_CAP, capSupported, ccdCan } from '../ccdargv.js';
@@ -17,7 +17,7 @@ import { formatDelegationInstant, type DelegationCheckpointV1 } from './delegati
 import { DELEGATION_LEASE_EXPIRY_MS } from './delegation-lease-state.js';
 import { conflictingTreeKeys } from './delegation-conflicts.js';
 import {
-  decideOperatorRetain, decideResolve, decideRetain, leaseCoordinatorOf, type LeaseDoorTarget, type LeaseResolveAnswer,
+  decideOperatorRetain, decideResolve, decideRetain, leaseCoordinatorOf, type LeaseDoorTarget, type LeaseResolveAnswer, type LiveParentRead,
 } from './delegation-lease-acts.js';
 import type { CoordStore } from './store.js';
 import type { StampedRun } from './runBinding.js';
@@ -39,29 +39,25 @@ const no = (error: LeaseDoorRefusal, detail: string): LeaseDoorAnswer => ({ ok: 
 export type RunStampsRead = { ok: true; runs: readonly StampedRun[] } | { ok: false; detail: string };
 
 /**
- * D-7818 and D-8042: every run that ever named `sessionId`, open or closed, with no limit, each with its interval. It is composed
- * from two readers the store already has, never a store method of its own: the binding's own series (`CoordStore#bindingRunsOf`,
- * every run the session works on or claims, any state, unbounded), then each run's interval by its id (`CoordStore#run`, a run-keyed
- * read). A fifth session-keyed run reader would break the ARCH-62 census's ceiling of four (`run-session-census.test.ts`). The series
- * also holds the runs the session claims; `claimantAt` reads only the ones that name it as worker. All-or-failure: one unreadable
- * run fails the read. It costs one run read per run in the series, on a door that is rare.
+ * D-7818 and D-8042: every run that ever named `sessionId`, open or closed, with no limit, each with its interval: the binding's own
+ * series (`CoordStore#bindingRunsOf`, every run the session works on or claims, any state, unbounded), whose row carries `closedAt`
+ * beside `openedAt`, so no run is read again by id and none is hydrated. It is no store method of its own: a fifth session-keyed run
+ * reader would break the ARCH-62 census's ceiling of four (`run-session-census.test.ts`). The series also holds the runs the session
+ * claims; `claimantAt` reads only the ones that name it as worker. All-or-failure, as the series is.
  */
-export function runStampsOfSeries(coord: Pick<CoordStore, 'bindingRunsOf' | 'run'>, sessionId: string): RunStampsRead {
+export function runStampsOfSeries(coord: Pick<CoordStore, 'bindingRunsOf'>, sessionId: string): RunStampsRead {
   const series = coord.bindingRunsOf(sessionId);
   if (!series.ok) return { ok: false, detail: series.detail };
-  const runs: StampedRun[] = [];
-  for (const b of series.runs) {
-    const read = coord.run(b.id);
-    if (!read.ok) return { ok: false, detail: read.detail };
-    if (read.run !== null) runs.push({ id: read.run.id, sessionId: read.run.sessionId, claimedBy: read.run.claimedBy, openedAt: read.run.openedAt, closedAt: read.run.closedAt });
-  }
-  return { ok: true, runs };
+  return { ok: true, runs: series.runs.map((r) => ({ id: r.id, sessionId: r.sessionId, claimedBy: r.claimedBy, openedAt: r.openedAt, closedAt: r.closedAt })) };
 }
 /** How many times a door decides again when the lease moved between its read and its act (`stale-generation`, the lane's carrier mint). */
 const ATTEMPTS = 2;
 
-/** A session's CURRENT incarnation, read twice (`$REG/<id>.generation`, ruling R38), or why it is unmeasured. */
-async function incarnationOf(d: LeaseDoorDeps, id: string): Promise<{ kind: 'measured'; incarnation: string } | { kind: 'unmeasured'; reason: string }> {
+/** A session's CURRENT incarnation, read twice (`$REG/<id>.generation`, ruling R38), or why it is unmeasured (`absent` when the row is
+ *  measured absent). An id that is not a session id's shape is read nowhere and is unmeasured (defence in depth: the parsers refuse it
+ *  first). */
+export async function incarnationOf(d: Pick<LeaseDoorDeps, 'io' | 'registryDir'>, id: string): Promise<{ kind: 'measured'; incarnation: string } | { kind: 'unmeasured'; reason: string }> {
+  if (!isSessionIdShape(id)) return { kind: 'unmeasured', reason: 'not a session id' };
   const generationOf = (s: string) => childReclaimGenerationRead(d.io, d.registryDir, s);
   try {
     return (await settleParentIncarnations(generationOf, await readParentGenerations(generationOf, [id]))).get(id) ?? { kind: 'unmeasured', reason: 'unread' };
@@ -155,10 +151,12 @@ export async function operatorRetainLease(d: LeaseDoorDeps, leaseId: string): Pr
  *  `attach` transition or the `foreign` release, each with the resolution mark. */
 export async function resolveLease(d: LeaseDoorDeps, req: { target: LeaseDoorTarget; action: 'attach' | 'foreign'; parent: string | null }): Promise<LeaseDoorAnswer> {
   const parentInc = req.action === 'attach' && req.parent !== null ? await incarnationOf(d, req.parent) : null;
+  const liveParent = (id: string): LiveParentRead => (id !== req.parent || parentInc === null ? { kind: 'not-live' }
+    : parentInc.kind === 'measured' ? { kind: 'live', incarnation: parentInc.incarnation }
+    : parentInc.reason === 'absent' ? { kind: 'not-live' } : { kind: 'unmeasured', reason: parentInc.reason });
   return decideAndAct(d, async (durable, cp) => {
     const decided: LeaseResolveAnswer = decideResolve({ target: req.target, action: req.action, parent: req.parent, checkpoint: cp,
-      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: carrierMarks(d),
-      liveParent: (id) => (id === req.parent && parentInc?.kind === 'measured' ? { incarnation: parentInc.incarnation } : null) });
+      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: carrierMarks(d), liveParent });
     if (!decided.ok) return no(decided.refusal, decided.detail);
     if (decided.act === 'release') {
       return settle(durable, () => durable.releaseLease({ leaseId: decided.leaseId, expectGeneration: decided.expectGeneration, releaseReason: 'foreign',

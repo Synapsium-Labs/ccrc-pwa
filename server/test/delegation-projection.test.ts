@@ -468,7 +468,7 @@ describe('delegation-conflicts: the one derivation of conflict, resolution, diso
     const l = lease({ leaseId: 'l1', adminRecord: 'agent-a', project: 'demo', sourceKind: 'raw' });
     const cp = { ...emptyDelegationCheckpoint(), leases: [l] };
     const resolve = (tgt: NonNullable<ReturnType<typeof parseLeaseTarget>>) => decideResolve({ target: tgt, action: 'foreign', parent: null,
-      checkpoint: cp, conflicting: new Set(), boxHolds: true, carrierRequired: false, liveParent: () => null });
+      checkpoint: cp, conflicting: new Set(), boxHolds: true, carrierRequired: false, liveParent: () => ({ kind: 'not-live' }) });
     expect(resolve(target!)).toMatchObject({ ok: true, act: 'release', leaseId: 'l1' });
     // `tree-` followed by delegationTreeKey itself does not parse; another 64-hex spelling resolves to no tree
     expect(parseLeaseTarget(`tree-${delegationTreeKey('demo', 'agent-a')}`)).toBeNull();

@@ -42,10 +42,11 @@
 //     of the same parent and incarnation shares its identity record and its upstream ID is the run's plus `-<index>`.
 //   * A run-child verdict whose owner activity the checkpoint does not hold (or whose parent has no session) reports nothing.
 import {
+  delegationTreeKey,
   type DelegationCorrelationReason,
   type DelegationCorrelationVerdict,
 } from './delegation-correlation.js';
-import { disownedTreeKey, disownedTreeKeys } from './delegation-conflicts.js';
+import { disownedTreeKey, disownedTreeKeys, disownedTreeRecords } from './delegation-conflicts.js';
 import {
   DELEGATION_MODEL_REFUSALS,
   DelegationModelError,
@@ -246,6 +247,9 @@ interface Ground {
   /** Wave 5 PR8 (D-7822): the trees the operator said are not delegation's (`disownedTreeKeys`, keyed with the creation base). Final for
    *  the tree: no lease is requested and no attempt recorded for a census record with the same project, admin record and creation base. */
   disownedTrees: ReadonlySet<string>;
+  /** D-8043: the (project, admin record) of every disowned tree, whatever its base (`disownedTreeRecords`). A record whose base is
+   *  unmeasured (null) is held on such a tree until its base reads. */
+  disownedRecords: ReadonlySet<string>;
   /** Every unreleased lease: whoever holds a tree holds it, whichever activity it names. */
   openLeases: readonly { activityId: string; parentId: string; parentIncarnation: string; project: string; adminRecord: string; canonicalPath: string }[];
 }
@@ -263,6 +267,7 @@ function groundOf(now: string, recovery: DelegationRecoveryState): Ground {
     attemptsByKey: delegationAttemptsByKey(cp.attempts),
     finalConflicts: new Set(cp.attempts.filter((a) => a.verdict === 'conflicting').map((a) => treeKey(a.project, a.adminRecord))),
     disownedTrees: disownedTreeKeys(cp),
+    disownedRecords: disownedTreeRecords(cp),
     openLeases: cp.leases.filter((l) => l.releasedAt === null).map((l) => ({
       activityId: l.activityId, parentId: l.parentId, parentIncarnation: l.parentIncarnation, project: l.project, adminRecord: l.adminRecord, canonicalPath: l.canonicalPath,
     })),
@@ -399,8 +404,12 @@ function planRecord(ground: Ground, claimsAllowed: boolean, record: DelegationCe
   // Only a record measured PRESENT is a tree. An unreadable or absent one is no candidate, whatever verdict it was handed.
   if (record.state !== 'present') return [];
   // A conflict, or the operator's "not delegated", is final for the tree (D-7821, D-7822): nothing links, files or requests on it again.
-  const finalConflict = ground.finalConflicts.has(treeKey(record.project, record.adminRecord))
-    || ground.disownedTrees.has(disownedTreeKey(record.project, record.adminRecord, record.claudeBase));
+  // An UNMEASURED base (null) is never another creation base: it holds any tree of that project and admin record that was disowned at
+  // any base, until the base reads; a measured base keeps the exact compare (D-8043).
+  const disowned = record.claudeBase === null
+    ? ground.disownedRecords.has(delegationTreeKey(record.project, record.adminRecord))
+    : ground.disownedTrees.has(disownedTreeKey(record.project, record.adminRecord, record.claudeBase));
+  const finalConflict = ground.finalConflicts.has(treeKey(record.project, record.adminRecord)) || disowned;
   switch (verdict.kind) {
     case 'run-child-owned':
       return planRunChildOwned(ground, record, verdict);

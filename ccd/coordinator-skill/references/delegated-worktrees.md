@@ -15,7 +15,9 @@ the worktree is no longer held back, and the sweep may take it.
 
 ## Retaining one
 
-The lease's parent, or that parent's coordinator, may keep it another 7 days:
+You may keep a worktree's lease another 7 days when you are the lease's parent, or when
+your run's claim names that parent (you are its coordinator). That holds for every
+lease, including one the server inferred from a shell call:
 
 ```
 printf '{"byId":"<your id>","byUuid":"<your uuid>"}' | ~/.local/bin/ccrc-api leases retain <lease-id> --json -
@@ -29,9 +31,10 @@ is recorded, and the worktree's carrier follows.
 Turning a kept worktree into a real run is a `runs open` that names the worktree's
 lease. That is a later change and is not available yet; do not try it.
 
-## Unowned worktrees
+## The operator's acts
 
-A worktree in conflict, or one the server only inferred from a shell call, is the
-operator's, not yours. The operator keeps it, attaches it to its own session, or says it
-is not delegated, from the PWA. A worktree with no lease at all has no control yet. This
-session never does any of these, and never retains a worktree it does not own.
+Attaching a lease to its own session, and saying a worktree is not delegated, are the
+operator's, from the PWA, and so is every act on a worktree in conflict: Retain refuses
+one. A worktree with no lease at all has no control yet. This session never does any of
+these, and never retains a lease whose parent is neither you nor a session your run's
+claim names.

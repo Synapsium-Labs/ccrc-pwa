@@ -8,8 +8,8 @@
 // coordination directory and the server's own `CoordStore` (so every door commits through the real SQLite projection); the route
 // reaches it through a stand-in watcher. Every directory is a FIXTURE home: nothing reads the live `~/.ccrc` or `~/.cc-sessions`, no ccd
 // verb runs, and the box token is a test constant. Fixture names: `lane-a-demo`, `lane-b-demo`, `coord-a-demo`, `project-a`.
-import { afterEach, describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { Bus } from '../src/bus.js';
@@ -32,6 +32,7 @@ import {
 import { conflictingTreeKeys, delegationTreeTarget } from '../src/coord/delegation-conflicts.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
 import { projectDelegation } from '../src/coord/delegation-projection.js';
+import { incarnationOf } from '../src/coord/delegationLeaseDoor.js';
 import { LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP, ORPHAN_LEASE_CAP } from '../src/ccdargv.js';
 import { LEASE_DOOR_REFUSALS, type DelegationEventEnvelopeV1 } from '../../shared/api.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
@@ -157,6 +158,7 @@ async function world(opts: { armed?: boolean; caps?: string[] | null } = {}): Pr
   return { home, app, coord, durable, fleet, uuids, x: x.leaseId, r: r.leaseId, route };
 }
 
+const rmGeneration = (w: World, id: string): void => rmSync(path.join(w.home, '.cc-sessions', `${id}.generation`));
 function journal(home: string) {
   const p = path.join(home, '.ccrc', DELEGATION_JOURNAL_FILE);
   return existsSync(p) ? parseDelegationJournal(new Uint8Array(readFileSync(p))) : [];
@@ -261,8 +263,10 @@ describe('W5-R9: retain\'s refusal order, by name, one request each (the intent 
     }
     const bounded = w.coord.delegationRunStamps();
     expect(bounded.ok && bounded.runs.some((r) => r.id === run.id), 'CONTROL: the bounded read no longer holds the run').toBe(false);
+    const hydrate = vi.spyOn(w.coord, 'run');
     const res = await retain(w, w.x, { byId: COORD.id, byUuid: COORD.uuid });
     expect([res.statusCode, res.json().disposition]).toEqual([200, 'retained']);
+    expect(hydrate, 'F8: the claimant read hydrates no run').not.toHaveBeenCalled();
     const other = await retain(w, w.r, { byId: OTHER.id, byUuid: OTHER.uuid });
     expect(other.json().error).toBe('not-lease-parent');
   });
@@ -433,4 +437,91 @@ describe('W5-R12d: a box that cannot hold a tree takes no hold of an ephemeral l
       expect((await resolve(w, w.r, { action: 'foreign' })).statusCode, 'foreign is never gated').toBe(200);
     });
   }
+});
+
+// ── Fix round 1 (review 1554): the door's rare paths, each with its own row ─────────────────────────────────────────────
+
+/** An applier that is the real one but for the act a row puts in its place. */
+const wrapped = (w: World, over: Partial<Pick<DelegationDurability, 'transitionLease' | 'releaseLease'>>) => {
+  const real = w.durable;
+  w.route.applier = {
+    state: () => real.state(),
+    transitionLease: over.transitionLease ?? ((req: Parameters<DelegationDurability['transitionLease']>[0]) => real.transitionLease(req)),
+    releaseLease: over.releaseLease ?? ((req: Parameters<DelegationDurability['releaseLease']>[0]) => real.releaseLease(req)),
+  };
+};
+const stale = { kind: 'refused' as const, refusal: 'stale-generation' as const, detail: 'the lease moved' };
+
+describe('F2: the door\'s rare paths', () => {
+  it('(1) resolve-attach reads the parent\'s registry row: a parent whose generation file is absent answers 409 not-live-parent, journals nothing', async () => {
+    const w = await world();
+    rmGeneration(w, PARENT.id);
+    const n = journal(w.home).length;
+    const res = await resolve(w, w.r, { action: 'attach', parent: PARENT.id });
+    expect([res.statusCode, res.json().error]).toEqual([409, 'not-live-parent']);
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+  });
+
+  it('D-8041: an unreadable parent generation in resolve-attach answers 502 registry-unmeasurable, never not-live-parent, and journals nothing', async () => {
+    const w = await world();
+    writeFileSync(path.join(w.home, '.cc-sessions', `${PARENT.id}.generation`), 'not-a-generation');
+    const n = journal(w.home).length;
+    const res = await resolve(w, w.r, { action: 'attach', parent: PARENT.id });
+    expect([res.statusCode, res.json().error]).toEqual([502, 'registry-unmeasurable']);
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+  });
+
+  it('(2) the parent\'s run series unreadable answers 503 not-ready and journals nothing', async () => {
+    const w = await world();
+    const own = w.coord.openRun({ program: 'program-own', title: 'run-own', project: 'project-a', wave: 1, waveOf: 1, claimedBy: PARENT.id });
+    if (!('id' in own)) throw new Error('openRun refused');
+    w.coord.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, own.id);
+    expect(w.coord.bindingRunsOf(PARENT.id).ok, 'CONTROL: the series is unreadable').toBe(false);
+    const n = journal(w.home).length;
+    const res = await retain(w, w.x);
+    expect([res.statusCode, res.json().error]).toEqual([503, 'not-ready']);
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+  });
+
+  it('(3) a lease that moves under the act is decided once more: stale-generation twice answers 503 not-ready; once, then the act commits', async () => {
+    const w = await world();
+    let calls = 0;
+    wrapped(w, { transitionLease: async () => { calls++; return stale; } });
+    const n = journal(w.home).length;
+    const twice = await retain(w, w.x);
+    expect([twice.statusCode, twice.json().error, calls]).toEqual([503, 'not-ready', 2]);
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+    let once = 0;
+    wrapped(w, { transitionLease: async (req) => (once++ === 0 ? stale : w.durable.transitionLease(req)) });
+    const ok = await retain(w, w.x);
+    expect([ok.statusCode, ok.json().disposition, once]).toEqual([200, 'retained', 2]);
+  });
+
+  it('(4) a PR5b door that throws answers 503 not-ready and journals nothing', async () => {
+    const w = await world();
+    wrapped(w, { transitionLease: async () => { throw new Error('fold refused'); }, releaseLease: async () => { throw new Error('fold refused'); } });
+    const n = journal(w.home).length;
+    for (const res of [await retain(w, w.x), await operatorRetain(w, w.x), await resolve(w, w.r, { action: 'foreign' })]) {
+      expect([res.statusCode, res.json().error]).toEqual([503, 'not-ready']);
+      expect(res.json().detail).toMatch(/not confirmed durable/);
+    }
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+  });
+
+  it('F6 on the route: operator-retain with {"": 1} answers 400 bad-request', async () => {
+    const w = await world();
+    const res = await w.app.inject({ method: 'POST', url: `/api/leases/${w.x}/operator-retain`, payload: { '': 1 } });
+    expect([res.statusCode, res.json().error]).toEqual([400, 'bad-request']);
+  });
+});
+
+describe('CodeQL defence in depth: the incarnation read checks the id\'s shape at the read', () => {
+  it('incarnationOf with ../x reads no file and answers unmeasured', async () => {
+    const readFileMeasured = vi.fn(async () => ({ ok: false as const, reason: 'absent' as const }));
+    expect(await incarnationOf({ io: { readFileMeasured } as never, registryDir: '/fixture-registry' }, '../x')).toMatchObject({ kind: 'unmeasured' });
+    expect(readFileMeasured).not.toHaveBeenCalled();
+    // CONTROL: a session id is read
+    await incarnationOf({ io: { readFileMeasured } as never, registryDir: '/fixture-registry' }, 'lane-a-demo');
+    expect(readFileMeasured).toHaveBeenCalled();
+  });
 });

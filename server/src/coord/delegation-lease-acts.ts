@@ -19,7 +19,7 @@ import {
   type DelegationLeaseRow,
 } from './delegation-model.js';
 import { decideLeaseRelease, decideLeaseTransition, delegationCarrierStateOf, type DelegationLeaseActRefusal } from './delegation-lease-state.js';
-import { delegationTreeTarget, newestUnownedAttempts } from './delegation-conflicts.js';
+import { delegationTreeTarget, newestUnownedAttempts, treeLeaseOf } from './delegation-conflicts.js';
 import { delegationTreeKey } from './delegation-correlation.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
 
@@ -50,7 +50,13 @@ export function parseLeaseTarget(param: string): LeaseDoorTarget | null {
 
 type BadRequest = { ok: false; detail: string };
 const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
-const keysAre = (v: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(v).sort().join(',') === [...keys].sort().join(',');
+/** The body's own keys are exactly `keys`, compared element by element (never a joined string, which `{"": 1}` or a key holding a comma
+ *  could spell). */
+const keysAre = (v: Record<string, unknown>, keys: readonly string[]): boolean => {
+  const have = Object.keys(v).sort();
+  const want = [...keys].sort();
+  return have.length === want.length && have.every((k, i) => k === want[i]);
+};
 
 /** Retain's body is exactly `{byId, byUuid}` (a session id and a non-empty string), then `:lease` is a lease id: in that order. */
 export function parseRetainRequest(body: unknown, param: string): { ok: true; leaseId: string; byId: string; byUuid: string } | BadRequest {
@@ -156,22 +162,26 @@ export type LeaseResolveAnswer =
   | { ok: true; act: 'release'; leaseId: string; expectGeneration: number; resolvesThrough: DelegationAttemptMark | null }
   | Refused;
 
-/** The lease a target names: by id, or the unreleased lease on the tree a `tree-<key>` names (the first by lease id; policy holds one). */
-function leaseOfTarget(cp: Pick<DelegationCheckpointV1, 'leases'>, target: LeaseDoorTarget): DelegationLeaseRow | Refused {
+/** The lease a target names: by id, or for a `tree-<key>` the lease `treeLeaseOf` names on that tree, the one the projection's unowned
+ *  row offers (F7). */
+function leaseOfTarget(cp: Pick<DelegationCheckpointV1, 'leases'>, conflicting: ReadonlySet<string>, target: LeaseDoorTarget): DelegationLeaseRow | Refused {
   if (target.kind === 'lease') {
     return cp.leases.find((l) => l.leaseId === target.leaseId) ?? no('lease-unknown', `resolve: no lease ${target.leaseId}`);
   }
-  const onTree = cp.leases.filter((l) => l.releasedAt === null && delegationTreeTarget(l.project, l.adminRecord) === target.treeKey)
-    .sort((a, b) => (a.leaseId < b.leaseId ? -1 : a.leaseId > b.leaseId ? 1 : 0));
-  return onTree[0] ?? no('tree-unleased', `resolve: tree ${target.treeKey} holds no unreleased lease (a worktree with no lease is not resolved in wave 5)`);
+  const named = cp.leases.find((l) => l.releasedAt === null && delegationTreeTarget(l.project, l.adminRecord) === target.treeKey);
+  const onTree = named === undefined ? null : treeLeaseOf(cp, conflicting, delegationTreeKey(named.project, named.adminRecord));
+  return onTree?.lease ?? no('tree-unleased', `resolve: tree ${target.treeKey} holds no unreleased lease (a worktree with no lease is not resolved in wave 5)`);
 }
+
+/** The attach parent's registry row, as the door measured it: live with an incarnation, measured absent or not live, or unmeasured. */
+export type LiveParentRead = { kind: 'live'; incarnation: string } | { kind: 'not-live' } | { kind: 'unmeasured'; reason: string };
 
 /**
  * The operator's resolve (`POST /api/leases/:lease/resolve`). The target is a lease, or the unreleased lease on a `tree-<key>`'s tree
  * (`tree-unleased` when there is none). `resolvesThrough` is the tree's newest unowned-work attempt (`newestUnownedAttempts`), or null:
  * the resolution mark that takes the tree out of `conflictingTreeKeys` (D-7820).
  * - `attach`: `parent` is the lease's own parent (`not-lease-parent`; re-parenting is never offered) and a live registry row with a
- *   measured incarnation (`not-live-parent`). A non-conflicting lease must be `raw` (`wrong-disposition`: a linked agent or workflow lease
+ *   measured incarnation (`not-live-parent` when measured absent, `registry-unmeasurable` when unmeasured, D-8041). A non-conflicting lease must be `raw` (`wrong-disposition`: a linked agent or workflow lease
  *   is kept with operator-retain); a conflicting lease of any source is admitted, since resolve is the one act a conflict admits. An
  *   `ephemeral` lease on a box that cannot hold its tree refuses `box-unsupported`. The lease moves to `retained` and keeps its source
  *   and parent (D-7833).
@@ -181,9 +191,9 @@ export function decideResolve(input: {
   target: LeaseDoorTarget; action: 'attach' | 'foreign'; parent: string | null;
   checkpoint: Pick<DelegationCheckpointV1, 'leases' | 'leaseCarriers' | 'attempts'>;
   conflicting: ReadonlySet<string>; boxHolds: boolean; carrierRequired: boolean;
-  liveParent: (id: string) => { incarnation: string } | null;
+  liveParent: (id: string) => LiveParentRead;
 }): LeaseResolveAnswer {
-  const found = leaseOfTarget(input.checkpoint, input.target);
+  const found = leaseOfTarget(input.checkpoint, input.conflicting, input.target);
   if ('ok' in found) return found;
   const lease = found;
   const gone = known(lease, 'resolve');
@@ -199,9 +209,11 @@ export function decideResolve(input: {
   if (input.parent !== lease.parentId) {
     return no('not-lease-parent', `resolve: lease ${lease.leaseId} is attached to its own parent ${lease.parentId} only; it is never re-parented`);
   }
-  if (input.liveParent(input.parent) === null) {
-    return no('not-live-parent', `resolve: ${input.parent} is not a live session with a measured incarnation`);
+  const live = input.liveParent(input.parent);
+  if (live.kind === 'unmeasured') {
+    return no('registry-unmeasurable', `resolve: the registry incarnation of ${input.parent} is unmeasured (${live.reason}) — transient, retry`);
   }
+  if (live.kind === 'not-live') return no('not-live-parent', `resolve: ${input.parent} is not a live session (its registry row is absent)`);
   if (!input.conflicting.has(k) && lease.sourceKind !== 'raw') {
     return no('wrong-disposition', `resolve: lease ${lease.leaseId} is a linked ${lease.sourceKind} lease with no conflict; keep it with operator-retain`);
   }

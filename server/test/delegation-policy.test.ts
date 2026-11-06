@@ -743,6 +743,35 @@ describe('conflict finality across passes', () => {
     const removed = recovery({ leases: [disowned], leaseCarriers: [{ ...foreign, releaseReason: 'native-removed' }] });
     expect(kinds(substantive(planDelegationReconciliation(one(rec(), linkedV(agentAct, 2), { recovery: removed }))))).toEqual(['request-linked-lease-identity']);
   });
+  // D-8043 (review 1554 F1): a null census base is UNMEASURED, never another creation base. The census reaches the planner with a null
+  // base for each cause it has: `claude-base-malformed` and `claude-base-unreadable`, and an absent CLAUDE_BASE with no first `logs/HEAD`
+  // line (`divergence-sweep.test.ts`, "a CLAUDE_BASE that is not a sha is no base…", "a CLAUDE_BASE that cannot be READ is no base…" and
+  // the 'nothing' record of "CLAUDE_BASE and the first logs/HEAD line…"), so these rows feed it null directly.
+  const disownedAt = (creationBase: string | null) => {
+    const l = lease({ releasedAt: T(5), generation: 3, creationBase });
+    return recovery({ leases: [l], leaseCarriers: [{ leaseId: l.leaseId, transferringSince: null, transferRun: null, promotedRun: null,
+      promotedSession: null, releaseReason: 'foreign' as const, resolvedThrough: null }] });
+  };
+  const VERDICTS = () => [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]),
+    conflictingV('rungs-disagree', [agentAct.identityJournalId])];
+  it('D-8043 (a): disowned at base X, a null base gets no effect pass after pass; X again gets none; base Y links a new lease', () => {
+    const rc = disownedAt('base-x');
+    for (let pass = 0; pass < 2; pass++) {
+      for (const v of VERDICTS()) expect(substantive(planDelegationReconciliation(one(rec({ claudeBase: null }), v, { recovery: rc }))), `${pass} ${v.kind}`).toEqual([]);
+    }
+    expect(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'base-x' }), linkedV(agentAct, 2), { recovery: rc })))).toEqual([]);
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'base-y' }), linkedV(agentAct, 2), { recovery: rc })))))
+      .toEqual(['request-linked-lease-identity']);
+    // CONTROL: a null base on ANOTHER admin record of the project is not held
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: null, adminRecord: 'agent-other', canonicalPath: WT('agent-other') }),
+      unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), { recovery: rc }))))).not.toEqual([]);
+  });
+  it('D-8043 (b): disowned at a null base, a null base gets no effect; once the base reads X it is linked as a new lease', () => {
+    const rc = disownedAt(null);
+    for (const v of VERDICTS()) expect(substantive(planDelegationReconciliation(one(rec({ claudeBase: null }), v, { recovery: rc }))), v.kind).toEqual([]);
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'base-x' }), linkedV(agentAct, 2), { recovery: rc })))))
+      .toEqual(['request-linked-lease-identity']);
+  });
 });
 
 describe('a recovery that is not ready decides nothing', () => {

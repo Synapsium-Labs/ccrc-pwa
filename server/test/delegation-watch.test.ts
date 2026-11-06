@@ -1032,6 +1032,25 @@ describe('W5-R8c: a lease released foreign is final for its tree', () => {
     const open = leasesOf(w.home).filter((l) => l.releasedAt === null);
     expect(open.map((l) => [l.adminRecord, l.creationBase]), 'another creation base is another tree').toEqual([['raw-tree', 'c'.repeat(40)]]);
   });
+
+  it('D-8043: a base the census cannot read holds the disowned tree pass after pass; the same base still holds it; another base links', async () => {
+    const w = await rawTreeWorld();
+    const census = { demo: [OLD, RAW] };
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), census);
+    const [lease] = leasesOf(w.home);
+    const applier = (await w.watcher.delegationApplier())!;
+    expect(await applier.releaseLease({ leaseId: lease!.leaseId, expectGeneration: 0, releaseReason: 'foreign', at: formatDelegationInstant(at(2) + 1000),
+      lastHeadSha: null, resolvesThrough: null })).toMatchObject({ kind: 'applied', state: 'released' });
+    const attempts = attemptsOf(w.home).length;
+    const unread = record('demo', 'raw-tree', { claudeBase: null, diagnostic: 'claude-base-unreadable' });
+    for (let i = 3; i < 6; i++) await censusPass(w, at(i), { demo: [OLD, unread] });
+    for (let i = 6; i < 8; i++) await censusPass(w, at(i), census);
+    expect(leasesOf(w.home).filter((l) => l.releasedAt === null), 'no new lease while the base is unread, nor on the same base').toEqual([]);
+    expect(attemptsOf(w.home), 'no attempt is recorded').toHaveLength(attempts);
+    const reborn = record('demo', 'raw-tree', { claudeBase: 'd'.repeat(40) });
+    for (let i = 8; i < 11; i++) await censusPass(w, at(i), { demo: [OLD, reborn] });
+    expect(leasesOf(w.home).filter((l) => l.releasedAt === null).map((l) => [l.adminRecord, l.creationBase])).toEqual([['raw-tree', 'd'.repeat(40)]]);
+  });
 });
 
 describe('rung 4 end to end: a raw worktree the session itself created becomes a journaled lease identity, and nothing else', () => {

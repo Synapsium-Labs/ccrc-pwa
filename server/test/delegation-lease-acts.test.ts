@@ -3,10 +3,11 @@
 // Rows W5-R1 to W5-R8b of the plan's "## PR8", under O5-8 (c): a resolve acts on a lease only, a `tree-<key>` is resolved as the
 // unreleased lease on that tree, and a tree with none refuses `tree-unleased`. W5-R3c reads a real `CoordStore` over a fixture
 // database; every other row is pure. Fixture names only: `lane-a-demo`, `coord-a-demo`, `project-a`.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 import {
   decideOperatorRetain, decideResolve, decideRetain, isDelegationLeaseActsKebab, leaseCoordinatorOf, parseLeaseTarget,
+  parseOperatorRetainRequest, parseRetainRequest, type LiveParentRead,
 } from '../src/coord/delegation-lease-acts.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
 import { delegationTreeTarget } from '../src/coord/delegation-conflicts.js';
@@ -58,6 +59,13 @@ describe('decideRetain', () => {
       byIncarnation: 'inc-1', coordinator: noCoordinator, ...ok })).toMatchObject({ ok: false, refusal: 'lease-released' });
     expect(decideRetain({ lease: undefined, carrier: undefined, byId: 'lane-a-demo', byIncarnation: 'inc-1', coordinator: noCoordinator, ...ok }))
       .toMatchObject({ ok: false, refusal: 'lease-unknown' });
+  });
+  it('F6: a body\'s keys are compared one by one: {"": 1} is no empty body, and a key holding a comma is no two keys', () => {
+    const id = '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab';
+    expect(parseOperatorRetainRequest({ '': 1 }, id)).toMatchObject({ ok: false });
+    expect(parseOperatorRetainRequest({}, id)).toEqual({ ok: true, leaseId: id });
+    expect(parseRetainRequest({ 'byId,byUuid': 1 }, id)).toMatchObject({ ok: false, detail: 'the body is exactly {byId, byUuid}' });
+    expect(parseRetainRequest({ byId: 'lane-a-demo', byUuid: 'u' }, id)).toMatchObject({ ok: true });
   });
   it('W5-R5: a target is a UUID or tree-<64 hex>, nothing else', () => {
     expect(parseLeaseTarget('0f8e6a8c-1b2d-4c3e-9f00-0123456789ab')).toEqual({ kind: 'lease', leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab' });
@@ -119,8 +127,11 @@ describe('leaseCoordinatorOf', () => {
     expect(frame.leases.map((l) => [l.parentId, l.via])).toEqual([[leaseCoordinatorOf(worker, closed), 'lane-a-demo']]);
   });
 
+  // F3: the 501 runs go through the store's own writers (the row's point), with the fixture database's fsync off; F8: the read is fed
+  // from the series rows, so it reads no run again by id.
   it('W5-R3c (D-8042): fed runStampsOfSeries, the rule names the coordinator past 501 newer closed runs; fed delegationRunStamps() it answers null', () => {
     const store = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-lease-acts-'), 'coord.db')));
+    store.db.exec('PRAGMA synchronous = OFF');
     let n = 0;
     const open = (claimedBy: string) => {
       const r = store.openRun({ program: `program-${n++}`, title: 'run-a', project: 'project-a', wave: 1, waveOf: 1, claimedBy });
@@ -131,13 +142,11 @@ describe('leaseCoordinatorOf', () => {
     store.bindSession(mine, 'lane-a-demo');
     expect(store.advance(mine, 'failed', 'test-close').ok).toBe(true);
     store.db.prepare('UPDATE runs SET openedAt = ?, closedAt = ? WHERE id = ?').run(atMin(10), atMin(40), mine);
-    for (let i = 0; i < 501; i++) {
-      const other = open('coord-b-demo');
-      store.bindSession(other, `lane-z${i}-demo`);
-      expect(store.advance(other, 'failed', 'test-close').ok).toBe(true);
-    }
+    for (let i = 0; i < 501; i++) expect(store.advance(open('coord-b-demo'), 'failed', 'test-close').ok).toBe(true);
     // the coordinator's own run claims the worker too: the series holds every run the worker works on or claims
+    const hydrate = vi.spyOn(store, 'run');
     const naming = runStampsOfSeries(store, 'lane-a-demo');
+    expect(hydrate, 'F8: no run is read again by id').not.toHaveBeenCalled();
     if (!naming.ok) throw new Error(naming.detail);
     expect(naming.runs).toEqual([{ id: mine, sessionId: 'lane-a-demo', claimedBy: 'coord-a-demo', openedAt: atMin(10), closedAt: atMin(40) }]);
     expect(leaseCoordinatorOf(worker, naming.runs)).toBe('coord-a-demo');
@@ -146,13 +155,11 @@ describe('leaseCoordinatorOf', () => {
     if (!bounded.ok) throw new Error(bounded.detail);
     expect(bounded.runs.some((r) => r.id === mine)).toBe(false);
     expect(leaseCoordinatorOf(worker, bounded.runs)).toBeNull();
-    // a session that names no run reads none; all-or-failure: one unreadable run in the series fails the whole read
+    // a session that names no run reads none; all-or-failure: a run id in the series this process cannot represent fails the whole read
     expect(runStampsOfSeries(store, 'lane-q-demo')).toEqual({ ok: true, runs: [] });
-    store.db.exec('PRAGMA ignore_check_constraints = ON');
-    store.db.prepare('UPDATE runs SET wave = 0 WHERE id = ?').run(mine);
-    store.db.exec('PRAGMA ignore_check_constraints = OFF');
+    store.db.prepare('UPDATE runs SET id = ? WHERE id = ?').run(2n ** 53n + 1n, open('lane-a-demo'));
     expect(runStampsOfSeries(store, 'lane-a-demo')).toMatchObject({ ok: false });
-  });
+  }, 60_000);
 });
 
 // ── decideResolve ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -166,7 +173,7 @@ const attempt = (over: Partial<DelegationAttemptRow> = {}): DelegationAttemptRow
 const cpOf = (leases: DelegationLeaseRow[], attempts: DelegationAttemptRow[] = [], carriers: DelegationLeaseCarrierRow[] = []): DelegationCheckpointV1 => ({
   ...emptyDelegationCheckpoint(), leases, attempts, ...(carriers.length > 0 ? { leaseCarriers: carriers } : {}),
 });
-const live = (id: string) => (id === 'lane-a-demo' ? { incarnation: 'inc-1' } : null);
+const live = (id: string): LiveParentRead => (id === 'lane-a-demo' ? { kind: 'live', incarnation: 'inc-1' } : { kind: 'not-live' });
 const raw = { ...lease, sourceKind: 'raw' as const, disposition: 'ephemeral' as const, cleanupDueAt: null };
 const key = delegationTreeKey(lease.project, lease.adminRecord);
 const resolveOf = (over: Partial<Parameters<typeof decideResolve>[0]> & { checkpoint: DelegationCheckpointV1 }) => decideResolve({
@@ -191,8 +198,10 @@ describe('decideResolve', () => {
         resolvesThrough: { attemptedAt: ATTEMPT_AT, attemptId: 'a'.repeat(64) } });
   });
 
-  it('W5-R6 (live parent): a parent with no live registry row or no measured incarnation refuses not-live-parent', () => {
-    expect(resolveOf({ checkpoint: cpOf([raw]), liveParent: () => null })).toMatchObject({ ok: false, refusal: 'not-live-parent' });
+  it('W5-R6 (live parent): a parent measured not live refuses not-live-parent; an unmeasured one registry-unmeasurable (D-8041)', () => {
+    expect(resolveOf({ checkpoint: cpOf([raw]), liveParent: () => ({ kind: 'not-live' }) })).toMatchObject({ ok: false, refusal: 'not-live-parent' });
+    expect(resolveOf({ checkpoint: cpOf([raw]), liveParent: () => ({ kind: 'unmeasured', reason: 'unreadable' }) }))
+      .toMatchObject({ ok: false, refusal: 'registry-unmeasurable' });
     expect(resolveOf({ checkpoint: cpOf([raw]), parent: null })).toMatchObject({ ok: false, refusal: 'not-lease-parent' });
   });
 
@@ -206,6 +215,27 @@ describe('decideResolve', () => {
     expect(resolveOf({ checkpoint: cpOf([], [attempt()]), target }), 'an unowned tree with no lease').toMatchObject({ ok: false, refusal: 'tree-unleased' });
     expect(resolveOf({ checkpoint: cpOf([lease]), target: { kind: 'lease', leaseId: '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab' } }))
       .toMatchObject({ ok: false, refusal: 'lease-unknown' });
+  });
+
+  it('W5-R7b (F7): on a tree holding a raw lease and a hidden conflicting agent lease, the unowned row and the tree resolve name the same lease', () => {
+    // the raw lease sorts FIRST by id and is older, so first-by-id (and oldest-of-all) would pick it; the hidden agent lease is the one
+    const rawFirst = { ...raw, leaseId: '00000000-0000-4000-8000-000000000001', firstObservedAt: '2026-10-01T00:00:00.000Z',
+      canonicalPath: `${lease.canonicalPath}-raw` };
+    const agent = { ...lease, leaseId: 'ffffffff-0000-4000-8000-000000000002' };
+    const cp = cpOf([rawFirst, agent], [attempt()]);
+    const frame = projectDelegation({
+      checkpoint: cp, census: { measuredAt: Date.parse(ATTEMPT_AT), projects: new Map([[lease.project, { delegation: null }]]), incarnations: new Map() },
+      absences: [], sessions: [{ id: 'lane-a-demo', status: 'idle' }], runs: [],
+    });
+    const offered = frame.unowned.find((u) => u.adminRecord === lease.adminRecord)?.leaseId;
+    expect(offered).toBe(agent.leaseId);
+    const target = { kind: 'tree' as const, treeKey: delegationTreeTarget(lease.project, lease.adminRecord) };
+    for (const action of ['foreign', 'attach'] as const) {
+      expect(resolveOf({ checkpoint: cp, target, action, parent: action === 'attach' ? 'lane-a-demo' : null, conflicting: new Set([key]) }), action)
+        .toMatchObject({ ok: true, leaseId: offered });
+    }
+    // no conflict: nothing is hidden, the row names no lease, and the tree resolves as the oldest unreleased lease
+    expect(resolveOf({ checkpoint: cpOf([rawFirst, agent]), target, action: 'foreign', parent: null })).toMatchObject({ ok: true, leaseId: rawFirst.leaseId });
   });
 
   it('W5-R8: foreign of a lease releases it with the resolution mark (null with no unowned attempt); a transferring lease refuses', () => {

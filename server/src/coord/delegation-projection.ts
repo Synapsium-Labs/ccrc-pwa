@@ -31,7 +31,7 @@ import {
   type DelegationCheckpointV1,
 } from './delegation-model.js';
 import { delegationTreeKey } from './delegation-correlation.js';
-import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered } from './delegation-conflicts.js';
+import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, treeLeaseOf } from './delegation-conflicts.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
 import { ccdIdForWorktree } from '../divergence.js';
 
@@ -89,8 +89,6 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   // (`delegation-conflicts.ts`, the derivations every wave-5 decider reads too, D-7820).
   const newest = newestUnownedAttempts(checkpoint);
   const conflicting = conflictingTreeKeys(checkpoint);
-  // PR8: the unreleased lease hidden for a conflict on each tree, which that tree's unowned row names so the lease has a control.
-  const hidden = new Map<string, string>();
 
   const activityRows: DelegationActivityWire[] = [];
   for (const a of checkpoint.activities) {
@@ -108,7 +106,7 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   for (const l of unreleased) {
     const k = delegationTreeKey(l.project, l.adminRecord);
     if (owns(l.project, l.canonicalPath)) continue;
-    if (conflicting.has(k) && l.sourceKind !== 'raw') { hidden.set(k, l.leaseId); continue; }
+    if (conflicting.has(k) && l.sourceKind !== 'raw') continue;
     const workspace = presence(l.project, l.adminRecord);
     if (workspace === 'absent') continue;
     const coordinator = coordinatorOf(l.parentId, l.firstObservedAt);
@@ -129,9 +127,12 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
     if (resolvedAttemptCovered(checkpoint, a)) continue;                      // the operator resolved it (D-7820)
     const workspace = presence(a.project, a.adminRecord);
     if (workspace === 'absent') continue;
+    // PR8: the lease hidden for a conflict on this tree, named so the lease has a control: `treeLeaseOf`, the one derivation a
+    // `tree-<key>` resolve reads too, so the row and the resolve name the same lease (F7).
+    const hidden = treeLeaseOf(checkpoint, conflicting, k);
     unownedRows.push({
       project: a.project, adminRecord: a.adminRecord, canonicalPath: a.canonicalPath, verdict: a.verdict as DelegationUnownedWire['verdict'],
-      reason: a.detail!, rung: a.rung, workspace, attemptedAt: a.attemptedAt, ...(hidden.has(k) ? { leaseId: hidden.get(k)! } : {}),
+      reason: a.detail!, rung: a.rung, workspace, attemptedAt: a.attemptedAt, ...(hidden?.hiddenForConflict === true ? { leaseId: hidden.lease.leaseId } : {}),
     });
   }
 
