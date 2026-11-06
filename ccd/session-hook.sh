@@ -2512,9 +2512,9 @@ GRAPH_QUERY_RE=$'(^|[;&|(`"\'/[:space:]])graphify["\']?[[:space:]]+(query|path|e
 GRAPH_ANSWER_RE=$'(^|\n)(Traversal: |NODE |EDGE |Shortest path \\(|No path found between |Node: )'
 
 # ── D-8046: the command a denied session is told to run ─────────────────
-# ANY PATH, NO MACHINE. Sessions are not given `~/.local/bin`, and nothing a
-# session can edit gives it to them: Claude Code writes the process PATH as the
-# last line of its shell snapshot. So the sentence carries its own. `$HOME` stays
+# ANY PATH, NO MACHINE. A session launched before D-8050 has no `~/.local/bin`,
+# and nothing it can edit gives it the folder: Claude Code writes the process PATH
+# as the last line of its shell snapshot. So the sentence carries its own. `$HOME` stays
 # literal for the session's shell to expand, this text names no box, and a
 # graphify elsewhere on PATH still answers, which a bare absolute path would not.
 GRAPH_RUN='PATH="$HOME/.local/bin:$PATH" graphify'
