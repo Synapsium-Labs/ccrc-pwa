@@ -179,6 +179,29 @@ export function matchRoute(path: string): RouteMatch | null {
   return null;
 }
 
+/** A console path: segments of unreserved and percent-escaped characters, then an optional query or fragment. */
+const CONSOLE_PATH = /^(\/[A-Za-z0-9._~%/-]*)([?#][^\s]*)?$/;
+
+/** A console path as the browser resolves it (dot-segments, `%2e` ones too), or null when it resolves to another origin's
+ *  shape (`//host/…`): the path a tap opens, which is the one `matchRoute` must judge (review 1466 F8). */
+function resolvedPath(path: string): string | null {
+  const resolved = new URL(path, 'https://console.invalid').pathname;
+  return resolved.startsWith('//') ? null : resolved;
+}
+
+/** The in-app address a console path is, or null (moved here from `ledgers/ledgerLinks.ts`, its console-path arm, so the ledgers
+ *  and chat ask one decision: chat reading Task L, D-8062). A path the console routes (`matchRoute`, asked of the path as the
+ *  browser resolves it) becomes that resolved path plus its query or fragment. Null for anything else: not a console path, the
+ *  bare root, a protocol-relative `//host` or `/\host`, a dot-segment escape that resolves to another origin's shape, or a
+ *  path the table does not route. */
+export function routedHref(text: string): string | null {
+  const m = CONSOLE_PATH.exec(text);
+  if (m === null || m[1] === undefined || m[1] === '/') return null;
+  const path = resolvedPath(m[1]);
+  if (path === null || path === '/' || matchRoute(path) === null) return null;
+  return `${path}${m[2] ?? ''}`;
+}
+
 /** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route and on a path outside the
  *  table (its placeholder), `session` for anything the detail pane shows. `app.tsx` hands it to the frame, and the
  *  resume banner reads it to place its one instance (accounts plan Task A23, D-7871 (3)). */

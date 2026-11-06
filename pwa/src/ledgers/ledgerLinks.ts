@@ -7,7 +7,8 @@
 // context's link owner, `docs/docsLinks.ts`, when chat came to ask it too (chat reading Task L, D-8062).
 //
 // `linkRuns` splits an item's text into text and link runs. Only three things are links (D27): an `https` address, a path the
-// console routes (`matchRoute`, asked of the path as the browser resolves it, dot-segments and `%2e` ones too: review 1466 F8),
+// console routes (`routedHref`, which asks `matchRoute` of the path as the browser resolves it, dot-segments and `%2e` ones too:
+// review 1466 F8),
 // and a repository document path in one of the Docs reader's four sections, which becomes the Docs reader address in the
 // programme's home project (D28). Everything else stays text: `http:`, `javascript:`, `data:`, `vbscript:`, `mailto:`, a path
 // the console does not route, a protocol-relative `//host`, a path inside another word or address (review 1466 F7), a document
@@ -21,7 +22,7 @@ import type { RunSummary } from '../../../shared/api';
 import { isSpecPath, linkCandidates, linksDocumentOutside, type GoalsView } from '../../../shared/ledgers';
 import { docHref } from '../docs/docsLinks';
 import { runHomeProject } from '../fleet/runWords';
-import { matchRoute } from '../lib/routes';
+import { routedHref } from '../lib/routes';
 import { isGoalsFor } from './waitingView';
 
 /** One run of an item's text: words drawn as they are, or a link. `external` is an outside page, which opens in a new tab with
@@ -51,16 +52,6 @@ export function programmeSpecHref(slug: string, goals: readonly unknown[], runs:
   return specHref(entry === undefined ? null : (entry as GoalsView).specPath, homeProjectOf(slug, runs));
 }
 
-/** A console path: segments of unreserved and percent-escaped characters, then an optional query or fragment. */
-const CONSOLE_PATH = /^(\/[A-Za-z0-9._~%/-]*)([?#][^\s]*)?$/;
-
-/** A console path as the browser resolves it (dot-segments, `%2e` ones too), or null when it resolves to another origin's
- *  shape (`//host/…`): the path a tap opens, which is the one `matchRoute` must judge (review 1466 F8). */
-function resolvedPath(path: string): string | null {
-  const resolved = new URL(path, 'https://console.invalid').pathname;
-  return resolved.startsWith('//') ? null : resolved;
-}
-
 /** The link a candidate is, or null when it stays text. */
 function linkOf(text: string, homeProject: string | null): LinkRun | null {
   if (/^https:\/\//i.test(text)) {
@@ -75,11 +66,8 @@ function linkOf(text: string, homeProject: string | null): LinkRun | null {
     const href = docHref(text, homeProject);
     return href === null ? null : { kind: 'link', text, href, external: false };
   }
-  const m = CONSOLE_PATH.exec(text);
-  if (m === null || m[1] === undefined || m[1] === '/') return null;
-  const path = resolvedPath(m[1]);
-  if (path === null || path === '/' || matchRoute(path) === null) return null;
-  return { kind: 'link', text, href: `${path}${m[2] ?? ''}`, external: false };
+  const href = routedHref(text);
+  return href === null ? null : { kind: 'link', text, href, external: false };
 }
 
 /** An item's text as runs of text and links, in order; the runs' texts put together are the text, and no two text runs are
