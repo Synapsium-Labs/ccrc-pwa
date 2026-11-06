@@ -20112,16 +20112,18 @@ _affinity_slot_take() {   # target -> rc 0 granted | 1 lost | 2 granted, the slo
 }
 
 # `cur_serves` (D-6181, spec §3.1), defined ONCE: the session's current account
-# still serves it — `_avail` passes, the class gate answers 0, the move is not a
-# pool leave and the session is not hard-blocked. Only such a move (the return
-# home; later the sideways move) is guarded. A move off a `cur` that fails it is
-# a LEAVE, paying overage while it waits, and is never delayed.
+# still serves it — `_avail` passes, the class gate does not answer 1, the move is
+# not a pool leave and the session is not hard-blocked. Only such a move (the
+# return home; later the sideways move) is guarded. A move off a `cur` that fails
+# it is a LEAVE, paying overage while it waits, and is never delayed. The gate's
+# rc 2 (unmeasured) serves: with `_avail cur` true and nothing forcing,
+# `_swap_target` answers home or rc 5, so the only move it can delay is the return.
 _affinity_cur_serves() {   # id wrapper aff-verb hard-blocked -> rc 0 iff cur still serves
   local cls=""
   [[ -z "$4" && "$3" != auto-pool ]] || return 1
   _avail "$2" || return 1
   _route_peek_to cls "$1" class; [[ "$cls" == default ]] && cls=""
-  _class_gate "$2" "$cls"
+  _class_gate "$2" "$cls"; [[ $? -ne 1 ]]
 }
 _swap_stagger_off() { [[ -e "$REG/swap-stagger-off" || -L "$REG/swap-stagger-off" ]]; }   # D-6181's brake: present -> today's undelayed dispatch
 

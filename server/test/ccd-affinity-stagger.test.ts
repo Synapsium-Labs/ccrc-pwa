@@ -291,6 +291,107 @@ describe('D-6181: what the guards never touch', () => {
   });
 });
 
+// `_class_gate` has THREE answers, and only 1 is a fact about `cur`. Unmeasured
+// (rc 2) is no refusal: `_swap_target`'s stay arm answers rc 5 for it, so with
+// `_avail cur` true and nothing forcing, the one move that can come out is the
+// return home, and that is the move the guards exist for. These rows run the real
+// `_avail`, `_class_gate` and `_swap_target` over real limits rows.
+describe('D-6181: an unmeasured cur is not a leave', () => {
+  const REAL_GATES = (pane = PROMPT): string =>
+    STUBS(pane).replace('_swap_target() { _reg_get "$1" home; }; _avail() { return 0; };', '');
+  const SPY = '_affinity_slot_take() { echo "slot $*" >> "$HOME/ccd-calls"; return 1; };';
+  const IDS = ['s-aaaa', 's-bbbb', 's-cccc', 's-dddd'];
+
+  const limits = (w: string, row: Record<string, number | null> | null): void => {
+    const f = path.join(h.home, '.cc-limits', `${w}.json`);
+    if (row) fs.writeFileSync(f, JSON.stringify(row)); else fs.rmSync(f, { force: true });
+  };
+  const measured = (): Record<string, number | null> =>
+    ({ five: 10, seven: 20, fiveResetAt: epoch() + 3600, sevenResetAt: epoch() + 86400, ts: epoch() });
+
+  /** Four opus rows on `claude-a`, home `claude`, which measures room. */
+  const herd = (move: 'pin' | 'home'): void => {
+    for (const id of IDS) seed(id);
+    h.sh(IDS.map((id) => `_reg_set ${id} class opus${move === 'pin'
+      ? `; _reg_set ${id} swappin claude-a; _reg_set ${id} swappinexp "${epoch() - 60} ttl"` : ''}`).join('\n'));
+    sessionJson();
+    limits('claude', measured());
+  };
+
+  const ROWS = [
+    { shape: 'sevenResetAt has passed', cur: () => ({ ...measured(), seven: 50, sevenResetAt: epoch() - 60 }) },
+    { shape: 'sevenResetAt has passed, five null', cur: () => ({ five: null, seven: 50, sevenResetAt: epoch() - 60, ts: epoch() }) },
+    { shape: 'no limits file for cur', cur: () => null },
+  ].flatMap((r) => [
+    { ...r, move: 'pin' as const, name: 'pin-expiry release' },
+    { ...r, move: 'home' as const, name: 'ordinary return home' },
+  ]);
+
+  it.each(ROWS)('$name, $shape: four sessions give one dispatch and three stagger lines', ({ cur, move }) => {
+    herd(move); limits('claude-a', cur());
+    expect(h.sh(`_class_gate claude-a opus; echo $?`)).toBe('2');
+    ticks(IDS, REAL_GATES());
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(swapLog().match(/stand-down \S+: stagger$/gm)).toHaveLength(3);
+  });
+
+  it.each(ROWS)('$name, $shape: four drafts give no dispatch and four draft lines', ({ cur, move }) => {
+    herd(move); limits('claude-a', cur());
+    ticks(IDS, REAL_GATES(DRAFT));
+    expect(dispatches()).toEqual([]);
+    expect(swapLog().match(/stand-down \S+: draft$/gm)).toHaveLength(4);
+  });
+
+  // The rows above must read exactly as a measured `cur` reads. Since the
+  // statusline publishes the weekly figure with no 5h window, `five: null` beside
+  // a live `seven` is a measured row and the class gate answers 0 for it.
+  const MEASURED = [
+    { shape: 'five and seven', cur: () => ({ ...measured(), seven: 50 }) },
+    { shape: 'five null, a live seven', cur: () => ({ five: null, seven: 50, sevenResetAt: epoch() + 86400, ts: epoch() }) },
+  ];
+
+  it.each(MEASURED)('kept: a measured cur ($shape): four sessions give the same one dispatch', ({ cur }) => {
+    herd('pin'); limits('claude-a', cur());
+    expect(h.sh(`_class_gate claude-a opus; echo $?`)).toBe('0');
+    ticks(IDS, REAL_GATES());
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+  });
+
+  it.each(MEASURED)('kept: a measured cur ($shape): four drafts give the same four draft lines', ({ cur }) => {
+    herd('pin'); limits('claude-a', cur());
+    ticks(IDS, REAL_GATES(DRAFT));
+    expect(dispatches()).toEqual([]);
+    expect(swapLog().match(/stand-down \S+: draft$/gm)).toHaveLength(4);
+  });
+
+  it('home unmeasured too: `_swap_target` answers rc 5, nothing moves and no slot is spent', () => {
+    herd('home');
+    const passed = (): Record<string, number | null> => ({ ...measured(), seven: 50, sevenResetAt: epoch() - 60 });
+    limits('claude-a', passed()); limits('claude', passed());
+    ticks(IDS, `${REAL_GATES()} ${SPY}`);
+    expect(dispatches()).toEqual([]);
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+  });
+
+  it('a ceiling-leave off an unmeasured cur is still a leave: five at the ceiling, seven passed, no slot read', () => {
+    herd('home');
+    limits('claude-a', { ...measured(), five: 100, seven: 50, sevenResetAt: epoch() - 60 });
+    expect(h.sh(`_class_gate claude-a opus; echo $?`)).toBe('2');
+    ticks(IDS, `${REAL_GATES(DRAFT)} ${SPY}`);
+    expect(dispatches()).toEqual(IDS.map((id) => `dispatch ${id} -> claude affinity`));
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+  });
+
+  it('a pool leave off an unmeasured cur is still a leave: no slot read and no draft stand-down', () => {
+    herd('home');
+    limits('claude-a', { ...measured(), seven: 50, sevenResetAt: epoch() - 60 });
+    ticks(['s-aaaa'], `${STUBS(DRAFT)} _pool_ok() { return 1; }; ${SPY}`);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(h.calls().filter((l) => l.startsWith('slot '))).toEqual([]);
+    expect(swapLog()).not.toMatch(/stand-down s-aaaa: draft/);
+  });
+});
+
 describe('D-6181: the draft', () => {
   it('an idle pane with a draft takes no return home and logs stand-down draft', () => {
     seed('s-aaaa'); sessionJson();
