@@ -718,7 +718,7 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
 
   it("a lane ccrc only records keeps its launcher and its credential, which is what the verb does, and the sentence says so (D-8051 (13))", async () => {
     await open('lane-x');
-    const line = 'Removing lane-x takes it off the fleet host\'s roster, with the records kept about it, and takes ccrc\'s own hooks and skills out of its config folder. '
+    const line = 'Removing lane-x takes it off the fleet host\'s roster, removes ccrc\'s state records for it, and takes ccrc\'s own hooks and skills out of its config folder. '
       + 'Its launcher, whatever credential that launcher uses, the rest of its config folder and its transcripts stay: ccrc only records this lane.';
     expect(screen.getByText(line)).toBeInTheDocument();
     expect(document.querySelector('[data-frame="remove"]')?.textContent).not.toMatch(/deletes/i);

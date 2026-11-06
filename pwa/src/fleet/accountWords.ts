@@ -562,7 +562,7 @@ const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: str
   'last-enabled-home': (id) => `${id} is the only lane that can take new sessions. Turn another on first.`,
   'lane-busy': (id) => `${id} is busy with another account change. Try again in a moment.`,
   'outcome-unknown': (id, what) => `The fleet host didn't answer in time, so whether ${id} was ${what} is unknown. The screen reads it again.`,
-  'check-unrecorded': (id) => `The check ran, but the fleet host couldn't record its result, so what this screen shows for ${id} is out of date. Run it on the fleet host to see the result: ${fixCommands.check(id)}`,
+  'check-unrecorded': (id) => `The check ran, but its result couldn't be read back from the fleet host, so what this screen shows for ${id} is out of date. Run it on the fleet host to see the result: ${fixCommands.check(id)}`,
   'not-found': (id) => `${id} is no longer on this box's roster.`,
   'unsupported': () => 'The fleet host needs an update before lanes can be switched or checked here.',
   'insecure-origin': () => "Accounts can't be changed over plain HTTP.",
@@ -715,7 +715,7 @@ export const typedConfirmLabel = (id: string): string => `Type ${id} to confirm`
  *  skills (D-8051 (15)). The last sentence says "if": the verb keeps a secrets file off the path ccrc expects (D-8051 (19)). */
 export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep' | 'recorded'): string => {
   if (codexFolder === 'recorded') {
-    return `Removing ${id} takes it off the fleet host's roster, with the records kept about it, and takes ccrc's own hooks and skills out of its config folder. `
+    return `Removing ${id} takes it off the fleet host's roster, removes ccrc's state records for it, and takes ccrc's own hooks and skills out of its config folder. `
       + 'Its launcher, whatever credential that launcher uses, the rest of its config folder and its transcripts stay: ccrc only records this lane.';
   }
   if (codexFolder === 'keep') {

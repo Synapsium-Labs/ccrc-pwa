@@ -64,8 +64,8 @@ describe('one state word per lane (D-5517)', () => {
       ['unreachable', "the last check couldn't reach the provider, or got a server error back · checked 2h ago · nothing was learned about the credential; it may be fine"],
       ['timeout', "the last check didn't get an answer in time · checked 2h ago · nothing was learned about the credential; it may be fine"],
       // Every provider answer `classify` has no row for: nothing here may call it fine (D-8051 (16)).
-      ['unknown', "the last check got an answer ccrc can't read as a pass or a refusal · checked 2h ago · don't rely on the credential until a check passes"],
-      ['a-newer-word', "the last check got an answer ccrc can't read as a pass or a refusal · checked 2h ago · don't rely on the credential until a check passes"],
+      ['unknown', "the last check got no answer ccrc can read as a pass or a refusal · checked 2h ago · don't rely on the credential until a check passes"],
+      ['a-newer-word', "the last check got no answer ccrc can read as a pass or a refusal · checked 2h ago · don't rely on the credential until a check passes"],
     ];
     for (const [verdict, source] of sources) {
       const a = stateWordFor(token(read({ check: { verdict, at: NOW - 2 * 3_600_000 } })));
@@ -332,7 +332,7 @@ describe('the Accounts card says the one word it was given (D-7718)', () => {
     };
     expect(card('unreachable')).toEqual(["The last check couldn't reach the provider, or got a server error back.", 'Nothing was learned about the credential; it may be fine.']);
     expect(card('timeout')).toEqual(["The last check didn't get an answer in time.", 'Nothing was learned about the credential; it may be fine.']);
-    expect(card('unknown')).toEqual(["The last check got an answer ccrc can't read as a pass or a refusal.", "Don't rely on the credential until a check passes."]);
+    expect(card('unknown')).toEqual(["The last check got no answer ccrc can read as a pass or a refusal.", "Don't rely on the credential until a check passes."]);
   });
 
   it('a trouble card says what is wrong, its effect and its fix, with the fleet-host command', () => {

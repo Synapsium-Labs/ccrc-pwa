@@ -18,7 +18,7 @@ export const FAILED_CHECKS: ReadonlyArray<readonly [name: string, lane: LaneWire
     "The check did not pass: it didn't get an answer in time. Nothing was learned about the credential; it may be fine."],
   // Never "it may be fine": `classify` writes this for every provider answer it has no row for.
   ['unknown', lane('inconclusive', { verdict: 'unknown', at }),
-    "The check did not pass: it got an answer ccrc can't read as a pass or a refusal. Don't rely on the credential until a check passes."],
+    "The check did not pass: it got no answer ccrc can read as a pass or a refusal. Don't rely on the credential until a check passes."],
   ['no verdict at all', lane('not-checked'),
     'The check did not pass: the fleet host recorded no result. Nothing was learned about the credential; it may be fine.'],
 ];

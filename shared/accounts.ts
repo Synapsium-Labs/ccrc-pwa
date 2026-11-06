@@ -158,11 +158,11 @@ const limitSource = (window: '5h' | '7d', resetAt: number | null | undefined, no
 export const NOTHING_LEARNED = 'nothing was learned about the credential; it may be fine';
 /** What a check that neither passed nor was refused found, as the words after "it" or "the last check", and what that
  *  means for the credential. `unreachable` covers a 5xx too (`classify`), and `unknown` every provider answer with no row
- *  of its own, so neither may say more than this (D-8051 (16)). A word this table doesn't know reads as `unknown`. */
+ *  of its own and a probe that printed no JSON, so neither may say more than this (D-8051 (16)). A word this table doesn't know reads as `unknown`. */
 const CHECK_FINDINGS: Readonly<Record<string, { readonly found: string; readonly credential: string }>> = {
   unreachable: { found: "couldn't reach the provider, or got a server error back", credential: NOTHING_LEARNED },
   timeout: { found: "didn't get an answer in time", credential: NOTHING_LEARNED },
-  unknown: { found: "got an answer ccrc can't read as a pass or a refusal", credential: "don't rely on the credential until a check passes" },
+  unknown: { found: "got no answer ccrc can read as a pass or a refusal", credential: "don't rely on the credential until a check passes" },
 };
 export const checkFinding = (verdict: string): { readonly found: string; readonly credential: string } =>
   CHECK_FINDINGS[Object.hasOwn(CHECK_FINDINGS, verdict) ? verdict : 'unknown']!;
