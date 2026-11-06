@@ -3,6 +3,7 @@
 // run is not among those loaded once both of its sources have answered. Placeholders only: project `project-a`, session `sess-a`.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { CoordCapsView, RunSpend, RunSummary, RunsPageAnswer } from '../../shared/api';
@@ -43,7 +44,7 @@ const NO_SPEND = (): Promise<RunSpend> => new Promise(() => {});
 interface Read { readonly before: number | undefined; resolve(a: RunsPageAnswer): Promise<void> }
 
 /** The board, mounted at `search`, with a live frame of `live` (none: no frame yet) and archive reads the test answers. */
-function board(search: string, live: RunSummary[] | null) {
+function board(search: string, live: RunSummary[] | null, strict = false) {
   const store = makeStore();
   act(() => {
     store.setState({ runs: live ?? [], runsFrameSeen: live !== null, sessions: [], fleetFrameSeen: true });
@@ -54,7 +55,8 @@ function board(search: string, live: RunSummary[] | null) {
   }));
   navigate(search);
   const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
-  const r = render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+  const screenEl = <RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />;
+  const r = render(strict ? <StrictMode>{screenEl}</StrictMode> : screenEl);
   return { ...r, store, reads, loadRuns, scroll, scrolled: (): Element[] => scroll.mock.contexts as Element[] };
 }
 
@@ -83,6 +85,17 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
     expect(b.scrolled()).toHaveLength(1);
     expect(document.activeElement).toBe(document.body);
     expect(notLoaded(1527)).toBeNull();
+  });
+
+  // The once-per-value record (`useArrival`'s `arrivedAt`): the effect is keyed on the run and on whether its row exists, so a
+  // plain re-render never runs it again, but React runs a new effect twice in StrictMode, and the record is what keeps that
+  // second run from scrolling and focusing again.
+  it('under StrictMode, where React runs the effect twice, the row still arrives once', async () => {
+    const b = board(runsRunHref(1527), [run(1527)], true);
+    await waitFor(() => expect(b.loadRuns).toHaveBeenCalled());
+    await act(async () => {});
+    expect(b.scrolled()).toEqual([rowOf(1527)]);
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
   });
 
   it('a run that is not loaded says runNotLoadedLine(1527) once the frame and the archive read have answered', async () => {
