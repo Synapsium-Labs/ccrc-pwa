@@ -330,11 +330,12 @@ export function ChatRef({ mark, children }: { mark: Mark; children?: ReactNode }
  *  already broken, so one value for both is the honest shape. The markup is
  *  byte-identical to the two copies it replaced, which the W4 goldens pin. */
 function ImageLink({ href, alt }: { href: string | undefined; alt: string }): ReactNode {
+  const img = <img src={href} alt={alt} loading="lazy" className="msg-img" />;
   // Under a link's anchor the image draws bare, so the link it sits in is the one anchor and one click (review 1597 F1).
-  if (useContext(InsideLinkContext)) return <img src={href} alt={alt} loading="lazy" className="msg-img" />;
+  if (useContext(InsideLinkContext)) return img;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
-      <img src={href} alt={alt} loading="lazy" className="msg-img" />
+      {img}
     </a>
   );
 }
