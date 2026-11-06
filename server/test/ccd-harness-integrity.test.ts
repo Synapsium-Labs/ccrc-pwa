@@ -95,6 +95,7 @@ function testSources(): string[] {
  * them. Exact both ways: an entry whose file no longer defines it, or that a shipped script now defines, is stale.
  */
 const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
+  'ccd-python-reader-census.test.ts': ['_limit_rows_new', '_new_reader', '_not_a_reader'],
   // This suite's own CONTROL plants these three in strings.
   'ccd-harness-integrity.test.ts': ['_method', '_nope', '_tmpl'],
   'ccd-collect-race-forge.test.ts': ['_race_swap'],
