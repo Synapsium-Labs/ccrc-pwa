@@ -38,6 +38,34 @@
 - **The browser rows that assume today's draw and today's head.** `pwa/browser/reader-frame.browser.test.ts:621-680` (M8.B1 taps Render on every figure), `:1018-1041` (M8.3 live: Mermaid's text in the srcdoc once), `:1117-1154` (M8.8 taps Render), `:1222-1256` (the worst case: Mermaid inlined once). `pwa/browser/docs-compact-head.browser.test.ts:197-384` expects option 1's row on a ready reader leaf at 412, 599 and in Instrument, and pins `PHONE_TITLE_MAX` 133 on it. Both files open leaves at 1280 by default (`reader-frame.browser.test.ts:398-403`).
 - **The censuses this wave meets.** `pwa/test/control-census.test.ts:435-448` (a control by file, tag and class, TOKEN claims checked against the stylesheets); `pwa/test/tap-targets.test.tsx:342-358` (the floor half's loop) and `:1190-1219` (the compact head's two halves); `pwa/design/audit.mjs:1160-1169` (`INHERITED_GROUNDS` for the compact head; `contrast.test.ts` measures every `docs.css` rule that sets `color`); `pwa/test/docs-compact-css.test.ts` (the head's declarations); `pwa/test/markup-census.test.ts` (two blocks of one shape, two equal class literals, two equal leaves); the server's `rings/pwa-rings.test.ts` (an L1 file loads no `.tsx`) and `rings/ringContextMap.ts` (C9's `docs/**` row already covers a new `pwa/src/docs` file).
 
+## Phone evidence received (2026-11-06)
+
+The operator supplied this block in chat for console item 53 (which replaces withdrawn item 47). It measures library build `0079625cc30a`, the current 1.0.0 instrument, not 1.1.0's `6bcf14892e48`. Record `E17-READING does-not-hold` and `E17-BLOCKS 1` in Task 1 Step 2. Under the proposed Q1 rule this selects **arm B with a block**: the Docs reader keeps drawing on request. Receipt of this evidence is not approval of Q1-Q3; console item 48 remains open.
+
+```text
+reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         shared thread (longest gap 2994 ms in a 3000 ms spin; watchdog timer 2520 ms late; shared-thread evidence: gap and timer)
+  mermaid            does not hold (longest gap 217 ms, all six together; worst single: figure 4, 150 ms)
+    gaps ms          none 17 ready · trivial 100 ready · f1 133 ready · f2 133 ready · f3 133 ready · f4 150 ready · f5 142 ready · f6 125 ready · all 217 ready
+draw on open: needs one figure per task here; every single figure fits the budget
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+- **E18:** the instrument reports all seven walls and teardown holding. Preserve its coverage limits: the CSP iframe channel is not measured; the library half reports 0 of 1 attempted; `store.set` and a same-source-only listener were not exercised. This is the lab's bounded result, not proof of every possible sandbox escape being absent.
+- **E17:** 217 ms exceeds the accepted 200 ms Mermaid budget. Every single-figure mount fits (worst 150 ms), but that does not make the all-six mount pass. The busy-frame line demonstrates a shared thread and is diagnostic, not a separate gate.
+- **Scheduling:** “one figure per task” is the instrument's recommendation, not evidence that the reader implements that scheduling or that a six-figure document stays responsive. A scheduling change and a fresh passing measurement are separate work; this receipt does not add them to this wave or waive the budget.
+- **Access correction:** Search → `reader lab` → “Go to Settings › Reader lab”, or `/settings/reader-lab`. The Settings index has no row today. Visible Settings rows for Reader lab and Measure highlighting remain owed in this take-up wave; the executable steps still need their scoped amendment before dispatch.
+
 ## Global Constraints
 
 - **SAFETY.** Never run `ccd` against the live HOME; never run a destructive ccd verb; never touch tmux, `~/.cc-sessions`, `~/.cc-limits` or `claude-session@*` units; never call the live ccrc server; never print a secret file's contents and never put a token in an argv (read-only `gh` verbs only, `GH_TOKEN` from the environment). No test reaches a network or a real server: the browser files serve the run's own build from loopback and answer `/api` from fixtures. The two network reads this wave makes are the registry's and GitHub's, for the published package (Task 2), each read-only.
@@ -57,7 +85,7 @@
 
 ## How this wave runs (coordinator)
 
-- **The gates.** Run 1532 is open at `planned`. It is dispatched once (1) the operator has signed and pushed the library's v1.1.0 tag on `50cef012a` and approved its npm release (console item 42), and the coordinator has read the published package and the GitHub release; (2) the operator has answered Q1 to Q3; and (3) the operator's E17 block is in hand (console item 47), or the operator has answered Q1 that the wave lands without one (then the reading is `not-measured` and the Docs reader keeps drawing on tap).
+- **The gates.** Run 1532 is open at `planned`. It is dispatched once (1) the operator has signed and pushed the library's v1.1.0 tag on `50cef012a` and approved its npm release (console item 42), and the coordinator has read the published package and the GitHub release; (2) the operator has answered Q1 to Q3; and (3) the operator's E17 block is in hand (console item 53; result received 2026-11-06 above), or the operator has answered Q1 that the wave lands without one (then the reading is `not-measured` and the Docs reader keeps drawing on tap).
 - **The plan reaches `main` first**, through the programme's ledger PR, with the E17 block and the answers.
 - **The issued block.** At run-open the coordinator is issued a contiguous block by `POST /api/ledger/deviations`: one for refinement (d), and three in reserve for departures found while executing and in a fix round. The run is dispatched with no `sessionId`, so a fresh child workspace is minted from `main`.
 - **Claims** are checked at dispatch and again at the start of each task that edits a shared file: `pwa/package.json`, `pwa/package-lock.json`, `pwa/src/docs/DocsHead.tsx`, `docsText.ts`, `docs.css`, `ReaderFrame.tsx`, `reader/bridge.ts`, `reader/policy.ts`, `pwa/src/screens/DocsScreen.tsx`, `pwa/src/readerLab/run.ts`, `pwa/design/audit.mjs`, `pwa/test/tap-targets.test.tsx`, `pwa/test/control-census.test.ts`, `pwa/test/docs-compact-css.test.ts`, `pwa/test/docs-compact-head.test.tsx`, `pwa/test/reader-bridge.test.ts`, `pwa/test/reader-lab-bridge.test.ts`, `pwa/test/reader-frame.test.tsx`, `pwa/test/reader-policy.test.ts`, `pwa/test/reader-pin.test.ts`, both browser files, the three specs. Where another run holds one, the brief names the coordinator's scoped agreement. A subagent edit outside the claim is the worker's to claim first.
