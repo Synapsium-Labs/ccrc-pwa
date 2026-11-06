@@ -51,6 +51,9 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _route_pending_word_to: 'W3 Task 15 (D-4963)',
   _home_measured_to: 'W3 Task 16 (D-4963)',
   _swap_lane_to: 'auto-swap reliability W1 (D-6180)',
+  _swap_pin_legacy_offset_to: 'auto-swap reliability W1 (D-6181)',
+  _swap_pin_expiry_to: 'auto-swap reliability W1 (D-6181)',
+  _limit_reset_to: 'auto-swap reliability W1 (D-6181)',
   _roster_fp_to: 'accounts connect A15 (D-7717)',
   _dl_fingerprint_to: 'delegation broker wave 5 PR1, Task 5.1.3 (D-7939)',
 };
@@ -61,14 +64,16 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 Task 13 (D-4963) landed `_file_read_to`, `_reg_get_to` and
  *  `_reg_read_to`; W3 Task 15 (D-4963) landed `_route_peek_to`, `_route_effort_for_to`, `_route_applied_get_to`,
  *  `_route_wanted_to` and `_route_pending_word_to`; W3 Task 16 (D-4963) landed `_home_measured_to`; the rest of W3 removes
- *  its own. D-6180 (auto-swap reliability W1) landed `_swap_lane_to`, planned and landed in one commit. D-7717
+ *  its own. D-6180 (auto-swap reliability W1) landed `_swap_lane_to`, planned and landed in one commit, and D-6181
+ *  `_swap_pin_legacy_offset_to`, `_swap_pin_expiry_to` and `_limit_reset_to` the same way. D-7717
  *  (accounts connect A15) landed `_roster_fp_to` the same way, and delegation broker wave 5 PR1 `_dl_fingerprint_to`
  *  (ccd/lib/delegation-lease.sh, its fingerprint's unmeasured reason kept in the caller's shell). */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
-  '_home_measured_to', '_swap_lane_to', '_roster_fp_to', '_dl_fingerprint_to',
+  '_home_measured_to', '_swap_lane_to', '_swap_pin_legacy_offset_to', '_swap_pin_expiry_to', '_limit_reset_to',
+  '_roster_fp_to', '_dl_fingerprint_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),

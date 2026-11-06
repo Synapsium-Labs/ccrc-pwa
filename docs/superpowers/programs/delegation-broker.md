@@ -48,7 +48,7 @@ never links work by a name, a path, a time or a working directory.
 | 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120, #1162, #1558 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done`; follow-up 9 #1162 merged 2026-10-23 as `0c439bb7d`, run 816 closed `done`; follow-up 10 #1558 merged 2026-10-27 as `66fd18299` (head `2155e5625`), run 968 still open; the seven-day soak was waived by the operator on 2026-10-28, not passed |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
 | 5v | visibility (scope decision 2026-11-02) | honest helper and workspace visibility in the PWA; no automatic end or reopening | pwa, through the server box | 4 | #2254 | **merged** 2026-11-04 as `1d5b09e01` at exact head `e0792867f` (run 1421, four review rounds; the fourth by the operator's lift of the cap); run 1421 closed `done` |
-| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 dispatched 2026-11-06 (run 1550) |
+| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). PR7 dispatched 2026-11-06 (run 1569) |
 | 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); dispatched once the rest of wave 5 has landed and been used, when the operator says so |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
@@ -1855,6 +1855,53 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   is ruled (c), so PR8 is one pull request with no tree doors, and a tree with no unreleased lease refuses
   `tree-unleased`. The plan cuts PR8 from `main` with PR4 measured on both boxes; the coordinator ruled that this gates
   PR8's merge, not its work, and the server box's measurement comes with item 52.
+- **2026-11-06 — PR8 landed (Retain and resolve).** #2357 merged as `4413ff1df` at `6b64c7ffa` after two review rounds
+  (reviews 1554 and 1564), first in v0.0.1000. It gives a lease's parent, or the coordinator that claimed the parent,
+  Retain (`ccrc-api leases retain`, box-token gated and attribution-checked), and gives the operator keep, attach and
+  "not delegated" (two session-only doors). O5-8 was ruled (c), so there are no tree doors: a `tree-<key>` target names
+  the lease on that tree, and a tree with no unreleased lease refuses `tree-unleased`. Every act writes through PR5b's
+  `transitionLease` and `releaseLease`, under the floor rule. Its first full CI run was red on five censuses, fixed
+  before round 1. Round 1 found nothing critical and two important findings: a census record whose creation base could
+  not be read was read as another base, so a tree the operator had disowned was linked, adopted and mailed again; and
+  four door guards had no row that went red. The fixes: a base that cannot be read holds the tree while its (project,
+  admin record) holds any disowned key (D-8043); one row and one mutant for each guard; one derivation (`treeLeaseOf`)
+  for the lease that the unowned row and the tree target name; a claimant read fed from the binding series rows, with no
+  per-run hydration (D-8042 amended); and an unmeasured parent in an attach answering `registry-unmeasurable` (D-8041
+  extended). Round 2 found nothing critical or important. PR8's departures are D-8040 to D-8043: D-8040 `boxHolds` needs
+  `lease-mark-lock-v1`; D-8041 an unmeasured registry answers 502; D-8042 the claimant read is composed from the binding
+  series, with no store method; D-8043 the unmeasured-base hold. The block's last two numbers are unused.
+- **2026-11-06 — How PR8 landed, and CodeQL.** The CodeQL check was red on PR8 at every round with three high
+  `js/path-injection` alerts at the file reader in `server/src/io.ts`. All three were open on `main` since 2026-10-30,
+  before PR8. Round 2 traced every new flow, Retain's `byId` and resolve's parent, into the registry's `<id>.uuid` and
+  `<id>.generation` reads, and found a session-id shape check before each read on every path, so the flow is real but
+  not exploitable. CodeQL feeds no required check, and the PR had no review thread. The landing verdict read `ROUTE Q`,
+  and the coordinator enqueued with `--match-head-commit`. Dismissing the alerts is the operator's.
+- **2026-11-06 — Corrections from review 1564.** Two texts are wider than the code, and this entry corrects them. First,
+  pr8.md's retry note says "a second attach does the same". For a conflicting agent lease, the first attach's resolution
+  ends the conflict, so a second attach answers `wrong-disposition`, and only a raw lease renews. On a box that marks
+  carriers, an immediate retry answers `carrier-behind` until the lane reads the carrier back. Every case stays benign.
+  Second, D-7822 and D-8043 say a held record gets "no attempt recorded". The `run-child-owned` arm still records its
+  `linked` verdict, which creates no lease and no unowned row; that behaviour predates PR8 and is what the plan
+  prescribes.
+- **2026-11-06 — Carried from PR8's reviews.**
+  - PR7: an in-series row for the claimant read, red under a `LIMIT` on the series read (1564 F1); `treeLeaseOf` stays
+    ownership-blind, ruled accepted, with rows for the moved-worktree case and for its order (1564 F2); one `try` around
+    a door's decision step, answering `not-ready` (1564 F5); and rows showing that unmeasured caps fail shut (1564 F8).
+  - The Rider: a typed measured-absent outcome for the parent's incarnation, in place of the door's string compare (1564
+    F3); and the reference's two omitted conditions (the parent at the lease's incarnation, the claimant as of the
+    lease's first observation) with a positive corpus pin (1564 F7); and splitting `box-unsupported` for unmeasured caps
+    (1564 F8).
+- **2026-11-06 — Item 56, and the dispatch after PR8.** Item 56 asks for one rollout of both boxes to v0.0.1000 or
+  later, fleet box first, carrying PR8: the fleet box takes `ccrc-api leases retain` and the coordinator's reference,
+  and PR7's notices will name that verb. The server box's floor stays v0.0.966. PR7 (run 1569) went out from `main` with
+  PR6 and PR8 merged, with its own deviation block, named in its brief. The plan makes Task 0 (re-reading the fleet's
+  Claude Code lane versions and capturing those the correlation corpus lacks) the coordinator's, before dispatch. The
+  capture runs for hours in the foreground, and a coordinator that holds its turn holds every child's mail, so the
+  coordinator ruled it PR7's first commit, by the worker. The corpus row W5-D12 reads a complete matrix at PR7's tip
+  either way. At dispatch the lanes ran 2.1.311 to 2.1.319, and the matrix stopped at 2.1.299. The worker stops before
+  the decider if any new version builds an unmeasured cell or reds a correlation row. The carried items are in the
+  brief's carried file, review 1549's findings among them. Their reviewer's copy had been removed with its workspace, so
+  the coordinator kept a copy.
 
 ## Carried constraints
 

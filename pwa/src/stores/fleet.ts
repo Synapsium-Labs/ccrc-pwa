@@ -3,7 +3,8 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type DelegationProjectionWire, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
-import { loadFleetSnapshot, saveFleetSnapshot, snapshotRefused } from '../lib/offline';
+import { loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot, snapshotRefused, type WaitingSnapshot } from '../lib/offline';
+import { authLost } from '../lib/auth';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
@@ -242,8 +243,14 @@ export interface FleetState {
    *  tell the two apart reads `null`, not `items.length`. A reconnect keeps the last view (it is replaced by the frame the
    *  server sends on connect), so a network blip is not an empty list. NOT hydrated from, or written to, the offline
    *  snapshot, for `pools`' reason: items from an earlier page load are not a fact this page has heard. Envelope-level
-   *  validation only (`asFleetMsg`): a member this build cannot name is the reader's to tolerate. */
+   *  validation only (`asFleetMsg`): a member this build cannot name is the reader's to tolerate. The device's copy of
+   *  the list, from an earlier page load, is `waitingSaved` below and never this field (console speed C4, spec D16). */
   waiting: WaitingView | null;
+  /** The device's copy of the Waiting on you list (console speed, Task C4; spec §2.6, D16): the last list a page on this
+   *  device heard, as `lib/offline.ts` saved it, or `null` when there is no copy. Set ONCE, when the store is created,
+   *  and never from a frame; NEVER written into `waiting`, so every reader that asks whether this page has heard the list
+   *  answers as before. Read only through `ledgers/savedCopy.ts`, which draws it marked as not current. */
+  waitingSaved: WaitingSnapshot | null;
   setWaiting(view: WaitingView): void;
   /** The run archive's pages as `useColdRuns` last stored them (console speed S2), or `null` before a paged read has
    *  landed. MEMORY ONLY: never hydrated from or written to the offline snapshot or any storage key, so a reload starts
@@ -429,6 +436,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // below, not this socket), so the snapshot's own roster is read off current state at WRITE time rather than out
     // of the `fleet` frame, which carries none.
     const writeSnapshot = (sessions: FleetSession[]): void => saveFleetSnapshot(sessions, get().roster);
+    // The Waiting list's device copy (console speed C4), written after each `waiting` write, and NEVER while auth is lost
+    // (review 1561 F1): the socket outlives a sign-out, so a later frame, or a read already on the wire, would put back
+    // the copy the sign-out removed. The page still takes the list; only the device's copy is refused.
+    const saveWaiting = (view: WaitingView): void => { if (!authLost().lost) saveWaitingSnapshot(view); };
     const openWindow = (): void => {
       snapshotTimer = setTimeout(() => {
         snapshotTimer = null;
@@ -569,6 +580,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       delegation: null,
       // No list until a frame or a refetch lands, and never hydrated — see the field's docstring.
       waiting: null,
+      // The device's copy, read once here and never again: see the field's docstring.
+      waitingSaved: loadWaitingSnapshot(),
       // No pages until a paged archive read lands, and never hydrated — see the field's docstring.
       runPages: null,
       projects: null,
@@ -728,6 +741,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               set({ delegation: msg.delegation });
             } else if (msg.type === 'waiting') {
               set({ waiting: msg.waiting });
+              saveWaiting(msg.waiting);
             }
           },
           onState: (conn) => set(conn === 'connecting' ? { conn } : { conn, linkLost: conn === 'down' }),
@@ -770,6 +784,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       setWaiting(view) {
         set({ waiting: view });
+        saveWaiting(view);
       },
 
       setRunPages(pages) {

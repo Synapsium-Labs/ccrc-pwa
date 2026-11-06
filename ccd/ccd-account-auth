@@ -69,9 +69,9 @@ CCRC_ACCOUNTS_JSON="$HOME/.ccrc/accounts.json"
 # sign-in and writes the status file while it lives.
 #
 # IN AN ATTEMPT THE CREDENTIAL LANDS IN SCRATCH, never in the lane: the minted
-# token in `~/.ccrc/auth-scratch/<id>/minted.env`, and a re-auth's or a
-# switch's sign-in in `~/.ccrc/auth-scratch/<id>/config` (outside every agent
-# read root). `ccrc account set --method … --attempt` then checks it and
+# token in `~/.ccrc/auth-scratch/<id>/minted.env`, a re-auth's or a switch's
+# sign-in in `~/.ccrc/auth-scratch/<id>/config`, and a Codex lane's sign-in in
+# `~/.ccrc/auth-scratch/<id>/codex` (outside every agent read root). `ccrc account set --method … --attempt` then checks it and
 # installs it under the lane's lock, and only a passing check reaches `done`.
 AUTH_ATTEMPT=''
 AUTH_IN_PANE="${CCRC_AUTH_IN_PANE:-}"
@@ -1240,11 +1240,19 @@ _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb ove
   # verb prints no line that its auth library could not print too, so its own
   # status is the fact to key on.
   #
+  # IN AN ATTEMPT THE SIGN-IN LANDS IN SCRATCH (spec §9 row 5; accounts plan Task
+  # A24), a first sign-in and Sign in again alike. This helper cannot tell them
+  # apart, since it never reads the authDir, and need not: a refused, cancelled
+  # or expired attempt then leaves the lane's folder as it was, and a device flow
+  # always runs, where the lane's own folder would answer `already-signed-in`
+  # for a present credential. `_auth_install` checks it and moves it in.
+  #
   # `$HOME/.local/bin/ccrc` is ABSOLUTE, like `ccd account-pane`'s own exec of
   # this file. The pane runs under the tmux server's environment, and a user
   # unit's PATH carries no `~/.local/bin`: `deploy/systemd/ccrc-models.service`
   # says so beside its own PATH line, measured on the fleet host.
-  local rc vrc='' rcf='' argv=() ccrc="$HOME/.local/bin/ccrc"
+  local rc vrc='' rcf='' argv=() ccrc="$HOME/.local/bin/ccrc" login=(codex login "$AUTH_ID")
+  [[ -z "$AUTH_ATTEMPT" ]] || login+=(--scratch)
   [[ -x "$ccrc" ]] \
     || _auth_die "ccrc-absent: $ccrc does not exist or is not executable, and a codex lane signs in only through it"
   command -v "$CCRC_AUTH_SCRIPT" >/dev/null 2>&1 \
@@ -1254,7 +1262,7 @@ _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb ove
   rm -f -- "$rcf" 2>/dev/null || _auth_die "cannot clear an earlier run's $rcf"
   _auth_state starting
   mapfile -t argv < <(_auth_script_argv \
-    sh -c 'f=$1; shift; "$@"; r=$?; echo "$r" > "$f"; exit "$r"' sh "$rcf" "$ccrc" codex login "$AUTH_ID")
+    sh -c 'f=$1; shift; "$@"; r=$?; echo "$r" > "$f"; exit "$r"' sh "$rcf" "$ccrc" "${login[@]}")
   _auth_spawn_pty_child "${argv[@]}"
   local child=$AUTH_CHILD
   exec 8<"$AUTH_RUN/out"
@@ -1266,8 +1274,11 @@ _auth_openai_login_codex() {   # `ccrc codex login <id>` — ccrc's own verb ove
   if (( rc == 124 || AUTH_EXPIRED )); then _auth_end expired 1; fi
   [[ -n "$vrc" ]] \
     || _auth_die "ccrc codex login $AUTH_ID reported no exit status ($CCRC_AUTH_SCRIPT exited $rc), so the lane is not known to be signed in"
+  [[ "$vrc" != 5 ]] || _auth_die lane-credential-refused   # `_codex_login`'s, an attempt's alone: no code was asked for
+  [[ "$vrc" != 6 ]] || _auth_die credential-write   # the same, on a lane folder the library saw no file in
   [[ "$vrc" == 0 ]] \
     || _auth_die "ccrc codex login $AUTH_ID exited $vrc (its reason is the last line in this pane)"
+  [[ -z "$AUTH_ATTEMPT" ]] || _auth_install openai-login
   _auth_end done 0
 }
 _auth_user_code() {   # <clean line> — the launcher's DEVICE CODE, published on purpose
@@ -1311,7 +1322,7 @@ _auth_token_lane() {   # -> 0 when AUTH_ID's roster entry names a secretsFile
 # it under the lane's lock, or refuses with a code and writes nothing. The code
 # is the only part of its answer that reaches the status file: every sentence
 # the sheet shows comes from a code.
-_auth_install() {   # <setup-token|login> — returns on an install, _auth_die on a refusal
+_auth_install() {   # <setup-token|login|openai-login> — returns on an install, _auth_die on a refusal
   local out='' rc=0 code=''
   printf '[checking the new credential before it is installed]\n'
   out="$("$WRAPPER_DIR/ccrc" account set --id "$AUTH_ID" --method "$1" --attempt "$AUTH_ATTEMPT" </dev/null 2>/dev/null)" || rc=$?

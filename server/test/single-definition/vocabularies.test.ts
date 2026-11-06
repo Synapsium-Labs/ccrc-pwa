@@ -1458,3 +1458,21 @@ describe('delegation wave 5 PR6: the carrier lane\'s retried refusals are one li
     for (const w of DELEGATION_CARRIER_RETRIED_REFUSALS) expect(LEASE_MARK_REFUSALS).toContain(w);
   });
 });
+
+// Delegation broker wave 5, PR8 (Task 5.8.2): the lease doors' refusal words and statuses, declared ONCE in `shared/api.ts` (the PWA reads
+// them and cannot import a `server/src/coord` module), with `LeaseDoorRefusal` and `LeaseDoorAnswer` beside them, each derived.
+describe('delegation wave 5 PR8: the lease door vocabulary is declared once, in shared/api.ts', () => {
+  it('LEASE_DOOR_REFUSALS, LeaseDoorRefusal and LeaseDoorAnswer are each declared exactly once, in shared/api.ts; the type is derived', async () => {
+    const decl = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(decl(/^\s*(?:export\s+)?(?:const|let|var)\s+LEASE_DOOR_REFUSALS\b/m)).toEqual(['shared/api.ts']);
+    expect(decl(/^\s*(?:export\s+)?type\s+LeaseDoorRefusal\b\s*=/m)).toEqual(['shared/api.ts']);
+    expect(decl(/^\s*(?:export\s+)?type\s+LeaseDoorAnswer\b\s*=/m)).toEqual(['shared/api.ts']);
+    expect(readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8')).toMatch(/^export type LeaseDoorRefusal = keyof typeof LEASE_DOOR_REFUSALS;$/m);
+    const { LEASE_DOOR_REFUSALS } = await import('../../../shared/api.js');
+    expect(Object.keys(LEASE_DOOR_REFUSALS)).toEqual(['lease-unknown', 'lease-released', 'not-lease-parent', 'wrong-disposition', 'not-ready',
+      'incarnation-changed', 'registry-unmeasurable', 'not-live-parent', 'tree-not-unowned', 'bad-request', 'lease-conflicting', 'carrier-behind',
+      'box-unsupported', 'tree-unleased']);
+    // the route refusal table takes these statuses by spreading the one table, never a second spelling of the words
+    expect(readFileSync(path.join(ccrcRoot, 'shared', 'refusal.ts'), 'utf8')).toMatch(/^\s*\.\.\.LEASE_DOOR_REFUSALS,$/m);
+  });
+});

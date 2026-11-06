@@ -43,7 +43,7 @@
  */
 import type { ClaimRefusal } from './box-token.js';
 import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
-import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from './api.js';
+import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
@@ -190,7 +190,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The sign-in routes (accounts plan Task A21, D-7793): their nine words of their own.
   | AccountAuthRefusal
   // The landing line's guarded entrances (wave 5f): the infrastructure words and the mutation words, one closed family.
-  | LandingInfrastructureCode | LandingMutationCode;
+  | LandingInfrastructureCode | LandingMutationCode
+  // The lease doors (delegation broker wave 5 PR8): their words and statuses are declared once, `api.ts#LEASE_DOOR_REFUSALS`.
+  | LeaseDoorRefusal;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -208,6 +210,9 @@ export const LANDING_REFUSAL_STATUS: Readonly<Record<LandingInfrastructureCode |
 /** Each route refusal word's one status (D-5381). Measured from the sends on
  *  landing day, never chosen: changing one is a behaviour change. */
 export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
+  // The lease doors (delegation broker wave 5 PR8): spread FIRST, so a word the table below already holds keeps the table's status;
+  // `lease-routes.test.ts` holds every lease door word's status equal to this table's. CHOSEN, not measured, for the new words.
+  ...LEASE_DOOR_REFUSALS,
   // 400
   'bad-request': 400, 'bad-tag': 400, 'bad-kind': 400, 'bad-account-id': 400, 'bad-attachment': 400,
   'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400,

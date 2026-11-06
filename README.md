@@ -1469,8 +1469,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty machine lanes the
-fleet host reaches (thirty-six box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the sixty-one machine lanes the
+fleet host reaches (thirty-seven box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
@@ -1921,7 +1921,7 @@ phrase as JSON. There is no PWA surface for it in this build: run it on the box 
 ```bash
 ccrc account roster                        # the roster, as JSON
 ccrc account candidates                    # launchers in ~/.local/bin that look like accounts and are not rostered
-ccrc account add --id <id> --provider <anthropic|openrouter|compatible> --label <text> --hue <hue> \
+ccrc account add --id <id> --provider <anthropic|openai|openrouter|compatible> --label <text> --hue <hue> \
     [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--credential -] [--adopt]
 ccrc account declare --id <id> --label <text> --hue <hue> [--provider <p>] [--base-url <url>] [--suffix <s>]
 ccrc account check --id <id>               # is this lane's credential alive? (may spend one minimal turn), then the seed
@@ -1930,7 +1930,8 @@ ccrc account enable --id <id> [--force]    # remove the -disabled marker, under 
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
 ccrc account set --id <id> [--stated -] [--placement overflow|full]   # a token lane's stated account; placement
-ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential]
+ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential] \
+    [--keep-codex-auth | --delete-codex-auth]
 ```
 
 - **`add`** creates a ccrc-written lane (`exec.kind: "generated"`, `homeAble: true`, `telemetry: "anthropic"`)
@@ -1947,9 +1948,18 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   `~/.cc-secrets/<id>-<provider>.env`; `compatible` requires `--base-url`, and `openrouter` defaults to its own
   endpoint. `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
   required, and refused on an `anthropic` lane. `add` refuses a `selectable` list: add the account first, then
-  put `selectable` on its `exec.models` in `~/.ccrc/accounts.json` and run `ccrc install`. `--provider openai`
-  is refused: `add` writes only `generated` lanes, and a ChatGPT/Codex lane ccrc runs is a `codex` roster row
-  (below).
+  put `selectable` on its `exec.models` in `~/.ccrc/accounts.json` and run `ccrc install`.
+- **`add --provider openai`** makes a ChatGPT lane instead, the `codex` roster row (below): `exec.kind: "codex"`,
+  `homeAble: true`, `telemetry: "codex"`, switched off. It takes `--id`, `--label`, `--hue`, `--suffix` and `--adopt`,
+  and refuses `--credential`, `--base-url`, `--models` and `--method` by name. It picks two ports that no roster lane
+  names and nothing answers on, from `CCRC_ACCOUNT_CODEX_PORT_BASE` (default 14100), refusing `no-free-port`, and names
+  a fresh folder, `exec.authDir: ".local/share/ccrc/codex/<id>-<six random hex digits>"`, refusing `authdir-occupied` if
+  anything stands there. So a re-added id never meets an old lane's sign-in. The folder is only a name until the first
+  sign-in makes it. It refuses `codex-runtime-absent`, with nothing written, on a box with no Codex runtime, and builds
+  none: run `ccgpt-runtime build`, then add the lane again. `ccrc install` builds a runtime only for a lane the roster
+  already names, so the first ChatGPT lane on a box takes that step. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
+  the next `ccrc install` or `ccrc update` enables `ccrc-codex-usage@<id>.timer`. The next step is `auth-start --method
+  openai-login`, then `check` and `enable`.
 - **A credential only ever arrives on a pipe.** `--credential -` is the only spelling — a literal would sit in
   world-readable argv — and a terminal on stdin is refused rather than prompted:
   `ccrc account add … --credential - < keyfile`. A `login` lane takes no `--credential`. The whole of stdin is
@@ -1992,11 +2002,25 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   user manager cannot stop it. Both verbs default `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` before they ask
   the manager, since the agent spawns them with only `HOME`, `PATH` and `LANG`. A lane
   that already holds a credential signs in, or mints, into `~/.ccrc/auth-scratch/<id>` (outside every agent read
-  root), and the helper hands it to `set --method setup-token|login --attempt <a>`, which probes it and, only once
+  root), and the helper hands it to `set --method setup-token|login|openai-login --attempt <a>`, which probes it and, only once
   it passes, installs it under the lane lock: a re-mint into `<id>-oauth.env`, a Sign in again into the config
   dir, and a switch also sets or clears the roster's `exec.secretsFile` and rewrites the wrapper and `accounts.sh`.
-  A refused, cancelled or expired attempt leaves the lane as it was, and every attempt's end kills its tmux server
-  and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
+  A Codex lane's attempt, a first sign-in included, signs in to `~/.ccrc/auth-scratch/<id>/codex` (`ccrc codex login
+  <id> --scratch`), and the helper hands it to `set --method openai-login --attempt <a>`. That runs the check, a real
+  request on the new credential for the lane's model catalogue, and the auth library then writes the credential into
+  `exec.authDir`, under its own lock. A first sign-in also runs `ccrc models refresh <id>`, so `check` can start the
+  gateway; a lane that has its `litellm.yaml` restarts no tier. Only the refusal's code reaches the status file, so each
+  says what happened: `no-credential` (the sign-in is absent, expired, barred, unreadable or not private to this user;
+  nothing was sent, or the library would not install it), `token-unverified` (a request went, and the provider refused
+  it or did not answer), `codex-answer-unreadable` (the provider answered, but not with a model list this box can
+  read), `codex-runtime-absent` (run `ccrc install`, then sign in again), `codex-check-unrun` (the check could not
+  run here, which says nothing of the sign-in; `ccrc doctor` names what is missing) and `lane-credential-refused` (the
+  lane's own `auth.json` is unreadable or another family's, so no sign-in can land on it; `ccrc doctor` names it). That
+  last one is read before the device flow, so the operator approves no code, and again at the install. It means that
+  file and nothing else: a lane folder or lock the library could not make, or a lane folder it cannot see into (that
+  one also before the code), is `credential-write`, and a scratch folder that fails after the code ends the attempt as a
+  failed sign-in, each with the library's own line. A refused, cancelled or expired
+  attempt leaves the lane as it was, and every attempt's end kills its tmux server and deletes its scratch. Every mint records `mintedAt` in the lane state; a paste clears it. `credential --id <id>
   --sign-out` runs `claude auth logout` in that lane's config dir and removes its `.credentials.json` (whether that
   ends the sign-in at Anthropic is unmeasured). A macOS node refuses `auth-start` with `auth-unsupported-here`
   (reason `darwin-arm-absent`) until its launchd arm ships. `ccd account-pane --id <id> --method setup-token`, the
@@ -2016,10 +2040,17 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   the answer's `operator-steps`), the `-disabled` marker, the limits file and the ccrc-managed settings,
   hooks and skills in the config dir. The config dir and its transcripts stay; the key
   file is removed, and a `login` lane signed out, unless `--keep-credential`; the lane's model-class files
-  stay until `ccrc models <id> rm`. It also refuses `auth-in-progress` while a sign-in for the lane runs, and
+  stay until `ccrc models <id> rm`. A `codex` lane's `exec.authDir` is deleted too, unless `--keep-codex-auth` or
+  `--keep-credential` keeps it (`--delete-codex-auth` spells the default, and refuses beside `--keep-codex-auth`). The
+  test is the path, not who made the folder, because nothing records that: a folder under
+  `.local/share/ccrc/codex/` goes, a hand-written lane's included, so pass `--keep-codex-auth` to keep a sign-in you
+  placed there yourself. Three folders stay whatever was asked, each reported in `kept` and named in `operator-steps`:
+  one outside that home; one another lane's row reaches, whether the row names it in another spelling (`codex//<x>`),
+  through a link, or names a folder inside it or around it; and one whose fate could not be read. It also refuses `auth-in-progress` while a sign-in for the lane runs, and
   `sleeping-sessions` (with their ids) for hibernated rows, which a removal would move to upstream to wake there;
   `--rehome-sleeping` moves them anyway. `~/.ccrc/auth-scratch/<id>` is deleted, and the answer's `atProvider`
-  says, per credential kind, what is still valid at the provider. `--mode discard` is the same removal for a lane
+  says, per credential kind, what is still valid at the provider: deleting a Codex folder ends nothing there, so a
+  lane that held a sign-in lists it, and one whose folder holds none (the auth library reads `absent` and nothing stands at its checkpoint path, `auth.pending.json`) lists nothing. `--mode discard` is the same removal for a lane
   `add` made that was never switched on and has no session; anything else refuses `not-discardable`.
   `--dry-run` takes no lock, writes nothing and answers what a removal would meet: live, sleeping and archived
   sessions, upstream, the other placeable lanes, a sign-in in progress, and whether Discard applies.
@@ -2282,9 +2313,11 @@ and answers the old `502` (which a client that only half-closed still reads). A 
 queued behind this one (HTTP pipelining) cannot be seen to leave, so its old request is still sent when the gateway
 returns; the shim's one real client does not pipeline.
 
-**Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
+**Adding one** is `ccrc account add --provider openai` ("Connecting an account"), then `auth-start --method
+openai-login`, `check` and `enable`. A lane can also be a roster edit. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;
-the two ports are examples — any two free ports above 1023 that no other `codex` lane uses):
+the two ports are examples — any two free ports above 1023 that no other `codex` lane uses; `ccrc account remove`
+deletes an `authDir` under `.local/share/ccrc/codex/` unless told to keep it, a hand-written lane's included):
 
 ```json
 {
@@ -2325,16 +2358,17 @@ Per-lane state lives in
 
 **One library owns the credential.** Exactly one ccrc program reads and writes `auth.json` in `exec.authDir`:
 the auth library `ccgpt-auth.py`, placed beside the shim. `ccrc codex login` is its device-code sign-in and needs
-no Codex runtime; it writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
+no Codex runtime, though the check of a sign-in made through `auth-start` does; it writes nothing until the sign-in completes, so an abandoned one leaves the authDir as it was,
 and it never writes over another tool's credential file. The lane has one refresher, through the library's lock:
 its LiteLLM tier in `litellm` mode, its bridge in `direct` mode; every other reader only reads. Beside the
 credential the library keeps `auth.json.lock`,
 the checkpoint `auth.pending.json` and the non-secret `auth.status.json`, each 0600; a refresh token the token
 endpoint refuses is the state `needs-signin` there, which the tier answers with a 401 at once and `ccrc codex
 start` and doctor name with `ccrc codex login <id>` as the remedy. History's redaction loads the credential as a
-secret source. ccrc never moves or removes the authDir — not on `ccrc account remove`, not on `ccrc uninstall`
-(which stops the lane's proven tiers, removes the runtime, and keeps the lane directory and logs), and not on
-`--purge`, because the parser refuses an `authDir` under `~/.ccrc`.
+secret source. `ccrc account remove` deletes the authDir of any lane under `.local/share/ccrc/codex/`, whoever made it,
+unless told to keep it ("Connecting an account"). Nothing else moves or removes one: not `ccrc uninstall` (which stops the lane's proven tiers, removes the
+runtime, and keeps the lane directory and logs), and not `--purge`, because the parser refuses an `authDir` under
+`~/.ccrc`.
 
 **Usage.** `ccgpt-usage.py` publishes a lane's Codex usage into `~/.cc-limits/<id>.json` — the weekly window
 as `seven`, a 5h-style window as `five` only while it is active — so the swapper and the accounts screen see
@@ -5859,8 +5893,10 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   build's. A box with no usable `realpath` **SKIPs**: the two halves must agree that an unresolvable
   pair is unmeasured, or a box neither of them could measure gets two different verdicts (D-1350).
 - **The number (R4).** The hook increments `graphQueries` in the hookstate it already writes, on a
-  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`. Builds do not count — this
-  measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
+  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`, by name or by path, and
+  whose output is a real answer (D-8046): a line that starts as graphify starts one. A failed call
+  that still exits 0 (`graphify query x | head` with no engine on `PATH`, `No matching nodes found.`)
+  counts for nothing and opens nothing. Builds do not count — this measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
   `resume` (D-1248) and kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader
   on the server side and keeps **`null` (no field — an older hook) apart from `0` (measured none)**; it
   rides `FleetSession.graphQueries` additively (no `FLEET_PROTO` bump) and renders as a `graph N` chip
@@ -5903,9 +5939,10 @@ armed: a card promising a deny that never comes teaches the session to ignore th
 
 The deny is the one shape `PreToolUse` defines — a `permissionDecision` of `deny` with a reason —
 and the reason is the card's own vocabulary plus the act: this tree has a knowledge graph (node
-count and freshness word), this session has not queried it yet, search opens after one
-`graphify query` (`path` and `explain` spelled out beside it), and *Denial k of 3; after 3 the gate
-opens anyway.* **Everything else fails open, and so does the bound.** An unreadable hookstate, a
+count and freshness word), this session has no answer from it yet, search opens after one graph
+query that answers (`query`, `path` and `explain` each spelled out, each carrying
+`PATH="$HOME/.local/bin:$PATH"` so the line runs whatever `PATH` the session has; the source-read nudge
+says it the same way, D-8046), and *Denial k of 3; after 3 the gate opens anyway.* **Everything else fails open, and so does the bound.** An unreadable hookstate, a
 missing `jq`, an unresolvable tree, an unparseable stamp, a graph that is not there: no stdout, and
 the call proceeds. Three denials without a query and the fourth search passes — a session that
 cannot run `Bash` at all is never wedged by a hook it has no way to satisfy — and a denial is

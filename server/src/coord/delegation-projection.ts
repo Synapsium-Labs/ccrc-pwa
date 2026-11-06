@@ -1,6 +1,6 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
-// THIS MODULE IS L1. It imports the shared wire, the pure model, the policy's one classifier of unowned work, the correlation
+// THIS MODULE IS L1. It imports the shared wire, the pure model, the one newest-attempt derivation (`delegation-conflicts.ts`), the correlation
 // module's tree key, the binding's R9 decider and the divergence sweep's ccd identity of a worktree, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
@@ -27,12 +27,11 @@ import {
   formatDelegationInstant,
   parseDelegationInstant,
   type DelegationActivityRow,
-  type DelegationAttemptRow,
   type DelegationCensusRecord,
   type DelegationCheckpointV1,
 } from './delegation-model.js';
-import { isUnownedWorkReason } from './delegation-policy.js';
 import { delegationTreeKey } from './delegation-correlation.js';
+import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, treeLeaseOf } from './delegation-conflicts.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
 import { ccdIdForWorktree } from '../divergence.js';
 
@@ -45,7 +44,7 @@ export interface DelegationProjectionSession { id: string; status: SessionStatus
  *  `StampedRun`, declared once there (R9's decider reads it). */
 export type DelegationProjectionRun = StampedRun;
 export interface DelegationProjectionInput {
-  checkpoint: Pick<DelegationCheckpointV1, 'activities' | 'leases' | 'attempts'>;
+  checkpoint: Pick<DelegationCheckpointV1, 'activities' | 'leases' | 'attempts' | 'leaseCarriers'>;
   census: {
     measuredAt: number;
     projects: ReadonlyMap<string, { delegation: readonly DelegationCensusRecord[] | null }>;
@@ -86,16 +85,10 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const unreleased = checkpoint.leases.filter((l) => l.releasedAt === null);
   const leasedTrees = new Set(unreleased.map((l) => delegationTreeKey(l.project, l.adminRecord)));
   const leasedActivities = new Set(unreleased.map((l) => l.activityId));
-  // The newest unowned-work attempt per tree (R59's one classifier). A tree is in conflict when ITS newest attempt is `conflicting`, so
-  // a lease suppressed for a conflict always leaves the tree an unowned row (D-7003).
-  const newest = new Map<string, DelegationAttemptRow>();
-  for (const a of checkpoint.attempts) {
-    if ((a.verdict !== 'unresolved' && a.verdict !== 'conflicting') || !isUnownedWorkReason(a.detail ?? '')) continue;
-    const k = delegationTreeKey(a.project, a.adminRecord);
-    const held = newest.get(k);
-    if (!held || held.attemptedAt < a.attemptedAt || (held.attemptedAt === a.attemptedAt && held.attemptId < a.attemptId)) newest.set(k, a);
-  }
-  const conflicting = new Set([...newest].filter(([, a]) => a.verdict === 'conflicting').map(([k]) => k));
+  // The newest unowned-work attempt per tree, and the trees whose newest is `conflicting` and not covered by an operator's resolve
+  // (`delegation-conflicts.ts`, the derivations every wave-5 decider reads too, D-7820).
+  const newest = newestUnownedAttempts(checkpoint);
+  const conflicting = conflictingTreeKeys(checkpoint);
 
   const activityRows: DelegationActivityWire[] = [];
   for (const a of checkpoint.activities) {
@@ -112,7 +105,8 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const leaseRows: DelegationLeaseWire[] = [];
   for (const l of unreleased) {
     const k = delegationTreeKey(l.project, l.adminRecord);
-    if (owns(l.project, l.canonicalPath) || (conflicting.has(k) && l.sourceKind !== 'raw')) continue;
+    if (owns(l.project, l.canonicalPath)) continue;
+    if (conflicting.has(k) && l.sourceKind !== 'raw') continue;
     const workspace = presence(l.project, l.adminRecord);
     if (workspace === 'absent') continue;
     const coordinator = coordinatorOf(l.parentId, l.firstObservedAt);
@@ -130,11 +124,15 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const unownedRows: DelegationUnownedWire[] = [];
   for (const [k, a] of newest) {
     if ((leasedTrees.has(k) && a.verdict !== 'conflicting') || owns(a.project, a.canonicalPath)) continue;
+    if (resolvedAttemptCovered(checkpoint, a)) continue;                      // the operator resolved it (D-7820)
     const workspace = presence(a.project, a.adminRecord);
     if (workspace === 'absent') continue;
+    // PR8: the lease hidden for a conflict on this tree, named so the lease has a control: `treeLeaseOf`, the one derivation a
+    // `tree-<key>` resolve reads too, so the row and the resolve name the same lease (F7).
+    const hidden = treeLeaseOf(checkpoint, conflicting, k);
     unownedRows.push({
       project: a.project, adminRecord: a.adminRecord, canonicalPath: a.canonicalPath, verdict: a.verdict as DelegationUnownedWire['verdict'],
-      reason: a.detail!, rung: a.rung, workspace, attemptedAt: a.attemptedAt,
+      reason: a.detail!, rung: a.rung, workspace, attemptedAt: a.attemptedAt, ...(hidden?.hiddenForConflict === true ? { leaseId: hidden.lease.leaseId } : {}),
     });
   }
 
