@@ -1,7 +1,7 @@
 // Instrument's desk, measured in a real Chrome over the production build (W2 desk polish, Task T2e, D-6335; T2g, D-6715).
 // The jsdom suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this
-// geometry; this file holds the geometry: no empty fourth column (the reading column is 860 at 1600 and the detail
-// reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
+// geometry; this file holds the geometry: no empty fourth column (the reading column is the whole detail pane at 1600,
+// 1128, since D-8059 made Instrument's `--measure-chat` 100%, and the detail reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
 // has no pool lag, so nothing else draws there and the first row starts higher), a status row of two lines and at most
 // 42 px under a fine pointer when its name and state fit (every row at most three lines and under 61 px: the name,
 // `waiting · needs you` and the context, when a long name and the state do not fit side by side; T3b, R21's F2 and
@@ -18,7 +18,7 @@
 // `openApp`'s `touch: true`.
 //
 // MUTATION TABLE (plan Task T2e Step 3 and fix round 1; RUN, this file alone, each mutant reverted):
-//   the fourth track unconditional ..................... "at 1600 the session's reading column is 860 …"
+//   the fourth track unconditional ..................... "at 1600 the session's reading column is the pane …"
 //   a literal 32px floor outside (pointer: fine) ....... "under touch emulation, every row and control is at least 44 px"
 //   fleet.css's `.sess-actions::before` inset without
 //     the border's 2px (the 42 px hit area it documents)  "under touch emulation, every row and control is at least 44 px"
@@ -175,7 +175,7 @@ async function open(theme: string, width: number, height: number, route: string,
 
 describe('no empty fourth column', () => {
   for (const theme of THEMES) {
-    it(`at 1600 the session's reading column is 860 and the detail reaches the viewport's right edge (${theme})`, async () => {
+    it(`at 1600 the session's reading column is the pane and the detail reaches the viewport's right edge (${theme})`, async () => {
       const { ctx, page, errors } = await open(theme, 1600, 900, SESSION_ROUTE);
       try {
         await page.waitForSelector('.composer', { timeout: 20_000 });
@@ -192,7 +192,7 @@ describe('no empty fourth column', () => {
         // Three tracks (the rail, the list, the detail): the 320 px fourth track is S12's, with the Inspector part.
         expect(m.tracks, 'grid tracks').toEqual(['52px', '420px', '1128px']);
         expect(m.inspectors, 'Instrument places no inspector yet').toBe(0);
-        expect(m.composerW, 'the reading column').toBe(860);
+        expect(m.composerW, 'the reading column: the whole detail pane (D-8059)').toBe(1128);
         expect(m.detailRight, "the detail reaches the viewport's right edge").toBe(1600);
         expect(m.sideScroll).toBe(0);
         expect(errors).toEqual([]);
