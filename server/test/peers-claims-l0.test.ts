@@ -154,7 +154,7 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly fifteen import lines: fourteen types, and one value from an import-free L0 sibling (D-3021)', () => {
+  it('shared/api.ts has exactly sixteen import lines: fifteen types, and one value from an import-free L0 sibling (D-3021)', () => {
     // Account-pool membership, release rollout, the box-token console card and
     // the node role each added an L0 sibling shape, and the session's workflow
     // rows (D-5560) a sixth, and the lane state's wire words (D-6058 (3)) a seventh, and the fleet health's disk block (D-6615) an eighth, and the landing checks mail token (a type-only import, `typeof import(...)` being forbidden) a tenth: no duplicate wire types.
@@ -176,6 +176,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",
       "import type { ReadFailure } from './agent-protocol.js';",
+      "import type { PerfHealth } from './perf.js';",
       "import type { WorkflowView } from './workflows.js';",
       "import type { WaitingView } from './ledgers.js';",
       "import type { CHECKS_MAIL_TOKEN } from './landing.js';",

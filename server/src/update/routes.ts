@@ -14,6 +14,7 @@ import {
 import { resolveAndProject, resolveInputFor } from './project.js';
 import { SERVER_LABEL, buildInfoOfRow } from './inventory.js';
 import { boxSettingsView } from './boxSettings.js';
+import { RELEASE_WINDOW_RECENT, RELEASE_WINDOW_STABLE_BACK, releaseWindow } from './releaseWindow.js';
 import { dispatchViewsFor } from './converge.js';
 import type { CataloguePoller } from './catalogue.js';
 import { updateTargetListed } from '../../../shared/update-move.js';
@@ -622,11 +623,26 @@ export function registerUpdateRoutes(
     // D-6916: each node's box settings, from the watcher's held reads and the request's clock. No watcher, no field.
     const held = watcher?.boxSettingsHeld();
     const nowS = Math.floor(Date.now() / 1000);
+    // Console speed S2: the wire carries the release WINDOW, not the whole catalogue; `releasesTotal` is the whole
+    // catalogue's size, which the PWA's older-releases count reads. The store's `releases()` stays whole (the planner's).
+    const all = deps.coord.releases();
+    const nodes = deps.coord.nodes();
+    const intents = deps.coord.intents();
+    const window = releaseWindow(all, {
+      installed: nodes.flatMap((n) => (n.currentVersion === null ? [] : [n.currentVersion])),
+      previous: nodes.flatMap((n) => (n.previousVersion === null ? [] : [n.previousVersion])),
+      intentTags: [
+        ...intents.flatMap((i) => (i.pinnedTag === null ? [] : [i.pinnedTag])),
+        ...nodes.flatMap((n) => [n.desiredTag, n.requestedTag].filter((t): t is string => t !== null)),
+      ],
+      recent: RELEASE_WINDOW_RECENT, stableBack: RELEASE_WINDOW_STABLE_BACK,
+    });
     const view: UpdatesView = {
       catalogue: deps.catalogue?.state() ?? { lastOkAt: null, lastError: null },
-      releases: deps.coord.releases().map(toReleaseWire),
-      nodes: deps.coord.nodes().map((n) => ({ ...toNodeWire(n), ...(held ? { settings: boxSettingsView(held.get(n.nodeId), nowS) } : {}) })),
-      intent: deps.coord.intents().map(toIntentWire),
+      releases: window.map(toReleaseWire),
+      releasesTotal: all.length,
+      nodes: nodes.map((n) => ({ ...toNodeWire(n), ...(held ? { settings: boxSettingsView(held.get(n.nodeId), nowS) } : {}) })),
+      intent: intents.map(toIntentWire),
       // Box-token lifecycle wave 1 (D-4392): the console card's one object, the driver's own view, read at
       // request time. No driver, no field — an absent `boxToken` is how an older server already answers.
       ...(deps.tokenDriver ? { boxToken: deps.tokenDriver.view() } : {}),

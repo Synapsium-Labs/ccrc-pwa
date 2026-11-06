@@ -80,7 +80,8 @@
 }
 .pg-prog { margin-left: auto; display: flex; align-items: center; gap: var(--sp-1); flex: none; }
 .pg-count { white-space: nowrap; }
-/* The waiting chip (desktop-polish PL5b): "N waiting on you", a `Door` to the programme's view. It is NOT tinted and not the
+/* The waiting chip (desktop-polish PL5b): "N waiting on you", a `Door` that opens the Waiting on you list filtered to this
+   programme (PL11, D-7986). It is NOT tinted and not the
    hue's text: it states its own ground and ink (`--bg-surface` under `--ink-primary`, the page's own pair), with the hue as its
    non-text outline, so the audit measures one pair in every palette whatever the programme's hue. Never wider than its words
    ("99+ waiting on you" is the widest it prints): it does not shrink, and the kicker wraps before it would overflow. A slug the

@@ -545,14 +545,14 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(title.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('counts its sessions\' questions with its open items: 2 items and 1 question read "3 waiting on you" on the box and 3 on the view (ruling 14290)', () => {
+  it('counts its sessions\' questions with its open items: 2 items and 1 question read "3 waiting on you" on the box and on its Goals page\'s link (ruling 14290; PL11)', () => {
     const asking = fleet();
     withList(OPEN(2), asking);
     const box = drawCard(asking.sessions, asking.runs, 'project-c');
     expect(chip(box)!.textContent).toContain('3 waiting on you');
     cleanup();
     render(<ProgrammeScreen slug="port-api" store={useFleetStore} />);
-    expect(screen.getByRole('heading', { name: 'Waiting on you · 3' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '3 waiting on you' })).toBeTruthy();
   });
 
   it('counts a question alone: a programme with no open item but one asking session still has a chip', () => {
@@ -597,7 +597,8 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(chip(c)).toBeNull();
   });
 
-  it('is a door: a labelled button that opens the programme\'s view and nothing else on the box', () => {
+  // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the chip opens the one list, filtered to its programme.
+  it('a programme chip opens the combined list filtered to that programme', () => {
     withList(OPEN(3));
     const { sessions, runs } = quiet();
     const c = drawCard(sessions, runs, 'project-c');
@@ -607,12 +608,13 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     expect(c.querySelectorAll('.pg-waiting')).toHaveLength(1);
     history.replaceState(null, '', '/');
     fireEvent.click(door);
-    expect(location.pathname).toBe('/programmes/port-api');
+    expect(location.pathname + location.search).toBe('/waiting?programme=port-api');
+    expect(matchRoute(location.pathname)?.route.id).toBe('waiting');
     expect(c.querySelector('.pg-foot button')?.getAttribute('aria-expanded'), 'the footer toggle is untouched').toBe('false');
     history.replaceState(null, '', '/');
   });
 
-  it.each(['Build_4', 'pA', 'build_4-name'])('is a door to the view for the programme %s, a slug the server accepts that the first route refused', (slug) => {
+  it.each(['Build_4', 'pA', 'build_4-name'])('is a door to the filtered list for the programme %s, a slug the server accepts that the first route refused', (slug) => {
     const f = quiet();
     const from = { sessions: f.sessions, runs: f.runs.map((r) => ({ ...r, program: slug })) };
     withList(OPEN(2, slug), from);
@@ -620,9 +622,8 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     const door = within(c).getByRole('button', { name: /2 waiting on you/ });
     history.replaceState(null, '', '/');
     fireEvent.click(door);
-    expect(location.pathname).toBe(`/programmes/${slug}`);
-    expect(matchRoute(location.pathname)?.route.id).toBe('programme');
-    expect(matchRoute(location.pathname)?.param).toBe(slug);
+    expect(location.pathname).toBe('/waiting');
+    expect(new URLSearchParams(location.search).get('programme')).toBe(slug);
     history.replaceState(null, '', '/');
   });
 
@@ -645,7 +646,7 @@ describe('the waiting chip on a programme box (PL5b)', () => {
     const { sessions, runs } = quiet();
     const c = drawCard(sessions, runs, 'project-c');
     const door = within(c).getByRole('button', { name: /150 waiting on you/ });
-    expect(door.getAttribute('aria-label')).toMatch(/^150 waiting on you: open /);
+    expect(door.getAttribute('aria-label')).toMatch(/^150 waiting on you in /);
     expect(door.textContent).toContain('99+ waiting on you');
     expect(door.textContent).not.toContain('150');
   });
@@ -742,18 +743,18 @@ describe('every programme box opens its view and links its spec (PL10, D26 amend
     }
   });
 
-  it('the waiting chip is unchanged above zero', () => {
+  it('the waiting chip above zero opens the filtered list (PL11, D-7986), beside the title door', () => {
     const list = waitingView({ items: Array.from({ length: 3 }, (_v, i) => itemView({ id: 100 + i, program: 'port-api' })), goals: [goals()] });
     const { sessions, runs } = heard(list);
     const c = drawCard(sessions, runs, 'project-c');
     const chip = within(c).getByRole('button', { name: /3 waiting on you/ });
     expect(chip.classList.contains('pg-waiting')).toBe(true);
-    expect(chip.getAttribute('aria-label')).toBe('3 waiting on you: open Port the API');
+    expect(chip.getAttribute('aria-label')).toBe('3 waiting on you in Port the API');
     expect(chip.textContent).toContain('3 waiting on you');
     // The title door and the spec link sit beside it, and the chip stays the box's one button to the view.
     expect(titleDoor(c)!.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(c.querySelectorAll('.pg-kicker button')).toHaveLength(1);
     fireEvent.click(chip);
-    expect(location.pathname).toBe('/programmes/port-api');
+    expect(location.pathname + location.search).toBe('/waiting?programme=port-api');
   });
 });

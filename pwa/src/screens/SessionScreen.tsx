@@ -46,7 +46,7 @@ import { sessionFacts } from '../fleet/sessionFacts';
 import { coordinatorPresence } from '../fleet/presence';
 import { orphanGuidance } from '../fleet/orphanWords';
 import { placementOfRow, poolOfPlacement } from '../fleet/placementWords';
-import { isRunClosed } from '../fleet/runWords';
+import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords';
 import { HistoryTab } from '../session/HistoryTab';
 import { TerminalDrawer } from '../session/TerminalDrawer';
 import { modelOptions, effortOptions, type PickOption } from '../lib/models';
@@ -531,6 +531,7 @@ export function SessionScreen({
   // hidden rail brings them back. Asked of the set, never of the skin's id.
   const inspectorShown = useInspectorShown();
   const inspectorHoldsStrips = inspectorShown && (frameSet?.Inspector ?? null) !== null;
+  const programmeSlug = live === null ? null : sessionProgramme(live, fleetRuns);
   const chromeInputs: SessionHeaderProps = {
     session: live,
     status,
@@ -542,6 +543,9 @@ export function SessionScreen({
     onInterrupt: (source) => void interrupt(source),
     onBack: () => navigate('/'),
     queuedField,
+    // PL11 (D-7986; spec §2, D30): the Goals door, for a session in a programme, read off its row and the runs it already holds,
+    // named by the programme's title (review 1537 A10).
+    programme: programmeSlug === null ? null : { slug: programmeSlug, title: programmeTitle(programmeSlug, fleetRuns) },
     fallback: deepLinkFallback(id, roster, projects, { title: project, wrapper }),
   };
 

@@ -9334,7 +9334,7 @@ EOF
   echo scope-sweep-busy   # D-7994: the sweep's busy arm switch's writer, behind POST /api/coord/scope-sweep
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
-  echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit   # delegation broker wave 5: the lease carrier's one writer (PR1) and its read-only audit (PR2), ccd/lib/delegation-lease.sh
+  echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit; echo lease-mark-lock-v1   # delegation broker wave 5: the lease carrier's one writer (PR1), its read-only audit (PR2), and the mark's orphan lock (PR6, D-8037), ccd/lib/delegation-lease.sh
   echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo orphan-lease-v1   # delegation broker wave 5 PR4: the orphan ladder's lease rung (`_dl_orphan_rung`, ccd/lib/delegation-lease.sh)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's

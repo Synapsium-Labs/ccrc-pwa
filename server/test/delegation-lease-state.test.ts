@@ -11,9 +11,13 @@ import {
   decideLeaseRelease,
   decideLeaseTransition,
   delegationCarrierStateOf,
+  planNativeRemoved,
+  DELEGATION_LEASE_RELEASES_PER_PASS,
+  type NativeRemovedInput,
 } from '../src/coord/delegation-lease-state.js';
-import type { DelegationLeaseCarrierRow } from '../src/coord/delegation-model.js';
-import { leaseRow } from './delegationLeaseFixture.js';
+import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
+import type { DelegationLeaseCarrierRow, DelegationLeaseRow } from '../src/coord/delegation-model.js';
+import { checkpointWithLease, leaseRow } from './delegationLeaseFixture.js';
 
 const carrierRow = (over: Partial<DelegationLeaseCarrierRow> & { leaseId: string }): DelegationLeaseCarrierRow => ({
   transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: null, ...over,
@@ -101,5 +105,159 @@ describe('the one lease transition table', () => {
     expect(delegationCarrierStateOf(lease, undefined)).toBe('retained');
     expect(delegationCarrierStateOf({ ...lease, releasedAt: '2026-11-09T00:00:00.000Z' },
       carrierRow({ leaseId: lease.leaseId, transferringSince: '2026-11-10T12:00:00.000Z', transferRun: 4 }))).toBe('released');
+  });
+});
+
+// ── PR5b (Task 5.5.4): native-removed release, the planner ─────────────────────────────────────────────────────────────
+
+describe('planNativeRemoved: a lease whose tree is gone from two successful listings is released', () => {
+  const key = (project: string, record: string): string => delegationTreeKey(project, record);
+  const A = leaseRow({ leaseId: 'lease-a', project: 'project-a', adminRecord: 'wt-1', generation: 1, currentJournalSequence: 6 });
+  /** One pass's census: which projects were censused, and per record (by project) its census state; a record not named is not listed. */
+  type Pass = { censused: string[]; records?: Array<[string, string, 'present' | 'absent' | 'unreadable', string?]> };
+  type Memory = { absentListings: ReadonlyMap<string, number>; lastHeads: ReadonlyMap<string, string> };
+  const inputOf = (leases: DelegationLeaseRow[], pass: Pass, memory: Memory, carriers: DelegationLeaseCarrierRow[] = []): NativeRemovedInput => {
+    const recs = pass.records ?? [];
+    return {
+      checkpoint: { ...checkpointWithLease(), leases, ...(carriers.length === 0 ? {} : { leaseCarriers: carriers }) },
+      censused: new Set(pass.censused),
+      listed: new Set(recs.map(([p, r]) => key(p, r))),
+      absent: new Set(recs.filter(([, , s]) => s === 'absent').map(([p, r]) => key(p, r))),
+      unreadable: new Set(recs.filter(([, , s]) => s === 'unreadable').map(([p, r]) => key(p, r))),
+      heads: new Map(recs.flatMap(([p, r, s, h]) => (s === 'present' && h !== undefined ? [[key(p, r), h] as const] : []))),
+      ...memory,
+    };
+  };
+  /** Runs passes in order, carrying the memory, and answers each pass's plan. */
+  const run = (leases: DelegationLeaseRow[], passes: Pass[], carriers: DelegationLeaseCarrierRow[] = []) => {
+    let memory: Memory = { absentListings: new Map(), lastHeads: new Map() };
+    return passes.map((p) => { const out = planNativeRemoved(inputOf(leases, p, memory, carriers)); memory = { absentListings: out.absentListings, lastHeads: out.lastHeads }; return out; });
+  };
+  const gone: Pass = { censused: ['project-a'], records: [['project-a', 'wt-other', 'present']] };
+  const present: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'present']] };
+
+  it('W5-J15: absent from two consecutive successful listings releases, native-removed, at the lease\'s generation', () => {
+    const [one, two] = run([A], [gone, gone]);
+    expect(one!.release).toEqual([]);
+    expect(one!.absentListings.get('lease-a')).toBe(1);
+    expect(two!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: null }]);
+    expect(two!.absentListings.get('lease-a'), 'a release candidate keeps its count until its release lands (review 1498 F1)').toBe(2);
+    expect(run([A], [{ censused: ['project-a'], records: [['project-a', 'wt-1', 'absent']] }, gone])[1]!.release, 'listed absent counts as absent').toHaveLength(1);
+    expect(run([A], [gone, present, gone]).map((o) => o.release.length), 'a present listing resets the count').toEqual([0, 0, 0]);
+  });
+
+  it('W5-J16: an uncensused pass between two absences neither counts nor resets; an unreadable one resets', () => {
+    expect(run([A], [gone, { censused: [] }, gone]).map((o) => o.release.length)).toEqual([0, 0, 1]);
+    const unread: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'unreadable']] };
+    const outs = run([A], [gone, unread, gone]);
+    expect(outs.map((o) => o.release.length)).toEqual([0, 0, 0]);
+    expect(outs[1]!.absentListings.has('lease-a'), 'unreadable is never absence: the count is 0').toBe(false);
+    // The planner reads `unreadable` itself: a record unreadable but not in `listed` resets too, and is never missing (review 1498 F6).
+    const memory: Memory = { absentListings: new Map([['lease-a', 1]]), lastHeads: new Map() };
+    const out = planNativeRemoved({ ...inputOf([A], gone, memory), unreadable: new Set([key('project-a', 'wt-1')]) });
+    expect([out.release.length, out.absentListings.has('lease-a')], 'an unreadable record resets even when unlisted').toEqual([0, false]);
+  });
+
+  it('W5-J16b: an admin record that stays listed while its tree directory is gone never releases; missing from two listings it does', () => {
+    // The census lists the record (its admin record reads) while the tree directory is gone: listed, and not `absent`.
+    const standing: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'present']] };
+    const outs = run([A], [standing, standing, standing, gone, gone]);
+    expect(outs.map((o) => o.release.length)).toEqual([0, 0, 0, 0, 1]);
+    expect(outs.slice(0, 3).every((o) => !o.absentListings.has('lease-a')), 'its count stays 0').toBe(true);
+  });
+
+  it('W5-J16c: a project dropped from the census, or listed unmeasured, releases nothing for three passes, keeps its count and is counted uncensused', () => {
+    // Dropped from the registry-named census: not in `censused` at all.
+    const dropped = run([A], [gone, { censused: ['project-b'] }, { censused: ['project-b'] }, { censused: ['project-b'] }]);
+    expect(dropped.map((o) => o.release.length)).toEqual([0, 0, 0, 0]);
+    expect(dropped.slice(1).map((o) => [o.uncensused, o.absentListings.get('lease-a')])).toEqual([[1, 1], [1, 1], [1, 1]]);
+    // Listed but unmeasured (`delegation: null`): the lane leaves it out of `censused` too, so the same three answers.
+    const unmeasured = run([A], [{ censused: [] }, { censused: [] }, { censused: [] }]);
+    expect(unmeasured.map((o) => [o.release.length, o.uncensused, o.absentListings.has('lease-a')])).toEqual([[0, 1, false], [0, 1, false], [0, 1, false]]);
+  });
+
+  // PR6 ruling 2 (review 1498 F4): at most DELEGATION_LEASE_RELEASES_PER_PASS releases a pass, oldest lease first. `lane` stands in for
+  // the lane: a released lease is released in the next checkpoint and leaves the memory, as `releaseLease`'s `applied` makes it.
+  const ten = Array.from({ length: 10 }, (_, i) => leaseRow({ leaseId: `lease-${i}`, project: 'project-a', adminRecord: `wt-${i}`,
+    generation: 1, creatingJournalSequence: 100 - i, currentJournalSequence: 100 - i }));        // the array's LAST is the oldest
+  const lane = () => {
+    let leases = ten;
+    let memory: Memory = { absentListings: new Map(), lastHeads: new Map() };
+    return (pass: Pass) => {
+      const out = planNativeRemoved(inputOf(leases, pass, memory));
+      const done = new Set(out.release.map((r) => r.leaseId));
+      leases = leases.map((l) => (done.has(l.leaseId) ? { ...l, generation: l.generation + 1, releasedAt: '2026-11-10T00:00:00.000Z' } : l));
+      memory = { absentListings: new Map([...out.absentListings].filter(([id]) => !done.has(id))), lastHeads: new Map([...out.lastHeads].filter(([id]) => !done.has(id))) };
+      return { out, memory };
+    };
+  };
+  const listing = (state: 'present' | 'unreadable', ids: number[]): Pass =>
+    ({ censused: ['project-a'], records: [['project-a', 'wt-other', 'present'], ...ids.map((i) => ['project-a', `wt-${i}`, state, 'c'.repeat(40)] as [string, string, 'present' | 'unreadable', string])] });
+
+  it('ruling 2: ten candidates release eight in one pass, oldest lease first, and the other two in the next', () => {
+    expect(DELEGATION_LEASE_RELEASES_PER_PASS).toBe(8);
+    const step = lane();
+    expect(step(gone).out.release).toEqual([]);
+    const second = step(gone);
+    expect(second.out.release.map((r) => r.leaseId)).toEqual(['lease-9', 'lease-8', 'lease-7', 'lease-6', 'lease-5', 'lease-4', 'lease-3', 'lease-2']);
+    expect([...second.memory.absentListings], 'a capped-out candidate keeps its count').toEqual([['lease-1', 2], ['lease-0', 2]]);
+    expect(step(gone).out.release.map((r) => r.leaseId), 'and releases on the next pass that still misses it').toEqual(['lease-1', 'lease-0']);
+  });
+
+  it('ruling 2 (review 1546 F6d): a capped-out candidate keeps its head as well as its count, and releases with it', () => {
+    const step = lane();
+    const head = 'c'.repeat(40);
+    expect(step(listing('present', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])).out.release).toEqual([]);
+    step(gone);
+    const second = step(gone);
+    expect(second.out.release).toHaveLength(8);
+    expect([...second.memory.lastHeads], 'the two past the cap keep the head their last listing read').toEqual([['lease-1', head], ['lease-0', head]]);
+    expect(step(gone).out.release.map((r) => [r.leaseId, r.lastHeadSha])).toEqual([['lease-1', head], ['lease-0', head]]);
+  });
+
+  it('ruling 2: a capped-out candidate whose tree is listed present, or unreadable, on the next pass is not released, and its count resets', () => {
+    for (const state of ['present', 'unreadable'] as const) {
+      const step = lane();
+      step(gone);
+      expect(step(gone).out.release).toHaveLength(8);
+      const third = step(listing(state, [0, 1]));
+      expect(third.out.release, state).toEqual([]);
+      expect(third.memory.absentListings.size, state).toBe(0);
+    }
+  });
+
+  it('W5-J16d: two leases on one admin record name in two projects: missing from A\'s listing while B lists it counts only A\'s lease', () => {
+    const B = leaseRow({ leaseId: 'lease-b', project: 'project-b', adminRecord: 'wt-1', canonicalPath: '/work/project-b/.claude/worktrees/wt-1', generation: 2 });
+    const pass: Pass = { censused: ['project-a', 'project-b'], records: [['project-b', 'wt-1', 'present']] };
+    const outs = run([A, B], [pass, pass]);
+    expect(outs[1]!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: null }]);
+    expect(outs.every((o) => !o.absentListings.has('lease-b'))).toBe(true);
+  });
+
+  it('D-8025: the release carries the last head a census saw for the record, kept across the absent listings and an uncensused pass', () => {
+    const seen: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'present', 'a'.repeat(40)]] };
+    const later: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'present', 'b'.repeat(40)]] };
+    const outs = run([A], [seen, later, gone, { censused: [] }, gone]);
+    expect(outs[1]!.lastHeads.get('lease-a')).toBe('b'.repeat(40));
+    expect(outs[4]!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: 'b'.repeat(40) }]);
+    expect(outs[4]!.lastHeads.get('lease-a'), 'a release candidate keeps its head until its release lands').toBe('b'.repeat(40));
+  });
+
+  it('review 1498 F1: a release that did not land is planned again at the next absent listing, with the head kept', () => {
+    const seen: Pass = { censused: ['project-a'], records: [['project-a', 'wt-1', 'present', 'c'.repeat(40)]] };
+    const outs = run([A], [seen, gone, gone, gone]);                 // the lease stays unreleased: its door never answered applied
+    expect(outs.map((o) => o.release.length)).toEqual([0, 0, 1, 1]);
+    expect(outs[3]!.release).toEqual([{ leaseId: 'lease-a', expectGeneration: 1, releaseReason: 'native-removed', lastHeadSha: 'c'.repeat(40) }]);
+    expect(outs[3]!.absentListings.get('lease-a')).toBe(3);
+  });
+
+  it('W5-J17: a promoted lease releases transferred; a transferring lease never releases; a released lease is not planned', () => {
+    const P = leaseRow({ leaseId: 'lease-p', disposition: 'promoted', generation: 3, promotedAt: '2026-10-15T00:00:00.000Z' });
+    expect(run([P], [gone, gone])[1]!.release).toEqual([{ leaseId: 'lease-p', expectGeneration: 3, releaseReason: 'transferred', lastHeadSha: null }]);
+    const X = leaseRow({ leaseId: 'lease-t', disposition: 'adopted', generation: 3 });
+    const transferring: DelegationLeaseCarrierRow = { leaseId: 'lease-t', transferringSince: '2026-10-15T00:00:00.000Z', transferRun: 12,
+      promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: null };
+    expect(run([X], [gone, gone, gone], [transferring]).map((o) => o.release.length)).toEqual([0, 0, 0]);
+    expect(run([leaseRow({ releasedAt: '2026-10-15T00:00:00.000Z' })], [gone, gone]).map((o) => o.release.length)).toEqual([0, 0]);
   });
 });

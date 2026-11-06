@@ -2,13 +2,15 @@
 // what it pins; the screen's and the routes' tests read the same words through their components.
 import { describe, expect, it } from 'vitest';
 import {
-  COMBINED_LIST, fromWord, groupByProgramme, itemPills, itemPlace, knownProgrammes, listGroups, listOfFromWord, openRunsOf,
-  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, waitingTotal, type ItemList, type QuestionRow,
+  COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
+  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, waitingTotal,
+  type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
+import { sessionProgramme } from '../src/fleet/runWords';
 
 const ask = (sessionId: string, program: string | null, at = NOW - MIN): QuestionRow => ({ sessionId, program, title: sessionId, at });
 
@@ -63,6 +65,20 @@ describe('questionRows', () => {
     const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Which one?', bucketSince: NOW - MIN });
     const rows = questionRows(withRunBinding([asking], runs), runs);
     expect(rows.map((r) => [r.sessionId, r.program])).toEqual([['project-a-ask', 'prog-a']]);
+  });
+
+  // The session's programme has ONE reader (desktop-polish PL11, D-7986): the question rows and the session's Goals door both
+  // ask `sessionProgramme`, so a session never files its question under one programme and opens another's Goals.
+  it('the row\'s programme is the session\'s one reader: its bound open run\'s, else the open run it claims, else none', () => {
+    const runs = [
+      runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-w1' }),
+      runRow({ id: 6, program: 'prog-b', claimedBy: 'project-a-coord' }),
+      runRow({ id: 7, program: 'prog-c', claimedBy: 'project-a-old', state: 'done', closedAt: NOW }),
+    ];
+    const sessions = withRunBinding(['project-a-w1', 'project-a-coord', 'project-a-old', 'project-a-solo']
+      .map((id) => fleetSession({ id, bucket: 'attention', title: id })), runs);
+    expect(sessions.map((s) => sessionProgramme(s, runs))).toEqual(['prog-a', 'prog-b', null, null]);
+    expect(questionRows(sessions, runs).map((r) => r.program)).toEqual(sessions.map((s) => sessionProgramme(s, runs)));
   });
 
   it('a session in no programme is one row with no programme', () => {
@@ -166,13 +182,35 @@ describe('the list an item was opened from rides the URL as one word', () => {
   const LISTS: readonly (readonly [string, ItemList])[] = [
     ['waiting', { at: 'waiting', programme: null }],
     ['waiting:prog-a', { at: 'waiting', programme: 'prog-a' }],
-    ['programme:prog-b', { at: 'programme', programme: 'prog-b' }],
+    // An item opened from its programme's Goals page (review 1537 F2): the same filtered list, its way back that Goals page.
+    ['goals:prog-a', { at: 'waiting', programme: 'prog-a', back: 'goals' }],
   ];
   it.each(LISTS)('%s reads back as the list it names, and that list writes it', (word, list) => {
     expect(listOfFromWord(word)).toEqual(list);
     expect(fromWord(list)).toBe(word);
   });
-  it.each([null, '', 'fleet', 'waiting:', 'programme:', 'programme:../x', 'programme:a b', 'waiting:prog-a:x', 'PROGRAMME:prog-a'])(
+  // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme view's own share of the list is gone, so
+  // an old `programme:<slug>` word names the combined list filtered to that programme, and is written as that list's word.
+  it('an old from=programme word reads as the combined list filtered to that programme', () => {
+    expect(listOfFromWord('programme:prog-b')).toEqual({ at: 'waiting', programme: 'prog-b' });
+    expect(fromWord(listOfFromWord('programme:prog-b'))).toBe('waiting:prog-b');
+  });
+  // REVIEW 1537 F2 (keeping review 1402's F3): the way back of an item opened from Goals is read off the list its URL names.
+  it("an item opened from Goals goes back to that programme's Goals page; any other list goes back to the list", () => {
+    expect(goalsBack(listOfFromWord('goals:prog-a'))).toBe('prog-a');
+    expect(goalsBack(listOfFromWord('waiting:prog-a'))).toBeNull();
+    expect(goalsBack(listOfFromWord('programme:prog-a'))).toBeNull();
+    expect(goalsBack(COMBINED_LIST)).toBeNull();
+    // Its steps go along the programme's filtered list, as that list's own do, and keep the way back.
+    const groups = groupByProgramme([itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-a' }),
+      itemView({ id: 3, program: 'prog-b' })], []);
+    const place = itemPlace(1, listOfFromWord('goals:prog-a'), groups);
+    expect(place?.next).toBe(2);
+    expect(place?.total).toBe(2);
+    expect(fromWord(place!.list)).toBe('goals:prog-a');
+  });
+  it.each([null, '', 'fleet', 'waiting:', 'programme:', 'programme:../x', 'programme:a b', 'waiting:prog-a:x', 'PROGRAMME:prog-a',
+    'goals:', 'goals:../x', 'GOALS:prog-a'])(
     'an unknown or malformed word (%j) falls back to the combined list', (word) => {
       expect(listOfFromWord(word)).toEqual(COMBINED_LIST);
     });
@@ -197,60 +235,38 @@ describe('itemPlace: previous and next in the order and filter of the list the i
     expect(itemPlace(2, COMBINED_LIST, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
   });
 
-  it('the side rail\'s filter to one programme, and the programme view, step inside that programme only', () => {
+  it('the side rail\'s filter to one programme steps inside that programme only', () => {
     const filtered: ItemList = { at: 'waiting', programme: 'prog-a' };
-    const view: ItemList = { at: 'programme', programme: 'prog-a' };
     expect(itemPlace(4, filtered, groups)).toEqual({ list: filtered, index: 0, total: 2, prev: null, next: 1 });
-    expect(itemPlace(1, view, groups)).toEqual({ list: view, index: 1, total: 2, prev: 4, next: null });
+    expect(itemPlace(1, filtered, groups)).toEqual({ list: filtered, index: 1, total: 2, prev: 4, next: null });
   });
 
   it('the first item has no previous and the last no next', () => {
     expect(itemPlace(3, COMBINED_LIST, groups)).toMatchObject({ index: 0, prev: null, next: 2 });
     expect(itemPlace(1, COMBINED_LIST, groups)).toMatchObject({ index: 4, prev: 4, next: null });
-    expect(itemPlace(2, { at: 'programme', programme: 'prog-b' }, groups)).toMatchObject({ index: 1, total: 3, prev: 3, next: 5 });
+    expect(itemPlace(2, { at: 'waiting', programme: 'prog-b' }, groups)).toMatchObject({ index: 1, total: 3, prev: 3, next: 5 });
   });
 
   it('a list that does not hold the item (a stale link) falls back to the combined list', () => {
-    expect(itemPlace(2, { at: 'programme', programme: 'prog-a' }, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
+    expect(itemPlace(2, { at: 'waiting', programme: 'prog-a' }, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
     expect(itemPlace(2, { at: 'waiting', programme: 'prog-gone' }, groups)).toEqual({ list: COMBINED_LIST, index: 1, total: 5, prev: 3, next: 5 });
   });
 
   it('an item no list holds (recently cleared, or gone) has no place', () => {
     expect(itemPlace(9, COMBINED_LIST, groups)).toBeNull();
-    expect(itemPlace(9, { at: 'programme', programme: 'prog-a' }, groups)).toBeNull();
+    expect(itemPlace(9, { at: 'waiting', programme: 'prog-a' }, groups)).toBeNull();
   });
 
-  it('the filter to a programme with no group shows every group, as the side rail does; the programme view shows none', () => {
+  it('the filter to a programme with no group shows every group, as the side rail does', () => {
     expect(listGroups({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(groups);
-    expect(listGroups({ at: 'programme', programme: 'prog-gone' }, groups)).toEqual([]);
   });
 
-  it('resolveList is the one stale-list rule: a list naming a programme no group holds is the combined list, any other stands', () => {
-    for (const list of [COMBINED_LIST, { at: 'waiting', programme: 'prog-a' }, { at: 'programme', programme: 'prog-b' }] as ItemList[]) {
+  it('resolveList is the one stale-list rule: a filter naming a programme no group holds is the combined list, any other stands', () => {
+    for (const list of [COMBINED_LIST, { at: 'waiting', programme: 'prog-a' }, { at: 'waiting', programme: 'prog-b' }] as ItemList[]) {
       expect(resolveList(list, groups), fromWord(list)).toBe(list);
     }
     expect(resolveList({ at: 'waiting', programme: 'prog-gone' }, groups)).toEqual(COMBINED_LIST);
-    expect(resolveList({ at: 'programme', programme: 'zzz' }, groups)).toEqual(COMBINED_LIST);
-    expect(resolveList({ at: 'programme', programme: 'zzz' }, [])).toEqual(COMBINED_LIST);
-  });
-
-  it('a programme view whose slug is real stays a programme view with no group; a filter to it does not (follow-up F3)', () => {
-    const view: ItemList = { at: 'programme', programme: 'prog-gone' };
-    const filter: ItemList = { at: 'waiting', programme: 'prog-gone' };
-    const known = new Set(['prog-gone']);
-    expect(resolveList(view, groups, known)).toBe(view);
-    expect(resolveList(filter, groups, known)).toEqual(COMBINED_LIST); // the side rail offers no filter to it
-    expect(resolveList({ at: 'programme', programme: 'zzz' }, groups, known)).toEqual(COMBINED_LIST); // a slug nothing knows
-    expect(resolveList(view, groups)).toEqual(COMBINED_LIST);
-  });
-
-  it('a slug is real when the runs, the Goals or the cleared trail name it (follow-up F3)', () => {
-    const goals = (program: string) => ({ program, specPath: null, inShort: null, inShortAt: null, modifications: [] });
-    expect([...knownProgrammes(waitingView(), null)]).toEqual([]);
-    expect(knownProgrammes(waitingView(), [runRow({ id: 1, program: 'prog-r' })]).has('prog-r')).toBe(true);
-    expect(knownProgrammes(waitingView({ goals: [goals('prog-g')] }), null).has('prog-g')).toBe(true);
-    expect(knownProgrammes(waitingView({ cleared: [itemView({ id: 9, program: 'prog-c', state: 'done' })] }), []).has('prog-c')).toBe(true);
-    expect(knownProgrammes(waitingView({ items: [itemView({ id: 1, program: 'prog-a' })] }), []).has('zzz')).toBe(false);
+    expect(resolveList({ at: 'waiting', programme: 'zzz' }, [])).toEqual(COMBINED_LIST);
   });
 
   it('the position as announced carries the item\'s title, so a step that keeps "N of M" still says something new (follow-up A-3)', () => {
@@ -258,5 +274,22 @@ describe('itemPlace: previous and next in the order and filter of the list the i
     expect(positionWords(null, 'Item 11')).toBe('');
     // No title (the item is gone and its place kept): the place alone (carry C, D-7951; review 1408 F3).
     expect(positionWords({ list: COMBINED_LIST, index: 1, total: 3, prev: 10, next: 12 }, '')).toBe('2 of 3');
+  });
+});
+
+// ── the summary counts what the page draws (review 1537 F4) ───────────────────────────────────────────────────────────
+describe('the summary pills count the groups the list draws', () => {
+  const ITEMS = [
+    itemView({ id: 1, program: 'prog-b', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-b', neededBy: 'soon' }),
+    itemView({ id: 3, program: 'prog-a', neededBy: 'soon' }), itemView({ id: 4, program: 'prog-a', state: 'checking' }),
+  ];
+  const QUESTIONS: QuestionRow[] = [{ sessionId: 's-b', program: 'prog-b', title: 'Ask', at: NOW }];
+  const groups = groupByProgramme(ITEMS, QUESTIONS);
+  it("unfiltered, every group's: the whole list's counts", () => {
+    expect(shownSummary(listGroups(COMBINED_LIST, groups))).toEqual(summaryCounts(ITEMS, QUESTIONS));
+  });
+  it("filtered to prog-a, prog-a's alone: prog-b's blocking item and question do not reach it", () => {
+    expect(shownSummary(listGroups({ at: 'waiting', programme: 'prog-a' }, groups)))
+      .toEqual({ blocking: 0, questions: 0, soon: 1, checking: 1, cameBack: 0 });
   });
 });

@@ -97,6 +97,33 @@ describe('the Waiting on you list', () => {
     expect(within(trail).getByText('Approve the prototype')).toBeTruthy();
   });
 
+  // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme page lost its cleared trail, so the list
+  // filtered to a programme is where that programme's recently cleared items show, and only those; clearing the filter shows all.
+  it('filtered to a programme, Recently cleared holds that programme\'s items only; unfiltered, every programme\'s', () => {
+    const view = waitingView({
+      items: [itemView({ id: 1, program: 'prog-a' }), itemView({ id: 2, program: 'prog-b' })],
+      cleared: [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN }),
+        itemView({ id: 21, program: 'prog-b', state: 'done', title: 'Lift the cap', closedAt: NOW - 60 * MIN })],
+    });
+    open({ view, programme: 'prog-a' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText('Approve v6')).toBeTruthy();
+    expect(within(trail).queryByText('Lift the cap')).toBeNull();
+    cleanup();
+    open({ view, programme: null });
+    const all = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(all).getByText('Approve v6')).toBeTruthy();
+    expect(within(all).getByText('Lift the cap')).toBeTruthy();
+  });
+
+  it('filtered to the sessions in no programme, Recently cleared is not drawn: every cleared item is a programme\'s', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+    const view = waitingView({ cleared: [itemView({ id: 20, program: 'prog-a', state: 'done', title: 'Approve v6', closedAt: NOW - 60 * MIN })] });
+    open({ view, sessions: [asking], programme: '' });
+    expect(screen.getByText('A question')).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Recently cleared' })).toBeNull();
+  });
+
   it('a question row links to its session and is never tickable', () => {
     const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'Status flag question', bucketSince: NOW - 6 * MIN });
     const runs = [runRow({ id: 5, program: 'prog-a', sessionId: 'project-a-ask' })];
@@ -203,6 +230,34 @@ describe('the Waiting on you list', () => {
     const summary = screen.getByRole('list', { name: 'Summary' });
     const words = within(summary).getAllByRole('listitem').map((li) => li.textContent);
     expect(words).toEqual(['1 blocking now', '1 question from a session', '2 needed soon', '1 being checked', '1 came back']);
+  });
+
+  // REVIEW 1537 F4: under a filter the pills count only what the page draws, so prog-b's blocking item never reads on prog-a's
+  // page, where a programme chip lands.
+  it("filtered to a programme, the summary counts that programme's items alone: another's blocking item does not reach it", () => {
+    open({
+      programme: 'prog-a',
+      view: waitingView({
+        items: [
+          itemView({ id: 1, program: 'prog-b', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-b', neededBy: 'soon' }),
+          itemView({ id: 3, program: 'prog-a', neededBy: 'soon' }), itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
+        ],
+      }),
+    });
+    const words = within(screen.getByRole('list', { name: 'Summary' })).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['2 needed soon']);
+  });
+
+  // REVIEW 1548 M3: the other filter. Filtered to the sessions in no programme, the pills count those sessions' questions alone:
+  // a programme's blocking item does not reach them.
+  it('filtered to the sessions in no programme, the summary counts their questions alone: a programme\'s blocking item does not reach it', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+    open({
+      sessions: [asking], programme: '',
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-a', neededBy: 'soon' })] }),
+    });
+    const words = within(screen.getByRole('list', { name: 'Summary' })).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['1 question from a session']);
   });
 
   it('the rail filters to the programme its prop names, keeps no copy of its own, and tells the route of a pick', () => {

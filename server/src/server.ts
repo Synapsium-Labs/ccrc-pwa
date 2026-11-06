@@ -44,6 +44,7 @@ import { readTasks } from './tasks/read.js';
 import { Bus, type Notice } from './bus.js';
 import type { FleetWatcher } from './watch.js';
 import { SessionStream, parseSince } from './sessionws.js';
+import { BEAT_MS } from './sessionws.js';
 // D-5866: the one verb question. Its own line, so the ccdargv import above is left as it stands.
 import { ccdCan } from './ccdargv.js';
 import {
@@ -74,6 +75,7 @@ import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from '.
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
+import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
@@ -548,6 +550,32 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   /** The measured secret for THIS moment — `SECRET_UNREAD` when the flag is off,
    *  so nothing touches the disk on a box whose gate is dark. */
   const secretNow = () => (deps.cfg.authEnabled ? measureSecret(deps.cfg.authSecretPath) : SECRET_UNREAD);
+
+  // Console speed S2: every route is timed from its response. The PATTERN is recorded (`/api/sessions/:id/...`), never the URL,
+  // so an id or a nonce never reaches the recorder. It changes no answer and adds no header.
+  app.addHook('onResponse', (req, reply, done) => {
+    deps.perf?.route(req.method, req.routeOptions.url ?? '<unmatched>', reply.elapsedTime);
+    done();
+  });
+  // Fix rounds 1-2 (F1, F2): operator acts (`operatorActRoute`) in flight, and when the last one ENDED, so a served read
+  // never predates the operator's own act (`takenAfter`); one in flight counts as ending now. An act ends at the later of
+  // its handler settling and its response closing: a client that aborts leaves it in flight until the box has answered. A
+  // refusal inside the handler counts (the box may have acted); one the auth gate sends first ran nothing. Wrapped at
+  // `onRoute`, not `onSend`: those are the masking backstop's, counted in secret-mask.
+  let operatorActAt: number | null = null;
+  let operatorActs = 0;
+  const lastOperatorAct = (): number | null => (operatorActs > 0 ? Date.now() : operatorActAt);
+  app.addHook('onRoute', (route) => {
+    if (![route.method].flat().some((m) => operatorActRoute(m, route.url))) return;
+    const inner = route.handler;
+    route.handler = function (req, reply) {
+      operatorActs += 1;
+      let open = 2;   // the handler and the response
+      const end = (): void => { open -= 1; if (open === 0) { operatorActs -= 1; operatorActAt = Date.now(); } };
+      reply.raw.once('close', end);
+      try { return Promise.resolve(inner.call(this, req, reply)).finally(end); } catch (err) { end(); throw err; }
+    };
+  });
 
   /**
    * THE CREDENTIAL QUESTION, as a value other route families can be handed —
@@ -1192,7 +1220,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // D-5995: session text in a fleet answer (an ask summary, a task's active form) is masked before it is serialized,
   // on every arm of the route; each row's server-built identity fields (its id, its names) are kept as they are.
   app.get('/api/fleet', async () => {
-    if (deps.cfg.fleetMode === 'remote' && deps.fleetState && !deps.fleetState.connected) {
+    const linkDown = deps.cfg.fleetMode === 'remote' && deps.fleetState !== undefined && !deps.fleetState.connected;
+    if (linkDown && deps.fleetState) {
       const snap = await loadSnapshot(stateCachePath);
       // NO `pools` KEY on this arm, deliberately: nothing about pools is
       // persisted (spec §5.4.1), so there is nothing measured to serve, and a
@@ -1200,6 +1229,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "unknown" on the PWA, which is the truth here.
       if (snap) return { sessions: dropStaleLandings(snap.sessions, Date.now()), stale: true, downSince: deps.fleetState.downSince };
     }
+    // Console speed S2: the watcher's last listed tick answers whole with its age (no registry read, no pools read, no
+    // assembly) while BOTH the listing and the pools read beside its wire are fresh (`servedFleetReads`). Anything less
+    // falls to the reads below, which are today's, and so does a link that is down with no snapshot (F3).
+    const servedFleet = servedFleetReads(watcher?.currentFleetListing() ?? null, takenAfter(watcher?.currentProjectPoolsRead() ?? null, lastOperatorAct()), Date.now());
+    const servedPools = servedFleet.serve ? watcher?.currentPools() ?? null : null;
+    if (servedFleet.serve && servedPools !== null && !linkDown) return { sessions: dropStaleLandings(servedFleet.listing.sessions, Date.now()), pools: servedPools, ageMs: servedFleet.ageMs };
     // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
     // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
     // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
@@ -1303,6 +1338,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const psi = watcher?.pressure(deps.cfg.fleetMode !== 'remote' || deps.fleetState?.connected === true) ?? undefined;
     // The fleet box's backup health (D-7858), judged now from the last read. Absent before one landed: UNKNOWN.
     const backup = watcher?.backup() ?? undefined;
+    // The console's own timers (console speed S1/S2): absent when no recorder is wired, which a reader treats as unknown.
+    const perfBlock = deps.perf ? { perf: deps.perf.health(Date.now()) } : {};
     if (deps.cfg.fleetMode === 'remote' && deps.fleetState) {
       // The two stamps: with a coordination database, the inventory's rows —
       // re-measured every minute by `sweepInventory`, superseded rows excluded
@@ -1329,6 +1366,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         ...(disk ? { disk } : {}),
         ...(psi ? { psi } : {}),
         ...(backup ? { backup } : {}),
+        ...perfBlock,
       };
     }
     // Local mode drives ccd on this same box, off this same roster: there is
@@ -1354,6 +1392,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       ...(disk ? { disk } : {}),
       ...(psi ? { psi } : {}),
       ...(backup ? { backup } : {}),
+      ...perfBlock,
     };
   });
 
@@ -1440,7 +1479,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/api/accounts', async (req, reply): Promise<AccountsResponse> => {
     // `no-store` on every answer (accounts plan Task A12): a session reader's carries identities and key hints.
     reply.header('cache-control', 'no-store');
-    const limits = await readLimits(deps.io, deps.cfg);
+    // Console speed S2: the watcher's last tick of the limits while it is fresh, with its age on the answer; else the read as before.
+    const servedLimits = servedFromWatcher(takenAfter(watcher?.currentLimits() ?? null, lastOperatorAct()), Date.now());
+    const limits = servedLimits.serve ? servedLimits.value.limits : await readLimits(deps.io, deps.cfg);
     // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
     // exactly the way `shares`/`limits` are each one read for every row below
     // rather than one per account: `deps.coord?.accountPoolEdges()` inside
@@ -1509,9 +1550,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // central tag has moved.
       projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }, accountEdges),
       roster: rosterWireOf(accountEdges),
+      ...(servedLimits.serve ? { ageMs: servedLimits.ageMs } : {}),
     };
     // `lanes` and `connect` for the SESSION verdict only (D-5511, D-5517): a dark gate's reader, and a box token (which
-    // an armed gate refuses before this handler), get today's three fields and nothing else. The lane states are read
+    // an armed gate refuses before this handler), get today's three fields and nothing else (plus `ageMs`
+    // when the limits were served from the watcher). The lane states are read
     // only here, so no other `readLimits` caller pays for them.
     const auth = sessionAuth(req);
     if (!deps.cfg.authEnabled || !auth.allow || auth.reason !== 'session') return today;
@@ -1585,6 +1628,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // silently (fleet.ts), so this costs nothing while FLEET_PROTO_MIN stays
     // at FLEET_PROTO; it only bites the day MIN is raised on purpose.
     socket.send(JSON.stringify({ type: 'hello', proto: FLEET_PROTO, min: FLEET_PROTO_MIN } satisfies FleetMsg));
+    // F13: the close listener before the timer, and the timer unref'd, as the session beat does.
+    socket.on('close', () => { clearInterval(beat); });
+    const beat = setInterval(() => socket.send(JSON.stringify({ type: 'beat', at: Date.now() } satisfies FleetMsg)), BEAT_MS).unref();
     // D-5995: the session-derived frames (fleet, notice, runs, coord) are masked before they are serialized, once per
     // broadcast (`maskedFrame`); a fleet row's server-built identity fields are kept as they are (`maskFleetFrame`).
     const sendFleet = (sessions: FleetSession[]) =>
@@ -2120,7 +2166,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
     const since = parseSince(q.since, q.sinceFile);
-    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since);
+    const stream = new SessionStream(deps, bus, id, (m: SessionStreamMsg) => socket.send(JSON.stringify(m)), since, watcher);
     void stream.start();
     // A per-connection token, not the session id: one socket's close drops
     // only its OWN claim, so a second tab watching the same session doesn't
@@ -2869,13 +2915,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // which needs the PARENT listing to tell an absent `pools/` from an
     // unlistable one (`pools.ts`, spec §5.4.4). This request uses the shared
     // request-lane budget rather than inheriting the watcher's cadence slice.
-    const poolsRead = await readProjectPools(
+    // Console speed S2: both from the watcher's last tick while both are fresh (`servedProjectReads`), else read as before.
+    const servedReads = servedProjectReads(takenAfter(watcher?.currentProjectPoolsRead() ?? null, lastOperatorAct()), takenAfter(watcher?.currentLimits() ?? null, lastOperatorAct()), Date.now());
+    const poolsRead = servedReads.serve ? servedReads.pools.read : await readProjectPools(
       deps.io,
       deps.cfg,
       (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
-    const limits = await readLimits(deps.io, deps.cfg);
+    const limits = servedReads.serve ? servedReads.limits.limits : await readLimits(deps.io, deps.cfg);
+    const servedAge = servedReads.serve ? { ageMs: servedReads.ageMs } : {};
     // ONE shares read for the whole request, exactly the way `limits` above
     // is one `readLimits` for every row — and skipped entirely for the
     // default class, so a caller that never asked for a class never pays for
@@ -2909,6 +2958,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return {
         ...listed,
         projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p) })),
+        ...servedAge,
       };
     }
     const coord = deps.coord;
@@ -2929,6 +2979,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         }
         return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p) };
       }),
+      ...servedAge,
     };
   });
 

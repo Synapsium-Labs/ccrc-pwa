@@ -93,7 +93,7 @@ async function makeApp(
     // route rather than answering `unmeasured`. Empty map: no test in this
     // file measures a repo, only that the key is present and defaulted.
     // D-6436: and `currentFleetListing()`, null here (no listing), so the route reads the registry itself as before.
-    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), currentFleetListing: () => null, stop: () => {}, serverCapsSettled: async () => {} } as never)
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), currentFleetListing: () => null, currentLimits: () => null, currentProjectPoolsRead: () => null, stop: () => {}, serverCapsSettled: async () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),

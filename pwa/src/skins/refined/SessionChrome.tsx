@@ -14,6 +14,7 @@ import {
   HeaderBack, HeaderChips, HeaderCoordination, HeaderCrumbText, HeaderDoors, HeaderTitleText, useSessionChromeInputs,
   useSessionHeaderView,
 } from '../../session/SessionHeader';
+import { GoalsDoor } from '../../session/SessionDetails';
 import { useSessionFlows } from '../../session/SessionFlows';
 import { InspectorToggle } from '../../inspector/InspectorToggle';
 
@@ -21,6 +22,13 @@ export function SessionChrome(): ReactNode {
   const inputs = useSessionChromeInputs();
   const { openMenu } = useSessionFlows();
   const view = useSessionHeaderView(inputs);
+  // The Goals door (desktop-polish PL11, D-7986; review 1548 F1, ruled in fix round 2). This chrome has no Back's-row keys and
+  // one rail, so it draws the view's slot (`GoalsSlot`) in that rail: on a phone (`back-row`) on the coordination line, where
+  // refined.css puts it first, beside the status; at a desk (`coordination-line` or `chip-row`) as the rail's LAST item. The
+  // desk rail wraps, and a last item can only take a line of its own: the header is then taller by at most the door's own row,
+  // and no chip changes rail line, as one standing inside the coordination line would make them.
+  const goals = view.goals;
+  const phone = goals !== null && goals.slot === 'back-row';
   return (
     <header className="chat-head ref-session-head">
       <HeaderBack onBack={inputs.onBack} />
@@ -40,7 +48,8 @@ export function SessionChrome(): ReactNode {
       <div className="chat-meta ref-chip-rail">
         <HeaderChips
           view={view}
-          afterStatus={<HeaderCoordination view={view} />}
+          afterStatus={<HeaderCoordination view={view} goals={phone ? goals : null} />}
+          afterDetails={goals !== null && !phone ? <GoalsDoor goals={goals} /> : null}
         />
       </div>
     </header>

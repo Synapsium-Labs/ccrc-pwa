@@ -166,7 +166,7 @@ describe("Refined's phone header is one row of finger-sized doors, and `+ New` c
           for (const badge of badges) {
             const br = badge.getBoundingClientRect();
             if (br.right > window.innerWidth + 0.5) out.push('the badge is cut');
-            // The glyph is the door's only visible label: a "99+" may sit on its top-right corner, never its middle.
+            // The glyph is the door's only visible label: a "99+" sits clear of the glyph's centre point (review 1511 F3).
             const g = badge.closest('[data-command]')!.querySelector('svg')!.getBoundingClientRect();
             const cx = (g.left + g.right) / 2;
             const cy = (g.top + g.bottom) / 2;

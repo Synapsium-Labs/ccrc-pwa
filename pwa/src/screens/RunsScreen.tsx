@@ -60,19 +60,27 @@ import '../fleet/fleet.css';
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 /** D-6799: one run's spend. Module-level so its identity is stable across renders. */
 const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
+/** The board's archive reader (console speed S2): the paged `GET /api/runs?closed=1&limit=&before=`. Module-level, so its
+ *  identity is stable across renders (`useColdRuns.ts#loadColdRuns`'s reason). The Inbox and Mail keep the unpaged
+ *  `loadColdRuns`. */
+const loadColdRunsPage: PagedLoader = (limit, before) => api.runsPage(limit, before ?? null);
+/** How many closed runs one read of the archive asks for (console speed S2). */
+const ARCHIVE_PAGE = 50;
+/** Finished's own failure sentence: its one source, the archive read, did not answer, so newer closes may be missing. */
+const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
-import { loadColdRuns, useColdRuns } from './useColdRuns';
+import { useColdRuns, type PagedLoader } from './useColdRuns';
 
 
 export function RunsScreen({
   store = useFleetStore,
-  loadRuns = loadColdRuns,
+  loadRuns = loadColdRunsPage,
   loadCaps = loadCapsDefault,
   loadSpend = loadSpendDefault,
 }: {
   store?: FleetStore;
-  loadRuns?: () => Promise<{ runs: RunSummary[] }>;
+  loadRuns?: PagedLoader;
   /** The caps dial's own read, injected HERE rather than left to
    *  `CapsControl`'s default, for the reason `loadRuns` is: every loader this
    *  screen sets going on mount is one a test must be able to hold, and a
@@ -112,7 +120,17 @@ export function RunsScreen({
   // The archive read — the only carrier of a finished run — with its race
   // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
   // none of which rendered anything.
-  const { cold, state: coldState, reload: loadCold } = useColdRuns(store, loadRuns);
+  const { cold, state: coldState, reload: loadCold, loadOlder, hasOlder } = useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
+  // "Show older" (console speed S2): disabled while a page is on its way.
+  const [olderBusy, setOlderBusy] = useState(false);
+  // Only a page that FAILED says so: a page `dropped` as stale (a re-read landed meanwhile) is not an error, and the next tap
+  // asks again. It is the older page's own outcome, apart from the re-read's (`coldState`): only the next tap clears it.
+  const [olderFailed, setOlderFailed] = useState(false);
+  const showOlder = (): void => {
+    setOlderBusy(true);
+    setOlderFailed(false);
+    void loadOlder().then((outcome) => setOlderFailed(outcome === 'failed')).finally(() => setOlderBusy(false));
+  };
 
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
   // #166 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
@@ -204,7 +222,10 @@ export function RunsScreen({
   // active, `coldState === 'ok'` for finished (finished has no other
   // source). When NEITHER has ever answered, this screen knows nothing at
   // all, and must say so rather than rendering the ordinary empty state.
-  const noSignalYet = !runsFrameSeen && coldState !== 'ok';
+  //
+  // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now: a failed re-read over
+  // stored pages keeps its rows, and must not swap the board for "Could not reach the server".
+  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
   // composition is pinned at exactly two network calls
@@ -391,12 +412,25 @@ export function RunsScreen({
               <ul className="runs-list">
                 {finished.slice(0, shownFinished).map((run) => rowFor(run, finishedNow))}
               </ul>
-              {shownFinished < finished.length && (
+              {/* One quiet control at the foot of Finished. It unfolds the loaded rows first; once every loaded row is
+                  shown it asks for the next page ("Show older", console speed S2), so a tap always changes something the
+                  operator can see. The two are never offered together, so they are one control. */}
+              {(shownFinished < finished.length || hasOlder) && (
                 <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
-                  onClick={showMoreFinished}>
-                  {finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
-                    finished.length - shownFinished)}
+                  disabled={shownFinished >= finished.length && olderBusy}
+                  onClick={shownFinished < finished.length ? showMoreFinished : showOlder}>
+                  {shownFinished < finished.length
+                    ? finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
+                      finished.length - shownFinished)
+                    : 'Show older'}
                 </Button>
+              )}
+              {/* Two failures, two lines, each its own fact (fix round 2, F3, F4): a failed re-read (a remount's background
+                  read included) says newer closes may be missing, beside the stored rows (Step 6); a failed "Show older"
+                  says older ones did not load. Both failed, both show. */}
+              {coldFailed && <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState>}
+              {hasOlder && shownFinished >= finished.length && olderFailed && (
+                <EmptyState data-state="error">Could not load older runs.</EmptyState>
               )}
             </div>
           ) : coldFailed ? (
@@ -410,9 +444,7 @@ export function RunsScreen({
             // finished", which the board has no standing to claim.
             <div className="runs-group" role="group" aria-label="finished, unknown">
               <p className="runs-group-head"><span className="runs-program">Finished</span></p>
-              <EmptyState data-state="error">
-                Could not reach the server — finished runs may exist that are not shown.
-              </EmptyState>
+              <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState>
             </div>
           ) : null}
         </>

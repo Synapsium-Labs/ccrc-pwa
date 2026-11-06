@@ -186,9 +186,26 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
   // followed by `:` and not `=`), and a loop head
   // (`for (const { childReclaimAttention } of …)`, whose `}` is followed by
   // `of`). Each reads the list without a `.childReclaimAttention` access.
-  it('(e) the published coord frame’s attention list is read by nothing in server/src', () => {
-    expect(codeHits(
-      /\.childReclaimAttention\b|\[\s*['"`]childReclaimAttention['"`]\s*\]|\{[^{}\n]*\bchildReclaimAttention\b[^{}\n]*\}\s*=(?!=)/,
-    )).toEqual([]);
+  // The ONE allowed reader (console speed S2): `GET /api/runs?closed=1&limit=` pins the archive rows a reclaim attention
+  // item names, so a page never drops a run the banner is pointing at. Spec §2.2 asks for exactly that read, and §5.9 bars
+  // a reclaim DECISION from reading the published verdicts and nothing more: this read decides which rows are SENT and
+  // nothing else (it feeds no branch that asks, licenses, orders or paces a reclaim). It is matched by the file and the
+  // line's text, so it is one hit; a second copy of it, or any other reader, is still a red, and the control below reds
+  // when the read moves or goes.
+  const PRESENTATION_READ =
+    'coord/routes.ts: pinned: reclaimAttentionRunIds(watcher?.currentCoord()?.childReclaimAttention),';
+  const attentionReads = (): string[] => codeHits(
+    /\.childReclaimAttention\b|\[\s*['"`]childReclaimAttention['"`]\s*\]|\{[^{}\n]*\bchildReclaimAttention\b[^{}\n]*\}\s*=(?!=)/,
+  );
+
+  it('(e) the published coord frame’s attention list is read by nothing in server/src but the run pages’ one presentation read', () => {
+    const hits = attentionReads();
+    expect(hits.filter((h) => h !== PRESENTATION_READ)).toEqual([]);
+    // Exactly one copy of the allowed read: a duplicate of the line is a second reader.
+    expect(hits.filter((h) => h === PRESENTATION_READ).length).toBeLessThanOrEqual(1);
+  });
+
+  it('(e) control: the allowed presentation read stands, once', () => {
+    expect(attentionReads()).toEqual([PRESENTATION_READ]);
   });
 });

@@ -3,6 +3,8 @@ import { wireHookAsk } from './fleet.js';
 import type { Deps } from './server.js';
 import { SHAPE_ONLY_MASKER } from './accounts/mask.js';
 import type { Bus, Notice } from './bus.js';
+import type { rowFactsOf } from './tickPlan.js';
+import { servedFromWatcher } from './servedRead.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
@@ -17,10 +19,24 @@ import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import { framePairing } from './pane/askPairing.js';
-import type { Dialog, DialogAsk, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
+import type { Dialog, DialogAsk, FleetSession, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
 import { reviewQuestions, reviewRows } from '../../shared/ask-menu.js';
 
 const POLL_MS = 2000;
+/** The per-socket heartbeat of both sockets, `/ws/fleet` and `/ws/session/:id` (console speed S2, spec D14). It is an app
+ *  frame because a browser cannot see pings, and it comes from a timer of the socket's own because a beat driven by the
+ *  watcher's tick would stop exactly when the tick is slow. */
+export const BEAT_MS = 10_000;
+/** A stream given the watcher's facts re-resolves on a `row:<id>` event or the tailer's rotation; this is the third
+ *  trigger, the backstop for a change neither saw (console speed S2, spec D8). */
+export const STREAM_BACKSTOP_MS = 30_000;
+/** What a stream asks the watcher for: structural, so `sessionws.ts` never imports `watch.ts` (`FleetWatcher` satisfies it). */
+export interface RowFactsSource {
+  currentRowFacts(id: string): ReturnType<typeof rowFactsOf>;
+  /** The fleet as the latest tick listed it (`FleetWatcher.currentFleetListing`): each row's `status` and
+   *  `statusUpdatedAt` come from the same live-file measurement `resolve()` makes (D-115). */
+  currentFleetListing(): { sessions: FleetSession[]; listedAt: number } | null;
+}
 const BACKLOG_N = 50;
 
 interface Resolved {
@@ -70,6 +86,15 @@ type Resolution =
 export class SessionStream implements FeedSubscriber {
   private tailer: TranscriptTailer | null = null;
   private poll: NodeJS.Timeout | null = null;
+  /** With a watcher: the 30 s backstop's interval (`poll` is then the 2 s status look in the listing). */
+  private backstop: NodeJS.Timeout | null = null;
+  /** With a watcher: a ROW EVENT that came in while a tick was in flight, or the start pre-arm, and nothing else (a poll
+   *  or the backstop that finds a tick in flight drops), so the tick that ends (or `start()`) runs once more. */
+  private rerun = false;
+  /** The `statusUpdatedAt` of the last measurement this stream took, to compare with the listing's. */
+  private statusAt: number | null = null;
+  /** The beat's own interval (`BEAT_MS`), independent of `poll`: started before `start()`'s first await. */
+  private beat: NodeJS.Timeout | null = null;
   private stopped = false;
   private ticking = false;
   private uuid: string | null = null;
@@ -259,21 +284,44 @@ export class SessionStream implements FeedSubscriber {
      *  its absence is still not a mismatch — a client with no file is a real
      *  state, and it is a state with no offset to protect. */
     private readonly since?: { uuid: string; offset: number; file?: string | null },
+    /** The watcher's last tick (console speed S2). Given, `resolve()` takes the row, the pane verdict and the pid from
+     *  it while they are fresh; the stream re-resolves on `row:<id>`, on a status change `lookInListing` sees every
+     *  `POLL_MS` (a full tick when no fresh listing has the row) and on a backstop. Omitted, it is what it was. */
+    private readonly rows?: RowFactsSource,
   ) {
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
     this.send = (m) => sendRaw(masker.maskDeep(m));
     this.transcripts = new TranscriptResolver(deps.io);
   }
 
+  /** The watcher saw this row's record or pane verdict change: re-resolve now (the same `tick()` the poll ran). Before
+   *  `start()` has armed the stream, or while a tick is in flight, it keeps the event as `rerun`: only a row event is kept. */
+  private readonly onRowChanged = (): void => { if (this.poll && !this.ticking) void this.tick(); else this.rerun = true; };
+
+  /** With a watcher, every `POLL_MS`: look this row up in the watcher's fleet listing, in memory, and run `tick()` only
+   *  when its status or `statusUpdatedAt` is not what this stream last measured. No fresh listing, or no such row,
+   *  polls as without a watcher: a full `tick()`. */
+  private lookInListing(): void {
+    const served = servedFromWatcher(this.rows?.currentFleetListing() ?? null, Date.now());
+    const row = served.serve ? served.value.sessions.find((x) => x.id === this.id) : undefined;
+    if (row === undefined || row.status !== this.status || row.statusUpdatedAt !== this.statusAt) void this.tick();
+  }
+
   async start(): Promise<void> {
+    // Before the first resolve, so a change during it is kept (`rerun`) and run once the stream is armed.
+    if (this.rows) this.bus.on(`row:${this.id}`, this.onRowChanged);
     this.bus.on('notice', this.onNotice);
     this.bus.on(`session:${this.id}`, this.onSessionMsg);
     this.bus.on(`answered:${this.id}`, this.onAnswered);
+    // Before the first await: it beats while a resolve or a tick is held, whatever the resolve's outcome.
+    this.beat = setInterval(() => { this.send({ type: 'beat', at: Date.now() }); }, BEAT_MS);
+    this.beat.unref();
     const r = await this.resolve();
     if (this.stopped) return;
     if (r.ok) {
       this.uuid = r.data.uuid;
       this.status = r.data.status;
+      this.statusAt = r.data.statusUpdatedAt;
       this.tailed = r.data.resolution;
       const echoed = this.since?.file ?? null;
       if (this.since && this.since.uuid === r.data.uuid
@@ -353,9 +401,14 @@ export class SessionStream implements FeedSubscriber {
     // appeared-branch heal a stream that started life unable to prove the
     // session existed at all (`this.uuid` is still null on that first tick).
     if (r.ok || r.reason === 'unmeasurable') {
-      this.poll = setInterval(() => { void this.tick(); }, POLL_MS);
+      this.poll = setInterval(() => { if (this.rows) this.lookInListing(); else void this.tick(); }, POLL_MS);
       this.poll.unref();
+      if (this.rows) {
+        this.backstop = setInterval(() => { void this.tick(); }, STREAM_BACKSTOP_MS).unref();
+        if (this.rerun) { this.rerun = false; void this.tick(); }
+      }
     } else {
+      this.bus.off(`row:${this.id}`, this.onRowChanged);   // a proven-gone session installs no trigger
       this.feed.leave(this);          // nothing will ever be asked of it again
     }
   }
@@ -606,8 +659,13 @@ export class SessionStream implements FeedSubscriber {
     this.bus.off('notice', this.onNotice);
     this.bus.off(`session:${this.id}`, this.onSessionMsg);
     this.bus.off(`answered:${this.id}`, this.onAnswered);
+    this.bus.off(`row:${this.id}`, this.onRowChanged);
     if (this.poll) clearInterval(this.poll);
     this.poll = null;
+    if (this.backstop) clearInterval(this.backstop);
+    this.backstop = null;
+    if (this.beat) clearInterval(this.beat);
+    this.beat = null;
     this.feed?.leave(this);
     this.feed = null;
     this.tailer?.stop();
@@ -616,9 +674,11 @@ export class SessionStream implements FeedSubscriber {
 
   /** Registry record + live state → current uuid, transcript file, and status. */
   private async resolve(): Promise<Resolution> {
-    // C0.3: one session's own row, not the whole registry — this stream only
-    // ever asks about `this.id`, every 2 s, for as long as the socket is open.
-    const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
+    // C0.3: one session's own row, not the whole registry — this stream only ever asks about `this.id`: on a
+    // row event, a status change in the watcher's listing or the backstop (every 2 s with no watcher).
+    const served = this.rows ? servedFromWatcher(this.rows.currentRowFacts(this.id), Date.now()) : null;
+    const facts = served?.serve ? served.value : null;
+    const read = facts ? { kind: 'found' as const, record: facts.record } : await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
     if (read.kind !== 'found') {
       // The registry ladder is `readSession`'s row arm (ARCH-48, #783); this door keeps only its terminal answers.
       // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own `listed: false` types elsewhere in this
@@ -635,7 +695,7 @@ export class SessionStream implements FeedSubscriber {
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path
     // that names nothing real, rather than this session's actual transcript.
     // `measuredIdentity` — the one door to the triple — is null the instant
-    // ANY of the three is unmeasured; this poll re-runs every 2 s, so a
+    // ANY of the three is unmeasured; this resolve re-runs every 2 s (with a watcher, on a row event, a status change or the 30 s backstop), so a
     // transient field read heals itself on the very next tick with no
     // special-casing beyond this early return. HONEST LIMIT: there is no
     // half-measure here — when `uuid` itself is unmeasured there is no
@@ -673,14 +733,14 @@ export class SessionStream implements FeedSubscriber {
     // D-5561: one `has-session`, as before — its verdict kept, because the
     // workflow reader must not read a substrate fault (`unknown`) as a process
     // that died mid-run. `status` folds it exactly as `hasSession` did.
-    const verdict = (await this.deps.tmux.sessionVerdict(this.id)).verdict;
+    const verdict = (facts ? facts.verdict : await this.deps.tmux.sessionVerdict(this.id)).verdict;
     let proc: Proc = verdict === 'gone' ? { kind: 'gone' } : { kind: 'unmeasured' };
     // D-309 (was D-B8-13): `unknown` deliberately reads as not-alive here, so the chat
     // header shows 'dead' during a substrate fault — display-only, and the
     // same deferred product decision as assembleFleet's (see fleet.ts).
     if (verdict === 'live') {
       turn = 'idle';
-      const pid = await this.deps.tmux.panePid(this.id);
+      const pid = facts ? facts.pid : await this.deps.tmux.panePid(this.id);
       if (pid === null) {
         // D-5275: mirror `assembleFleet` (D-5234). The pane is alive and its
         // pid read FAILED, which measured nothing about the session; the card
@@ -780,7 +840,7 @@ export class SessionStream implements FeedSubscriber {
   /** The tailed file shrank under us: treat as rotation — re-resolve, resend backlog.
    *  An unmeasurable or absent re-resolve here (rare — the file just rotated,
    *  so the registry read a moment ago plainly succeeded) leaves the OLD
-   *  tailer alone rather than tearing it down on a guess; the next 2 s tick
+   *  tailer alone rather than tearing it down on a guess; the next poll (or, with a watcher, row event or backstop)
    *  retries. */
   private async onFileShrunk(): Promise<void> {
     if (this.stopped) return;
@@ -845,9 +905,10 @@ export class SessionStream implements FeedSubscriber {
     return true;
   }
 
-  /** 2 s poll: uuid change → rotated + fresh backlog; status change → status msg. */
+  /** The poll's body (every 2 s; with a watcher, run on a row event, a status change in its listing or the backstop): uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
-    if (this.stopped || this.ticking) return;
+    if (this.stopped) return;
+    if (this.ticking) return;   // no overlap: a poll or the backstop that finds a tick in flight drops, as before (F2)
     this.ticking = true;
     try {
       const r = await this.resolve();
@@ -869,6 +930,7 @@ export class SessionStream implements FeedSubscriber {
       this.readable = r.ok;
       if (!r.ok) return;
       const data = r.data;
+      this.statusAt = data.statusUpdatedAt;
       this.resolvedFor = { file: data.file, proc: data.proc };
       this.feed?.setFacts(this, factsOf(data));
       if (data.uuid !== this.uuid) {
@@ -991,6 +1053,7 @@ export class SessionStream implements FeedSubscriber {
       // reads them on its own clock and `onReading` applies them. This tick states what it measured about the session.
     } finally {
       this.ticking = false;
+      if (this.rerun && !this.stopped) { this.rerun = false; void this.tick(); }
     }
   }
 }
