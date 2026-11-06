@@ -43,7 +43,7 @@ export const CLEANUP_HELD_BY_CONTROL: Record<CleanupHeldByAct, {
     button: 'Forget row…',
     confirmLabel: 'Forget row',
     title: (rowId) => `Forget ${rowId}?`,
-    consequence: (item) => `Only the registry entry of ${item.rowId} is removed. Its transcript and any pasted images stay on disk and nothing in git is touched. The cleanup it blocked goes ahead on the next pass.`,
+    consequence: (item) => `Only the registry entry of ${item.rowId} is removed. Its transcript and any pasted images stay on disk and nothing in git is touched. The cleanup it blocked goes ahead on the next pass, wherever no other row still holds it.`,
   },
   recheck: {
     button: 'Check again…',

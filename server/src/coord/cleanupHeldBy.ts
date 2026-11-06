@@ -94,7 +94,7 @@ const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
   'gone-unrecorded': {
     found: 'This row\'s folder no longer exists, and nothing records where it went.',
     remedy: (act) => act === 'forget'
-      ? 'Forgetting the row removes only its registry entry, and the cleanup it blocked goes ahead on the next pass of the lanes.'
+      ? 'Forgetting the row removes only its registry entry, and the cleanup it blocked goes ahead on the next pass of the lanes, wherever no other row still holds it.'
       : 'This row is a workspace, or its workspace field could not be read, so only a person removes it. Recreate its tree at its branch tip with `git worktree add`, or, once its session has ended, remove it by hand. Where git still records it, use the scoped `git -C <project> worktree remove <path>`, never a repo-wide prune. '
         + RECHECK_TAIL,
   },
