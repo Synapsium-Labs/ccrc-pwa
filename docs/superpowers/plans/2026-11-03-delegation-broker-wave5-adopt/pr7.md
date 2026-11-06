@@ -1,14 +1,12 @@
 # PR7 (S3, adoption, the digest and the reminder): departures and measurements
 
 Run 1569, delegation broker wave 5, Tasks 5.7.1 to 5.7.4, with the carried items of the coordinator's brief (reviews 1549
-and 1564). Five departures are defined in the plan's "Deviations found": D-8053 to D-8057. The rest of the block issued to this run is
-unused, and this note does not spell it.
-
-- **D-8053:** Task 0 left PR7 (the coordinator's ruling, 2026-11-06). See below.
-- **D-8054:** adoption's `boxHolds` needs `lease-mark-lock-v1` too, through the one predicate the doors use (`boxHoldsTrees`).
-- **D-8055:** the lane's adoption step is its own module, `server/src/coord/delegationAdoptStep.ts`, called from `watch.ts`.
-- **D-8056:** a notice is owed at the lease's current generation; a transfer refused back to `adopted` is owed a notice of its own.
-- **D-8057:** the audit answers are held while the decider watches the lease.
+and 1564). Five departures are defined in the plan's "Deviations found": D-8053 (Task 0 left PR7, by the coordinator's ruling
+of 2026-11-06; below), D-8054 (adoption's `boxHolds` needs `lease-mark-lock-v1` too, through the one predicate the doors use,
+`boxHoldsTrees`), D-8055 (the lane's adoption step is its own module, `server/src/coord/delegationAdoptStep.ts`, called from
+`watch.ts`), D-8056 (a notice is owed at the lease's current generation, so a transfer refused back to `adopted` is owed a
+notice of its own) and D-8057 (the audit answers are held while the decider watches the lease). The rest of the block issued
+to this run is unused, and this note does not spell it.
 
 D-8037's sentence about the mark's locks is amended in place (review 1549 F6): one lock per distinct spelling, as the code and
 `pr6.md` say.
@@ -108,3 +106,73 @@ tree the orphan lane removes. Neither is a change this PR makes.
 | D, 1564 F2 | none (rows only) | the two 1564 F2 rows | 1564-F2-id-only, 1564-F2-instant-only |
 | D, 1564 F5 | one `try` around the decision step | 1564 F5 in `lease-routes.test.ts` | 1564-F5 |
 | D, 1564 F8 | none (rows only) | 1564 F8 in `lease-routes.test.ts` and in the lane | (W5-DM14, D-8054-lock) |
+
+## The mutation table
+
+Each mutant was applied alone to a saved copy, run against the rows named, and restored with its sha checked. All 31 were
+killed, each on the row it was written for.
+
+| Mutant | File | The mutation | Red rows |
+|---|---|---|---|
+| W5-DM1 | `delegation-adoption.ts` | drop the adoptable-source filter | W5-D2; W5-D12 on every version |
+| W5-DM2 | `delegation-adoption.ts` | any non-active activity is terminal | W5-D4 |
+| W5-DM3 | `delegation-adoption.ts` | an unmeasured registry counts as an absent parent | W5-D5 |
+| W5-DM4 | `delegation-adoption.ts` | a null incarnation counts as a changed one | W5-D6 |
+| W5-DM5 | `delegation-adoption.ts` | no stable-pass count | W5-D7, W5-D9 |
+| W5-DM6 | `delegation-adoption.ts` | the breaker never waits | W5-D8, W5-D21 |
+| W5-DM7 | `delegation-adoption.ts` | only `changed: true` counts as changed | W5-D10 |
+| W5-DM8 | `delegation-adoption.ts` | an absent marker counts as live | W5-D11; W5-Q1 |
+| W5-DM9 | `rundefsTx.ts` | dedupe on outstanding mail only | W5-Q3, W5-Q3b |
+| W5-DM9b | `delegationAdoptStep.ts` | notices from this pass's decisions, not durable state | W5-Q3b, W5-Q4 |
+| W5-DM10 | `delegationAdoptStep.ts` | `mail-disabled` does not hold the notice | W5-Q4 |
+| W5-DM11 | `delegation-adoption.ts` | the coordinator never receives | W5-D20; W5-Q5 |
+| W5-DM11b | `delegationAdoptStep.ts` | the claimant from open runs only | W5-Q5 (each shape) |
+| W5-DM11c | `delegation-adoption.ts` | the parent receives at any incarnation | W5-D20; W5-Q6b |
+| W5-DM11d | `delegationAdoptStep.ts` | the bounded `delegationRunStamps()` read | W5-Q5 (first of 502) |
+| W5-DM12 | `delegation-adoption.ts` | the decider reads the clock | W5-D10, W5-D11, W5-D14 |
+| W5-DM13 | `delegation-adoption.ts` | a conflicting tree does not wait | W5-D18 |
+| W5-DM14 | `delegation-adoption.ts` | `boxHolds` ignored | W5-D19; the `boxHolds` rows |
+| W5-DM15 | `delegation-checkpoint.ts` | the `retained-lineage` fold removed | W5-Q2 |
+| W5-DM16 | `delegation-adoption.ts` | an uncensused project drops its watch | W5-D14b |
+| W5-X-writer | `delegationAdoptStep.ts` | the step writes the marker | W5-X1, W5-X2 |
+| D-8054-lock | `delegationLeaseDoor.ts` | `boxHoldsTrees` without the lock word | the lane's `boxHolds` row; the lock row in `lease-routes.test.ts` |
+| 1564-F1-asc | `store.ts` | the series read takes the first 500 | 1564 F1 (both ends); W5-Q5 (last of 502) |
+| 1564-F1-desc | `store.ts` | the series read takes the newest 500 | 1564 F1 (both ends); W5-Q5 (first of 502) |
+| 1564-F2-id-only | `delegation-conflicts.ts` | order by id only | the 1564 F2 order row |
+| 1564-F2-instant-only | `delegation-conflicts.ts` | order by instant only | the 1564 F2 order row |
+| 1564-F5 | `delegationLeaseDoor.ts` | no `try` around the decision step | 1564 F5 |
+| 1549-F1 | `delegation-carrier.ts` | no journal evidence for a released lease | W5-K2 |
+| 1549-F2 | `delegationCarrierMark.ts` | an up-to-date lease stays unmeasured | the F2 row |
+| 1549-F3 | `delegationCarrierMark.ts` | the retry after 3 passes, not 30 | the 1547 F2 row's lower edge |
+| 1549-F4 | `delegationCarrierMark.ts` | no `notIndexed` clear | the F4 row |
+
+The mutants in `store.ts`, `delegation-checkpoint.ts` and `delegation-conflicts.ts` touch files PR7 does not edit. They
+show that PR7's rows guard code PR7 relies on.
+
+## Counts moved
+
+- The switchboard: 36 rows (32 markers, 4 settings) to 37 (33 markers, 4 settings), `switches.test.ts`.
+- `W5_OPEN` in `delegation-wave3.integration.test.ts`: the `delegation-adopt` row names three files, and the
+  `ws-lease-audit` row gains `delegation-adoption.ts` and `delegationAdoptStep.ts`. The lane store-mention list gains two
+  lines, and the step may call `queueRunlessNotice` once.
+- `run-session-census` keeps its ceiling of four. No store method is added.
+- The coordinator skill's clauses are unchanged.
+
+## Growth
+
+`GROWTH_CHECK=1` growth-check is green. `watch.ts` grows by 12 lines (13 added, 1 removed): 11 net code lines, against the
+plan's aim of at most +40. `store.ts` is unchanged. The two new coord files are `delegation-adoption.ts` (302 lines) and
+`delegationAdoptStep.ts` (210).
+
+## Suites at the tip
+
+Each suite ran alone, through `ccrc test`: the plan's "PR7 at its tip" list and every guard suite `fast-plan.mjs#guardTests`
+derives, 218 files in all, then `growth-check` (armed), `deviation-refs`, the server and pwa typechecks and pwa's
+`older-server-render`. The six corpus suites and W5-D12 ran on the 14-version corpus.
+
+- Green: every one, except `retire-executors-pin`.
+- `spawn-group-pin` was red on the first run: the corpus replay's timed hook spawn did not go through `spawnSyncGroup`.
+  The replay now uses it, and the suite is green.
+- `typecheck-tests` was red twice. The first run lacked the agent package's modules in this worktree. The second was
+  killed by the test slice's memory cap with no type error printed. Its third run, alone, is green.
+- `retire-executors-pin` is red, 13 of 206. It reds on the fleet box on a clean `main` too (the brief), so the merge queue judges it.
