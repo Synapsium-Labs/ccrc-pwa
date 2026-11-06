@@ -36,7 +36,7 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); merged 2026-11-03 (`43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38), run 1311 closed done; plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; the fleet box runs it (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
-| 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | to plan |
+| 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); the key's form and the departure from the journal wait on the operator (item 60), then the plan's approval; run 1427 |
 | 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
@@ -2020,6 +2020,40 @@ carries it (spec §5.1, amended 2026-09-24).
   - **The ledger.** #2249 landed at 10:02 UTC as `707eae764`, on the operator's go-ahead (item 26). It carries the
     rulings, the acceptance and the departures note.
   - **Next.** Wave 5g's run is 1427, planned and not yet planned in detail.
+- **2026-11-06 22:15 — wave 5g planned (D-8080 to D-8089); two choices go to the operator.**
+  - **The operator asked** what work remains, and to take the programme towards completion. This coordinator
+    pinned the programme's spec to its Goals the same day, which it had not done before (coordinator clause 20).
+  - **The survey.** Two Opus readers surveyed `main` at `5dd21cdb2`: one the dispatch route, the line's store and
+    journal and the run lifecycle, the other the spec, this ledger, the 5e and 5f plans and the skills. The spec
+    gives intents one table line and one sentence. It defines no key, and no release.
+  - **Two choices are the operator's (item 60):**
+    - **The key** is the repository's issue or PR number (`#<n>`) or a deviation number (`D-<n>`), the two numbers
+      coordinators already share (D-8081). Free text would rarely match.
+    - **No journal** (D-8080). The spec says intents are journalled to `landing.log`. But a hold ends when its run
+      ends, and runs live only in `coord.db`, so a journalled intent restored without its run has nothing to judge
+      it by. And the journal's parser refuses any record kind it does not know, so the first intent record would stop
+      a server rolled back to any build before 5g from starting. The plan keeps intents in `coord.db` beside their
+      runs. If the operator agrees, the spec's §5.5 and §7 sentences are amended on this plan's PR.
+  - **Settled in the plan:** a hold lasts while its run is not `done` or `failed`, and nothing writes its end, so
+    every door that closes a run releases it alike, the dead-coordinator lane's `sweep` close included (D-8082); a
+    programme never blocks its own later waves (D-8083); a review run names no intents (D-8084); the refusal is the
+    last check of dispatch's `request` step, before any fleet act, and names the key and the holding run (D-8085);
+    one writer, inside the dispatch's transaction, and the `200` names the keys it wrote (D-8086); no read route in
+    5g (D-8087); stage 5's §10 count is read by hand at the two-week reading (D-8088). 5g also takes D-7942, carried
+    from wave 5f's review to the next wave that edits the coordinator skill (D-8089). The 'address' mail-form item
+    stays carried, to 5i.
+  - **The review.** Three Opus lenses (executability, spec fidelity, fail-closed) read the plan at medium effort,
+    with a Sonnet refuter on each important finding (workflow `wf_04a8b054-108`, 17 agents). Six important findings
+    held and are answered: `coord-db.test.ts` pins the schema version, so Task 1 moves it; the D-7942 sentence is
+    pinned whole in `coordinator-skill.test.ts`, so Task 3 changes its pins; a run is dispatched once, so the insert
+    is a plain `INSERT` and a repeated key is tested at the store, where it rolls the dispatch back; a skill mutation
+    row that could not go red now removes the code from every skill file; the gate-order rows cover every new
+    adjacent pair; and a census pins the one writer. Each minor finding is answered too. One important finding was
+    refuted: the existing gate-order rows do not break.
+  - **The spec.** §11's ruling 3 still read "how they land is open". The operator answered it on 2026-10-30 (route
+    G: a direct merge once the PR's own checks pass), and §11 now says so.
+  - **Next.** The operator's answer to item 60, then the plan's approval as an item, then the plan lands and run 1427
+    is dispatched.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2618,4 +2652,7 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   departures are D-7941 to D-7949 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-departures.md`). The plan is
   `docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`. Wave 5g's run is
   1427, planned.
-- **5g to 5k follow in order**, each planned against `main` as it then stands. 5h also waits until the fleet box runs 5c.
+- **5g is planned** (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089;
+  Decisions, 2026-11-06 22:15). It waits on the operator's item 60 and then on the plan's approval; its run is 1427.
+- **5h to 5k follow in order**, each planned against `main` as it then stands. The fleet box runs 5c, which 5h reads
+  (v0.0.926 or later since 2026-11-03).
