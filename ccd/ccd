@@ -6849,14 +6849,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # marker `$REG/<id>.shedding`, which no alias glob reaches, and the gate fails closed on it
 # (DEPSSHED region).
 #
-# NOT reachable this way, and this set IS the boundary — TWENTY dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these eleven are
+# NOT reachable this way, and this set IS the boundary — TWENTY-ONE dot-prefixed
+# artifacts live under `$REG`; the eight above are reachable, these twelve are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The eleven: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The twelve: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
 # records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
 # `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
@@ -6873,7 +6873,9 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # DIRECTORY for the same reason `.lifecycle/` is one, and unreachable for
 # `.reaped/`'s reason rather than the second-dot one below; its per-id
 # `<id>.json`, its `.<id>.<pid>.tmp` staging files and its `<id>.run/` FIFOs
-# are counted WITH it); `_reg_set`'s own tmps; `ccd-pool-sync`'s
+# are counted WITH it); `$REG/.affslot/` (D-6181: the affinity slots, a dotted
+# DIRECTORY unreachable for `.reaped/`'s reason; its `.lock`, its `.fleet` and its
+# per-account slot files are counted WITH it); `_reg_set`'s own tmps; `ccd-pool-sync`'s
 # `$REG/.pool-epoch.$$.tmp` staging file, written by the same tmp-then-rename
 # idiom outside `_reg_set` itself, before it renames into the dot-FREE
 # `$REG/pool-epoch` — the projection's published name carries no dot, only
@@ -20027,7 +20029,7 @@ _swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099
 # window was blocked, the pin was set on home itself, or that reset lies beyond
 # the bound — the set time plus SWAP_PIN_TTL ("or after 24 h", whichever first).
 _swap_pin_expiry_to() {   # var home target now -> var = "<epoch> reset|ttl"
-  local __pe_out="$1" __pe_home="$2" __pe_tgt="$3" __pe_now="$4" __pe_w __pe_v __pe_r __pe_best=0 __pe_cap
+  local __pe_out="$1"; shift; local __pe_home="$1" __pe_tgt="$2" __pe_now="$3" __pe_w __pe_v __pe_r __pe_best=0 __pe_cap
   __pe_cap=$(( __pe_now + SWAP_PIN_TTL ))
   if [[ -n "$__pe_home" && "$__pe_tgt" != "$__pe_home" ]]; then
     for __pe_w in five seven; do
@@ -26792,11 +26794,11 @@ _limit_field() { local __lfw_v __lfw_rc; _limit_field_to __lfw_v "$@"; __lfw_rc=
 # same one read of the file (`_limit_pick_to`); one definition, which D-6182's
 # "window ended" reader is built on rather than growing a second raw reader.
 _limit_reset_to() {   # var wrapper five|seven -> var = that window's `<field>ResetAt` epoch as written; rc 0 | 1 none (no file, no reset)
-  local __lr_out="$1" __lr_f="$LIMITS_DIR/$2.json" __lr_t='' __lr_in=1 __lr_v=''
+  local __lr_out="$1"; shift; local __lr_f="$LIMITS_DIR/$1.json" __lr_t='' __lr_in=1 __lr_v=''
   printf -v "$__lr_out" ''
   [[ -f "$__lr_f" ]] || return 1
   _limit_text_to __lr_t "$__lr_f" || __lr_in=
-  _limit_pick_to __lr_v "$__lr_in" "$__lr_t" "$__lr_f" "${3}ResetAt"
+  _limit_pick_to __lr_v "$__lr_in" "$__lr_t" "$__lr_f" "${2}ResetAt"
   [[ "$__lr_v" =~ ^[1-9][0-9]*$ ]] || return 1
   printf -v "$__lr_out" '%s' "$__lr_v"
 }
