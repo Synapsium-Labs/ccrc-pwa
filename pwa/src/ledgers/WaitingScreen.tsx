@@ -22,8 +22,11 @@ import './ledgers.css';
 export interface WaitingScreenProps {
   /** `null` until the first `waiting` frame or `GET /api/waiting` answer: "not heard yet" is not "nothing waits". */
   readonly view: WaitingView | null;
-  /** The fleet's sessions, or `null` before the first fleet frame: the offline snapshot's rows are not a fact, and a list
-   *  without its sessions' questions is not "nothing needs you", so the screen says it is waiting (review 1359 F3). */
+  /** The fleet's sessions, or `null` before the first fleet frame and with no saved rows to draw: a list without its
+   *  sessions' questions is not "nothing needs you", so the screen then says it is waiting (review 1359 F3). Before the
+   *  fleet frame, the route may pass the rows the fleet snapshot saved on this device, never as a fact: always with
+   *  `notCurrent` saying they are the device's (console speed C4, spec D16), and never when nothing was saved (review
+   *  1556 R1). */
   readonly sessions: readonly FleetSession[] | null;
   /** The runs, or `null` before the runs frame: a programme is not called ended on runs this page has not heard. */
   readonly runs: readonly RunSummary[] | null;

@@ -27,17 +27,21 @@ export type ItemSource =
 /** The Waiting page's source. `heard` is what this page has heard (`null` for each part it has not: the list off the
  *  store's `waiting`, the rows off `useHeard`); `saved` is the device's copy of the list; `deviceRows` is the store's
  *  `sessions`, which the fleet snapshot hydrates on a cold start. Live only when both parts are heard, which is today's
- *  draw condition. */
+ *  draw condition.
+ *
+ *  EMPTY DEVICE ROWS ARE NO SNAPSHOT (review 1556 R1). The fleet snapshot never saves an empty list (`snapshotRefused`),
+ *  so before the fleet frame an empty `deviceRows` means nothing was saved (a first visit, cleared data, a private window,
+ *  storage absent or throwing), and rows the page needs from the device are not there: `none`, which draws what the page
+ *  drew before a copy existed. Never "Nothing needs you." under an "as last saved" line. */
 export function listSource(
   heard: { readonly view: WaitingView | null; readonly sessions: readonly FleetSession[] | null },
   saved: WaitingSnapshot | null,
   deviceRows: readonly FleetSession[],
 ): ListSource {
-  if (heard.view !== null) {
-    return heard.sessions !== null
-      ? { kind: 'live', view: heard.view, sessions: heard.sessions }
-      : { kind: 'saved-rows', view: heard.view, sessions: deviceRows };
-  }
+  if (heard.view !== null && heard.sessions !== null) return { kind: 'live', view: heard.view, sessions: heard.sessions };
+  // The rows this draw takes from the device, when it takes any: none saved is no copy to draw.
+  if (heard.sessions === null && deviceRows.length === 0) return { kind: 'none' };
+  if (heard.view !== null) return { kind: 'saved-rows', view: heard.view, sessions: deviceRows };
   if (saved === null) return { kind: 'none' };
   return { kind: 'saved-list', view: saved.view, sessions: heard.sessions ?? deviceRows, savedAt: saved.savedAt };
 }

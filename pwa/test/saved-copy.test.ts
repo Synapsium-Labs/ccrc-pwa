@@ -32,6 +32,17 @@ describe('listSource: what the Waiting page draws', () => {
       .toEqual({ kind: 'saved-rows', view: heardList, sessions: deviceRows });
   });
 
+  // Review 1556 R1: with no fleet snapshot on the device (first visit, cleared data, private window, storage absent or
+  // throwing) the store's rows are `[]`, which is not a saved copy of anything: the page draws what it drew before C4.
+  it('no rows heard and none on the device: nothing to draw, even with a saved list', () => {
+    expect(listSource({ view: null, sessions: null }, saved, [])).toEqual({ kind: 'none' });
+  });
+
+  it('the list heard, no rows heard and none on the device: nothing to draw', () => {
+    expect(listSource({ view: heardList, sessions: null }, saved, [])).toEqual({ kind: 'none' });
+    expect(listSource({ view: heardList, sessions: null }, null, [])).toEqual({ kind: 'none' });
+  });
+
   it('nothing anywhere: no list heard and none saved', () => {
     expect(listSource({ view: null, sessions: heardRows }, null, deviceRows)).toEqual({ kind: 'none' });
     expect(listSource({ view: null, sessions: null }, null, [])).toEqual({ kind: 'none' });

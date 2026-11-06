@@ -73,6 +73,23 @@ describe('the Waiting on you page on a cold start', () => {
     expect(screen.queryByText(/not current/)).toBeNull();
   });
 
+  // Review 1556 R1: with no fleet snapshot on the device, nothing was saved, so nothing is drawn "as last saved".
+  it('no fleet snapshot on the device: a list that lands before the fleet frame draws the waiting line', () => {
+    const store = coldStart({ list: null });
+    render(<WaitingRoute store={store} />);
+    act(() => store.setState({ waiting: waitingView() }));
+    expect(statusTexts()).toContain(NO_FRAME_WORD);
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+    expect(screen.queryByText(/not current/)).toBeNull();
+  });
+
+  it('no fleet snapshot on the device: a saved list alone draws the waiting line', () => {
+    const store = coldStart();
+    render(<WaitingRoute store={store} />);
+    expect(statusTexts()).toContain(NO_FRAME_WORD);
+    expect(screen.queryByText('Saved item')).toBeNull();
+  });
+
   it('a box with no coordination database says so, not the saved list', async () => {
     vi.spyOn(api, 'waiting').mockRejectedValue(new ApiError(503, { ok: false, error: 'not-configured' }));
     const store = coldStart({ rows: true });
