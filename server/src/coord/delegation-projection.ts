@@ -1,6 +1,6 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
-// THIS MODULE IS L1. It imports the shared wire, the pure model, the policy's one classifier of unowned work, the correlation
+// THIS MODULE IS L1. It imports the shared wire, the pure model, the one newest-attempt derivation (`delegation-conflicts.ts`), the correlation
 // module's tree key, the binding's R9 decider and the divergence sweep's ccd identity of a worktree, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
@@ -27,12 +27,11 @@ import {
   formatDelegationInstant,
   parseDelegationInstant,
   type DelegationActivityRow,
-  type DelegationAttemptRow,
   type DelegationCensusRecord,
   type DelegationCheckpointV1,
 } from './delegation-model.js';
-import { isUnownedWorkReason } from './delegation-policy.js';
 import { delegationTreeKey } from './delegation-correlation.js';
+import { newestUnownedAttempts } from './delegation-conflicts.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
 import { ccdIdForWorktree } from '../divergence.js';
 
@@ -86,15 +85,8 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const unreleased = checkpoint.leases.filter((l) => l.releasedAt === null);
   const leasedTrees = new Set(unreleased.map((l) => delegationTreeKey(l.project, l.adminRecord)));
   const leasedActivities = new Set(unreleased.map((l) => l.activityId));
-  // The newest unowned-work attempt per tree (R59's one classifier). A tree is in conflict when ITS newest attempt is `conflicting`, so
-  // a lease suppressed for a conflict always leaves the tree an unowned row (D-7003).
-  const newest = new Map<string, DelegationAttemptRow>();
-  for (const a of checkpoint.attempts) {
-    if ((a.verdict !== 'unresolved' && a.verdict !== 'conflicting') || !isUnownedWorkReason(a.detail ?? '')) continue;
-    const k = delegationTreeKey(a.project, a.adminRecord);
-    const held = newest.get(k);
-    if (!held || held.attemptedAt < a.attemptedAt || (held.attemptedAt === a.attemptedAt && held.attemptId < a.attemptId)) newest.set(k, a);
-  }
+  // The newest unowned-work attempt per tree (`delegation-conflicts.ts`, the one derivation every wave-5 decider reads too).
+  const newest = newestUnownedAttempts(checkpoint);
   const conflicting = new Set([...newest].filter(([, a]) => a.verdict === 'conflicting').map(([k]) => k));
 
   const activityRows: DelegationActivityWire[] = [];
