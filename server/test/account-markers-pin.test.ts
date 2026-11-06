@@ -487,7 +487,7 @@ describe('disabled, every writer (`_acct_mark_off` via add/declare/disable, `_ac
     '--base-url', 'https://orchard-api/v1', '--credential', '-'];
   const ENTRY_C = { id: 'lane-c', label: 'lane-c·x', configDirSuffix: '.claude-lane-c',
     exec: { kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/v1', secretsFile: '.cc-secrets/lane-c-compatible.env' },
-    homeAble: true, hue: 'amber', telemetry: 'anthropic' };
+    homeAble: true, hue: 'amber', telemetry: 'none' };
   const ENTRY_D = { id: 'lane-d', label: 'lane·d', hue: 'violet', configDirSuffix: '.lane-d', homeAble: false, telemetry: 'none',
     exec: { kind: 'external', provider: 'openai' } };
   const OPERATOR_STEPS_C = [

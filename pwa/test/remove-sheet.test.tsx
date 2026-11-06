@@ -7,7 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { AccountRemoveAnswer, AccountRemoveCheckAnswer, AccountsConnect, FleetSession, LaneWire, RosterWire } from '../../shared/api';
 import { RemoveSheet, type RemoveClient, type RemoveSheetProps } from '../src/accounts/RemoveSheet';
 import {
-  DISCARD_LANE, REVOKE_PAGES, discardLine, offlineRefusal, removeButtonLabel, revokeRecord, sleepingBlockText, typedConfirmLabel,
+  DISCARD_LANE, REVOKE_PAGES, atProviderWords, discardLine, offlineRefusal, removeButtonLabel, revokeRecord, sleepingBlockText, typedConfirmLabel,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -282,6 +282,11 @@ describe('the ledger (spec §11.3; N6; the OA1 record)', () => {
     expect(client.accountRevokeAck.mock.calls[0]![0]).toStrictEqual({ laneId: 'lane-b', kind: 'anthropic-token' });
     expect(JSON.stringify(client.accountRevokeAck.mock.calls)).not.toContain('a3f9');
     expect(within(at).getByTestId('revoke-record')).toHaveTextContent(revokeRecord(true, false));
+  });
+
+  it("an OpenRouter key's row names the key by its ending, the one thing the box knows of it (D-8023 (14))", () => {
+    expect(atProviderWords('openrouter-key', 'still-valid', 'sk-or-v1-…a26a').tail).toBe(" (it's the key ending in …a26a).");
+    expect(atProviderWords('openrouter-key', 'still-valid', undefined).tail).toBe('.');
   });
 
   it("a sign-in's row says unmeasured, never ended and never still valid (G23 not run)", async () => {

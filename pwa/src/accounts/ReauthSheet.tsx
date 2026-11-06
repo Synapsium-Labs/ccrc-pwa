@@ -26,6 +26,11 @@
 // "Not the account this lane had? **Sign this lane out and start again**" (N5's sign-out, then a new attempt; G23 is
 // unmeasured, so nothing is said about the provider). A mint cannot read its account, so the stated identity is asked
 // again with the old one as its default text.
+//
+// A CODEX LANE (Task A25, D-8051; spec §9 row 5) runs this sheet too: **Sign in again** with the ChatGPT device-code card.
+// A24's arm signs in into scratch and moves it into the lane's folder only on `done` and a passing check, so every
+// ending above holds. The lane's gateway reloads the sign-in itself, so the restart list only offers a way out of a
+// stuck session, and the fresh check starts the gateway. It has no identity to read back, and no token to revoke.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, TextLink } from '@ccrc/ui';
 import type { AccountStateWord } from '../../../shared/accounts';
@@ -36,8 +41,8 @@ import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   CHECK_AGAIN_LABEL, CLOSE, DONE, LEDGER, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
-  REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
-  SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
+  REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, signInLedger, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
+  SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, chatgptSignedInLine, checkingLine, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
   reauthRestartLead, reauthSignOutConfirm, reauthStart, reauthStartRefusal, reauthTitle, reauthWasLine, revokeOldWords,
   signOutRefused, signOutUnknown, statedRefused,
 } from '../fleet/accountWords';
@@ -80,10 +85,14 @@ export interface CardAct { readonly act: CredentialAct; readonly primary: boolea
  *  - Signed out, sign-in lane: **Switch to a long-lived token** (primary, Q1; A23's sheet) · Sign in again.
  *  - Signed out, token lane: **Mint a new token** (primary) · Paste a token.
  *  - Expiring (a minted token): **Replace token** (the mint) · Switch to sign-in (A23's sheet).
+ *  - Signed out, Codex lane: **Sign in again** (primary, Task A25, D-8051), where the fleet runs the ChatGPT sign-in and
+ *    can install it (`codex`: `account-codex-v1` in `connect.caps`, which the server holds back until its host is
+ *    measured, on a lane ccrc owns: `managedCodex`).
  */
-export function troubleActs(word: AccountStateWord, kind: string | undefined, auth: boolean): readonly CardAct[] {
+export function troubleActs(word: AccountStateWord, kind: string | undefined, auth: boolean, codex = false): readonly CardAct[] {
   const acts: CredentialAct[] = [];
-  if (word === 'signed-out' && kind === 'sign-in' && auth) acts.push('switch-to-token', 'sign-in-again');
+  if (word === 'signed-out' && kind === 'codex' && auth && codex) acts.push('sign-in-again');
+  else if (word === 'signed-out' && kind === 'sign-in' && auth) acts.push('switch-to-token', 'sign-in-again');
   else if (word === 'signed-out' && kind === 'token') acts.push(...(auth ? ['mint-new-token', 'paste-token'] as const : ['paste-token'] as const));
   else if (word === 'expiring' && kind === 'token') acts.push(...(auth ? ['replace-token', 'switch-to-sign-in'] as const : ['replace-token'] as const));
   return acts.map((act, i) => ({ act, primary: auth && i === 0 }));
@@ -97,7 +106,8 @@ export type ReauthClient = SignInRoutes
 
 export interface ReauthSheetProps {
   id: string;
-  /** The method this sheet runs, the lane's own: `login` (Sign in again) or `setup-token` (Mint a new token). */
+  /** The method this sheet runs, the lane's own: `login` or `openai-login` (Sign in again), or `setup-token` (Mint a new
+   *  token). */
   method: SignInMethod;
   open: boolean;
   onClose: () => void;
@@ -138,7 +148,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
 
   const [frame, setFrame] = useState<Frame>(props.resume !== undefined ? 'run' : 'confirm');
   const [ledger, setLedger] = useState<LedgerLine[]>(() =>
-    (props.resume !== undefined ? [{ text: SIGN_IN_LEDGER.waiting, at: Date.now() }] : []));
+    (props.resume !== undefined ? [{ text: signInLedger(props.resume.method).waiting, at: Date.now() }] : []));
   const [said, setSaid] = useState<Announcement | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -167,8 +177,8 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   /** The fresh check (spec §9: every re-login ends with one), then the store reads the lane again. */
   const check = async (): Promise<void> => {
     setChecking(true);
-    write(LEDGER.checking(id));
-    status(LEDGER.checking(id));
+    write(checkingLine(id, method));
+    status(checkingLine(id, method));
     try {
       const a = await client.accountCheck(id);
       if (!live.current) return;
@@ -198,7 +208,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
 
   const s = useSignInAttempt({
     id, client, blocked: offline, write, settle, status, alert,
-    endText: (k, failure) => reauthEnd(id, method, k, failure, old.now()),
+    endText: (k, failure, expiresAt) => reauthEnd(id, method, k, failure, old.now(), expiresAt),
     startRefusal: (word, reason) => reauthStartRefusal(id, method, word, reason, old.now()),
     onStart: () => { setNotice(null); setWrongOpen(false); setFrame('run'); },
     onDone: () => { void installed(); },
@@ -316,7 +326,8 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
   } else {
     const word = (checked?.state.word ?? 'not-checked') as AccountStateWord;
     const lamp = STATE_LAMPS[word] ?? STATE_LAMPS['not-checked'];
-    const identity = checked === null ? null : identityLine(checked, word, Math.floor(Date.now() / 1000));
+    const identity = checked === null ? null
+      : identityLine(checked, word, Math.floor(Date.now() / 1000)) ?? (method === 'openai-login' ? chatgptSignedInLine(checked) : null);
     const revoke = revokeOldWords(id, old.now());
     body = (
       <>
@@ -368,9 +379,10 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
                 laneId={id} kind="anthropic-token" label={revoke.label} old={revoke.old} blocked={offline}
                 ack={(b) => client.accountRevokeAck(b)}
               />
-              <CompromiseSteps roster={roster} />
             </>
           )}
+          {/* In the token and Codex sheets' result frames, never a Claude sign-in's (spec §3.11). */}
+          {method !== 'login' && <CompromiseSteps roster={roster} />}
           <FrameFoot primary={{ label: DONE, onClick: onClose, disabled: checking }} />
         </div>
       </>

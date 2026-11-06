@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat reading mockup</title>
+<style>
+:root { --doc-bg:#F7F8F6; --doc-ink:#1A201B; --doc-dim:#4E5850; --doc-edge:#DDE2DC; --doc-card:#FFFFFF; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --doc-bg:#0E100F; --doc-ink:#E6EAE6; --doc-dim:#9AA39B; --doc-edge:#2A2F2B; --doc-card:#151816; } }
+:root[data-theme="dark"] { --doc-bg:#0E100F; --doc-ink:#E6EAE6; --doc-dim:#9AA39B; --doc-edge:#2A2F2B; --doc-card:#151816; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--doc-bg); color: var(--doc-ink); font: 15px/1.55 "Geist", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; overflow-x: hidden; }
+.page { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+.page h1 { font-size: 24px; margin: 0 0 4px; }
+.page h2 { font-size: 18px; margin: 40px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--doc-edge); }
+.page > p { color: var(--doc-ink); max-width: 80ch; }
+.page .lede { color: var(--doc-dim); }
+.zoom { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; font-size: 14px; color: var(--doc-dim); }
+.zoom label { border: 1px solid var(--doc-edge); border-radius: 999px; padding: 4px 12px; cursor: pointer; background: var(--doc-card); }
+.zoom input { margin: 0 6px 0 0; }
+.shot { margin: 18px 0 30px; }
+.shot h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--doc-dim); font-family: ui-monospace, Menlo, monospace; }
+.scaler { overflow-x: auto; border: 1px solid var(--doc-edge); border-radius: 8px; zoom: .5; }
+body:has(#z75:checked) .scaler { zoom: .75; }
+body:has(#z100:checked) .scaler { zoom: 1; }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 12px 0; }
+.legend div { background: var(--doc-card); border: 1px solid var(--doc-edge); border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+
+/* ---- the app's two palettes (values copied from ui/src/styles/tokens.css, main 4c677d328) ---- */
+.frame.dark { --bg-page:#0B0D0C; --bg-surface:#141715; --bg-raised:#1C201D; --bg-well:#070808; --edge-subtle:#262B27; --edge-strong:#39403A;
+  --ink-primary:#ECF0EC; --ink-secondary:#ADB6AE; --ink-tertiary:#8B948C; --ink-on-well:#DEE4DE; --accent:#45D67E; --accent-tint:#12291B;
+  --status-busy-text:#57E08B; --status-attention-text:#F2B84B; --status-attention-tint:#2E2413; --status-dead-text:#E8836F; --status-dead-tint-solid:#2D211D;
+  --acct-violet:#C7A7F4; --acct-violet-tint:#241C38; --acct-blue:#96B4F4; --acct-cyan:#6FD6EA; --acct-cyan-tint:#0E2A31; --well-bar-hair:#212221; --syn-comment:#8B948C; }
+.frame.light { --bg-page:#F4F6F3; --bg-surface:#FFFFFF; --bg-raised:#EAEEEA; --bg-well:#141715; --edge-subtle:#DDE2DC; --edge-strong:#C3CAC2;
+  --ink-primary:#1A201B; --ink-secondary:#4E5850; --ink-tertiary:#5F6962; --ink-on-well:#DEE4DE; --accent:#0E7B3F; --accent-tint:#DFF2E5;
+  --status-busy-text:#106E39; --status-attention-text:#8A5A0A; --status-attention-tint:#F7E9CF; --status-dead-text:#B2402C; --status-dead-tint-solid:#F6E8E6;
+  --acct-violet:#6D3FB4; --acct-violet-tint:#EDE6FA; --acct-blue:#2F55B8; --acct-cyan:#0A6377; --acct-cyan-tint:#DAF0F6; --well-bar-hair:#2C302D; --syn-comment:#8B948C; }
+
+/* ---- skins: Refined (default) and Instrument (lengths only) ---- */
+.frame { --r-md:10px; --r-lg:14px; --fs-prose:15px; --gutter:32px; --measure-chat:820px; --prose-measure:72ch; }
+.frame.skin-instrument { --r-md:5px; --r-lg:8px; --fs-prose:14px; --gutter:14px; --measure-chat:860px; }
+.frame.after { --measure-chat:1200px; --prose-measure:76ch; }
+.frame.after.skin-instrument { --measure-chat:100%; --prose-measure:88ch; }
+
+.frame { width: 1600px; min-height: 1000px; display: flex; background: var(--bg-page); color: var(--ink-primary); overflow: hidden;
+  font: 400 var(--fs-prose)/1.6 "Geist", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.mono, .head, .tool, .well, .chip, .receipt, kbd, .hints, .strip .small { font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.rail { width: 56px; flex: none; border-right: 1px solid var(--edge-subtle); background: var(--bg-surface); display: flex; flex-direction: column; align-items: center; gap: 18px; padding-top: 18px; }
+.rail span { width: 22px; height: 22px; border-radius: 6px; background: var(--bg-raised); }
+.rail .dot { background: var(--accent); border-radius: 999px; width: 12px; height: 12px; }
+.pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.head { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; padding: 12px var(--gutter); border-bottom: 1px solid var(--edge-subtle); background: var(--bg-surface); font-size: 13px; }
+.crumbs { font-size: 17px; } .crumbs .dim, .dim { color: var(--ink-tertiary); }
+.chips { grid-column: 1; display: flex; gap: 10px; align-items: center; color: var(--ink-secondary); }
+.chip-acct { color: var(--acct-cyan); background: var(--acct-cyan-tint); border-radius: 999px; padding: 1px 8px; }
+.pill { border: 1px solid var(--edge-strong); border-radius: 999px; padding: 1px 8px; }
+.btns { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--edge-strong); border-radius: var(--r-md); padding: 8px 12px; color: var(--ink-primary); }
+.chat { flex: 1; display: flex; flex-direction: column; padding: 8px var(--gutter) 12px; }
+.col { width: 100%; max-width: min(var(--measure-chat), 100%); margin-inline: auto; }
+.item { padding: 8px 16px; display: grid; gap: 4px; }
+.user-row { justify-items: end; }
+.msg-user { background: var(--bg-raised); border: 1px solid var(--edge-subtle); border-radius: var(--r-lg); padding: 8px 14px; max-width: 70%; }
+.receipt { margin: 0; font-size: 11px; color: var(--ink-tertiary); }
+.tool { border: 1px solid var(--edge-subtle); border-radius: var(--r-md); background: var(--bg-surface); overflow: hidden; font-size: 12.5px; }
+.tool-head { display: flex; gap: 12px; padding: 6px 12px; color: var(--ink-secondary); }
+.tool-name { color: var(--ink-primary); font-weight: 600; } .tool-meta { margin-left: auto; color: var(--ink-tertiary); }
+.well { margin: 0; background: var(--bg-well); color: var(--ink-on-well); padding: 10px 12px; font-size: 13px; line-height: 20px; white-space: pre; overflow: hidden; }
+.c-muted { color: var(--syn-comment); font-style: italic; }
+.prose { display: grid; gap: 12px; color: var(--ink-primary); }
+.prose > * { margin: 0; }
+.prose > :is(p, ul, ol) { max-width: var(--prose-measure); }
+.prose ul { padding-left: 20px; display: grid; gap: 8px; list-style: disc; }
+.prose li::marker { color: var(--ink-tertiary); }
+.prose strong { font-weight: 600; }
+.chip { font-size: 13px; color: var(--ink-on-well); background: var(--bg-well); border: 1px solid var(--well-bar-hair); border-radius: 6px; padding: 1px 5px; }
+.table-wrap { overflow: hidden; border-radius: var(--r-md); }
+table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 13px; line-height: 1.5; }
+th, td { border: 1px solid var(--edge-subtle); padding: 8px 12px; text-align: left; }
+thead th { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-primary); background: color-mix(in srgb, var(--ink-primary) 8%, transparent); border-bottom: 2px solid var(--edge-strong); }
+.strips { padding: 0 16px; }
+.strip { display: flex; gap: 12px; align-items: center; border: 1px solid var(--edge-subtle); background: var(--bg-surface); border-radius: var(--r-lg); padding: 10px 14px; margin: 6px 0; }
+.strip .count { margin-left: auto; color: var(--ink-tertiary); } .strip .small { font-size: 12px; }
+.composer { padding: 0 16px; }
+.field { display: flex; align-items: center; gap: 12px; border: 1px solid var(--edge-strong); border-radius: var(--r-lg); background: var(--bg-surface); padding: 12px 14px; }
+.caret { color: var(--accent); } .ph { color: var(--ink-tertiary); flex: 1; } .plus { color: var(--ink-secondary); font-size: 20px; }
+.send { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 999px; background: var(--bg-raised); color: var(--ink-tertiary); }
+.hints { display: flex; justify-content: center; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--ink-tertiary); }
+kbd { border: 1px solid var(--edge-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; margin-right: 3px; color: var(--ink-primary); background: var(--bg-raised); }
+
+/* ---- the AFTER marks: the four places of section 3 ---- */
+.after .prose { justify-items: start; }
+.after .prose > :is(.table-wrap) { justify-self: stretch; }
+.after .lead-act { color: var(--status-attention-text); }
+.after .lead-info { color: var(--acct-blue); }
+.after ul.act li::marker { color: var(--status-attention-text); }
+.after a.ref { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 3px; }
+.st { display: inline-block; font-size: .86em; font-weight: 600; line-height: 1.35; padding: 0 6px; border-radius: 4px; }
+.st-green  { color: var(--status-busy-text);      background: var(--accent-tint); }
+.st-merged { color: var(--acct-violet);           background: var(--acct-violet-tint); }
+.st-amber  { color: var(--status-attention-text); background: var(--status-attention-tint); }
+.st-red    { color: var(--status-dead-text);      background: var(--status-dead-tint-solid); }
+</style>
+</head>
+<body>
+<main class="page">
+  <h1>Chat reading mockup</h1>
+  <p class="lede">A session at a desk, in a 1600 px frame, before and after the proposals of <code>docs/superpowers/specs/2026-11-06-chat-reading-design.md</code>. Static and neutral: every name here is a stand-in. The palette values are copied from <code>ui/src/styles/tokens.css</code> (Phosphor &amp; Ink, dark and light).</p>
+  <div class="legend">
+    <div><b>Width.</b> Before: an 820 px centred column. After: a 1200 px column (Refined) or the whole pane (Instrument); prose to 76ch or 88ch; the table, tool card, strip and composer take the column.</div>
+    <div><b>Colour.</b> Amber for the action lead-in and its list markers; blue for other lead-ins; status labels on the callouts' pairs; names in the link colour.</div>
+    <div><b>Links.</b> run 1527, review 1544, item 34, #651, a commit and a plan path are links. "Mail 13955" stays text (Later), and "passed to the parser" is not a status.</div>
+  </div>
+  <div class="zoom" role="radiogroup" aria-label="Frame zoom">Frame zoom:
+    <label><input type="radio" name="z" id="z50" checked>50%</label>
+    <label><input type="radio" name="z" id="z75">75%</label>
+    <label><input type="radio" name="z" id="z100">100%</label>
+  </div>
+
+  <h2>Dark (Phosphor &amp; Ink), Refined skin</h2>
+  
+<section class="shot">
+  <h3>BEFORE: centred 820 px column, one ink</h3>
+  <div class="scaler">
+  <div class="frame dark skin-refined before">
+    <nav class="rail"><span class="dot"></span><span></span><span></span><span></span><span></span></nav>
+    <div class="pane">
+      <header class="head">
+        <div class="crumbs"><span class="dim">project-a</span> › <b>ws/project-a-issue-triage</b></div>
+        <div class="chips"><span class="meta">✓ done · 4m ago</span><span class="chip-acct">● lane-a</span><span class="meta">org-a/project-a</span><span class="pill">Opus 5.5</span><span class="meta">coordinator · graph 15 · gated 1</span></div>
+        <div class="btns"><span class="btn">&gt;_ Terminal</span><span class="btn">⋯ More</span><span class="btn">Open PR</span></div>
+      </header>
+      <div class="chat">
+        <div class="col">
+  <div class="item user-row"><div class="msg-user">Why is the worker on run 1527 still not picking up its mail? Fix it if you can.</div><p class="receipt">08:41 ✓</p></div>
+
+  <div class="item"><div class="tool"><div class="tool-head"><span class="tool-name">Bash</span><span class="tool-sum">ps -o pid,args -u lane-a | grep -E "pgrep|until"</span><span class="tool-meta">0.2 s</span></div>
+  <pre class="well"><span class="c-muted"># the two wait loops in the worker's shell</span>
+1286235 bash -c until ! pgrep -f "mutate.py"; do sleep 30; done
+1259080 bash -c until grep -q "^done" mutants.txt &amp;&amp; ! pgrep -f "r3b/mutate.py"; do sleep 30; done</pre></div></div>
+
+  <div class="item"><div class="prose">
+    <p>The worker is fine; two of its background wait loops can never finish, because each waits on a condition that can never come true.</p>
+    <ul>
+      <li>PID 1286235 runs <code class="chip">until ! pgrep -f "mutate.py"</code>, waiting until no process matches "mutate.py". Its own command line contains "mutate.py", so <code class="chip">pgrep</code> always finds the loop itself.</li>
+      <li>PID 1259080 waits for a line in a mutants file and also has <code class="chip">! pgrep -f "r3b/mutate.py"</code> in its condition, so it is stuck the same way.</li>
+    </ul>
+    <p>While they run, the worker never goes idle, so the fleet holds its mail. Ending them doesn't touch the worker's code or branch; they are only wait loops.</p>
+    <p><strong>Why I can't do it.</strong> Killing another session's processes is an operator act under the coordinator rules, so it has to be you.</p>
+    <p><strong>What to do (either one):</strong></p>
+    <ul>
+      <li>run <code class="chip">! kill 1259080 1286235</code>; or</li>
+      <li>open tmux pane <code class="chip">cc-project-a-backup-guard</code> and stop those two background tasks from its task list.</li>
+    </ul>
+    <p><strong>What happens next.</strong> Mail 13955 delivers on the next sweep and run 1527 starts its fix round. On its wave-done I re-measure it at 5138c8420, open review 1544, and record the ruling in docs/superpowers/plans/2026-11-01-example.md before any merge.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PR</th><th>State</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>#651</td><td>Merged</td><td>the row-count fix on our side</td></tr>
+        <tr><td>#652</td><td>Failed</td><td>one leg red on the macOS runner; advisory</td></tr>
+        <tr><td>#660</td><td>Waiting</td><td>needs your answer on item 34</td></tr>
+      </tbody>
+    </table></div>
+    <p>Once that's done, the next question is item 34: whether to report the row-count leak upstream (fixed on our side by #651, CI green; #652 failed on the macOS leg only). The value passed to the parser was never the problem.</p>
+  </div></div></div>
+        <div class="col strips"><div class="strip"><span>✉</span><b>Fleet move to the fleet box: pause from 06:44Z</b><span class="count">2</span><span class="dim small">1 question · 1 status</span></div></div>
+        <div class="col composer"><div class="field"><span class="caret">❯</span><span class="ph">Message project-a</span><span class="plus">+</span><span class="send">↑</span></div>
+          <div class="hints"><span><kbd>⏎</kbd> send</span><span><kbd>⇧</kbd><kbd>⏎</kbd> newline</span><span><kbd>Esc</kbd> stop</span><span><kbd>⌘</kbd><kbd>K</kbd> commands</span></div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+  
+<section class="shot">
+  <h3>AFTER: 1200 px column, prose at 76ch, colour and links</h3>
+  <div class="scaler">
+  <div class="frame dark skin-refined after">
+    <nav class="rail"><span class="dot"></span><span></span><span></span><span></span><span></span></nav>
+    <div class="pane">
+      <header class="head">
+        <div class="crumbs"><span class="dim">project-a</span> › <b>ws/project-a-issue-triage</b></div>
+        <div class="chips"><span class="meta">✓ done · 4m ago</span><span class="chip-acct">● lane-a</span><span class="meta">org-a/project-a</span><span class="pill">Opus 5.5</span><span class="meta">coordinator · graph 15 · gated 1</span></div>
+        <div class="btns"><span class="btn">&gt;_ Terminal</span><span class="btn">⋯ More</span><span class="btn">Open PR</span></div>
+      </header>
+      <div class="chat">
+        <div class="col">
+  <div class="item user-row"><div class="msg-user">Why is the worker on <a class="ref" href="#" title="opens its object">run 1527</a> still not picking up its mail? Fix it if you can.</div><p class="receipt">08:41 ✓</p></div>
+
+  <div class="item"><div class="tool"><div class="tool-head"><span class="tool-name">Bash</span><span class="tool-sum">ps -o pid,args -u lane-a | grep -E "pgrep|until"</span><span class="tool-meta">0.2 s</span></div>
+  <pre class="well"><span class="c-muted"># the two wait loops in the worker's shell</span>
+1286235 bash -c until ! pgrep -f "mutate.py"; do sleep 30; done
+1259080 bash -c until grep -q "^done" mutants.txt &amp;&amp; ! pgrep -f "r3b/mutate.py"; do sleep 30; done</pre></div></div>
+
+  <div class="item"><div class="prose">
+    <p>The worker is fine; two of its background wait loops can never finish, because each waits on a condition that can never come true.</p>
+    <ul>
+      <li>PID 1286235 runs <code class="chip">until ! pgrep -f "mutate.py"</code>, waiting until no process matches "mutate.py". Its own command line contains "mutate.py", so <code class="chip">pgrep</code> always finds the loop itself.</li>
+      <li>PID 1259080 waits for a line in a mutants file and also has <code class="chip">! pgrep -f "r3b/mutate.py"</code> in its condition, so it is stuck the same way.</li>
+    </ul>
+    <p>While they run, the worker never goes idle, so the fleet holds its mail. Ending them doesn't touch the worker's code or branch; they are only wait loops.</p>
+    <p><strong class="lead lead-info">Why I can't do it.</strong> Killing another session's processes is an operator act under the coordinator rules, so it has to be you.</p>
+    <p><strong class="lead lead-act">What to do (either one):</strong></p>
+    <ul class="act">
+      <li>run <code class="chip">! kill 1259080 1286235</code>; or</li>
+      <li>open tmux pane <code class="chip">cc-project-a-backup-guard</code> and stop those two background tasks from its task list.</li>
+    </ul>
+    <p><strong class="lead lead-info">What happens next.</strong> Mail 13955 delivers on the next sweep and <a class="ref" href="#" title="opens its object">run 1527</a> starts its fix round. On its wave-done I re-measure it at <a class="ref" href="#" title="opens its object">5138c8420</a>, open <a class="ref" href="#" title="opens its object">review 1544</a>, and record the ruling in <a class="ref" href="#" title="opens its object">docs/superpowers/plans/2026-11-01-example.md</a> before any merge.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PR</th><th>State</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><a class="ref" href="#" title="opens its object">#651</a></td><td><span class="st st-merged">Merged</span></td><td>the row-count fix on our side</td></tr>
+        <tr><td><a class="ref" href="#" title="opens its object">#652</a></td><td><span class="st st-red">Failed</span></td><td>one leg red on the macOS runner; advisory</td></tr>
+        <tr><td><a class="ref" href="#" title="opens its object">#660</a></td><td><span class="st st-amber">Waiting</span></td><td>needs your answer on <a class="ref" href="#" title="opens its object">item 34</a></td></tr>
+      </tbody>
+    </table></div>
+    <p>Once that's done, the next question is <a class="ref" href="#" title="opens its object">item 34</a>: whether to report the row-count leak upstream (fixed on our side by <a class="ref" href="#" title="opens its object">#651</a>, CI <span class="st st-green">green</span>; <a class="ref" href="#" title="opens its object">#652</a> <span class="st st-red">failed</span> on the macOS leg only). The value passed to the parser was never the problem.</p>
+  </div></div></div>
+        <div class="col strips"><div class="strip"><span>✉</span><b>Fleet move to the fleet box: pause from 06:44Z</b><span class="count">2</span><span class="dim small">1 question · 1 status</span></div></div>
+        <div class="col composer"><div class="field"><span class="caret">❯</span><span class="ph">Message project-a</span><span class="plus">+</span><span class="send">↑</span></div>
+          <div class="hints"><span><kbd>⏎</kbd> send</span><span><kbd>⇧</kbd><kbd>⏎</kbd> newline</span><span><kbd>Esc</kbd> stop</span><span><kbd>⌘</kbd><kbd>K</kbd> commands</span></div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+
+  <h2>Light (Phosphor &amp; Ink light), Refined skin</h2>
+  
+<section class="shot">
+  <h3>BEFORE: centred 820 px column, one ink</h3>
+  <div class="scaler">
+  <div class="frame light skin-refined before">
+    <nav class="rail"><span class="dot"></span><span></span><span></span><span></span><span></span></nav>
+    <div class="pane">
+      <header class="head">
+        <div class="crumbs"><span class="dim">project-a</span> › <b>ws/project-a-issue-triage</b></div>
+        <div class="chips"><span class="meta">✓ done · 4m ago</span><span class="chip-acct">● lane-a</span><span class="meta">org-a/project-a</span><span class="pill">Opus 5.5</span><span class="meta">coordinator · graph 15 · gated 1</span></div>
+        <div class="btns"><span class="btn">&gt;_ Terminal</span><span class="btn">⋯ More</span><span class="btn">Open PR</span></div>
+      </header>
+      <div class="chat">
+        <div class="col">
+  <div class="item user-row"><div class="msg-user">Why is the worker on run 1527 still not picking up its mail? Fix it if you can.</div><p class="receipt">08:41 ✓</p></div>
+
+  <div class="item"><div class="tool"><div class="tool-head"><span class="tool-name">Bash</span><span class="tool-sum">ps -o pid,args -u lane-a | grep -E "pgrep|until"</span><span class="tool-meta">0.2 s</span></div>
+  <pre class="well"><span class="c-muted"># the two wait loops in the worker's shell</span>
+1286235 bash -c until ! pgrep -f "mutate.py"; do sleep 30; done
+1259080 bash -c until grep -q "^done" mutants.txt &amp;&amp; ! pgrep -f "r3b/mutate.py"; do sleep 30; done</pre></div></div>
+
+  <div class="item"><div class="prose">
+    <p>The worker is fine; two of its background wait loops can never finish, because each waits on a condition that can never come true.</p>
+    <ul>
+      <li>PID 1286235 runs <code class="chip">until ! pgrep -f "mutate.py"</code>, waiting until no process matches "mutate.py". Its own command line contains "mutate.py", so <code class="chip">pgrep</code> always finds the loop itself.</li>
+      <li>PID 1259080 waits for a line in a mutants file and also has <code class="chip">! pgrep -f "r3b/mutate.py"</code> in its condition, so it is stuck the same way.</li>
+    </ul>
+    <p>While they run, the worker never goes idle, so the fleet holds its mail. Ending them doesn't touch the worker's code or branch; they are only wait loops.</p>
+    <p><strong>Why I can't do it.</strong> Killing another session's processes is an operator act under the coordinator rules, so it has to be you.</p>
+    <p><strong>What to do (either one):</strong></p>
+    <ul>
+      <li>run <code class="chip">! kill 1259080 1286235</code>; or</li>
+      <li>open tmux pane <code class="chip">cc-project-a-backup-guard</code> and stop those two background tasks from its task list.</li>
+    </ul>
+    <p><strong>What happens next.</strong> Mail 13955 delivers on the next sweep and run 1527 starts its fix round. On its wave-done I re-measure it at 5138c8420, open review 1544, and record the ruling in docs/superpowers/plans/2026-11-01-example.md before any merge.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PR</th><th>State</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>#651</td><td>Merged</td><td>the row-count fix on our side</td></tr>
+        <tr><td>#652</td><td>Failed</td><td>one leg red on the macOS runner; advisory</td></tr>
+        <tr><td>#660</td><td>Waiting</td><td>needs your answer on item 34</td></tr>
+      </tbody>
+    </table></div>
+    <p>Once that's done, the next question is item 34: whether to report the row-count leak upstream (fixed on our side by #651, CI green; #652 failed on the macOS leg only). The value passed to the parser was never the problem.</p>
+  </div></div></div>
+        <div class="col strips"><div class="strip"><span>✉</span><b>Fleet move to the fleet box: pause from 06:44Z</b><span class="count">2</span><span class="dim small">1 question · 1 status</span></div></div>
+        <div class="col composer"><div class="field"><span class="caret">❯</span><span class="ph">Message project-a</span><span class="plus">+</span><span class="send">↑</span></div>
+          <div class="hints"><span><kbd>⏎</kbd> send</span><span><kbd>⇧</kbd><kbd>⏎</kbd> newline</span><span><kbd>Esc</kbd> stop</span><span><kbd>⌘</kbd><kbd>K</kbd> commands</span></div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+  
+<section class="shot">
+  <h3>AFTER: 1200 px column, prose at 76ch, colour and links</h3>
+  <div class="scaler">
+  <div class="frame light skin-refined after">
+    <nav class="rail"><span class="dot"></span><span></span><span></span><span></span><span></span></nav>
+    <div class="pane">
+      <header class="head">
+        <div class="crumbs"><span class="dim">project-a</span> › <b>ws/project-a-issue-triage</b></div>
+        <div class="chips"><span class="meta">✓ done · 4m ago</span><span class="chip-acct">● lane-a</span><span class="meta">org-a/project-a</span><span class="pill">Opus 5.5</span><span class="meta">coordinator · graph 15 · gated 1</span></div>
+        <div class="btns"><span class="btn">&gt;_ Terminal</span><span class="btn">⋯ More</span><span class="btn">Open PR</span></div>
+      </header>
+      <div class="chat">
+        <div class="col">
+  <div class="item user-row"><div class="msg-user">Why is the worker on <a class="ref" href="#" title="opens its object">run 1527</a> still not picking up its mail? Fix it if you can.</div><p class="receipt">08:41 ✓</p></div>
+
+  <div class="item"><div class="tool"><div class="tool-head"><span class="tool-name">Bash</span><span class="tool-sum">ps -o pid,args -u lane-a | grep -E "pgrep|until"</span><span class="tool-meta">0.2 s</span></div>
+  <pre class="well"><span class="c-muted"># the two wait loops in the worker's shell</span>
+1286235 bash -c until ! pgrep -f "mutate.py"; do sleep 30; done
+1259080 bash -c until grep -q "^done" mutants.txt &amp;&amp; ! pgrep -f "r3b/mutate.py"; do sleep 30; done</pre></div></div>
+
+  <div class="item"><div class="prose">
+    <p>The worker is fine; two of its background wait loops can never finish, because each waits on a condition that can never come true.</p>
+    <ul>
+      <li>PID 1286235 runs <code class="chip">until ! pgrep -f "mutate.py"</code>, waiting until no process matches "mutate.py". Its own command line contains "mutate.py", so <code class="chip">pgrep</code> always finds the loop itself.</li>
+      <li>PID 1259080 waits for a line in a mutants file and also has <code class="chip">! pgrep -f "r3b/mutate.py"</code> in its condition, so it is stuck the same way.</li>
+    </ul>
+    <p>While they run, the worker never goes idle, so the fleet holds its mail. Ending them doesn't touch the worker's code or branch; they are only wait loops.</p>
+    <p><strong class="lead lead-info">Why I can't do it.</strong> Killing another session's processes is an operator act under the coordinator rules, so it has to be you.</p>
+    <p><strong class="lead lead-act">What to do (either one):</strong></p>
+    <ul class="act">
+      <li>run <code class="chip">! kill 1259080 1286235</code>; or</li>
+      <li>open tmux pane <code class="chip">cc-project-a-backup-guard</code> and stop those two background tasks from its task list.</li>
+    </ul>
+    <p><strong class="lead lead-info">What happens next.</strong> Mail 13955 delivers on the next sweep and <a class="ref" href="#" title="opens its object">run 1527</a> starts its fix round. On its wave-done I re-measure it at <a class="ref" href="#" title="opens its object">5138c8420</a>, open <a class="ref" href="#" title="opens its object">review 1544</a>, and record the ruling in <a class="ref" href="#" title="opens its object">docs/superpowers/plans/2026-11-01-example.md</a> before any merge.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PR</th><th>State</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><a class="ref" href="#" title="opens its object">#651</a></td><td><span class="st st-merged">Merged</span></td><td>the row-count fix on our side</td></tr>
+        <tr><td><a class="ref" href="#" title="opens its object">#652</a></td><td><span class="st st-red">Failed</span></td><td>one leg red on the macOS runner; advisory</td></tr>
+        <tr><td><a class="ref" href="#" title="opens its object">#660</a></td><td><span class="st st-amber">Waiting</span></td><td>needs your answer on <a class="ref" href="#" title="opens its object">item 34</a></td></tr>
+      </tbody>
+    </table></div>
+    <p>Once that's done, the next question is <a class="ref" href="#" title="opens its object">item 34</a>: whether to report the row-count leak upstream (fixed on our side by <a class="ref" href="#" title="opens its object">#651</a>, CI <span class="st st-green">green</span>; <a class="ref" href="#" title="opens its object">#652</a> <span class="st st-red">failed</span> on the macOS leg only). The value passed to the parser was never the problem.</p>
+  </div></div></div>
+        <div class="col strips"><div class="strip"><span>✉</span><b>Fleet move to the fleet box: pause from 06:44Z</b><span class="count">2</span><span class="dim small">1 question · 1 status</span></div></div>
+        <div class="col composer"><div class="field"><span class="caret">❯</span><span class="ph">Message project-a</span><span class="plus">+</span><span class="send">↑</span></div>
+          <div class="hints"><span><kbd>⏎</kbd> send</span><span><kbd>⇧</kbd><kbd>⏎</kbd> newline</span><span><kbd>Esc</kbd> stop</span><span><kbd>⌘</kbd><kbd>K</kbd> commands</span></div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+
+  <h2>Instrument skin, dark</h2>
+  
+<section class="shot">
+  <h3>BEFORE: centred 860 px log column</h3>
+  <div class="scaler">
+  <div class="frame dark skin-instrument before">
+    <nav class="rail"><span class="dot"></span><span></span><span></span><span></span><span></span></nav>
+    <div class="pane">
+      <header class="head">
+        <div class="crumbs"><span class="dim">project-a</span> › <b>ws/project-a-issue-triage</b></div>
+        <div class="chips"><span class="meta">✓ done · 4m ago</span><span class="chip-acct">● lane-a</span><span class="meta">org-a/project-a</span><span class="pill">Opus 5.5</span><span class="meta">coordinator · graph 15 · gated 1</span></div>
+        <div class="btns"><span class="btn">&gt;_ Terminal</span><span class="btn">⋯ More</span><span class="btn">Open PR</span></div>
+      </header>
+      <div class="chat">
+        <div class="col">
+  <div class="item user-row"><div class="msg-user">Why is the worker on run 1527 still not picking up its mail? Fix it if you can.</div><p class="receipt">08:41 ✓</p></div>
+
+  <div class="item"><div class="tool"><div class="tool-head"><span class="tool-name">Bash</span><span class="tool-sum">ps -o pid,args -u lane-a | grep -E "pgrep|until"</span><span class="tool-meta">0.2 s</span></div>
+  <pre class="well"><span class="c-muted"># the two wait loops in the worker's shell</span>
+1286235 bash -c until ! pgrep -f "mutate.py"; do sleep 30; done
+1259080 bash -c until grep -q "^done" mutants.txt &amp;&amp; ! pgrep -f "r3b/mutate.py"; do sleep 30; done</pre></div></div>
+
+  <div class="item"><div class="prose">
+    <p>The worker is fine; two of its background wait loops can never finish, because each waits on a condition that can never come true.</p>
+    <ul>
+      <li>PID 1286235 runs <code class="chip">until ! pgrep -f "mutate.py"</code>, waiting until no process matches "mutate.py". Its own command line contains "mutate.py", so <code class="chip">pgrep</code> always finds the loop itself.</li>
+      <li>PID 1259080 waits for a line in a mutants file and also has <code class="chip">! pgrep -f "r3b/mutate.py"</code> in its condition, so it is stuck the same way.</li>
+    </ul>
+    <p>While they run, the worker never goes idle, so the fleet holds its mail. Ending them doesn't touch the worker's code or branch; they are only wait loops.</p>
+    <p><strong>Why I can't do it.</strong> Killing another session's processes is an operator act under the coordinator rules, so it has to be you.</p>
+    <p><strong>What to do (either one):</strong></p>
+    <ul>
+      <li>run <code class="chip">! kill 1259080 1286235</code>; or</li>
+      <li>open tmux pane <code class="chip">cc-project-a-backup-guard</code> and stop those two background tasks from its task list.</li>
+    </ul>
+    <p><strong>What happens next.</strong> Mail 13955 delivers on the next sweep and run 1527 starts its fix round. On its wave-done I re-measure it at 5138c8420, open review 1544, and record the ruling in docs/superpowers/plans/2026-11-01-example.md before any merge.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PR</th><th>State</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>#651</td><td>Merged</td><td>the row-count fix on our side</td></tr>
+        <tr><td>#652</td><td>Failed</td><td>one leg red on the macOS runner; advisory</td></tr>
+        <tr><td>#660</td><td>Waiting</td><td>needs your answer on item 34</td></tr>
+      </tbody>
+    </table></div>
+    <p>Once that's done, the next question is item 34: whether to report the row-count leak upstream (fixed on our side by #651, CI green; #652 failed on the macOS leg only). The value passed to the parser was never the problem.</p>
+  </div></div></div>
+        <div class="col strips"><div class="strip"><span>✉</span><b>Fleet move to the fleet box: pause from 06:44Z</b><span class="count">2</span><span class="dim small">1 question · 1 status</span></div></div>
+        <div class="col composer"><div class="field"><span class="caret">❯</span><span class="ph">Message project-a</span><span class="plus">+</span><span class="send">↑</span></div>
+          <div class="hints"><span><kbd>⏎</kbd> send</span><span><kbd>⇧</kbd><kbd>⏎</kbd> newline</span><span><kbd>Esc</kbd> stop</span><span><kbd>⌘</kbd><kbd>K</kbd> commands</span></div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+  
+<section class="shot">
+  <h3>AFTER: the log takes the pane, prose at 88ch</h3>
+  <div class="scaler">
+  <div class="frame dark skin-instrument after">
+    <nav class="rail"><span class="dot"></span><span></span><span></span><span></span><span></span></nav>
+    <div class="pane">
+      <header class="head">
+        <div class="crumbs"><span class="dim">project-a</span> › <b>ws/project-a-issue-triage</b></div>
+        <div class="chips"><span class="meta">✓ done · 4m ago</span><span class="chip-acct">● lane-a</span><span class="meta">org-a/project-a</span><span class="pill">Opus 5.5</span><span class="meta">coordinator · graph 15 · gated 1</span></div>
+        <div class="btns"><span class="btn">&gt;_ Terminal</span><span class="btn">⋯ More</span><span class="btn">Open PR</span></div>
+      </header>
+      <div class="chat">
+        <div class="col">
+  <div class="item user-row"><div class="msg-user">Why is the worker on <a class="ref" href="#" title="opens its object">run 1527</a> still not picking up its mail? Fix it if you can.</div><p class="receipt">08:41 ✓</p></div>
+
+  <div class="item"><div class="tool"><div class="tool-head"><span class="tool-name">Bash</span><span class="tool-sum">ps -o pid,args -u lane-a | grep -E "pgrep|until"</span><span class="tool-meta">0.2 s</span></div>
+  <pre class="well"><span class="c-muted"># the two wait loops in the worker's shell</span>
+1286235 bash -c until ! pgrep -f "mutate.py"; do sleep 30; done
+1259080 bash -c until grep -q "^done" mutants.txt &amp;&amp; ! pgrep -f "r3b/mutate.py"; do sleep 30; done</pre></div></div>
+
+  <div class="item"><div class="prose">
+    <p>The worker is fine; two of its background wait loops can never finish, because each waits on a condition that can never come true.</p>
+    <ul>
+      <li>PID 1286235 runs <code class="chip">until ! pgrep -f "mutate.py"</code>, waiting until no process matches "mutate.py". Its own command line contains "mutate.py", so <code class="chip">pgrep</code> always finds the loop itself.</li>
+      <li>PID 1259080 waits for a line in a mutants file and also has <code class="chip">! pgrep -f "r3b/mutate.py"</code> in its condition, so it is stuck the same way.</li>
+    </ul>
+    <p>While they run, the worker never goes idle, so the fleet holds its mail. Ending them doesn't touch the worker's code or branch; they are only wait loops.</p>
+    <p><strong class="lead lead-info">Why I can't do it.</strong> Killing another session's processes is an operator act under the coordinator rules, so it has to be you.</p>
+    <p><strong class="lead lead-act">What to do (either one):</strong></p>
+    <ul class="act">
+      <li>run <code class="chip">! kill 1259080 1286235</code>; or</li>
+      <li>open tmux pane <code class="chip">cc-project-a-backup-guard</code> and stop those two background tasks from its task list.</li>
+    </ul>
+    <p><strong class="lead lead-info">What happens next.</strong> Mail 13955 delivers on the next sweep and <a class="ref" href="#" title="opens its object">run 1527</a> starts its fix round. On its wave-done I re-measure it at <a class="ref" href="#" title="opens its object">5138c8420</a>, open <a class="ref" href="#" title="opens its object">review 1544</a>, and record the ruling in <a class="ref" href="#" title="opens its object">docs/superpowers/plans/2026-11-01-example.md</a> before any merge.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>PR</th><th>State</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><a class="ref" href="#" title="opens its object">#651</a></td><td><span class="st st-merged">Merged</span></td><td>the row-count fix on our side</td></tr>
+        <tr><td><a class="ref" href="#" title="opens its object">#652</a></td><td><span class="st st-red">Failed</span></td><td>one leg red on the macOS runner; advisory</td></tr>
+        <tr><td><a class="ref" href="#" title="opens its object">#660</a></td><td><span class="st st-amber">Waiting</span></td><td>needs your answer on <a class="ref" href="#" title="opens its object">item 34</a></td></tr>
+      </tbody>
+    </table></div>
+    <p>Once that's done, the next question is <a class="ref" href="#" title="opens its object">item 34</a>: whether to report the row-count leak upstream (fixed on our side by <a class="ref" href="#" title="opens its object">#651</a>, CI <span class="st st-green">green</span>; <a class="ref" href="#" title="opens its object">#652</a> <span class="st st-red">failed</span> on the macOS leg only). The value passed to the parser was never the problem.</p>
+  </div></div></div>
+        <div class="col strips"><div class="strip"><span>✉</span><b>Fleet move to the fleet box: pause from 06:44Z</b><span class="count">2</span><span class="dim small">1 question · 1 status</span></div></div>
+        <div class="col composer"><div class="field"><span class="caret">❯</span><span class="ph">Message project-a</span><span class="plus">+</span><span class="send">↑</span></div>
+          <div class="hints"><span><kbd>⏎</kbd> send</span><span><kbd>⇧</kbd><kbd>⏎</kbd> newline</span><span><kbd>Esc</kbd> stop</span><span><kbd>⌘</kbd><kbd>K</kbd> commands</span></div></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</section>
+</main>
+</body>
+</html>

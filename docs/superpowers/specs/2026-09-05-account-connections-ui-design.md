@@ -1038,7 +1038,7 @@ Never on the account card, never on a chip, in any state. The blinking caret is 
 here: `▍` means the machine is mid-sentence, and a pane waiting on a human is not.
 
 The URL is a 52px button with its host in mono beside a copy control; the OpenAI user code is
-set at 24px with `--tracking-caps` and marked *"not a secret — shown so you can type it"*.
+set at 24px with `--tracking-caps` and marked *"Don't share it"* (amended by the 2026-10-18 spec's §7.2 step 5).
 Both are the two-app moments of this whole feature, so both clear 44px with room to spare.
 Every terminal state says what did *not* happen: expired reads *"the sign-in expired; no
 credential file was written"*; cancelled reads *"the pane was closed; nothing was stored —

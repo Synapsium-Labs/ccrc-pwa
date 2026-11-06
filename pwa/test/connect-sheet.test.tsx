@@ -302,6 +302,8 @@ describe('Name it (spec §5)', () => {
     // The step-up lapses before the operator chooses.
     rerender({ connect: { ...FRESH(), stepUpFreshUntil: Date.now() - 1 } });
     fireEvent.click(use);
+    // A token lane is asked for its token. A ChatGPT lane says its own line (`chatgpt-sheet.test.tsx`).
+    expect(screen.getByTestId('connect-status')).toHaveTextContent("Using what's there: paste the token");
     // Back at the method frame: Confirm it's you before the add, and the add waits for it.
     paste();
     await screen.findByRole('button', { name: 'Confirm with passphrase' });

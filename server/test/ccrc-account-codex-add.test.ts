@@ -43,7 +43,6 @@ async function codexBox(prefix: string, opts: { roster?: unknown; runtime?: bool
   homes.push(home);
   plantCodexBins(home);
   if (opts.runtime !== false) plantFakeRuntime(home);
-  symlinkSync(join(REPO, 'ccd', 'ccrc-models-probe'), join(home, 'ccrc', 'ccd', 'ccrc-models-probe'));
   return { home, base: String(await freePort()) };
 }
 
@@ -219,6 +218,16 @@ describe('remove and the lane\'s sign-in folder (spec §11 step 4; G20, Q11)', (
     expect(a['removed']).toContain(authDir);
     expect(a['kept']).not.toContain(authDir);
     expect(a['atProvider']).toEqual([{ kind: 'codex', state: 'still-valid', revokeAt: 'chatgpt-settings' }]);
+  }, 60_000);
+
+  it('the sheet\'s line turned off keeps the authDir, and the ledger says so', async () => {
+    const { home, authDir } = await signedInLane('ccrc-codex-remove-ui-keep-');
+    const r = ccrcAuth(home, uiArgv('lane-g', { mode: 'remove', keepCodexAuth: 'true' }), '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(existsSync(authDir), 'the sign-in folder').toBe(true);
+    const a = answerOf(r);
+    expect(a['kept']).toContain(authDir);
+    expect(a['removed']).not.toContain(authDir);
   }, 60_000);
 
   it.each([['remove'], ['discard']])('a lane nobody signed in lists nothing at the provider: --mode %s', async (mode) => {

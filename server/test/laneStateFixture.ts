@@ -6,7 +6,7 @@
 // `$HOME`, and no fixture holds a real-shaped secret: the credential is a fixed canary string.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -85,7 +85,7 @@ export function laneBox(prefix: string, roster: unknown = FIXTURE_ROSTER): strin
   const home = mkTmp(prefix);
   const ccd = join(home, 'ccrc', 'ccd');
   mkdirSync(ccd, { recursive: true });
-  for (const f of ['ccrc', 'ccrc-wrapper-shape', 'ccrc-doctor-checks', 'ccd-account-health']) {
+  for (const f of ['ccrc', 'ccrc-wrapper-shape', 'ccrc-doctor-checks', 'ccd-account-health', 'ccrc-models-probe']) {
     symlinkSync(join(REPO, 'ccd', f), join(ccd, f));
   }
   symlinkSync(join(REPO, 'deploy'), join(home, 'ccrc', 'deploy'));
@@ -116,6 +116,31 @@ export function ccrcRun(home: string, args: string[], stdin = '', extraEnv: Node
   const r = spawnSync(BASH, ['-c', 'umask 022; exec "$@"', '_', BASH, ccrcIn(home), ...args],
     { env: { ...boxEnv(home), ...extraEnv }, encoding: 'utf8', input: stdin });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** `home`'s `account-op.mjs` with ONE op cut out of it: that op answers as an older `main` answers an op it does not
+ *  have, a `usage:` line on stderr, nothing on stdout and exit 2, and every other op is delegated to the real file. This
+ *  is the half-updated box D-2051 was measured on, written as a shadow of one op rather than a copy of an old file, so
+ *  it goes on measuring that seam as the real file grows ops. */
+export function shadowAccountOp(home: string, missingOp: string): void {
+  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
+  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+  // AND THE REST OF `deploy/` IS STILL THERE. A box with one stale file is what this stands in for; a box MISSING
+  // `gen-accounts.mjs` is a different one, and it refuses at `accounts-sh` long before the op under test.
+  for (const f of readdirSync(join(REPO, 'deploy'))) {
+    if (f === 'account-op.mjs') continue;
+    symlinkSync(join(REPO, 'deploy', f), join(home, 'ccrc', 'deploy', f));
+  }
+  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
+    `if (process.argv[2] === ${JSON.stringify(missingOp)}) {`,
+    '  process.stderr.write("usage: node deploy/account-op.mjs <refuse|providers|roster'
+      + '|candidates|check-add> [--<key> <value>]\\u2026\\n");',
+    '  process.exitCode = 2;',
+    '} else {',
+    `  await import(${JSON.stringify(ACCOUNT_OP)});`,
+    '}',
+    '',
+  ].join('\n'));
 }
 
 /** The same, spawned in its own process group so a case can signal the whole group as the agent does. */

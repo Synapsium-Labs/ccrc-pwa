@@ -71,10 +71,10 @@ const FIXTURE: AppFixture = (() => {
 })();
 
 /** Review 1466 F18: the widest counts the bar prints, "99+" on Waiting on you and on Runs (120 open items, 120 runs whose
- *  worker asks the operator), and one on the Inbox. */
+ *  coordinator asks the operator: a session binds one run, D-8049), and one on the Inbox. */
 const FIXTURE_99: AppFixture = (() => {
   const asking = { ...(session('ask-1', 'child') as Record<string, unknown>), status: 'waiting', bucket: 'attention' };
-  const many = Array.from({ length: 120 }, (_, i) => run(1000 + i, 'prog-a', 'Programme A', 'prog-a-coord', 'ask-1'));
+  const many = Array.from({ length: 120 }, (_, i) => run(1000 + i, 'prog-a', 'Programme A', 'ask-1', 'ask-1'));
   const waiting = { items: Array.from({ length: 120 }, (_, i) => item(10 + i, {})), cleared: [], goals: [GOALS] };
   return {
     api: { ...FIXTURE.api, '/api/runs': many, '/api/waiting': { ok: true, waiting } },
