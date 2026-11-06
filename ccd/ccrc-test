@@ -531,7 +531,7 @@ _tinert() {   # <string with its marks> <1 when a pipe is on it> -> 0 when no co
     case "${TW[0]}" in
       # An empty word is the rest of an argument after a closing `"$(…)"`: `_tsegments` opens a new line there.
       ''|cat|tee|gh|git|node|python|python3|jq|sed|awk|grep|rg|head|tail|wc|sort|uniq|tr|cut|base64|curl|ccrc-api \
-        |echo|printf|read|cd|pwd|ls|mkdir|rmdir|touch|rm|cp|mv|ln|chmod|mktemp|sleep|date|export|unset|set \
+        |echo|printf|read|cd|pwd|ls|mkdir|rmdir|touch|rm|cp|mv|ln|chmod|sleep|date|export|unset|set \
         |test|'['|'[['|:|true|false|fi|done) ;;
       npx|bunx|pnpx|npm|pnpm|yarn|bun|vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker|ccrc|ccrc-test)
         [ "$strict$marked" = 00 ] || return 1 ;;
