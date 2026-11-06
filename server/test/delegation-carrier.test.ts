@@ -2,7 +2,8 @@
 // Every row is pure: a checkpoint, the carriers the lane read back, and the lane's memory in; steps and health out.
 import { describe, it, expect } from 'vitest';
 import {
-  DELEGATION_CARRIER_MARKS_PER_PASS, carrierMarkArgs, delegationCarrierCensusRow, parseDelegationCarrier, planCarrierSteps,
+  DELEGATION_CARRIER_MARKS_PER_PASS, DELEGATION_CARRIER_REFUSAL_RETRY_PASSES, DELEGATION_CARRIER_REVERIFY_PER_PASS, carrierMarkArgs,
+  carrierReadsOf, delegationCarrierCensusRow, parseDelegationCarrier, planCarrierSteps,
   type CarrierReadBack, type DelegationCarrierBody, type StandingMarkRefusal,
 } from '../src/coord/delegation-carrier.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
@@ -11,11 +12,11 @@ import { checkpointWithLease, leaseRow } from './delegationLeaseFixture.js';
 
 const NOW = Date.parse('2026-11-10T12:00:00Z');
 const INC = '11111111-2222-4333-8444-555555555555';
-const none = (): { refused: Map<string, StandingMarkRefusal>; censusRow: Map<string, string>; indexed: Set<string> } =>
-  ({ refused: new Map(), censusRow: new Map(), indexed: new Set<string>() });
+const none = (): { refused: Map<string, StandingMarkRefusal>; censusRow: Map<string, string>; indexed: Set<string>; deferred: Set<string> } =>
+  ({ refused: new Map(), censusRow: new Map(), indexed: new Set<string>(), deferred: new Set<string>() });
 type PlanInput = Parameters<typeof planCarrierSteps>[0];
 const plan = (checkpoint: DelegationCheckpointV1, over: Partial<PlanInput> = {}) =>
-  planCarrierSteps({ checkpoint, readBack: new Map(), supported: true, nowMs: NOW, ...none(), ...over });
+  planCarrierSteps({ checkpoint, readBack: new Map(), supported: true, lockSupported: true, nowMs: NOW, pass: 1, ...none(), ...over });
 
 /** The carrier the box would hold for `lease` at its own generation, state and sequence (the verb's body, `markedAt` included). */
 const bodyOf = (lease: DelegationLeaseRow, over: Partial<DelegationCarrierBody> = {}): DelegationCarrierBody => ({
@@ -52,6 +53,9 @@ describe('planCarrierSteps', () => {
     const b = plan(behind, { supported: false, readBack: new Map([[behind.leases[0]!.leaseId, { kind: 'absent' }]]) });
     expect(b.steps).toEqual([]);
     expect(b.health).toMatchObject({ unsupported: 1, marked: 0, pending: 0 });
+    // review 1546 F13: every lease the planner would step on but cannot counts, a released one included
+    const gone = checkpointWithLease({ generation: 2, carrierGenerationSeen: 1, releasedAt: '2026-11-10T00:00:00.000Z' });
+    expect(plan(gone, { supported: false }).health).toMatchObject({ unsupported: 1 });
   });
 
   it('W5-K3: a carrier behind the journal is re-marked at the journal generation; an equal one is seen', () => {
@@ -76,11 +80,7 @@ describe('planCarrierSteps', () => {
     const lease = cp.leases[0]!;
     const rb = new Map([[lease.leaseId, carrier(bodyOf(lease))]]);
     expect(plan(cp, { readBack: rb }).steps).toEqual([{ kind: 'seen', leaseId: lease.leaseId, generation: 1 }]);
-    // the seen applied as PR5b's `noteCarrierSeen` folds it: the generation and `currentJournalSequence` stay (D-7851)
-    const after: DelegationCheckpointV1 = { ...cp, leases: [{ ...lease, carrierGenerationSeen: 1 }] };
-    const second = plan(after, { readBack: rb });
-    expect(second.steps).toEqual([]);
-    expect(second.health).toMatchObject({ marked: 1, mismatched: 0 });
+    // the second pass, after the seen applied through PR5b's door, is `delegation-carrier-lane.test.ts`'s W5-K4 (review 1546 F5)
   });
 
   it('W5-K5: a carrier ahead of the journal, or naming a sequence the checkpoint does not hold, is mismatched and never marked', () => {
@@ -133,7 +133,7 @@ describe('planCarrierSteps', () => {
     const cp: DelegationCheckpointV1 = { ...locked, leases: [...locked.leases, fresh] };
     const absent = new Map<string, CarrierReadBack>(locked.leases.map((l) => [l.leaseId, { kind: 'absent' }]));
     const censusRow = new Map(locked.leases.map((l) => [delegationTreeKey(l.project, l.adminRecord), 'row-locked']));
-    const refused = new Map<string, StandingMarkRefusal>(locked.leases.map((l) => [l.leaseId, { generation: 1, censusRow: 'row-locked', word: 'locked' }]));
+    const refused = new Map<string, StandingMarkRefusal>(locked.leases.map((l) => [l.leaseId, { generation: 1, censusRow: 'row-locked', word: 'locked', pass: 1 }]));
     const first = plan(cp, { readBack: absent, censusRow, refused });
     expect(first.steps).toEqual([{ kind: 'mint', leaseId: fresh.leaseId, expectGeneration: 0 }]);
     expect(first.health.refused).toBe(9);
@@ -172,8 +172,12 @@ describe('planCarrierSteps', () => {
     const rb = new Map<string, CarrierReadBack>([[id, { kind: 'absent' }]]);
     expect(plan(cp, { readBack: rb, indexed: new Set([id]) }).steps)
       .toMatchObject([{ kind: 'mark', args: { leaseId: id, generation: 2, state: 'released', releaseReason: 'native-removed' } }]);
-    expect(plan(cp, { readBack: rb, indexed: 'unmeasured' }).steps).toEqual([]);
-    expect(plan(cp, { readBack: rb, indexed: new Set() }).steps).toEqual([]);
+    const unmeasured = plan(cp, { readBack: rb, indexed: 'unmeasured' });
+    expect(unmeasured.steps).toEqual([]);
+    expect(unmeasured.health, 'review 1546 F10: an unmeasured index counts the lease unmeasured').toMatchObject({ unmeasured: 1 });
+    const none = plan(cp, { readBack: rb, indexed: new Set() });
+    expect(none.steps).toEqual([]);
+    expect(none.health.unmeasured).toBe(0);
   });
 
   it('W5-K10: an unowned carrier counts unowned, and a released unowned one does not', () => {
@@ -181,6 +185,78 @@ describe('planCarrierSteps', () => {
     const stray = bodyOf(leaseRow({ leaseId: '99999999-0000-4000-8000-000000000009', generation: 1 }));
     expect(plan(cp, { readBack: new Map([[stray.leaseId, carrier(stray)]]) }).health.unowned).toBe(1);
     expect(plan(cp, { readBack: new Map([[stray.leaseId, carrier({ ...stray, state: 'released', releaseReason: 'foreign' })]]) }).health.unowned).toBe(0);
+  });
+
+  it('D-8036 (review 1546 F6a): an unowned carrier that cannot be read counts unmeasured, never unowned', () => {
+    const cp = checkpointWithLease({ generation: 1, carrierGenerationSeen: 1 });
+    for (const rb of [{ kind: 'unreadable', detail: 'EACCES' }, { kind: 'malformed', detail: 'not JSON' }] as const) {
+      expect(plan(cp, { readBack: new Map([['99999999-0000-4000-8000-000000000009', rb]]) }).health).toMatchObject({ unmeasured: 1, unowned: 0 });
+    }
+  });
+
+  it('D-8034 (review 1546 F1): every lease behind is read, and up to eight up-to-date unreleased ones, least recently read first', () => {
+    const cp = many(10, () => ({ generation: 1, carrierGenerationSeen: 1 }));
+    const ids = cp.leases.map((l) => l.leaseId);
+    expect(DELEGATION_CARRIER_REVERIFY_PER_PASS).toBe(8);
+    const first = carrierReadsOf(cp, new Map());
+    expect(first).toEqual({ behind: [], reverify: ids.slice(0, 8) });
+    const second = carrierReadsOf(cp, new Map(ids.slice(0, 8).map((id) => [id, 1])));
+    expect(second.reverify.slice(0, 2), 'the two left over go first').toEqual(ids.slice(8));
+    expect(second.reverify).toHaveLength(8);
+    const mixed: DelegationCheckpointV1 = { ...cp, leases: [{ ...cp.leases[0]!, generation: 2 }, { ...cp.leases[1]!, releasedAt: '2026-11-10T00:00:00.000Z' },
+      ...cp.leases.slice(2)] };
+    const m = carrierReadsOf(mixed, new Map());
+    expect(m.behind, 'behind is read whatever the bound').toEqual([ids[0]]);
+    expect(m.reverify, 'a released up-to-date lease is not read again').not.toContain(ids[1]);
+  });
+
+  it('D-8034 (review 1546 F1): a re-read up-to-date carrier that changed is mismatched, and one that is gone is marked again', () => {
+    const cp = checkpointWithLease({ generation: 1, currentJournalSequence: 9, carrierGenerationSeen: 1 });
+    const lease = cp.leases[0]!;
+    for (const body of [bodyOf(lease, { generation: 2 }), bodyOf(lease, { journalSeq: 8 })]) {
+      const r = plan(cp, { readBack: new Map([[lease.leaseId, carrier(body)]]) });
+      expect(r.steps).toEqual([]);
+      expect(r.health).toMatchObject({ mismatched: 1, marked: 0 });
+    }
+    expect(plan(cp, { readBack: new Map([[lease.leaseId, { kind: 'absent' }]]) }).steps)
+      .toMatchObject([{ kind: 'mark', args: { leaseId: lease.leaseId, generation: 1, state: 'ephemeral' } }]);
+    expect(plan(cp, { readBack: new Map([[lease.leaseId, carrier(bodyOf(lease))]]) })).toMatchObject({ steps: [], health: { marked: 1 } });
+  });
+
+  it('D-8037 (review 1546 F2): without the orphan lock, a mark of a state that holds a tree is not composed and counts unsupported', () => {
+    const held = checkpointWithLease({ generation: 2, disposition: 'retained', cleanupDueAt: '2026-11-17T12:00:00.000Z', carrierGenerationSeen: 1 });
+    const eph = checkpointWithLease({ generation: 1 });
+    const absent = (cp: DelegationCheckpointV1) => new Map<string, CarrierReadBack>([[cp.leases[0]!.leaseId, { kind: 'absent' }]]);
+    const r = plan(held, { readBack: absent(held), lockSupported: false });
+    expect(r.steps).toEqual([]);
+    expect(r.health).toMatchObject({ unsupported: 1, pending: 0 });
+    expect(plan(eph, { readBack: absent(eph), lockSupported: false }).steps).toMatchObject([{ kind: 'mark', args: { state: 'ephemeral' } }]);
+    expect(plan(held, { readBack: absent(held), lockSupported: true }).steps).toMatchObject([{ kind: 'mark', args: { state: 'retained' } }]);
+  });
+
+  it('D-8039 (review 1546 F3): a standing refusal ends after thirty passes, whatever the census row says', () => {
+    const cp = checkpointWithLease({ generation: 1 });
+    const lease = cp.leases[0]!;
+    const key = delegationTreeKey(lease.project, lease.adminRecord);
+    expect(DELEGATION_CARRIER_REFUSAL_RETRY_PASSES).toBe(30);
+    for (const word of ['nested', 'tree-held'] as const) {
+      const refused = new Map<string, StandingMarkRefusal>([[lease.leaseId, { generation: 1, censusRow: 'row', word, pass: 5 }]]);
+      const at = (pass: number) => plan(cp, { readBack: new Map([[lease.leaseId, { kind: 'absent' }]]), censusRow: new Map([[key, 'row']]), refused, pass });
+      expect(at(34)).toMatchObject({ steps: [], health: { refused: 1 } });
+      expect(at(35).steps, `${word}: composed again at the bound`).toMatchObject([{ kind: 'mark', args: { leaseId: lease.leaseId } }]);
+    }
+  });
+
+  it('D-8039 (review 1546 F4): a lease whose last mark answered unmeasured takes the budget after every other, oldest first in each group', () => {
+    const cp = many(10, (i) => ({ generation: i < 9 ? 1 : 0 }));
+    const ids = cp.leases.map((l) => l.leaseId);
+    const absent = new Map<string, CarrierReadBack>(ids.slice(0, 9).map((id) => [id, { kind: 'absent' }]));
+    const r = plan(cp, { readBack: absent, deferred: new Set(ids.slice(0, 9)) });
+    const named = r.steps.map((s) => (s.kind === 'mark' ? s.args.leaseId : s.leaseId));
+    expect(named, 'the new lease is minted first, then seven of the nine').toEqual([ids[9], ...ids.slice(0, 7)]);
+    expect(r.health.pending).toBe(2);
+    expect(plan(cp, { readBack: absent }).steps.map((s) => (s.kind === 'mark' ? s.args.leaseId : s.leaseId)), 'none deferred: oldest first')
+      .toEqual(ids.slice(0, 8));
   });
 
   it('the census row says the tree state, head, lock and the registry workdirs at or inside it, and nothing else', () => {
@@ -211,6 +287,10 @@ describe('parseDelegationCarrier', () => {
   const good = bodyOf(leaseRow({ generation: 1 }));
   it('reads the verb\'s own body', () => {
     expect(parseDelegationCarrier(`${JSON.stringify(good)}\n`)).toEqual({ kind: 'carrier', body: good });
+    expect(parseDelegationCarrier(`${JSON.stringify(good)}\n`, good.leaseId)).toEqual({ kind: 'carrier', body: good });
+  });
+  it('review 1546 F8: a body whose leaseId is not the lease its file is named for is malformed', () => {
+    expect(parseDelegationCarrier(JSON.stringify(good), '99999999-0000-4000-8000-000000000009')).toMatchObject({ kind: 'malformed' });
   });
   it('W5-K9: a missing key, an extra key, generation 0, a state outside the vocabulary and a body over 16384 bytes are malformed', () => {
     const { markedAt: _m, ...missing } = good;

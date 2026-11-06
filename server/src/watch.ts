@@ -10942,14 +10942,14 @@ class DelegationLane {
           const cs = durable.state();
           if (cs.phase === 'ready' && !pass.signal.aborted) {
             const d = { io: this.deps.io, registryDir: this.deps.cfg.registryDir, signal: pass.signal, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, durable, nowMs: () => Date.now() };
-            const { steps, censusRow } = await planCarrierPass(d, cs.checkpoint as DelegationCheckpointV1, this.carrierMemory, { supported: ccdCan(this.deps.fleetState, 'leaseMark'),
+            const { steps, censusRow } = await planCarrierPass(d, cs.checkpoint as DelegationCheckpointV1, this.carrierMemory, { fleetState: this.deps.fleetState,
               nowMs: pass.now, census: flat, workdirs: pass.records.flatMap((r) => (typeof r.workdir === 'string' ? [r.workdir] : [])) });
             for (const step of steps) {
               const now = durable.state();
               if (pass.signal.aborted || now.phase !== 'ready') break;
               if (step.kind !== 'mark') { await applyCarrierJournalStep(durable, step, Date.now()); continue; }
               const lease = now.checkpoint.leases.find((l) => l.leaseId === step.args.leaseId);
-              if (lease !== undefined) noteCarrierMark(this.carrierMemory, lease, await markLeaseCarrier(d, lease, now.checkpoint as DelegationCheckpointV1), censusRow);
+              if (lease !== undefined) noteCarrierMark(this.carrierMemory, lease, await markLeaseCarrier(d, lease, now.checkpoint as DelegationCheckpointV1, step.args), censusRow);
             }
           }
         } catch (err) { console.warn(`ccrc-server: delegation lease acts failed: ${err instanceof Error ? err.message : String(err)}`); } finally { endActs(); }

@@ -3,7 +3,7 @@
 // describes, as the box would), or runs the REAL `cmd_ws_lease_mark` on a fixture box (`makeCcdHarness`). Every home is a fixture:
 // nothing reads or writes the live `~/.ccrc` or `~/.cc-sessions`.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -12,20 +12,23 @@ import { localIO } from '../src/io.js';
 import { FleetWatcher, DELEGATION_SWEEP_MS } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { LEASE_MARK_CAP } from '../src/ccdargv.js';
+import { LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/coord/ports.js';
-import { DELEGATION_CHECKPOINT_FILE, decodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, DelegationDurability, decodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
 import {
-  DELEGATION_EVENTS_CAP, formatDelegationInstant, type DelegationCensusRecord, type DelegationLeaseRow,
+  DELEGATION_EVENTS_CAP, formatDelegationInstant, type DelegationCensusRecord, type DelegationCheckpointV1, type DelegationLeaseRow,
 } from '../src/coord/delegation-model.js';
 import type { DelegationCensusPass } from '../src/coord/gitref.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import * as F from './leaseFixture.js';
-import { markLeaseCarrier } from '../src/coord/delegationCarrierMark.js';
-import { checkpointWithLease } from './delegationLeaseFixture.js';
+import { emptyCarrierLaneMemory, markLeaseCarrier, planCarrierPass } from '../src/coord/delegationCarrierMark.js';
+import {
+  DELEGATION_CARRIER_REFUSAL_RETRY_PASSES, planCarrierSteps, type DelegationCarrierBody, type StandingMarkRefusal,
+} from '../src/coord/delegation-carrier.js';
+import { checkpointWithLease, leaseRow } from './delegationLeaseFixture.js';
 
 const NOW = Date.UTC(2026, 9, 15, 10, 30, 0);
 const INC = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -36,8 +39,17 @@ const at = (n: number): number => NOW + n * DELEGATION_SWEEP_MS;
 const iso = (ms: number): string => formatDelegationInstant(ms);
 
 type Answer = (argv: readonly string[]) => CcdResult | Promise<CcdResult>;
+/** A FleetIO whose two measured reads are counted (review 1546 F6c): `dir <path>` and `file <path>`, under the leases directory only. */
+const countingIO = (): { io: typeof localIO; reads: string[] } => {
+  const reads: string[] = [];
+  const io = Object.create(localIO) as typeof localIO;
+  const note = (kind: string, p: string): void => { if (p.includes('/delegation/leases')) reads.push(`${kind} ${p}`); };
+  io.readFileMeasured = ((...a: Parameters<typeof localIO.readFileMeasured>) => { note('file', a[0]); return localIO.readFileMeasured(...a); }) as typeof localIO.readFileMeasured;
+  io.readdirMeasured = ((...a: Parameters<typeof localIO.readdirMeasured>) => { note('dir', a[0]); return localIO.readdirMeasured(...a); }) as typeof localIO.readdirMeasured;
+  return { io, reads };
+};
 interface World {
-  home: string; registryDir: string; watcher: FleetWatcher; argvs: string[][]; answer: Answer;
+  home: string; registryDir: string; watcher: FleetWatcher; argvs: string[][]; answer: Answer; reads: string[];
   fleet: { connected: boolean; downSince: null; ccdVerbs: string[] | null };
 }
 const worlds: World[] = [];
@@ -89,10 +101,12 @@ function world(opts: { home?: string; ccdVerbs?: string[] | null } = {}): World 
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: path.join(home, 'projects') } as never);
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-  const fleet = { connected: true, downSince: null, ccdVerbs: opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP, LEASE_MARK_CAP] : opts.ccdVerbs };
-  const made = { home, registryDir: cfg.registryDir, argvs: [] as string[][], answer: written as Answer, fleet } as Omit<World, 'watcher'> as World;
+  const fleet = { connected: true, downSince: null,
+    ccdVerbs: opts.ccdVerbs === undefined ? ['caps', DELEGATION_EVENTS_CAP, LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP] : opts.ccdVerbs };
+  const { io, reads } = countingIO();
+  const made = { home, registryDir: cfg.registryDir, argvs: [] as string[][], answer: written as Answer, fleet, reads } as Omit<World, 'watcher'> as World;
   const runCcd = async (argv: readonly string[]): Promise<CcdResult> => { made.argvs.push([...argv]); return made.answer(argv); };
-  const deps = { ...testDeps(home), monotonicMs: () => Date.now(), cfg, io: localIO, coord, fleetState: fleet, runCcd };
+  const deps = { ...testDeps(home), monotonicMs: () => Date.now(), cfg, io, coord, fleetState: fleet, runCcd };
   made.watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
   worlds.push(made);
   return made;
@@ -144,6 +158,33 @@ const leasesOf = (w: World): DelegationLeaseRow[] => {
   return existsSync(cp) ? [...decodeDelegationCheckpoint(new Uint8Array(readFileSync(cp))).leases] : [];
 };
 const journal = (w: World): string => readFileSync(path.join(w.home, '.ccrc', DELEGATION_JOURNAL_FILE), 'utf8');
+const laneOf = (w: World): Record<string, unknown> => (w.watcher as unknown as { delegationLane(): Record<string, unknown> }).delegationLane();
+/** Aborts the lane's running pass, as its budget would, and answers the work promises to await (review 1546 F6b). */
+const cutPass = (w: World): Promise<unknown>[] => {
+  const running = laneOf(w)['running'] as Map<AbortController, Promise<unknown>>;
+  const works = [...running.values()];
+  for (const ac of running.keys()) ac.abort();
+  return works;
+};
+const memoryOf = (w: World): { pass: number; refused: Map<string, StandingMarkRefusal> } =>
+  laneOf(w)['carrierMemory'] as { pass: number; refused: Map<string, StandingMarkRefusal> };
+/** A further lease on `adminRecord`, created through the applier as the lane would (the K13b rows). */
+const maker = (w: World, first: DelegationLeaseRow) => async (adminRecord: string, n: number): Promise<string> => {
+  const applier = (await w.watcher.delegationApplier())!;
+  const out = await applier.createLease({ activityId: first.activityId, parentId: 'demo-a', parentIncarnation: INC, project: 'demo', adminRecord,
+    canonicalPath: `/w/demo/.claude/worktrees/${adminRecord}`, creationBase: null, sourceKind: 'raw', correlationJournalIds: [], firstObservedAt: iso(at(2) + n) });
+  expect(out.kind).toBe('created');
+  return (out as { leaseId: string }).leaseId;
+};
+const recordOf = (argv: readonly string[]): string => Buffer.from(flagsOf(argv)['admin-record-hex']!, 'hex').toString();
+const refuse = (word: string): CcdResult => ok(`${JSON.stringify({ ok: false, refusal: word, detail: `a fixture ${word}` })}\n`, 1);
+/** The carrier body the box would hold for `lease` at its own generation, state and sequence. */
+const bodyFor = (lease: DelegationLeaseRow, over: Partial<DelegationCarrierBody> = {}): DelegationCarrierBody => ({
+  v: 1, leaseId: lease.leaseId, generation: lease.generation, state: lease.releasedAt !== null ? 'released' : lease.disposition,
+  journalSeq: lease.currentJournalSequence, parentId: lease.parentId, parentIncarnation: lease.parentIncarnation, activityId: lease.activityId,
+  source: lease.sourceKind, project: lease.project, adminRecord: lease.adminRecord, canonicalPath: lease.canonicalPath, fingerprint: 'f'.repeat(64),
+  claudeBase: null, branch: null, expiresAt: null, releaseReason: null, promotedRun: null, promotedSession: null, markedAt: NOW, ...over,
+});
 /** Three census passes: the raw tree is linked and leased (generation 0) at the third, and its carrier is minted in the same pass. */
 async function linked(w: World, recs: DelegationCensusRecord[] = [OLD, RAW]): Promise<DelegationLeaseRow> {
   for (const n of [0, 1, 2]) await censusPass(w, at(n), recs);
@@ -230,12 +271,7 @@ describe('PR6: the lane marks carriers, reads them back, and counts what it cann
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const first = await linked(w, recs);
     const applier = (await w.watcher.delegationApplier())!;
-    const make = async (adminRecord: string, n: number): Promise<string> => {
-      const out = await applier.createLease({ activityId: first.activityId, parentId: 'demo-a', parentIncarnation: INC, project: 'demo', adminRecord,
-        canonicalPath: `/w/demo/.claude/worktrees/${adminRecord}`, creationBase: null, sourceKind: 'raw', correlationJournalIds: [], firstObservedAt: iso(at(2) + n) });
-      expect(out.kind).toBe('created');
-      return (out as { leaseId: string }).leaseId;
-    };
+    const make = maker(w, first);
     const locked: string[] = [];
     for (let i = 0; i < 9; i++) locked.push(await make(`locked-${i}`, i));
     for (let i = 0; i < 9; i++) {
@@ -262,6 +298,181 @@ describe('PR6: the lane marks carriers, reads them back, and counts what it cann
   }, ROW_MS);
 });
 
+describe('PR6 fix round 1 (review 1546): the lane re-reads, bounds and orders', () => {
+  it('W5-K4: the seen applied through PR5b\'s door moves neither the generation nor the sequence, so the next plan counts it marked', async () => {
+    const w = await rawTreeWorld();
+    const lease = await linked(w);
+    const applier = (await w.watcher.delegationApplier())!;
+    const rb = new Map([[lease.leaseId, { kind: 'carrier' as const, body: bodyFor(lease) }]]);
+    const planOf = () => planCarrierSteps({ checkpoint: applier.state().checkpoint as DelegationCheckpointV1, readBack: rb, supported: true,
+      lockSupported: true, nowMs: NOW, pass: 1, refused: new Map(), censusRow: new Map(), indexed: new Set(), deferred: new Set() });
+    expect(planOf().steps).toEqual([{ kind: 'seen', leaseId: lease.leaseId, generation: 1 }]);
+    expect((await applier.noteCarrierSeen({ leaseId: lease.leaseId, generation: 1, at: iso(at(3)) })).kind).toBe('applied');
+    const second = planOf();
+    expect(second.steps).toEqual([]);
+    expect(second.health).toMatchObject({ marked: 1, mismatched: 0 });
+  }, ROW_MS);
+
+  it('D-8034 (F1): an up-to-date carrier changed out of band counts mismatched, and one removed is marked again', async () => {
+    const w = await rawTreeWorld();
+    const lease = await linked(w);
+    await censusPass(w, at(3));
+    const f = marks(w)[0]!;
+    writeCarrier(w, f);
+    await censusPass(w, at(4));
+    expect(leasesOf(w)[0]!.carrierGenerationSeen).toBe(1);
+    for (const [n, over] of [[5, { generation: '2' }], [6, { 'journal-seq': '999' }]] as const) {
+      writeCarrier(w, { ...f, ...over });
+      await censusPass(w, at(n));
+      expect(w.watcher.currentDelegationHealth()?.carriers, `pass ${n}`).toMatchObject({ mismatched: 1, marked: 0 });
+      expect(marks(w), 'a mismatched carrier is never overwritten').toHaveLength(1);
+    }
+    rmSync(path.join(w.registryDir, 'delegation', 'leases', `${lease.leaseId}.json`));
+    await censusPass(w, at(7));
+    expect(marks(w).slice(1)).toEqual([expect.objectContaining({ lease: lease.leaseId, generation: '1', state: 'ephemeral' })]);
+  }, ROW_MS);
+
+  it('F5: a verb that answers written while the carrier it left is ahead journals no seen, and the next pass counts it mismatched', async () => {
+    const w = await rawTreeWorld();
+    w.answer = (argv) => { writeCarrier(w, { ...flagsOf(argv), generation: String(Number(flagsOf(argv).generation) + 1) }); return written(argv); };
+    await linked(w);
+    await censusPass(w, at(3));
+    expect(marks(w)).toHaveLength(1);
+    expect(journal(w)).not.toContain('"kind":"lease-carrier-seen"');
+    expect(leasesOf(w)[0]!.carrierGenerationSeen).toBeNull();
+    await censusPass(w, at(4));
+    expect(marks(w)).toHaveLength(1);
+    expect(w.watcher.currentDelegationHealth()?.carriers).toMatchObject({ mismatched: 1 });
+  }, ROW_MS);
+
+  it('D-8039 (F3): a nested or tree-held refusal the census row cannot see is composed again after thirty passes', async () => {
+    for (const word of ['nested', 'tree-held']) {
+      const w = await rawTreeWorld();
+      let refusing = true;                                            // a containing workdir, or another lease's carrier, holds the tree
+      w.answer = (argv) => { if (refusing) return refuse(word); writeCarrier(w, flagsOf(argv)); return written(argv); };
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const lease = await linked(w);
+      await censusPass(w, at(3));
+      await censusPass(w, at(4));
+      expect(marks(w), `${word}: standing`).toHaveLength(1);
+      refusing = false;                                               // the cause is gone, and nothing in the census row says so
+      const memory = memoryOf(w);
+      const recorded = memory.refused.get(lease.leaseId)!.pass;
+      memory.pass = recorded + DELEGATION_CARRIER_REFUSAL_RETRY_PASSES - 2;
+      await censusPass(w, at(5));
+      expect(marks(w), `${word}: still standing at pass 29`).toHaveLength(1);
+      await censusPass(w, at(6));
+      expect(marks(w), `${word}: composed again at pass 30`).toHaveLength(2);
+      await censusPass(w, at(7));
+      expect(leasesOf(w)[0]!.carrierGenerationSeen, word).toBe(1);
+    }
+  }, 2 * ROW_MS);
+
+  it('D-8039 (F4): nine leases that answer unmeasured every pass never hold a new lease out of its carrier', async () => {
+    const recs = [OLD, RAW, ...Array.from({ length: 9 }, (_, i) => record(`unm-${i}`))];
+    const w = await rawTreeWorld();
+    w.answer = (argv) => { if (recordOf(argv).startsWith('unm-')) return refuse('unmeasured'); writeCarrier(w, flagsOf(argv)); return written(argv); };
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const make = maker(w, await linked(w, recs));
+    const unm: string[] = [];
+    for (let i = 0; i < 9; i++) unm.push(await make(`unm-${i}`, i));
+    for (let n = 3; n < 7; n++) await censusPass(w, at(n), recs);
+    expect(new Set(marks(w).map((f) => f.lease!).filter((id) => unm.includes(id))), 'each of the nine was composed and answered unmeasured').toEqual(new Set(unm));
+    const before = marks(w).length;
+    const fresh = await make('fresh-tree', 40);
+    const all = [...recs, record('fresh-tree')];
+    await censusPass(w, at(7), all);
+    expect(leasesOf(w).find((l) => l.leaseId === fresh)!.generation, 'minted in the first pass').toBe(1);
+    await censusPass(w, at(8), all);
+    expect(marks(w).slice(before).map((f) => f.lease), 'marked in the second').toContain(fresh);
+    await censusPass(w, at(9), all);
+    expect(leasesOf(w).find((l) => l.leaseId === fresh)!.carrierGenerationSeen, 'seen in the third').toBe(1);
+  }, ROW_MS);
+
+  it('F10: a mark that did not run keeps its lease measured against the by-tree entries, so an entry written late is healed', async () => {
+    const w = await rawTreeWorld();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    w.answer = () => ({ ran: false, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM', reason: 'timeout', detail: 'a fixture timeout' });
+    const lease = await linked(w);
+    await censusPass(w, at(3));
+    expect(marks(w)).toHaveLength(1);
+    const applier = (await w.watcher.delegationApplier())!;
+    expect((await applier.releaseLease({ leaseId: lease.leaseId, expectGeneration: 1, releaseReason: 'foreign', at: iso(at(3)), lastHeadSha: null,
+      resolvesThrough: null })).kind).toBe('applied');
+    w.answer = written;
+    const mine = (): Record<string, string>[] => marks(w).filter((f) => f.lease === lease.leaseId);   // the tree, still listed, is leased anew
+    await censusPass(w, at(4));
+    expect(mine(), 'no entry names it yet: no heal').toHaveLength(1);
+    const byTree = path.join(w.registryDir, 'delegation', 'leases', 'by-tree');
+    mkdirSync(byTree, { recursive: true });
+    writeFileSync(path.join(byTree, 'e'.repeat(64)), `${lease.leaseId}\n`);   // the verb that timed out wrote its entry late
+    await censusPass(w, at(5));
+    expect(mine().slice(1)).toEqual([expect.objectContaining({ lease: lease.leaseId, state: 'released', 'release-reason': 'foreign' })]);
+  }, ROW_MS);
+
+  it('F6b: a pass aborted between two carrier marks composes nothing more', async () => {
+    const w = await rawTreeWorld();
+    const make = maker(w, await linked(w));
+    await make('second-tree', 1);
+    const recs = [OLD, RAW, record('second-tree')];
+    await censusPass(w, at(3), recs);                                  // the second is minted; the first is marked, and stays behind
+    let works: Promise<unknown>[] = [];
+    let cut = true;
+    w.answer = (argv) => { if (cut) { cut = false; works = cutPass(w); } return written(argv); };
+    const before = marks(w).length;
+    await censusPass(w, at(4), recs);
+    await Promise.allSettled(works);
+    expect(marks(w).length - before, 'one mark, then the cut').toBe(1);
+  }, ROW_MS);
+
+  it('F6b: a pass aborted between two native-removed releases releases nothing more', async () => {
+    const w = await rawTreeWorld();
+    const make = maker(w, await linked(w));
+    await make('second-tree', 1);
+    await censusPass(w, at(3), [OLD, RAW, record('second-tree')]);
+    await censusPass(w, at(4), [OLD]);                                 // both trees gone from one listing
+    const orig = DelegationDurability.prototype.releaseLease;
+    let works: Promise<unknown>[] = [];
+    const release = vi.spyOn(DelegationDurability.prototype, 'releaseLease').mockImplementation(async function (this: DelegationDurability, req) {
+      if (release.mock.calls.length === 1) works = cutPass(w);
+      return orig.call(this, req);
+    });
+    await censusPass(w, at(5), [OLD]);
+    await Promise.allSettled(works);
+    expect(release, 'one release, then the cut').toHaveBeenCalledTimes(1);
+    expect(leasesOf(w).filter((l) => l.releasedAt !== null)).toHaveLength(1);
+  }, ROW_MS);
+});
+
+describe('PR6 fix round 1 (review 1546 F6c): the reads one carrier pass makes', () => {
+  const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  it('one listing, every carrier behind that is listed, eight up-to-date ones least recently read first, an unowned released one once, the by-tree entries once', async () => {
+    const home = mkTmp('ccrc-carrier-reads-');
+    const registryDir = path.join(home, '.cc-sessions');
+    const dir = path.join(registryDir, 'delegation', 'leases');
+    mkdirSync(dir, { recursive: true });
+    const row = (n: number, over: Partial<DelegationLeaseRow>): DelegationLeaseRow => leaseRow({ leaseId: id(n), adminRecord: `wt-${n}`,
+      canonicalPath: `/work/project-a/.claude/worktrees/wt-${n}`, creatingJournalSequence: 10 + n, currentJournalSequence: 10 + n, generation: 1, ...over });
+    const up = Array.from({ length: 10 }, (_, n) => row(n, { carrierGenerationSeen: 1 }));
+    for (const l of up) writeFileSync(path.join(dir, `${l.leaseId}.json`), JSON.stringify(bodyFor(l)));
+    const behind = row(20, {});                                        // not listed: absent, with no read
+    const gone = row(21, { releasedAt: '2026-11-10T00:00:00.000Z' });  // released with no carrier: the by-tree entries are read once
+    writeFileSync(path.join(dir, `${id(40)}.json`), JSON.stringify(bodyFor(row(40, { releasedAt: '2026-11-10T00:00:00.000Z' }), { releaseReason: 'foreign' })));
+    const cp: DelegationCheckpointV1 = { ...checkpointWithLease(), leases: [...up, behind, gone], lineage: [] };
+    const { io, reads } = countingIO();
+    const memory = emptyCarrierLaneMemory();
+    const pass = () => planCarrierPass({ io, registryDir }, cp, memory, { fleetState: { ccdVerbs: [LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP] }, nowMs: NOW,
+      census: [], workdirs: [] });
+    const file = (n: number): string => `file ${dir}/${id(n)}.json`;
+    const first = await pass();
+    expect(reads.splice(0)).toEqual([`dir ${dir}`, ...[0, 1, 2, 3, 4, 5, 6, 7].map(file), file(40), `dir ${dir}/by-tree`]);
+    expect(first.steps).toMatchObject([{ kind: 'mark', args: { leaseId: id(20) } }]);
+    expect(memory.health).toMatchObject({ marked: 10, unowned: 0, mismatched: 0 });
+    await pass();
+    expect(reads.splice(0), 'the two left over first, then the least recently read; no unowned, no by-tree').toEqual([`dir ${dir}`, ...[8, 9, 0, 1, 2, 3, 4, 5].map(file)]);
+  });
+});
+
 describe('PR6: markLeaseCarrier asks the capability itself', () => {
   it('W5-K12b: with no carrier-mark capability, or no evidence at all, the composer composes and runs nothing', async () => {
     const cp = checkpointWithLease({ generation: 1, parentIncarnation: INC });
@@ -278,6 +489,73 @@ describe('PR6: markLeaseCarrier asks the capability itself', () => {
     expect(argvs, 'nothing composed on no evidence').toEqual([]);
     expect(await markLeaseCarrier(deps(['caps', LEASE_MARK_CAP]) as never, lease, cp)).toMatchObject({ kind: 'marked', seen: false });
     expect(argvs.map((a) => a[0]), 'the capability present: one mark').toEqual(['ws-lease-mark']);
+  });
+
+  /** The composer's deps over a fixture read: `carrier` is the file the read-back finds (absent when undefined). */
+  const composer = (o: { verbs: string[] | null; carrier?: string; seen?: unknown[]; seenThrows?: boolean }) => {
+    const argvs: string[][] = [];
+    const d = {
+      io: { readFileMeasured: async () => (o.carrier === undefined ? { ok: false as const, reason: 'absent' as const } : { ok: true as const, content: o.carrier }),
+        readdirMeasured: async () => ({ ok: false as const, reason: 'absent' as const }) },
+      registryDir: '/nowhere', runCcd: async (argv: readonly string[]): Promise<CcdResult> => { argvs.push([...argv]); return written(argv); },
+      fleetState: { ccdVerbs: o.verbs }, nowMs: () => NOW,
+      durable: { noteCarrierSeen: async (req: unknown) => { if (o.seenThrows === true) throw new Error('a fixture throw'); o.seen?.push(req); return { kind: 'applied' }; } },
+    };
+    return { d: d as never, argvs };
+  };
+  const BOTH = ['caps', LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP];
+
+  it('D-8037 (F2): without lease-mark-lock-v1 a held-state lease composes nothing and counts unsupported, an ephemeral one is marked; with it both are', async () => {
+    const held = leaseRow({ leaseId: '00000000-0000-4000-8000-000000000001', generation: 2, carrierGenerationSeen: 1, disposition: 'retained',
+      cleanupDueAt: '2026-11-17T12:00:00.000Z', parentIncarnation: INC, adminRecord: 'wt-h', creatingJournalSequence: 5, currentJournalSequence: 7 });
+    const eph = leaseRow({ leaseId: '00000000-0000-4000-8000-000000000002', generation: 1, parentIncarnation: INC, adminRecord: 'wt-e',
+      creatingJournalSequence: 6, currentJournalSequence: 6 });
+    const cp: DelegationCheckpointV1 = { ...checkpointWithLease(), leases: [held, eph], lineage: [] };
+    for (const [verbs, want] of [[['caps', LEASE_MARK_CAP], [eph.leaseId]], [BOTH, [held.leaseId, eph.leaseId]]] as const) {
+      const memory = emptyCarrierLaneMemory();
+      const { d, argvs } = composer({ verbs: [...verbs] });
+      const plan = await planCarrierPass(d, cp, memory, { fleetState: { ccdVerbs: [...verbs] }, nowMs: NOW, census: [], workdirs: [] });
+      expect(plan.steps.map((s) => (s.kind === 'mark' ? s.args.leaseId : '')), verbs.join(' ')).toEqual(want);
+      expect(memory.health?.unsupported, verbs.join(' ')).toBe(want.length === 1 ? 1 : 0);
+      const outs = [await markLeaseCarrier(d, held, cp), await markLeaseCarrier(d, eph, cp)];
+      expect(outs.map((o) => o.kind), verbs.join(' ')).toEqual(want.length === 1 ? ['unsupported', 'marked'] : ['marked', 'marked']);
+      expect(argvs.map((a) => flagsOf(a).lease), 'only what was marked was composed').toEqual(want);
+    }
+  });
+
+  it('F5: a verb that answers written while the carrier reads back behind, ahead, foreign or naming another lease journals no seen', async () => {
+    const cp = checkpointWithLease({ generation: 2, carrierGenerationSeen: 1, parentIncarnation: INC, currentJournalSequence: 9 });
+    const lease = cp.leases[0]!;
+    const seen: unknown[] = [];
+    for (const body of [bodyFor(lease, { generation: 1 }), bodyFor(lease, { generation: 3 }), bodyFor(lease, { parentId: 'lane-b-demo' }),
+      bodyFor(lease, { journalSeq: 8 }), bodyFor(lease, { leaseId: '99999999-0000-4000-8000-000000000009' })]) {
+      const { d } = composer({ verbs: BOTH, carrier: JSON.stringify(body), seen });
+      expect(await markLeaseCarrier(d, lease, cp)).toEqual({ kind: 'marked', answer: 'written', seen: false });
+    }
+    expect(seen, 'no read-back but an equal one is seen').toEqual([]);
+    const { d } = composer({ verbs: BOTH, carrier: JSON.stringify(bodyFor(lease)), seen });
+    expect(await markLeaseCarrier(d, lease, cp)).toEqual({ kind: 'marked', answer: 'written', seen: true });
+    expect(seen).toEqual([expect.objectContaining({ leaseId: lease.leaseId, generation: 2 })]);
+  });
+
+  it('F9: a lease that moved between the plan and the step composes nothing; the planned generation and state compose as planned', async () => {
+    const cp = checkpointWithLease({ generation: 2, parentIncarnation: INC });
+    const lease = cp.leases[0]!;
+    const { d, argvs } = composer({ verbs: BOTH });
+    expect(await markLeaseCarrier(d, lease, cp, { generation: 1, state: 'ephemeral' })).toEqual({ kind: 'moved' });
+    expect(await markLeaseCarrier(d, lease, cp, { generation: 2, state: 'adopted' })).toEqual({ kind: 'moved' });
+    expect(argvs).toEqual([]);
+    expect(await markLeaseCarrier(d, lease, cp, { generation: 2, state: 'ephemeral' })).toMatchObject({ kind: 'marked' });
+    expect(argvs).toHaveLength(1);
+  });
+
+  it('F13: a seen door that throws after a landed mark is logged as a throw, and the mark stands', async () => {
+    const cp = checkpointWithLease({ generation: 1, parentIncarnation: INC });
+    const lease = cp.leases[0]!;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { d } = composer({ verbs: BOTH, carrier: JSON.stringify(bodyFor(lease)), seenThrows: true });
+    expect(await markLeaseCarrier(d, lease, cp)).toEqual({ kind: 'marked', answer: 'written', seen: false });
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([`ccrc-server: delegation: carrier ${lease.leaseId} seen threw: a fixture throw`]);
   });
 });
 

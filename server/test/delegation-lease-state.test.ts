@@ -204,6 +204,17 @@ describe('planNativeRemoved: a lease whose tree is gone from two successful list
     expect(step(gone).out.release.map((r) => r.leaseId), 'and releases on the next pass that still misses it').toEqual(['lease-1', 'lease-0']);
   });
 
+  it('ruling 2 (review 1546 F6d): a capped-out candidate keeps its head as well as its count, and releases with it', () => {
+    const step = lane();
+    const head = 'c'.repeat(40);
+    expect(step(listing('present', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])).out.release).toEqual([]);
+    step(gone);
+    const second = step(gone);
+    expect(second.out.release).toHaveLength(8);
+    expect([...second.memory.lastHeads], 'the two past the cap keep the head their last listing read').toEqual([['lease-1', head], ['lease-0', head]]);
+    expect(step(gone).out.release.map((r) => [r.leaseId, r.lastHeadSha])).toEqual([['lease-1', head], ['lease-0', head]]);
+  });
+
   it('ruling 2: a capped-out candidate whose tree is listed present, or unreadable, on the next pass is not released, and its count resets', () => {
     for (const state of ['present', 'unreadable'] as const) {
       const step = lane();

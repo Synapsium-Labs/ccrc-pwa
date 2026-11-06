@@ -83,4 +83,22 @@ describe('ruling 1: a carrier mark takes the orphan act\'s lock, and never waits
     expect(String(free.doc.detail)).toContain('which git records as');
     expect(fs.existsSync(F.carrierPath(h))).toBe(false);
   }, 60_000);
+
+  it('review 1546 F11: when the spellings cannot be ordered (a sort that fails), the mark takes no lock, answers unmeasured and writes nothing', () => {
+    F.agentTree(h);
+    for (const pre of ['sort() { return 1; };', 'sort() { return 0; };']) {
+      const r = F.mark(h, {}, pre);
+      expect(r.doc, `${pre} ${JSON.stringify(r.doc)}`).toMatchObject({ ok: false, refusal: 'unmeasured' });
+      expect(String(r.doc.detail), 'refused at the orphan lock, not elsewhere').toContain('could not be ordered');
+      expect(fs.existsSync(F.carrierPath(h)), 'no carrier').toBe(false);
+      expect(byTree(), 'no by-tree entry').toEqual([]);
+    }
+    expect(F.mark(h).doc, 'with the real sort it is written').toMatchObject({ ok: true, answer: 'written' });
+  }, 60_000);
+
+  it('D-8037 (review 1546 F2): ccd caps reports lease-mark-lock-v1 beside lease-mark-v1', () => {
+    const caps = h.sh('cmd_caps').split('\n');
+    expect(caps).toContain('lease-mark-v1');
+    expect(caps).toContain('lease-mark-lock-v1');
+  });
 });

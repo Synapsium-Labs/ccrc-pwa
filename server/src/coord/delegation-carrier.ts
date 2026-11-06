@@ -6,7 +6,8 @@
 // writes any generation above the stored one (D-7802), so a carrier that missed generations catches up in one write. A carrier
 // it cannot read, one ahead of the journal, and one no journal lease owns are counted, never acted on. A mark the box refused in a
 // word that will stand (every word but `busy` and `unmeasured`) is not composed again until its generation or its tree's census
-// row changes (D-7807), and never takes the per-pass budget from a lease that can be marked.
+// row changes (D-7807), or until `DELEGATION_CARRIER_REFUSAL_RETRY_PASSES` passes have gone by (D-8039), and never takes the
+// per-pass budget from a lease that can be marked.
 import {
   DELEGATION_LEASE_RELEASE_REASONS, DELEGATION_LEASE_SOURCE_KINDS, isDelegationCarrierState,
   type DelegationCarrierHealth, type DelegationCarrierState, type DelegationLeaseReleaseReason, type DelegationLeaseSourceKind,
@@ -21,6 +22,12 @@ import { delegationCarrierStateOf } from './delegation-lease-state.js';
 
 /** At most this many `mint` and `mark` steps a pass (a heal included), oldest lease first; the rest count `pending`. */
 export const DELEGATION_CARRIER_MARKS_PER_PASS = 8;
+/** At most this many up-to-date unreleased leases have their carrier read again a pass, least recently read first (D-8034), so a
+ *  carrier changed or lost out of band is found within a bounded number of passes. These reads spend no mark budget. */
+export const DELEGATION_CARRIER_REVERIFY_PER_PASS = 8;
+/** A standing refusal ends after this many passes since it was recorded, counted in passes, never a clock (D-8039): what decided
+ *  `nested` by a containing workdir, a workdir written through a link, or `tree-held` is not in the census row's digest. */
+export const DELEGATION_CARRIER_REFUSAL_RETRY_PASSES = 30;
 /** The box's own bound on a carrier (`ccd/lib/delegation-lease.sh#__DL_CARRIER_MAX`): a larger one is malformed, never read. */
 export const DELEGATION_CARRIER_MAX_BYTES = 16384;
 
@@ -35,8 +42,9 @@ export interface DelegationCarrierBody {
 export type ParsedCarrier = { kind: 'carrier'; body: DelegationCarrierBody } | { kind: 'malformed'; detail: string };
 /** What the lane read for one lease's carrier: proven absent, unreadable, or the file's parse. */
 export type CarrierReadBack = { kind: 'absent' } | { kind: 'unreadable'; detail: string } | ParsedCarrier;
-/** A mark refusal that will answer the same until something changes: every `LeaseMarkRefusal` but `busy` and `unmeasured`. */
-export interface StandingMarkRefusal { generation: number; censusRow: string | null; word: LeaseMarkRefusal }
+/** A mark refusal that will answer the same until something changes: every `LeaseMarkRefusal` but `busy` and `unmeasured`. `pass` is
+ *  the lane's pass ordinal when it was recorded (D-8039's bound). */
+export interface StandingMarkRefusal { generation: number; censusRow: string | null; word: LeaseMarkRefusal; pass: number }
 export type CarrierStep =
   | { kind: 'mint'; leaseId: string; expectGeneration: 0 }                  // journal `carrier`, then mark at generation 1
   | { kind: 'mark'; args: LeaseMarkArgs }                                   // compose the verb at the lease's generation
@@ -46,6 +54,11 @@ export type CarrierStep =
 export const DELEGATION_CARRIER_RETRIED_REFUSALS = ['busy', 'unmeasured'] as const satisfies readonly LeaseMarkRefusal[];
 export function isStandingMarkRefusal(word: LeaseMarkRefusal): boolean {
   return !(DELEGATION_CARRIER_RETRIED_REFUSALS as readonly string[]).includes(word);
+}
+/** Whether a carrier in `state` holds its tree from the orphan act: every state but `ephemeral` and `released`. A mark of such a
+ *  state is composed only on a box that takes the orphan lock (`LEASE_MARK_LOCK_CAP`, D-8037). */
+export function carrierStateHoldsTree(state: DelegationCarrierState): boolean {
+  return state !== 'ephemeral' && state !== 'released';
 }
 
 const LEASE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -60,8 +73,9 @@ const KEYS = Object.keys(BODY_KEYS) as readonly (keyof DelegationCarrierBody)[];
 const count = (v: unknown, min: number): boolean => typeof v === 'number' && Number.isSafeInteger(v) && v >= min;
 const strOrNull = (v: unknown): boolean => v === null || typeof v === 'string';
 
-/** The carrier's grammar, the box reader's (`__DL_CARRIER_PY`) on the server: every key, no other, each value in its grammar. */
-export function parseDelegationCarrier(text: string): ParsedCarrier {
+/** The carrier's grammar, the box reader's (`__DL_CARRIER_PY`) on the server: every key, no other, each value in its grammar, and,
+ *  given the lease the file is named for, a `leaseId` that names it (the box's reader asks the same). */
+export function parseDelegationCarrier(text: string, fileLeaseId?: string): ParsedCarrier {
   const bad = (detail: string): ParsedCarrier => ({ kind: 'malformed', detail });
   if (new TextEncoder().encode(text).length > DELEGATION_CARRIER_MAX_BYTES) return bad(`the carrier is over ${DELEGATION_CARRIER_MAX_BYTES} bytes`);
   let v: unknown;
@@ -75,6 +89,7 @@ export function parseDelegationCarrier(text: string): ParsedCarrier {
   if (missing !== undefined) return bad(`the carrier lacks the key ${missing}`);
   if (o.v !== 1) return bad('the carrier is not version 1');
   if (typeof o.leaseId !== 'string' || !LEASE_ID.test(o.leaseId)) return bad('leaseId is not a lease id');
+  if (fileLeaseId !== undefined && o.leaseId !== fileLeaseId) return bad(`leaseId names another lease than the file ${fileLeaseId}`);
   if (!count(o.generation, 1) || !count(o.journalSeq, 1)) return bad('generation and journalSeq are positive integers');
   if (!isDelegationCarrierState(o.state)) return bad('state is not a carrier state');
   for (const k of STRINGS) if (typeof o[k] !== 'string') return bad(`${k} is not a string`);
@@ -118,8 +133,11 @@ export function carrierReadBackVersus(lease: DelegationLeaseRow, carrier: Delega
 }
 
 /** Rule 6's census row of one tree: its census state, head and lock, and the registry workdirs at or inside `treePath` (the lease's
- *  journalled path), so a `locked`, `registered` or `nested` refusal is composed again once the lock goes, the row goes, or the head
- *  moves. `record` undefined: the pass's census does not list the tree. A canonical string, compared and never parsed. */
+ *  journalled path, compared as written), so a `locked` or `registered` refusal is composed again once the lock goes, the row goes,
+ *  or the head moves. It holds only those: a workdir that contains the tree, one written through a link, and another lease's carrier
+ *  (`tree-held`) are not in it, and `DELEGATION_CARRIER_REFUSAL_RETRY_PASSES` covers the rest (D-8039). Two leases on one tree key
+ *  share one row; only a released one can share it. `record` undefined: the pass's census does not list the tree. A canonical
+ *  string, compared and never parsed. */
 export function delegationCarrierCensusRow(treePath: string, record: { state: string; headSha: string | null; locked: boolean } | undefined,
   workdirs: readonly string[]): string {
   const at = workdirs.filter((w) => w === treePath || w.startsWith(`${treePath}/`)).sort();
@@ -134,28 +152,45 @@ export function delegationCarrierHealthShown(h: DelegationCarrierHealth | null):
 
 const order = (a: DelegationLeaseRow, b: DelegationLeaseRow): number =>
   a.creatingJournalSequence - b.creatingJournalSequence || (a.leaseId < b.leaseId ? -1 : a.leaseId > b.leaseId ? 1 : 0);
+const upToDateOf = (l: DelegationLeaseRow): boolean => l.generation > 0 && (l.carrierGenerationSeen ?? 0) >= l.generation;
+
+/** The leases whose carrier the lane reads this pass (D-8034): every lease behind its generation, and up to
+ *  `DELEGATION_CARRIER_REVERIFY_PER_PASS` up-to-date unreleased ones, least recently read first (`lastRead`: pass ordinals; a lease
+ *  never read goes first), oldest first among equals. */
+export function carrierReadsOf(checkpoint: DelegationCheckpointV1, lastRead: ReadonlyMap<string, number>): { behind: string[]; reverify: string[] } {
+  const leases = [...checkpoint.leases].sort(order);
+  const behind = leases.filter((l) => l.generation > 0 && !upToDateOf(l)).map((l) => l.leaseId);
+  const reverify = leases.filter((l) => upToDateOf(l) && l.releasedAt === null)
+    .map((l, i) => ({ id: l.leaseId, i, last: lastRead.get(l.leaseId) ?? -1 }))
+    .sort((a, b) => a.last - b.last || a.i - b.i).slice(0, DELEGATION_CARRIER_REVERIFY_PER_PASS).map((x) => x.id);
+  return { behind, reverify };
+}
 
 /**
  * The carrier steps of one pass (plan "## PR6", rules 1-8), oldest lease first by its creating journal sequence. `readBack` holds what
- * the lane read: a lease with no entry was not read (the lane reads no carrier already read back at its lease's generation) and is
- * `marked` when its `carrierGenerationSeen` equals its generation, else `unmeasured`; an entry for an id the checkpoint does not hold is
- * an unowned carrier (rule 8). `indexed` names the leases a by-tree entry names (rule 3's heal), or `'unmeasured'`, which composes no heal.
+ * the lane read (`carrierReadsOf`): a lease with no entry was not read this pass and is `marked` when its `carrierGenerationSeen` equals
+ * its generation (read back equal when last read), else `unmeasured`; an entry for an id the checkpoint does not hold is an unowned
+ * carrier (rule 8). `indexed` names the leases a by-tree entry names (rule 3's heal), or `'unmeasured'`, which composes no heal and
+ * counts the lease `unmeasured`. `lockSupported`: the box takes the orphan lock, without which no mark of a state that holds a tree is
+ * composed (D-8037). `pass` is the lane's pass ordinal (D-8039's bound), and `deferred` names the leases whose last mark answered
+ * `unmeasured`: they take the budget after every other lease (D-8039).
  */
 export function planCarrierSteps(input: {
-  checkpoint: DelegationCheckpointV1; readBack: ReadonlyMap<string, CarrierReadBack>; supported: boolean; nowMs: number;
-  refused: ReadonlyMap<string, StandingMarkRefusal>; censusRow: ReadonlyMap<string, string>; indexed: ReadonlySet<string> | 'unmeasured';
+  checkpoint: DelegationCheckpointV1; readBack: ReadonlyMap<string, CarrierReadBack>; supported: boolean; lockSupported: boolean;
+  nowMs: number; pass: number; refused: ReadonlyMap<string, StandingMarkRefusal>; censusRow: ReadonlyMap<string, string>;
+  indexed: ReadonlySet<string> | 'unmeasured'; deferred: ReadonlySet<string>;
 }): { steps: readonly CarrierStep[]; health: DelegationCarrierHealth } {
   const health: DelegationCarrierHealth = { marked: 0, pending: 0, unsupported: 0, mismatched: 0, unmeasured: 0, unowned: 0, refused: 0 };
   const carriers = new Map((input.checkpoint.leaseCarriers ?? []).map((c) => [c.leaseId, c] as const));
   const owned = new Set(input.checkpoint.leases.map((l) => l.leaseId));
   const steps: CarrierStep[] = [];
-  let budget = DELEGATION_CARRIER_MARKS_PER_PASS;
-  const spend = (step: CarrierStep): void => { if (budget > 0) { budget -= 1; steps.push(step); } else health.pending += 1; };
+  const first: CarrierStep[] = [], last: CarrierStep[] = [];         // D-8039: a lease whose last mark answered `unmeasured` goes last
+  const spend = (step: CarrierStep, id: string): void => { (input.deferred.has(id) ? last : first).push(step); };
   for (const lease of [...input.checkpoint.leases].sort(order)) {
     const released = lease.releasedAt !== null;
-    const upToDate = lease.generation > 0 && (lease.carrierGenerationSeen ?? 0) >= lease.generation;
-    if (!input.supported) { if (!released && !upToDate) health.unsupported += 1; continue; }        // rule 1
-    if (lease.generation === 0) { if (!released) spend({ kind: 'mint', leaseId: lease.leaseId, expectGeneration: 0 }); continue; }   // rule 2
+    const upToDate = upToDateOf(lease);
+    if (!input.supported) { if (!upToDate) health.unsupported += 1; continue; }                     // rule 1, released leases included
+    if (lease.generation === 0) { if (!released) spend({ kind: 'mint', leaseId: lease.leaseId, expectGeneration: 0 }, lease.leaseId); continue; }   // rule 2
     const carrier = carriers.get(lease.leaseId);
     const rb = input.readBack.get(lease.leaseId);
     if (rb === undefined) { if (upToDate) health.marked += 1; else health.unmeasured += 1; continue; }
@@ -168,17 +203,23 @@ export function planCarrierSteps(input: {
         if (!upToDate) steps.push({ kind: 'seen', leaseId: lease.leaseId, generation: lease.generation });
         continue;
       }
-    } else if (released && (input.indexed === 'unmeasured' || !input.indexed.has(lease.leaseId))) {
-      continue;                                                       // rule 3: no carrier was ever written, and no entry names it
+    } else if (released) {
+      const indexed = input.indexed;
+      if (indexed === 'unmeasured') { health.unmeasured += 1; continue; }   // rule 3: whether an entry names it was not measured
+      if (!indexed.has(lease.leaseId)) continue;                     // rule 3: no carrier was ever written, and no entry names it
     }
-    const standing = input.refused.get(lease.leaseId);                // rule 6
-    if (standing !== undefined && standing.generation === lease.generation
+    const args = carrierMarkArgs(lease, carrier);
+    if (!input.lockSupported && carrierStateHoldsTree(args.state)) { health.unsupported += 1; continue; }   // rule 1 (D-8037)
+    const standing = input.refused.get(lease.leaseId);                // rule 6, bounded (D-8039)
+    if (standing !== undefined && standing.generation === lease.generation && input.pass - standing.pass < DELEGATION_CARRIER_REFUSAL_RETRY_PASSES
         && standing.censusRow === (input.censusRow.get(delegationTreeKey(lease.project, lease.adminRecord)) ?? null)) {
       health.refused += 1;
       continue;
     }
-    spend({ kind: 'mark', args: carrierMarkArgs(lease, carrier) });   // rules 3 and 7
+    spend({ kind: 'mark', args }, lease.leaseId);                     // rules 3 and 7
   }
+  let budget = DELEGATION_CARRIER_MARKS_PER_PASS;                     // rule 7: oldest first within each group
+  for (const step of [...first, ...last]) { if (budget > 0) { budget -= 1; steps.push(step); } else health.pending += 1; }
   for (const [id, rb] of input.readBack) {                            // rule 8
     if (owned.has(id)) continue;
     if (rb.kind === 'carrier' && rb.body.state !== 'released') health.unowned += 1;

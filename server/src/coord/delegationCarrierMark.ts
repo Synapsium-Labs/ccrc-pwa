@@ -7,24 +7,33 @@
 // `leaseActs` phase calls it for every `mark` step, and PR9's promoting dispatch will call it too. Journal first, then mark, then
 // read back: the planner reads the checkpoint, so a mark is only ever composed at a generation the journal already holds.
 //
-// The lane's memory here is a process's own (`CarrierLaneMemory`): the standing refusals (D-7807), which refusal was logged, the
+// The lane's memory here is a process's own (`CarrierLaneMemory`): a pass ordinal, the pass each lease's carrier was last read at,
+// the standing refusals (D-7807), which refusal was logged, the leases whose last mark answered `unmeasured` or did not run, the
 // unowned carriers already read `released`, and the released leases already measured with no carrier and no by-tree entry. A
 // restart loses it and retries each standing refusal once. The agent's write allowlist is untouched: the carrier's only writer is
 // verb `CCD_ARGV.leaseMark` composes, reached through `EXEC_COMMANDS`.
 import { LEASE_MARK_REFUSALS, type DelegationCarrierHealth, type LeaseMarkRefusal } from '../../../shared/api.js';
-import { CCD_ARGV, ccdCan } from '../ccdargv.js';
+import { CCD_ARGV, LEASE_MARK_LOCK_CAP, capSupported, ccdCan, type LeaseMarkArgs } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { RunCcd } from './ports.js';
 import type { DelegationDurability } from './delegation-checkpoint.js';
 import { delegationTreeKey } from './delegation-correlation.js';
 import {
-  carrierMarkArgs, carrierReadBackVersus, delegationCarrierCensusRow, isStandingMarkRefusal, parseDelegationCarrier, planCarrierSteps,
-  type CarrierReadBack, type CarrierStep, type StandingMarkRefusal,
+  carrierMarkArgs, carrierReadBackVersus, carrierReadsOf, carrierStateHoldsTree, delegationCarrierCensusRow, isStandingMarkRefusal,
+  parseDelegationCarrier, planCarrierSteps, type CarrierReadBack, type CarrierStep, type StandingMarkRefusal,
 } from './delegation-carrier.js';
 import { formatDelegationInstant, type DelegationCensusRecord, type DelegationCheckpointV1, type DelegationLeaseRow } from './delegation-model.js';
 
 export interface CarrierLaneMemory {
+  /** The lane's carrier passes so far: an ordinal, never a clock (D-8034's re-verify order, D-8039's bound). */
+  pass: number;
+  /** leaseId -> the pass its carrier was last read at (D-8034). */
+  readonly lastRead: Map<string, number>;
+  /** Leases whose last mark answered `unmeasured`: they take the budget last (D-8039). */
+  readonly unmeasured: Set<string>;
+  /** Leases whose last mark did not run (`ran: false`): the verb may still write their by-tree entry, so they are never `notIndexed`. */
+  readonly notRan: Set<string>;
   /** leaseId -> the standing refusal of its last mark (rule 6). */
   readonly refused: Map<string, StandingMarkRefusal>;
   /** leaseId -> the generation whose refusal was last logged (one line per lease and generation). */
@@ -36,8 +45,8 @@ export interface CarrierLaneMemory {
   /** The last pass's counts, or null before the lane planned a carrier pass. */
   health: DelegationCarrierHealth | null;
 }
-export const emptyCarrierLaneMemory = (): CarrierLaneMemory =>
-  ({ refused: new Map(), logged: new Map(), releasedUnowned: new Set(), notIndexed: new Set(), health: null });
+export const emptyCarrierLaneMemory = (): CarrierLaneMemory => ({ pass: 0, lastRead: new Map(), unmeasured: new Set(), notRan: new Set(),
+  refused: new Map(), logged: new Map(), releasedUnowned: new Set(), notIndexed: new Set(), health: null });
 
 export interface CarrierReadDeps {
   readonly io: Pick<FleetIO, 'readFileMeasured' | 'readdirMeasured'>;
@@ -49,10 +58,11 @@ const CARRIER_FILE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const LEASE_LINE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\n?$/;
 const TREE_KEY = /^[0-9a-f]{64}$/;
 
-/** One carrier read: proven absent, unreadable (a link, a non-regular file, a failed read), or the file's parse. */
+/** One carrier read: proven absent, unreadable (a non-regular file, a failed read), or the file's parse, whose `leaseId` must name the
+ *  lease the file is named for. A link is followed here, while the box refuses one (`bad-carrier`); the box is the authority. */
 export async function readDelegationCarrier(d: CarrierReadDeps, leaseId: string): Promise<CarrierReadBack> {
   const r = await d.io.readFileMeasured(`${leasesDir(d)}/${leaseId}.json`, undefined, d.signal);
-  if (r.ok) return parseDelegationCarrier(r.content);
+  if (r.ok) return parseDelegationCarrier(r.content, leaseId);
   return r.reason === 'absent' ? { kind: 'absent' } : { kind: 'unreadable', detail: `the carrier of lease ${leaseId} could not be read` };
 }
 
@@ -76,34 +86,38 @@ async function readIndexed(d: CarrierReadDeps): Promise<ReadonlySet<string> | 'u
 /**
  * Reads what one pass's carrier step needs and plans it. Unsupported: nothing is read. Otherwise one listing of the leases directory
  * (a proven absent directory is every carrier absent; an unreadable one reads nothing, and every lease that needed a read counts
- * `unmeasured`), one read per lease whose carrier was not yet read back at its generation and is listed, one per unowned carrier not
- * already known `released`, and the by-tree entries only while a released lease with no carrier has not yet been measured against
- * them. The census row of each lease's tree is the pass's census record and the registry workdirs at or inside it.
+ * `unmeasured`), one read per listed carrier `carrierReadsOf` names (every lease behind its generation, and up to eight up-to-date
+ * unreleased ones, least recently read first, D-8034), one per unowned carrier not already known `released`, and the by-tree entries
+ * only while a released lease with no carrier has not yet been measured against them. The census row of each lease's tree is the
+ * pass's census record and the registry workdirs at or inside it.
  */
 export async function planCarrierPass(d: CarrierReadDeps, cp: DelegationCheckpointV1, memory: CarrierLaneMemory, input: {
-  supported: boolean; nowMs: number; census: readonly DelegationCensusRecord[]; workdirs: readonly string[];
+  fleetState: Pick<FleetState, 'ccdVerbs'> | undefined; nowMs: number; census: readonly DelegationCensusRecord[]; workdirs: readonly string[];
 }): Promise<{ steps: readonly CarrierStep[]; censusRow: ReadonlyMap<string, string> }> {
+  const supported = ccdCan(input.fleetState, 'leaseMark'), pass = (memory.pass += 1);
   const byKey = new Map(input.census.map((r) => [delegationTreeKey(r.project, r.adminRecord), r] as const));
   const censusRow = new Map(cp.leases.map((l) => {
     const key = delegationTreeKey(l.project, l.adminRecord);
     return [key, delegationCarrierCensusRow(l.canonicalPath, byKey.get(key), input.workdirs)] as const;
   }));
   const owned = new Set(cp.leases.map((l) => l.leaseId));
-  for (const map of [memory.refused, memory.logged]) for (const id of map.keys()) if (!owned.has(id)) map.delete(id);
-  for (const id of memory.notIndexed) if (!owned.has(id)) memory.notIndexed.delete(id);
+  for (const map of [memory.refused, memory.logged, memory.lastRead]) for (const id of map.keys()) if (!owned.has(id)) map.delete(id);
+  for (const set of [memory.notIndexed, memory.unmeasured, memory.notRan]) for (const id of set) if (!owned.has(id)) set.delete(id);
   const readBack = new Map<string, CarrierReadBack>();
-  let indexed: ReadonlySet<string> | 'unmeasured' = 'unmeasured';
-  if (input.supported) {
+  let indexed: ReadonlySet<string> | 'unmeasured' = new Set();       // no heal asked: nothing to measure
+  if (supported) {
     const list = await d.io.readdirMeasured(leasesDir(d), undefined, d.signal);
     const listed = list.ok ? new Set(list.entries.flatMap((n) => { const m = CARRIER_FILE.exec(n); return m === null ? [] : [m[1]!]; }))
       : list.reason === 'absent' ? new Set<string>() : null;
     const heal: string[] = [];
     if (listed !== null) {
-      for (const l of cp.leases) {
-        if (l.generation === 0 || (l.carrierGenerationSeen ?? 0) >= l.generation || d.signal?.aborted === true) continue;
-        const rb: CarrierReadBack = listed.has(l.leaseId) ? await readDelegationCarrier(d, l.leaseId) : { kind: 'absent' };
-        readBack.set(l.leaseId, rb);
-        if (rb.kind === 'absent' && l.releasedAt !== null && !memory.notIndexed.has(l.leaseId)) heal.push(l.leaseId);
+      const reads = carrierReadsOf(cp, memory.lastRead), released = new Set(cp.leases.flatMap((l) => (l.releasedAt === null ? [] : [l.leaseId])));
+      for (const id of [...reads.behind, ...reads.reverify]) {
+        if (d.signal?.aborted === true) break;
+        const rb: CarrierReadBack = listed.has(id) ? await readDelegationCarrier(d, id) : { kind: 'absent' };
+        readBack.set(id, rb);
+        memory.lastRead.set(id, pass);
+        if (rb.kind === 'absent' && released.has(id) && !memory.notIndexed.has(id)) heal.push(id);
       }
       for (const id of listed) {
         if (owned.has(id) || memory.releasedUnowned.has(id) || d.signal?.aborted === true) continue;
@@ -115,10 +129,11 @@ export async function planCarrierPass(d: CarrierReadDeps, cp: DelegationCheckpoi
     }
     if (heal.length > 0) {
       indexed = await readIndexed(d);
-      if (indexed !== 'unmeasured') for (const id of heal) if (!indexed.has(id)) memory.notIndexed.add(id);
+      if (indexed !== 'unmeasured') for (const id of heal) if (!indexed.has(id) && !memory.notRan.has(id)) memory.notIndexed.add(id);
     }
   }
-  const plan = planCarrierSteps({ checkpoint: cp, readBack, supported: input.supported, nowMs: input.nowMs, refused: memory.refused, censusRow, indexed });
+  const plan = planCarrierSteps({ checkpoint: cp, readBack, supported, lockSupported: capSupported(input.fleetState, LEASE_MARK_LOCK_CAP),
+    nowMs: input.nowMs, pass, refused: memory.refused, censusRow, indexed, deferred: memory.unmeasured });
   memory.health = plan.health;
   return { steps: plan.steps, censusRow };
 }
@@ -148,7 +163,10 @@ export interface CarrierMarkDeps extends CarrierReadDeps {
 }
 export type CarrierMarkOutcome =
   | { kind: 'marked'; answer: string; seen: boolean }
-  | { kind: 'refused'; word: LeaseMarkRefusal; detail: string };
+  | { kind: 'refused'; word: LeaseMarkRefusal; detail: string; notRan?: true }
+  /** Nothing composed: the lease moved since the pass planned its mark (F9), or the box takes no orphan lock for a state that holds a
+   *  tree (D-8037). The next pass plans again. */
+  | { kind: 'moved' } | { kind: 'unsupported'; detail: string };
 
 const markAnswer = (stdout: string): CarrierMarkOutcome => {
   const line = stdout.trim().split('\n').pop() ?? '';
@@ -164,39 +182,59 @@ const markAnswer = (stdout: string): CarrierMarkOutcome => {
 
 /**
  * Marks one lease's carrier at the generation the checkpoint journals, then reads that carrier back and journals `seen` only when the
- * read-back equals the lease (`carrierReadBackVersus`). With no capability evidence it composes nothing (`unmeasured`). A builder refusal (a lease field outside the verb's grammar) is `usage`; a
- * transport failure, a throw or an answer outside the grammar is `unmeasured`, retried next pass.
+ * read-back equals the lease (`carrierReadBackVersus`). With no capability evidence it composes nothing (`unmeasured`); a state that
+ * holds a tree is composed only behind `LEASE_MARK_LOCK_CAP` (D-8037). `planned` is the lane's planned argv: when the lease moved since
+ * (another generation or state), nothing is composed (F9); PR9's direct call passes none. A builder refusal (a lease field outside the
+ * verb's grammar) is `usage`; a transport failure, a throw or an answer outside the grammar is `unmeasured`, retried next pass.
  */
-export async function markLeaseCarrier(d: CarrierMarkDeps, lease: DelegationLeaseRow, cp: DelegationCheckpointV1): Promise<CarrierMarkOutcome> {
+export async function markLeaseCarrier(
+  d: CarrierMarkDeps, lease: DelegationLeaseRow, cp: DelegationCheckpointV1, planned?: Pick<LeaseMarkArgs, 'generation' | 'state'>,
+): Promise<CarrierMarkOutcome> {
   const row = (cp.leaseCarriers ?? []).find((c) => c.leaseId === lease.leaseId);
   if (!ccdCan(d.fleetState, 'leaseMark')) return { kind: 'refused', word: 'unmeasured', detail: 'the box reports no carrier-mark capability' };
+  const args = carrierMarkArgs(lease, row);
+  if (planned !== undefined && (planned.generation !== args.generation || planned.state !== args.state)) return { kind: 'moved' };
+  if (carrierStateHoldsTree(args.state) && !capSupported(d.fleetState, LEASE_MARK_LOCK_CAP)) {
+    return { kind: 'unsupported', detail: `the box reports no orphan lock for a ${args.state} mark` };
+  }
   let argv;
-  try { argv = CCD_ARGV.leaseMark(carrierMarkArgs(lease, row)); } catch (err) {
+  try { argv = CCD_ARGV.leaseMark(args); } catch (err) {
     return { kind: 'refused', word: 'usage', detail: err instanceof Error ? err.message : String(err) };
   }
+  let out: CarrierMarkOutcome;
   try {
     const res = await d.runCcd(argv);
-    if (res.ran === false) return { kind: 'refused', word: 'unmeasured', detail: `ccd did not run (${res.reason}): ${res.detail}` };
-    const out = markAnswer(res.stdout);
-    if (out.kind === 'refused') return out;
+    if (res.ran === false) return { kind: 'refused', word: 'unmeasured', detail: `ccd did not run (${res.reason}): ${res.detail}`, notRan: true };
+    out = markAnswer(res.stdout);
+    if (out.kind !== 'marked') return out;
     const rb = await readDelegationCarrier(d, lease.leaseId);
     if (rb.kind !== 'carrier' || carrierReadBackVersus(lease, row, rb.body) !== 'equal') return out;
-    const seen = await d.durable.noteCarrierSeen({ leaseId: lease.leaseId, generation: lease.generation, at: formatDelegationInstant(d.nowMs()) });
-    return { ...out, seen: seen.kind !== 'refused' };
   } catch (err) {
     return { kind: 'refused', word: 'unmeasured', detail: err instanceof Error ? err.message : String(err) };
   }
+  try {                                                               // the mark landed: a throw here is the door's, never a refusal
+    const seen = await d.durable.noteCarrierSeen({ leaseId: lease.leaseId, generation: lease.generation, at: formatDelegationInstant(d.nowMs()) });
+    return { ...out, seen: seen.kind !== 'refused' };
+  } catch (err) {
+    console.warn(`ccrc-server: delegation: carrier ${lease.leaseId} seen threw: ${err instanceof Error ? err.message : String(err)}`);
+    return out;
+  }
 }
 
-/** What a mark's answer leaves in the lane's memory: a standing refusal is kept against its generation and census row (rule 6), a
- *  retried one or a mark clears it; a refusal is logged once per lease and generation, and the journal never changes. */
+/** What a mark's answer leaves in the lane's memory: a standing refusal is kept against its generation, census row and pass (rule 6,
+ *  D-8039), a retried one or a mark clears it; an `unmeasured` answer defers the lease (D-8039), a mark that did not run keeps it out of
+ *  `notIndexed`; a refusal is logged once per lease and generation, and the journal never changes. */
 export function noteCarrierMark(memory: CarrierLaneMemory, lease: DelegationLeaseRow, out: CarrierMarkOutcome, censusRow: ReadonlyMap<string, string>): void {
-  if (out.kind === 'marked') { memory.refused.delete(lease.leaseId); return; }
+  if (out.kind === 'moved' || out.kind === 'unsupported') return;
+  const id = lease.leaseId;
+  if (out.kind === 'refused' && out.word === 'unmeasured') memory.unmeasured.add(id); else memory.unmeasured.delete(id);
+  if (out.kind === 'refused' && out.notRan === true) { memory.notRan.add(id); memory.notIndexed.delete(id); } else memory.notRan.delete(id);
+  if (out.kind === 'marked') { memory.refused.delete(id); return; }
   if (memory.logged.get(lease.leaseId) !== lease.generation) {
     memory.logged.set(lease.leaseId, lease.generation);
     console.warn(`ccrc-server: delegation: carrier ${lease.leaseId} generation ${lease.generation} refused ${out.word}${out.detail === '' ? '' : `: ${out.detail}`}`);
   }
   if (!isStandingMarkRefusal(out.word)) { memory.refused.delete(lease.leaseId); return; }
-  memory.refused.set(lease.leaseId, { generation: lease.generation, word: out.word,
+  memory.refused.set(lease.leaseId, { generation: lease.generation, word: out.word, pass: memory.pass,
     censusRow: censusRow.get(delegationTreeKey(lease.project, lease.adminRecord)) ?? null });
 }

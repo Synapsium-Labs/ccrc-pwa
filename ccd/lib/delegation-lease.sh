@@ -398,15 +398,20 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
   # order, each with -n: no wait, so no cycle with `ws-orphan`, which holds the same lock while its rung reads the carrier. Held through
   # the carrier's rename; `cmd_ws_lease_mark` closes them. A release never takes one. Like `ws-orphan`'s, the lock files are never removed.
   if [[ -n "$tp" && "$state" != released ]]; then
-    local sp16 ofd
+    local sp sp16 ofd spellings
+    # review 1546 F11: the list is measured, and at least one lock is taken, one per distinct spelling, or nothing is written
+    spellings=$(printf '%s\n' "$DL_TREE_REC" "$tp" | LC_ALL=C sort -u) && [[ -n "$spellings" ]] \
+      || { _dl_mark_refuse unmeasured "the spellings of the tree $tp could not be ordered; nothing was written"; return 1; }
     while IFS= read -r sp; do
+      [[ -n "$sp" ]] || continue
       sp16=$(printf '%s' "$sp" | _plat_sha256 | cut -d' ' -f1 | cut -c1-16) && [[ "$sp16" =~ ^[0-9a-f]{16}$ ]] \
         || { _dl_mark_refuse unmeasured "the orphan lock of $sp could not be named"; return 1; }
       { exec {ofd}>>"$REG/.orphan-$sp16.lock"; } 2>/dev/null \
         || { _dl_mark_refuse unmeasured "the orphan lock $REG/.orphan-$sp16.lock could not be opened"; return 1; }
       _DL_ORPHAN_FDS+=("$ofd")
       flock -n "$ofd" || { _dl_mark_refuse busy "the orphan act holds the lock of the tree $sp; nothing was written"; return 1; }
-    done < <(printf '%s\n' "$DL_TREE_REC" "$tp" | LC_ALL=C sort -u)
+    done <<< "$spellings"
+    (( ${#_DL_ORPHAN_FDS[@]} > 0 )) || { _dl_mark_refuse unmeasured "no orphan lock of the tree $tp was taken; nothing was written"; return 1; }
   fi
   if [[ -n "$tp" ]]; then
     # rule 6: no link below the root that holds the tree, as git recorded it

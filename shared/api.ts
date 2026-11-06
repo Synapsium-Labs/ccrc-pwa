@@ -12138,8 +12138,9 @@ export interface DelegationObservationHealth {
    */
   uncensusedLeases?: number;
   /**
-   * Wave 5 (PR6): the lane's carrier step over the last pass, counted, never acted on beyond its own marks. Absent until the lane has
-   * planned a carrier pass on a ready applier, and from an older server: absence says nothing was counted, never that every carrier is marked.
+   * Wave 5 (PR6, D-8035): the lane's carrier step, counted, never acted on beyond its own marks. The counts are those of the last pass
+   * that planned the step. Absent whenever every count is zero, and from an older server: absence says nothing was counted, never that
+   * every carrier is marked. Read it through `delegationCarrierHealthOf`.
    */
   carriers?: DelegationCarrierHealth;
 }
@@ -12157,6 +12158,12 @@ export interface DelegationCarrierHealth {
  *  unreleased lease's project, or an older server's block, whose 0 never says an older lane reached them all). */
 export function delegationUncensusedLeasesOf(health: Pick<DelegationObservationHealth, 'uncensusedLeases'>): number {
   return typeof health.uncensusedLeases === 'number' ? health.uncensusedLeases : 0;
+}
+
+/** `carriers`' one reader (review 1546 F7): absence permits and reads as null, nothing counted (every count of the last pass that planned
+ *  the step was zero, or an older server's block). */
+export function delegationCarrierHealthOf(health: Pick<DelegationObservationHealth, 'carriers'>): DelegationCarrierHealth | null {
+  return typeof health.carriers === 'object' && health.carriers !== null ? health.carriers : null;
 }
 
 /** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes

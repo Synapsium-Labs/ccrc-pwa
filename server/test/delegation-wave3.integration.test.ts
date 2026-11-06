@@ -1263,7 +1263,7 @@ describe('8. the closed scope census', () => {
       const family = caps.filter((c) => /(^|-)lease|delegation|adopt|carrier/i.test(c));
       expect(family).toContain('delegation-events-v1');
       for (const c of family) {
-        expect(['delegation-events-v1', 'lease-mark-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1'], c).toContain(c);
+        expect(['delegation-events-v1', 'lease-mark-v1', 'lease-mark-lock-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1'], c).toContain(c);
       }
     } finally { h.cleanup(); }
     expect(DELEGATION_EVENTS_CAP).toBe('delegation-events-v1');
