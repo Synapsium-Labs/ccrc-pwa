@@ -87,12 +87,12 @@ The coordinator's rulings, applied red first inside this task's claims:
 | 3, F-D | none: a commit already could not follow `.`, `/` or `-`. Rows and a mutant now hold it | rows `feat-4c677d328`, `v1.2.4c677d328`, `a/4c677d328` |
 | 3, F-E | none: a document path already could not run on into `/` or `-`. Rows and a mutant now hold it | rows `docs/a.md/x`, `docs/a.md-bak` |
 | 4, G2 | A commit is not followed by `-`, nor by `.` and a word character; a document path is not followed by `.` and a word character. A sentence-ending `.` still ends a name | rows for two UUIDs, `abc1234.ts` and `docs/plan.md.bak`; positives `at abc1234.` and `read docs/a.md.` |
-| 4, G3 | A commit is never digits, one `e`, digits (`EXPONENT = /^\d*e\d+$/`): the smallest rule that refuses both `1e10000` and `e1234567`. A rule like "no digit-e-digit" alone would let `e1234567` through | rows `1e10000`, `10e1000`, `e1234567` |
+| 4, G3 | A commit is never digits, one `e`, digits (`EXPONENT = /^\d*e\d+$/`): the smallest rule that refuses both `1e10000` and `e1234567`. A rule like "no digit-e-digit" alone would let `e1234567` through. **Dropped in fix round 2.** | rows `1e10000`, `10e1000`, `e1234567` (removed in fix round 2) |
 | 4, colours | none needed: a PR takes digits only, and a commit is at least seven characters, so `#a3f`, `#1a2b3c` and `#ff00aa` were already text. Rows hold it; digits-only `#333` and `#000000` stay PR marks | three negative rows, two positive rows |
 | 5, P4 | S1 reads body rows only; the header row keeps plain text | "S1 does not label a header cell" |
 
-Left as observed, not ruled: an 8-digit colour such as `#ff00aa80` is still `#` followed by a commit mark, because the
-ruling names 3 and 6 digits. Task L's repository rule decides whether it links.
+Left as observed, not ruled, in this round: an 8-digit colour such as `#ff00aa80` is still `#` followed by a commit
+mark, because the ruling names 3 and 6 digits. Fix round 2 ruled on it (below).
 
 ### Mutants, fix round 1
 
@@ -120,4 +120,42 @@ Gates, one at a time through `ccrc test`, all green:
 - markdown-golden under `CI=1`: 173 of 173, every stored file byte-identical;
 - the pwa type check: clean;
 - the whole pwa suite: 466 files, 13 765 passed, 3 skipped;
+- `server/test/single-definition/`: 23 files, 1 084 passed.
+
+## Fix round 2 (review 1575, the last)
+
+The coordinator's rulings, applied red first inside this task's claims:
+
+| Ruling | What changed | Pinned by |
+|---|---|---|
+| 1, F1 | The exponent rule of fix round 1 is dropped, with its rows. It refused a real short SHA of digits, one `e` and digits about 1 time in 43 at seven characters. **The price:** `1e10000` and every number of that shape now read as a commit. Only Task L's repository rule can tell them apart (it resolves to nothing). | positive rows `1e23456`, `0e99365`, `651e805`, and `1e10000` (the price) |
+| 2, F2 | A commit is never preceded by `#` (`NOT_BEFORE_COMMIT`), so an 8-digit colour (`#ff00aa80`) and `#abc1234` are plain text. `@` and `(` still stand before a commit | negative rows `#ff00aa80`, `#abc1234`; positive rows `@4c677d3`, `(4c677d3)` |
+| 3, F3 | A table's header row carries no status label of any kind (S1, S2 or S3). One `labels` flag, carried on the walk's stack and false below a table's first row, gates all three. A name in a header cell is still marked | "S2 and S3 do not label a header cell either, and a name there is still marked" (a bold status word, a name with a status, a subject with a status, in a header and a body row) |
+| 4, F4 | No code change: the guards existed and had no row. Rows now hold each one | `leadingStatus('Failed_2')` null, `CI green_light` no status, `snake_4c677d328` and a combining mark before a hex run (`cafe` U+0301 `abc1234`) no mark |
+
+### Mutants, fix round 2
+
+All earlier mutants were re-run, re-anchored where the code moved:
+- mutant 2 now forces `shaShape` true;
+- mutant 16 drops `pathOk` from the commit's predecessor test;
+- mutant 22 lets S1 into the header row;
+- mutant 20 now puts the exponent rule back and reds the real-SHA rows.
+
+Six new mutants were added. All 30 (1 to 12, 13a, 13b, 14 to 29) went red on the named case, each restored from its saved copy with its sha256 checked.
+
+| # | Mutant | Red case |
+|---|---|---|
+| 20 | the exponent rule put back | `1e23456`, `0e99365`, `651e805`, `1e10000 (the price)` |
+| 24 | a commit allowed after `#` | `#ff00aa80`, `#abc1234` |
+| 25 | the header gated for S1 only (fix round 1's shape: S1 skips row 0, S2 and S3 ungated) | "S2 and S3 do not label a header cell either …" |
+| 26 | `leadingStatus` without its whole-word check | "'Failed_2' is null" |
+| 27 | S3's status word without its whole-word check | "CI green_light (a whole word only) is not" |
+| 28 | `\p{M}` dropped from the word class | "a combining mark before a hex run" |
+| 29 | `_` dropped from the word class | `snake_4c677d328`, "'Failed_2' is null", "CI green_light …" |
+
+Gates, one at a time through `ccrc test`, all green:
+- chat-marks, remark-chat-marks, markdown-parse, render-hast and markdown-purity: 265 tests;
+- markdown-golden under `CI=1`: 173 of 173, every stored file byte-identical;
+- the pwa type check: clean;
+- the whole pwa suite: 466 files, 13 775 passed, 3 skipped;
 - `server/test/single-definition/`: 23 files, 1 084 passed.
