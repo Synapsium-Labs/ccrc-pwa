@@ -104,9 +104,12 @@ describe('the reclaim carriage', () => {
     expect(entry.heldBy).toEqual(HELD);
   });
 
-  it('an older document (no heldBy key) gives absent, and the entry carries nothing but absent', () => {
+  it('an older document (no heldBy key) reads absent, and the read and the entry carry nothing', () => {
+    // A parser spreads `heldBy` only when the document NAMES rows (`heldByRowsOf`), so a read without rows keeps the shape
+    // it had before R2.
     const read = parseChildReclaimAuditFailed('project-a-child-1', doc(), '');
-    expect(read).toMatchObject({ kind: 'unmeasured', heldBy: { kind: 'absent' } });
+    expect(read.kind).toBe('unmeasured');
+    expect(Object.prototype.hasOwnProperty.call(read, 'heldBy')).toBe(false);
     expect(heldByOf(JSON.parse(doc()))).toEqual({ kind: 'absent' });
     const entry = childReclaimNextEntry(reclaimEntry(), childReclaimSweepOutcomeOf(failedOutcome()), ask(NOW),
       { monoMs: NOW, wallMs: NOW }, PASS)!;
@@ -173,9 +176,10 @@ describe('the collect carriage', () => {
     expect(e.heldBy).toEqual(HELD);
   });
 
-  it('an older collect document gives absent', () => {
+  it('an older collect document carries no heldBy', () => {
     const audit = parseCollectAudit('tmp-1', false, doc(), '');
-    expect(audit).toMatchObject({ kind: 'unmeasured', heldBy: { kind: 'absent' } });
+    expect(audit.kind).toBe('unmeasured');
+    expect(Object.prototype.hasOwnProperty.call(audit, 'heldBy')).toBe(false);
   });
 
   it('a later collect audit clears it', () => {

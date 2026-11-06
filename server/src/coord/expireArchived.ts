@@ -384,7 +384,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
       (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' })),
     [RETIRE_STEPS.audit]: (audit, _f, req) => {
       const answer = expiryAnswerOf(req);
-      if (audit.kind === 'unreadable') return answer({ kind: 'audit-failed', detail: audit.detail, heldBy: audit.heldBy });
+      if (audit.kind === 'unreadable') return answer({ kind: 'audit-failed', detail: audit.detail, ...(audit.heldBy === undefined ? {} : { heldBy: audit.heldBy }) });
       if (audit.expiresAt.kind === 'absent') return answer({ kind: 'no-evidence' });
       return null;
     },

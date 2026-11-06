@@ -453,8 +453,10 @@ describe('the collect readers are their own (spec §5.10)', () => {
     // ARCH-41 (#776): `shared/workspaceTransitions.js` is L0: the refusal words are typed and narrowed from its table.
     // D-7059 (ARCH-73 #808): `./journalKernel.js` is L1 and imports nothing: the journal's NDJSON framing is its
     // `splitJournalRecords`, and the parse's strictness stays here.
+    // Cleanup un-wedge R2 (D-8000): `./cleanupHeldBy.js` is L1 importing L0 alone, for `heldByRowsOf`, the one reader of an
+    // audit document's holding rows.
     const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
-      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './journalKernel.js']);
+      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './cleanupHeldBy.js', './journalKernel.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

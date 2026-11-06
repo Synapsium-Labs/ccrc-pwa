@@ -772,7 +772,8 @@ describe('the source', () => {
     const at = (needle: string): number[] => lines.flatMap((l, i) => (l.includes(needle) ? [i] : []));
     const read = at('_ws_workdirid_read "$o" "$w"');
     expect(read, 'one field read').toHaveLength(1);
-    const unread = at('unread+="${unread:+, }$n"; continue;')[0]!;
+    // Cleanup un-wedge R2 (D-8000): the unreadable row is named by its id at the same arm, before its `continue`.
+    const unread = at('unread+="${unread:+, }$n"; _ws_held_by_put workdir-unreadable "$o"; continue;')[0]!;
     const notAbs = at('[[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+=')[0]!;
     expect(unread < read[0]! && read[0]! < notAbs, 'after the .workdir read, before the first arm that skips a row').toBe(true);
     expect(lines.slice(unread + 1, read[0]!).some((l) => /\bcontinue\b/.test(l)), 'no continue between them').toBe(false);
@@ -781,7 +782,8 @@ describe('the source', () => {
   it('the field arms only ever add: every bucket write between them and the outrank line appends', () => {
     const body = bodyOf('_ws_reclaim_workdir_shared');
     const a = body.indexOf('# AND WHERE EACH ROW ENTERED: rules (a) to (d)');
-    const b = body.indexOf('[[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0');
+    // R2 (D-8000): the outrank line also clears the rows it names before it returns 0.
+    const b = body.indexOf('[[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || { _WS_HELD_BY=\'\'; _WS_HELD_BY_IDS=\'\'; _WS_HELD_BY_RC=0; return 0; }');
     expect(a > -1 && b > a, 'the arms stand above the outrank line').toBe(true);
     const arms = code(body.slice(a, b)).join('\n');
     const writes = [...arms.matchAll(/\b(_WS_(?:SHARED|NESTED|THROUGH)_ROWS|un(?:walk|rec|res|placed|mine|proc|read|leaf|mount|pend|field))(\+?=)/g)];

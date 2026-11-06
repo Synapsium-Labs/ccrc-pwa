@@ -38,7 +38,7 @@ import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
 import { readChildSiblings } from './siblingRead.js';
-import { heldByOf, type HeldByRead } from '../cleanupHeldBy.js';
+import { heldByRowsOf, type HeldByRead } from '../cleanupHeldBy.js';
 import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
@@ -901,7 +901,7 @@ export function parseChildReclaimAuditFailed(sessionId: string, stdout: string, 
     return { kind: 'unreadable', detail };
   }
   return { kind: 'unmeasured', resume: typeof v.resume === 'string' && v.resume !== '' ? 'resumable' : 'not-resumable', detail,
-    heldBy: heldByOf(v) };
+    ...heldByRowsOf(v) };
 }
 
 /** The exact stderr shape ccd's own `die` calls print for the SIX single-line
@@ -2354,7 +2354,7 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
       }
       if (audit.kind === 'unmeasured') {
         return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
-          token: CHILD_RECLAIM_PROBE_UNMEASURED, heldBy: audit.heldBy };
+          token: CHILD_RECLAIM_PROBE_UNMEASURED, ...(audit.heldBy === undefined ? {} : { heldBy: audit.heldBy }) };
       }
       return null;
     },

@@ -66,6 +66,14 @@ export function heldByOf(doc: unknown): HeldByRead {
 }
 
 /** True when the read names at least one row and says the child has no fault of its own. */
+/** What a lane parser spreads onto its read: `{ heldBy }` only when the document NAMES rows, else nothing. Every other
+ *  answer (absent, not-reached, none, malformed) contributes no item and folds nothing, exactly as no read does, so a
+ *  read without rows keeps the shape it had before R2. */
+export function heldByRowsOf(doc: unknown): { readonly heldBy?: HeldByRead } {
+  const read = heldByOf(doc);
+  return read.kind === 'rows' ? { heldBy: read } : {};
+}
+
 export function heldOnlyByListed(read: HeldByRead | undefined): boolean {
   return read !== undefined && read.kind === 'rows' && read.rows.length > 0 && read.own === false;
 }
