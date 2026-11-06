@@ -6,10 +6,12 @@ manager. A wrapper cannot set it (`_wrap_parse_shape` refuses the shape), and `~
 writes the process `PATH` as the last line of its shell snapshot.
 
 - **D-8050 (2026-11-06)** — ccd gives every session `~/.local/bin` at its two launch lines. `SESSION_PANE_PATH`, one
-  definition, runs in the pane before the last `cd`. `$HOME` and `$PATH` stay literal for the pane's shell, so it names
-  no machine. The folder goes last, so a tool the box already resolves keeps answering and the folder only adds names.
-  A `PATH` that already holds the folder is left as it was. Both lines sit in `_spawn_start`, which every account kind
-  reaches through its wrapper: upstream, generated and codex.
+  definition, is a `/bin/sh -c` word between `exec env`'s variables and the wrapper, ending in `exec "$@"`, so no
+  process stays between the pane and the wrapper. It is one single-quoted word because the pane's shell is whatever
+  tmux has as its default, and a fish pane rejects a whole `-c` string for one `case` in it. `$HOME` and `$PATH` stay
+  literal for that `/bin/sh`, so it names no machine. The folder goes last, so a tool the box already resolves keeps
+  answering and the folder only adds names. A `PATH` that already holds the folder is left as it was. Both lines sit
+  in `_spawn_start`, which every account kind reaches through its wrapper: upstream, generated and codex.
 
 ## What this switches on
 
@@ -23,6 +25,11 @@ writes the process `PATH` as the last line of its shell snapshot.
 ## Known limits
 
 - A running session keeps its old `PATH` until it restarts.
+- A fish pane on Linux still starts nothing, with or without this step: the tool-child's `${...-}` on that line is not
+  fish syntax (`fish -c 'exec env A="${X-}" true'` exits 127, fish 4.9.3). That line is not changed here. The Darwin
+  line runs under fish.
+- CI has no fish binary, so the fish row skips there. `ccd-session-path.test.ts` also pins, on every box, that no shell
+  grammar of this kind stands outside single quotes on the Darwin line.
 - An account whose `settings.json` sets `env.PATH` keeps that value, because Claude Code applies it over the launch
   `PATH`.
 - `doctor`'s `graphify-path` check still names `ccrc install` as the remedy when it runs from a session that has not

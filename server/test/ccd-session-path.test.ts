@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { makeCcdHarness, sessionPanePath, type CcdHarness } from './ccdWsHelpers.js';
 
 const UUID = 'deadbeef-0000-4000-8000-000000000000';
@@ -29,7 +29,14 @@ const RESUME_DIES = `sleep() { :; };
     };`;
 
 /** The last step of each account kind, as `ccrc wrappers` writes it: every kind ends in an exec of a file in the folder. */
-const REPORT = `#!/bin/sh\nprintf 'tool=%s\\npath=%s\\n' "$(command -v ${TOOL})" "$PATH" > "$HOME/session-report"\n`;
+const REPORT = `#!/bin/sh\nprintf 'tool=%s\\npath=%s\\npid=%s\\nargs=%s\\npwd=%s\\n' "$(command -v ${TOOL})" "$PATH" "$$" "$#:$*" "$PWD" > "$HOME/session-report"\n`;
+/** Each shell a pane may have, as `ccd-workdirid.test.ts` lists them: `sh` and `bash` everywhere, the rest where installed. */
+const onPath = (name: string): string =>
+  (process.env['PATH'] ?? '').split(':').filter(Boolean).map((d) => path.join(d, name)).find((f) => fs.existsSync(f)) ?? '';
+const SHELLS: ReadonlyArray<readonly [string, string, boolean]> = [
+  ['sh', '/bin/sh', true], ['bash', onPath('bash'), true],
+  ['dash', onPath('dash'), false], ['zsh', onPath('zsh'), false], ['fish', onPath('fish'), false],
+];
 const KINDS = [
   { kind: 'upstream', wrapper: 'claude', target: null },
   { kind: 'generated', wrapper: 'lane-a', target: 'claude' },
@@ -50,11 +57,13 @@ const wrapperOf = ({ wrapper, target }: (typeof KINDS)[number]): void => {
   put(path.join(bin(), target), REPORT);
   put(path.join(bin(), wrapper), `#!/usr/bin/env bash\nexport CLAUDE_CONFIG_DIR="$HOME/.${wrapper}"\nexec "$HOME/.local/bin/${target}" "$@"\n`);
 };
-const spawnLines = (wrapper: string, workdir = h.home): string[] => {
+/** `os` picks the arm, as `CCD_OS` does in `ccd-route-spawn.test.ts`. Darwin is the arm whose whole line a fish pane can
+ *  read: on Linux the tool-child's `${...-}` is not fish syntax, so that pane parses nothing with or without this step. */
+const spawnLines = (wrapper: string, workdir = h.home, os?: 'linux' | 'darwin'): string[] => {
   h.sh(`_reg_set myid wrapper ${wrapper}
         _reg_set myid workdir '${workdir}'
         _reg_set myid uuid ${UUID}`);
-  h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
+  h.sh(`${os === undefined ? '' : `CCD_OS=${os}; `}${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null`);
   const lines = h.calls().filter((c) => c.startsWith('tmux new-session'));
   expect(lines).toHaveLength(2);
   return lines.map((l) => {
@@ -66,15 +75,15 @@ const spawnLines = (wrapper: string, workdir = h.home): string[] => {
 /** What the pane does with the string: the same `-c` tmux gives its default shell, with only the pane's HOME and PATH. */
 const runPane = (command: string, pathValue = BOX_PATH, shell = '/bin/sh'): Record<string, string> => {
   fs.rmSync(path.join(h.home, 'session-report'), { force: true });
-  try {
-    execFileSync(shell, ['-c', command], { env: { HOME: h.home, PATH: pathValue }, stdio: 'ignore', cwd: h.home });
-  } catch { /* a pane that fails is a missing report, which each case reads */ }
+  // A pane that fails is a missing report, which each case reads.
+  const { pid } = spawnSync(shell, ['-c', command], { env: { HOME: h.home, PATH: pathValue }, stdio: 'ignore', cwd: h.home });
   const report = path.join(h.home, 'session-report');
   if (!fs.existsSync(report)) return {};
-  return Object.fromEntries(fs.readFileSync(report, 'utf8').trim().split('\n').map((l) => {
+  const fields = Object.fromEntries(fs.readFileSync(report, 'utf8').trim().split('\n').map((l) => {
     const i = l.indexOf('=');
     return [l.slice(0, i), l.slice(i + 1)];
   }));
+  return { ...fields, panePid: String(pid) };
 };
 
 describe('a started session has $HOME/.local/bin on its PATH (D-8050)', () => {
@@ -87,12 +96,42 @@ describe('a started session has $HOME/.local/bin on its PATH (D-8050)', () => {
     }
   });
 
-  it.each(['/bin/sh', 'bash'])('runs the same under %s, the shell tmux may be configured with', (shell) => {
+  for (const [name, shell, needed] of SHELLS) {
+    it.skipIf(!needed && shell === '')(`under ${name}, a shell a pane may have: both lines start the wrapper with the folder last`, () => {
+      expect(shell, `${name} is on the suite's PATH`).not.toBe('');
+      wrapperOf(KINDS[0]);
+      put(path.join(bin(), TOOL), '#!/bin/sh\n');
+      for (const line of spawnLines('claude', h.home, 'darwin')) {
+        const report = runPane(line, BOX_PATH, shell);
+        expect(report.tool, line).toBe(path.join(bin(), TOOL));
+        expect(report.path).toBe(`${BOX_PATH}:${bin()}`);
+      }
+    });
+  }
+
+  it('every word outside single quotes is one all those shells read, so no pane has to run on a fish binary to prove it', () => {
     wrapperOf(KINDS[0]);
-    put(path.join(bin(), TOOL), '#!/bin/sh\n');
-    const [primary] = spawnLines('claude');
-    const resolved = shell === 'bash' ? execFileSync('/bin/sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).trim() : shell;
-    expect(runPane(primary!, BOX_PATH, resolved).tool).toBe(path.join(bin(), TOOL));
+    for (const line of spawnLines('claude', h.home, 'darwin')) {
+      const outside = line.replace(/'[^']*'/g, "''");
+      expect(outside, 'a shell that cannot parse one word runs none of the string').not.toMatch(/\b(case|esac|if|fi|for|while|done)\b|[{}]|\$\(/);
+    }
+  });
+
+  it('the wrapper keeps the pane: no process stays between them, and its arguments arrive whole', () => {
+    wrapperOf(KINDS[0]);
+    const lines = spawnLines('claude');
+    const report = runPane(lines[1]!);
+    expect(report.pid).toBe(report.panePid);
+    expect(report.args).toBe(`3:--session-id ${UUID} --dangerously-skip-permissions`);
+  });
+
+  it('a workdir reached through a link keeps its logical spelling, as the pane entered it', () => {
+    wrapperOf(KINDS[0]);
+    const real = path.join(h.home, 'real');
+    const link = path.join(h.home, 'link');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, link);
+    for (const line of spawnLines('claude', link)) expect(runPane(line).pwd).toBe(link);
   });
 
   it('the folder is added last, so a tool the box already resolves keeps answering', () => {
@@ -137,6 +176,6 @@ describe('a started session has $HOME/.local/bin on its PATH (D-8050)', () => {
     const step = sessionPanePath(h);
     expect(step).toContain('$HOME/.local/bin');
     expect(step).not.toContain(h.home);
-    for (const line of spawnLines('claude')) expect(line).toContain(`true; ${step}; cd '`);
+    for (const line of spawnLines('claude')) expect(line).toContain(` ${step} '${bin()}/claude' `);
   });
 });

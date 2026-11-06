@@ -65,7 +65,7 @@ const spawnBoth = (id: string, pre = ''): { lines: string[]; err: string; code: 
 };
 /** Today's argv for a top-level row (`ccd-spawn-child-settings.test.ts`'s `today`), with `flags` where `launchflags` go. */
 const line = (wrapper: string, flags: string, sidflag: string, env = ''): string =>
-  `cd '${h.home}' && ${paneFragment(h, TOP, h.home)}true; ${sessionPanePath(h)}; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)}${sessionTmpToken(h)}${env} '${h.home}/.local/bin/${wrapper}' ${flags} ${sidflag} --dangerously-skip-permissions`;
+  `cd '${h.home}' && ${paneFragment(h, TOP, h.home)}true; cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')}${adj(h)}${sessionTmpToken(h)}${env} ${sessionPanePath(h)} '${h.home}/.local/bin/${wrapper}' ${flags} ${sidflag} --dangerously-skip-permissions`;
 const settingsOf = (l: string): string[] => [...l.matchAll(/--settings '([^']*)'/g)].map((m) => m[1] as string);
 const warnings = (err: string): string[] => err.split('\n').filter((l) => /account deny rules/.test(l));
 
