@@ -25,6 +25,7 @@ import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { isWorkspaceRefusal, type WorkspaceRefusal } from '../../shared/workspaceTransitions.js';
 import { splitJournalRecords } from './journalKernel.js';
+import { heldByOf, type HeldByRead } from './coord/cleanupHeldBy.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -125,7 +126,9 @@ export type CollectAudit =
   | { readonly kind: 'verdict'; readonly verdict: string; readonly idleAt: number | null;
       readonly witnessRun: number | null; readonly leaf: string | null; readonly detail: string }
   | { readonly kind: 'unmeasured'; readonly probe: string; readonly witnessRun: number | null;
-      readonly leaf: string | null; readonly detail: string }
+      readonly leaf: string | null; readonly detail: string;
+      /** Cleanup un-wedge R2: the rows that hold the temp root (`heldByOf`); absent from an older ccd. */
+      readonly heldBy?: HeldByRead }
   | { readonly kind: 'unreadable'; readonly detail: string }
   | { readonly kind: 'no-document'; readonly stderr: string };
 
@@ -185,7 +188,7 @@ export function parseCollectAudit(sessionId: string, ok: boolean, stdout: string
       return { kind: 'unreadable', detail: `ws-audit --collect failed with a document that is not its unmeasured answer${said}` };
     }
     if (seen.kind === 'bad') return { kind: 'unreadable', detail: 'ws-audit --collect answered unmeasured with a witness it cannot vouch for' };
-    return { kind: 'unmeasured', probe, witnessRun: witnessRunOf(seen), leaf, detail };
+    return { kind: 'unmeasured', probe, witnessRun: witnessRunOf(seen), leaf, detail, heldBy: heldByOf(v) };
   }
   if (v.verdict === 'collectable') {
     if (typeof v.token !== 'string' || !COLLECT_TOKEN_SHAPE.test(v.token)) {
@@ -794,6 +797,9 @@ export interface CollectEntry {
   readonly evidence: CollectEvidence;
   readonly feedEpisode: string | null;
   readonly feedOutlivesObservations: boolean;
+  /** Cleanup un-wedge R2: the rows the latest audit said hold this id — set only by an unmeasured audit that named
+   *  them, cleared by every other audit. Absent: no read yet. Counted on the held-rows line, never paced on. */
+  readonly heldBy?: HeldByRead;
 }
 
 /** A first sighting, and every id after a restart: nothing observed, nothing counted, due at once. `gen` is a clear
@@ -862,6 +868,11 @@ export function collectIdleSchedule(idleAt: number | null, arrival: ChildReclaim
  *  word continues its own streak and every other answer ends it. Only `changed-recently` keeps a schedule. A
  *  collectable, verdict or unmeasured document brings its own evidence; no document and an unreadable one keep the last. */
 export function collectAfterAudit(e: CollectEntry, a: CollectAudit, s: CollectStep, observes: boolean): CollectEntry {
+  // R2: the entry keeps the LATEST audit's holding rows, and only an unmeasured one carries any.
+  return { ...collectAfterAuditFrom(e, a, s, observes), heldBy: a.kind === 'unmeasured' ? a.heldBy : undefined };
+}
+
+function collectAfterAuditFrom(e: CollectEntry, a: CollectAudit, s: CollectStep, observes: boolean): CollectEntry {
   const t = s.now.monoMs;
   // the LATEST document's evidence (spec §5.10): every document that carries one brings it; the rest keep the last
   const brought = collectEvidenceOf(a);

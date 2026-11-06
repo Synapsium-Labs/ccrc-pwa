@@ -23,6 +23,7 @@ import {
 import { CCD_LOCK_UNOPENABLE } from '../../shared/ccd-refusal.js';
 import { runNamesSession } from './coord/runBinding.js';
 import type { SiblingRef } from './coord/staleSibling.js';
+import type { HeldByRead } from './coord/cleanupHeldBy.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
  *  (spec §5.7, "Presence, and its bound"). Unbounded would be worse than
@@ -178,6 +179,10 @@ export interface ChildReclaimSweepEntry extends ChildReclaimTierState {
    *  `firstEligibleAt`, then id), so a child that defers every pass cannot hog
    *  the one in-flight slot. */
   readonly lastAskedAt: number | null;
+  /** Cleanup un-wedge R2: the rows its latest outcome said hold it — set only by a failure that carried them (the
+   *  audit's `unmeasured` answer), and cleared by every other outcome, so it is always the LATEST answer's. Absent until
+   *  then, which reads as "no read yet" (`withCleanupHeldBy`). A restart rebuilds it on the passes that follow. */
+  readonly heldBy?: HeldByRead;
   /** The birth of the workspace generation this entry describes: the opening
    *  `create`'s `at`, on ccd's clock, compared for equality only
    *  (`childReclaimSameGeneration`). A different birth is a different
@@ -837,7 +842,9 @@ export function childReclaimKeptVerdicts(
  *  persistent tier is decided here, from the answer alone. */
 export type ChildReclaimSweepOutcome =
   | { readonly kind: 'reclaimed' | 'gone' }
-  | { readonly kind: 'failed'; readonly token: string | null; readonly stuck: boolean }
+  | { readonly kind: 'failed'; readonly token: string | null; readonly stuck: boolean;
+      /** R2: the holding rows of an audit that answered `unmeasured`; absent on every other failure. */
+      readonly heldBy?: HeldByRead }
   | { readonly kind: 'refused'; readonly token: string }
   | { readonly kind: 'deferred'; readonly why: string };
 
@@ -931,13 +938,13 @@ export function childReclaimNextEntry(
         ...entry, ...childReclaimTierAfterFailure(entry, outcome.token, outcome.stuck),
         consecutiveFailures: entry.consecutiveFailures + 1, lastFailedAt: ask.at.monoMs,
         firstViewerDeferredAt: null, lastViewerDeferredAt: null, lastViewerWallAt: null, viewerHeldSince: null,
-        refusedAt: null, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
+        refusedAt: null, lastAskedAt: ask.at.monoMs, lastDeferWhy: null, heldBy: outcome.heldBy,
       };
     case 'refused':
       return {
         ...entry, ...CHILD_RECLAIM_TIER_NONE, consecutiveFailures: 0, lastFailedAt: null,
         firstViewerDeferredAt: null, lastViewerDeferredAt: null, lastViewerWallAt: null, viewerHeldSince: null,
-        refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
+        refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs, lastDeferWhy: null, heldBy: undefined,
       };
     case 'deferred': {
       const viewerClass = (CHILD_RECLAIM_VIEWER_DEFERS as readonly string[]).includes(outcome.why);
@@ -959,6 +966,7 @@ export function childReclaimNextEntry(
         viewerHeldSince: inLine ? (entry.viewerHeldSince ?? answered.monoMs) : null,
         refusedAt: null, consecutiveFailures: 0, lastFailedAt: null, lastAskedAt: ask.at.monoMs,
         lastDeferWhy: outcome.why,                                                                              // the episode a feed row is written once for
+        heldBy: undefined,                                                                                      // R2: only a failure carries rows
       };
     }
   }

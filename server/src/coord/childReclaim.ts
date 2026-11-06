@@ -38,6 +38,7 @@ import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
 import { readChildSiblings } from './siblingRead.js';
+import { heldByOf, type HeldByRead } from './cleanupHeldBy.js';
 import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
@@ -487,7 +488,9 @@ export type ChildReclaimOutcome =
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
-      readonly resume: ChildReclaimResume; readonly detail: string; readonly token: string | null };
+      readonly resume: ChildReclaimResume; readonly detail: string; readonly token: string | null;
+      /** R2: the audit's holding rows, on the audit's own `unmeasured` failure only. */
+      readonly heldBy?: HeldByRead };
 
 /** The executor's answer as the sweep's memory needs it (spec §5.7, the persistent tier). The ONE projection:
  *  `failed` carries ccd's own word and whether it is in the stuck class, decided HERE by the class's one spelling
@@ -500,7 +503,8 @@ export function childReclaimSweepOutcomeOf(o: ChildReclaimOutcome): ChildReclaim
     case 'reclaimed': case 'gone': return { kind: o.kind };
     case 'refused': return { kind: 'refused', token: o.token };
     case 'deferred': return { kind: 'deferred', why: o.why };
-    case 'failed': return { kind: 'failed', token: o.token, stuck: isChildReclaimStuckToken(o.token) };
+    case 'failed': return { kind: 'failed', token: o.token, stuck: isChildReclaimStuckToken(o.token),
+      ...(o.heldBy === undefined ? {} : { heldBy: o.heldBy }) };
   }
 }
 
@@ -815,7 +819,9 @@ export type ChildReclaimAuditRead =
  *  breadcrumb phase (a non-empty string `resume`): a breadcrumb stood when the
  *  audit read it. Nothing else is read from it. No hand-kept phase list. */
 export type ChildReclaimAuditUnmeasured = {
-  readonly kind: 'unmeasured'; readonly resume: 'resumable' | 'not-resumable'; readonly detail: string };
+  readonly kind: 'unmeasured'; readonly resume: 'resumable' | 'not-resumable'; readonly detail: string;
+  /** The rows that hold the child (cleanup un-wedge R2), read by `heldByOf`, the one reader: `absent` from an older ccd. */
+  readonly heldBy?: HeldByRead };
 
 /** What an exit-1 audit document can answer: its `unmeasured` answer or
  *  `unreadable`. It has NO `token` arm and no `refused` arm, so no exit-1
@@ -894,7 +900,8 @@ export function parseChildReclaimAuditFailed(sessionId: string, stdout: string, 
   if (!isRecord(v) || v.id !== sessionId || v.mode !== 'reclaim' || v.verdict !== 'unmeasured') {
     return { kind: 'unreadable', detail };
   }
-  return { kind: 'unmeasured', resume: typeof v.resume === 'string' && v.resume !== '' ? 'resumable' : 'not-resumable', detail };
+  return { kind: 'unmeasured', resume: typeof v.resume === 'string' && v.resume !== '' ? 'resumable' : 'not-resumable', detail,
+    heldBy: heldByOf(v) };
 }
 
 /** The exact stderr shape ccd's own `die` calls print for the SIX single-line
@@ -2347,7 +2354,7 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
       }
       if (audit.kind === 'unmeasured') {
         return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
-          token: CHILD_RECLAIM_PROBE_UNMEASURED };
+          token: CHILD_RECLAIM_PROBE_UNMEASURED, heldBy: audit.heldBy };
       }
       return null;
     },

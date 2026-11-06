@@ -1164,13 +1164,14 @@ describe('the ranked held bytes (D-5943)', () => {
 });
 
 describe('L1', () => {
-  it('imports L0 alone — no node:, no fs, no fastify', () => {
+  it('imports L0 and the held-rows reader alone — no node:, no fs, no fastify', () => {
     const src = readFileSync(path.join(path.dirname(CCD), '..', 'server', 'src', 'archivedExpiry.ts'), 'utf8');
     const froms = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
     // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
     // ARCH-41 (#776): the expiry words are typed and narrowed from L0's `WORKSPACE_TRANSITIONS`.
+    // Cleanup un-wedge R2 (D-8000): `heldByOf`, the ONE reader of an audit document's `heldBy`, is L1 importing L0 alone.
     expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js',
-      '../../shared/workspaceTransitions.js', '../../shared/switches.js']);
+      '../../shared/workspaceTransitions.js', './coord/cleanupHeldBy.js', '../../shared/switches.js']);
   });
 });
