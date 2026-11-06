@@ -3,8 +3,8 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   DELEGATION_ADOPTABLE_SOURCES, DELEGATION_ADOPT_CARRIER_READS_PER_PASS, DELEGATION_ADOPT_SETTLE_MS, DELEGATION_AUDITS_PER_PASS, DELEGATION_AUDIT_HOLD_MS,
   DELEGATION_HOLD_CLOSING, DELEGATION_REMINDER_LEAD_MS, adoptTerminalEvidenceAt, adoptionAudits, adoptionCarrierReads, adoptionParentFacts, buildLeaseDigest,
-  buildLeaseReminder, decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptionInput, type AdoptionParentReads, type HeldLeaseAudit,
-  type ParentFact,
+  buildLeaseReminder, decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptWatch, type AdoptionInput, type AdoptionParentReads,
+  type HeldLeaseAudit, type ParentFact,
 } from '../src/coord/delegation-adoption.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
 import { leaseCoordinatorOf } from '../src/coord/delegation-lease-acts.js';
@@ -377,13 +377,13 @@ describe('review 1587 (fix round 1): the parents, kept evidence, held audits and
     const cp = active();
     const l = cp.leases[0]!;
     const walk = (over: Partial<AdoptionParentReads>): string[] => {
-      let watch: ReadonlyMap<string, never> = new Map();
+      let watch: ReadonlyMap<string, AdoptWatch> = new Map();
       const seen: string[] = [];
       for (let n = 0; n <= 10; n += 1) {
         const now = T0 + n * 60_000;
-        const r = decideAdoption(base(cp, now, { parents: adoptionParentFacts(cp, reads(l, { now: iso(now), alive: new Set(), ...over })), watch: watch as never }));
+        const r = decideAdoption(base(cp, now, { parents: adoptionParentFacts(cp, reads(l, { now: iso(now), alive: new Set(), ...over })), watch }));
         seen.push(...kinds(r));
-        watch = r.watch as never;
+        watch = r.watch;
       }
       return seen;
     };
@@ -395,11 +395,11 @@ describe('review 1587 (fix round 1): the parents, kept evidence, held audits and
     const cp = active();
     const l = cp.leases[0]!;
     const seen = new Map([[l.leaseId, { generation: 1, terminalAt: iso(T0), passes: 2 }]]);
-    const one = (p: ParentFact, watch: ReadonlyMap<string, never> = seen as never, over: Partial<AdoptionInput> = {}) =>
+    const one = (p: ParentFact, watch: ReadonlyMap<string, AdoptWatch> = seen, over: Partial<AdoptionInput> = {}) =>
       decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, p]]), watch, ...over }));
     const aged = live(l, { alive: false });                                       // present, same incarnation, not alive, deadSince gone
     expect(kinds(one(aged)), 'live: adopted on the death seen').toEqual(['adopt']);
-    expect(kinds(one(aged, seen as never, { marker: 'absent' })), 'shadow: still counted').toEqual(['would-adopt']);
+    expect(kinds(one(aged, seen, { marker: 'absent' })), 'shadow: still counted').toEqual(['would-adopt']);
     const again = one(live(l));
     expect(again.decisions, 'alive again at its incarnation (a supervisor restart)').toEqual([]);
     expect(again.watch.size).toBe(0);
