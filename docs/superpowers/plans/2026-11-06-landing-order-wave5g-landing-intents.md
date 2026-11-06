@@ -229,7 +229,7 @@ git commit -m "feat(dispatch): a dispatch names its landing intents and another 
 - Modify: `ccd/coordinator-skill/SKILL.md`
 - Modify: `ccd/coordinator-skill/references/wave-lifecycle.md`
 - Modify: `README.md` (the run-lifecycle paragraph on what dispatch checks)
-- Modify (test): `server/test/coordinator-skill.test.ts`: step 6's pins of the D-7942 sentence: grep the file for ``with the run at `working` `` and change every hit. They are `REPORT_LESS` (the review 1303 F2 case), the inline whole-paragraph array and the `toContain` in the 5f report-less pin case, and `STEP6_AFTER` if the wrap moves, changed to the new wording in the same commit; no clause pin changes
+- Modify (test): `server/test/coordinator-skill.test.ts`: step 6's pins of the D-7942 sentence: grep the file for the old sentence's closing words, `grep -n 'with the run at .working.' server/test/coordinator-skill.test.ts`, and change every hit. They are `REPORT_LESS` (the review 1303 F2 case), the inline whole-paragraph array and the `toContain` in the 5f report-less pin case, and `STEP6_AFTER` if the wrap moves, changed to the new wording in the same commit; no clause pin changes
 
 **Interfaces:**
 - Consumes: Task 2's code, field and wire body.
