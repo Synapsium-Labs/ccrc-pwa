@@ -280,7 +280,9 @@ export interface SessionRecord {
   lastEnd: LastEnd | null;
   /** `$REG/<id>.hibernated` — `<epoch> <idle-hours>`, written by `ccd hibernate` (D-5242) and removed by the
    *  wake (`ensure`/`start`), `stop` and `ws-archive`. Its epoch in MS. Read ONLY when the listing names it, so a
-   *  row that never slept costs no read; parsed by `parseHibernated` (malformed → null, the row still parses). */
+   *  row that never slept costs no read; parsed by `parseHibernated`. A listed marker that gives no time (malformed, or
+   *  its read failed) borrows the stop stamp's time, and is null with no readable stop stamp (`hibernatedAtOf`, D-8067):
+   *  this time can be a borrowed one, so it says WHEN only as nearly as the stop does. */
   hibernatedAt: number | null;
   /** Which of `started`/`stopped`/`supervised` were LISTED but unreadable this
    *  pass — the same evidence rule `unmeasured` uses for the identity triple,
@@ -565,7 +567,7 @@ export const SUBSTRATE_NO_REASON = '<substrate marker empty — reason lost>';
  * so a caller gets `absent`/`unreadable` apart rather than collapsed to one
  * `null`. The fields that have not migrated to the measured ladder (`home`/
  * `pool`/`lastswap`/`workspace`/`base`/`prphase`/`prnumber`/`prcheckedat`/
- * `archived`/`archivemanifest`/`swapblocked`/`spawn`/`lastend`/`hibernated`/`title`) still fold a failure
+ * `archived`/`archivemanifest`/`swapblocked`/`spawn`/`lastend`/`title`) still fold a failure
  * to null, in `buildRecord`'s `listedField`, which also marks the record
  * (`plainFieldUnreadable`) when the read was `unreadable`.
  *
@@ -633,6 +635,22 @@ function childMarkOf(read: MeasuredRead, listed: boolean): ChildMark {
   // named at all is `none` too (`child-reclaim-mark.test.ts`'s own kept
   // case), same as a proven absence of one.
   return listed ? { kind: 'unreadable' } : { kind: 'none' };
+}
+
+/** `SessionRecord.hibernatedAt` from the marker's read and the row's stop stamp (D-8067, operator ruling 2026-11-06).
+ *  `read` is null when the listing does not name the marker: no marker, whatever the stop says. A read that proves the
+ *  file gone is a wake or a stop that raced this read (each removes the marker), so a stamp beside it is no sleeper. A
+ *  listed marker that gives no time, by a failed read or a body `parseHibernated` refuses, still means asleep: ccd reads
+ *  the file's presence, and removes it on every stop and wake, so the pair stands for a sleeper. A wrong `asleep` costs
+ *  one budgeted wake; a wrong `dead` can cost a reclaimed run. The time is the stop stamp's, in SECONDS on disk, under
+ *  `parseHibernated`'s bounds. With no such stamp the row reads as it would with no marker. This is here and not in the
+ *  parser, which never names a time its body did not give. */
+function hibernatedAtOf(read: MeasuredRead | null, stop: { at: number } | null): number | null {
+  if (read === null || (!read.ok && read.reason === 'absent')) return null;
+  const own = read.ok ? parseHibernated(read.content) : null;
+  if (own !== null || stop === null) return own;
+  const borrowed = stop.at * 1000;
+  return Number.isSafeInteger(borrowed) && borrowed > 0 ? borrowed : null;
 }
 
 /** `$REG/<id>.deny-settings`'s ONE reader (plan Task 15, D-5299): `null` is an unlisted field (`none`); a listed
@@ -849,7 +867,7 @@ async function buildRecord(
   const [wrapperRead, projectRead, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRaw,
+    routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRead,
     namedRead, titleRaw] = await Promise.all([
     // The identity triple (`wrapper`, `workdir`, `uuid`) and `hold` are read whatever the listing says (D-6388): the
     // plan (C1) rules them unconditional. Every other field's one-listing window is accepted: its presence is as of
@@ -890,8 +908,9 @@ async function buildRecord(
     // as a child costs nothing and a listed field that will not read is `unreadable`, never `none`.
     listedOnlyMeasured('deny-settings'),
     listedOnlyMeasured('childshell'),
-    // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing.
-    listedField('hibernated'),
+    // D-5242: the hibernation marker, read only when listed — a row that never slept costs nothing. MEASURED (D-8067):
+    // a listed marker that will not read is told from one a wake removed (see `hibernatedAtOf`).
+    listedOnlyMeasured('hibernated'),
     // Named workspaces S2 (D-6163): the operator's name marker and title, each read only when listed, the D-5347 shape
     // `deny-settings` and `childshell` use — a row ccd never named costs no read, so the census does not move. `named`
     // is MEASURED: a listed marker that will not read is told from one that is gone (see `namedByOperator`).
@@ -987,6 +1006,8 @@ async function buildRecord(
   // identity triple's drop, applied here to "not a fault" instead of "row
   // gone".)
   const stopStamp = stoppedRead.ok ? packedStamp(stoppedRead.content) : null;
+  // `listedField`'s own remembering, for the one plain field read measured: a failed read is never cached.
+  if (hibernatedRead !== null && !hibernatedRead.ok && hibernatedRead.reason === 'unreadable') plainUnreadable = true;
   const swapStamp = packedStamp(swapBlockedRaw);
   const spawnStamp = packedStamp(spawnRaw);
   const spawnRc = spawnStamp === null ? null : numOrNull(spawnStamp.rest);
@@ -1219,7 +1240,7 @@ async function buildRecord(
     // typing as `number`, the silent lie `numOrNull` exists to refuse.
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
     lastEnd: parseLastEnd(lastEndRaw),
-    hibernatedAt: parseHibernated(hibernatedRaw),
+    hibernatedAt: hibernatedAtOf(hibernatedRead, stopStamp),
     lifecycleUnmeasured,
     unmeasured,
     route,
@@ -1634,7 +1655,8 @@ export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string):
 /** `$REG/<id>.hibernated`'s body (D-5242): `<epoch-seconds>` and, after one space, the idle hours `ccd hibernate`
  *  measured (an integer or a decimal). The epoch is what is read, in MS; the hours are the log's, not the wire's.
  *  Anything else — an empty body, a non-integer or zero epoch, a third word — is null: a marker this build cannot
- *  read never names a time it did not measure, and the row still parses. */
+ *  read never names a time it did not measure, and the row still parses. What a null means for the row is
+ *  `hibernatedAtOf`'s (D-8067). */
 export function parseHibernated(raw: string | null): number | null {
   if (raw === null) return null;
   const m = /^([1-9][0-9]{0,15})(?: ([0-9]+(?:\.[0-9]+)?))?$/.exec(raw.trim());

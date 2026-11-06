@@ -328,8 +328,8 @@ export interface FleetSession {
    *  bump. */
   lastEnd: LastEnd | null;
   /** D-5242 (`hibernate-long-idle-sessions`): when `ccd hibernate` put this session to sleep, epoch MS, from
-   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep, and on a
-   *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
+   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep. A listed marker
+   *  that gives no time carries the stop stamp's time instead, and null with no readable stop stamp (D-8067). ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
   /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
