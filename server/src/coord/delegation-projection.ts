@@ -1,7 +1,7 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
 // THIS MODULE IS L1. It imports the shared wire, the pure model, the one newest-attempt derivation (`delegation-conflicts.ts`), the correlation
-// module's tree key, the binding's R9 decider and the divergence sweep's ccd identity of a worktree, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
+// module's tree key, the lease's one carrier-state derivation (`delegation-lease-state.ts`, PR7), the binding's R9 decider and the divergence sweep's ccd identity of a worktree, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
 //
@@ -11,6 +11,7 @@
 // sometimes for different coordinators, and the placement stamps do not carry a run's interval.
 import {
   isDelegationActivityPlacement,
+  isDelegationCarrierState,
   isDelegationCreatorKind,
   isDelegationLiveness,
   isDelegationRowGroup,
@@ -33,6 +34,7 @@ import {
 import { delegationTreeKey } from './delegation-correlation.js';
 import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, treeLeaseOf } from './delegation-conflicts.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
+import { delegationCarrierStateOf } from './delegation-lease-state.js';
 import { ccdIdForWorktree } from '../divergence.js';
 
 /** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
@@ -118,6 +120,9 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
       leaseId: l.leaseId, parentId, via: coordinator === null ? null : l.parentId, group: groupOf(parentId), project: l.project,
       adminRecord: l.adminRecord, canonicalPath: l.canonicalPath, sourceKind: l.sourceKind, workspace,
       liveness: act ? liveness(act) : 'unmeasured', inferred, firstObservedAt: l.firstObservedAt,
+      // PR7 (Task 5.7.4): the carrier state and the hold's end; an unreleased lease is never `released`
+      disposition: delegationCarrierStateOf(l, checkpoint.leaseCarriers?.find((c) => c.leaseId === l.leaseId)) as Exclude<ReturnType<typeof delegationCarrierStateOf>, 'released'>,
+      expiresAt: l.cleanupDueAt,
     });
   }
 
@@ -173,4 +178,5 @@ function presenceOf(
 
 /** The projection's closed words, for the mail-routes kebab census: derived from `shared/api.ts`'s four tables, never re-spelled. */
 export const isDelegationProjectionKebab = (tok: string): boolean =>
-  isDelegationLiveness(tok) || isDelegationRowGroup(tok) || isDelegationActivityPlacement(tok) || isDelegationCreatorKind(tok);
+  isDelegationLiveness(tok) || isDelegationRowGroup(tok) || isDelegationActivityPlacement(tok) || isDelegationCreatorKind(tok)
+  || isDelegationCarrierState(tok);

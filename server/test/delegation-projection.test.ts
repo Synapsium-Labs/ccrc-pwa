@@ -26,7 +26,7 @@ import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
 import { conflictingTreeKeys, delegationTreeTarget, disownedTreeKey, disownedTreeKeys, resolvedAttemptCovered } from '../src/coord/delegation-conflicts.js';
 import { decideOperatorRetain, decideResolve, decideRetain, parseLeaseTarget } from '../src/coord/delegation-lease-acts.js';
 import { delegationSha256Hex, emptyDelegationCheckpoint, type DelegationLeaseCarrierRow } from '../src/coord/delegation-model.js';
-import { DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_CREATOR_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS } from '../../shared/api.js';
+import { DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_CREATOR_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, FLEET_PROTO, delegationLeaseDispositionOf, delegationLeaseExpiresAtOf } from '../../shared/api.js';
 
 const T0 = Date.parse('2026-10-20T00:00:00.000Z');
 const at = (min: number): string => formatDelegationInstant(T0 + min * 60_000);
@@ -525,3 +525,32 @@ describe('delegation-conflicts: the one derivation of conflict, resolution, diso
     expect(disownedTreeKey('a', 'b-c', null)).not.toBe(disownedTreeKey('a-b', 'c', null));
   });
 });
+
+// Delegation broker wave 5, PR7 (Task 5.7.4): the lease row carries its disposition and expiry, additively.
+describe('PR7: the lease row\'s disposition and expiry (W5-W1, W5-W2)', () => {
+  it('W5-W1: an adopted row carries disposition adopted and expiresAt = cleanupDueAt; an ephemeral one ephemeral and null; a transferring one transferring', () => {
+    const out = projectDelegation(input({
+      leases: [
+        lease({ leaseId: 'l1', adminRecord: 't1', disposition: 'adopted', adoptedAt: at(20), cleanupDueAt: at(20 + 7 * 1440) }),
+        lease({ leaseId: 'l2', adminRecord: 't2' }),
+        lease({ leaseId: 'l3', adminRecord: 't3', disposition: 'retained', retainedAt: at(21), cleanupDueAt: at(21 + 7 * 1440) }),
+      ],
+      carriers: [{ leaseId: 'l3', transferringSince: at(25), transferRun: 9, promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: null }],
+      census: census({ [PROJECT]: [record('t1'), record('t2'), record('t3')] }),
+    }));
+    expect(out.leases.map((l) => [l.leaseId, l.disposition, l.expiresAt])).toEqual([
+      ['l1', 'adopted', at(20 + 7 * 1440)], ['l2', 'ephemeral', null], ['l3', 'transferring', at(21 + 7 * 1440)]]);
+    expect(delegationLeaseDispositionOf(out.leases[0]!)).toBe('adopted');
+    expect(delegationLeaseExpiresAtOf(out.leases[1]!)).toBeNull();
+  });
+
+  it('W5-W2: the frame stays additive — the kebab check admits the carrier words, FLEET_PROTO is 1, and an older row (no member) reads as null', () => {
+    for (const w of ['ephemeral', 'adopted', 'retained', 'transferring', 'promoted']) expect(isDelegationProjectionKebab(w), w).toBe(true);
+    expect(FLEET_PROTO).toBe(1);
+    const older = { leaseId: 'l1' } as never;
+    expect(delegationLeaseDispositionOf(older)).toBeNull();
+    expect(delegationLeaseExpiresAtOf(older)).toBeNull();
+    expect(delegationLeaseDispositionOf({ disposition: 'released' } as never), 'released is never a row\'s word').toBeNull();
+  });
+});
+

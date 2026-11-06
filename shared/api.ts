@@ -11946,6 +11946,22 @@ export interface DelegationLeaseWire {
   /** Non-null exactly when `sourceKind` is `raw` (D-6999). */
   inferred: DelegationInferredWire | null;
   firstObservedAt: string;
+  /** Delegation wave 5 PR7: the lease's carrier state (`ephemeral`, `adopted`, `retained`, `transferring`, `promoted`). Absent from an older
+   *  server. Read it through `delegationLeaseDispositionOf`. */
+  disposition?: Exclude<DelegationCarrierState, 'released'>;
+  /** Delegation wave 5 PR7: until when an adopted or retained tree is held back from the orphan lane (its `cleanupDueAt`), else null.
+   *  Absent from an older server. Read it through `delegationLeaseExpiresAtOf`. */
+  expiresAt?: string | null;
+}
+
+/** `disposition`'s one reader (PR7): absence permits and reads as null, unknown (an older server's row). */
+export function delegationLeaseDispositionOf(row: Pick<DelegationLeaseWire, 'disposition'>): Exclude<DelegationCarrierState, 'released'> | null {
+  const d: unknown = row.disposition;
+  return isDelegationCarrierState(d) && d !== 'released' ? d : null;
+}
+/** `expiresAt`'s one reader (PR7): absence and null both read as null (no hold known); only a string is an expiry. */
+export function delegationLeaseExpiresAtOf(row: { readonly expiresAt?: string | null }): string | null {
+  return typeof row.expiresAt === 'string' ? row.expiresAt : null;
 }
 
 export interface DelegationUnownedWire {
