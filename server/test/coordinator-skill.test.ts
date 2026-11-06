@@ -849,6 +849,13 @@ describe('the coordinator skill: linkage', () => {
       // the stopped session's pane scope. A coordinator told about it would be told how to arm or disarm the stop of
       // its own workers' leftovers. The forbid-mention case below forbids it.
       'POST /api/coord/pane-scope-stop',
+      // DELEGATION BROKER wave 5 PR8 — Retain is NAMED THROUGH ITS CLIENT VERB, the intent route's reason: the reference
+      // `delegated-worktrees.md` tells the coordinator to run `ccrc-api leases retain`, and the closed client owns the path. The
+      // operator's two lease doors are session-gated and never a coordinator's, for `POST /api/coord/pause`'s reason: naming them
+      // would be an invitation to keep, attach or disown a worktree in the operator's name.
+      'POST /api/leases/:lease/retain',
+      'POST /api/leases/:lease/operator-retain',
+      'POST /api/leases/:lease/resolve',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -4284,5 +4291,29 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
     ].join(' '));
     // The fail-closed sentence directly follows the new equality sentence, so deleting it reds here on its own.
     expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.');
+  });
+});
+
+describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R17)', () => {
+  const ref = (): string => refs('delegated-worktrees.md');
+
+  it('exists, says worktree, and names the ccrc-api op', () => {
+    expect(REFERENCE_NAMES, 'the reference file is missing').toContain('delegated-worktrees.md');
+    expect(ref()).toContain('worktree');
+    expect(ref()).toContain('ccrc-api leases retain');
+  });
+
+  it('names no ccd lease verb, no `ws-add --base`, and describes nothing as repair', () => {
+    const t = ref();
+    expect(t).not.toMatch(/ws-lease/);
+    expect(t).not.toMatch(/ws-add\s+--base/);
+    expect(t).not.toMatch(/repair/i);
+  });
+
+  it('disambiguates "adopted" from `spawn-adopted` in one sentence', () => {
+    const sentences = ref().split(/(?<=\.)\s+/).filter((x) => x.includes('spawn-adopted'));
+    expect(sentences, 'exactly one sentence names spawn-adopted').toHaveLength(1);
+    expect(sentences[0]).toMatch(/wave-lifecycle\.md/);
+    expect(sentences[0]).toMatch(/not/);
   });
 });

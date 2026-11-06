@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, fifty-seven rows, and nothing else; the
+#   * The route comes from ROUTES below, fifty-eight rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328).
@@ -87,7 +87,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Fifty-seven rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Fifty-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -168,6 +168,10 @@ declare -A ROUTES=(
   # assertion that must equal the derived id, so it can never select another session. The row declares an id because the route
   # template has one, not because a caller supplies it.
   [coordinators.intent]='POST|/api/coordinators/{id}/intent|yes|-'
+  # A lease's retain door (delegation broker wave 5, PR8): the lease's parent, or that parent's coordinator, asks the server to keep a
+  # delegated worktree. The `{id}` is the lease id (`SAFE_RE`, like every id); the caller sends exactly `{"byId":…,"byUuid":…}` on
+  # `--json -`, and nothing here fills identity.
+  [leases.retain]='POST|/api/leases/{id}/retain|yes|-'
   # The child's PermissionRequest hook (coordinator-first routing, plan Task 14, spec §6.3, D-5297). `request` sends
   # the canonical request on `--json -` and is answered `201 {id, waitS}`; `ruling` polls one row with the hook's
   # per-request nonce (`SAFE_RE`, like every id); `key` reads the server's public key, which the install spine pins

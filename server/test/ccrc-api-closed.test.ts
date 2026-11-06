@@ -145,6 +145,7 @@ describe('the corpora no longer invoke curl', () => {
       'landing.entries',
       'landing.order',
       'landing.show',
+      'leases.retain',
       'ledger.allocate',
       'linear.comment',
       'linear.create',
@@ -162,6 +163,15 @@ describe('the corpora no longer invoke curl', () => {
     ]);
     expect([...invoked].filter((key) => !declared.has(key)),
       'an executable corpus command has no ccrc-api route row').toEqual([]);
+  });
+
+  it('W5-R16: the delegated-worktrees reference calls `ccrc-api leases retain`, and the table has that row', () => {
+    const file = path.join(root, 'ccd/coordinator-skill/references/delegated-worktrees.md');
+    expect(fs.existsSync(file), 'the coordinator reference on delegated worktrees is missing').toBe(true);
+    const text = fs.readFileSync(file, 'utf8');
+    const calls = executableBlocks(text).flatMap((b) => [...b.matchAll(/ccrc-api\s+leases\s+retain\b/g)]);
+    expect(calls.length, 'the reference has no executable `ccrc-api leases retain` call').toBeGreaterThan(0);
+    expect(routeKeys().has('leases.retain'), 'no [leases.retain] row').toBe(true);
   });
 
   it('executes ask examples with no valid default and exact expanded calls', () => {
@@ -345,6 +355,7 @@ describe('the client stays closed', () => {
     // The programme ledgers' nine (plan PL3) took it to fifty-five; each takes the caller's own body, and none fills one.
     // The landing line's two attributed writes (landing order wave 5f: `landing.entries`, `landing.order`) took it to fifty-seven;
     // each takes the caller's own body, `byId` and `byUuid` included, and fills none, so the two fills below stay two.
+    // `leases.retain` (delegation broker wave 5, PR8) took it to fifty-eight; it takes the caller's own body and fills none.
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -353,7 +364,7 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(57);
+    expect(routeKeys().size).toBe(58);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

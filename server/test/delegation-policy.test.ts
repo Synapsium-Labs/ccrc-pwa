@@ -712,6 +712,66 @@ describe('conflict finality across passes', () => {
   it('a prior attempt that was merely unresolved is not final: it may still link', () => {
     expect(kinds(substantive(planDelegationReconciliation(one(rec(), linkedV(agentAct, 2), { recovery: recovery({ attempts: [attempt({ verdict: 'unresolved' })] }) }))))).toEqual(['request-linked-lease-identity']);
   });
+  // W5-R8g (delegation wave 5 PR8, D-7821): a characterisation row, green before PR8's policy edit. Correlation keeps `finalConflicts`
+  // (every tree with ANY recorded `conflicting` attempt), so a lease whose carrier row records a resolve covering that attempt
+  // (`resolvedThrough`) changes nothing here: no lease request and no attempt, for a linked, unresolved or conflicting verdict.
+  it('W5-R8g: a once-conflicted tree gets no effect for a linked, unresolved or conflicting verdict, resolved or not', () => {
+    const conflict = attempt();
+    const held = lease({ sourceKind: 'raw', activityId: rawAct.activityId });
+    const resolved = { leaseId: held.leaseId, transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null,
+      releaseReason: null, resolvedThrough: { attemptedAt: conflict.attemptedAt, attemptId: conflict.attemptId } };
+    const verdicts = [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]),
+      conflictingV('rungs-disagree', [agentAct.identityJournalId])];
+    for (const rc of [recovery({ attempts: [conflict] }), recovery({ attempts: [conflict], leases: [held], leaseCarriers: [resolved] })]) {
+      for (const v of verdicts) expect(substantive(planDelegationReconciliation(one(rec(), v, { recovery: rc }))), v.kind).toEqual([]);
+    }
+  });
+  // Wave 5 PR8 (D-7822): the operator's "not delegated" is final for the tree. `holdersOf` (open leases only) no longer finds the released
+  // lease, so without `disownedTrees` the next pass would request the lease again.
+  it('W5-R8c (the policy half): a tree released foreign gets no lease request and no attempt; the tree re-created on another base links', () => {
+    const disowned = lease({ releasedAt: T(5), generation: 3 });
+    const foreign = { leaseId: disowned.leaseId, transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null,
+      releaseReason: 'foreign' as const, resolvedThrough: null };
+    const rc = recovery({ leases: [disowned], leaseCarriers: [foreign] });
+    for (const v of [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]),
+      conflictingV('rungs-disagree', [agentAct.identityJournalId])]) {
+      expect(substantive(planDelegationReconciliation(one(rec(), v, { recovery: rc }))), v.kind).toEqual([]);
+    }
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'other' }), linkedV(agentAct, 2), { recovery: rc })))))
+      .toEqual(['request-linked-lease-identity']);
+    // CONTROL: the same lease released native-removed is no disowning; the tree links again
+    const removed = recovery({ leases: [disowned], leaseCarriers: [{ ...foreign, releaseReason: 'native-removed' }] });
+    expect(kinds(substantive(planDelegationReconciliation(one(rec(), linkedV(agentAct, 2), { recovery: removed }))))).toEqual(['request-linked-lease-identity']);
+  });
+  // D-8043 (review 1554 F1): a null census base is UNMEASURED, never another creation base. The census reaches the planner with a null
+  // base for each cause it has: `claude-base-malformed` and `claude-base-unreadable`, and an absent CLAUDE_BASE with no first `logs/HEAD`
+  // line (`divergence-sweep.test.ts`, "a CLAUDE_BASE that is not a sha is no base…", "a CLAUDE_BASE that cannot be READ is no base…" and
+  // the 'nothing' record of "CLAUDE_BASE and the first logs/HEAD line…"), so these rows feed it null directly.
+  const disownedAt = (creationBase: string | null) => {
+    const l = lease({ releasedAt: T(5), generation: 3, creationBase });
+    return recovery({ leases: [l], leaseCarriers: [{ leaseId: l.leaseId, transferringSince: null, transferRun: null, promotedRun: null,
+      promotedSession: null, releaseReason: 'foreign' as const, resolvedThrough: null }] });
+  };
+  const VERDICTS = () => [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]),
+    conflictingV('rungs-disagree', [agentAct.identityJournalId])];
+  it('D-8043 (a): disowned at base X, a null base gets no effect pass after pass; X again gets none; base Y links a new lease', () => {
+    const rc = disownedAt('base-x');
+    for (let pass = 0; pass < 2; pass++) {
+      for (const v of VERDICTS()) expect(substantive(planDelegationReconciliation(one(rec({ claudeBase: null }), v, { recovery: rc }))), `${pass} ${v.kind}`).toEqual([]);
+    }
+    expect(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'base-x' }), linkedV(agentAct, 2), { recovery: rc })))).toEqual([]);
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'base-y' }), linkedV(agentAct, 2), { recovery: rc })))))
+      .toEqual(['request-linked-lease-identity']);
+    // CONTROL: a null base on ANOTHER admin record of the project is not held
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: null, adminRecord: 'agent-other', canonicalPath: WT('agent-other') }),
+      unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]), { recovery: rc }))))).not.toEqual([]);
+  });
+  it('D-8043 (b): disowned at a null base, a null base gets no effect; once the base reads X it is linked as a new lease', () => {
+    const rc = disownedAt(null);
+    for (const v of VERDICTS()) expect(substantive(planDelegationReconciliation(one(rec({ claudeBase: null }), v, { recovery: rc }))), v.kind).toEqual([]);
+    expect(kinds(substantive(planDelegationReconciliation(one(rec({ claudeBase: 'base-x' }), linkedV(agentAct, 2), { recovery: rc })))))
+      .toEqual(['request-linked-lease-identity']);
+  });
 });
 
 describe('a recovery that is not ready decides nothing', () => {
@@ -872,9 +932,10 @@ describe('the effect census: six tags, nothing executable (W3-M53)', () => {
 describe('the policy module is L1: pure, with no clock, no randomness and no IO (W3-M62, the policy half)', () => {
   const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'coord', 'delegation-policy.ts');
   const code = readFileSync(file, 'utf8').split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
-  it('imports shared types, the pure model and the pure correlation module only', () => {
+  it('imports shared types, the pure model, the pure correlation module and the pure conflict derivations only', () => {
     const specs = [...code.matchAll(/^import\s[^;]*?from\s+'([^']+)';/gms)].map((m) => m[1]);
-    expect(specs.sort()).toEqual(['./delegation-correlation.js', './delegation-model.js']);
+    // Wave 5 PR8 adds `delegation-conflicts.ts`, an L1 module, for the disowned trees (D-7822).
+    expect(specs.sort()).toEqual(['./delegation-conflicts.js', './delegation-correlation.js', './delegation-model.js']);
   });
   it('names no filesystem, process, store, clock, randomness or async', () => {
     expect(code).not.toMatch(/node:fs|node:path|node:sqlite|node:crypto|fastify|CoordStore|process\.|readFileSync|writeFileSync|\bDate\.now\b|\bnew Date\(|performance\.now|\brandomUUID\b|\brandomBytes\b|Math\.random|\bsetTimeout\b|\bawait\b|\basync\b/);

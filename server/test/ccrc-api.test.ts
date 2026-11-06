@@ -194,6 +194,8 @@ describe('the closed route table', () => {
     // The coordinator's explicit intent declaration (delegation broker wave 3, Task 15). The one row with a grammar of its
     // own, `coordinators intent <set|clear> --session <id>`; the id in the path is derived from the pane, never from the flag.
     [['coordinators', 'intent', 'set', '--session', 'demo-ws'], 'POST', '/api/coordinators/demo-ws/intent'],
+    // The lease's retain door (delegation broker wave 5, PR8, W5-R15): the id in the path is the lease id, the body rides `--json`.
+    [['leases', 'retain', 'lease-7'], 'POST', '/api/leases/lease-7/retain'],
     // The child's PermissionRequest hook's three rows (coordinator-first routing, plan Task 14, D-5297).
     [['approvals', 'request'], 'POST', '/api/approvals'],
     [['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], 'GET', '/api/approvals/41/ruling'],
@@ -269,7 +271,8 @@ describe('the closed route table', () => {
     // Forty-six since the twelve Linear rows (D-7669, #1444).
     // Fifty-five since the programme ledgers' nine (plan PL3).
     // Fifty-seven since the landing line's two attributed writes (landing order wave 5f).
-    expect(keys).toHaveLength(57);
+    // Fifty-eight since `leases.retain` (delegation broker wave 5, PR8, W5-R15).
+    expect(keys).toHaveLength(58);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -283,7 +286,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -309,6 +312,18 @@ describe('the closed route table', () => {
     // this pin silently watch the wrong one.
     expect([...src.matchAll(/\n#\s*([A-Za-z-]+) rows\b/g)].length,
       'the ROUTES-table header anchor is no longer unique in ccd/ccrc-api').toBe(1);
+  });
+
+  it('W5-R15: leases.retain is a POST row with a path id the client checks against SAFE_RE, and sends nothing for a bad one', async () => {
+    const row = clientRoutes().find((r) => r.key === 'leases.retain');
+    expect(row, 'the table has no [leases.retain] row').toBeDefined();
+    expect(row!.method).toBe('POST');
+    expect(row!.path).toBe('/api/leases/{id}/retain');
+    await run(['leases', 'retain', '../x', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    expect(seen, 'a lease id that is not SAFE_RE-plain was sent').toHaveLength(0);
+    await run(['leases', 'retain', 'lease-7', '--json', '-'], '{"byId":"coord-a-demo","byUuid":"u"}');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body).toBe('{"byId":"coord-a-demo","byUuid":"u"}');
   });
 
   it('has no verb that reaches the pause door', async () => {
@@ -431,7 +446,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
       ['coordinators', 'intent', 'set', '--session', 'demo-ws'], ['approvals', 'request', '--json', '-'],
       ['approvals', 'ruling', '41', '--nonce', '0123456789abcdef0123456789abcdef'], ['approvals', 'key'], ['approvals', 'show', '41'],
-      ['testbox', 'status'], ['testbox', 'tools-sync'],
+      ['testbox', 'status'], ['testbox', 'tools-sync'], ['leases', 'retain', 'lease-7', '--json', '-'],
       ['items', 'raise', 'prog-a', '--json', '-'], ['items', 'list', 'prog-a', '--byId', 'demo-ws', '--byUuid', 'u-demo-ws'],
       ['items', 'confirm', '7', '--json', '-'], ['items', 'return', '7', '--json', '-'], ['items', 'withdraw', '7', '--json', '-'],
       ['items', 'block', '7', '--json', '-'], ['goals', 'pin', 'prog-a', '--json', '-'], ['goals', 'modify', 'prog-a', '--json', '-'],

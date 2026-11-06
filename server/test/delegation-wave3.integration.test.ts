@@ -963,7 +963,7 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
 ];
 const STILL_CLOSED = /\bws-lease-clean\b|\bcmd_ws_lease_clean\b|\blease-clean(?:-v1|-live)?\b|cleanup-queue/i;
 /** The fleet-side files allowed to hold the bare word `leases` (a path composed from parts has no token for W5_OPEN). */
-const W5_FLEET_LEASES = ['ccd/lib/delegation-lease.sh'];
+const W5_FLEET_LEASES = ['ccd/lib/delegation-lease.sh', 'ccd/ccrc-api'];   // PR8: `ccrc-api`'s `[leases.retain]` row names the route
 /** For each W5_OPEN row, the files of `shipped` (read through `text`) that hold its word outside its list. */
 const w5Offenders = (shipped: readonly string[], text: (f: string) => string): string[] =>
   W5_OPEN.flatMap(([word, re, allowed]) => shipped.filter((f) => re.test(text(f)) && !allowed.includes(f)).map((f) => `${word}: ${f}`));
@@ -1392,7 +1392,7 @@ describe('8. the closed scope census', () => {
     expect(disk(w.home).checkpoint!.leases).toEqual(cp.leases);
   });
 
-  it('no adoption, promotion, retain or resolve route: the one route wave 3 adds is the coordinator-intent declaration', async () => {
+  it('no adoption or promotion route: wave 3 adds the coordinator-intent declaration, and wave 5 PR8 opens exactly the three lease doors', async () => {
     const w = world();
     const app = await buildServer(w.deps as never, new Bus(), w.watcher);
     try {
@@ -1402,7 +1402,12 @@ describe('8. the closed scope census', () => {
       // ticket reference would become as a workspace name. It resolves a name, no lease or run, and it is listed by its exact printed line, so a second
       // `resolve` route, or this one under another verb, is still red.
       const OTHER_SENSE = ['├── /api/linear/resolve (GET, HEAD)'];
-      expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)), 'no later wave\'s route').toEqual([]);
+      // Wave 5 PR8 opens the three lease doors BY NAME, each by its exact printed line: a fourth lease route, or one of these under
+      // another verb, is still red.
+      const W5_LEASE_DOORS = ['├── /api/leases/:lease/retain (POST)', '├── /api/leases/:lease/resolve (POST)', '├── /api/leases/:lease/operator-retain (POST)'];
+      expect(routes.split('\n').filter((l) => W5_LEASE_DOORS.includes(l)).sort(), 'the three lease doors exist').toEqual([...W5_LEASE_DOORS].sort());
+      expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)
+        && !W5_LEASE_DOORS.includes(l)), 'no later wave\'s route').toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_SENSE.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_SENSE);
       expect(routes.split('\n').filter((l) => /coordinators/.test(l))).toEqual(['├── /api/coordinators/:session/intent (POST)']);
       // A journal in another sense: D-6861's `GET /api/coord/shadow-journal` reads what the unarmed disk lanes would have done.
@@ -1414,7 +1419,9 @@ describe('8. the closed scope census', () => {
     } finally { await app.close(); }
     // `POST /api/runs` takes no lease to promote, and no source names the verb a promotion would call
     // Wave 5 (PR5a, W5-V3): `operator-retain` is a reason of the lease transition table, declared once by its L1 owner; still no route.
-    expect(filesUnder('server/src', /\.ts$/).filter((f) => /promotesLease|operator-retain|leases\/:id/.test(code(read(f))))).toEqual(['server/src/coord/delegation-lease-state.ts']);
+    // Wave 5 PR8: the operator's keep is decided (`delegation-lease-acts.ts`) and acted (`delegationLeaseDoor.ts`); the route is `:lease`.
+    expect(filesUnder('server/src', /\.ts$/).filter((f) => /promotesLease|operator-retain|leases\/:id/.test(code(read(f))))).toEqual(
+      ['server/src/coord/delegation-lease-acts.ts', 'server/src/coord/delegation-lease-state.ts', 'server/src/coord/delegationLeaseDoor.ts', 'server/src/coord/routes.ts']);
   });
 
   it('the intent declaration is identity, not adoption: it writes the current incarnation\'s `explicitIntentAt` and what derives from it, and nothing else', async () => {
@@ -1644,7 +1651,9 @@ describe('8. the closed scope census', () => {
   it('pure policy imports no randomness and cannot produce a completed lease row: it only ever REQUESTS a lease identity', async () => {
     const policySrc = code(read('server/src/coord/delegation-policy.ts'));
     const imports = [...policySrc.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-    expect(imports.sort(), 'L1 imports the model and correlation, nothing else').toEqual(['./delegation-correlation.js', './delegation-model.js']);
+    // Wave 5 PR8 adds the pure conflict derivations (`delegation-conflicts.ts`, L1) for the trees the operator disowned (D-7822).
+    expect(imports.sort(), 'L1 imports the model, correlation and the conflict derivations, nothing else').toEqual(
+      ['./delegation-conflicts.js', './delegation-correlation.js', './delegation-model.js']);
     const RANDOM = /\brandom(UUID|Bytes|Int|Fill)\b|getRandomValues|Math\.random|crypto\.subtle|\bwebcrypto\b/;
     for (const f of ['delegation-policy.ts', 'delegation-correlation.ts', 'delegation-ingest.ts', 'delegation-model.ts']) {
       expect(code(read(`server/src/coord/${f}`)), `${f} mints nothing`).not.toMatch(RANDOM);
