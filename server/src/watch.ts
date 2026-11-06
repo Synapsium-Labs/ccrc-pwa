@@ -1974,7 +1974,7 @@ export class FleetWatcher {
    *  field initialiser runs, so it cannot be built beside the other fields. */
   private delegationLaneMemo: DelegationLane | null = null;
   private delegationLane(): DelegationLane {
-    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes);
+    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
   }
 
@@ -10426,7 +10426,8 @@ class DelegationLane {
     } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
   }
 
-  constructor(private readonly deps: WatcherDeps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
+  constructor(private readonly deps: WatcherDeps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner,
+    private readonly listedIds: () => ReadonlySet<string> | null = () => null) {}   // PR7 (review 1587 F1): every id the registry's listing named
 
   /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
    *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */
@@ -10947,8 +10948,8 @@ class DelegationLane {
             const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
             await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
               notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
-            }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, registryListed: this.registryListed,
-              incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
+            }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, listedIds: this.listedIds(), registryListed: this.registryListed,
+              alive: this.lastAlive, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
           }
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();

@@ -18,7 +18,7 @@ import {
   DELEGATION_EVENTS_CAP, delegationSha256Hex, encodeDelegationNaturalKey, formatDelegationInstant, type DelegationCensusRecord, type DelegationLeaseRow,
 } from '../src/coord/delegation-model.js';
 import type { DelegationCensusPass } from '../src/coord/gitref.js';
-import { DELEGATION_HOLD_CLOSING, DELEGATION_REMINDER_LEAD_MS } from '../src/coord/delegation-adoption.js';
+import { DELEGATION_AUDIT_HOLD_MS, DELEGATION_HOLD_CLOSING, DELEGATION_REMINDER_LEAD_MS } from '../src/coord/delegation-adoption.js';
 import type { DelegationDurability } from '../src/coord/delegation-checkpoint.js';
 import { delegationAdoptionHealthOf, type DelegationEventEnvelopeV1, type FleetSession } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -36,7 +36,9 @@ const CLOSING = 'After that date the worktree is no longer held back from the di
 type Audit = Record<string, unknown>;
 interface World {
   home: string; registryDir: string; watcher: FleetWatcher; coord: CoordStore; argvs: string[][]; fleet: { connected: boolean; downSince: null; ccdVerbs: string[] | null };
-  audit: Audit; feed: { title: string; body: string }[]; pushes: string[]; sessions: { id: string; incarnation: string }[];
+  audit: Audit; feed: { title: string; body: string }[]; pushes: string[]; sessions: { id: string; incarnation: string; status?: 'idle' | 'dead' }[];
+  /** Review 1587 F1: ids the registry's listing names whose row it could not assemble (no record, no session). */
+  unbuilt: string[];
 }
 const worlds: World[] = [];
 afterEach(async () => {
@@ -75,7 +77,7 @@ function world(opts: { caps?: string[] | null } = {}): World {
   const fleet = { connected: true, downSince: null, ccdVerbs: opts.caps === undefined ? [...FULL] : opts.caps };
   const made = { home, registryDir: cfg.registryDir, coord, argvs: [] as string[][], fleet, feed: [] as { title: string; body: string }[], pushes: [] as string[],
     audit: { ok: true, lease: 'x', generation: 1, tip: 'a'.repeat(40), dirty: false, aheadOfBase: 1, branchAheadOfBase: 'no-branch', changed: true, token: 'tok-1' } as Audit,
-    sessions: [{ id: OWNER, incarnation: INC }] } as Omit<World, 'watcher'> as World;
+    sessions: [{ id: OWNER, incarnation: INC }], unbuilt: [] } as Omit<World, 'watcher'> as World;
   const runCcd = async (argv: readonly string[]): Promise<CcdResult> => {
     made.argvs.push([...argv]);
     const f = flagsOf(argv);
@@ -98,14 +100,16 @@ function world(opts: { caps?: string[] | null } = {}): World {
 
 const WTX: DelegationCensusRecord = { project: 'demo', adminRecord: 'wt-x', canonicalPath: '/w/demo/.claude/worktrees/wt-x', headBranch: null,
   headSha: 'a'.repeat(40), claudeBase: 'b'.repeat(40), locked: false, baseAgreesFirstLog: true, state: 'present', diagnostic: null };
-const sessionOf = (id: string) => ({ id, project: 'demo', status: 'idle' as const, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'] });
-/** One census pass at `ms`: the census lists `recs`, and the registry lists the world's sessions (an absent session: no row). */
+const sessionOf = (id: string, status: 'idle' | 'dead' = 'idle') => ({ id, project: 'demo', status, stoppedBy: null as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'] });
+/** One census pass at `ms`: the census lists `recs`, and the registry lists the world's sessions (an absent session: no row; an unbuilt
+ *  one: named by the listing, with no record and no session). */
 const pass = async (w: World, ms: number, recs: DelegationCensusRecord[] = [WTX]): Promise<void> => {
   vi.spyOn(Date, 'now').mockReturnValue(ms);
   const c: DelegationCensusPass = { measuredAt: ms, projects: new Map([['demo', { read: { ok: true, records: [] }, delegation: recs }]]),
     incarnations: new Map(w.sessions.map((s) => [s.id, { kind: 'measured', incarnation: s.incarnation }] as const)) };
   (w.watcher as unknown as { delegationCensus: DelegationCensusPass | null }).delegationCensus = c;
-  const s = w.sessions.map((x) => sessionOf(x.id));
+  (w.watcher as unknown as { listedIds: ReadonlySet<string> | null }).listedIds = new Set(w.sessions.map((x) => x.id));
+  const s = w.sessions.filter((x) => !w.unbuilt.includes(x.id)).map((x) => sessionOf(x.id, x.status));
   await w.watcher.sweepDelegation(s as never, s.map((x) => ({ id: x.id, project: x.project, child: { kind: 'none' } })) as never);
 };
 
@@ -115,19 +119,21 @@ const ev = (ms: number) => {
   return { v: 1 as const, observedAt: iso(ms), sessionId: OWNER, parentIncarnation: INC, claudeSessionId: '11111111-2222-3333-4444-555555555555',
     eventId: delegationSha256Hex(`pr7-lane-event-${n}`), bucket: '2026101510', startOffset: n * 100, endOffset: n * 100 + 99 };
 };
-/** The lane, primed and ready, holding one `agent` lease on `wt-x` whose activity ended (its SubagentStop) at `NOW - 20 min`. */
-async function leased(opts: { caps?: string[] | null } = {}): Promise<{ w: World; durable: DelegationDurability; lease: DelegationLeaseRow }> {
+/** The lane, primed and ready, holding one `agent` lease on `wt-x` whose activity ended (its SubagentStop) at `NOW - 20 min`; with
+ *  `ended: false` the activity is still active (no SubagentStop), so only the parent can give terminal evidence. */
+async function leased(opts: { caps?: string[] | null; ended?: boolean } = {}): Promise<{ w: World; durable: DelegationDurability; lease: DelegationLeaseRow }> {
   const w = world(opts);
   await pass(w, NOW - 25 * 60_000, []);
   const durable = (await w.watcher.delegationApplier())!;
   const E0 = NOW - 22 * 60_000;
   const events: DelegationEventEnvelopeV1[] = [{ ...ev(E0), eventKind: 'SessionStart', source: 'startup' } as DelegationEventEnvelopeV1,
     { ...ev(E0 + 60_000), eventKind: 'SubagentStart', agentId: 'agent-x', agentType: null } as DelegationEventEnvelopeV1,
-    { ...ev(E0 + 120_000), eventKind: 'SubagentStop', agentId: 'agent-x', agentType: null, agentTranscriptPath: null } as DelegationEventEnvelopeV1];
+    ...(opts.ended === false ? [] : [{ ...ev(E0 + 120_000), eventKind: 'SubagentStop', agentId: 'agent-x', agentType: null, agentTranscriptPath: null } as DelegationEventEnvelopeV1])];
   await durable.applyAccepted({ accepted: events.map((event) => ({ event, acceptedAt: iso(Date.parse(event.observedAt) + 1000) })), cursor: null, interval: null });
   const cp = durable.state().checkpoint;
   const activityId = cp.activityIdsByNaturalKey[encodeDelegationNaturalKey({ parentId: OWNER, parentIncarnation: INC, sourceKind: 'agent', upstreamId: 'agent-x' })]!;
-  expect(cp.activities.find((a) => a.activityId === activityId)?.executionState, 'CONTROL: the SubagentStop ended the activity').toBe('ended');
+  expect(cp.activities.find((a) => a.activityId === activityId)?.executionState, 'CONTROL: the SubagentStop ended the activity, or none ran')
+    .toBe(opts.ended === false ? 'active' : 'ended');
   const made = await durable.createLease({ activityId, parentId: OWNER, parentIncarnation: INC, project: 'demo', adminRecord: 'wt-x',
     canonicalPath: WTX.canonicalPath!, creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: iso(E0 + 60_000) });
   if (made.kind !== 'created') throw new Error('the fixture lease was not created');
@@ -382,5 +388,196 @@ describe('PR7: the lane adopts a changed worktree with terminal evidence behind 
     expect(leaseOf(durable, lease.leaseId).disposition).toBe('ephemeral');
     expect(health(w)?.unsupported).toBe(1);
     expect(audits(w), 'and no audit is composed on no evidence').toEqual([]);
+  }, ROW_MS);
+});
+
+// Review 1587, fix round 1 (the coordinator's rulings of 2026-11-06): what the step feeds the decider and the memory it keeps.
+describe('PR7 fix round 1: the parents, kept evidence, held audits, attention, dated notices, the owed count and the log memories', () => {
+  type LaneMemo = { firstDead: Map<string, number>; running: Map<AbortController, Promise<unknown>> };
+  const laneOf = (w: World): LaneMemo => (w.watcher as unknown as { delegationLane(): LaneMemo }).delegationLane();
+  const disposition = (durable: DelegationDurability, id: string) => leaseOf(durable, id).disposition;
+  const dead = (w: World): void => { w.sessions = [{ id: OWNER, incarnation: INC, status: 'dead' }]; };
+  const alive = (w: World): void => { w.sessions = [{ id: OWNER, incarnation: INC }]; };
+  const kept = (w: World) => w.feed.filter((f) => f.title === 'worktree kept: demo/wt-x');
+
+  it('F1: a parent the listing names but the registry could not assemble is unmeasured, never absent: no adoption over the settle and the passes', async () => {
+    const { w, durable, lease } = await leased({ ended: false });
+    touch(w, 'delegation-adopt');
+    for (let n = 0; n < 3; n += 1) await pass(w, at(n));          // alive: the carrier is minted, marked and seen
+    w.unbuilt = [OWNER];
+    for (let n = 3; n < 16; n += 1) await pass(w, at(n));
+    expect(disposition(durable, lease.leaseId)).toBe('ephemeral');
+    w.unbuilt = [];
+    w.sessions = [];
+    expect(disposition(durable, lease.leaseId)).toBe('ephemeral');
+    await passesUntilKept(w, durable, lease.leaseId, 16, 12);
+    expect(disposition(durable, lease.leaseId), 'CONTROL: unlisted (absent), the same lease is adopted').toBe('adopted');
+  }, ROW_MS);
+
+  it('F2: a dead parent whose dead-since memory has aged out still counts would-adopt in shadow, and adopts live', async () => {
+    const { w, durable, lease } = await leased({ ended: false });
+    for (let n = 0; n < 3; n += 1) await pass(w, at(n));
+    dead(w);
+    for (let n = 3; n < 14; n += 1) await pass(w, at(n));
+    expect(health(w)).toMatchObject({ mode: 'shadow', wouldAdopt: 1 });
+    expect(laneOf(w).firstDead.has(OWNER), 'CONTROL: the death is remembered').toBe(true);
+    const late = at(3) + 62 * 60_000;                                // past the lane's 60-minute dead-since memory
+    await pass(w, late);
+    expect(laneOf(w).firstDead.has(OWNER), 'CONTROL: the dead-since memory aged out').toBe(false);
+    expect(health(w)).toMatchObject({ mode: 'shadow', wouldAdopt: 1 });
+    touch(w, 'delegation-adopt');
+    for (let k = 1; k < 4 && disposition(durable, lease.leaseId) === 'ephemeral'; k += 1) await pass(w, late + k * 60_000);
+    expect(disposition(durable, lease.leaseId)).toBe('adopted');
+  }, ROW_MS);
+
+  it.each([1, 3])('F2: a parent dead for %i pass(es) and then alive again at its incarnation (a supervisor restart) never adopts', async (deadPasses) => {
+    const { w, durable, lease } = await leased({ ended: false });
+    touch(w, 'delegation-adopt');
+    for (let n = 0; n < 3; n += 1) await pass(w, at(n));
+    dead(w);
+    for (let n = 3; n < 3 + deadPasses; n += 1) await pass(w, at(n));
+    alive(w);
+    for (let n = 3 + deadPasses; n < 20; n += 1) await pass(w, at(n));
+    expect(disposition(durable, lease.leaseId)).toBe('ephemeral');
+    expect(health(w)?.adopted ?? 0).toBe(0);
+  }, ROW_MS);
+
+  it('F2: a restart (a new lane, fresh memory) over a dead parent adopts nothing on death alone', async () => {
+    const { w, durable, lease } = await leased({ ended: false });
+    for (let n = 0; n < 3; n += 1) await pass(w, at(n));
+    dead(w);
+    await w.watcher.closeDelegation();
+    w.watcher = new FleetWatcher((w.watcher as unknown as { deps: unknown }).deps as never, new Bus(), 10_000);
+    touch(w, 'delegation-adopt');
+    for (let n = 3; n < 20; n += 1) await pass(w, at(n));
+    expect(disposition(durable, lease.leaseId)).toBe('ephemeral');
+    expect(laneOf(w).firstDead.size, 'the new lane never saw the parent alive, so it never saw it die').toBe(0);
+  }, ROW_MS);
+
+  it('F3: a held audit answer older than an hour is asked again before an adoption', async () => {
+    const { w, durable, lease } = await leased();
+    for (let n = 0; n < 9; n += 1) await pass(w, at(n));
+    expect(audits(w)).toHaveLength(1);
+    expect(health(w)?.wouldAdopt).toBe(1);
+    touch(w, 'delegation-adopt');
+    const late = at(8) + DELEGATION_AUDIT_HOLD_MS + 60_000;
+    await pass(w, late);
+    expect(disposition(durable, lease.leaseId), 'the day-old answer does not adopt').toBe('ephemeral');
+    await pass(w, late + 60_000);
+    expect(audits(w), 'asked again').toHaveLength(2);
+    expect(disposition(durable, lease.leaseId)).toBe('adopted');
+  }, ROW_MS);
+
+  it('F3: an unmeasured audit answer is never held: the next pass asks for it again', async () => {
+    const { w, lease } = await leased();
+    w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
+    const counts: number[] = [];
+    for (let n = 0; n < 12; n += 1) { await pass(w, at(n)); counts.push(audits(w).length); }
+    const first = counts.indexOf(1);
+    expect(first, `CONTROL: an audit ran (${counts.join(',')})`).toBeGreaterThanOrEqual(0);
+    expect(counts[first + 2], `asked by the next pass, composed at the start of the one after (${counts.join(',')})`).toBe(2);
+    expect(audits(w).every((a) => a[2] === lease.leaseId)).toBe(true);
+  }, ROW_MS);
+
+  it('A8: an unchanged lease is not audited again within the hour; past it, it is', async () => {
+    const { w, durable, lease } = await leased();
+    touch(w, 'delegation-adopt');
+    w.audit = { ...w.audit, changed: false };
+    for (let n = 0; n < 30; n += 1) await pass(w, at(n));
+    expect(audits(w)).toHaveLength(1);
+    expect(health(w)?.unchanged).toBe(1);
+    const late = at(0) + DELEGATION_AUDIT_HOLD_MS + 5 * 60_000;
+    for (let k = 0; k < 6; k += 1) await pass(w, late + k * 60_000);
+    expect(audits(w)).toHaveLength(2);
+    expect(disposition(durable, lease.leaseId)).toBe('ephemeral');
+  }, ROW_MS);
+
+  it('F4: a pass cut while the adopt transition is awaited raises its attention items on the next pass, once', async () => {
+    const { w, durable, lease } = await leased();
+    const WTY = { ...WTX, adminRecord: 'wt-y', canonicalPath: '/w/demo/.claude/worktrees/wt-y' };
+    const second = await durable.createLease({ activityId: lease.activityId, parentId: OWNER, parentIncarnation: INC, project: 'demo', adminRecord: 'wt-y',
+      canonicalPath: WTY.canonicalPath, creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: lease.firstObservedAt });
+    if (second.kind !== 'created') throw new Error('the second lease was not created');
+    for (let n = 0; n < 9; n += 1) await pass(w, at(n), [WTX, WTY]);
+    expect(health(w)?.wouldAdopt, 'CONTROL: both wait in shadow, settled and audited').toBe(2);
+    await durable.applyCheckpointChange((cp) => ({ ...cp, attempts: [...cp.attempts, { attemptId: delegationSha256Hex('pr7-fr1-conflict'), parentId: OWNER,
+      parentIncarnation: INC, project: 'demo', adminRecord: 'wt-y', canonicalPath: WTY.canonicalPath, attemptedAt: iso(at(8)), rung: null, verdict: 'conflicting',
+      evidenceJournalIds: [], detail: 'rungs-disagree' }] }));
+    touch(w, 'delegation-adopt');
+    const lane = laneOf(w);
+    let late: Promise<unknown>[] = [];
+    const real = durable.transitionLease.bind(durable);
+    vi.spyOn(durable, 'transitionLease').mockImplementationOnce(async (a) => {
+      late = [...lane.running.values()];
+      for (const ac of lane.running.keys()) ac.abort();           // the pass is cut while the act is awaited
+      return real(a);
+    });
+    await pass(w, at(9), [WTX, WTY]);
+    await Promise.allSettled(late);
+    expect(disposition(durable, lease.leaseId), 'CONTROL: the act landed').toBe('adopted');
+    const conflicts = () => w.pushes.filter((t) => t === 'worktree on a conflicting tree: demo/wt-y').length;
+    expect(conflicts(), 'the cut pass pushed nothing after the act').toBe(0);
+    await pass(w, at(10), [WTX, WTY]);
+    expect(conflicts()).toBe(1);
+    await pass(w, at(11), [WTX, WTY]);
+    expect(conflicts(), 'once').toBe(1);
+  }, ROW_MS);
+
+  it('F5: an adoption made while mail-disabled stood, lifted after its hold ended, queues no digest', async () => {
+    const { w, durable, lease } = await leased();
+    touch(w, 'delegation-adopt');
+    touch(w, 'mail-disabled');
+    await passesUntilKept(w, durable, lease.leaseId, 0);
+    expect(disposition(durable, lease.leaseId)).toBe('adopted');
+    expect(mail(w)).toEqual([]);
+    const due = Date.parse(leaseOf(durable, lease.leaseId).cleanupDueAt!);
+    unmark(w, 'mail-disabled');
+    await pass(w, due + 60_000);
+    await pass(w, due + 2 * 60_000);
+    expect(mail(w)).toEqual([]);
+    expect(health(w)?.owed ?? 0).toBe(0);
+  }, ROW_MS);
+
+  it('F6: a digest already sent is not owed while mail-disabled stands', async () => {
+    const { w, durable, lease } = await leased();
+    touch(w, 'delegation-adopt');
+    const next = await passesUntilKept(w, durable, lease.leaseId, 0);
+    expect(mail(w)).toHaveLength(1);
+    touch(w, 'mail-disabled');
+    await pass(w, at(next));
+    await pass(w, at(next + 1));
+    expect(health(w)?.owed ?? 0).toBe(0);
+  }, ROW_MS);
+
+  it('F6, A2: an unmeasured recipient holds the notice and counts as owed, and never writes the record-only row; measured again, it is mailed once', async () => {
+    const { w, durable, lease } = await leased();
+    touch(w, 'delegation-adopt');
+    touch(w, 'mail-disabled');
+    const next = await passesUntilKept(w, durable, lease.leaseId, 0);
+    expect(kept(w)).toHaveLength(1);
+    w.unbuilt = [OWNER];
+    unmark(w, 'mail-disabled');
+    await pass(w, at(next));
+    await pass(w, at(next + 1));
+    expect(mail(w)).toEqual([]);
+    expect(health(w)?.owed).toBe(1);
+    expect(kept(w), 'no record-only row for a recipient that did not read').toHaveLength(1);
+    w.unbuilt = [];
+    await pass(w, at(next + 2));
+    await pass(w, at(next + 3));
+    expect(mail(w).map((m) => m.subject)).toEqual([`delegation: worktree kept for ${OWNER} (${lease.leaseId}, generation 2)`]);
+  }, ROW_MS);
+
+  it('A1: a refused adoption at a generation shadow already logged still logs its refusal once', async () => {
+    const { w, durable, lease } = await leased();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (let n = 0; n < 9; n += 1) await pass(w, at(n));
+    const lines = () => warn.mock.calls.map((c) => String(c[0]));
+    expect(lines().filter((l) => l.startsWith(`ccrc-server: delegation: adoption shadow: would adopt ${lease.leaseId}`))).toHaveLength(1);
+    vi.spyOn(durable, 'transitionLease').mockResolvedValue({ kind: 'refused', refusal: 'carrier-behind', detail: 'fixture refusal' } as never);
+    touch(w, 'delegation-adopt');
+    for (let n = 9; n < 13; n += 1) await pass(w, at(n));
+    expect(lines().filter((l) => l.startsWith(`ccrc-server: delegation: adoption of ${lease.leaseId} refused`))).toEqual([
+      `ccrc-server: delegation: adoption of ${lease.leaseId} refused carrier-behind: fixture refusal`]);
   }, ROW_MS);
 });
