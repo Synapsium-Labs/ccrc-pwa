@@ -3530,6 +3530,19 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
     expect(row.state).toBe('queued');
   });
 
+  it('a marker that gives no time, beside a stop stamp, wakes the same way and never parks (D-8067)', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.hibernated`), 'not-a-stamp');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([ID]);
+    expect(deliveryRow(coord, id)).toMatchObject({ state: 'queued', lastGate: 'hibernated', attempts: 0 });
+  });
+
   it('never parks, however many sweeps; a second sweep inside 10 minutes wakes nothing more, one after does', async () => {
     const h = harness({ hasSession: false });
     const coord = store(h.home);

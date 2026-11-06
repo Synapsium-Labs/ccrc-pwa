@@ -1864,8 +1864,8 @@ describe('FleetSession.hibernatedAt (D-5242)', () => {
   it('no .hibernated is null', async () => {
     expect((await row(null))!.hibernatedAt).toBeNull();
   });
-  it('a malformed .hibernated is null, and the row is still on the wire', async () => {
-    expect((await row('seven hours ago'))!.hibernatedAt).toBeNull();
+  it('a malformed .hibernated beside a stop stamp rides the wire with the stop time (D-8067)', async () => {
+    expect(await row('seven hours ago')).toMatchObject({ hibernatedAt: 1_784_599_820_000, status: 'dead', bucket: 'dead' });
   });
 });
 

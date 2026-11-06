@@ -4,7 +4,7 @@ import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity,
+  readRegistry, readRegistryMeasured, readSessionRecord, measuredIdentity, isCleanRecord,
   HOLD_UNREADABLE, REGISTRY_UNMEASURED_STUCK_MS, SWAP_BLOCKED_NO_REASON,
   SUBSTRATE_UNREADABLE, SUBSTRATE_NO_REASON,
   STRANDED_NO_REASON, STRANDED_UNREADABLE,
@@ -1412,6 +1412,57 @@ describe('the hibernation marker (D-5242)', () => {
       expect(r.id, JSON.stringify(bad)).toBe('lane-a-project-a');
       expect(r.hibernatedAt, JSON.stringify(bad)).toBeNull();
     }
+  });
+
+  // D-8067 (operator ruling 2026-11-06): the marker is LISTED, it gives no time and a stop stamp is readable, so the row
+  // reads asleep at the stop stamp's time, in MS. `.stopped` is in SECONDS, as `.hibernated` is; `buildRecord` decides
+  // this and `parseHibernated` still answers null for all of these bodies.
+  describe('a marker that gives no time, beside a stop stamp (D-8067)', () => {
+    const ID = 'lane-a-project-a';
+    const cfg = () => loadConfig({ CCRC_HOME: home });
+    const readThrough = async (io: FleetIO) => (await readRegistry(io, cfg()))[0]!;
+
+    it('a malformed body reads the stop stamp\'s time, in MS', async () => {
+      for (const bad of ['', 'x', 'x 7', '-1 7', '1785300000.5 7', '1785300000 7 extra', '1785300000 seven', '0 7']) {
+        seed(reg, ID, { hibernated: bad, stopped: '1785300100 ccd' });
+        expect((await read()).hibernatedAt, JSON.stringify(bad)).toBe(1785300100_000);
+      }
+    });
+    it('a failed read reads the stop stamp\'s time, and the record is not cached', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7', stopped: '1785300100 ccd' });
+      const r = await readThrough(unreadableField(ID, 'hibernated'));
+      expect(r.hibernatedAt).toBe(1785300100_000);
+      expect(r.plainFieldUnreadable).toBe(true);
+      expect(isCleanRecord(r)).toBe(false);
+    });
+    it('a marker that gives its time keeps it: the stop stamp is never preferred', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7', stopped: '1785300100 ccd' });
+      expect((await read()).hibernatedAt).toBe(1785300000_000);
+    });
+    it('a stop stamp with no marker listed is an ordinary stop, and costs no marker read', async () => {
+      seed(reg, ID, { stopped: '1785300100 ccd' });
+      reads.length = 0;
+      expect((await read()).hibernatedAt).toBeNull();
+      expect(reads).toEqual([]);
+    });
+    it('a marker the read proves gone is a raced wake or stop, not a sleeper', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7', stopped: '1785300100 ccd' });
+      const r = await readThrough(absentField(ID, 'hibernated'));
+      expect(r.hibernatedAt).toBeNull();
+      expect(r.plainFieldUnreadable).toBeUndefined();
+    });
+    it('no stop stamp to borrow from stays null, for a failed read too', async () => {
+      seed(reg, ID, { hibernated: '1785300000 7' });
+      expect((await readThrough(unreadableField(ID, 'hibernated'))).hibernatedAt).toBeNull();
+    });
+    it('a stop stamp that is not readable lends no time', async () => {
+      seed(reg, ID, { hibernated: 'x', stopped: '1785300100 ccd' });
+      expect((await readThrough(unreadableField(ID, 'stopped'))).hibernatedAt).toBeNull();
+      for (const stamp of ['', 'not-a-stamp', '0 ccd', '-5 ccd', '99999999999999999 ccd']) {
+        seed(reg, ID, { hibernated: 'x', stopped: stamp });
+        expect((await read()).hibernatedAt, JSON.stringify(stamp)).toBeNull();
+      }
+    });
   });
 });
 
