@@ -82,12 +82,11 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
       "  const named = runs.filter((r) => r.sessionId !== '');",
       '  const own = sessionById.get(s.id);',
       '  const open = runForSession(runs, s);',
-      '  const seen = childRunsSeen(new Set(), [s], runs);',
       '}',
     ].join('\n'));
     expect(got.map((s) => [s.kind, s.text])).toEqual([
       ['comparison', 'r.claimedBy === s.id'], ['lookup', 'sessionById.get(run.claimedBy)'],
-      ['runForSession', 'runForSession(runs, s)'], ['childRunsSeen', 'childRunsSeen(new Set(), [s], runs)'],
+      ['runForSession', 'runForSession(runs, s)'],
     ]);
   });
 
@@ -320,10 +319,10 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
   // claim map, and rowRun's call of runForSession).
   // C7d (D-7182): `runCard`'s two card lookups (D-7205) report as named, beside the new readers' by-id lookups,
   // `workerOf`'s one (D-7205) and `coordinatorOf`'s one (D-7207).
-  it('runMatchers(): 0 inline comparisons, 0 map lookups, runForSession 0 calls, childRunsSeen 1; 4 named by-id lookups in the readers', () => {
+  it('runMatchers(): 0 inline comparisons, 0 map lookups, runForSession 0 calls; 4 named by-id lookups in the readers', () => {
     const sites = runMatchers();
-    held('runMatchers', sites.filter((s) => s.kind !== 'named'), 1);
-    expect(countBy(sites, (s) => s.kind)).toEqual({ childRunsSeen: 1, named: 4 });
+    held('runMatchers', sites.filter((s) => s.kind !== 'named'), 0);
+    expect(countBy(sites, (s) => s.kind)).toEqual({ named: 4 });
   });
 
   // Pinned exact by C7b (D-7180, D-7221): #1720 merged, leaving `HotFilesStrip`'s and `useFleetHealth`'s timers, which

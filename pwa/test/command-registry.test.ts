@@ -92,7 +92,7 @@ describe('the base commands', () => {
       claimedBy: 'coord', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null,
       handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
       health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-      childReclaim: null, reviewCap: null });
+      childReclaim: null, reviewCap: null, hadChild: false });
     const r = runOf(7, 'worker');
     const bound = { id: 7, state: 'working' as const, claimedBy: 'coord' };
     const worker = (over: Partial<FleetSession>): FleetSession => fleetSession({ id: 'worker', project: 'project-a', role: 'child', bucket: 'idle', statusUpdatedAt: 2, ...over });

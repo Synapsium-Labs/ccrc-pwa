@@ -6990,6 +6990,27 @@ export interface RunSummary {
    */
   reviewCap: ReviewCapStatus | null;
 
+  /**
+   * D-8068: this run held a child workspace. Its dispatch asked ccd for one and a session was bound, or a later wave was
+   * bound to a session an earlier run minted. The fact outlives the child: it is what says a finished row with no chip
+   * may still be waiting for one, after the child's registry row is gone and after a reload.
+   *
+   * `childIds` cannot answer this (it names only OPEN runs with a bound worker), and neither can `childReclaim`, whose
+   * `null` is also the race's own answer. The workspace's `.child` mark names only the minting run; this names every run
+   * the child served, the hand-over wave's row included.
+   *
+   * A ROW STORED BEFORE THE FIELD reads through migration 41's backfill, never as a flat false. The answer can be true
+   * for a run with no marked child (a row older than child marks, or a recycled name's later row), and on a live row
+   * for one whose failed attempt kept its mark and then bound a session that is no child. Each costs one spare archive
+   * read per reclaim end and nothing else. Nothing refuses, renders or reclaims on it.
+   *
+   * Written and read on the server alone: the fleet box sends no new frame, so a fleet on another version is no concern
+   * of this field. ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a
+   * literal). Read it ONLY through `runHadChild` (`pwa/src/fleet/runWords.ts`), because an older server omits it and a
+   * `RunSummary` is cast, never revived: absent reads as false, which leaves the chip triggers and no more.
+   */
+  hadChild: boolean;
+
   /** The ids of the open runs this run's COORDINATOR (`claimedBy`) has working for it, each bound to the incarnation of
    *  the worker it was opened for: `childrenOf` (`server/src/coord/runBinding.ts`), asked once per frame. The same list
    *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through

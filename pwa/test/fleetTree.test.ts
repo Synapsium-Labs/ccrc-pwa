@@ -37,7 +37,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 const coordinator = sess(COORD, { workspace: null, role: 'coordinator', name: 'the coordinator' });
@@ -389,19 +389,19 @@ describe('W4-U0: today\'s tree, characterised before delegation rows (delegation
     expect(treeCalls.length).toBeGreaterThan(0);
     expect(treeCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
       [
-        "7238fc1ccb39cd91",
-        "2dcc8e7db34b6972",
-        "c2b1c4fbc383efa3",
-        "afec98f7add32b4a",
-        "afec98f7add32b4a",
-        "7abe92f21eb047dc",
-        "3b0c6bc57e68b73e",
-        "495e11812fac1dfd",
-        "5c64241582b713b0",
-        "1fecb6a5645e7e8e",
-        "ae77e22eac7c913b",
-        "10e24e1975059fe1",
-        "a3d43382df21dd42",
+        "678df0990fc9d9a3",
+        "f5412eafea725a74",
+        "e13dd9fb1b84bb11",
+        "6c75881ac6dd9c0a",
+        "6c75881ac6dd9c0a",
+        "984d21b4e102850e",
+        "ecba0a4cb22421de",
+        "f01270cc3b4d1539",
+        "659cc933542493b0",
+        "17b9936e404411a1",
+        "3f683024a89f0c47",
+        "20176c2e6406ff43",
+        "e89a25980f4c561e",
       ]
     `);
   });

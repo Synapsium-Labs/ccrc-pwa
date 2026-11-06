@@ -55,7 +55,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 /** The new child: minted by run 504 (closed since), so its marker names 504. */

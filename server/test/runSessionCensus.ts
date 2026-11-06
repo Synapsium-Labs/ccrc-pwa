@@ -187,6 +187,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "closeRun's compare-and-set: the claimant of ONE re-read run against the one the caller measured, whichever session works it" },
   { file: 'server/src/coord/store.ts', text: 'predecessor !== sessionId',
     why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (bindSession: whether the bind replaces the occupant, asked once and reused by the birth clear and the occupant stamp)" },
+  { file: 'server/src/coord/store.ts', text: 'UPDATE runs SET hadChild = 1 WHERE id = ? AND EXISTS (SELECT 1 FROM runs m WHERE m.sessionId = ? AND m.hadChild = 1)',
+    why: "bindSession passing a run's hadChild attribute on (D-8068): one UPDATE inside a binding WRITER (BINDING_WRITER_VERBS), which asks whether any row naming this session holds the flag and returns no run. Not routed through runsNamingSession or bindingRunsOf: neither row carries the column, and both answer failure on one unrepresentable row, which must not fail a bind over a flag that costs one spare archive read" },
   { file: 'server/src/coord/store.ts', text: 'predecessor === sessionId',
     why: "the open path's own duplicate and claimant decision inside its transaction: a binding WRITER (BINDING_WRITER_VERBS), not a reader (bindSession: a same-session re-statement)" },
   { file: 'server/src/coord/store.ts', text: "'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +`WHERE r.sessionId = ? AND e.detail = ? AND r.state NO",

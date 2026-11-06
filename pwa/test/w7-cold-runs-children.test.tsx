@@ -1,14 +1,13 @@
-// `useColdRuns`'s child accumulation (`childRunsSeen`, D-7214) and the archive reads it triggers, pinned before C7d
-// (D-7179; Task C7a; plan docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 3). `childRunsSeen` asks
-// "which finished runs had a child", from two facts held for the board's life: the minting run each fleet session's
-// `.child` mark names, and every cold row carrying a reclaim chip. `RunSummary.childIds` names only OPEN runs with a
-// bound worker, so it never names a closed run; these rows are what a reader keyed on it would lose. Each row pins the
-// `loadRuns` calls, under fake timers (no wall-clock wait decides a count).
+// The archive reads `useColdRuns` makes for a finished run that had a child, pinned before C7d (D-7179; Task C7a; plan
+// docs/superpowers/plans/2026-10-27-consolidation-w7-pwa.md, item 3). The board used to gather that answer itself, for its
+// own life, from fleet marks and cold chips (D-7214). The server says it now (`RunSummary.hadChild`, D-8068), and these
+// rows keep what that memory protected, plus the case it could not: a board that loads after the child has gone.
+// `RunSummary.childIds` names only OPEN runs with a bound worker, so it never names a closed run; these rows are what a
+// reader keyed on it would lose. Each row pins the `loadRuns` calls, under fake timers (no wall-clock wait decides a count).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { ChildReclaimStatus, CoordStatus, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { childRunsSeen } from '../src/fleet/runWords';
 import { useColdRuns } from '../src/screens/useColdRuns';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -20,10 +19,11 @@ const run = (id: number, over: Partial<RunSummary> = {}): RunSummary => ({
   claimedBy: 'coord-a', resumed: false, clearedAt: null, openedAt: T - 1_000_000, dispatchStartedAt: null, dispatchedAt: T - 900_000,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null, ...over,
+  childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 const finished = (id: number, word: ChildReclaimStatus['word'] | null, over: Partial<RunSummary> = {}): RunSummary =>
   run(id, { state: 'done', closedAt: T - 60_000, childReclaim: word === null ? null : { word, sentence: null, at: null }, ...over });
+const hadChild = { hadChild: true };
 const child = (runId: number, over: Partial<FleetSession> = {}): FleetSession =>
   fleetSession({ id: 'session-a', project: 'project-a', workspace: 'ws-a', role: 'child', child: { kind: 'child', runId }, ...over });
 const coordWith = (doneAt?: number): CoordStatus => ({
@@ -59,10 +59,9 @@ const fleetFrame = async (store: FleetStore, sessions: FleetSession[]): Promise<
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-describe('useColdRuns: the children it remembers and the reads they trigger (D-7214)', () => {
-  it('the race row: finished run 7, no live runs, a child marked {kind: child, runId: 7}; a coord-frame reclaim end re-reads (two loadRuns calls)', async () => {
-    expect([...childRunsSeen(new Set(), [child(7)], [finished(7, null)])]).toEqual([7]);
-    const { store, loadRuns } = await mount([finished(7, null)], [child(7)]);
+describe('useColdRuns: a finished run that had a child, and the reads it triggers (D-8068)', () => {
+  it('the race row: finished run 7, no live runs, its child leaves the fleet; a coord-frame reclaim end re-reads (two loadRuns calls)', async () => {
+    const { store, loadRuns } = await mount([finished(7, null, hadChild)], [child(7)]);
     expect(loadRuns).toHaveBeenCalledTimes(1);
     await fleetFrame(store, []);                    // the vanish: no chip, so wave 5 stays quiet
     expect(loadRuns).toHaveBeenCalledTimes(1);
@@ -72,41 +71,62 @@ describe('useColdRuns: the children it remembers and the reads they trigger (D-7
     expect(loadRuns).toHaveBeenCalledTimes(2);
   });
 
-  it('the resumed-child row: a child whose mark names run 1 while its binding names run 5; run 1 is in the set', async () => {
+  it('the resumed-child row: a child whose mark names run 1 while its binding names run 5; both finished rows are re-read for', async () => {
     const resumed = child(1, { run: { id: 5, state: 'working', claimedBy: 'coord-a' }, openRun: { id: 5, state: 'working', claimedBy: 'coord-a' } });
-    expect([...childRunsSeen(new Set(), [resumed], [])]).toEqual([1]);
-    const { store, loadRuns } = await mount([finished(1, null)], [resumed]);
-    await coordFrame(store, T + 1);
-    expect(loadRuns).toHaveBeenCalledTimes(2);
+    for (const id of [1, 5]) {
+      const { store, loadRuns } = await mount([finished(id, null, hadChild)], [resumed]);
+      await coordFrame(store, T + 1);
+      expect(loadRuns, `run ${id}`).toHaveBeenCalledTimes(2);
+      cleanup();
+    }
   });
 
-  it('the board-mounted-after-close row: the board mounts after run 7 closed; the mark still puts it in the set', async () => {
-    const { store, loadRuns } = await mount([finished(7, null)], [child(7)]);
+  it('the board-mounted-after-close row: the board mounts after run 7 closed, with the child still listed', async () => {
+    const { store, loadRuns } = await mount([finished(7, null, hadChild)], [child(7)]);
     expect(loadRuns).toHaveBeenCalledTimes(1);
     await coordFrame(store, T + 1);
     expect(loadRuns).toHaveBeenCalledTimes(2);
   });
 
-  it('a finished run nobody marked and no chip names is not in the set: no re-read', async () => {
-    const { store, loadRuns } = await mount([finished(7, null)], [fleetSession({ id: 'session-b', project: 'project-a' })]);
+  it('the reload row: a board mounted after the child left, which no fleet frame ever told, still re-reads', async () => {
+    const { store, loadRuns } = await mount([finished(7, null, hadChild)], []);
     await coordFrame(store, T + 1);
-    expect(loadRuns).toHaveBeenCalledTimes(1);
+    expect(loadRuns).toHaveBeenCalledTimes(2);
   });
 
-  it('the skew row: childIds absent or present, the set and the re-reads are the same (the reader never reads childIds)', async () => {
+  it('a finished run the server says had no child is not re-read, whatever a fleet frame marks', async () => {
+    const nobody = await mount([finished(7, null)], [fleetSession({ id: 'session-b', project: 'project-a' })]);
+    await coordFrame(nobody.store, T + 1);
+    expect(nobody.loadRuns).toHaveBeenCalledTimes(1);
+    cleanup();
+    const marked = await mount([finished(7, null)], [child(7)]);
+    await coordFrame(marked.store, T + 1);
+    expect(marked.loadRuns, 'the board reads no mark now').toHaveBeenCalledTimes(1);
+  });
+
+  it('the skew row: childIds absent or present, the re-reads are the same (the reader never reads childIds)', async () => {
     const counts: number[] = [];
-    const sets: number[][] = [];
     for (const childIds of [undefined, [7], []] as const) {
-      const rows = [finished(7, null, childIds === undefined ? {} : { childIds })];
-      sets.push([...childRunsSeen(new Set(), [child(7)], rows)]);
+      const rows = [finished(7, null, { ...hadChild, ...(childIds === undefined ? {} : { childIds }) })];
       const { store, loadRuns } = await mount(rows, [child(7)]);
       await fleetFrame(store, []);
       await coordFrame(store, T + 1);
       counts.push(loadRuns.mock.calls.length);
       cleanup();
     }
-    expect(sets).toEqual([[7], [7], [7]]);
     expect(counts).toEqual([2, 2, 2]);
+  });
+
+  it('the older-server row: a row with no hadChild key asks no read of its own, and the chip triggers still fire', async () => {
+    const { hadChild: _gone, ...bare } = finished(7, null);
+    const chipless = await mount([bare as RunSummary], [child(7)]);
+    await coordFrame(chipless.store, T + 1);
+    expect(chipless.loadRuns).toHaveBeenCalledTimes(1);
+    cleanup();
+    const { hadChild: _also, ...pending } = finished(7, 'pending');
+    const chipped = await mount([pending as RunSummary], [child(7)]);
+    await coordFrame(chipped.store, T + 1);
+    expect(chipped.loadRuns).toHaveBeenCalledTimes(2);
   });
 
   it('the schedule: one read per mount, one on a live run leaving the slice, one on a pending child\'s session leaving the fleet', async () => {
