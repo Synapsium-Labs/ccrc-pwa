@@ -34,13 +34,13 @@ import { delegationTreeKey } from './delegation-correlation.js';
 import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, treeLeaseOf } from './delegation-conflicts.js';
 import { claimantAt, type StampedRun } from './runBinding.js';
 import { ccdIdForWorktree } from '../divergence.js';
-import { rowStanding } from '../sessionReading.js';
+import { rowStanding, type RowStandingFacts } from '../sessionReading.js';
 
 /** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
  *  that window falls back to its own row: the rider's store read by `sessionId` removes the bound. */
 export const DELEGATION_PROJECTION_CLOSED_RUNS = 200;
 
-export type DelegationProjectionSession = Pick<FleetSession, 'id'> & Partial<Pick<FleetSession, 'presence' | 'lifecycle' | 'unmeasured'>>;
+export type DelegationProjectionSession = Pick<FleetSession, 'id'> & RowStandingFacts;
 /** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration: the binding module's
  *  `StampedRun`, declared once there (R9's decider reads it). */
 export type DelegationProjectionRun = StampedRun;

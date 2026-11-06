@@ -132,7 +132,7 @@ import {
   type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
 import { claimExpiry, claimVerdictOf, type LivenessProbe } from './coord/claims.js';
-import { rowStanding } from './sessionReading.js';
+import { rowStanding, type RowStandingFacts } from './sessionReading.js';
 import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
@@ -9868,8 +9868,8 @@ export interface DelegationLaneStall {
  *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
  *  reason: absent reads as no stop evidence (D-5433). */
 /** What the claim sweeps read of a frame row: `Pick` is deliberate, so a test need not fabricate a whole `FleetSession`. */
-type ClaimProbeRow = Pick<FleetSession, 'id' | 'unmeasured'> & Partial<Pick<FleetSession, 'presence' | 'lifecycle'>>;
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt' | 'presence' | 'lifecycle' | 'unmeasured'>>;
+type ClaimProbeRow = Pick<FleetSession, 'id' | 'unmeasured'> & RowStandingFacts;
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>> & RowStandingFacts;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'> & Partial<Pick<SessionRecord, 'workdir'>>;   // PR6: workdirs key a standing refusal
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 

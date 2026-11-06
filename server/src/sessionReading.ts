@@ -176,6 +176,11 @@ function presenceOf(f: SessionFacts): Verdict {
  *  lifecycle that reads alive with no pane). */
 export type RowStanding = 'here' | 'doubt' | 'asleep' | 'gone';
 
+/** The facts `rowStanding` reads, named once so its callers' row types do not spell them again. */
+export interface RowStandingFacts {
+  readonly presence?: Presence; readonly lifecycle?: SessionLifecycle | null; readonly unmeasured?: readonly IdentityField[];
+}
+
 /** D-6908, on the wire's `presence` rather than the old `status === 'dead'`, which is every pane tmux did not call live.
  *  A row with no `presence` said nothing, and nothing said is doubt (an older row; `shared/api.ts` on `presence`).
  *
@@ -183,9 +188,7 @@ export type RowStanding = 'here' | 'doubt' | 'asleep' | 'gone';
  *  not parse over a pane tmux proved gone. The ruling keeps exactly two cases, and a torn stamp does not clear itself, so
  *  as doubt it would hold a claim for 8 hours. It stays what it was before D-6908. The row cannot tell that from the same
  *  torn stamp with tmux silent, which therefore reads `gone` too, also as before. */
-export function rowStanding(row: {
-  readonly presence?: Presence; readonly lifecycle?: SessionLifecycle | null; readonly unmeasured?: readonly IdentityField[];
-}): RowStanding {
+export function rowStanding(row: RowStandingFacts): RowStanding {
   if (unmeasuredFields(row).length > 0) return 'doubt';
   switch (row.presence) {
     case 'alive': return row.lifecycle === 'restarting' ? 'doubt' : 'here';
