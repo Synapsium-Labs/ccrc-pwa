@@ -4,7 +4,7 @@
 // What jsdom cannot hold: Refined at 1600 and 1920 on a session with a plan and mail —
 //   - "shown: three tracks; hidden: two tracks": the frame's grid has the sidebar, the detail and the 320 rail while the
 //     rail is shown, and the sidebar and the detail alone once it is hidden (the empty aside takes no track); the
-//     reading column is still 820 and centred in the detail pane, and the task and mail strips are above the composer;
+//     reading column is still the 1200 cap (D-8059) and centred in the detail pane, and the task and mail strips are above the composer;
 //   - "hiding at the newest turn keeps the reader at the newest turn": the strips returning shrinks the transcript, and
 //     the reader that was at the newest turn is still there;
 //   - "no sideways page scroll either way";
@@ -115,7 +115,7 @@ const toggle = (page: Page) => page.locator('[data-command="toggle-inspector"]')
 
 describe('Refined at 1600 and 1920', () => {
   for (const width of WIDTHS) {
-    it(`${width}px, shown: three tracks; hidden: two tracks, the reading column still 820 and centred, the strips above the composer`, async () => {
+    it(`${width}px, shown: three tracks; hidden: two tracks, the reading column still 1200 and centred, the strips above the composer`, async () => {
       const { ctx, page, errors } = await openSession(view(width));
       try {
         const shown = await measure(page);
@@ -124,8 +124,8 @@ describe('Refined at 1600 and 1920', () => {
         expect(shown.tracks[2]).toBe('320px');
         expect(shown.rail).toBe(true);
         expect(shown.strips, 'the rail holds the plan and the mail').toEqual({ task: false, mail: false, aboveComposer: false });
-        expect(shown.column.width, 'the reading column, shown (yields to the pane at 1600)').toBeLessThanOrEqual(820);
-        if (width === 1920) expect(shown.column.width).toBe(820);
+        expect(shown.column.width, 'the reading column, shown (yields to the pane at 1600)').toBeLessThanOrEqual(1200);
+        if (width === 1920) expect(shown.column.width).toBe(1200);
 
         await toggle(page).click();
         await page.waitForFunction(() => document.querySelector('.ref-inspector') === null);
@@ -134,7 +134,7 @@ describe('Refined at 1600 and 1920', () => {
         expect(hidden.tracks, 'hidden: sidebar and detail').toHaveLength(2);
         expect(hidden.tracks[0]).toBe('400px');
         expect(hidden.rail).toBe(false);
-        expect(hidden.column.width, 'the column is the measure, not wider').toBe(820);
+        expect(hidden.column.width, 'the column is the measure, not wider').toBe(1200);
         expect(Math.abs(hidden.column.leftGap - hidden.column.rightGap), `centred (${hidden.column.leftGap} / ${hidden.column.rightGap})`)
           .toBeLessThanOrEqual(1);
         expect(hidden.strips, 'the plan and the mail are back, above the composer').toEqual({ task: true, mail: true, aboveComposer: true });
