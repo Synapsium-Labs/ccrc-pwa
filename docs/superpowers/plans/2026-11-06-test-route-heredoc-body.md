@@ -37,7 +37,7 @@ The command word is the real one. `_tsegments` cuts a word at `$(` and at a quot
 read as `X=`, then `true`, then an empty word, and the empty word is not a command. `_tbodies` therefore hands it no
 substitution and no quoted newline: each substitution moves to a line of its own and leaves a mark in its word, a quoted
 newline leaves a mark, and `$'…'`, which `_tsegments` does not know, becomes a mark. `_tinert` and the classifier then read
-the same text, so what was cleared is what is classified, and an assignment before a command hides nothing.
+the same text, so what was cleared is what is classified, and an assignment before a command does not hide a shell from that reading, except a quoted substitution nested in another quoted substitution, which main misses too (Known limits).
 
 The list is an allowlist because many things run text, and a miss in this direction costs a false denial, not a missed
 run. Any error in the reader fails the same way: it runs in a subshell and a failed read keeps the string whole.
@@ -79,6 +79,11 @@ Known false denials, kept because the guard fails closed:
   the quotes: a substitution or a quote nested in a quoted substitution (`X="$(true "$(true)" x)" bash <<EOF`,
   `echo "$(X=$(true) bash <<EOF…)"`) or `$'\''`. The reader refuses each of these lines, and the whole string then reads
   light, as it does on `main`.
+- An ordinary spelling sits in that last gap: `REV="$(git rev-parse "$(git merge-base a b)")" bash <<'EOF'` reads light, and
+  bash runs the body, as on `main`. A possible follow-up, left out of the last fix round because it changes the fallback:
+  when the reader refuses, read the moved-out text and its body lines instead of the raw string.
+- An unquoted body with a bash 5.3 `${ cmd; }` reads as text and bash runs it. This one reads heavy on `main`. The check
+  looks for `$(` and backquote only; the spelling needs bash 5.3 or later and is unusual, so it stays a known limit.
 
 Measured on `/bin/bash` 3.2 only: a `)` line in a body inside `$(…)` ends the substitution there. The fleet's bash is 5,
 and the classifier itself needs bash 4.
