@@ -9,6 +9,7 @@ import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnaps
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
 import { WAITING_SNAPSHOT_KEY, saveFleetSnapshot, saveWaitingSnapshot } from '../src/lib/offline';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { TEST_ROSTER } from './rosterFixture';
 import { frame as delegationFrame, lease as delegationLease, unowned as delegationUnowned } from './delegationFixture';
 
@@ -1705,6 +1706,27 @@ describe('fleet store', () => {
       expect(store.getState().waiting).toBeNull();
       expect(window.localStorage.getItem(WAITING_SNAPSHOT_KEY)).toBeNull();
       store.getState().disconnect();
+    });
+
+    // Review 1561 F1: the socket outlives a sign-out, so a frame (or a read already on the wire) after it must not write the
+    // copy back. The page still takes the list; only the device's copy is refused.
+    it('after a sign-out, a waiting frame and a read on the open store save nothing', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      raiseAuthLost('no-session');
+      try {
+        lastSocket().message(JSON.stringify({ type: 'waiting', waiting: list }));
+        store.getState().setWaiting(list);
+        expect(store.getState().waiting).toEqual(list);
+        expect(window.localStorage.getItem(WAITING_SNAPSHOT_KEY)).toBeNull();
+      } finally {
+        clearAuthLost();
+        store.getState().disconnect();
+      }
+      // Signed in again, the next list is saved as before.
+      store.getState().setWaiting(list);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view: list });
     });
 
     it('a store whose storage throws still starts, with waitingSaved null', () => {

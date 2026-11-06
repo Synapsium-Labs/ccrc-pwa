@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { COSE_ES256 } from '../../shared/api';
 import { api } from '../src/lib/api';
+import { ApiError } from '../src/lib/apiError';
 import { authLost, clearAuthLost, onAuthPostureChanged } from '../src/lib/auth';
 import { PasskeyNotice } from '../src/fleet/PasskeyNotice';
 import { navigate } from '../src/lib/router';
@@ -441,6 +442,33 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
     expect(window.localStorage.getItem('ccrc.waiting-snapshot.v1')).toBeNull();
     expect(window.localStorage.getItem('ccrc.fleet-snapshot.v1')).toBe('fleet-bytes');
     window.localStorage.removeItem('ccrc.fleet-snapshot.v1');
+  });
+
+  // Review 1561 F2 and F3: which arm of a Sign out forgets the copy. A 401 is the session already gone, so it is signed out
+  // and forgets; any other failure (a 5xx, the network) leaves the session, and so the copy, as they were.
+  const COPY = '{"savedAt":1,"view":{"items":[],"cleared":[],"goals":[]}}';
+  const signOutAnswering = async (answer: Error): Promise<void> => {
+    window.localStorage.setItem('ccrc.waiting-snapshot.v1', COPY);
+    await armed();
+    vi.spyOn(api, 'logout').mockRejectedValue(answer);
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('region', { name: 'This session' })).getByRole('button', { name: 'Sign out' }));
+    });
+  };
+
+  it('a Sign out the server answers 401 (the session already gone) forgets the copy too', async () => {
+    await signOutAnswering(new ApiError(401, { ok: false, error: 'no-session' }));
+    expect(window.localStorage.getItem('ccrc.waiting-snapshot.v1')).toBeNull();
+  });
+
+  it('a Sign out refused for another reason keeps the copy (a 5xx, or no network)', async () => {
+    await signOutAnswering(new ApiError(503, { ok: false, error: 'unavailable' }));
+    expect(window.localStorage.getItem('ccrc.waiting-snapshot.v1')).toBe(COPY);
+    cleanup();
+    vi.restoreAllMocks();
+    await signOutAnswering(new TypeError('offline'));
+    expect(window.localStorage.getItem('ccrc.waiting-snapshot.v1')).toBe(COPY);
+    window.localStorage.removeItem('ccrc.waiting-snapshot.v1');
   });
 
   it('an unreadable status shows no Your sign-in or This session, and never says on', async () => {

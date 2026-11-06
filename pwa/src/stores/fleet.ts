@@ -4,6 +4,7 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { FLEET_PROTO, isPoolsEnforcement, type AccountsResponse, type CoordStatus, type DelegationProjectionWire, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, loadWaitingSnapshot, saveFleetSnapshot, saveWaitingSnapshot, snapshotRefused, type WaitingSnapshot } from '../lib/offline';
+import { authLost } from '../lib/auth';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
 import { mergeBySeq, reviveNotifyEvents } from '../lib/feed';
 import { requestUpdate } from '../lib/swupdate';
@@ -435,6 +436,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
     // below, not this socket), so the snapshot's own roster is read off current state at WRITE time rather than out
     // of the `fleet` frame, which carries none.
     const writeSnapshot = (sessions: FleetSession[]): void => saveFleetSnapshot(sessions, get().roster);
+    // The Waiting list's device copy (console speed C4), written after each `waiting` write, and NEVER while auth is lost
+    // (review 1561 F1): the socket outlives a sign-out, so a later frame, or a read already on the wire, would put back
+    // the copy the sign-out removed. The page still takes the list; only the device's copy is refused.
+    const saveWaiting = (view: WaitingView): void => { if (!authLost().lost) saveWaitingSnapshot(view); };
     const openWindow = (): void => {
       snapshotTimer = setTimeout(() => {
         snapshotTimer = null;
@@ -736,7 +741,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               set({ delegation: msg.delegation });
             } else if (msg.type === 'waiting') {
               set({ waiting: msg.waiting });
-              saveWaitingSnapshot(msg.waiting);
+              saveWaiting(msg.waiting);
             }
           },
           onState: (conn) => set(conn === 'connecting' ? { conn } : { conn, linkLost: conn === 'down' }),
@@ -779,7 +784,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       setWaiting(view) {
         set({ waiting: view });
-        saveWaitingSnapshot(view);
+        saveWaiting(view);
       },
 
       setRunPages(pages) {

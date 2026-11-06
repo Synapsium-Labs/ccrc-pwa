@@ -14,6 +14,7 @@ import type { ReactNode } from 'react';
 import { Button, Section } from '@ccrc/ui';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api, apiErrorText } from '../../lib/api';
+import { ApiError } from '../../lib/apiError';
 import { raiseAuthLost } from '../../lib/auth';
 import { forgetWaitingSnapshot } from '../../lib/offline';
 
@@ -37,10 +38,14 @@ export function ThisSessionCard(): ReactNode {
     result.clear();
     try {
       await api.logout();
-      // The Waiting list saved on this device goes with the session (console speed C4, review 1556 R2).
+      // The Waiting list saved on this device goes with the session (console speed C4, review 1556 R2): only once the
+      // server has ended it, so a refused sign-out leaves the session, and the copy, as they were.
       forgetWaitingSnapshot();
       raiseAuthLost('no-session');
     } catch (err) {
+      // A 401 is the session already gone (review 1561 F2): the operator is signed out, so the copy goes too. Any other
+      // failure (a 5xx, the network) left the session standing, and the copy with it.
+      if (err instanceof ApiError && err.status === 401) forgetWaitingSnapshot();
       result.say(apiErrorText(err), 'refusal');
     } finally {
       // Cleared on the success path too: this card stays mounted behind the login screen, and a kept "Signing out…"
