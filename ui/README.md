@@ -90,7 +90,9 @@ and the contrast gate measures each palette once, for both skins.
 - **The roles.** `tokens.css`'s `:root` declares the type and density roles at
   Refined's values (`--fs-ui`, `--fs-prose`, `--fs-meta`, `--fs-page`, the
   `--*-section` set, `--gutter`, `--row-h`, `--pad-card`, `--gap-section`,
-  `--page-max`, `--page-max-wide`, `--measure-chat`). Each one chooses a step
+  `--page-max`, `--page-max-wide`, `--measure-chat`, and `--measure-chat-prose`:
+  the chat's prose measure inside the `--measure-chat` column from 900px up,
+  D-8059). Each one chooses a step
   from a scale, so it adds no new size. `theme.css` maps them as `text-md`
   (the 14px scale step), `text-ui`, `text-prose`, `text-meta`, `text-title`
   (the page title, `--fs-page`) and `text-section`, and as the spacing keys

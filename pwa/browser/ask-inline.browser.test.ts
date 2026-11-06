@@ -273,8 +273,9 @@ const t1dNamed = (v: T1dView): string => `${v.skin}, ${v.theme}, ${v.width}x${v.
  *  rule (chat.css, `@media (height < 700px)`) one line and none. */
 const SHORT_WINDOW = 700;
 const floors = (v: T1dView): { lines: number; transcript: number } => (v.height < SHORT_WINDOW ? { lines: 1, transcript: 0 } : { lines: 2, transcript: 48 });
-/** A question that wraps to two lines at the card's width in every view, from Refined's 1280 card (about 850px) to
- *  Instrument's 1920 one, the whole pane since D-8059 (about 1420px); the cells that read it assert that premise. `.ask-inline-title` collapses a newline, so the second
+/** A question that wraps to two lines at the card's text width in every view, from the narrowest, Instrument's 1280
+ *  card (about 830px; Refined's 1280 is about 894px), to Instrument's 1920 one, the whole pane since D-8059 (about
+ *  1390px); the cells that read it assert that premise. `.ask-inline-title` collapses a newline, so the second
  *  line is made by the wrap, never by a line break. */
 const SHORT_QUESTION = 'Should the nightly report keep its current layout, with the summary table first and the per-project '
   + 'details after it, or move the details first and the summary to the end, after every project\'s own section, so that '
@@ -634,9 +635,9 @@ describe('the question region scrolls by its keys (T1d, T1e, D-7565)', () => {
 
 // At 1600 Refined draws its inspector rail and the page gains no sideways scroll. The card is bounded by
 // `min(var(--measure-chat), 100%)` less its two insets (`.ask-inline`'s `max-width`), which `pageSide <= 0` alone cannot
-// see: a card that was too wide by two insets still fits the page. So the width is measured against what bounds it. As
-// measured here the column (880px) is WIDER than the reading measure (820px), so the measure binds and the `100%` arm,
-// the card yielding to a column narrower than the measure, is not exercised at this width.
+// see: a card that was too wide by two insets still fits the page. So the width is measured against what bounds it. Since
+// D-8059 the reading measure is 1200px, wider than the column here (880px), so the `100%` arm binds: the card yields to a
+// column narrower than the measure, and this case exercises that arm.
 describe('the inline ask at 1600 with the inspector rail (D-6326)', () => {
   const view: AppView = { skin: REFINED, theme: PHOSPHOR, width: 1600 };
   let measured: Measure | undefined;

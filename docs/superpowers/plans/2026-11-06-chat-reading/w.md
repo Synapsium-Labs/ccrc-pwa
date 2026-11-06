@@ -38,7 +38,8 @@ Geist's `ch` at the prose size is **9.938 px** in both skins (0.6625 em at 15 px
   fixtures whose premises held only in the old narrow column: `ask-inline.browser.test.ts`'s two-line question fitted on
   one line in Instrument's 1920 card (now about 1390 px of text), and its eighty-line question no longer asked for 40% of
   a 1440 pane; `wheel.ts`'s 150-word answer chip no longer passed `--well-max` at 1920. The question is now 259
-  characters (two lines from Refined's 1280 card to Instrument's 1920 one), the long question 160 lines, and the chip
+  characters (two lines from the narrowest card, Instrument's 1280 at about 830 px of text, to Instrument's 1920 one),
+  the long question 160 lines, and the chip
   400 words. The assertions are unchanged. Claimed (3685, 3686) before the edit.
 - **`w-session-header-900-red-on-main-here`.** `session-header.browser.test.ts`'s "Instrument's interim header … at 900
   no taller than the accepted growth" is red on this box (200.8 px against 188, both palettes) with main's four source
