@@ -712,6 +712,20 @@ describe('conflict finality across passes', () => {
   it('a prior attempt that was merely unresolved is not final: it may still link', () => {
     expect(kinds(substantive(planDelegationReconciliation(one(rec(), linkedV(agentAct, 2), { recovery: recovery({ attempts: [attempt({ verdict: 'unresolved' })] }) }))))).toEqual(['request-linked-lease-identity']);
   });
+  // W5-R8g (delegation wave 5 PR8, D-7821): a characterisation row, green before PR8's policy edit. Correlation keeps `finalConflicts`
+  // (every tree with ANY recorded `conflicting` attempt), so a lease whose carrier row records a resolve covering that attempt
+  // (`resolvedThrough`) changes nothing here: no lease request and no attempt, for a linked, unresolved or conflicting verdict.
+  it('W5-R8g: a once-conflicted tree gets no effect for a linked, unresolved or conflicting verdict, resolved or not', () => {
+    const conflict = attempt();
+    const held = lease({ sourceKind: 'raw', activityId: rawAct.activityId });
+    const resolved = { leaseId: held.leaseId, transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null,
+      releaseReason: null, resolvedThrough: { attemptedAt: conflict.attemptedAt, attemptId: conflict.attemptId } };
+    const verdicts = [linkedV(agentAct, 2), unresolvedV('ambiguous-subagent-path', [agentAct.identityJournalId]),
+      conflictingV('rungs-disagree', [agentAct.identityJournalId])];
+    for (const rc of [recovery({ attempts: [conflict] }), recovery({ attempts: [conflict], leases: [held], leaseCarriers: [resolved] })]) {
+      for (const v of verdicts) expect(substantive(planDelegationReconciliation(one(rec(), v, { recovery: rc }))), v.kind).toEqual([]);
+    }
+  });
 });
 
 describe('a recovery that is not ready decides nothing', () => {
