@@ -1,8 +1,9 @@
 # PR8 (S4, Retain and resolve): departures and measurements
 
-Run 1550, delegation broker wave 5, Tasks 5.8.1 to 5.8.3, under O5-8 (c): one pull request, no tree doors. Two departures are
-defined in the plan's "Deviations found": D-8040 (`boxHolds` needs the mark's lock word, carried from PR6's D-8037) and D-8041
-(`registry-unmeasurable` answers 502). The rest of the block issued to this run is unused, and this note does not spell it.
+Run 1550, delegation broker wave 5, Tasks 5.8.1 to 5.8.3, under O5-8 (c): one pull request, no tree doors. Three departures are
+defined in the plan's "Deviations found": D-8040 (`boxHolds` needs the mark's lock word, carried from PR6's D-8037), D-8041
+(`registry-unmeasurable` answers 502) and D-8042 (the unbounded claimant read is composed from the binding series, with no new store
+method). The rest of the block issued to this run is unused, and this note does not spell it.
 
 ## The floor rule, as built
 
@@ -13,10 +14,11 @@ PR5a folds, so the rollback floor stays PR5a.
 
 ## Measured, not departures
 
-- **The claimant read and the watcher's port.** `CoordStore#delegationRunStampsNaming` is added, but it does not join
-  `ports.ts#WatcherCoordMember`. Only the routes reach it in PR8, and `rings/watcher-store-port.test.ts` reds a member the watcher
-  and its lane files do not reach (measured by adding it: "the census differs from WatcherCoordMember"). PR7's lane, which reaches it
-  for the digest's recipient, adds it there.
+- **The claimant read (D-8042).** The plan's `CoordStore#delegationRunStampsNaming` was built first, then taken out. It broke two
+  censuses. `run-session-census.test.ts` pins the store's session-keyed run readers at four, and a fifth is red. `coord-store.test.ts`
+  counts the store's delegation methods. Joined to `WatcherCoordMember`, it broke a third: `rings/watcher-store-port.test.ts` reds a
+  member the watcher and its lane files do not reach. The read is `delegationLeaseDoor.ts#runStampsOfSeries`, composed from
+  `bindingRunsOf` and `run`, so `store.ts` and `ports.ts` are unchanged.
 - **The policy's imports.** `delegation-policy.ts` imports `disownedTreeKey` and `disownedTreeKeys` from `delegation-conflicts.ts`, as
   the plan's "built from `disownedTreeKeys`" asks. Two pins held the policy to the model and correlation only
   (`delegation-policy.test.ts`, `delegation-wave3.integration.test.ts`); each now names the conflict module as well. The conflict module
@@ -44,6 +46,9 @@ PR5a folds, so the rollback floor stays PR5a.
 - **The reference names no `promotesLease`.** W5-SC1's allow-list for that word is empty until PR9. The reference says promotion is a
   `runs open` that names the lease, a later change.
 - **The coordinator skill has twenty clauses**, not the plan's nineteen. They are byte-unchanged.
+- **`retire-executors-pin` is red on `main` on this box.** Run alone, it failed three or four cases (the child-spent mail rows, and
+  temp-orphan cases taking 20 s) at this branch's tip, and four on a clean tree of `origin/main` (`ae42a89a0`). PR8 touches none of
+  that code. It is left to CI.
 
 ## Counts, re-measured on the base and moved by exactly the routes added
 
