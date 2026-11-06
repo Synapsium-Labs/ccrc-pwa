@@ -72,10 +72,14 @@ export const LIVENESS_QUALIFIER: Readonly<Record<DelegationLiveness, { readonly 
     word: 'stop not seen',
     title: "Its session is gone, dead or has restarted since, and the helper's stop was never recorded",
   },
+  asleep: {
+    word: 'session asleep',
+    title: 'Its session is asleep and wakes for mail or when opened; nothing shows whether the helper stopped',
+  },
   ended: { word: 'end recorded', title: 'The broker recorded its end; the worktree is still listed' },
   unmeasured: {
     word: 'unmeasured',
-    title: "Its execution state, or its session's incarnation, could not be measured",
+    title: "Its execution state, or whether its session is still there, could not be measured",
   },
 };
 

@@ -660,7 +660,7 @@ describe('delegation wave 3: the closed vocabularies are declared once, in share
 // hand-typed copy the idiom allows: the union fingerprint must find it in shared/api.ts exactly once, and nowhere else.
 describe('delegation wave 4: the projection\'s closed words are declared once, in shared/api.ts', () => {
   const VOCABS = [
-    ['DELEGATION_LIVENESS_MAP', 'DelegationLiveness', 'DELEGATION_LIVENESS', ['live', 'stale', 'ended', 'unmeasured']],
+    ['DELEGATION_LIVENESS_MAP', 'DelegationLiveness', 'DELEGATION_LIVENESS', ['live', 'stale', 'asleep', 'ended', 'unmeasured']],
     ['DELEGATION_ROW_GROUP_MAP', 'DelegationRowGroup', 'DELEGATION_ROW_GROUPS', ['parent', 'offline-coordinator']],
     ['DELEGATION_ACTIVITY_PLACEMENT_MAP', 'DelegationActivityPlacement', 'DELEGATION_ACTIVITY_PLACEMENTS', ['row', 'chip']],
     ['DELEGATION_CREATOR_KIND_MAP', 'DelegationCreatorKind', 'DELEGATION_CREATOR_KINDS', ['bash-call', 'unmeasured']],

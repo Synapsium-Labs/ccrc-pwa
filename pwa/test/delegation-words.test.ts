@@ -171,7 +171,8 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     }
     const word = (liveness: DelegationActivityWire['liveness']): string =>
       activityLine(activity({ liveness, displayName: null })).parts[1]!;
-    expect((['live', 'stale', 'unmeasured'] as const).map(word)).toEqual(['not confirmed', 'stop not seen', 'unmeasured']);
+    expect((['live', 'stale', 'asleep', 'unmeasured'] as const).map(word))
+      .toEqual(['not confirmed', 'stop not seen', 'session asleep', 'unmeasured']);
     expect(worktreeLine(lease({ liveness: 'ended' }), null, null).parts[2]).toBe('end recorded');
     // A newer server's liveness word is re-filed unmeasured by the reader, never drawn as live.
     const future = readDelegation(frame({ activities: [activity({ liveness: 'future-word' as never })] })).activities[0]!;
