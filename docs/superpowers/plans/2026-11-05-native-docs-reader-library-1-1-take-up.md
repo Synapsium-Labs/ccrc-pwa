@@ -2,7 +2,7 @@
 
 > **For agentic workers:** this wave is dispatched by the programme's coordinator as one run (see "How this wave runs" below). The worker executes it with REQUIRED SUB-SKILL superpowers:subagent-driven-development (recommended) or superpowers:executing-plans, task by task, under the `ccrc-worker` skill. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** rev 1 (2026-11-05), drafted for the coordinator before the library's v1.1.0 tag exists. Base: `origin/main` at `ce55b1ca967fa2f2af6ac71d8755f83447c57a82` (the merge of #2340, the reader lab's page). Every Find block below is quoted from that commit. The programme's open ledger PR (#2345) changes other lines of the rich-docs spec and the reader lab design than the ones quoted here (measured: the lines it changes are §4.7's reader-lab bullet, E18, A24, M10.4, M10.10, M10.13 and RD36 in the spec, and the design's own revisions), so its merge leaves every Find block matching. #2345 has since merged (`d32c339d3`); Task 8 Step 3's `**Revisions:**` Find is the one block quoted from that merge, because #2345 rewrote that line. **Task 1 Step 0 re-checks every Find block against the dispatch base** with one script, and a miss is a stop-and-ask. This plan replaces nothing.
+**Status:** rev 2 (2026-11-06), Q1-Q3 approved with every recommendation through console item 48; library 1.1.0 publication verified. The plan is not yet merged; the scoped Settings-access amendment and exact-tip CI remain required before landing and dispatch. Originally drafted on 2026-11-05 before the library's v1.1.0 tag existed. Base: `origin/main` at `ce55b1ca967fa2f2af6ac71d8755f83447c57a82` (the merge of #2340, the reader lab's page). Every Find block below is quoted from that commit. The programme's open ledger PR (#2345) changes other lines of the rich-docs spec and the reader lab design than the ones quoted here (measured: the lines it changes are §4.7's reader-lab bullet, E18, A24, M10.4, M10.10, M10.13 and RD36 in the spec, and the design's own revisions), so its merge leaves every Find block matching. #2345 has since merged (`d32c339d3`); Task 8 Step 3's `**Revisions:**` Find is the one block quoted from that merge, because #2345 rewrote that line. **Task 1 Step 0 re-checks every Find block against the dispatch base** with one script, and a miss is a stop-and-ask. This plan replaces nothing.
 
 **Scope:**
 - In: the exact pin moves from 1.0.0 to 1.1.0, with every W8a guard carried; the Docs reader draws Mermaid on open, after `ready`, when the reader lab's E17 `mermaid` line held on the operator's phone, and on request as today when it did not (one recorded reading, `policy.ts#READER_E17_MERMAID`); the reader lab's `lab-draw` profile stays the E17 instrument, unchanged in behaviour; on a phone, a leaf whose reader frame is ready gets one bar (the phone header's option 2): the frame's own bar off, its top space trimmed, its quick jump and contents (and a plan's Outline) on ccrc's buttons, its reading progress drawn by ccrc, the document's title on the bar, and the details panel behind the title; the adapter census and every other census these touch; the spec and design text the take-up changes (the rich-docs spec, the base spec's §4.4, §4.5, §4.7 and §4.17, and the reader lab design's §8 and RL14).
@@ -40,7 +40,9 @@
 
 ## Phone evidence received (2026-11-06)
 
-The operator supplied this block in chat for console item 53 (which replaces withdrawn item 47). It measures library build `0079625cc30a`, the current 1.0.0 instrument, not 1.1.0's `6bcf14892e48`. Record `E17-READING does-not-hold` and `E17-BLOCKS 1` in Task 1 Step 2. Under the proposed Q1 rule this selects **arm B with a block**: the Docs reader keeps drawing on request. Receipt of this evidence is not approval of Q1-Q3; console item 48 remains open.
+The operator supplied two blocks in chat for console item 53 (which replaces withdrawn item 47). Both measure library build `0079625cc30a`, the 1.0.0 instrument, not 1.1.0's `6bcf14892e48`. Preserve both blocks: the second passes, but does not erase the first failure. Record `E17-READING does-not-hold` and `E17-BLOCKS 2` in Task 1 Step 2. The operator separately approved Q1-Q3 with every recommendation through console item 48 on 2026-11-06. Under that approved Q1 rule this selects **arm B with a block**: the Docs reader keeps drawing on request.
+
+### Block 1 — Mermaid does not hold
 
 ```text
 reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
@@ -61,10 +63,38 @@ draw on open: needs one figure per task here; every single figure fits the budge
 door: 48 counted, 0 ignored; session cookie sent
 ```
 
-- **E18:** the instrument reports all seven walls and teardown holding. Preserve its coverage limits: the CSP iframe channel is not measured; the library half reports 0 of 1 attempted; `store.set` and a same-source-only listener were not exercised. This is the lab's bounded result, not proof of every possible sandbox escape being absent.
-- **E17:** 217 ms exceeds the accepted 200 ms Mermaid budget. Every single-figure mount fits (worst 150 ms), but that does not make the all-six mount pass. The busy-frame line demonstrates a shared thread and is diagnostic, not a separate gate.
-- **Scheduling:** “one figure per task” is the instrument's recommendation, not evidence that the reader implements that scheduling or that a six-figure document stays responsive. A scheduling change and a fresh passing measurement are separate work; this receipt does not add them to this wave or waive the budget.
+### Block 2 — Mermaid holds
+
+```text
+reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         shared thread (longest gap 2992 ms in a 3000 ms spin; watchdog timer 2516 ms late; shared-thread evidence: gap and timer)
+  mermaid            holds (ready; longest gap 192 ms, all six together; worst single: figure 5, 150 ms)
+    gaps ms          none 17 ready · trivial 108 ready · f1 133 ready · f2 125 ready · f3 133 ready · f4 133 ready · f5 150 ready · f6 125 ready · all 192 ready
+draw on open: fits the budget here, though the frame shares the thread
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+- **E18:** both blocks report all seven walls and teardown holding. Preserve their coverage limits: the CSP iframe channel is not measured; the library half reports 0 of 1 attempted; `store.set` and a same-source-only listener were not exercised. This is the lab's bounded result, not proof of every possible sandbox escape being absent.
+- **E17:** block 1's 217 ms exceeds the accepted 200 ms Mermaid budget; block 2's 192 ms passes it. Every single-figure mount fits in both blocks (worst 150 ms). The approved Q1 requires every supplied block to hold, so the combined reading remains `does-not-hold`, with two blocks. Do not average the measurements or replace the failed block with the passing one. Both busy-frame lines demonstrate a shared thread and are diagnostic, not separate gates.
+- **Scheduling:** block 1's “one figure per task” is the instrument's recommendation, not evidence that the reader implements that scheduling. Block 2 does not establish a scheduling change or a consistently passing all-six mount. Neither block measures the 1.1.0 build or the after-ready mode. This receipt does not add a scheduling change to this wave or waive the budget.
 - **Access correction:** Search → `reader lab` → “Go to Settings › Reader lab”, or `/settings/reader-lab`. The Settings index has no row today. Visible Settings rows for Reader lab and Measure highlighting remain owed in this take-up wave; the executable steps still need their scoped amendment before dispatch.
+
+## Operator answers and release receipt (2026-11-06)
+
+- **Plan approval:** console item 48 records “Approve with every recommendation (Q1-Q3 as recommended)”. Q1: after-ready only when every supplied E17 Mermaid block holds; otherwise on request. Q2: the frame's own Aa only. Q3: Share, Export and View on GitHub in the title's details panel, with no extra menu. The questions and alternatives below are retained as the decision record.
+- **Release:** signed tag `v1.1.0` at `50cef012aa671974473d19c2acd77f900e9d03af`; release run `42245203228`, attempt 2, completed successfully, including tag verification, both test jobs, build, attestation, publish, GitHub release and post-verify. The first attempt's WebKit B8.2 reset-to-top failure was not bypassed; the unchanged-tag retry passed. Its root cause remains unproven.
+- **Registry:** npm reports version `1.1.0` and `latest` `1.1.0`, with integrity `sha512-r2YCt15tGxOYKK1ONyZ/TzvpMdcC3bmUJvifmTdtrCPHxy8DG5nc65ImUi9RpPf+M82784HwMt52kdnkYcpqUg==`. The GitHub release is published, neither draft nor prerelease: https://github.com/Synapsium-Labs/docserver/releases/tag/v1.1.0 . Task 1 and Task 2 still re-check the package and its provenance at execution.
+- **Not yet done:** the plan has not merged and no take-up implementation has been dispatched. The scoped Settings-access plan amendment and exact-tip CI remain required before the plan lands. Publication of the library does not upgrade the PWA by itself.
 
 ## Global Constraints
 
@@ -1564,8 +1594,11 @@ Issued at the run's opening: (to be filled by Task 9 Step 4, refinement (d) firs
 - From the operator's rulings: draw Mermaid on open, following E17 (2026-11-03); the phone header's option 2 with the library release (2026-11-03, 2026-11-04); the library's Q5, Q8 and Q9 (2026-11-04).
 - From the header plan: option 2's details live behind the title, in the same disclosure option 1 uses (its Q2), and desktops and tablets keep today's header.
 
-### Waiting on you
-- **Q1. When does the Docs reader draw Mermaid on open?** The rich-docs spec makes drawing on open follow E17, and you are running the reader lab on your phone now (console item 47).
+### Answered by the operator (2026-11-06)
+
+Console item 48 approved every recommendation below. These questions and alternatives are retained for audit; none remains unanswered. The two phone blocks above select on request under Q1.
+
+- **Q1. When does the Docs reader draw Mermaid on open?** The rich-docs spec makes drawing on open follow E17. The operator supplied the two phone blocks above for console item 53 (replacing withdrawn item 47).
   - **Recommended:** on open (after `ready`) only when every block you send reads `holds` on its `mermaid` line; if any reads `does not hold`, or none is measured, the reader keeps drawing on tap as today. If no block has arrived when the library's tag is published, the wave lands on tap and a one-line follow-up (the recorded reading, its pin and the spec's E17 sentence) flips it when a block that holds arrives. Why: the reading is one recorded constant (refinement (b)), the on-tap arm stays in the reader, and the `busy-frame` line is a fact, not a condition, as E17's pass cell says.
   - Alternatives: (b) your own phone's block decides alone, and a second browser's block is recorded only; (c) draw on open whatever E17 reads, as the library batch accepted the risk with the gate's caps as the bound (its Q5), with the lab's reading recorded; this departs from the rich-docs spec's §4.6 sentence ("Drawing on open (ruled 2026-11-03) follows the reader lab's E17 measurement") and its E17 row, so it would need its own number (issued at run-open from the reserve) and a spec amendment of both in Task 8, which this plan does not yet write; (d) hold the whole wave until a block arrives.
 - **Q2. Aa, the reading settings, on the one bar.** With the frame's bar off, the library draws its own Aa at the frame's top right (sticky, 34 px tall), and `chrome.settings: false` would remove the reading settings altogether (width, font, the product lens); so a ccrc Aa button can only sit beside the frame's own.
@@ -1574,6 +1607,9 @@ Issued at the run's opening: (to be filled by Task 9 Step 4, refinement (d) firs
 - **Q3. Where Share, Export and View on GitHub go on the one bar.** The mockup you picked put them in a ⋯ menu (View on GitHub, Share, Export, Document details) and opened the details by tapping the title.
   - **Recommended:** no ⋯; the title opens the details panel, which then holds the crumbs, the truth line and the full header's actions line (View on GitHub, Share, Export, Open committed version), in §4.5's order and with their words. Why: the title gets the row's room, one disclosure serves both, and no new menu component with its own focus and dismissal rules is built (refinement (k)). Share and Export are two taps either way.
   - Alternative: the mockup's ⋯ menu beside the tools: one more 44 px control on the row (the title down to about 236 px at 412 px wide, 192 on a plan), a menu component, and its own keyboard and dismissal tests.
+
+### Waiting on you
+- No further answer to this plan's Q1-Q3 is needed. The scoped Settings-access plan amendment, exact-tip CI and plan landing are coordinator work before dispatch.
 
 ### Later
 - A lab profile that draws after `ready` (`ready-and-settle`, or a drawn signal of the library's own), if a reading must time that mode itself (refinement (d)).
