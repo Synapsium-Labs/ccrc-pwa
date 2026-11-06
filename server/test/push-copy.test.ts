@@ -1264,7 +1264,7 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
 // ── Plan W3 Task 3: the release push (design 2026-09-20 §13) ────────────────────────────────────────────────
 // A fleet-level push with no session (D-3296): decided by the pure `releaseToNotify`
 // (Task 2), marked in `releases.notifiedAt` BEFORE the send is started (D-3295), and
-// sent straight to `push.notify` — never through `pushOne`, whose presence gate and feed record are about a
+// sent through `notifyPushOnly` — never through `pushOne`, whose presence gate and feed record are about a
 // session. Each case calls the watcher's public `pushRelease` directly unless it is about a lane's wiring.
 describe('the release push — once per tag, across restarts, sessionless (design 2026-09-20 §13)', () => {
   afterEach(() => { vi.restoreAllMocks(); });
@@ -1429,7 +1429,8 @@ describe('the release push — once per tag, across restarts, sessionless (desig
     seed(w.coord!, { releases: [listed('v0.0.9')], server: 'v0.0.7', fleet: 'v0.0.7' });
     expect(w.w.pushRelease(T)).toMatchObject({ did: 'pushed', tag: 'v0.0.9' });
     await vi.waitFor(() => expect(warn.mock.calls.some(([l]) =>
-      String(l).startsWith('ccrc-server: ') && String(l).includes('release push for v0.0.9 did not send'))).toBe(true));
+      String(l).startsWith('ccrc-server: ') && String(l).includes('release push for v0.0.9 did not send')
+      && String(l).includes('not retried') && String(l).includes('(endpoint gone)'))).toBe(true));
     expect(w.w.pushRelease(T + 60_000)).toEqual({ did: 'skipped', why: 'nothing-to-notify' });
     expect(calls).toBe(1);
   });

@@ -160,7 +160,7 @@ import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/run
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
-import { notify, noticeSink } from './notice.js';
+import { notify, noticeSink, notifyPushOnly } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -1803,7 +1803,9 @@ export class FleetWatcher {
    * mark exists to stop, and a missed one is still shown by the fleet's update line and the settings screen.
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
-   * `pushOne` is about a session and this is about the fleet. A server-role process only: the push
+   * `pushOne` is about a session and this is about the fleet. So it goes through `notifyPushOnly`, the funnel's
+   * send-only door: being in the funnel gates nothing here, and this mark is the only once-only guard the push has.
+   * A server-role process only: the push
    * subscriptions are this box's disk (`push.ts`'s header), and the notify mode is the fleet row's alone.
    * With no push service (no VAPID keys — `index.ts` builds `push` only then) it decides and marks NOTHING:
    * a mark with no sender would answer `pushed` for a push nobody sent and use the tag up for good, so a
@@ -1852,10 +1854,7 @@ export class FleetWatcher {
     const copy = releasePushCopy(n, summary);
     const payload: PushPayload = { title: copy.title, body: copy.body, tag: copy.tag, url: copy.url };
     const tag = n.tag;
-    const sending = sender.notify(payload);
-    void sending.catch((e: unknown) => {
-      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the fleet's update line and the settings screen still show the release`);
-    });
+    notifyPushOnly({ push: sender }, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
     return { did: 'pushed', tag, payload };
   }
 
@@ -2522,8 +2521,8 @@ export class FleetWatcher {
       // readRegistry() field is its own agent-WS round trip. Some lanes still list
       // the registry themselves on purpose, each for its own reason recorded at
       // its call site, among others: sweepDivergences, the mail lane's `mailPass`,
-      // the temp-root collector, sweepOrphanTrees, the snapshot re-check, and
-      // `readLimits` inside `assembleFleet`, every listed tick. The lifecycle mirror
+      // the temp-root collector, sweepOrphanTrees and the snapshot re-check. `readLimits`
+      // takes this listing's names (D-8069). The lifecycle mirror
       // lists none of the registry's rows: it reads its own `$REG/.lifecycle/`.
       //
       // `readRegistryMeasured`, not `readRegistry` (blocking review findings
@@ -2747,7 +2746,7 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg));   // read once a tick: published by `currentLimits`, handed to assembleFleet
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
       const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.

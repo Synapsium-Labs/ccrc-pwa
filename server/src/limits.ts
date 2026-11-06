@@ -452,15 +452,18 @@ export async function readLaneStates(io: FleetIO, cfg: CcrcConfig): Promise<Lane
 /** `readLimits`' file reads in flight at once (D-6436), through `bounded.ts`'s pool. */
 export const LIMITS_READ_CONCURRENCY = 8;
 
+/** `registryNames` is a registry listing the caller already holds, and absent means list here (D-8069). The tick hands
+ *  its own, so a listed tick lists once. A request-time caller passes none: it has no tick's listing to trust, and a
+ *  marker raised a moment ago must count for the answer it gives now. */
 export async function readLimits(
   io: FleetIO,
   cfg: CcrcConfig,
   now = Math.floor(Date.now() / 1000),
+  registryNames?: readonly string[],
 ): Promise<Record<string, AccountLimits>> {
   const names = (await io.readdir(cfg.limitsDir)) ?? [];
-  // One readdir, not one stat per account: the registry dir is already being
-  // read on every fleet poll and this rides the same trip.
-  const regNames = (await io.readdir(cfg.registryDir)) ?? [];
+  // One listing, not one stat per account.
+  const regNames = registryNames ?? (await io.readdir(cfg.registryDir)) ?? [];
   const disabledLanes = new Set(
     regNames.filter((n) => n.endsWith('-disabled')).map((n) => n.slice(0, -'-disabled'.length)),
   );
