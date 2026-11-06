@@ -45,10 +45,16 @@ function splitSelectors(prelude: string): string[] {
   return out.map((s) => normSel(s)).filter((s) => s !== '');
 }
 
-/** Every innermost rule of `css`, comments stripped, in source order, with its offset in the stripped text. */
+/** `css` with comments and statement at-rules (`@layer a, b;`, `@import "x";`) blanked to spaces, so offsets hold and
+ *  the rule after one is read whole (fix round 1, review 1584 F5: its prelude used to start with the `@`). */
+function readable(css: string): string {
+  return stripComments(css).replace(/@[\w-]+[^{};]*;/g, (m) => ' '.repeat(m.length));
+}
+
+/** Every innermost rule of `css`, comments and statement at-rules blanked, in source order, with its offset. */
 function rulesOf(css: string): { selectors: string[]; body: string; at: number }[] {
   const out: { selectors: string[]; body: string; at: number }[] = [];
-  for (const m of stripComments(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  for (const m of readable(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const prelude = (m[1] ?? '').trim();
     if (prelude === '' || prelude.startsWith('@')) continue;
     out.push({ selectors: splitSelectors(prelude), body: m[2] ?? '', at: m.index ?? 0 });
@@ -64,7 +70,11 @@ function ruleFor(css: string, sel: string): { selectors: string[]; body: string;
   return found[0]!;
 }
 
-const LEAD = (kind: 'action' | 'info'): string => `${SCOPE} strong[${MARK_ATTR.lead}='${kind}']`;
+/** prose.css's DONE test: a task item whose OWN box is checked, in a tight list or a loose one. */
+const DONE_ITEM = '.task-list-item:has(> input:checked, > p:first-child > input:checked)';
+/** A lead-in rule leaves a checked task item's lead-in alone (fix round 1, review 1584 F2). */
+const NOT_DONE = `:not(${DONE_ITEM} *)`;
+const LEAD = (kind: 'action' | 'info'): string => `${SCOPE} strong[${MARK_ATTR.lead}='${kind}']${NOT_DONE}`;
 const MARKER = `${SCOPE} :is(ul, ol)[${MARK_ATTR.afterLead}='action'] > li::marker`;
 const LABEL = `${SCOPE} [${MARK_ATTR.status}]`;
 const TONE = (tone: StatusTone): string => `${SCOPE} [${MARK_ATTR.status}='${tone}']`;
@@ -80,6 +90,23 @@ const TONES: Readonly<Record<StatusTone, { color: string; background: string }>>
 
 /** The attributes the colour rules select on. */
 const COLOUR_ATTRS = [MARK_ATTR.lead, MARK_ATTR.afterLead, MARK_ATTR.status];
+
+/** The eight new rules. */
+const RULES = [LEAD('action'), LEAD('info'), MARKER, LABEL, ...(Object.keys(TONES) as StatusTone[]).map(TONE)];
+
+/** Whether a selector names one of `attrs`, read as the engine reads an attribute name: in any case, with spaces just
+ *  inside the bracket and CSS escapes (`data\-status`) undone (fix round 1, review 1584 F5). */
+function namesAttr(sel: string, attrs: readonly string[]): boolean {
+  const bare = sel.replace(/\\(.)/g, '$1').replace(/\[\s+/g, '[').toLowerCase();
+  return attrs.some((a) => bare.includes(`[${a.toLowerCase()}`));
+}
+
+/** Every selector in `css` that names a colour attribute without starting with the T4a scope. */
+function unscopedNaming(css: string): { naming: number; unscoped: string[] } {
+  const scope = `${normSel(SCOPE)} `;
+  const naming = rulesOf(css).flatMap((r) => r.selectors).filter((s) => namesAttr(s, COLOUR_ATTRS));
+  return { naming: naming.length, unscoped: naming.filter((s) => !s.startsWith(scope)) };
+}
 
 describe('colour in the assistant\'s prose (D-8061)', () => {
   it('each lead-in rule reads its token', () => {
@@ -111,31 +138,61 @@ describe('colour in the assistant\'s prose (D-8061)', () => {
     }
   });
 
+  it('a checked task item\'s lead-in keeps no lead colour', () => {
+    // The exclusion names exactly what the DONE rule dims, so the two cannot drift apart.
+    expect(declValue(ruleFor(prose, `.msg-assist ${DONE_ITEM}`).body, 'color')).toBe('var(--ink-tertiary)');
+    for (const kind of ['action', 'info'] as const) {
+      const [only, ...rest] = ruleFor(prose, LEAD(kind)).selectors;
+      expect(rest, kind).toEqual([]);
+      expect(only!.endsWith(normSel(NOT_DONE)), kind).toBe(true);
+    }
+  });
+
   it('every new rule\'s selector starts with the T4a scope', () => {
     const scope = `${normSel(SCOPE)} `;
-    for (const sel of [LEAD('action'), LEAD('info'), MARKER, LABEL, ...Object.keys(TONES).map((t) => TONE(t as StatusTone))]) {
+    for (const sel of RULES) {
       for (const member of ruleFor(prose, sel).selectors) expect(member.startsWith(scope), member).toBe(true);
     }
   });
 
   it('no rule in prose.css names data-lead, data-after-lead or data-status without it', () => {
-    const scope = `${normSel(SCOPE)} `;
-    const naming = rulesOf(prose).flatMap((r) => r.selectors).filter((s) => COLOUR_ATTRS.some((a) => s.includes(`[${a}`)));
+    const { naming, unscoped } = unscopedNaming(prose);
     // Not vacuous: the eight rules above all name one.
-    expect(naming.length).toBeGreaterThanOrEqual(8);
-    for (const member of naming) expect(member.startsWith(scope), member).toBe(true);
+    expect(naming).toBeGreaterThanOrEqual(8);
+    expect(unscoped).toEqual([]);
   });
 
   it('the rules sit inside @layer components, after the T4a chip rule', () => {
     const layer = atBlock(prose, '@layer components');
     const t4a = ruleFor(layer, `${SCOPE} .md-code`).at;
-    for (const sel of [LEAD('action'), LEAD('info'), MARKER, LABEL, TONE('fail')]) {
-      expect(ruleFor(layer, sel).at, sel).toBeGreaterThan(t4a);
-    }
+    expect(RULES).toHaveLength(8);
+    for (const sel of RULES) expect(ruleFor(layer, sel).at, sel).toBeGreaterThan(t4a);
   });
 
   it('docs.css names none of the attributes', () => {
     const text = stripComments(docsCss);
     for (const attr of Object.values(MARK_ATTR)) expect(text, attr).not.toContain(attr);
+  });
+});
+
+// The reader's own blind spots, planted (fix round 1, review 1584 F5): each spelling the engine reads as one of the
+// colour attributes, and a rule right after a statement at-rule, is seen.
+describe('the scrape\'s reader', () => {
+  const ok = `${SCOPE} [${MARK_ATTR.status}] { color: red; }`;
+  it.each<[string, string]>([
+    ['after @layer a, b;', `@layer a, b;\n.x [${MARK_ATTR.status}] { color: red; }`],
+    ['after @import', `@import "x.css";\n.x [${MARK_ATTR.lead}] { color: red; }`],
+    ['a space inside the bracket', `.x [ ${MARK_ATTR.status}] { color: red; }`],
+    ['upper case', `.x [${MARK_ATTR.afterLead.toUpperCase()}] { color: red; }`],
+    ['an escaped hyphen', '.x [data\\-status] { color: red; }'],
+    ['one unscoped member of a list', `${SCOPE} [${MARK_ATTR.status}], .x [${MARK_ATTR.status}] { color: red; }`],
+  ])('%s is an unscoped rule', (_name, planted) => {
+    const { unscoped } = unscopedNaming(`${ok}\n${planted}`);
+    expect(unscoped).toHaveLength(1);
+    expect(unscoped[0]!.startsWith('.x ')).toBe(true);
+  });
+
+  it('the scoped rule alone is clean', () => {
+    expect(unscopedNaming(ok)).toEqual({ naming: 1, unscoped: [] });
   });
 });

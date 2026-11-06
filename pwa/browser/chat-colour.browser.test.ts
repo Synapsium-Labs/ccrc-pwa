@@ -41,7 +41,8 @@ const FIXTURE: AppFixture = {
 };
 
 /** The spec's screenshot shape: two kinds of lead-in, an action list, every tone in a label position, a table whose
- *  first column opens with status words, a plain list, and ordinary uses of a status word. */
+ *  first column opens with status words, a plain list, ordinary uses of a status word, and a task list whose checked
+ *  item opens with a lead-in (fix round 1, review 1584 F2). */
 const TURN = [
   "**Why I can't do it.** The gate needs a token this session does not hold.",
   '',
@@ -63,6 +64,11 @@ const TURN = [
   '- two',
   '',
   'I read the value passed to the parser, and it was a red herring.',
+  '',
+  'Two calls:',
+  '',
+  '- [x] **Your call:** pick the base.',
+  '- [ ] **Your call:** pick the name.',
 ].join('\n');
 const LEAD_TEXT = "Why I can't do it.";
 const PLAIN_TEXT = 'the value passed to the parser';
@@ -92,6 +98,7 @@ const I = 'body text and ordinary uses of a status word stay --ink-primary';
 const D = 'the Docs reader keeps ink';
 const R = 'an opened recap keeps ink';
 const C = 'the control: in chat the attributes draw';
+const K = "a checked task item's lead-in keeps no lead colour";
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -106,7 +113,8 @@ afterAll(async () => { await browser?.close(); await server?.close(); });
 
 interface Measure {
   readonly tokens: Record<string, string>;
-  readonly leads: { kind: string | null; text: string; colour: string }[];
+  /** Each lead-in, whether it opens a checked task item, and what it draws with its attribute and without it. */
+  readonly leads: { kind: string | null; text: string; done: boolean; colour: string; bare: string }[];
   readonly actionMarkers: string[];
   readonly plainMarkers: string[];
   readonly labels: { tone: string | null; text: string; colour: string; background: string }[];
@@ -167,11 +175,18 @@ describe('colour in the assistant\'s prose (D-8061)', () => {
           };
           const out = {
             tokens,
-            leads: [...chat.querySelectorAll(`strong[${attr.lead}]`)].map((el) => ({
-              kind: el.getAttribute(attr.lead), text: el.textContent ?? '', colour: getComputedStyle(el).color,
-            })),
+            leads: [...chat.querySelectorAll(`strong[${attr.lead}]`)].map((el) => {
+              const kind = el.getAttribute(attr.lead);
+              const colour = getComputedStyle(el).color;
+              el.removeAttribute(attr.lead);
+              const bare = getComputedStyle(el).color;
+              if (kind !== null) el.setAttribute(attr.lead, kind);
+              const item = el.closest('.task-list-item');
+              const box = item?.querySelector(':scope > input, :scope > p:first-child > input');
+              return { kind, text: el.textContent ?? '', done: box instanceof HTMLInputElement && box.checked, colour, bare };
+            }),
             actionMarkers: [...chat.querySelectorAll(`:scope > :is(ul, ol)[${attr.afterLead}='action'] > li`)].map(markerOf),
-            plainMarkers: [...chat.querySelectorAll(`:scope > :is(ul, ol):not([${attr.afterLead}]) > li`)].map(markerOf),
+            plainMarkers: [...chat.querySelectorAll(`:scope > :is(ul, ol):not([${attr.afterLead}]):not(.contains-task-list) > li`)].map(markerOf),
             labels: [...chat.querySelectorAll<HTMLElement>(`[${attr.status}]`)].map((el) => {
               const s = getComputedStyle(el);
               return { tone: el.getAttribute(attr.status), text: el.textContent ?? '', colour: s.color, background: s.backgroundColor };
@@ -200,11 +215,18 @@ describe('colour in the assistant\'s prose (D-8061)', () => {
         const t = m.tokens;
 
         // action lead-ins and their list markers are amber, info lead-ins blue
-        expect(m.leads.map((l) => [l.kind, l.text]), A).toEqual([
-          ['info', LEAD_TEXT], ['action', 'What to do (either one):'], ['info', 'What happens next.'],
+        expect(m.leads.map((l) => [l.kind, l.text, l.done]), A).toEqual([
+          ['info', LEAD_TEXT, false], ['action', 'What to do (either one):', false], ['info', 'What happens next.', false],
+          ['action', 'Your call:', true], ['action', 'Your call:', false],
         ]);
-        for (const lead of m.leads) {
+        for (const lead of m.leads.filter((l) => !l.done)) {
           expect(lead.colour, `${A}: ${lead.text}`).toBe(lead.kind === 'action' ? t['--status-attention-text'] : t['--acct-blue']);
+        }
+
+        // a checked task item's lead-in keeps no lead colour: it draws what it draws unmarked
+        for (const lead of m.leads.filter((l) => l.done)) {
+          expect(lead.colour, `${K}: ${lead.text}`).toBe(lead.bare);
+          expect(lead.colour, `${K}: ${lead.text}`).not.toBe(t['--status-attention-text']);
         }
         expect(m.actionMarkers, A).toEqual([t['--status-attention-text'], t['--status-attention-text']]);
 
