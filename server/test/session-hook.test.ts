@@ -365,9 +365,22 @@ const workLines = (tree: string): string[] => [
 
 const pre = (tool: string, input: object, cwd: string): object =>
   ({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd });
+/** What graphify 0.9.9 really prints for one answered `query`, and the
+ *  `tool_response` Claude Code really sends with a Bash `PostToolUse`
+ *  (`server/test/fixtures/delegation/<version>/agent-iso-bg.json` carries the
+ *  same five keys). A read counts on this, never on the command alone. */
+const ANSWER = "Traversal: BFS depth=2 | Start: ['assembleFleet'] | 2 nodes found\n\n"
+  + 'NODE assembleFleet [src=server/src/fleet.ts loc=L10 community=0]\n'
+  + 'NODE readHookState [src=server/src/hookstate.ts loc=L20 community=0]\n'
+  + 'EDGE assembleFleet --calls [EXTRACTED]--> readHookState\n';
+/** The command the deny and the nudge teach, spelled here so a drift is red. */
+const GRAPH_RUN = 'PATH="$HOME/.local/bin:$PATH" graphify';
+const bashResponse = (stdout: string): object =>
+  ({ stdout, stderr: '', interrupted: false, isImage: false, noOutputExpected: false });
 const query = (cwd: string): object =>
   ({ hook_event_name: 'PostToolUse', tool_name: 'Bash',
-    tool_input: { command: 'graphify query "who calls assembleFleet"' }, cwd });
+    tool_input: { command: 'graphify query "who calls assembleFleet"' },
+    tool_response: bashResponse(ANSWER), cwd });
 
 /** The one PreToolUse envelope on stdout, asserted to be exactly one line of
  *  JSON — a deny (R5) or a nudge (R6), and the assertion that it is never
@@ -742,8 +755,9 @@ describe('a session with no pane', () => {
 // read. `graphify update` and builds deliberately do NOT count: this is
 // measuring READS.
 describe('graphQueries — the read counter the console can see', () => {
-  const bash = (command: string): object =>
-    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command } });
+  const bash = (command: string, stdout: string = ANSWER): object =>
+    ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command },
+      tool_response: bashResponse(stdout) });
 
   it('counts query, path and explain — each one, once', () => {
     run(bash('graphify query "who calls assembleFleet"'));
@@ -759,6 +773,83 @@ describe('graphQueries — the read counter the console can see', () => {
     expect(readState().graphQueries).toBe(1);
     run(bash('true; graphify explain "y"'));
     expect(readState().graphQueries).toBe(2);
+  });
+
+  // D-8046. MEASURED: 283 real queries went uncounted, because a session whose
+  // PATH has no graphify calls it by path and the leading class refused the `/`.
+  it('counts a path-qualified graphify, in every spelling the fleet uses', () => {
+    const spellings = [
+      '$HOME/.local/bin/graphify query "x"',
+      '"$HOME/.local/bin/graphify" query "x"',
+      "'/opt/tools/graphify' query x",
+      '~/.local/bin/graphify path "a" "b"',
+      '/opt/tools/graphify explain "y"',
+      'cd /tmp && "$HOME/.local/bin/graphify" query "x" | head -40',
+      'PATH="$HOME/.local/bin:$PATH" graphify query "x"',
+      'bash -lc "graphify query x"',
+      '(graphify query x)',
+      'out=$(graphify query x); echo "$out"',
+    ];
+    spellings.forEach((command, i) => {
+      run(bash(command));
+      expect(readState().graphQueries, `not counted: ${command}`).toBe(i + 1);
+    });
+  });
+
+  it('holds both boundaries on a path-qualified graphify', () => {
+    run(bash('/opt/tools/mygraphify query "x"'));
+    run(bash('"$HOME/.local/bin/mygraphify" query "x"'));
+    run(bash('$HOME/.local/bin/graphify update .'));
+    run(bash('"$HOME/.local/bin/graphify" --version'));
+    run(bash('/opt/tools/graphify query-builder run'));
+    run(bash('/opt/tools/graphify.bak query "x"'));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  // D-8046. MEASURED: 73 of 239 denied sessions never got a real answer. The
+  // failures that opened the gate are the ones that exit 0: a pipe into `head`,
+  // an `|| true`, an `|| echo`, and graphify's own exit-0 misses.
+  it.each([
+    ['the engine is not on PATH, behind a pipe', 'bash: line 1: graphify: command not found\n'],
+    ['the link is missing', 'bash: /x/graphify: No such file or directory\n'],
+    ['nothing came back at all', ''],
+    ['stderr was thrown away', '   \n'],
+    ['a query that matched nothing', 'No matching nodes found.\n'],
+    ['an explain that matched nothing', "No node matching 'x' found.\n"],
+    ['there is no graph here', 'error: graph file not found: /x/graph.json\n'],
+    ['a bad call', 'Usage: graphify query "<question>"\n'],
+    ['the engine crashed', 'Traceback (most recent call last):\n  File "x", line 1\n'],
+    ['the fallback spoke', 'graphify is not available, using grep\n'],
+    ['a signature inside a line, not at its head', 'grep hit: NODE x\nsaw Traversal: BFS\n'],
+  ])('does NOT count a query that exits 0 but answered nothing: %s', (_label, stdout) => {
+    run(bash('graphify query "x" 2>&1 | head -40', stdout));
+    expect(readState().graphQueries).toBe(0);
+  });
+
+  it.each([
+    ['query', 'graphify query "x"', ANSWER],
+    ['query, its header cut away by tail', 'graphify query "x" | tail -2',
+      'NODE a [src=a.ts loc=L1 community=0]\nEDGE a --calls [EXTRACTED]--> b\n'],
+    ['query, one note ahead of the answer', 'graphify query "x" 2>&1',
+      `[graphify] note: this graph uses the pre-#1504 node-ID scheme\n${ANSWER}`],
+    ['path', 'graphify path "a" "b"', 'Shortest path (1 hops):\n  a --calls [EXTRACTED]--> b\n'],
+    ['path, two nodes the graph says are apart', 'graphify path "a" "b"',
+      "No path found between 'a' and 'b'.\n"],
+    ['explain', 'graphify explain "a"', 'Node: a\n  ID:        a_id\n  Source:    a.ts L1\n'],
+  ])('counts every shape of a real answer: %s', (_label, command, stdout) => {
+    run(bash(command, stdout));
+    expect(readState().graphQueries).toBe(1);
+  });
+
+  it('does NOT count a query with no usable response on the event', () => {
+    const base = { hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'graphify query "x"' } };
+    run(base);
+    run({ ...base, tool_response: ANSWER });
+    run({ ...base, tool_response: { stderr: ANSWER } });
+    run({ ...base, tool_response: { stdout: 7 } });
+    run({ ...base, tool_response: { ...bashResponse(ANSWER), interrupted: true } });
+    expect(readState().graphQueries).toBe(0);
   });
 
   it('does NOT count graphify update, a build, or a bare graphify', () => {
@@ -1338,7 +1429,7 @@ describe('the SessionStart graph card', () => {
     plantGraph(tree, { built: first });
     const text = card(run({ hook_event_name: 'SessionStart', cwd: tree }));
     expect(text).toContain('Search tools (Grep, Glob, shell grep/rg/find) are gated, '
-      + "and source-file reads are nudged, until this session's first graph query.");
+      + "and source-file reads are nudged, until this session's first answered graph query.");
     // …and the gate itself agrees, in the same tree, on the next call.
     const out = run({ hook_event_name: 'PreToolUse', tool_name: 'Grep',
       tool_input: { pattern: 'x' }, cwd: tree });
@@ -1398,9 +1489,9 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
   /** The spec's reason, spelled here so a drift in either direction is red. */
   const reasonFor = (nodes: number, fresh: string, k: number): string =>
     `graphify gate: this tree has a knowledge graph (${nodes} nodes, ${fresh}) and this session `
-    + 'has not queried it yet. Search tools open after one graph query — run: '
-    + '`graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a '
-    + 'relationship, `graphify explain "<concept>"` for one concept). '
+    + 'has no answer from it yet. Search tools open after one graph query that answers — run: '
+    + `\`${GRAPH_RUN} query "<your question in plain words>"\` (\`${GRAPH_RUN} path "<A>" "<B>"\` for a `
+    + `relationship, \`${GRAPH_RUN} explain "<concept>"\` for one concept). `
     + `Denial ${k} of 3; after 3 the gate opens anyway.`;
 
   it('denies the first Grep in a fresh-graph tree, with the whole envelope byte-exact', () => {
@@ -1418,6 +1509,46 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
     // The denial is COUNTED, in the state file the hook was already writing.
     expect(readState().graphGateDenials).toBe(1);
     expect(readState().state, 'the deny path skipped the state write').toBe('working');
+  });
+
+  // D-8046. The bound is what keeps a session with no working graphify moving.
+  it('stays armed after a query that answered nothing, and still opens after 3', () => {
+    const tree = gatedTree();
+    const failed = { ...(query(tree) as Record<string, unknown>),
+      tool_response: bashResponse('bash: line 1: graphify: command not found\n') };
+    for (const k of [1, 2, 3]) {
+      run(failed);
+      expect(readState().graphQueries).toBe(0);
+      const j = deny(run(grepPre(tree)));
+      expect(j.hookSpecificOutput.permissionDecisionReason).toBe(reasonFor(NODES, 'fresh', k));
+    }
+    run(failed);
+    expect(run(grepPre(tree)), 'the bound of three no longer opens the gate').toBe('');
+    expect(readState().graphGateDenials).toBe(3);
+  });
+
+  // D-8046. The text a denied session copies has to run from a shell whose PATH
+  // carries neither `~/.local/bin` nor graphify, which is what fleet sessions
+  // have; and what it runs has to open the gate it was printed by.
+  it('prints a command that runs on any PATH and that the gate then counts', () => {
+    const tree = gatedTree();
+    const bin = path.join(home, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'graphify'),
+      `#!/bin/sh\nprintf '%s\\n' 'Traversal: BFS depth=2 | Start: [x] | 1 nodes found' "ran $1"\n`,
+      { mode: 0o755 });
+    const reason = String(deny(run(grepPre(tree))).hookSpecificOutput.permissionDecisionReason);
+    const shown = /`([^`]* query "<your question in plain words>")`/.exec(reason)?.[1];
+    expect(shown, 'the reason names no query command').toBeDefined();
+    const command = shown!.replace('<your question in plain words>', 'who calls what');
+    expect(reason, 'a machine-specific path reached the reason').not.toContain(home);
+    const out = execFileSync('/bin/sh', ['-c', command], { cwd: tree, encoding: 'utf8',
+      env: { HOME: home, PATH: '/usr/bin:/bin' } });
+    expect(out).toContain('ran query');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command },
+      tool_response: bashResponse(out), cwd: tree });
+    expect(readState().graphQueries).toBe(1);
+    expect(run(grepPre(tree)), 'the printed command did not open the gate').toBe('');
   });
 
   it('is silent once the session has run one graphify query — the gate opens on the READ', () => {
@@ -1467,7 +1598,8 @@ describe('the PreToolUse search gate (R5, D-1613)', () => {
       // into the bound the next assertions depend on.
       fs.rmSync(stateFile());
     }
-    for (const cmd of ['vitest run | grep Tests', 'graphify query "x"', 'ls', 'echo find',
+    for (const cmd of ['vitest run | grep Tests', 'graphify query "x"',
+      `${GRAPH_RUN} query "find the grep"`, '"$HOME/.local/bin/graphify" query "x"', 'ls', 'echo find',
       'git status', 'cat f | ag x', 'grepper x', 'findutils --help', 'echo hi && grep x']) {
       expect(run(bashPre(cmd, tree)), `${cmd} was gated`).toBe('');
     }
@@ -1617,9 +1749,9 @@ describe('the PreToolUse Read nudge (R6, D-1745)', () => {
   const nudgeFor = (nodes: number | null, fresh: string): string =>
     'graphify: this tree has a knowledge graph ('
     + (nodes === null ? '' : `${nodes} nodes, `)
-    + `${fresh}) and this session has not queried it yet. `
-    + 'Before reading files to orient, run: `graphify query "<your question in plain words>"` '
-    + '(`graphify explain "<concept>"` for one concept). '
+    + `${fresh}) and this session has no answer from it yet. `
+    + `Before reading files to orient, run: \`${GRAPH_RUN} query "<your question in plain words>"\` `
+    + `(\`${GRAPH_RUN} explain "<concept>"\` for one concept). `
     + 'Reading a named file to edit it needs no query.';
 
   it('nudges the first source Read in a fresh-graph tree, with the whole envelope byte-exact', () => {

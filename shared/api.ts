@@ -344,8 +344,8 @@ export interface FleetSession {
    *  session died, and dating an orphan from it is a later decision. `never-started` has nothing to date. ADDITIVE like
    *  `presence`. */
   deadSince?: number | null;
-  /** How many graph READS this session has made — `hookstate.ts`'s
-   *  `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
+  /** How many graph READS this session has made that returned an answer —
+   *  `hookstate.ts`'s `graphQueries`, carried through unchanged. ADDITIVE: no `FLEET_PROTO`
    *  bump, and an older peer that omits it revives as `null` below.
    *
    *  `null` mirrors `hookState`/`subagents`: no fresh hook data, or a hook too

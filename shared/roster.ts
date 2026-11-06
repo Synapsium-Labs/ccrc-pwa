@@ -690,9 +690,9 @@ function parseCodexWord<W extends string>(
 /** `exec.authDir` — the directory holding a codex lane's OAuth. Gated exactly
  *  as `exec.secretsFile` is (same charset, same four path refusals), plus one
  *  rule of its own: it may not sit under `~/.ccrc`. `_uninst_purge` empties
- *  that tree except `memory`, and this credential is one ccrc never obtained —
- *  a refusal here makes "uninstall cannot destroy it" structural rather than
- *  documented. The test compares against `.ccrc/` WITH the separator, so a
+ *  that tree except `memory`, and a lane's sign-in goes only by `ccrc account
+ *  remove` of that lane — a refusal here makes "uninstall cannot destroy it"
+ *  structural rather than documented. The test compares against `.ccrc/` WITH the separator, so a
  *  sibling like `.ccrc-backups` is untouched. */
 function parseAuthDir(raw: unknown, id: string): string {
   if (typeof raw !== 'string') {
@@ -700,7 +700,8 @@ function parseAuthDir(raw: unknown, id: string): string {
       `account "${id}" has a missing or non-string exec.authDir.`,
       `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to the directory holding that ` +
         'lane\'s ChatGPT OAuth, as a path relative to $HOME (e.g. ' +
-        `".local/share/ccrc/codex/${id}"). ccrc records the path and never reads what is in it.`,
+        `".local/share/ccrc/codex/${id}"). ccrc's auth library reads and refreshes the credential there, and ` +
+        "'ccrc account remove' deletes a folder under .local/share/ccrc/codex/ unless told to keep it.",
     );
   }
   if (
@@ -719,8 +720,9 @@ function parseAuthDir(raw: unknown, id: string): string {
       `account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(raw)}).`,
       `Move account "${id}"'s OAuth directory outside $HOME/.ccrc (e.g. ` +
         `".local/share/ccrc/codex/${id}") and set exec.authDir in ${ROSTER_PATH} to the new ` +
-        'path. `ccrc uninstall --purge` empties $HOME/.ccrc, and a credential ccrc never ' +
-        'obtained must not be destroyable by ccrc.',
+        'path. `ccrc uninstall --purge` empties $HOME/.ccrc, and a sign-in must not go with it. ' +
+        "'ccrc account remove' deletes a folder under .local/share/ccrc/codex/ unless told to keep it; " +
+        'a folder elsewhere outside $HOME/.ccrc it leaves alone.',
     );
   }
   return raw;

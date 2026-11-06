@@ -462,8 +462,8 @@ describe('parseRoster', () => {
   });
 
   // The one refusal that is not a path-safety rule. `ccrc uninstall --purge`
-  // empties ~/.ccrc except `memory`; a credential ccrc never obtained must not
-  // be destroyable by ccrc's own uninstall, so the roster refuses to put one
+  // empties ~/.ccrc except `memory`; a lane's sign-in must not be destroyable
+  // by ccrc's own uninstall, so the roster refuses to put one
   // there rather than documenting that it would be unwise.
   it.each([
     ['.ccrc/codex/codex-a/auth'],

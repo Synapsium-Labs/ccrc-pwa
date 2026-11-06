@@ -156,7 +156,7 @@ export const PROVIDERS = {
   },
   openai: {
     label: 'ChatGPT subscription (Codex lane)',
-    credential: "the lane's own OAuth directory, named by exec.authDir — ccrc records the path and never reads what is in it",
+    credential: "the lane's own OAuth directory, named by exec.authDir — ccrc's auth library is the one reader and writer of what is in it",
     envVar: null,
     // §5:423 and §6:512's name for this method. §4.2's cell spells it
     // `pane:login`, which is not this name with a prefix — see `ConnectMethod`.

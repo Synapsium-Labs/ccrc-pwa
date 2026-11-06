@@ -37,9 +37,9 @@
 
 import {
   chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync,
-  readSync, renameSync, statSync, unlinkSync, writeFileSync,
+  readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 // FIVE CONSTANTS, IMPORTED AND NEVER RE-SPELLED (D-2004, D-2021, D-2022). They
 // are the constants `rosterFromJson` itself decides with, so `check-add`
@@ -148,8 +148,8 @@ const PROVIDER_CONNECT = {
  *  OpenRouter lane's meter is the key's credit, and a compatible endpoint reports nothing. */
 const PROVIDER_TELEMETRY = { anthropic: 'anthropic', openrouter: 'openrouter', compatible: 'none' };
 
-/** The providers `add` may create a lane for. `openai` is not one: its launcher
- *  is somebody else's program and `declare` is the verb for it (§4.2, §5). */
+/** The providers `add` may create a GENERATED lane for. `openai` is not one: `add` makes it the other kind ccrc
+ *  owns, a Codex lane (`exec.kind: 'codex'`, accounts plan Task A24, D-5519), whose launcher is `ccrc-codex`. */
 const PROVIDER_GENERATABLE = new Set(['anthropic', 'openrouter', 'compatible']);
 
 /** The per-provider view every caller in this file reads, composed at load time
@@ -549,6 +549,15 @@ function suffixFreeClass(accounts, suffix, file) {
  *  validated it (Task 23) so that no JSON parse lands in the writer, where a
  *  throw would exit with a stack trace and an empty stdout. */
 function addedEntry(plan) {
+  // A CODEX LANE (D-5519): ccrc's own launcher, its two ports and its authDir, and the telemetry its usage poller
+  // publishes. It has no endpoint, no secrets file and no model map; `parseRoster` holds the row either way.
+  if (plan.codex !== undefined && plan.codex !== null) {
+    return {
+      id: plan.id, label: plan.label, configDirSuffix: plan.configDirSuffix,
+      exec: { kind: 'codex', provider: plan.provider, ...plan.codex },
+      homeAble: true, hue: plan.hue, telemetry: 'codex',
+    };
+  }
   const exec = { kind: 'generated', provider: plan.provider };
   if (plan.baseUrl !== null) exec.baseUrl = plan.baseUrl;
   if (plan.secretsFile !== null) exec.secretsFile = plan.secretsFile;
@@ -623,7 +632,8 @@ const OPS = {
   // own.
   candidates: { keys: ['name', 'bytes'], repeat: ['name', 'bytes'] },
   'check-add': {
-    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt', 'placement'],
+    keys: ['file', 'id', 'provider', 'label', 'hue', 'suffix', 'base-url', 'models', 'method', 'home', 'adopt', 'placement',
+      'proxy-port', 'litellm-port', 'auth-dir'],
     repeat: [],
   },
   // ONE key carries the whole request, because `check-add` already resolved it:
@@ -694,8 +704,11 @@ const OPS = {
   // has written nothing passes none, and the refusal keeps the sentence it
   // always had.
   drop: { keys: ['file', 'id', 'stands'], repeat: [] },
+  // Asked after `drop`, so every row left is another lane's. `authDirFate` says what the answer means.
+  'auth-dir-fate': { keys: ['file', 'home', 'auth-dir'], repeat: [] },
   removed: {
-    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets'],
+    keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step', 'kind', 'provider', 'secret-env', 'secrets',
+      'codex-sign-in'],
     repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
   },
   // `--stands` here is `drop`'s key at a second address and for its reason: a
@@ -2013,9 +2026,13 @@ const AT_PROVIDER = {
   codex: { state: 'still-valid', revokeAt: 'chatgpt-settings' },
 };
 
-/** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. */
-function credentialKindOf(kind, provider, secretEnv, secrets) {
-  if (kind === 'codex') return 'codex';
+/** The credential kind of a removed lane, from the fields `lane` answered for it before the drop. `codexSignIn` is
+ *  bash's measure of a Codex lane's folder: `none` when the auth library read no sign-in there and nothing stands at
+ *  its checkpoint path, as on a lane `add` made and nobody signed in. Such a lane has nothing to revoke, so it answers
+ *  no kind. A folder deleted by hand reads the same, because nothing on the box records that a sign-in ever existed.
+ *  Unset, the row stands: nobody could tell. */
+function credentialKindOf(kind, provider, secretEnv, secrets, codexSignIn) {
+  if (kind === 'codex') return codexSignIn === 'none' ? null : 'codex';
   if (kind === 'external' || kind === undefined) return null;
   if (secrets === undefined || secrets === '') return provider === 'anthropic' ? 'anthropic-sign-in' : null;
   if (secretEnv === 'CLAUDE_CODE_OAUTH_TOKEN') return 'anthropic-token';
@@ -2230,6 +2247,34 @@ function opAuthAnswer(a) {
   return 0;
 }
 
+/** The one home `remove` deletes a lane's sign-in folder under, `$HOME`-relative. */
+const CODEX_AUTH_HOME = '.local/share/ccrc/codex';
+
+/** What `ccrc account remove` may do with a lane's sign-in folder, once its row is gone (spec §11 step 4; D-8016 (6)).
+ *  `outside`: it is not under that home. `named`: another lane's folder is that folder, or is inside it, or holds it.
+ *  `delete`: neither. The roster's validator admits several spellings of one folder (`codex//a`, `codex/a/.`), so paths
+ *  are compared resolved, never as written, and also through their symlinks, since `real` is where a credential is. The
+ *  end of `authDir` is not followed: `rm` removes a link there, not what it points at. A path that cannot be measured
+ *  throws, and the caller reads no answer as keep. */
+function authDirFate(accounts, home, authDir) {
+  const real = (p) => {
+    try { return realpathSync(p); } catch (e) { if (e.code === 'ENOENT') return p; throw e; }
+  };
+  const inside = (p, root) => p.startsWith(`${root}/`);
+  const overlap = (a, b) => a === b || inside(a, b) || inside(b, a);
+  const root = resolve(home, CODEX_AUTH_HOME);
+  const dir = resolve(home, authDir);
+  const stands = join(real(dirname(dir)), basename(dir));
+  if (!inside(dir, root) || !inside(stands, real(root))) return 'outside';
+  const named = accounts.some((row) => {
+    const other = row?.exec?.authDir;
+    if (typeof other !== 'string') return false;
+    const at = resolve(home, other);
+    return overlap(dir, at) || overlap(stands, real(at));
+  });
+  return named ? 'named' : 'delete';
+}
+
 function main(argv) {
   const op = argv[2];
   if (op === undefined || !Object.hasOwn(OPS, op)) {
@@ -2385,15 +2430,22 @@ function main(argv) {
     const known = providerKnownClass(provider);
     if (known !== 0) return known;
     const P = PROVIDER_DEPLOY[provider];
-    if (!P.generatable) {
-      // §4.2: this lane is somebody else's launcher. `add` WRITES a wrapper;
-      // `declare` records one it must never touch. Two verbs, because the two
-      // acts differ in what ccrc is allowed to overwrite.
-      refuse('external-provider-use-declare',
-        `provider "${provider}" is an external launcher: ccrc records it and never writes it. `
-        + `Use 'ccrc account declare --id ${id} --provider ${provider} …' once its executable is `
-        + 'in ~/.local/bin.');
-      return 2;
+    // A PROVIDER `add` CANNOT GENERATE IS A CODEX LANE (D-5519), and bash measured its three facts: the two ports it
+    // found free and the fresh folder it named. They are refused here if absent, for a hand caller of this op, and the
+    // folder is the one bash could not settle: nothing may already stand there (G20).
+    const codexLane = !P.generatable;
+    if (codexLane) {
+      for (const k of ['proxy-port', 'litellm-port', 'auth-dir', 'home']) {
+        if (a[k] === undefined) { refuse('bad-argv', `check-add for provider "${provider}" needs --${k}`); return 2; }
+      }
+      let taken = true;
+      try { lstatSync(join(a['home'], a['auth-dir'])); } catch (e) { taken = e.code !== 'ENOENT'; }
+      if (taken) {
+        refuse('authdir-occupied',
+          `$HOME/${a['auth-dir']} already exists, and a new lane's ChatGPT sign-in folder is always a fresh one, so `
+          + "this lane could inherit somebody else's sign-in. Try again, which draws another name. Nothing was written.");
+        return 1;
+      }
     }
 
     // ── THE METHOD ──────────────────────────────────────────────────────────
@@ -2531,8 +2583,8 @@ function main(argv) {
     // — the three keys the spec MEASURED on the fleet box (spec:310-311) — and
     // Task 25 writes that block from `plan.baseUrl`. A lane exporting
     // `CLAUDE_CODE_OAUTH_TOKEN` writes no `ANTHROPIC_BASE_URL` at all, and one
-    // exporting nothing (`openai`) never got here — `!P.generatable` refused it
-    // above. Read the predicate as "this lane names its own endpoint", not as
+    // exporting nothing (`openai`) has its own gateway, on the ports above.
+    // Read the predicate as "this lane names its own endpoint", not as
     // "this string equals that string": the day a fifth provider needs a
     // different answer, the honest fix is a column in `PROVIDERS` and its
     // mirror here, not a second clause bolted on below.
@@ -2547,8 +2599,9 @@ function main(argv) {
       // anything for this provider, saying so is the answer.
       if (given !== undefined) {
         refuse('base-url-not-supported',
-          `provider "${provider}" has no endpoint of its own: its lane talks to Claude Code's own `
-          + 'default, so --base-url would be recorded in the roster and never used by anything. '
+          `provider "${provider}" has no endpoint of its own: its lane talks to `
+          + `${codexLane ? 'its own gateway' : "Claude Code's own default"}, `
+          + 'so --base-url would be recorded in the roster and never used by anything. '
           + 'Drop the flag, or use --provider compatible with that endpoint.');
         return 2;
       }
@@ -2697,6 +2750,9 @@ function main(argv) {
       // `--argjson`, and neither should be the place a parse failure lands.
       models,
       placement,
+      // Numbers, as the roster keeps them: `rosterAdmits` below judges what bash measured.
+      codex: codexLane
+        ? { proxyPort: Number(a['proxy-port']), litellmPort: Number(a['litellm-port']), authDir: a['auth-dir'] } : null,
     };
 
     // ── THE SAME VALIDATOR THE WRITER RUNS, ON THE SAME OBJECT IT WRITES ────
@@ -3278,7 +3334,7 @@ function main(argv) {
         `${a['file']} still carries account "${a['id']}", so this run cannot report it removed`);
       return 1;
     }
-    const kind = credentialKindOf(a['kind'], a['provider'], a['secret-env'], a['secrets']);
+    const kind = credentialKindOf(a['kind'], a['provider'], a['secret-env'], a['secrets'], a['codex-sign-in']);
     out({
       ok: true,
       id: a['id'],
@@ -3289,6 +3345,16 @@ function main(argv) {
       'operator-steps': a['operator-step'] ?? [],
       ...(a['kind'] === undefined ? {} : { atProvider: kind === null ? [] : [{ kind, ...AT_PROVIDER[kind] }] }),
     });
+    return 0;
+  }
+
+  if (op === 'auth-dir-fate') {
+    for (const k of ['file', 'home', 'auth-dir']) {
+      if (a[k] === undefined) { refuse('bad-argv', `auth-dir-fate needs --${k}`); return 2; }
+    }
+    const json = readRoster(a['file']);
+    if (json === null) return 1;
+    out({ ok: true, fate: authDirFate(json['accounts'], a['home'], a['auth-dir']) });
     return 0;
   }
 

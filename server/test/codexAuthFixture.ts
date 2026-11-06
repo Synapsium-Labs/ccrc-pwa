@@ -10,7 +10,7 @@
 // a random signature segment, so two plantings never collide and nothing here is a real credential.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -100,6 +100,41 @@ export type AuthScript = { token?: AuthAnswer[]; usercode?: AuthAnswer[]; device
 export type AuthRequest = {
   method: string; path: string; headers: IncomingHttpHeaders; body: string; form: Record<string, unknown> | null;
 };
+
+/** A lane folder that cannot be measured: `plant` makes it so at `dir` and answers how to undo a mode. `lstat` of the
+ *  file inside fails with `errno`, so nothing says a file is there, whatever the folder may hold. The two that need a
+ *  mode to refuse are left out under root, which no mode refuses. */
+export type LaneFolderFault = [name: string, errno: string, plant: (dir: string) => () => void];
+const noUndo = (): void => undefined;
+export const LANE_FOLDER_FAULTS: LaneFolderFault[] = [
+  ['is a regular file', 'ENOTDIR', (dir) => {
+    mkdirSync(path.dirname(dir), { recursive: true });
+    writeFileSync(dir, '');
+    return noUndo;
+  }],
+  ['sits under a regular file', 'ENOTDIR', (dir) => {
+    mkdirSync(path.dirname(path.dirname(dir)), { recursive: true });
+    writeFileSync(path.dirname(dir), '');
+    return noUndo;
+  }],
+  ['is a symlink loop', 'ELOOP', (dir) => {
+    mkdirSync(path.dirname(dir), { recursive: true });
+    symlinkSync(dir, dir);
+    return noUndo;
+  }],
+  ...(process.getuid?.() === 0 ? [] : [
+    ['does not exist, under a folder of mode 000', 'EACCES', (dir) => {
+      mkdirSync(path.dirname(dir), { recursive: true });
+      chmodSync(path.dirname(dir), 0o000);
+      return () => chmodSync(path.dirname(dir), 0o700);
+    }],
+    ['is mode 000, with a good sign-in inside', 'EACCES', (dir) => {
+      plantBackendCredential(dir);
+      chmodSync(dir, 0o000);
+      return () => chmodSync(dir, 0o700);
+    }],
+  ] satisfies LaneFolderFault[]),
+];
 
 export const AUTH_ROUTES = {
   token: '/oauth/token',

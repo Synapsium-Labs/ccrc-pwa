@@ -9211,6 +9211,9 @@ EOF
   # `account-auth-v1` (N4, D-7734; accounts plan Task A20): `ccrc account auth-start|auth-code|auth-cancel`, the
   # detached attempt on the lane's private tmux socket, `set --method` and `credential --sign-out` are on this box.
   echo account-auth-v1
+  # `account-codex-v1` (N4; accounts plan Task A24): `ccrc account add --provider openai`, `remove`'s delete of the
+  # lane's sign-in folder and `set --method openai-login` are on this box.
+  echo account-codex-v1
   # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
   # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
   echo account-openrouter-v2

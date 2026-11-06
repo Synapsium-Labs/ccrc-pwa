@@ -174,6 +174,21 @@ class Unreadable(AuthError):
     word = "credential-unusable"
 
 
+class LaneFileForeign(ForeignFamily):
+    """`_refuse_signin`'s reading of the lane's own file, for a sign-in held apart from it. Its parent to every reader;
+    `main` alone tells it apart, by its exit status, because the caller answers it with a code of its own."""
+
+
+class LaneFileUnreadable(Unreadable):
+    """As LaneFileForeign. A plain Unreadable says nothing of that file: `held` raises one for a folder or a lock it
+    could not make, on any folder, and `recover_pending` for a checkpoint."""
+
+
+class LaneFolderUnreachable(Unreadable):
+    """As LaneFileForeign, for a reading of the lane's file whose `lstat` failed: the folder on the way is the fault, and
+    nothing says a file is there, so it is no LaneFileUnreadable."""
+
+
 class RefreshFailed(AuthError):
     """Transient: a network failure, a timeout, a redirect, or a rejection classified transient."""
 
@@ -192,6 +207,11 @@ class EndpointRefused(AuthError):
 
 class LoginFailed(AuthError):
     word = "login-failed"
+
+
+class SigninUnusable(LoginFailed):
+    """A sign-in that `install_signin` was handed and will not install: it fails its check. A `login-failed` to every
+    reader; `main` alone tells it apart, by its exit status, because the caller answers it with another code."""
 
 
 class HeldReentry(RuntimeError):
@@ -340,6 +360,7 @@ class Reading(NamedTuple):
     family: Optional[str]
     identity: Optional[Identity]
     detail: str  # a sentence, never a token
+    found: bool = True  # False only when `lstat` could not measure the path, so nothing says a file is there
 
 
 # The unsaved records: authDir -> (record, identity of the file the record was to replace, measured under the lock,
@@ -503,7 +524,7 @@ def _parse_file(auth_dir: str) -> object:
             if e.errno == errno.ENOENT:
                 return _empty("absent", "no credential at " + where + "; sign the lane in")
             return _empty("unreadable", "the credential at " + where + " cannot be read (" + errno.errorcode.get(
-                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=False))
+                e.errno or 0, "error") + "); " + _remedy(e, auth_dir, opened=False))._replace(found=False)
         if not stat.S_ISREG(st.st_mode):
             return _empty("unreadable", "the credential path " + where + " is not a regular file; move it aside "
                           "and sign the lane in", _identity(st))
@@ -1738,13 +1759,17 @@ def _exchange(base: str, code: str, verifier: str, lane: str) -> Tuple[dict, Opt
     return _merge(_empty("absent", ""), None, answer, rid), rid
 
 
-def _refuse_signin(r: Reading) -> None:
+def _refuse_signin(r: Reading, lane_file: bool = False) -> None:
     """A sign-in never writes over a file that reads `unreadable` nor over another family's file, and refuses them
-    before any request, so an operator who cannot keep the result never approves a code."""
+    before any request, so an operator who cannot keep the result never approves a code. `lane_file` says the reading
+    is of the lane's own file while the sign-in is held in another folder (`--over`, `install`); a reading that found
+    nothing at that path blames the folder, not a file."""
+    if r.credential == "unreadable" and lane_file and not r.found:
+        raise LaneFolderUnreachable("ccrc cannot reach the lane's folder: " + r.detail)
     if r.credential == "unreadable":
-        raise Unreadable("ccrc will not sign in over it: " + r.detail)
+        raise (LaneFileUnreadable if lane_file else Unreadable)("ccrc will not sign in over it: " + r.detail)
     if r.credential == "foreign-family":
-        raise ForeignFamily(r.detail)
+        raise (LaneFileForeign if lane_file else ForeignFamily)(r.detail)
 
 
 def _pending_exists(auth_dir: str) -> bool:
@@ -1759,8 +1784,13 @@ def _pending_exists(auth_dir: str) -> bool:
     return True
 
 
-def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, timeout_s: Optional[float] = None) -> str:
+def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, timeout_s: Optional[float] = None,
+                   over: Optional[str] = None) -> str:
     """Sign the lane in by LiteLLM's device-code protocol, writing the credential through the library's commit.
+
+    `over` is the folder this sign-in will be installed over, when `auth_dir` is a scratch folder (`install_signin`). It
+    is read as step 1 reads `auth_dir`, with no lock and nothing written, so an operator whose sign-in could not land
+    there never approves a code. The install reads it again, with no lock, and its commit once more, under the lock.
 
     1. `read`, with no lock and nothing written: `unreadable` refuses Unreadable and `foreign-family` ForeignFamily,
        before any request.
@@ -1782,6 +1812,8 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     With CCRC_CODEX_AUTH_BASE set, one stderr line names it and its URL before the first request."""
     stream = sys.stdout if out is None else out
     wait = DEVICE_TIMEOUT_S if timeout_s is None else timeout_s
+    if over is not None:
+        _refuse_signin(read(over), lane_file=True)
     r = read(auth_dir)
     _refuse_signin(r)
     if _pending_exists(auth_dir):
@@ -1805,6 +1837,13 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
     stream.flush()
     code, verifier = _poll_device(base, device_auth_id, user_code, interval, wait, lane)
     record, rid = _exchange(base, code, verifier, lane)
+    _commit_signin(auth_dir, record, rid, lane)
+    return "signed-in"
+
+
+def _commit_signin(auth_dir: str, record: dict, rid: Optional[str], lane: str) -> None:
+    """`sign_in_device`'s step 5, and `install_signin`'s last: the sign-in's record written over `auth_dir`, or
+    LoginFailed with the old file unchanged."""
     key = _key(auth_dir)
     fields = dict(lastRefreshAt=time.time(), lastRequestId=rid)  # kept with an unsaved record, as a refresh's are
     with held(auth_dir) as p:
@@ -1841,7 +1880,34 @@ def sign_in_device(auth_dir: str, *, lane: str, out: Optional[TextIO] = None, ti
             _UNSAVED.pop(key, None)
         write_status(auth_dir, state="ok", expiresAt=record.get("expires_at"), lastErrorCode=None,
                      identity=_current_identity(p.credential), unsaved=False, **fields)
-    return "signed-in"
+
+
+def install_signin(auth_dir: str, *, source: str, lane: str) -> str:
+    """Move the sign-in held at `source` over the lane's credential at `auth_dir` (accounts spec §9 row 5). A Sign in
+    again signs in to a scratch authDir, so the lane's credential stands until this runs, and this is its one writer:
+    the record goes through `_commit_signin`, under the lane's own lock, as a device sign-in's does.
+
+    THE CHECK, MADE BEFORE THE LANE IS TOUCHED. `source` must read `present`, unexpired and not barred, and its file
+    must be mode 0600 or tighter and this user's. That is every check a credential allows offline, and it asks the
+    provider nothing: that is the caller's check, a real request on `source` made before this runs. This is a verb of
+    its own, so it holds these gates itself, and after that request a mode or owner failure is what they meet. Anything
+    else is SigninUnusable, with `auth_dir` untouched. `source` is left in place for the caller to delete. Answers
+    `"installed"`.
+
+    The lane's file is read first, with no lock, as `sign_in_device` reads it: under `held`, a checkpoint's settle would
+    refuse the same file with a plain Unreadable. The commit reads it again under the lock, and a file that goes bad
+    between the two is then an ordinary refusal, exit 1, whose line still names it."""
+    report = status_report(source)
+    r, raw = _read_raw(source)
+    if r.credential != "present" or not isinstance(raw, dict):
+        raise SigninUnusable("the sign-in at " + source + " reads " + r.credential + ", so it was not installed; "
+                             + _again(lane))
+    if expired(r) or _bars(read_status(source)) or report["modeOk"] is not True or report["ownerOk"] is not True:
+        raise SigninUnusable("the sign-in at " + source + " is expired, barred, or not private to this user, so it was "
+                             "not installed; " + _again(lane))
+    _refuse_signin(read(auth_dir), lane_file=True)
+    _commit_signin(auth_dir, dict(raw), None, lane)
+    return "installed"
 
 
 # ── the status report ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1910,12 +1976,13 @@ def status_report(auth_dir: str) -> dict:
 
 
 # ── the command line ─────────────────────────────────────────────────────────────────────────────────────────────
-USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> | paths | secret-files, each with --auth-dir "
-         "<absolute>")
+USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> [--over <absolute>] | install --from <absolute> "
+         "--lane <id> | paths | secret-files, each with --auth-dir <absolute>")
 # Each verb's options: (required, optional). Every option takes one value.
 _VERBS = {
     "status": (frozenset({"--auth-dir"}), frozenset({"--lane"})),
-    "signin": (frozenset({"--auth-dir", "--lane"}), frozenset()),
+    "signin": (frozenset({"--auth-dir", "--lane"}), frozenset({"--over"})),
+    "install": (frozenset({"--auth-dir", "--from", "--lane"}), frozenset()),
     "paths": (frozenset({"--auth-dir"}), frozenset()),
     "secret-files": (frozenset({"--auth-dir"}), frozenset()),
 }
@@ -1931,9 +1998,16 @@ def main(argv: List[str]) -> int:
     unknown verb or option, a repeated or valueless option, or a missing required one is usage: one line on stderr,
     rc 2. No verb ever prints a token.
       status [--lane <id>]  one JSON object, `status_report`, rc 0
-      signin --lane <id>    the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
+      signin --lane <id> [--over <absolute>]
+                            the device lines on stdout, then `ccgpt-auth: <id>: signed-in` or
                             `ccgpt-auth: <id>: already-signed-in: <ALREADY_SIGNED_IN>`, rc 0; or
-                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1
+                            `ccgpt-auth: <word>: <sentence>` on stderr, rc 1; with --over, rc 5 for a file there
+                            it will not sign in over, rc 6 for a folder it cannot see into, always before any request
+      install --from <absolute> --lane <id>
+                            `install_signin`: `ccgpt-auth: <id>: installed`, rc 0; the refusal line above, rc 1;
+                            or that line and rc 4 when the sign-in at --from fails its check, rc 5 when
+                            --auth-dir holds a file it will not write over, or rc 6 when it cannot see into
+                            --auth-dir. A folder or a lock it could not make is rc 1
       paths                 {"credential", "pending", "lock", "status", "lockWaitS"}, rc 0
       secret-files          the credential and checkpoint paths, one per line, rc 0"""
     if not argv or argv[0] not in _VERBS:
@@ -1952,7 +2026,7 @@ def main(argv: List[str]) -> int:
     if not required <= set(opts):
         return _usage()
     auth_dir = opts["--auth-dir"]
-    if not os.path.isabs(auth_dir):
+    if not all(os.path.isabs(opts.get(name, auth_dir)) for name in ("--auth-dir", "--from", "--over")):
         return _usage()
     out = sys.stdout
     if verb == "status":
@@ -1969,11 +2043,19 @@ def main(argv: List[str]) -> int:
         return 0
     lane = opts["--lane"]
     try:
-        result = sign_in_device(auth_dir, lane=lane, out=out)
+        if verb == "install":
+            result = install_signin(auth_dir, source=opts["--from"], lane=lane)
+        else:
+            result = sign_in_device(auth_dir, lane=lane, out=out, over=opts.get("--over"))
     except AuthError as e:
         out.flush()
         sys.stderr.write("ccgpt-auth: " + e.word + ": " + str(e) + "\n")
-        return 1
+        if isinstance(e, SigninUnusable):
+            return 4
+        if isinstance(e, LaneFolderUnreachable):
+            return 6
+        # A sign-in held apart from the lane: the caller answers a lane's file that bars it with a code of its own.
+        return 5 if isinstance(e, (LaneFileUnreadable, LaneFileForeign)) else 1
     line = "ccgpt-auth: " + lane + ": " + result
     if result == "already-signed-in":
         line += ": " + ALREADY_SIGNED_IN
