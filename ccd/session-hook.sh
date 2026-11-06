@@ -2485,7 +2485,7 @@ REG="$HOME/.cc-sessions"
 # that never queried. This hook sees the UNEXPANDED line, so the path itself is
 # never worth reading: the last segment is. Prose that now matches here, like
 # `echo "graphify query"`, is what `GRAPH_ANSWER_RE` below refuses.
-GRAPH_QUERY_RE='(^|[;&|(`"'\''/[:space:]])graphify["'\'']?[[:space:]]+(query|path|explain)([[:space:]]|$)'
+GRAPH_QUERY_RE=$'(^|[;&|(`"\'/[:space:]])graphify["\']?[[:space:]]+(query|path|explain)([[:space:]]|$)'
 
 # ── D-8046: what counts as an ANSWER ────────────────────────────────────
 # The failures that reached this event are the ones that exit 0: `graphify query
