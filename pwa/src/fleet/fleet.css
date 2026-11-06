@@ -4172,6 +4172,20 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 .acct-url-field { max-height: 8em; overflow-y: auto; }
+/* The ChatGPT device code (spec §7.2 step 5): 24px mono at the caps tracking, on one line, read across to the provider's
+   page. Nine characters measure 147px, so the code and its Copy sit on one row in the 296px of a 360 phone's sheet. */
+.acct-device { display: grid; gap: var(--sp-2); min-width: 0; }
+.acct-device-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-width: 0; }
+.acct-device-copy { flex: none; }
+.acct-device-code {
+  font-family: var(--family-mono);
+  font-size: var(--fs-2xl);
+  letter-spacing: var(--tracking-caps);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--ink-primary);
+  user-select: all;
+}
 .acct-grants { display: grid; gap: var(--sp-1); min-width: 0; }
 .acct-grant-list {
   display: grid;

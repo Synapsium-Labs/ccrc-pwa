@@ -16,6 +16,11 @@
 // the box measures as discardable (never enabled, no session of any kind) is offered **Discard this lane** instead: one
 // tap with step-up and no typed confirm; the route and the verb both check it again.
 //
+// A CODEX LANE (Task A25, D-8051 (3); spec §11 step 4, G20): **Delete this lane's ChatGPT sign-in folder**, on by default,
+// sits above the typed confirm, and the verb does what the line says: off sends `--keep-codex-auth`. The ledger says
+// which it did, and links chatgpt.com, where the sign-in stays authorised. An OpenAI lane ccrc only records has no folder
+// step in the verb, so it has no such line and sends no such field (`managedCodex`, D-8051 (9)).
+//
 // THE LEDGER is the verb's answer, never guessed: Removed, Kept on the box, the archived sessions rehomed, and **Still
 // valid at the provider** with each kind's revoke link. A token's row carries the checklist item the operator ticks,
 // recorded through `revoke-ack` with no value (N6). A sign-in's row says what the OA1 record allows: G23 was not
@@ -33,7 +38,7 @@ import { openExternal } from '../lib/markdown';
 import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  DISCARD_LANE, DONE, LEDGER_HEADS, MOVE_ALL, MOVE_ONE, READ_IT_AGAIN, READING_LANE, REVOKE_NOT_RECORDED, REVOKE_PAGES,
+  CODEX_FOLDER_KEPT, CODEX_FOLDER_LINE, DISCARD_LANE, DONE, LEDGER_HEADS, MOVE_ALL, MOVE_ONE, READ_IT_AGAIN, READING_LANE, REVOKE_NOT_RECORDED, REVOKE_PAGES,
   STEP_UP_AGAIN_REMOVE, WAKE_AND_MOVE, atProviderHead, atProviderWords, discardLine, liveBlockText, notRemovedAfterUnknown, removeButtonLabel,
   removeCheckFailed, removeCheckLine, removeConsequence, removeHeld, removeRefusal, removeStillUnknown, removeUnknown, removedButNoLedger,
   removedDone, revokeRecord, sleepingBlockText, typedConfirmLabel, wakeFailed, wakingProgress, REVOKED_IT,
@@ -42,6 +47,7 @@ import { MoveSessionsSheet } from '../fleet/MoveSessionsSheet';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { ConfirmItsYou } from './ConfirmItsYou';
+import { managedCodex } from './connectFlow';
 import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
 
@@ -202,6 +208,11 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
   const [checkFailed, setCheckFailed] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
   const [typed, setTyped] = useState('');
+  /** The Codex line (spec §11 step 4): on by default. */
+  const [deleteFolder, setDeleteFolder] = useState(true);
+  const codexLane = managedCodex(readRoster().find((r) => r.id === id));
+  // One answer for what the sheet says and what it sends, so neither can drift from the line.
+  const codexAuth = codexLane ? (deleteFolder ? 'delete' as const : 'keep' as const) : undefined;
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ledger, setLedger] = useState<AccountRemoveAnswer | null>(null);
@@ -288,7 +299,9 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
     let outcome: 'done' | 'step-up' = 'done';
     try {
       outcome = await stepUp.runAct(async () => {
-        got.answer = await client.accountRemove(id, mode === 'discard' ? { mode: 'discard' } : { mode: 'remove', confirmId: typed });
+        got.answer = await client.accountRemove(id, mode === 'discard' ? { mode: 'discard' } : {
+          mode: 'remove', confirmId: typed, ...(codexAuth !== undefined ? { codexAuth } : {}),
+        });
       });
     } catch (e) {
       failure = e;
@@ -414,7 +427,16 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
             </>
           ) : (
             <>
-              <p className="acct-field-note">{removeConsequence(id)}</p>
+              <p className="acct-field-note">{removeConsequence(id, codexAuth)}</p>
+              {codexLane && (
+                <div className="acct-revoke" data-codex-folder="true">
+                  <OptionRow
+                    label={CODEX_FOLDER_LINE} checked={deleteFolder} disabled={blocked !== null}
+                    onClick={() => setDeleteFolder((d) => !d)}
+                  />
+                  {!deleteFolder && <p className="acct-field-note">{CODEX_FOLDER_KEPT}</p>}
+                </div>
+              )}
               <div className="acct-field">
                 <label htmlFor={confirmId}>{typedConfirmLabel(id)}</label>
                 <TextInput

@@ -1306,6 +1306,11 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "the compromise disclosure's steps, in a result frame (CompromiseSteps.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The remove and replace sheets' frames (.acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
+  // ── accounts plan Task A25 (D-8051): the ChatGPT device code ───────────
+  '.acct-device-code': {
+    under: ['var(--bg-sheet)'],
+    why: "the ChatGPT device code (RunFrame.tsx's UserCodeWell), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect and re-auth sheets' frames (.acct-frame) and the well (.acct-device) paint no background, and the selector names no paint.",
+  },
   // ── accounts plan Task A22 (D-7849): Mint and Sign in ──────────────────
   '.acct-url-host': {
     under: ['var(--bg-sheet)'],

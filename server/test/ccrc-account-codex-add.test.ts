@@ -220,6 +220,16 @@ describe('remove and the lane\'s sign-in folder (spec §11 step 4; G20, Q11)', (
     expect(a['atProvider']).toEqual([{ kind: 'codex', state: 'still-valid', revokeAt: 'chatgpt-settings' }]);
   }, 60_000);
 
+  it('the sheet\'s line turned off keeps the authDir, and the ledger says so', async () => {
+    const { home, authDir } = await signedInLane('ccrc-codex-remove-ui-keep-');
+    const r = ccrcAuth(home, uiArgv('lane-g', { mode: 'remove', keepCodexAuth: 'true' }), '', host);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(existsSync(authDir), 'the sign-in folder').toBe(true);
+    const a = answerOf(r);
+    expect(a['kept']).toContain(authDir);
+    expect(a['removed']).not.toContain(authDir);
+  }, 60_000);
+
   it.each([['remove'], ['discard']])('a lane nobody signed in lists nothing at the provider: --mode %s', async (mode) => {
     const { home, base } = await codexBox('ccrc-codex-remove-unsigned-');
     expect(add(home, 'lane-g', [], { CCRC_ACCOUNT_CODEX_PORT_BASE: base }).code).toBe(0);

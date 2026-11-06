@@ -38,7 +38,7 @@ export function AuthResumeBanner({ lanes }: { lanes: Readonly<Record<string, Lan
   if (r === null) return null;
   return (
     <div className="auth-resume" data-lane={r.id}>
-      <p className="auth-resume-text">{resumeBannerText(r.id, minutesLeft(r.held.expiresAt, now))}</p>
+      <p className="auth-resume-text">{resumeBannerText(r.id, minutesLeft(r.held.expiresAt, now), r.held.method)}</p>
       <Button variant="primary" size="fit" className="auth-resume-continue" onClick={() => navigate(accountsResumeHref(r.id))}>
         {CONTINUE}
       </Button>

@@ -299,6 +299,28 @@ describe('the secret: checked at the route, held for the request, never answered
   });
 });
 
+describe("a ChatGPT lane's add (spec §7.2 step 3; D-8051 (7))", () => {
+  const CODEX_ADD = { provider: 'openai', id: NEW, label: 'Lane N', hue: 'green' };
+
+  it("the sheet's body reaches the verb, with no method: the sign-in's method is `auth/start`'s", async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('add', { out: { ok: true, id: NEW, roster: withNew(r), fleetIdentity: NODE } });
+    r.stub('roster', { out: { ok: true, roster: withNew(r), fleetIdentity: NODE } });
+    const res = await post(r, '/api/accounts', CODEX_ADD, cookie);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.argv()[0]).toBe(`account add --id=${NEW} --provider=openai --label=Lane N --hue=green`);
+  });
+
+  it('`openai-login` on the add is refused before anything runs', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    const res = await post(r, '/api/accounts', { ...CODEX_ADD, method: 'openai-login' }, cookie);
+    expect(res.statusCode, res.body).toBe(REFUSAL_STATUS['bad-request']);
+    expect(r.argv()).toEqual([]);
+  });
+});
+
 describe('add: outcome unknown is never retried (spec §3.9, §6.2; D-5518)', () => {
   it('an add that times out answers outcome unknown, reconciles, and a retry finds the lane rather than duplicate-id', async () => {
     const r = await openApp({ addTimeoutMs: 2_000 });
@@ -352,6 +374,29 @@ describe('add: outcome unknown is never retried (spec §3.9, §6.2; D-5518)', ()
 });
 
 describe('remove, discard and the pre-check (spec §11)', () => {
+  it('the remove sheet\'s Codex line reaches the verb as its own flag, and only remove takes it (D-8051 (3))', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    for (const bad of [{ mode: 'remove', confirmId: LANE, codexAuth: 'maybe' }, { mode: 'discard', codexAuth: 'keep' }, { mode: 'check', codexAuth: 'keep' }]) {
+      const res = await post(r, `/api/accounts/${LANE}/remove`, bad, cookie);
+      expect(res.statusCode, JSON.stringify(bad)).toBe(REFUSAL_STATUS['bad-request']);
+    }
+    expect(r.calls).toEqual([]);
+    r.stub('remove', { out: REMOVED_ANSWER(r) });
+    const kept = await post(r, `/api/accounts/${LANE}/remove`, { mode: 'remove', confirmId: LANE, codexAuth: 'keep' }, cookie);
+    expect(kept.statusCode, kept.body).toBe(200);
+    expect(r.argv()).toEqual([`account remove --id=${LANE} --mode=remove --keep-codex-auth`]);
+  });
+
+  it('the Codex line ticked asks for the delete by name', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('remove', { out: REMOVED_ANSWER(r) });
+    const gone = await post(r, `/api/accounts/${LANE}/remove`, { mode: 'remove', confirmId: LANE, codexAuth: 'delete' }, cookie);
+    expect(gone.statusCode, gone.body).toBe(200);
+    expect(r.argv()).toEqual([`account remove --id=${LANE} --mode=remove --delete-codex-auth`]);
+  });
+
   it('remove\'s typed confirm must equal the id (confirm-mismatch), and nothing runs', async () => {
     const r = await openApp();
     const cookie = await fresh(r.app);
