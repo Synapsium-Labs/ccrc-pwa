@@ -136,6 +136,8 @@ export const SKIN_TOKENS: { readonly [C in SkinTokenClass]: readonly SkinToken[]
     { name: '--page-max' },
     { name: '--page-max-wide' },
     { name: '--measure-chat' },
+    // The chat's prose measure inside that column (D-8059): a length, read by chat.css from 900 up.
+    { name: '--measure-chat-prose' },
     // The page scaffold's (D-5102). `--head-h` is the sticky header's height,
     // tap-bearing because Back sits in it (D-5667). `--section-flow` is a
     // keyword, a Section head's flex-direction: it is how a skin draws the

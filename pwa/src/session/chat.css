@@ -1954,10 +1954,16 @@ button.metachip:active {
   min-width: 0;
 }
 /* THE READING COLUMN. From 900 the transcript's rows, the strips and the
-   composer sit in one column of the skin's measure (`--measure-chat`: 780,
-   820 at ≥1600; Instrument's log column 860), centred in the pane. A
+   composer sit in one column of the skin's measure (`--measure-chat`: 1200 in
+   Refined, the whole pane in Instrument; D-8059), centred in the pane. A
    max-width, never a fixed width: at 1600 with the inspector rail the pane is
-   narrower than the measure, and the column yields to it. */
+   narrower than the measure, and the column yields to it.
+   Inside the column the assistant's prose (the list prose.css's measure rule
+   names) keeps the chat's own measure, `--measure-chat-prose` (76ch Refined,
+   88ch Instrument), from the column's left edge; code, tables, tool cards and
+   images take the full column. The user's bubble sits at the column's right
+   edge, at most 70% of it. Below 900 none of this applies: the shared
+   `--measure-prose` and the 85% bubble hold. */
 @media (min-width: 900px) {
   .chat-item,
   .chat-strips,
@@ -1968,6 +1974,10 @@ button.metachip:active {
     max-width: min(var(--measure-chat), 100%);
     margin-inline: auto;
   }
+  .chat-item .msg-assist > :is(p, ul, ol, blockquote, h1, h2, h3, h4, hr, .callout) {
+    max-width: var(--measure-chat-prose);
+  }
+  .msg-user { max-width: 70%; }
 }
 /* D-5100's 🤖 is `Icon bot` now: drawn at the glyph's own em, so the chip
    keeps the height the emoji gave it. */
