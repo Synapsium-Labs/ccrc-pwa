@@ -7,6 +7,7 @@ import {
 } from '../src/cleanupHeldBy.js';
 import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/cleanupHeldBy.js';
 import type { ExpiryReport } from '../src/archivedExpiry.js';
+import { parsedFile } from './scan/symbols.js';
 
 const row = (id: string, word: HeldByWord = 'gone-unrecorded', workspace: HeldByWorkspace | null = 'absent'): HeldByRow =>
   ({ id, word, workspace });
@@ -152,7 +153,8 @@ describe('cleanupHeldBy', () => {
   // Review 1580 F7 and rulings 1-4 and 8: what each sentence says, so a dropped scope, a prune or a pace is a red.
   const sentenceOf = (w: HeldByWord, ws: HeldByWorkspace | null, fleet: string | null): string =>
     cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w, ws)]) }], () => fleet)[0]!.sentence;
-  const PACE = 'within minutes for a new hold, and up to four hours for children that have been failing a long time';
+  const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+  const PAUSED = 'Nothing is re-read while the cleanup is paused.';
   it('a workspace gone-unrecorded row names the scoped remove and never a prune, and no recreate advice', () => {
     const s = sentenceOf('gone-unrecorded', 'present', '/x/ws');
     expect(s).toContain('`git -C <main> worktree remove <path>`');
@@ -160,6 +162,8 @@ describe('cleanupHeldBy', () => {
     expect(s).not.toContain('<project>');
     expect(s).not.toContain('worktree add');
     expect(s).not.toMatch(/recreate/i);
+    expect(s).toContain('If its folder still stands but a directory on its path cannot be searched, make that directory searchable, or restore a link on its path to its original target.');
+    expect(s).not.toContain('only cannot be searched');
   });
   it('gone-unrecorded says its folder is gone with no record, or a directory or link on its path cannot be searched', () => {
     for (const s of [sentenceOf('gone-unrecorded', 'present', '/x/ws'), sentenceOf('gone-unrecorded', 'absent', null)]) {
@@ -168,11 +172,16 @@ describe('cleanupHeldBy', () => {
   });
   it('forget says when the cleanup goes ahead, at the held children\'s own pace', () => {
     const s = sentenceOf('gone-unrecorded', 'absent', null);
-    expect(s).toContain(PACE);
+    expect(s).toContain(`when ccrc next checks what this row holds: ${PACE}. ${PAUSED}`);
     expect(s).not.toContain('next pass');
+    expect(s).not.toContain('the children');
   });
   it('under-proc says ccrc never stops that process', () => {
     expect(sentenceOf('under-proc', 'present', '/x/ws')).toContain('ccrc never stops that process');
+  });
+  it('under-proc and entry-pending keep ccd\'s purge option', () => {
+    expect(sentenceOf('under-proc', 'present', '/x/ws')).toContain('Stop and start the session from a plain path, or purge its row.');
+    expect(sentenceOf('entry-pending', 'present', '/x/ws')).toContain('Stop and start that session, or purge its row once its session has ended.');
   });
   it('workdir-unreadable names the registry record, not the folder', () => {
     const s = sentenceOf('workdir-unreadable', 'present', '/x/ws');
@@ -190,8 +199,8 @@ describe('cleanupHeldBy', () => {
     for (const w of HELD_BY_WORDS) {
       const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], noFleet);
       expect(item!.act).toBe('recheck');
-      expect(item!.sentence).toContain('This row is no longer registered. The line clears as each child it held is checked again');
-      expect(item!.sentence).toContain(PACE);
+      expect(item!.sentence).toContain(`The fleet state does not list this row. The line clears as each item it held is checked again, ${PACE}. If it stays after that, a partial registry entry remains for this id; remove it by hand once its session has ended. ${PAUSED}`);
+      expect(item!.sentence).not.toContain('no longer registered');
       expect(item!.sentence).not.toContain('only a person removes it');
       expect(item!.sentence).not.toContain('worktree');
     }
@@ -200,11 +209,33 @@ describe('cleanupHeldBy', () => {
     for (const w of HELD_BY_WORDS) {
       const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], null);
       expect(item!.act).toBe('recheck');
-      expect(item!.sentence).toContain('This row\'s state in the fleet has not been read yet, and nothing is offered for it until it is.');
+      expect(item!.sentence).toContain('This row\'s state in the fleet has not been read yet, so only a re-check is offered.');
+      expect(item!.sentence).not.toContain('nothing is offered');
       expect(item!.sentence).not.toContain('only a person removes it');
       expect(item!.sentence).not.toContain('worktree');
-      expect(item!.sentence).not.toContain('no longer registered');
+      expect(item!.sentence).not.toContain('does not list this row');
     }
+  });
+  // Review 1585 N4 (the held-pace-two-writers departure): the pace and the pause clause are written in the server's
+  // sentences and in the console's confirm words; the two copies must say the same thing.
+  it('the pace and the pause clause are the same words on the server and in the console', () => {
+    const init = (file: string, name: string): string => {
+      const b = parsedFile(file).bindings.filter((x) => x.name === name);
+      expect(b, `${file} defines ${name} once`).toHaveLength(1);
+      return b[0]!.init;
+    };
+    for (const name of ['HELD_PACE', 'HELD_PAUSED']) {
+      const server = init('server/src/cleanupHeldBy.ts', name);
+      expect(server.length).toBeGreaterThan(20);
+      expect(init('pwa/src/fleet/heldByRowsWords.ts', name), name).toBe(server);
+    }
+  });
+  // Review 1585 N5: the one L1 edge the fold added, pinned.
+  it('cleanupHeldBy imports L0 and only expiryReportStands (and its report type) from archivedExpiry', () => {
+    const imports = parsedFile('server/src/cleanupHeldBy.ts').imports;
+    expect([...new Set(imports.map((i) => i.specifier))].sort()).toEqual(['../../shared/api.js', './archivedExpiry.js']);
+    const edge = imports.filter((i) => i.specifier === './archivedExpiry.js');
+    expect(edge.map((i) => ({ names: i.names, typeNames: i.typeNames }))).toEqual([{ names: ['expiryReportStands', 'ExpiryReport'], typeNames: ['ExpiryReport'] }]);
   });
   it('forget needs every read of the row to say absent', () => {
     const items = cleanupHeldBy([
@@ -230,6 +261,10 @@ const status = (r: ChildReclaimAttention[], e?: ExpiryAttention[]): CoordStatus 
 const lane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead }> =>
   new Map(Object.entries(m).map(([k, v]) => [k, v === undefined ? {} : { heldBy: v }]));
 const none = lane({});
+// The expiry lane's entries carry `report`, required (review 1585 F5): a lane passed without it does not type-check.
+const expLane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead; report: null }> =>
+  new Map(Object.entries(m).map(([k, v]) => [k, v === undefined ? { report: null } : { heldBy: v, report: null }]));
+const noExp = expLane({});
 const listed = rows([row('row-a')], false);
 
 describe('withCleanupHeldBy', () => {
@@ -237,7 +272,7 @@ describe('withCleanupHeldBy', () => {
     const ids = ['project-a-child-1', 'project-a-child-2', 'project-a-child-3'];
     const out = withCleanupHeldBy(
       status([...ids.map((i) => failing(i)), stuck('project-a-child-4')].slice(0, 3).concat([stuck('project-a-child-4')])),
-      { reclaim: lane({ ...Object.fromEntries(ids.map((i) => [i, listed])), 'project-a-child-4': listed }), expire: none, collect: none },
+      { reclaim: lane({ ...Object.fromEntries(ids.map((i) => [i, listed])), 'project-a-child-4': listed }), expire: noExp, collect: none },
       [{ id: 'row-a', workspace: null }]);
     expect(out.childReclaimAttention).toEqual([]);
     expect(out.cleanupHeldBy).toHaveLength(1);
@@ -245,73 +280,73 @@ describe('withCleanupHeldBy', () => {
   });
   it('a child held only by listed rows but with its own fault keeps its item', () => {
     const f = failing('project-a-child-1');
-    const out = withCleanupHeldBy(status([f]), { reclaim: lane({ 'project-a-child-1': rows([row('row-a')], true) }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status([f]), { reclaim: lane({ 'project-a-child-1': rows([row('row-a')], true) }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention).toEqual([f]);
   });
   it('a child refused for another reason keeps its own item', () => {
     const items = [terminal('c1'), failing('c2', 'pin-failed'), stuck('c3', 'pin-failed')];
-    const out = withCleanupHeldBy(status(items), { reclaim: lane({ c1: listed, c2: listed, c3: listed }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status(items), { reclaim: lane({ c1: listed, c2: listed, c3: listed }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention).toEqual(items);
   });
   it('items of other children and kinds stay in order', () => {
     const items = [failing('c1'), terminal('c2'), failing('c3'), failing('c4')];
-    const out = withCleanupHeldBy(status(items), { reclaim: lane({ c1: listed, c3: none.get('x')?.heldBy }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status(items), { reclaim: lane({ c1: listed, c3: none.get('x')?.heldBy }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention).toEqual([items[1], items[2], items[3]]);
   });
   it('a child whose read is absent (older ccd) keeps its item', () => {
     const f = failing('c1');
     for (const read of [undefined, HELD_BY_ABSENT]) {
-      const out = withCleanupHeldBy(status([f]), { reclaim: lane({ c1: read }), expire: none, collect: none }, null);
+      const out = withCleanupHeldBy(status([f]), { reclaim: lane({ c1: read }), expire: noExp, collect: none }, null);
       expect(out.childReclaimAttention).toEqual([f]);
     }
-    expect(withCleanupHeldBy(status([f]), { reclaim: none, expire: none, collect: none }, null).childReclaimAttention).toEqual([f]);
+    expect(withCleanupHeldBy(status([f]), { reclaim: none, expire: noExp, collect: none }, null).childReclaimAttention).toEqual([f]);
   });
   it('a malformed read keeps its item', () => {
     const f = failing('c1');
-    const out = withCleanupHeldBy(status([f]), { reclaim: lane({ c1: { kind: 'malformed' } }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status([f]), { reclaim: lane({ c1: { kind: 'malformed' } }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention).toEqual([f]);
   });
   it('a none or not-reached read keeps its item', () => {
     const f = failing('c1');
     for (const read of [{ kind: 'none' }, { kind: 'not-reached' }] as HeldByRead[]) {
-      expect(withCleanupHeldBy(status([f]), { reclaim: lane({ c1: read }), expire: none, collect: none }, null).childReclaimAttention).toEqual([f]);
+      expect(withCleanupHeldBy(status([f]), { reclaim: lane({ c1: read }), expire: noExp, collect: none }, null).childReclaimAttention).toEqual([f]);
     }
   });
   it('an expiry failing item held only by listed rows folds', () => {
-    const out = withCleanupHeldBy(status([], [expFailing('a1'), expHeld('a1')]), { reclaim: none, expire: lane({ a1: listed }), collect: none }, null);
+    const out = withCleanupHeldBy(status([], [expFailing('a1'), expHeld('a1')]), { reclaim: none, expire: expLane({ a1: listed }), collect: none }, null);
     expect(out.expiryAttention).toEqual([expHeld('a1')]);
     expect(out.cleanupHeldBy![0]!.holds.expire).toBe(1);
   });
   it('an expiry child with its own fault keeps its item', () => {
     const e = expFailing('a1');
-    const out = withCleanupHeldBy(status([], [e]), { reclaim: none, expire: lane({ a1: rows([row('row-a')], true) }), collect: none }, null);
+    const out = withCleanupHeldBy(status([], [e]), { reclaim: none, expire: expLane({ a1: rows([row('row-a')], true) }), collect: none }, null);
     expect(out.expiryAttention).toEqual([e]);
   });
   it('an expiry child whose read is absent keeps its item', () => {
     const e = expFailing('a1');
-    expect(withCleanupHeldBy(status([], [e]), { reclaim: none, expire: lane({ a1: undefined }), collect: none }, null).expiryAttention).toEqual([e]);
+    expect(withCleanupHeldBy(status([], [e]), { reclaim: none, expire: expLane({ a1: undefined }), collect: none }, null).expiryAttention).toEqual([e]);
   });
   it('an expiry child with a malformed read keeps its item', () => {
     const e = expFailing('a1');
-    expect(withCleanupHeldBy(status([], [e]), { reclaim: none, expire: lane({ a1: { kind: 'malformed' } }), collect: none }, null).expiryAttention).toEqual([e]);
+    expect(withCleanupHeldBy(status([], [e]), { reclaim: none, expire: expLane({ a1: { kind: 'malformed' } }), collect: none }, null).expiryAttention).toEqual([e]);
   });
   it('expiryAttention is not added when the status had none', () => {
-    expect('expiryAttention' in withCleanupHeldBy(status([]), { reclaim: none, expire: none, collect: none }, null)).toBe(false);
+    expect('expiryAttention' in withCleanupHeldBy(status([]), { reclaim: none, expire: noExp, collect: none }, null)).toBe(false);
   });
   it('a forgotten row (no longer in the fleet state) and a missing frame each get their own sentence', () => {
-    const lanes = { reclaim: lane({ c1: listed }), expire: none, collect: none };
+    const lanes = { reclaim: lane({ c1: listed }), expire: noExp, collect: none };
     const forgotten = withCleanupHeldBy(status([]), lanes, [{ id: 'row-b', workspace: null }]).cleanupHeldBy![0]!;
     expect(forgotten).toMatchObject({ rowId: 'row-a', act: 'recheck' });
-    expect(forgotten.sentence).toContain('This row is no longer registered.');
+    expect(forgotten.sentence).toContain('The fleet state does not list this row.');
     const unframed = withCleanupHeldBy(status([]), lanes, null).cleanupHeldBy![0]!;
     expect(unframed.sentence).toContain('has not been read yet');
-    expect(unframed.sentence).not.toContain('no longer registered');
+    expect(unframed.sentence).not.toContain('does not list this row');
   });
   it('an expiry item whose lane report stands keeps its item (a stuck one and a persistent-tier one)', () => {
     const stuckReport: ExpiryReport = { kind: 'stuck', at: 1, detail: 'd', attempts: 2 };
     const tierReport: ExpiryReport = { kind: 'failing', at: 1, detail: 'd', attempts: 4 };
     const passing: ExpiryReport = { kind: 'failing', at: 1, detail: 'd' };
-    const exp = new Map<string, { heldBy?: HeldByRead; report?: ExpiryReport | null }>([
+    const exp = new Map<string, { heldBy?: HeldByRead; report: ExpiryReport | null }>([
       ['a1', { heldBy: listed, report: stuckReport }], ['a2', { heldBy: listed, report: tierReport }],
       ['a3', { heldBy: listed, report: passing }],
     ]);
@@ -320,7 +355,7 @@ describe('withCleanupHeldBy', () => {
     expect(out.expiryAttention).toEqual([expFailing('a1'), expFailing('a2')]);
   });
   it('the fleet being unknown leaves forget off', () => {
-    const out = withCleanupHeldBy(status([]), { reclaim: lane({ c1: listed }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status([]), { reclaim: lane({ c1: listed }), expire: noExp, collect: none }, null);
     expect(out.cleanupHeldBy![0]!.act).toBe('recheck');
   });
 });

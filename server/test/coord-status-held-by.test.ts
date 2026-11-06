@@ -10,24 +10,25 @@ const listed: HeldByRead = { kind: 'rows', own: false, rows: [{ id: 'row-a', wor
 const lane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead }> =>
   new Map(Object.entries(m).map(([k, v]) => [k, v === undefined ? {} : { heldBy: v }]));
 const none = lane({});
+const noExp: ReadonlyMap<string, { heldBy?: HeldByRead; report: null }> = new Map();
 const status = (r: ChildReclaimAttention[]): CoordStatus => ({ childReclaimAttention: r }) as unknown as CoordStatus;
 const failing = (id: string): ChildReclaimAttention =>
   ({ kind: 'failing', sessionId: id, runId: null, token: 'probe-unmeasured', sentence: 's', at: 1 });
 
 describe('CoordStatus.cleanupHeldBy', () => {
   it('CoordStatus carries cleanupHeldBy when a row holds', () => {
-    const out = withCleanupHeldBy(status([]), { reclaim: none, expire: none, collect: lane({ t1: listed }) }, [{ id: 'row-a', workspace: '/x/ws' }]);
+    const out = withCleanupHeldBy(status([]), { reclaim: none, expire: noExp, collect: lane({ t1: listed }) }, [{ id: 'row-a', workspace: '/x/ws' }]);
     expect(out.cleanupHeldBy).toHaveLength(1);
     expect(out.cleanupHeldBy![0]!.act).toBe('recheck');
   });
   it('the field is omitted when nothing holds, so the frame is today\'s byte for byte', () => {
     const before = status([failing('c1')]);
-    const after = withCleanupHeldBy(before, { reclaim: lane({ c1: { kind: 'none' } }), expire: none, collect: none }, null);
+    const after = withCleanupHeldBy(before, { reclaim: lane({ c1: { kind: 'none' } }), expire: noExp, collect: none }, null);
     expect(Object.prototype.hasOwnProperty.call(after, 'cleanupHeldBy')).toBe(false);
     expect(JSON.stringify(after)).toBe(JSON.stringify(before));
   });
   it('an older lane state (no reads yet) omits the field', () => {
-    expect(withCleanupHeldBy(status([]), { reclaim: none, expire: none, collect: none }, []).cleanupHeldBy).toBeUndefined();
+    expect(withCleanupHeldBy(status([]), { reclaim: none, expire: noExp, collect: none }, []).cleanupHeldBy).toBeUndefined();
   });
   it('the status line composes through withCleanupHeldBy', () => {
     const src = readFileSync(new URL('../src/watch.ts', import.meta.url), 'utf8');

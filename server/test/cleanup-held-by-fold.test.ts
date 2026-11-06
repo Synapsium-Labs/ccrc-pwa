@@ -40,6 +40,10 @@ const listed: HeldByRead = { kind: 'rows', own: false, rows: [{ id: 'row-a', wor
 const lane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead }> =>
   new Map(Object.entries(m).map(([k, v]) => [k, v === undefined ? {} : { heldBy: v }]));
 const none = lane({});
+// The expiry lane's entries carry `report`, required (review 1585 F5): a lane passed without it does not type-check.
+const expLane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead; report: null }> =>
+  new Map(Object.entries(m).map(([k, v]) => [k, v === undefined ? { report: null } : { heldBy: v, report: null }]));
+const noExp = expLane({});
 
 // ── the reclaim lane's inputs ────────────────────────────────────────────────
 const kindOf = (t: string): 'terminal' | null => (t === 'branch-elsewhere' ? 'terminal' : null);
@@ -199,7 +203,7 @@ describe('the fold sits at composition', () => {
     const list = rowsOf();
     const input = status(list);
     const before = structuredClone(input);
-    const out = withCleanupHeldBy(input, { reclaim: lane(heldReads()), expire: none, collect: none }, [{ id: 'row-a', workspace: null }]);
+    const out = withCleanupHeldBy(input, { reclaim: lane(heldReads()), expire: noExp, collect: none }, [{ id: 'row-a', workspace: null }]);
     expect(out.childReclaimAttention).toHaveLength(1);
     expect(out.childReclaimAttention[0]).toMatchObject({ kind: 'terminal', token: 'branch-elsewhere' });
     expect(out.cleanupHeldBy).toHaveLength(1);
@@ -214,18 +218,18 @@ describe('the fold sits at composition', () => {
   it('the branch-elsewhere child keeps its own item', () => {
     const list = rowsOf();
     const out = withCleanupHeldBy(status(list),
-      { reclaim: lane({ ...heldReads(), 'project-a-child-4': listed }), expire: none, collect: none }, null);
+      { reclaim: lane({ ...heldReads(), 'project-a-child-4': listed }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention.map(ids)).toEqual(['project-a-child-4']);
   });
 
   it('a child whose read is absent (older ccd) keeps its item', () => {
     const list = rowsOf();
-    const out = withCleanupHeldBy(status(list), { reclaim: lane({ ...heldReads(), 'project-a-child-1': { kind: 'absent' } }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status(list), { reclaim: lane({ ...heldReads(), 'project-a-child-1': { kind: 'absent' } }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention.map(ids)).toEqual(['project-a-child-1', 'project-a-child-4']);
   });
 
   it('a malformed read keeps its item', () => {
-    const out = withCleanupHeldBy(status(rowsOf()), { reclaim: lane({ ...heldReads(), 'project-a-child-2': { kind: 'malformed' } }), expire: none, collect: none }, null);
+    const out = withCleanupHeldBy(status(rowsOf()), { reclaim: lane({ ...heldReads(), 'project-a-child-2': { kind: 'malformed' } }), expire: noExp, collect: none }, null);
     expect(out.childReclaimAttention.map(ids)).toEqual(['project-a-child-2', 'project-a-child-4']);
   });
 
@@ -234,30 +238,30 @@ describe('the fold sits at composition', () => {
   const exp = (): ExpiryAttention[] => [expFailing('archived-1'), expFailing('archived-2'), expFailing('archived-3')];
 
   it('the expiry lane\'s failing items: held ones fold and the others keep their item', () => {
-    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: lane({ 'archived-1': listed, 'archived-2': listed, 'archived-3': listed }), collect: none }, null);
+    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: expLane({ 'archived-1': listed, 'archived-2': listed, 'archived-3': listed }), collect: none }, null);
     expect(out.expiryAttention).toEqual([]);
     expect(out.cleanupHeldBy![0]!.holds.expire).toBe(3);
   });
 
   it('an expiry child whose read is absent keeps its item', () => {
-    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: lane({ 'archived-1': { kind: 'absent' }, 'archived-2': listed, 'archived-3': undefined }), collect: none }, null);
+    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: expLane({ 'archived-1': { kind: 'absent' }, 'archived-2': listed, 'archived-3': undefined }), collect: none }, null);
     expect(out.expiryAttention!.map((a) => a.sessionId)).toEqual(['archived-1', 'archived-3']);
   });
 
   it('an expiry child with a malformed read keeps its item', () => {
-    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: lane({ 'archived-1': { kind: 'malformed' }, 'archived-2': listed, 'archived-3': listed }), collect: none }, null);
+    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: expLane({ 'archived-1': { kind: 'malformed' }, 'archived-2': listed, 'archived-3': listed }), collect: none }, null);
     expect(out.expiryAttention!.map((a) => a.sessionId)).toEqual(['archived-1']);
   });
 
   it('an expiry child that is not held by a row (its read is none) keeps its item', () => {
-    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: lane({ 'archived-1': { kind: 'none' }, 'archived-2': listed, 'archived-3': listed }), collect: none }, null);
+    const out = withCleanupHeldBy(status([], exp()), { reclaim: none, expire: expLane({ 'archived-1': { kind: 'none' }, 'archived-2': listed, 'archived-3': listed }), collect: none }, null);
     expect(out.expiryAttention!.map((a) => a.sessionId)).toEqual(['archived-1']);
   });
 
   it('a child held by a row but with its own fault keeps its item', () => {
     const own: HeldByRead = { kind: 'rows', own: true, rows: [{ id: 'row-a', word: 'gone-unrecorded', workspace: 'absent' }] };
     const out = withCleanupHeldBy(status(rowsOf(), exp()),
-      { reclaim: lane({ ...heldReads(), 'project-a-child-1': own }), expire: lane({ 'archived-1': own, 'archived-2': listed }), collect: none }, null);
+      { reclaim: lane({ ...heldReads(), 'project-a-child-1': own }), expire: expLane({ 'archived-1': own, 'archived-2': listed }), collect: none }, null);
     expect(out.childReclaimAttention.map(ids)).toEqual(['project-a-child-1', 'project-a-child-4']);
     expect(out.expiryAttention!.map((a) => a.sessionId)).toEqual(['archived-1', 'archived-3']);
     // its row is still listed in the row's line: the child holds nothing more than the others do

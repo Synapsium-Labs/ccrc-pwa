@@ -100,17 +100,22 @@ interface SentenceParts { readonly found: string; readonly remedy: (act: Cleanup
 
 const RECHECK_TAIL = 'Then check again.';
 
-/** The real pace (review 1580 F1, ruling 1): a pass asks a held child only once its own backoff has run, which is
- *  minutes for a new hold and, on the persistent tier, up to four hours. Nothing resets that backoff. */
-const HELD_PACE = 'within minutes for a new hold, and up to four hours for children that have been failing a long time';
+/** The pace (reviews 1580 F1 and 1585 F1): a pass asks a held child only once its own backoff has run, one ask a minute
+ *  fleet-wide, so it is usually minutes for a new hold and a few hours or more on the persistent tier. Nothing resets
+ *  that backoff. The console's confirm words carry the same two phrases (`heldByRowsWords.ts`; a parity test holds them
+ *  equal). */
+const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+/** Said wherever a re-read is promised: the paused lanes read nothing. */
+const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
 
-/** Where the fleet state stands on a row: listed (then its workspace decides), no longer listed (a row ccd has purged,
- *  often one just forgotten), or no fleet frame read yet. Each gets its own words (review 1580 F2, ruling 2). */
+/** Where the fleet state stands on a row: listed (then its workspace decides), not listed (a row ccd purged, often one
+ *  just forgotten, or a partial registry entry the fleet state cannot build), or no fleet frame read yet. Each gets its
+ *  own words, worded from what is measured (reviews 1580 F2 and 1585 F2). */
 type FleetStanding = 'listed' | 'missing' | 'unframed';
 
 const STANDING_REMEDY: Record<Exclude<FleetStanding, 'listed'>, string> = {
-  missing: `This row is no longer registered. The line clears as each child it held is checked again, ${HELD_PACE}.`,
-  unframed: 'This row\'s state in the fleet has not been read yet, and nothing is offered for it until it is. ' + RECHECK_TAIL,
+  missing: `The fleet state does not list this row. The line clears as each item it held is checked again, ${HELD_PACE}. If it stays after that, a partial registry entry remains for this id; remove it by hand once its session has ended. ${HELD_PAUSED}`,
+  unframed: 'This row\'s state in the fleet has not been read yet, so only a re-check is offered. ' + RECHECK_TAIL,
 };
 
 /** One entry per word; a missing word is a compile error. */
@@ -118,8 +123,8 @@ const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
   'gone-unrecorded': {
     found: 'Its folder is gone with no record, or a directory or link on its path cannot be searched.',
     remedy: (act) => act === 'forget'
-      ? `Forgetting the row removes only its registry entry. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks the children this row holds: ${HELD_PACE}.`
-      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If a directory on its path only cannot be searched, make it searchable, or restore a link on its path to its original target. '
+      ? `Forgetting the row removes only its registry entry. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks what this row holds: ${HELD_PACE}. ${HELD_PAUSED}`
+      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If its folder still stands but a directory on its path cannot be searched, make that directory searchable, or restore a link on its path to its original target. '
         + RECHECK_TAIL,
   },
   'not-plain': {
@@ -128,7 +133,7 @@ const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
   },
   'under-proc': {
     found: 'This row\'s workdir is under /proc, so a running process may still use it.',
-    remedy: () => 'ccrc never stops that process. Stop and start the session from a plain path. ' + RECHECK_TAIL,
+    remedy: () => 'ccrc never stops that process. Stop and start the session from a plain path, or purge its row. ' + RECHECK_TAIL,
   },
   'workdir-unreadable': {
     found: 'This row\'s workdir record in the registry cannot be read (unreadable, or a link).',
@@ -136,7 +141,7 @@ const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
   },
   'entry-pending': {
     found: 'This row\'s session began a spawn that never recorded where its pane entered.',
-    remedy: () => 'Stop and start that session. ' + RECHECK_TAIL,
+    remedy: () => 'Stop and start that session, or purge its row once its session has ended. ' + RECHECK_TAIL,
   },
   'entry-unmeasured': {
     found: 'The record of where this row\'s session entered is not a regular file or cannot be read.',
@@ -193,17 +198,18 @@ export function cleanupHeldBy(
   });
 }
 
-/** The three lanes' latest reads, keyed by session id (or temp root). The expiry lane's entries carry their report too:
- *  an item whose report stands is never folded (review 1580 F5). */
+/** The three lanes' latest reads, keyed by session id (or temp root). The expiry lane's entries carry their report too,
+ *  REQUIRED, so a lane handed over without it does not type-check: an item whose report stands is never folded
+ *  (reviews 1580 F5 and 1585 F5). */
 export interface HeldByLanes {
   readonly reclaim: ReadonlyMap<string, { readonly heldBy?: HeldByRead }>;
-  readonly expire: ReadonlyMap<string, { readonly heldBy?: HeldByRead; readonly report?: ExpiryReport | null }>;
+  readonly expire: ReadonlyMap<string, { readonly heldBy?: HeldByRead; readonly report: ExpiryReport | null }>;
   readonly collect: ReadonlyMap<string, { readonly heldBy?: HeldByRead }>;
 }
 
 /** Adds `cleanupHeldBy` (omitted while no row holds) and folds the items it replaces: a reclaim `failing` or `stuck`
- *  item with token `probe-unmeasured`, and an expiry `failing` item whose lane report does not stand (a standing `stuck`
- *  or persistent-tier report is the record of a part-cleaned row, so it stays), whose child is held only by listed rows.
+ *  item with token `probe-unmeasured`, and an expiry `failing` item whose lane report does not stand (a final, `stuck`
+ *  or persistent-tier report is the record of a row that may be part-cleaned, so it stays), whose child is held only by listed rows.
  *  Every other item stays, in order. */
 export function withCleanupHeldBy(
   status: CoordStatus, lanes: HeldByLanes, fleet: readonly Pick<FleetSession, 'id' | 'workspace'>[] | null,
@@ -222,7 +228,7 @@ export function withCleanupHeldBy(
   const keepExpiry = (a: ExpiryAttention): boolean => {
     if (a.kind !== 'failing') return true;
     const entry = lanes.expire.get(a.sessionId);
-    return expiryReportStands(entry?.report ?? null) || !heldOnlyByListed(entry?.heldBy);
+    return (entry !== undefined && expiryReportStands(entry.report)) || !heldOnlyByListed(entry?.heldBy);
   };
   return {
     ...status,

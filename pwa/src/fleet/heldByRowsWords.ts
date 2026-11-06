@@ -34,13 +34,16 @@ export function heldByRowControl(item: CleanupHeldByItem): CleanupHeldByAct {
   return item.act === 'forget' && item.word === 'gone-unrecorded' ? 'forget' : 'recheck';
 }
 
-/** The real pace (review 1580 F1): ccrc asks a held child again only once that child's own backoff has run, which is
- *  minutes for a new hold and up to four hours on the persistent tier. Nothing here resets it or asks the server. */
-const HELD_PACE = 'within minutes for a new hold, and up to four hours for children that have been failing a long time';
+/** The pace (reviews 1580 F1 and 1585 F1): ccrc asks a held item again only once its own backoff has run, one ask a
+ *  minute fleet-wide. Nothing here resets it or asks the server. The server's sentences carry the same two phrases
+ *  (`server/src/cleanupHeldBy.ts`); a parity test holds them equal. */
+const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+/** Said wherever a re-read is promised: the paused lanes read nothing. */
+const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
 
 export const CLEANUP_HELD_BY_CONTROL: Record<CleanupHeldByAct, {
   button: string; confirmLabel: string;
-  /** The button's accessible name: its words with the row it acts on. */
+  /** The button's accessible name: its visible words as one unbroken run, then the row it acts on (D-7897). */
   ariaLabel: (rowId: string) => string;
   title: (rowId: string) => string;
   consequence: (item: CleanupHeldByItem) => string;
@@ -48,26 +51,26 @@ export const CLEANUP_HELD_BY_CONTROL: Record<CleanupHeldByAct, {
   forget: {
     button: 'Forget row…',
     confirmLabel: 'Forget row',
-    ariaLabel: (rowId) => `Forget ${rowId}…`,
+    ariaLabel: (rowId) => `Forget row ${rowId}…`,
     title: (rowId) => `Forget ${rowId}?`,
-    consequence: (item) => `Only the registry entry of ${item.rowId} is removed. Its transcript and any pasted images stay on disk and nothing in git is touched. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks the children this row holds: ${HELD_PACE}.`,
+    consequence: (item) => `Only the registry entry of ${item.rowId} is removed. Its transcript and any pasted images stay on disk and nothing in git is touched. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks what this row holds: ${HELD_PACE}. ${HELD_PAUSED}`,
   },
   recheck: {
     button: 'Check again…',
     confirmLabel: 'Check again',
-    ariaLabel: (rowId) => `Check ${rowId} again…`,
+    ariaLabel: (rowId) => `Check again — ${rowId}…`,
     title: (rowId) => `Check ${rowId} again?`,
-    consequence: (item) => `Nothing is sent and nothing changes for ${item.rowId}. This re-reads the latest status; ccrc reads this row again when it next checks the children it holds: ${HELD_PACE}.`,
+    consequence: (item) => `Nothing is sent and nothing changes for ${item.rowId}. This re-reads the latest status; ccrc reads this row again when it next checks what it holds: ${HELD_PACE}. ${HELD_PAUSED}`,
   },
 };
 
 export const CLEANUP_HELD_BY_RECHECKED =
-  `Checked again against the latest status; nothing was sent. ccrc reads this row again when it next checks the children it holds: ${HELD_PACE}.`;
+  `Checked again against the latest status; nothing was sent. ccrc reads this row again when it next checks what it holds: ${HELD_PACE}. ${HELD_PAUSED}`;
 
 /** The toast after a forget the server accepted: the row is gone from the registry, and its line stays until the
  *  children it held are asked again. */
 export const heldByRowForgot = (rowId: string): string =>
-  `Forgot ${rowId}. The line clears as each child it held is checked again, ${HELD_PACE}.`;
+  `Forgot ${rowId}. The line clears as each item it held is checked again, ${HELD_PACE}. ${HELD_PAUSED}`;
 
 /** What a line says, for telling a changed line from the same one in a new frame. */
 export const heldByRowLine = (item: CleanupHeldByItem): string =>
