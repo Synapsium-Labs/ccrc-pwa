@@ -206,8 +206,10 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
       {props.notCurrent !== undefined && <NotCurrentLine words={props.notCurrent} />}
+      {/* A saved source never says "Nothing needs you." (review 1561 F4): an empty list from the device's copy, or a
+          list drawn with the device's rows, is not a fact, so it says it is waiting, under the not-current line. */}
       {empty
-        ? <p className="wl-note">{EMPTY_WORD}</p>
+        ? <p className="wl-note">{props.notCurrent === undefined ? EMPTY_WORD : NO_FRAME_WORD}</p>
         : (
           <>
             {words.length > 0 && (

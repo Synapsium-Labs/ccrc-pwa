@@ -12,10 +12,9 @@ import { createFleetStore } from '../src/stores/fleet';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { placeBadge, useNavBadges } from '../src/fleet/navBadges';
 import { ItemRoute, WaitingRoute } from '../src/ledgers/WaitingRoutes';
-import { GONE_WORD, NOT_CURRENT_ACTS_WORD, NO_FRAME_WORD, SAVED_ROWS_WORD } from '../src/ledgers/ledgerWords';
-import { runRow } from './ledgersFixture';
+import { EMPTY_WORD, GONE_WORD, NOT_CURRENT_ACTS_WORD, NO_FRAME_WORD, SAVED_ROWS_WORD } from '../src/ledgers/ledgerWords';
 import { fleetSession } from './fleetFixture';
-import { MIN, itemView, waitingView } from './ledgersFixture';
+import { MIN, itemView, runRow, waitingView } from './ledgersFixture';
 
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
 
@@ -65,6 +64,25 @@ describe('the Waiting on you page on a cold start', () => {
     act(() => store.setState({ waiting: liveList }));
     expect(screen.getByText('Live item')).toBeTruthy();
     expect(statusTexts()).toContain(SAVED_ROWS_WORD);
+  });
+
+  // Review 1561 F4: a saved source never says "Nothing needs you.": the rows or the list are the device's, so an empty
+  // result is not a fact. The waiting line stands under the not-current line instead.
+  it('a heard empty list with saved rows that ask nothing says it is waiting, never "Nothing needs you."', () => {
+    const store = coldStart({ list: null, rows: true }); // the device's one row is not asking a question
+    render(<WaitingRoute store={store} />);
+    act(() => store.setState({ waiting: waitingView() }));
+    expect(statusTexts()).toContain(SAVED_ROWS_WORD);
+    expect(screen.getByText(NO_FRAME_WORD)).toBeTruthy();
+    expect(screen.queryByText(EMPTY_WORD)).toBeNull();
+  });
+
+  it('a saved empty list says it is waiting, never "Nothing needs you."', () => {
+    const store = coldStart({ list: waitingView(), rows: true });
+    render(<WaitingRoute store={store} />);
+    expect(statusTexts()[0]).toMatch(/^Saved on this device/);
+    expect(screen.getByText(NO_FRAME_WORD)).toBeTruthy();
+    expect(screen.queryByText(EMPTY_WORD)).toBeNull();
   });
 
   it('nothing saved keeps "Waiting for the first update from the server…"', () => {

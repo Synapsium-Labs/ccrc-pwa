@@ -32,7 +32,9 @@ export type ItemSource =
  *  EMPTY DEVICE ROWS ARE NO SNAPSHOT (review 1556 R1). The fleet snapshot never saves an empty list (`snapshotRefused`),
  *  so before the fleet frame an empty `deviceRows` means nothing was saved (a first visit, cleared data, a private window,
  *  storage absent or throwing), and rows the page needs from the device are not there: `none`, which draws what the page
- *  drew before a copy existed. Never "Nothing needs you." under an "as last saved" line. */
+ *  drew before a copy existed. A saved source with an empty result never says "Nothing needs you." either: the screen
+ *  draws the waiting line under its not-current line (`WaitingScreen`, review 1561 F4). Rows HEARD empty are live data,
+ *  so with a saved list they draw it, marked (review 1561 F5). */
 export function listSource(
   heard: { readonly view: WaitingView | null; readonly sessions: readonly FleetSession[] | null },
   saved: WaitingSnapshot | null,

@@ -43,6 +43,12 @@ describe('listSource: what the Waiting page draws', () => {
     expect(listSource({ view: heardList, sessions: null }, null, [])).toEqual({ kind: 'none' });
   });
 
+  // Review 1561 F5: the fleet heard, and empty, is live data, not a missing snapshot: the saved list draws, marked.
+  it('the fleet heard empty, the list not heard, a copy saved: the saved list draws', () => {
+    expect(listSource({ view: null, sessions: [] }, saved, []))
+      .toEqual({ kind: 'saved-list', view: savedList, sessions: [], savedAt: saved.savedAt });
+  });
+
   it('nothing anywhere: no list heard and none saved', () => {
     expect(listSource({ view: null, sessions: heardRows }, null, deviceRows)).toEqual({ kind: 'none' });
     expect(listSource({ view: null, sessions: null }, null, [])).toEqual({ kind: 'none' });
