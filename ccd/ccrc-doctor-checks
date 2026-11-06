@@ -11638,7 +11638,7 @@ _check_pane-scope-stop() {
 # always did: a server box (no session runs there), Darwin with no readable proc
 # tree, or a box with neither. NOT READ: a lane's settings.json `env` block, which
 # Claude Code applies inside the process, so a lane that sets PATH there reads as lacking.
-DR_SESSION_NOT_THESE="~/.profile, ~/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way"
+DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way"
 
 # The commands a session calls bare. A generated wrapper is not here: ccd launches
 # those by absolute path. Only what this box installed is asked about.
@@ -11727,11 +11727,11 @@ _dr_session_bin_dir() {   # <PATH> -> a directory; rc 1 when it holds none
 # took it. The remedy writes launchers, not links: `ccd`'s body and the shim both sit
 # behind paths they derive, and an exec reaches them exactly as a bare call would.
 _dr_path_sessions() {   # <the directory>
-  local want="$1" i sp c bad lacking=0 dir="" cmds=() miss=() list
-  for c in "${CCRC_SESSION_COMMANDS[@]}"; do [ -x "$want/$c" ] && cmds+=("$c"); done
+  local bin="$1" i sp c bad lacking=0 dir="" cmds=() miss=() list
+  for c in "${CCRC_SESSION_COMMANDS[@]}"; do [ -x "$bin/$c" ] && cmds+=("$c"); done
   for i in "${!DR_SESSION_PATHS[@]}"; do
     sp="${DR_SESSION_PATHS[$i]}"
-    case ":$sp:" in *":$want:"*) continue ;; esac
+    case ":$sp:" in *":$bin:"*) continue ;; esac
     bad=0
     [ "${#cmds[@]}" -gt 0 ] || bad=1
     for c in "${cmds[@]}"; do
@@ -11755,7 +11755,7 @@ _dr_path_sessions() {   # <the directory>
   list="$(_dr_join "${miss[@]}")"; list="${list//; /, }"
   local verb="do not"; [ "${#miss[@]}" -gt 1 ] || verb="does not"
   _dr_warn path "$(_dr_session_who "$lacking") without \$HOME/.local/bin on PATH, and $list $verb resolve there, so a bare call answers 'command not found' — doctor's own \$PATH cannot show this, because ccrc update adds the directory itself ($DR_SESSION_FROM)" \
-    "as root: for c in ${miss[*]}; do printf '#!/bin/sh\nexec \"%s/%s\" \"\$@\"\n' '$want' \"\$c\" > '$dir'/\"\$c\"; chmod 755 '$dir'/\"\$c\"; done — $dir is already on that PATH, so this reaches every session with no restart. $DR_SESSION_NOT_THESE"
+    "as root: for c in ${miss[*]}; do printf '#!/bin/sh\nexec \"%s/%s\" \"\$@\"\n' '$bin' \"\$c\" > '$dir'/\"\$c\"; chmod 755 '$dir'/\"\$c\"; done — $dir is already on that PATH, so this reaches every session with no restart. $DR_SESSION_NOT_THESE"
   return 2
 }
 
@@ -11836,20 +11836,20 @@ _dr_pw_launch() {   # <family> <exe> -> rc 0 started, rc 1 failed with DR_PW_WHY
 }
 
 _check_playwright() {
-  local role="" root d name rc started=() failed=() n=0
+  local role="" root build name rc started=() failed=() n=0
   [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   if [ "$role" = server ]; then
     _dr_skip playwright "this box records CCRC_ROLE=server, so no session runs a browser here"; return 3
   fi
   root="$(_dr_pw_root)"
-  for d in "$root"/*/; do
-    [ -d "$d" ] || continue
-    d="${d%/}"; name="${d##*/}"
+  for build in "$root"/*/; do
+    [ -d "$build" ] || continue
+    build="${build%/}"; name="${build##*/}"
     case "$name" in chromium-[0-9]*|chromium_headless_shell-[0-9]*|firefox-[0-9]*|webkit-[0-9]*) ;; *) continue ;; esac
     n=$((n + 1))
-    if [ ! -f "$d/INSTALLATION_COMPLETE" ]; then failed+=("$name: its download never finished"); continue; fi
+    if [ ! -f "$build/INSTALLATION_COMPLETE" ]; then failed+=("$name: its download never finished"); continue; fi
     local exe=""
-    exe="$(_dr_pw_exe "${name%-*}" "$d")" || { failed+=("$name: no launcher in the build"); continue; }
+    exe="$(_dr_pw_exe "${name%-*}" "$build")" || { failed+=("$name: no launcher in the build"); continue; }
     rc=0; _dr_pw_launch "${name%-*}" "$exe" || rc=$?
     case "$rc" in
       0) started+=("$name") ;;
@@ -11860,12 +11860,12 @@ _check_playwright() {
   if [ "$n" -eq 0 ]; then
     _dr_skip playwright "no Playwright browser build is cached at $root, so there is nothing to launch"; return 3
   fi
-  local names; names="$(_dr_join "${started[@]}")"; names="${names//; /, }"
+  local ok_list; ok_list="$(_dr_join "${started[@]}")"; ok_list="${ok_list//; /, }"
   if [ "${#failed[@]}" -eq 0 ]; then
-    _dr_pass playwright "started all $n cached builds offline: $names — a run asks for the revision its own Playwright package pins, and one not listed here is one it will not find"
+    _dr_pass playwright "started all $n cached builds offline: $ok_list — a run asks for the revision its own Playwright package pins, and one not listed here is one it will not find"
     return 0
   fi
-  _dr_warn playwright "${#failed[@]} of $n cached browser builds cannot start: $(_dr_join "${failed[@]}")${names:+; started: $names}" \
+  _dr_warn playwright "${#failed[@]} of $n cached browser builds cannot start: $(_dr_join "${failed[@]}")${ok_list:+; started: $ok_list}" \
     "a run that asks for one of these fails the same way. From the project whose run needs it: npx playwright install --with-deps <browser> fetches the build that project pins and the libraries it wants (root is needed for the libraries); a library the distro has moved past needs a Playwright release built for this distro. Delete a build no run asks for from $root"
   return 2
 }
