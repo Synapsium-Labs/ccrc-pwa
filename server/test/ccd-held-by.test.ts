@@ -201,6 +201,14 @@ describe('ccd names the rows that hold the child, by id and word', () => {
     expect(a.doc['heldByOwn']).toBe(false);
   }, 90_000);
 
+  it('an outranking pass leaves no row named, even in the global', () => {
+    const c = makeChild(h);
+    otherRow(ROW, gonePath());
+    otherRow('demo-twin', c.wt);
+    const out = h.sh(`_ws_reclaim_workdir_shared ${CHILD_ID} "${c.wt}" >/dev/null; printf '[%s][%s][%s]' "$?" "$_WS_HELD_BY" "$_WS_HELD_BY_IDS"`);
+    expect(out).toBe('[0][][]');
+  }, 90_000);
+
   it('a clean child prints heldBy []', () => {
     makeChild(h);
     const a = reclaimAudit();
