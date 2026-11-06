@@ -8701,6 +8701,10 @@ export interface LifecycleMeas {
   /** A child `create` row's start point, its `--base` (D-7827): the full commit id the worktree was checked out at, of the
    *  repository's own object format (D-7982); `base` stays the origin ref. Null: no `--base`, an older ccd, or another act. */
   readonly startpoint: string | null;
+  /** A `collect` row's witness word (cleanup un-wedge, Task R4): `moved-host` when the leaf was collected by path after a
+   *  box move, its witness naming a device this host does not have (`_ws_collect_moved_host`). Null: an ordinary
+   *  collection, an older ccd, or another act. */
+  readonly witness: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8725,6 +8729,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   unremoved: true, childOf: true, wip: true, residueBytes: true, tmpRootKept: true, clipsKept: true, leaf: true,
   childRun: true,
   startpoint: true,
+  witness: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot

@@ -573,6 +573,7 @@ _ws_reclaim_attic_extra	C4
 _ws_reclaim_log_of	C4
 _ws_reclaim_admin_entries	C4
 _ws_reclaim_no_record	C4
+_ws_reclaim_norecord_why	C4
 _ws_reclaim_reflog_ids	C4
 _ws_reclaim_idfile	C4
 _ws_reclaim_gitdir_walk	C4
@@ -679,6 +680,8 @@ _ws_collect_slug_askable	C4
 _ws_collect_registered	C4
 _ws_collect_slots_of	C4
 _ws_collect_root_dev	C4
+_ws_collect_leaf_owned	C4
+_ws_collect_moved_host	C4
 _ws_collect_eval	C4
 _ws_collect_resume_eval	C4
 _ws_collect_aside_judge	C4
