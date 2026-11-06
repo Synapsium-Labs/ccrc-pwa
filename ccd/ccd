@@ -1505,6 +1505,16 @@ SPAWN_RESUME_SETTLE_S=2         # seconds `_spawn_start` waits, on the `resume` 
                                 # NOT an env override — same discipline, and the same reason, as
                                 # SPAWN_GATE_TRIES above: HOME is ccd's only isolation boundary and
                                 # nothing on the wire can set a shell variable.
+# THE SESSION'S PATH (D-8050): the step both launch lines in `_spawn_start` run before their last `cd`.
+# A pane's PATH is the tmux server's, and a supervised session inherits that from the service manager, which
+# holds no `~/.local/bin`, so a bare `ccrc`, `ccd`, `ccrc-api` or `graphify` failed in a session. This is the
+# one place that can give it to them: a generated wrapper that exports PATH fails `_wrap_parse_shape`, and
+# Claude Code writes the process PATH as the last line of its shell snapshot, so `~/.bashrc` never applies.
+# LITERAL `$HOME` AND `$PATH`, expanded by the pane's shell, so it names no machine. LAST ON THE PATH, so a tool the
+# box already resolves keeps answering and the folder only adds names. It is its own statement, not a word on
+# `exec env`: the `case` is what leaves a PATH that already holds the folder alone, and the `cd ... && exec`
+# after it stays one list, so a workdir that cannot be entered still stops the exec.
+SESSION_PANE_PATH='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac'
 TMUX_SERVER_LOCK_WAIT=15        # seconds a spawn waits for the right to CREATE the tmux server.
                                 # Only the boot burst ever contends: 17 supervisors start in the
                                 # same second, all see no server, and without serialisation each
@@ -25125,7 +25135,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # that is going to abort never leaves a scope behind.
   _spawn_workdirid_pending "$id" "$workdir" || :
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; $SESSION_PANE_PATH; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -25187,7 +25197,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       fi
       _spawn_workdirid_pending "$id" "$workdir" || :
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; $SESSION_PANE_PATH; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   _panescope_record "$id"   # D-5237: the pane's scope, once per spawn, never per tick

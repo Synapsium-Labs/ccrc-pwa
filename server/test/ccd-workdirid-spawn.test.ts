@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, ccdSource, sessionPanePath } from './ccdWsHelpers.js';
 import { CCD_FUNCTION_DEF, ccdCallGraph, ccdFunctionDefinitions } from './consolidationCensus.js';
 import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import { PANE_EXEC, paneFragment } from './worktreeIdentityFixture.js';
@@ -171,7 +171,7 @@ describe.skipIf(!LINUX)('every spawn records where its pane entered (path-identi
     expect(out).toBe('[0]');
     expect(newSessions()).toHaveLength(1);
     expect(composed(newSessions()[0]!), 'the command string carries the fragment between the cd and the exec')
-      .toContain(`cd '${at('alias')}' && ${paneFragment(h, ID, at('alias'))}true; cd '${at('alias')}' && exec env `);
+      .toContain(`cd '${at('alias')}' && ${paneFragment(h, ID, at('alias'))}true; ${sessionPanePath(h)}; cd '${at('alias')}' && exec env `);
     expect(fs.readFileSync(at('field-at-pane-1'), 'utf8'), 'the parent wrote pending before the pane ran')
       .toMatch(PENDING(at('alias')));
     expect(field(ID, at('alias'))).toBe(`[rc=0] valid|${ident(at('B'))}|${real(at('B'))}|`);
@@ -253,7 +253,7 @@ describe.skipIf(!LINUX)('every spawn records where its pane entered (path-identi
     expect(spawnPane('new')).toBe('[0]');
     const [cmd] = newSessions().map(composed);
     expect(cmd, 'the command string carries the fragment')
-      .toContain(`cd '${wd}' && ${paneFragment(h, ID, wd)}true; cd '${wd}' && exec env `);
+      .toContain(`cd '${wd}' && ${paneFragment(h, ID, wd)}true; ${sessionPanePath(h)}; cd '${wd}' && exec env `);
     expect(linesOf('wrapper-ran')).toEqual([real(wd)]);
     expect(field(ID, wd), 'never a pending that a restart cannot clear (R54)').toBe(`[rc=0] valid|${ident(wd)}|${real(wd)}|`);
   }, 60_000);
@@ -349,7 +349,7 @@ describe('R7’s two launch statements, by content (C3, R47)', () => {
 
   it('exactly two command strings carry the fragment between the cd and a second cd, so the writer never gates the exec (R56)', () => {
     const text = body.join('\n');
-    expect(text.split(`cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env \${genenv}COLORTERM=truecolor `)
+    expect(text.split(`cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; $SESSION_PANE_PATH; cd '$workdir' && exec env \${genenv}COLORTERM=truecolor `)
       .length - 1).toBe(2);
     expect(text, 'no command string is left without the fragment').not.toContain(`"cd '$workdir' && exec env`);
   });
