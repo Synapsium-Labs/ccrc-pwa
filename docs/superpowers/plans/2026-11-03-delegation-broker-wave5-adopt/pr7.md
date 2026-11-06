@@ -239,13 +239,22 @@ ids and liveness to the call). `store.ts` is unchanged. The two new coord files 
 
 ## Suites at the tip
 
-Each suite ran alone, through `ccrc test`: the plan's "PR7 at its tip" list and every guard suite `fast-plan.mjs#guardTests`
-derives, 218 files in all, then `growth-check` (armed), `deviation-refs`, the server and pwa typechecks and pwa's
-`older-server-render`. The six corpus suites and W5-D12 ran on the 14-version corpus.
+Fix round 1's tip ran every suite alone, through `ccrc test`. That is 226 files: the plan's "PR7 at its tip" list, the
+coordinator's fix-round list (`lease-routes`, `delegation-lease-acts`, the corpus suites, `refusal-status`, `coord-store`,
+`run-session-census`, `anchors`, `topology-clean`, every `single-definition` file, `typecheck-tests`, `deviation-refs` and
+`dtbd` after a fetch) and the 199 guard suites `fast-plan.mjs#guardTests` derives. Then `growth-check` armed and the pwa
+typecheck. The corpus suites and W5-D12 ran on the 14-version corpus.
 
 - Green: every one, except `retire-executors-pin`.
-- `spawn-group-pin` was red on the first run: the corpus replay's timed hook spawn did not go through `spawnSyncGroup`.
-  The replay now uses it, and the suite is green.
-- `typecheck-tests` was red twice. The first run lacked the agent package's modules in this worktree. The second was
-  killed by the test slice's memory cap with no type error printed. Its third run, alone, is green.
-- `retire-executors-pin` is red, 13 of 206. It reds on the fleet box on a clean `main` too (the brief), so the merge queue judges it.
+- `typecheck-tests` was red on its run: two rows typed a watch as `never`, and the corpus row's parent lacked `ParentFact`'s
+  new `alive`. Fixed in their own commit; green alone, and the two suites green again.
+- `rings/watcher-store-port` (a 20 s `beforeAll` timeout), `delegation-recovery` (two 20 s timeouts, then a descriptor left
+  open by a timed-out row) and `secret-mask` (a 250 ms timing bound read 289 ms) were red under load. Each is green alone:
+  22/22, 465/465 and 96 passed with 1 skipped. Another worktree was running `delegation-recovery` at the same time, and
+  none of the three reaches a module fix round 1 changes.
+- `retire-executors-pin` is red, 9 of 206. It reds on the fleet box on a clean `main` too (the brief), so the merge queue
+  judges it.
+
+The first round's runs (at `d399d063f`) were the same list less the fix-round additions. There `spawn-group-pin` was red
+first, until the corpus replay's hook spawn went through `spawnSyncGroup`. `typecheck-tests` was red twice there, once for
+the agent package's missing modules and once killed by the test slice's memory cap, and green alone on its third run.
