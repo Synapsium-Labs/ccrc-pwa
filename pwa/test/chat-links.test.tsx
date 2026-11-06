@@ -201,6 +201,38 @@ describe('a name inside a link draws that link alone (chat reading Task L, D-806
     }
   });
 
+  // Review 1597 F1, fix round 2 ruling 1: an image written as a link's text draws without its own anchor, and a refused image
+  // source there draws as text, never its own link.
+  it.each([
+    ['[![run 1527](https://example.com/y.png)](https://example.com)', 'img'],
+    ['[![run 1527](/y.png)](https://example.com)', 'text'],
+  ])('%s draws one anchor and one window.open', (md, inner) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { container } = assistant(`See ${md} now.`);
+    const all = anchors(container);
+    expect(all).toHaveLength(1);
+    const a = all[0]!;
+    expect(a.getAttribute('href')).toBe('https://example.com');
+    const img = a.querySelector('img');
+    if (inner === 'img') {
+      expect(img?.getAttribute('src')).toBe('https://example.com/y.png');
+      expect(img?.getAttribute('alt')).toBe('run 1527');
+      expect(img?.className).toBe('msg-img');
+    } else {
+      expect(img).toBeNull();
+      expect(a.textContent).toBe('/y.png');
+    }
+    fireEvent.click(img ?? a);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer');
+  });
+
+  it('the same image outside a link keeps its own tap-to-open anchor', () => {
+    const { container } = assistant('See ![run 1527](https://example.com/y.png) now.');
+    const all = anchors(container);
+    expect(all.map((a) => [a.className, a.getAttribute('href')])).toEqual([['msg-img-link', 'https://example.com/y.png']]);
+  });
+
   it('the same code span outside a link still links', () => {
     const { container } = assistant('See `#651` and [`#651`](https://example.com/x).');
     expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual([

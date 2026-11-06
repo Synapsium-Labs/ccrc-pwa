@@ -74,11 +74,16 @@ const TS = new Date(NOW - 10 * MIN).toISOString();
 const TEXT = 'Waiting on run 1527 and item 340. The plan is docs/superpowers/specs/2026-11-06-x-design.md, merged in #651.';
 /** Held small ids, and names written as a link's text (review 1586 F1 and F5). */
 const HELD = 'Held: run 12 and item 41. See [`run 1526`](/runs) and [`#652`](https://example.com/x).';
+/** An image written as a link's text (review 1597 F1): the link is its one anchor. */
+const SHOT = 'Shot: [![run 1527](https://example.com/y.png)](https://example.com/shot).';
 const EVENTS: object[] = [
   { kind: 'user', uuid: 'u1', ts: TS, text: 'Where are we?' },
   { kind: 'assistant', uuid: 'a1', ts: TS, text: TEXT },
   { kind: 'assistant', uuid: 'a2', ts: TS, text: HELD },
+  { kind: 'assistant', uuid: 'a3', ts: TS, text: SHOT },
 ];
+/** A 1x1 transparent PNG, so the image in `SHOT` loads without the network. */
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -99,6 +104,9 @@ afterAll(async () => {
 /** The session's chat at `width`, its message drawn. */
 async function openChat(width: number): Promise<OpenedApp> {
   const opened = await openApp(browser!, { skin: REFINED, theme: 'light', width }, FIXTURE);
+  await opened.ctx.route('https://example.com/**', (r) => (r.request().url().endsWith('.png')
+    ? r.fulfill({ status: 200, contentType: 'image/png', body: PNG })
+    : r.fulfill({ status: 200, contentType: 'text/html', body: '<p>page</p>' })));
   await opened.ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
     ws.send(JSON.stringify({
       type: 'backlog', uuid: 'u-1', events: EVENTS, offset: 1, file: '/w/t.jsonl', missing: false,
@@ -213,6 +221,31 @@ for (const width of [1280, 390]) {
         await page.waitForFunction(() => location.pathname === '/runs', undefined, { timeout: 20_000 });
         expect(await here(page), 'the link\'s own address, never the name\'s').toBe('/runs');
         expect(popups).toBe(0);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it('an image written as a link\'s text draws inside that one anchor, and one click opens one page', async () => {
+      const { ctx, page, errors } = await openChat(width);
+      try {
+        await page.getByText('Shot:', { exact: false }).first().waitFor({ timeout: 20_000 });
+        const nested = await page.evaluate(() => document.querySelectorAll('.msg-assist a a').length);
+        expect(nested, 'no link inside a link').toBe(0);
+        const shot = page.locator('.msg-assist a[href="https://example.com/shot"]');
+        expect(await shot.count()).toBe(1);
+        const img = shot.locator('img.msg-img');
+        expect(await img.getAttribute('src')).toBe('https://example.com/y.png');
+        expect(await page.locator('.msg-assist a[href="https://example.com/y.png"]').count(), 'the image has no anchor of its own').toBe(0);
+        const popups: string[] = [];
+        page.on('popup', (p) => { popups.push(p.url()); });
+        await img.scrollIntoViewIfNeeded();
+        const [popup] = await Promise.all([page.waitForEvent('popup', { timeout: 20_000 }), img.click()]);
+        await popup.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(300);
+        expect(popups, 'one click opens one page, the link\'s').toEqual(['https://example.com/shot']);
+        expect(await here(page), 'the app stays on the session').toBe(`/s/${SESSION.id}`);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

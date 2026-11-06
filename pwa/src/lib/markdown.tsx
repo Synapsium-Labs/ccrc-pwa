@@ -330,6 +330,8 @@ export function ChatRef({ mark, children }: { mark: Mark; children?: ReactNode }
  *  already broken, so one value for both is the honest shape. The markup is
  *  byte-identical to the two copies it replaced, which the W4 goldens pin. */
 function ImageLink({ href, alt }: { href: string | undefined; alt: string }): ReactNode {
+  // Under a link's anchor the image draws bare, so the link it sits in is the one anchor and one click (review 1597 F1).
+  if (useContext(InsideLinkContext)) return <img src={href} alt={alt} loading="lazy" className="msg-img" />;
   return (
     <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
       <img src={href} alt={alt} loading="lazy" className="msg-img" />
@@ -359,15 +361,17 @@ export const CHAT_COMPONENTS: Components = {
       </ChatLink>
     );
   },
-  img({ src, alt }) {
+  img: function ChatImg({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;
+    const insideLink = useContext(InsideLinkContext);
     if (isRefusedChatImageSrc(href)) {
       // react-markdown's url transform empties a source with an unsafe scheme (`data:`, `javascript:`, ...) before
       // chat sees it, and `![x]()` has none: such an image shows its alt text as plain text, or nothing, never an
       // empty link and never the source as written (review 408, F6). A blank destination (`![x](< >)`) never
       // arrives blank: the parse percent-encodes it (`%20`), a path-relative URL that renders as the ordinary link.
       if (!href) return alt ? <>{alt}</> : null;
-      return <ChatLink target={{ href, external: true }}>{href}</ChatLink>;
+      // Under a link's anchor the source draws as text: never a link inside a link (review 1597 F1).
+      return insideLink ? <>{href}</> : <ChatLink target={{ href, external: true }}>{href}</ChatLink>;
     }
     return <ImageLink href={href} alt={alt ?? ''} />;
   },
