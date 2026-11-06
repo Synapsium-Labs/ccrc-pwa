@@ -23,6 +23,9 @@ import {
   type DelegationLeaseRow,
 } from '../src/coord/delegation-model.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
+import { conflictingTreeKeys, delegationTreeTarget, disownedTreeKey, disownedTreeKeys, resolvedAttemptCovered } from '../src/coord/delegation-conflicts.js';
+import { decideOperatorRetain, decideResolve, decideRetain, parseLeaseTarget } from '../src/coord/delegation-lease-acts.js';
+import { delegationSha256Hex, emptyDelegationCheckpoint, type DelegationLeaseCarrierRow } from '../src/coord/delegation-model.js';
 import { DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_CREATOR_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS } from '../../shared/api.js';
 
 const T0 = Date.parse('2026-10-20T00:00:00.000Z');
@@ -76,11 +79,15 @@ function run(id: number, sessionId: string, claimedBy: string | null, openedMin:
 }
 function input(over: {
   activities?: DelegationActivityRow[]; leases?: DelegationLeaseRow[]; attempts?: DelegationAttemptRow[];
+  carriers?: DelegationLeaseCarrierRow[];
   census?: DelegationProjectionInput['census']; absences?: { project: string; adminRecord: string }[];
   sessions?: DelegationProjectionSession[]; runs?: DelegationProjectionRun[];
 }): DelegationProjectionInput {
   return {
-    checkpoint: { activities: over.activities ?? [], leases: over.leases ?? [], attempts: over.attempts ?? [] },
+    checkpoint: {
+      activities: over.activities ?? [], leases: over.leases ?? [], attempts: over.attempts ?? [],
+      ...(over.carriers === undefined ? {} : { leaseCarriers: over.carriers }),
+    },
     census: over.census ?? census(), absences: over.absences ?? [], sessions: over.sessions ?? [alive('p')], runs: over.runs ?? [],
   };
 }
@@ -439,5 +446,82 @@ describe('projectDelegation: order, instant and words', () => {
       census: census({ a: [], 'a-b': [] }), absences: [{ project: 'a-b', adminRecord: 'c' }],
     }));
     expect(out.leases.map((l) => l.workspace)).toEqual(['unmeasured']);
+  });
+});
+
+// ── Delegation wave 5 PR8: the conflict derivations (`delegation-conflicts.ts`) and what the projection reads of them ──────────
+
+const carrier = (leaseId: string, over: Partial<DelegationLeaseCarrierRow> = {}): DelegationLeaseCarrierRow => ({
+  leaseId, transferringSince: null, transferRun: null, promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: null, ...over,
+});
+const conflict = (over: Partial<DelegationAttemptRow> = {}) =>
+  attempt({ attemptId: 'x9', adminRecord: 't1', verdict: 'conflicting', detail: 'rungs-disagree', attemptedAt: at(25), ...over });
+const markOf = (a: DelegationAttemptRow) => ({ attemptedAt: a.attemptedAt, attemptId: a.attemptId });
+
+describe('delegation-conflicts: the one derivation of conflict, resolution, disowning and the tree target', () => {
+  it('W5-R5c: the tree target is the SHA-256 hex of delegationTreeKey; it round-trips through parseLeaseTarget to the checkpoint\'s lease', () => {
+    const t = delegationTreeTarget('demo', 'agent-a');
+    expect(t).toMatch(/^[0-9a-f]{64}$/);
+    expect(t).toBe(delegationSha256Hex(delegationTreeKey('demo', 'agent-a')));
+    const target = parseLeaseTarget(`tree-${t}`);
+    expect(target).toEqual({ kind: 'tree', treeKey: t });
+    const l = lease({ leaseId: 'l1', adminRecord: 'agent-a', project: 'demo', sourceKind: 'raw' });
+    const cp = { ...emptyDelegationCheckpoint(), leases: [l] };
+    const resolve = (tgt: NonNullable<ReturnType<typeof parseLeaseTarget>>) => decideResolve({ target: tgt, action: 'foreign', parent: null,
+      checkpoint: cp, conflicting: new Set(), boxHolds: true, carrierRequired: false, liveParent: () => null });
+    expect(resolve(target!)).toMatchObject({ ok: true, act: 'release', leaseId: 'l1' });
+    // `tree-` followed by delegationTreeKey itself does not parse; another 64-hex spelling resolves to no tree
+    expect(parseLeaseTarget(`tree-${delegationTreeKey('demo', 'agent-a')}`)).toBeNull();
+    expect(resolve({ kind: 'tree', treeKey: delegationSha256Hex('demo/agent-a') })).toMatchObject({ ok: false, refusal: 'tree-unleased' });
+  });
+
+  it('W5-R8e: a covered conflict leaves conflictingTreeKeys, the keeps pass the conflict check, and the projection shows no unowned row', () => {
+    const c = conflict();
+    const raw = lease({ leaseId: 'l1', adminRecord: 't1', sourceKind: 'raw', disposition: 'retained', generation: 2, carrierGenerationSeen: 2 });
+    const k = delegationTreeKey(PROJECT, 't1');
+    expect([...conflictingTreeKeys({ attempts: [c], leases: [raw] })]).toEqual([k]);
+    expect(resolvedAttemptCovered({ leases: [raw] }, c)).toBe(false);
+    const resolved = { attempts: [c], leases: [raw], leaseCarriers: [carrier('l1', { resolvedThrough: markOf(c) })] };
+    expect(resolvedAttemptCovered(resolved, c)).toBe(true);
+    expect([...conflictingTreeKeys(resolved)]).toEqual([]);
+    const keep = { lease: raw, carrier: resolved.leaseCarriers[0], conflicting: conflictingTreeKeys(resolved), boxHolds: true, carrierRequired: true };
+    expect(decideRetain({ ...keep, byId: 'p', byIncarnation: 'inc-p', coordinator: null })).toMatchObject({ ok: true });
+    expect(decideOperatorRetain(keep)).toMatchObject({ ok: true });
+    const before = projectDelegation(input({ leases: [raw], attempts: [c] }));
+    expect(before.unowned.map((u) => u.adminRecord)).toEqual(['t1']);
+    const after = projectDelegation(input({ leases: [raw], attempts: [c], carriers: resolved.leaseCarriers }));
+    expect(after.unowned).toEqual([]);
+    expect(after.leases.map((l) => l.leaseId)).toEqual(['l1']);
+    // a mark below the newest attempt covers nothing; one above it covers it; the order is attemptedAt, then attemptId
+    const older = { ...resolved, leaseCarriers: [carrier('l1', { resolvedThrough: { attemptedAt: at(24), attemptId: 'zz' } })] };
+    expect([...conflictingTreeKeys(older)]).toEqual([k]);
+    const sameInstant = { ...resolved, leaseCarriers: [carrier('l1', { resolvedThrough: { attemptedAt: at(25), attemptId: 'x8' } })] };
+    expect([...conflictingTreeKeys(sameInstant)], 'x8 sorts below x9').toEqual([k]);
+    // a mark on a lease on ANOTHER tree covers nothing here
+    const elsewhere = { attempts: [c], leases: [raw, lease({ leaseId: 'l2', adminRecord: 't2' })], leaseCarriers: [carrier('l2', { resolvedThrough: markOf(c) })] };
+    expect([...conflictingTreeKeys(elsewhere)]).toEqual([k]);
+  });
+
+  it('PR8: an agent lease hidden for a conflict is named by its tree\'s unowned row (leaseId); a raw lease keeps its row and is not named', () => {
+    const c = conflict();
+    const hidden = projectDelegation(input({ leases: [lease({ leaseId: 'l1', adminRecord: 't1' })], attempts: [c] }));
+    expect(hidden.leases).toEqual([]);
+    expect(hidden.unowned.map((u) => [u.adminRecord, u.leaseId])).toEqual([['t1', 'l1']]);
+    const rawKept = projectDelegation(input({ leases: [lease({ leaseId: 'l1', adminRecord: 't1', sourceKind: 'raw' })], attempts: [c] }));
+    expect(rawKept.leases.map((l) => l.leaseId)).toEqual(['l1']);
+    expect(rawKept.unowned.map((u) => [u.adminRecord, 'leaseId' in u])).toEqual([['t1', false]]);
+    const plain = projectDelegation(input({ attempts: [attempt({ attemptId: 'x1', adminRecord: 't2' })] }));
+    expect(plain.unowned.map((u) => 'leaseId' in u), 'an unowned row with no hidden lease carries no leaseId (byte-identical to wave 4)').toEqual([false]);
+  });
+
+  it('W5-R8f: disownedTreeKeys holds a lease released foreign, keyed with its creation base, and not one released native-removed', () => {
+    const foreign = lease({ leaseId: 'l1', adminRecord: 't1', creationBase: 'main', releasedAt: at(30) });
+    const removed = lease({ leaseId: 'l2', adminRecord: 't2', creationBase: 'main', releasedAt: at(30) });
+    const unreleased = lease({ leaseId: 'l3', adminRecord: 't3' });
+    const cp = { leases: [foreign, removed, unreleased], leaseCarriers: [carrier('l1', { releaseReason: 'foreign' }),
+      carrier('l2', { releaseReason: 'native-removed' }), carrier('l3', { releaseReason: 'foreign' })] };
+    expect([...disownedTreeKeys(cp)]).toEqual([disownedTreeKey(PROJECT, 't1', 'main')]);
+    expect(disownedTreeKeys(cp).has(disownedTreeKey(PROJECT, 't1', 'other')), 'another creation base is another tree').toBe(false);
+    expect(disownedTreeKey('a', 'b-c', null)).not.toBe(disownedTreeKey('a-b', 'c', null));
   });
 });

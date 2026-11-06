@@ -6,8 +6,8 @@
 // is a statement for the watcher (Task 13) to record, not an act. Nothing here can adopt, retain, promote, dispatch, audit, clean up,
 // write a carrier, mint a token or delete; the union has no member that could.
 //
-// THIS MODULE IS L1. It imports the pure model and the pure correlation module and nothing else: no filesystem, no store, no
-// randomness. The one hash it takes (an attempt's ID) is the model's own SHA-256 over canonical JSON of the DECISION: parent,
+// THIS MODULE IS L1. It imports the pure model, the pure correlation module and the pure conflict derivations (`delegation-conflicts.ts`,
+// for the trees the operator disowned, wave 5 PR8) and nothing else: no filesystem, no store, no randomness. The one hash it takes (an attempt's ID) is the model's own SHA-256 over canonical JSON of the DECISION: parent,
 // incarnation, tree, path, rung, verdict and reason (`delegationAttemptKeyOf`), never its evidence. So the same decision seen again, with
 // more witnesses, is already recorded. Policy deduplicates by that key, so a row filed under the earlier, evidence-hashed ID still counts
 // (D-6190).
@@ -45,6 +45,7 @@ import {
   type DelegationCorrelationReason,
   type DelegationCorrelationVerdict,
 } from './delegation-correlation.js';
+import { disownedTreeKey, disownedTreeKeys } from './delegation-conflicts.js';
 import {
   DELEGATION_MODEL_REFUSALS,
   DelegationModelError,
@@ -242,6 +243,9 @@ interface Ground {
   sessions: ReadonlySet<string>;
   attemptsByKey: ReadonlyMap<string, DelegationAttemptRow>;
   finalConflicts: ReadonlySet<string>;
+  /** Wave 5 PR8 (D-7822): the trees the operator said are not delegation's (`disownedTreeKeys`, keyed with the creation base). Final for
+   *  the tree: no lease is requested and no attempt recorded for a census record with the same project, admin record and creation base. */
+  disownedTrees: ReadonlySet<string>;
   /** Every unreleased lease: whoever holds a tree holds it, whichever activity it names. */
   openLeases: readonly { activityId: string; parentId: string; parentIncarnation: string; project: string; adminRecord: string; canonicalPath: string }[];
 }
@@ -258,6 +262,7 @@ function groundOf(now: string, recovery: DelegationRecoveryState): Ground {
     sessions: new Set(cp.sessions.map((s) => parentKey(s.sessionId, s.parentIncarnation))),
     attemptsByKey: delegationAttemptsByKey(cp.attempts),
     finalConflicts: new Set(cp.attempts.filter((a) => a.verdict === 'conflicting').map((a) => treeKey(a.project, a.adminRecord))),
+    disownedTrees: disownedTreeKeys(cp),
     openLeases: cp.leases.filter((l) => l.releasedAt === null).map((l) => ({
       activityId: l.activityId, parentId: l.parentId, parentIncarnation: l.parentIncarnation, project: l.project, adminRecord: l.adminRecord, canonicalPath: l.canonicalPath,
     })),
@@ -393,7 +398,9 @@ function planUnowned(ground: Ground, record: DelegationCensusRecord, verdict: Ex
 function planRecord(ground: Ground, claimsAllowed: boolean, record: DelegationCensusRecord, verdict: DelegationCorrelationVerdict): DelegationReportEffect[] {
   // Only a record measured PRESENT is a tree. An unreadable or absent one is no candidate, whatever verdict it was handed.
   if (record.state !== 'present') return [];
-  const finalConflict = ground.finalConflicts.has(treeKey(record.project, record.adminRecord));
+  // A conflict, or the operator's "not delegated", is final for the tree (D-7821, D-7822): nothing links, files or requests on it again.
+  const finalConflict = ground.finalConflicts.has(treeKey(record.project, record.adminRecord))
+    || ground.disownedTrees.has(disownedTreeKey(record.project, record.adminRecord, record.claudeBase));
   switch (verdict.kind) {
     case 'run-child-owned':
       return planRunChildOwned(ground, record, verdict);

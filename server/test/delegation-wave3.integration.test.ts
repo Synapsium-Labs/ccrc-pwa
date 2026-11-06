@@ -1644,7 +1644,9 @@ describe('8. the closed scope census', () => {
   it('pure policy imports no randomness and cannot produce a completed lease row: it only ever REQUESTS a lease identity', async () => {
     const policySrc = code(read('server/src/coord/delegation-policy.ts'));
     const imports = [...policySrc.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-    expect(imports.sort(), 'L1 imports the model and correlation, nothing else').toEqual(['./delegation-correlation.js', './delegation-model.js']);
+    // Wave 5 PR8 adds the pure conflict derivations (`delegation-conflicts.ts`, L1) for the trees the operator disowned (D-7822).
+    expect(imports.sort(), 'L1 imports the model, correlation and the conflict derivations, nothing else').toEqual(
+      ['./delegation-conflicts.js', './delegation-correlation.js', './delegation-model.js']);
     const RANDOM = /\brandom(UUID|Bytes|Int|Fill)\b|getRandomValues|Math\.random|crypto\.subtle|\bwebcrypto\b/;
     for (const f of ['delegation-policy.ts', 'delegation-correlation.ts', 'delegation-ingest.ts', 'delegation-model.ts']) {
       expect(code(read(`server/src/coord/${f}`)), `${f} mints nothing`).not.toMatch(RANDOM);

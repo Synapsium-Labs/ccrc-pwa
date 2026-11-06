@@ -11953,6 +11953,9 @@ export interface DelegationUnownedWire {
   rung: 1 | 2 | 3 | 4 | null;
   workspace: Exclude<DelegationWorkspaceState, 'none' | 'provisioning' | 'absent'>;
   attemptedAt: string;
+  /** Delegation wave 5 PR8: the unreleased lease on this tree that the projection hid for a conflict, so the row offers that lease's
+   *  resolve (`POST /api/leases/:lease/resolve`). Absent when no lease was hidden; an older server never sends it. */
+  leaseId?: string;
 }
 
 /** The `delegation` frame's payload. ABSENCE MEANS UNAVAILABLE, never "no delegated work" (spec §5.8, §5.13).
@@ -12004,6 +12007,23 @@ export type LeaseAuditAnswer =
       aheadOfBase: number | 'unmeasured'; branchAheadOfBase: number | 'unmeasured' | 'no-branch' | 'branch-gone';
       changed: boolean | 'unmeasured'; detail?: string; holders?: readonly number[] | 'unmeasured'; token: string }
   | { ok: false; refusal: LeaseAuditRefusal; detail: string };
+
+/** Delegation broker wave 5, PR8 (Task 5.8.2): the lease doors' refusal words (`POST /api/leases/:lease/retain`, `operator-retain` and
+ *  `resolve`), each with the ONE status it answers. The routes send them through `refuseRoute`, so each word is also a route refusal
+ *  word in `shared/refusal.ts`, spread there from this table: one status per word. `registry-unmeasurable` answers 502, the status that
+ *  word answers on every route (D-5971); `tree-unleased` is a `tree-<key>` with no unreleased lease, which O5-8 (c) does not resolve. */
+export const LEASE_DOOR_REFUSALS = { 'lease-unknown': 404, 'lease-released': 409, 'not-lease-parent': 403,
+  'wrong-disposition': 409, 'not-ready': 503, 'incarnation-changed': 409, 'registry-unmeasurable': 502,
+  'not-live-parent': 409, 'tree-not-unowned': 409, 'bad-request': 400, 'lease-conflicting': 409,
+  'carrier-behind': 409, 'box-unsupported': 503, 'tree-unleased': 409 } as const;
+export type LeaseDoorRefusal = keyof typeof LEASE_DOOR_REFUSALS;
+export function isLeaseDoorRefusal(v: unknown): v is LeaseDoorRefusal {
+  return typeof v === 'string' && Object.hasOwn(LEASE_DOOR_REFUSALS, v);
+}
+/** A lease door's answer. `carrier: 'pending'`: the box's carrier is marked by the lane's next pass, never by the door. */
+export type LeaseDoorAnswer =
+  | { ok: true; lease: string; generation: number; disposition: DelegationCarrierState; expiresAt: string | null; carrier: 'pending' }
+  | { ok: false; error: LeaseDoorRefusal; detail: string };
 
 /** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
  *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */

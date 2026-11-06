@@ -1282,6 +1282,11 @@ export const LEASE_MARK_CAP = 'lease-mark-v1';
  *  D-8037) for every state but `released`. Spelled ONCE in `server/src`; ccd's `echo lease-mark-lock-v1` is the other. READ IT WITH
  *  `capSupported`, which refuses on no evidence: a mark of a state that holds a tree is composed only behind it. */
 export const LEASE_MARK_LOCK_CAP = 'lease-mark-lock-v1';
+/** The `ccd caps` token that says this box's orphan ladder has the lease rung (delegation broker wave 5 PR4,
+ *  `_dl_orphan_rung` in `ccd/lib/delegation-lease.sh`), so a held tree is skipped on the box. Spelled ONCE in `server/src`; ccd's
+ *  `echo orphan-lease-v1` is the other. READ IT WITH `capSupported`, which refuses on no evidence: a server act that moves a lease off
+ *  `ephemeral` (PR8's doors) needs it. */
+export const ORPHAN_LEASE_CAP = 'orphan-lease-v1';
 /** The `ccd caps` token that says this box's ccd has the lease audit (delegation broker wave 5, PR2): `ws-lease-audit
  *  --lease <id> --generation <n> [--holders]`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
  *  `echo lease-audit-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without
