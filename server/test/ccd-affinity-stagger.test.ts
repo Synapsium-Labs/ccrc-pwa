@@ -86,10 +86,20 @@ describe('D-6181 characterization: the undelayed return home', () => {
 
 // ── D-6181: the slots ───────────────────────────────────────────────────────
 
-/** `_affinity_slot_take <target> <now>`'s rc, from a fresh shell each call:
- *  every supervisor is its own process, so nothing may be kept in memory. */
+/** The clock the taker reads UNDER THE LOCK, pinned at its seam. `expr` is bash,
+ *  read at the call: name it `clk`, since the taker's own locals shadow `t`. */
+const CLOCK = (expr: string): string => `_now_s_to() { printf -v "$1" '%s' "${expr}"; };`;
+
+/** `_affinity_slot_take <target>`'s rc with the clock at `now`, from a fresh shell
+ *  each call: every supervisor is its own process, so nothing may be kept in memory. */
 const take = (target: string, now: number): number =>
-  Number(h.sh(`_affinity_slot_take ${target} ${now}; echo $?`));
+  Number(h.sh(`${CLOCK(String(now))} _affinity_slot_take ${target}; echo $?`));
+
+/** The epoch a slot file holds, or null when no grant ever wrote it. */
+const slot = (name: string): string | null => {
+  const f = path.join(reg('.affslot'), name);
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').trim() : null;
+};
 
 describe('D-6181: the per-account slot and the fleet-wide slot', () => {
   it('of four sessions returning to one home on one tick, exactly one dispatches', () => {
@@ -118,9 +128,9 @@ describe('D-6181: the per-account slot and the fleet-wide slot', () => {
   it('releases onto 5 different homes on one tick: dispatches at least AFFINITY_FLEET_SPACING apart', () => {
     // Each home retried every second from the previous grant, at most 60
     // tries, in ONE shell (bounded, so a missing helper is red, not a hang).
-    const out = h.sh(`t=1000000; for home in home-a home-b home-c home-d home-e; do
-        n=0; until _affinity_slot_take "$home" "$t"; do t=$((t + 1)); n=$((n + 1)); (( n > 60 )) && break; done
-        echo "$t"; done`);
+    const out = h.sh(`${CLOCK('$clk')} clk=1000000; for home in home-a home-b home-c home-d home-e; do
+        n=0; until _affinity_slot_take "$home"; do clk=$((clk + 1)); n=$((n + 1)); (( n > 60 )) && break; done
+        echo "$clk"; done`);
     const granted = out.split('\n').map(Number);
     expect(granted).toHaveLength(5);
     for (let i = 1; i < granted.length; i++) expect(granted[i]! - granted[i - 1]!).toBe(30);
@@ -137,12 +147,13 @@ describe('D-6181: the per-account slot and the fleet-wide slot', () => {
   it('two ticks racing for one slot: exactly one wins', () => {
     // The race is forced open: every slot read sleeps after reading, so two
     // takers that do not hold the lock both read the old grant and both win.
-    const out = h.sh(`
+    const out = h.sh(`${CLOCK('$clk')}
       eval "$(declare -f _file_read_to | sed '1s/^_file_read_to/_frt_orig/')"
       _file_read_to() { _frt_orig "$@"; local r=$?; sleep 0.3; return $r; }
       for t in claude:5000 claude-b:6000; do   # apart by more than the fleet spacing
-        ( _affinity_slot_take "\${t%%:*}" "\${t#*:}" && echo "won \${t%%:*}" ) &
-        ( _affinity_slot_take "\${t%%:*}" "\${t#*:}" && echo "won \${t%%:*}" ) &
+        clk="\${t#*:}"
+        ( _affinity_slot_take "\${t%%:*}" && echo "won \${t%%:*}" ) &
+        ( _affinity_slot_take "\${t%%:*}" && echo "won \${t%%:*}" ) &
         wait
       done`);
     expect(out.split('\n').filter((l) => l === 'won claude')).toHaveLength(1);
@@ -168,21 +179,82 @@ describe('D-6181: the per-account slot and the fleet-wide slot', () => {
   it('a lock held past HOME_RETURN_SPACING is broken: the move fails open', () => {
     const dir = reg('.affslot');
     fs.mkdirSync(dir, { recursive: true });
-    const out = h.sh(`
+    const out = h.sh(`${CLOCK('1181')}
       printf '%s\\n' 1000 > "$REG/.affslot/.lock"
       flock "$REG/.affslot/.lock" sleep 4 & sleep 0.3
-      _affinity_slot_take claude 1181; echo "rc=$?"; kill %1 2>/dev/null; wait 2>/dev/null; true`);
+      _affinity_slot_take claude; echo "rc=$?"; kill %1 2>/dev/null; wait 2>/dev/null; true`);
     expect(out).toMatch(/^rc=2$/m);
   });
 
   it('a lock held by a live, recent taker is "held": the slot is lost', () => {
     const dir = reg('.affslot');
     fs.mkdirSync(dir, { recursive: true });
-    const out = h.sh(`
+    const out = h.sh(`${CLOCK('1010')}
       printf '%s\\n' 1000 > "$REG/.affslot/.lock"
       flock "$REG/.affslot/.lock" sleep 4 & sleep 0.3
-      _affinity_slot_take claude 1010; echo "rc=$?"; kill %1 2>/dev/null; wait 2>/dev/null; true`);
+      _affinity_slot_take claude; echo "rc=$?"; kill %1 2>/dev/null; wait 2>/dev/null; true`);
     expect(out).toMatch(/^rc=1$/m);
+  });
+});
+
+describe('D-6181: the slot only ever spaces forward', () => {
+  it('a clock one second behind the stamp on file loses, and the stamp stays', () => {
+    expect(take('claude', 1001)).toBe(0);
+    expect(take('claude', 1000)).toBe(1);
+    expect(slot('claude')).toBe('1001');
+    expect(slot('.fleet')).toBe('1001');
+    // The spacing still runs from the grant, not from the loser's clock.
+    expect(take('claude', 1180)).toBe(1);
+    expect(take('claude', 1181)).toBe(0);
+  });
+
+  it('the fleet slot does the same: home-a at 2001, home-b at 2000 loses and writes nothing', () => {
+    expect(take('home-a', 2001)).toBe(0);
+    expect(take('home-b', 2000)).toBe(1);
+    expect(slot('home-b')).toBeNull();
+    expect(slot('.fleet')).toBe('2001');
+  });
+
+  it('a stamp a whole spacing ahead is no grant of this clock: it grants, and the slot heals', () => {
+    expect(take('claude', 5000)).toBe(0);
+    expect(take('claude', 4821)).toBe(1);   // 179 ahead: inside the spacing, lost
+    expect(take('claude', 4820)).toBe(0);   // 180 ahead: a broken slot must not freeze the return home
+    expect(slot('claude')).toBe('4820');
+    expect(take('claude', 4821)).toBe(1);   // healed: the spacing holds again
+  });
+
+  it('a fleet stamp a whole fleet spacing ahead does the same', () => {
+    expect(take('home-a', 5000)).toBe(0);
+    expect(take('home-b', 4971)).toBe(1);
+    expect(take('home-b', 4970)).toBe(0);
+    expect(slot('.fleet')).toBe('4970');
+  });
+
+  // The tick reads its clock at its top, well before the lock. While one tick
+  // stalls between the two, the clock moves on and the other tick takes the
+  // slot: `_swap_idle_gate`, the last gate before the guards, plays the stall.
+  it.each([
+    { stall: 1, home: 'claude', why: 'one home, a second' },
+    { stall: 200, home: 'claude', why: 'one home, past the spacing' },
+    { stall: 1, home: 'claude-b', why: 'two homes, a second' },
+    { stall: 200, home: 'claude-b', why: 'two homes, past the spacing' },
+  ])('a tick stalled before the lock loses to the grant made meanwhile ($why)', ({ stall, home }) => {
+    seed('s-aaaa'); seed('s-bbbb', home);
+    sessionJson();
+    const t = epoch();
+    fs.writeFileSync(path.join(h.home, 'clock'), `${t}\n`);
+    h.sh(`${STUBS()}
+      _now_s_to() { IFS= read -r "$1" < "$HOME/clock"; }
+      _swap_idle_gate() {
+        [[ "$1" == s-bbbb ]] || return 0
+        echo ${t + stall} > "$HOME/clock"
+        ( _auto_swap_check s-aaaa )
+      }
+      _auto_swap_check s-bbbb`);
+    expect(dispatches()).toEqual(['dispatch s-aaaa -> claude affinity']);
+    expect(swapLog()).toMatch(/stand-down s-bbbb: stagger/);
+    expect(slot('claude')).toBe(String(t + stall));
+    expect(slot('.fleet')).toBe(String(t + stall));
   });
 });
 
