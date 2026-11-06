@@ -85,3 +85,50 @@ Run one at a time through `ccrc test`:
   `serveDist(sharedDist())` in place of the house's `dist = sharedDist(); server = await serveDist(dist);`, which that
   guard reads by text. Fixed, and on re-run: 468 files, 13 826 passed, 3 skipped.
 - `chat-colour.browser.test.ts` and `tool-well-colour.browser.test.ts`: 32 of 32.
+
+## Fix round 1 (review 1584)
+
+Review 1584 read the tip c70242de5 and raised five findings, none blocking. The coordinator ruled on each (mail 16116).
+
+- **F1, departure `c-s3-negation`** (amends spec §3.3's S3; the coordinator records it in the ledger). A status label
+  must not say the opposite of its sentence. `chatMarks.ts` gains `STATUS_NEGATORS` (no, none, not, never, nothing, 0,
+  zero), and S3 withholds the label, keeping the mark, when:
+  - a negator stands before the status word in its clause (before the subject, or between the two). A clause ends at
+    `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the end, or at a line break, so "0 tests failed, 12 tests
+    passed" keeps the second label;
+  - a negator is the word's count behind a colon ("tests passed: 0 of 12", "checks failed: none");
+  - its sentence ends in `?` ("Has #651 merged?"). A sentence ends at `.`, `!` or `?` followed by a space or the end,
+    or at a line break.
+
+  Only S3 changes: a bold status word (S2) and a table cell's first word (S1) are unchanged. Between a subject and its
+  word a negator already gave no label, since S3 allows only a linker there. A negator or `?` in another text node (past
+  a bold or a code span) is not seen. The cases are `pwa/test/chat-marks-negation.test.ts`: the review's five inputs,
+  each negator word, the positives the ruling names ("3 tests failed", "the build failed", "#651 merged"), and
+  boundaries (a comma, a full stop, `10`, a file name's dot). No markdown golden changed: no corpus case holds a status
+  label.
+- **F2.** A checked task item's lead-in keeps no lead colour. The two lead rules end in
+  `:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *)`, the DONE rule's own test. The bold
+  then draws the prose's bold ink (`.msg-assist strong`, `--ink-primary`), as every bold in a done item does today, under
+  the item's line-through; the item's `--ink-tertiary` does not reach a `strong`, which sets its own colour, so the
+  lead-in is not dimmed, only uncoloured. Dimming a done item's bold would change the Docs reader and the recap too,
+  which this task keeps as they are. The two `INHERITED_GROUNDS` entries are re-keyed to the new selectors.
+- **F3.** The pictures are not attached to the public PR. They are held for the operator in this session's clips
+  folder, listed in the wave-done.
+- **F4.** "the rules sit inside @layer components, after the T4a chip rule" loops over all eight rules.
+- **F5.** The scrape blanks statement at-rules (`@layer a, b;`, `@import`) before reading, and reads an attribute name as
+  the engine does: in any case, with spaces inside the bracket and CSS escapes undone. Planted cases pin each spelling.
+
+### Mutants, fix round 1
+
+Every mutant above was re-run on the fix round's tree and went red on its named case again. Mutant 2 now changes the
+info lead-in rule's colour on its new selector; mutant 5 deletes its entry under the new key. The new ones, run the
+same way (saved copy, sha256 checked on restore):
+
+| # | Mutant | File | Red case |
+|---|---|---|---|
+| N1 | the negator half off (`isNegator` always false) | `chatMarks.ts` | `chat-marks-negation` 11 of 23, each "no label" row of the negator half and "the mark stays: a PR is still a PR" |
+| N2 | the question half off (`?` never withholds) | `chatMarks.ts` | `chat-marks-negation` "a sentence ending in "?" gives no label, and keeps its mark", "the question governs its own sentence only" |
+| N3 | the checked-item exclusion dropped from both lead rules | `prose.css` | `chat-colour` "a checked task item's lead-in keeps no lead colour"; browser, the same case, 16 of 16 views |
+| X7 | the `ok` rule moved out of `@layer components` | `prose.css` | `chat-colour` "the rules sit inside @layer components, after the T4a chip rule" |
+| N5a | the reader no longer blanks statement at-rules | `chat-colour.test.ts` | `chat-colour` "after @layer a, b; is an unscoped rule", "after @import is an unscoped rule" |
+| N5b | attribute names compared as written | `chat-colour.test.ts` | `chat-colour` "a space inside the bracket…", "upper case…", "an escaped hyphen is an unscoped rule" |
