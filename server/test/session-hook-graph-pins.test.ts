@@ -153,7 +153,7 @@ const ADVICE = '. Answer codebase questions with `graphify query "<question>"` f
   + 'read `graphify-out/GRAPH_REPORT.md` only for broad architecture. '
   + 'Do not run `graphify update` or any build here — the ccrc sweep owns the write side.';
 const GATE_ARMED = ' Search tools (Grep, Glob, shell grep/rg/find) are gated, '
-  + "and source-file reads are nudged, until this session's first graph query.";
+  + "and source-file reads are nudged, until this session's first answered graph query.";
 const has = (sha: string, fresh: string): string =>
   `graphify: this tree has a knowledge graph — graphify-out/, ${NODES} nodes, built at ${sha.slice(0, 8)} `
   + `(${fresh}), engine ${PIN} (pin ${PIN})${ADVICE}`;
