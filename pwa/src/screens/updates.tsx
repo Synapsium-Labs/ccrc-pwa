@@ -194,9 +194,18 @@ function onChannel(r: ReleaseWire, channel: UpdateChannel | null): boolean {
 const row = (release: ReleaseWire, ranBefore = false, floored: string[] = [], installBlocked = false): WindowRow =>
   ({ release, ranBefore, floored, installBlocked });
 
+/** Console speed S2: the rows the server's window left out of `GET /api/updates` (`releasesTotal` less the rows sent).
+ *  They are all older than what it kept, so they join `olderHidden`. The ONE reader: a non-number, or a total below the
+ *  rows sent, reads as absent (0), which is today's arithmetic. */
+function leftOutByServer(releasesTotal: number | undefined, sent: number): number {
+  return typeof releasesTotal === 'number' && Number.isFinite(releasesTotal) && releasesTotal >= sent ? releasesTotal - sent : 0;
+}
+
 export function releaseWindow(
   releases: readonly ReleaseWire[], nodes: readonly NodeWire[], channel: UpdateChannel | null | undefined,
+  releasesTotal?: number,
 ): ReleaseWindow {
+  const leftOut = leftOutByServer(releasesTotal, releases.length);
   const fleetChannel = isUpdateChannel(channel) ? channel : null;
   const rule: 'stable' | 'dev' = fleetChannel === 'stable' ? 'stable' : 'dev';
   const tagged = sortReleases(releases).filter((r) => isReleaseTag(r.tag));
@@ -218,9 +227,9 @@ export function releaseWindow(
     const shown = tagged.filter((r) => onChannel(r, fleetChannel) && (unmanaged || r.yanked !== true))
       .slice(0, RELEASE_WINDOW_MAX);
     const last = shown[shown.length - 1];
-    const olderHidden = last === undefined
+    const olderHidden = (last === undefined
       ? tagged.length
-      : tagged.filter((r) => compareReleaseTags(r.tag, last.tag) === -1 && !shown.includes(r)).length;
+      : tagged.filter((r) => compareReleaseTags(r.tag, last.tag) === -1 && !shown.includes(r)).length) + leftOut;
     return { ...base, state: unmanaged ? 'unmanaged' : 'unmeasured', newer: shown.map((r) => row(r)), olderHidden };
   }
 
@@ -256,7 +265,7 @@ export function releaseWindow(
     picked.sort((a, b) => compareReleaseTags(b.tag, a.tag));
   }
   const rollback = picked.map((r) => row(r, r === prevRow));
-  const olderHidden = older.length - rollback.length;
+  const olderHidden = older.length - rollback.length + leftOut;
 
   return {
     ...base, state: 'measured', newer, newerHidden: candidates.length - newer.length, running, mixed, rollback, olderHidden,
@@ -628,15 +637,17 @@ export function WhatsNewButton({ onClick, children }: { onClick: () => void; chi
  *  counted. `channel` is the fleet's (the `'*'` intent's); `haltedBy` is the one halt line's id, when the page
  *  draws it; `onWhatsNew` and `whatsNewSince` open the What's-new sheet from the Newer count line. */
 export function ReleaseList({
-  releases, nodes, channel, source, haltedBy = null, onWhatsNew, whatsNewSince = null, onMove, result = null,
+  releases, nodes, channel, source, haltedBy = null, onWhatsNew, whatsNewSince = null, onMove, result = null, releasesTotal,
 }: {
   releases: readonly ReleaseWire[]; nodes: readonly NodeWire[]; channel?: UpdateChannel | null; source?: ReleaseSourceWire;
+  /** `UpdatesView.releasesTotal`: the catalogue's size, of which the server's window sent `releases`. */
+  releasesTotal?: number;
   haltedBy?: string | null; onWhatsNew?: () => void; whatsNewSince?: string | null;
   onMove: (intent: MoveIntent) => void;
   /** The last move's answer and the opener it belongs to (D-5507). */
   result?: MoveResult | null;
 }): ReactNode {
-  const w = releaseWindow(releases, nodes, channel);
+  const w = releaseWindow(releases, nodes, channel, releasesTotal);
   if (w.empty) return null;
   const halted = haltedReason(nodes) !== null;
   const shared = { nodes, haltedBy, source, pending: w.pending, onMove, result };

@@ -23,6 +23,15 @@ export interface FleetNotice {
   message: string;
 }
 
+/** The run archive's pages (console speed S2), held in memory by the fleet store, their one owner. `runs` is every row
+ *  loaded so far, ids ascending; `nextBefore` is the `before` that asks the next older page, `null` when none remain;
+ *  `at` is when the last answer landed (epoch ms, this device's clock). */
+export interface RunPages {
+  runs: RunSummary[];
+  nextBefore: number | null;
+  at: number;
+}
+
 export interface FleetState {
   sessions: FleetSession[];
   conn: 'connecting' | 'open' | 'down';
@@ -236,6 +245,12 @@ export interface FleetState {
    *  validation only (`asFleetMsg`): a member this build cannot name is the reader's to tolerate. */
   waiting: WaitingView | null;
   setWaiting(view: WaitingView): void;
+  /** The run archive's pages as `useColdRuns` last stored them (console speed S2), or `null` before a paged read has
+   *  landed. MEMORY ONLY: never hydrated from or written to the offline snapshot or any storage key, so a reload starts
+   *  from `null`. A second mount of the hook draws these at once and re-reads in the background. A paged hook's
+   *  `useColdRuns` is its one writer. */
+  runPages: RunPages | null;
+  setRunPages(pages: RunPages): void;
   /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
    *  lifted here so the session view can label a repo (R3) without a second
    *  agent round trip per project on every mount. `null` = no read yet on
@@ -554,6 +569,8 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       delegation: null,
       // No list until a frame or a refetch lands, and never hydrated — see the field's docstring.
       waiting: null,
+      // No pages until a paged archive read lands, and never hydrated — see the field's docstring.
+      runPages: null,
       projects: null,
       roster: snapshot?.roster ?? [],
       // Never hydrated: the snapshot holds no lane, by design (G15).
@@ -753,6 +770,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       setWaiting(view) {
         set({ waiting: view });
+      },
+
+      setRunPages(pages) {
+        set({ runPages: pages });
       },
 
       mergeFeed(events, dropped) {

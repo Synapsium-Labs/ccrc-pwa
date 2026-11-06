@@ -13,6 +13,7 @@ import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
+import type { PerfHealth } from './perf.js';
 import type { WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
@@ -3746,6 +3747,12 @@ export interface FleetHealth {
    * Read it through `readArchivedHeld` alone. No PWA surface renders it yet (the PWA epic's, under the UI rule).
    */
   archivedHeld?: ArchivedHeld;
+  /**
+   * The console's own timers (console speed S1): the tick's phases, the link's round trips, the event-loop delay and the
+   * slowest routes. Optional like the blocks above: absent when the server runs no recorder, and a reader treats that as
+   * unmeasured, never as fast.
+   */
+  perf?: PerfHealth;
 }
 
 /**
@@ -4115,6 +4122,8 @@ export interface AccountsResponse {
   roster: RosterWire[];
   lanes?: Record<string, LaneWire>; // keyed by lane id, session verdict only (see `LaneWire`; D-5511, D-5517)
   connect?: AccountsConnect; // session verdict only, as `lanes` (see `AccountsConnect`)
+  /** The age of the watcher's measurement this answer was served from, in ms; absent when it was read fresh. */
+  ageMs?: number;
 }
 
 /** Wire shape of `/ws/fleet`, the single source of truth for both ends — it
@@ -4130,6 +4139,8 @@ export type FleetMsg =
   | { type: 'hello'; proto: number; min: number }
   | { type: 'fleet'; sessions: FleetSession[] }
   | { type: 'notice'; message: string }
+  /** Console speed S2: the socket's heartbeat, every `BEAT_MS` from a timer of its own. ADDITIVE, so no `FLEET_PROTO` bump: an older app drops an unknown frame type. */
+  | { type: 'beat'; at: number }
   /** Build 7. ADDITIVE, so no FLEET_PROTO bump: an already-deployed PWA drops
    *  an unknown frame type silently (`pwa/src/stores/fleet.ts:54-73`), which is
    *  the one-way new-writer/old-reader rule this file states at :560-566. */
@@ -4695,6 +4706,8 @@ export type SessionStreamMsg =
       foreignAccount?: string | null; searchComplete?: boolean; fileMeasured?: boolean }
   | { type: 'events'; uuid: string; events: ChatEvent[]; offset: number }
   | { type: 'status'; status: SessionStatus; statusUpdatedAt: number | null }
+  /** Console speed S2: the socket's heartbeat, every `BEAT_MS` from a timer of its own. ADDITIVE, so no `FLEET_PROTO` bump: an older app drops an unknown frame type. */
+  | { type: 'beat'; at: number }
   | { type: 'dialog'; dialog: Dialog; pairing?: AskPairing }   // a pane menu is awaiting an answer; pairing: D-7031
   | { type: 'dialog_cleared' }
   /** The hook-sourced envelope: `~/.cc-sessions/<id>.hookstate.json`'s `ask`,
@@ -6959,6 +6972,9 @@ export interface RunSummary {
    *  union does not move a cited line below it. */
   lastMoveAt?: number | null;
 }
+
+/** `GET /api/runs`'s paged answer: `nextBefore` asks for the next page of older terminal runs and is absent when none remain. */
+export interface RunsPageAnswer { runs: RunSummary[]; nextBefore?: number }
 
 /** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
  *  run's own events, its refused wave-dones and the WORKER session's lifecycle
@@ -10257,6 +10273,8 @@ export interface ReleaseSourceWire { owner: string; repo: string }
 export interface UpdatesView {
   catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[]; boxToken?: BoxTokenView;
   source?: ReleaseSourceWire;
+  /** How many releases the catalogue holds, which the wire window (`releases`) may send fewer of. */
+  releasesTotal?: number;
 }
 
 /** Every refusal word an update route answers with (§12). */

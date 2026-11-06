@@ -250,8 +250,16 @@ describe('the question id parser (W3 Q3f, D-7030)', () => {
   });
 });
 
+/** Console speed S2: routes that carry a resource id in the QUERY, not in a `:id` path segment, and parse it with the
+ *  canonical parser. `GET /api/runs?closed=1&limit=&before=` pages the run archive, and `before` is a run id (the
+ *  cursor), so it must not be coerced either: ` 1`, `01`, `1e0` and the rest are refused. The path scan cannot see such a
+ *  seam, so it is named here; the positive census expects it and the inverse scan adds it to the `:id` paths. */
+const QUERY_ID_SEAMS: Omit<RouteSource, 'code'>[] = [{ method: 'GET', routePath: '/api/runs' }];
+
+const seamKey = (r: Omit<RouteSource, 'code'>): string => `${r.method} ${r.routePath}`;
+
 describe('canonical coordination id route census', () => {
-  it('keeps all twenty-four textual resource-id seams on a shared parser (twenty-one, plus the question family\'s three)', () => {
+  it('keeps all twenty-five textual resource-id seams on a shared parser (twenty-two, plus the question family\'s three)', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -266,6 +274,8 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/runs/:id/items' },
       // D-6910: the operator's read of a review cap's ask, registered beside the lift.
       { method: 'GET', routePath: '/api/coord/review-cap/:id' },
+      // Console speed S2: the archive's cursor `before` is a run id in the query (`QUERY_ID_SEAMS`).
+      { method: 'GET', routePath: '/api/runs' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
       // D-6799: the run plus its spend.
       { method: 'GET', routePath: '/api/runs/:id' },
@@ -286,7 +296,9 @@ describe('canonical coordination id route census', () => {
     // The inverse scan. Positive census ∩ every `:id` registration must be the
     // whole of the latter — so a route added tomorrow with its own coercion
     // reds HERE, naming itself, rather than silently sitting outside the census.
-    expect(canonicalCoordIdRoutes()).toEqual(coordIdPathRoutes());
+    // `QUERY_ID_SEAMS` joins the `:id` paths: a seam that carries its id in the query is named, never silent.
+    const expected = [...coordIdPathRoutes(), ...QUERY_ID_SEAMS];
+    expect(canonicalCoordIdRoutes().map(seamKey).sort()).toEqual(expected.map(seamKey).sort());
 
     // And the old idiom is gone from the file entirely. `Number(q.limit)` and
     // friends are deliberately untouched — a limit is not a resource id — so

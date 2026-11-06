@@ -18,9 +18,15 @@
 // reap race, and that second listing is its own business. On a listable
 // registry each route calls `readRegistryMeasured` once and `readRegistry`
 // never.
+//
+// Console speed S2: `attributionVerdict` no longer reads the registry. It reads the sender's ONE row through
+// `readSessionRecord`, so for the attribution gate "one read" means one row: a listing of the registry directory and
+// that sender's own field files, never another row's, and no `readRegistryMeasured` call at all. The mail routes
+// above keep the whole-registry read.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { localIO, type FleetIO } from '../src/io.js';
+import path from 'node:path';
+import { localIO, localIOFor, type FleetIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 import { appFor, recorder, seedRow, ID_GATE_TOKEN } from './idGateFixture.js';
 import { absentField, unreadableField } from './ioDoubles.js';
@@ -46,7 +52,7 @@ const BAD = '--actor';
 type Route = 'mail' | 'ack' | 'attribution';
 interface Fixture { seed: readonly string[]; io?: FleetIO; from: string; to?: string; staleUuid?: true }
 
-const unlistableIO: FleetIO = { ...localIO, readdir: async () => null };
+const unlistableIO: FleetIO = { ...localIO, readdir: async () => null, readdirMeasured: async () => ({ ok: false, reason: 'unreadable' }) };
 
 const FIXTURES: Readonly<Record<string, Fixture>> = {
   'sender present': { seed: [SENDER, RCPT], from: SENDER },
@@ -116,16 +122,32 @@ afterEach(async () => {
 const post = (a: FastifyInstance, url: string, payload: Record<string, unknown>) =>
   a.inject({ method: 'POST', url, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN }, payload });
 
+interface Req { op: 'readdir' | 'readFileMeasured' | 'readFile'; path: string }
+
+/** `io` with every listing (plain or measured: both are one listing, logged as `readdir`) and every file read logged in
+ *  issue order. */
+function logged(io: FleetIO, log: Req[]): FleetIO {
+  return {
+    ...io,
+    readdir: async (dir, ...rest) => { log.push({ op: 'readdir', path: dir }); return io.readdir(dir, ...rest); },
+    readdirMeasured: async (dir, ...rest) => { log.push({ op: 'readdir', path: dir }); return io.readdirMeasured(dir, ...rest); },
+    readFileMeasured: async (p, ...rest) => { log.push({ op: 'readFileMeasured', path: p }); return io.readFileMeasured(p, ...rest); },
+    readFile: async (p, ...rest) => { log.push({ op: 'readFile', path: p }); return io.readFile(p, ...rest); },
+  };
+}
+
 /** One request on a fresh fixture HOME: the route's answer to `f`. */
 async function answer(f: Fixture, route: Route) {
   const home = mkTmp('ccrc-mail-one-read-');
   for (const id of f.seed) seedRow(home, id);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
-  const w = await appFor(home, recorder().run, f.io ? { io: f.io } : {});
+  const requests: Req[] = [];
+  const w = await appFor(home, recorder().run, { io: logged(f.io ?? localIOFor(home), requests) });
   app = w.app;
   const uuid = f.staleUuid ? 'u-someone-else' : `u-${f.from}`;
   readRegistrySpy.mockClear();
   readMeasuredSpy.mockClear();
+  requests.length = 0;
   const res = route === 'mail'
     ? await post(w.app, '/api/mail', {
       fromId: f.from, fromUuid: uuid, toId: f.to ?? RCPT,
@@ -134,7 +156,7 @@ async function answer(f: Fixture, route: Route) {
     : route === 'ack'
       ? await post(w.app, '/api/mail/1/ack', { fromId: f.from, fromUuid: uuid })
       : await post(w.app, '/api/claims/1/release', { byId: f.from, byUuid: uuid });
-  return { res, coord: w.coord };
+  return { res, coord: w.coord, requests, registryDir: path.join(home, '.cc-sessions') };
 }
 
 describe('characterization: each mail-ingress ladder answers as it did before the move (D-5863)', () => {
@@ -151,8 +173,8 @@ describe('characterization: each mail-ingress ladder answers as it did before th
   }
 });
 
-describe('one read: on a listable registry each ladder calls readRegistryMeasured once and readRegistry never (D-5863)', () => {
-  for (const route of ['mail', 'ack', 'attribution'] as const) {
+describe('one read: on a listable registry each mail ladder calls readRegistryMeasured once and readRegistry never (D-5863)', () => {
+  for (const route of ['mail', 'ack'] as const) {
     for (const fixture of ['sender present', 'sender absent', 'sender listed, row unreadable']) {
       it(`${route}: ${fixture}`, async () => {
         await answer(FIXTURES[fixture]!, route);
@@ -163,10 +185,42 @@ describe('one read: on a listable registry each ladder calls readRegistryMeasure
   }
 });
 
+describe('one read, one row: the attribution gate lists the registry once and reads only the sender\'s files (console speed S2)', () => {
+  for (const fixture of ['sender present', 'sender absent', 'sender listed, row unreadable']) {
+    it(`attribution: ${fixture}`, async () => {
+      const { requests, registryDir } = await answer(FIXTURES[fixture]!, 'attribution');
+      expect(readRegistrySpy, 'the wrapper is not called').not.toHaveBeenCalled();
+      expect(readMeasuredSpy, 'no whole-registry read').not.toHaveBeenCalled();
+      expect(requests.filter((q) => q.op === 'readdir').map((q) => q.path), 'one listing of the registry').toEqual([registryDir]);
+      const stray = requests.filter((q) => q.op !== 'readdir' && !path.basename(q.path).startsWith(`${SENDER}.`));
+      expect(stray.map((q) => q.path), 'a file of another row was read').toEqual([]);
+    });
+  }
+
+  it('attribution: sender present reads that row\'s files', async () => {
+    const { requests } = await answer(FIXTURES['sender present']!, 'attribution');
+    expect(requests.filter((q) => q.op !== 'readdir').length, 'the sender\'s own reads').toBeGreaterThan(0);
+  });
+
+  // Measured: `readSessionRecord` lists a SECOND time when the row's identity could not be measured, to tell a row
+  // reaped mid-read from one that is merely unreadable. That is the one re-listing the sender's read makes, and it
+  // is still no other row's file.
+  it('attribution: sender listed, identity degraded lists the registry a second time, for the sender\'s row only', async () => {
+    const { requests, registryDir } = await answer(FIXTURES['sender listed, identity degraded']!, 'attribution');
+    expect(readMeasuredSpy, 'no whole-registry read').not.toHaveBeenCalled();
+    expect(requests.filter((q) => q.op === 'readdir').map((q) => q.path)).toEqual([registryDir, registryDir]);
+    const stray = requests.filter((q) => q.op !== 'readdir' && !path.basename(q.path).startsWith(`${SENDER}.`));
+    expect(stray.map((q) => q.path), 'a file of another row was read').toEqual([]);
+  });
+});
+
 // The spy rows above cannot see a raw `io.readdir` put back beside the measured
 // read: that listing never goes through the registry module. So each ladder's
 // calls are pinned too, keyed on the parser (D-6114's scan/symbols.ts), never on
-// source text: one `readRegistryMeasured(`, no `readdir(`, no `readRegistry(`.
+// source text: one `readRegistryMeasured(`, no `readdir(`, no `readRegistry(` in each mail route; and in
+// `attributionVerdict` one `readSessionRecord(`, no `readRegistryMeasured(`, no `readRegistry(`, no plain `readdir(`, and
+// exactly one `readdirMeasured(`, the `bad-id` arm's listing (the only id `readSessionRecord` answers before any listing
+// of its own; the plain `readdir` call sites may only shrink, `fleetio-contract.test.ts`).
 const ROUTES = 'server/src/coord/routes.ts';
 const ATTRIBUTION = 'server/src/coord/attribution.ts';
 type Span = { start: number; end: number };
@@ -194,6 +248,14 @@ const holdsOneRead = (names: string[]): void => {
   expect(names, 'the wrapper is back in this ladder').not.toContain('readRegistry');
 };
 
+const holdsOneRow = (names: string[]): void => {
+  expect(names.filter((n) => n === 'readSessionRecord'), 'one single-row read').toHaveLength(1);
+  expect(names, 'the whole-registry read is back in this ladder').not.toContain('readRegistryMeasured');
+  expect(names, 'the wrapper is back in this ladder').not.toContain('readRegistry');
+  expect(names, 'a plain listing is back in this ladder').not.toContain('readdir');
+  expect(names.filter((n) => n === 'readdirMeasured'), 'a listing beside the row read, other than the bad-id arm\'s').toHaveLength(1);
+};
+
 describe('one read, pinned on the parse: no ladder lists the registry beside its measured read (D-5863)', () => {
   it('CONTROL (fixture): a raw readdir beside the measured read is caught', () => {
     const src = [
@@ -208,9 +270,28 @@ describe('one read, pinned on the parse: no ladder lists the registry beside its
     holdsOneRead(calls.ack!);
   });
 
+  it('CONTROL (fixture): the whole-registry read, or a second listing, in the sender ladder is caught', () => {
+    const wholeRegistry = [
+      'async function attributionVerdict() {',
+      '  const reg = await readRegistryMeasured(io, cfg);',
+      '  const names = await io.readdir(cfg.registryDir);',
+      '}',
+    ].join('\n');
+    const f = parseSource(wholeRegistry, 'fixture.ts');
+    const span = f.calls.find((c) => c.name === 'readRegistryMeasured')!;
+    const names = f.calls.filter((c) => c.start >= span.start && c.name !== null).map((c) => c.name!);
+    expect(() => holdsOneRow(names)).toThrow(/single-row/);
+    expect(() => holdsOneRow(['readSessionRecord', 'readdirMeasured', 'readdirMeasured'])).toThrow(/bad-id arm/);
+    expect(() => holdsOneRow(['readSessionRecord', 'readdir', 'readdirMeasured'])).toThrow(/plain listing/);
+    holdsOneRow(['readSessionRecord', 'readdirMeasured']);
+  });
+
   const calls = (): Record<string, string[]> =>
     ladderCalls(parsedFile(ROUTES), { file: parsedFile(ATTRIBUTION), span: symbolOf(ATTRIBUTION, 'attributionVerdict') });
-  for (const route of ['attribution', 'mail', 'ack'] as const) {
+  it('attribution: one readSessionRecord(, no readRegistryMeasured( and no readRegistry(', () => {
+    holdsOneRow(calls().attribution!);
+  });
+  for (const route of ['mail', 'ack'] as const) {
     it(`${route}: one readRegistryMeasured(, no readdir( and no readRegistry(`, () => {
       holdsOneRead(calls()[route]!);
     });

@@ -139,8 +139,8 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/routes.ts | POST /api/mail | readRegistryMeasured | refuses',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistryMeasured | refuses',
   // #1444 (spec §6.2): `attributionVerdict` moved whole out of `registerCoordRoutes` into its own module, the same
-  // reader and the same word; only the file changes.
-  'coord/attribution.ts | attributionVerdict | readRegistryMeasured | refuses',
+  // reader and the same word; only the file changes. Console speed S2 then took it out of this list: it reads the
+  // sender's one row through `readSessionRecord` and has no whole-registry site left to classify.
   'coord/questions.ts | raiseApproval | readRegistry | refuses',
   // W3 Q3f (D-7030; named exception 3): the rule handler's read moved into the claimant's core with its ladder, the
   // same reader and the same word; only the file and the enclosing symbol change.
@@ -204,8 +204,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 22 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(22);
+  it('the classified set is exactly these 21 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(21);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -416,7 +416,9 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(words('server.ts'), 'GET /api/fleet, then the ws cold start, then discard\'s check (accounts A17)')
       .toEqual(['stale', 'stale', 'refuses']);
     // #1444 (spec §6.2): the attribution site moved with `attributionVerdict` into its own module, the same word.
-    expect(words('coord/attribution.ts'), 'attribution (D-5863)').toEqual(['refuses']);
+    // Console speed S2: it now reads the sender's one row through `readSessionRecord`, whose `bad-id` arm is the
+    // refusal, so the file carries no `readRegistryMeasured` site and no `[registry-refused:*]` tag at all.
+    expect(words('coord/attribution.ts'), 'attribution (D-5863; one row since console speed S2)').toEqual([]);
     expect(words('coord/routes.ts'), 'POST /api/mail and its ack (D-5863), then GET /api/peers and the claims conflict')
       .toEqual(['refuses', 'refuses', 'reports', 'reports']);
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
@@ -430,6 +432,6 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(3);
-    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(19);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(18);
   });
 });
