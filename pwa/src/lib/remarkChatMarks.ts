@@ -9,8 +9,9 @@
 //     `MARK_ATTR.id`, a status word in S3's position a `span` carrying `MARK_ATTR.status`;
 //   - S2: a `strong` whose whole content is plain text that is a status word carries `MARK_ATTR.status` (a bold holding
 //     inline code or a link is never marked: fix round 1, review 1574 F-B);
-//   - S1: a body cell (not the header row's) whose first child is text starting with a status word has that word split
-//     off as a status span (fix round 1, review 1574 P4);
+//   - S1: a body cell whose first child is text starting with a status word has that word split off as a status span;
+//   - a table's header row (its first row) carries no status label of any kind, S1, S2 or S3; a name in it is still
+//     marked (fix round 1, review 1574 P4; fix round 2, review 1575 F3);
 //   - a root-level paragraph, or the first paragraph of an item of a root-level list, that opens with a `strong`
 //     `leadKind` reads as a lead-in gives that `strong` `MARK_ATTR.lead`; a root-level list straight after a root-level
 //     paragraph with an action lead-in carries `MARK_ATTR.afterLead`. A lead-in inside a quote or a callout is not
@@ -93,20 +94,28 @@ function splitLeadingStatus(cell: MdNode): void {
   cell.children!.splice(0, 1, ...parts);
 }
 
-/** A text node as `markRuns`' runs; `null` when it holds no name and no status word. */
-function textRuns(node: MdNode): MdNode[] | null {
-  const runs = markRuns(node.value ?? '');
-  if (runs.length === 0 || (runs.length === 1 && runs[0]!.kind === 'text')) return null;
-  return runs.map((r): MdNode => {
-    switch (r.kind) {
-      case 'text':
-        return { type: 'text', value: r.text };
-      case 'mark':
-        return span(r.mark.text, { [MARK_ATTR.kind]: r.mark.kind, [MARK_ATTR.id]: r.mark.id });
-      case 'status':
-        return span(r.text, { [MARK_ATTR.status]: r.tone });
+/** A text node as `markRuns`' runs; `null` when there is nothing to mark. Where `labels` is false (a header cell) a
+ *  status run stays text, joined to the text beside it, and only names are marked. */
+function textRuns(node: MdNode, labels: boolean): MdNode[] | null {
+  const out: MdNode[] = [];
+  let marked = false;
+  const pushText = (value: string): void => {
+    const last = out[out.length - 1];
+    if (last !== undefined && last.data === undefined) last.value = (last.value ?? '') + value;
+    else out.push({ type: 'text', value });
+  };
+  for (const r of markRuns(node.value ?? '')) {
+    if (r.kind === 'text' || (r.kind === 'status' && !labels)) {
+      pushText(r.text);
+    } else if (r.kind === 'mark') {
+      marked = true;
+      out.push(span(r.mark.text, { [MARK_ATTR.kind]: r.mark.kind, [MARK_ATTR.id]: r.mark.id }));
+    } else {
+      marked = true;
+      out.push(span(r.text, { [MARK_ATTR.status]: r.tone }));
     }
-  });
+  }
+  return marked ? out : null;
 }
 
 /** Chat's marks over an mdast tree, in place. */
@@ -114,31 +123,30 @@ export function remarkChatMarks(): (tree: unknown) => void {
   return (tree: unknown): void => {
     const root = tree as MdNode;
     markLeads(root);
-    const stack: MdNode[] = [root];
+    // Each entry carries `labels`: false inside a table's header row (its first row), where no status label of any
+    // kind is written, S1, S2 or S3 (fix round 2, review 1575 F3). This flag is the one place that gates all three.
+    const stack: { node: MdNode; labels: boolean }[] = [{ node: root, labels: true }];
     while (stack.length > 0) {
-      const node = stack.pop()!;
-      if (node.type === 'table') {
-        // S1 reads body rows only: the first row is the header.
-        const rows = node.children ?? [];
-        for (let r = 1; r < rows.length; r += 1) for (const cell of rows[r]!.children ?? []) splitLeadingStatus(cell);
-      }
-      if (node.type === 'strong' && (node.children ?? []).every((c) => c.type === 'text')) {
+      const { node, labels } = stack.pop()!;
+      if (labels && node.type === 'tableCell') splitLeadingStatus(node);
+      if (labels && node.type === 'strong' && (node.children ?? []).every((c) => c.type === 'text')) {
         const tone = statusTone(plainText(node));
         if (tone !== null) setAttr(node, MARK_ATTR.status, tone);
       }
       const children = node.children;
       if (!children) continue;
       const next: MdNode[] = [];
-      for (const child of children) {
+      children.forEach((child, index) => {
         if (child.type === 'text' && child.data?.hName === undefined) {
-          const runs = textRuns(child);
+          const runs = textRuns(child, labels);
           if (runs === null) next.push(child);
           else for (const run of runs) next.push(run);
-          continue;
+          return;
         }
         next.push(child);
-        if (child.children && !SKIP.has(child.type)) stack.push(child);
-      }
+        const header = node.type === 'table' && index === 0;
+        if (child.children && !SKIP.has(child.type)) stack.push({ node: child, labels: labels && !header });
+      });
       node.children = next;
     }
   };

@@ -106,12 +106,12 @@ function wordBefore(text: string, at: number): boolean {
  *  (`abc1234.ts`, `docs/plan.md.bak`). A `.` that ends a sentence does not (fix round 1, ruling 4). */
 const runsOnAfterDot = (text: string, end: number): boolean => text.charAt(end) === '.' && wordAfter(text, end + 1);
 
-/** A number in exponent notation, or `e` and digits: digits, one `e`, digits (`1e10000`, `e1234567`). Hex in that shape
- *  is never taken for a commit (fix round 1, ruling 4: the smallest rule that refuses both). */
-const EXPONENT = /^\d*e\d+$/;
-
 /** What may not stand right before a document path or a commit, besides a word character. */
 const PATHISH = new Set(['.', '/', '-']);
+
+/** What may not stand right before a commit besides those: `#`, so an 8-digit colour (`#ff00aa80`) is plain text
+ *  (fix round 2, review 1575 F2). */
+const NOT_BEFORE_COMMIT = '#';
 
 // The grammar, one sticky pattern per kind, tried in this priority order at each position. A match is a name only
 // when the boundary checks in `nameAt` hold.
@@ -147,10 +147,12 @@ function nameAt(text: string, at: number): { mark: Mark; end: number } | null {
       return { mark: { kind, id: m[1]!, text: m[0] }, end: at + m[0].length };
     }
   }
-  m = pathOk ? stickyAt(COMMIT, text, at) : null;
+  m = pathOk && text.charAt(at - 1) !== NOT_BEFORE_COMMIT ? stickyAt(COMMIT, text, at) : null;
   if (m === null) return null;
   const end = at + m[0].length;
-  const shaShape = /\d/.test(m[0]) && /[a-f]/.test(m[0]) && !EXPONENT.test(m[0]);
+  // No exponent rule (fix round 2, review 1575 F1): digits, one `e` and digits is a real short SHA about 1 time in 43,
+  // so `1e10000` reads as a commit too, and only Task L's repository rule can tell them apart.
+  const shaShape = /\d/.test(m[0]) && /[a-f]/.test(m[0]);
   if (shaShape && !wordAfter(text, end) && text.charAt(end) !== '-' && !runsOnAfterDot(text, end)) {
     return { mark: { kind: 'commit', id: m[0], text: m[0] }, end };
   }

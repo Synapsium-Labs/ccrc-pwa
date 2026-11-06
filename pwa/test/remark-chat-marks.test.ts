@@ -98,10 +98,20 @@ describe('status labels', () => {
     expect(strongs.map((n) => props(n)[MARK_ATTR.status] ?? null)).toEqual(['ok', null, null]);
   });
 
-  // Fix round 1 (review 1574 P4, ruling 5): the header row keeps plain text.
+  // Fix round 1 (review 1574 P4, ruling 5); fix round 2 (review 1575 F3): a header cell carries no status label of any
+  // kind, S1, S2 or S3. A name in it is still marked.
   it('S1 does not label a header cell', () => {
     const tree = mdast('| Done | #651 |\n|---|---|\n| Failed | x |\n');
     expect(withAttr(tree, MARK_ATTR.status).map((n) => n.value)).toEqual(['Failed']);
+  });
+
+  it('S2 and S3 do not label a header cell either, and a name there is still marked', () => {
+    const tree = mdast('| **Done** | #651 merged | CI passed |\n|---|---|---|\n| **Done** | #652 merged | CI passed |\n');
+    const rows = all(tree).filter((n) => n.type === 'tableRow');
+    const statuses = (row: MdNode): unknown[] => withAttr(row, MARK_ATTR.status).map((n) => props(n)[MARK_ATTR.status]);
+    expect(statuses(rows[0]!)).toEqual([]);
+    expect(statuses(rows[1]!)).toEqual(['ok', 'merged', 'ok']);
+    expect(marks(rows[0]!).map((n) => props(n)[MARK_ATTR.id])).toEqual(['651']);
   });
 
   it('S1 splits a table cell\'s first status word', () => {

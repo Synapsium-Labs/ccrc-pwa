@@ -71,13 +71,15 @@ describe('ordinary words the grammar leaves as text (negatives)', () => {
     ['a UUID (550e8400-…)', '550e8400-e29b-41d4-a716-446655440000'],
     ['abc1234.ts', 'edit abc1234.ts'],
     ['docs/plan.md.bak', 'docs/plan.md.bak'],
-    // Ruling 4 (G3): an exponent shape (digits, one `e`, digits) is no commit; a colour is no PR.
-    ['1e10000', 'about 1e10000'],
-    ['10e1000', 'about 10e1000'],
-    ['e1234567', 'code e1234567'],
+    // Ruling 4 (G3): a colour is no PR. Fix round 2 (review 1575 F2): nor is it `#` and a commit.
     ['#a3f (a 3-digit colour)', 'colour #a3f'],
     ['#1a2b3c (a 6-digit colour)', 'colour #1a2b3c'],
     ['color: #ff00aa;', 'color: #ff00aa;'],
+    ['#ff00aa80 (an 8-digit colour)', 'colour #ff00aa80'],
+    ['#abc1234', 'see #abc1234'],
+    // Fix round 2 (review 1575 F4): `_` and a combining mark are word characters, and S3 reads a whole word.
+    ['snake_4c677d328', 'name snake_4c677d328'],
+    ['a combining mark before a hex run', 'cafe\u0301abc1234'],
   ])('%s', (_name, text) => {
     expect(marksOf(text)).toEqual([]);
   });
@@ -89,6 +91,15 @@ describe('ordinary words the grammar leaves as text (negatives)', () => {
     ['#333', 'see #333', { kind: 'pr', id: '333', text: '#333' }],
     ['#000000', 'see #000000', { kind: 'pr', id: '000000', text: '#000000' }],
     ['docs/a.md. (sentence end)', 'read docs/a.md.', { kind: 'doc', id: 'docs/a.md', text: 'docs/a.md' }],
+    // Fix round 2 (review 1575 F2): only `#` is refused before a commit; `@` and `(` still stand before one.
+    ['@4c677d3', 'main@4c677d3', { kind: 'commit', id: '4c677d3', text: '4c677d3' }],
+    ['(4c677d3)', 'fixed (4c677d3)', { kind: 'commit', id: '4c677d3', text: '4c677d3' }],
+    // Fix round 2 (review 1575 F1): there is no exponent rule. A real short SHA of digits, one `e` and digits is a
+    // commit; the price is that `1e10000` reads as one too, and only Task L's repository rule can tell them apart.
+    ['1e23456 (a real SHA shape)', 'at 1e23456', { kind: 'commit', id: '1e23456', text: '1e23456' }],
+    ['0e99365', 'at 0e99365', { kind: 'commit', id: '0e99365', text: '0e99365' }],
+    ['651e805', 'at 651e805', { kind: 'commit', id: '651e805', text: '651e805' }],
+    ['1e10000 (the price)', 'about 1e10000', { kind: 'commit', id: '1e10000', text: '1e10000' }],
   ])('%s is still a name', (_name, text, mark) => {
     expect(marksOf(text)).toEqual([mark]);
   });
@@ -110,6 +121,7 @@ describe('status words in a label position (S3: after a name or a subject)', () 
   });
 
   it.each<[string, string]>([
+    ['CI green_light (a whole word only)', 'CI green_light'],
     ['the value passed', 'the value passed to the parser'],
     ['a red herring', 'a red herring'],
     ['CI is now green (two linkers)', 'CI is now green'],
@@ -176,6 +188,9 @@ describe('leadingStatus (S1) and statusTone', () => {
   });
   it("'Failure' is null: a whole word only", () => {
     expect(leadingStatus('Failure')).toBeNull();
+  });
+  it("'Failed_2' is null: `_` is a word character (review 1575 F4)", () => {
+    expect(leadingStatus('Failed_2')).toBeNull();
   });
   it('every listed word has its tone, case-insensitive, and nothing else has one', () => {
     for (const [tone, words] of Object.entries(STATUS_WORDS)) {
