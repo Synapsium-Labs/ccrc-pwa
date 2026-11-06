@@ -41,7 +41,7 @@ export interface SessionHeaderViewInput {
   now: number;
   /** `(pointer: fine)`: where a physical Escape key exists the Stop cap is absent. */
   finePointer: boolean;
-  /** `(min-width: 900px)` (`useDesk`): where the Goals door stands (`goals.slot`). Absent: below 900. */
+  /** The desk query (`useDesk`, 900 px and wider): where the Goals door stands (`goals.slot`). Absent: below 900. */
   desk?: boolean;
   /** The session's programme, its slug (`sessionProgramme`, read off its fleet row and the runs) and its title
    *  (`programmeTitle`), or `null`/absent: in none. */
