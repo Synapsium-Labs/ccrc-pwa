@@ -13,9 +13,15 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
  * one could join with nobody deciding that it should. Reopen the ruling only on a real fault, or if Python leaves ccd.
  *
  * WHAT IS MEASURED. A site is either a function of ccd that runs a Python interpreter and speaks transcript grammar, or
- * a Python program under `ccd/` that names a transcript. A function counts as a whole, bash lines included, because a
- * reader can take its file in the bash half and hold no grammar in the Python half. The scan is textual: it finds a
- * reader by the words on its lines, so a row is a recorded judgment, and `no-read` is a site that matches the words only.
+ * a Python program under `ccd/` that names a transcript, by a file name or a word only transcripts hold. A function
+ * counts as a whole, bash lines included, because a reader can take its file in the bash half and hold no grammar in the
+ * Python half. The scan is textual: it finds a reader by the words on its lines, so a row is a recorded judgment, and
+ * `no-read` is a site that matches the words only. A program is held to the narrower words because the codex bridge
+ * under `ccd/` speaks `message` and `tool_use` too, so a program that uses only those goes unseen.
+ *
+ * WHAT IS NOT MEASURED. The line between a reader and a writer is checked on function rows only. Both program rows
+ * already write files of their own, so the same check could not tell a new transcript writer among them; their rows say
+ * in words what they do.
  *
  * WHEN THIS GOES RED ON A NEW READER, there are two ways out:
  *   1. Read through `ccd/lib/transcript.jq` instead, which needs no row.
@@ -23,12 +29,13 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
  *      can argue with. A false match takes the same route with `kind: 'no-read'`. One row, no other edit.
  *
  * WHEN THE BANNER READER'S PORT LANDS, nothing here has to change for the port to pass: `leaving` lets the row match
- * nothing and the count falls by one. Delete the row in that pull request all the same, because a row left behind
- * would let Python back into that function unseen.
+ * nothing and the count falls by one, and the cases that pin this run on a fixture, so they do not need the live tree
+ * to still hold the reader. Delete the row in that pull request all the same, because a row left behind would let
+ * Python back into that function unseen.
  */
 
 type Kind =
-  | 'reader'    // parses transcript records and writes none of them
+  | 'reader'    // parses transcript records and rewrites none of them
   | 'writer'    // rewrites a transcript in place
   | 'no-read';  // matches the words and parses no transcript record
 
@@ -48,7 +55,7 @@ const ROWS: readonly Row[] = [
   { name: 'ccd-usage-sweep.py', kind: 'reader', d: 'D-8070',
     why: 'sums usage from assistant rows, a standalone sweep that stays in Python' },
   { name: 'lib/carry-dedupe.py', kind: 'reader', d: 'D-8070',
-    why: 'parses each row of a carried copy for its uuid, to prove the copy adds nothing to the keeper' },
+    why: 'parses each row of a carried copy for its uuid, to prove the copy adds nothing to the keeper; it rewrites no record, but it deletes a carried copy once proved and swaps identical sidecar files for hard links to the keeper\'s' },
   { name: '_sanitize_anthropic', kind: 'writer', d: 'D-8070',
     why: 'fills empty assistant text blocks in a carried transcript; the writer stays whatever happens to the readers' },
   { name: '_carry_py', kind: 'no-read', d: 'D-8070',
@@ -62,8 +69,8 @@ const ROWS: readonly Row[] = [
 const FUNCTION_HEAD = /^([A-Za-z_][\w-]*)\(\) *\{/;
 const PYTHON_RUN = /(?:^|[\s|(&;=])(?:[^\s'"]*\/)?python[\d.]*\s+(?:-|\/|"|'|\$)/m;
 const TRANSCRIPT_GRAMMAR = /\.jsonl|transcript|isApiErrorMessage|<command-|["'](?:assistant|user|message)["']|\b(?:stop_reason|sessionId|parentUuid|tool_use|tool_result)\b/i;
-const PROGRAM_NAMES_TRANSCRIPT = /\.jsonl|transcript/i;
-const WRITES_FILE = /os\.(?:replace|rename)\(|open\([^\n]*,\s*["'][wa]/;
+const PROGRAM_NAMES_TRANSCRIPT = /\.jsonl|transcript|isApiErrorMessage|parentUuid/i;
+const WRITES_FILE = /os\.(?:replace|rename)\(|shutil\.move\(|\.write_(?:text|bytes)\(|open\([^\n]*,\s*["'](?:[wa]|r\+|rb\+)/;
 
 const code = (text: string): string => text.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n');
 
@@ -82,7 +89,10 @@ function functionsOf(text: string): Map<string, string> {
   return out;
 }
 
-interface Site { readonly name: string; readonly writes?: boolean }
+interface Site {
+  readonly name: string;
+  readonly writes?: boolean;  // a function's measure; a program has none, see WHAT IS NOT MEASURED
+}
 
 function measure(ccd: string, programs: ReadonlyMap<string, string>): Site[] {
   const sites: Site[] = [];
@@ -162,6 +172,17 @@ function withFunction(name: string, body: string): string {
 
 const JQ_BODY = '  tail -n 5 -- "$1" | jq -L "$TRANSCRIPT_JQ_LIB" -rRs \'include "transcript"; last_turn_ts\'';
 
+/** A ccd and a table of their own: the leaving row's cases must hold before, during and after the real port. */
+const LEAVING = '_fixture_banner';
+const PY_BODY = '  tail -n 5 -- "$1" | python3 -c \'import json,sys; print(json.loads(sys.stdin.read())["message"])\'';
+const fixtureFn = (name: string, body: string): string => `${name}() {\n${body}\n}\n`;
+const fixtureCcd = (...rest: readonly string[]): string => [fixtureFn('_fixture_stays', PY_BODY), ...rest].join('\n');
+const FIXTURE_ROWS: readonly Row[] = [
+  { name: '_fixture_stays', kind: 'reader', d: 'D-8070', why: 'a fixture' },
+  { name: LEAVING, kind: 'reader', d: 'D-8070', why: 'a fixture', leaving: true },
+];
+const judgeFixture = (ccd: string, rows: readonly Row[] = FIXTURE_ROWS): Verdict => judge(measure(ccd, new Map()), rows, defined);
+
 describe('the Python transcript readers in ccd (D-8070)', () => {
   it('finds exactly the rows, so the tree stands as the ruling recorded it', () => {
     const v = judgeText(tree);
@@ -177,6 +198,8 @@ describe('the Python transcript readers in ccd (D-8070)', () => {
     expect(judgeText(grammarOnly).problems.join('\n')).toMatch(/^_new_reader reads/);
     const py = new Map(programs).set('lib/new-reader.py', 'import glob\nprint(glob.glob("*.jsonl"))\n');
     expect(judgeText(tree, ROWS, py).problems.join('\n')).toMatch(/^lib\/new-reader\.py reads/);
+    const wordsOnly = new Map(programs).set('lib/new-reader.py', 'import json,sys\nprint(json.loads(sys.argv[1])["parentUuid"])\n');
+    expect(judgeText(tree, ROWS, wordsOnly).problems.join('\n')).toMatch(/^lib\/new-reader\.py reads/);
   });
 
   it('reads a function to its next head, past a column-0 brace in a heredoc', () => {
@@ -189,19 +212,19 @@ describe('the Python transcript readers in ccd (D-8070)', () => {
     expect(judgeText(fn).problems).toEqual([]);
   });
 
-  it('drops the banner reader cleanly: its port needs no edit here, and the count falls by one', () => {
-    const before = judgeText(tree);
-    expect(before.readers).toContain('_transcript_limit_banner');
-    const ported = judgeText(withFunction('_transcript_limit_banner', JQ_BODY));
-    expect(ported.problems).toEqual([]);
-    expect(ported.readers).toEqual(before.readers.filter((r) => r !== '_transcript_limit_banner'));
-    const rowDeleted = judgeText(withFunction('_transcript_limit_banner', JQ_BODY), ROWS.filter((r) => r.name !== '_transcript_limit_banner'));
-    expect(rowDeleted).toEqual(ported);
+  it('drops a leaving reader cleanly: its port needs no edit to the rows, and the count falls by one', () => {
+    expect(judgeFixture(fixtureCcd(fixtureFn(LEAVING, PY_BODY)))).toEqual({ readers: ['_fixture_stays', LEAVING], writers: [], problems: [] });
+    const dropped = { readers: ['_fixture_stays'], writers: [], problems: [] };
+    const ported = fixtureCcd(fixtureFn(LEAVING, JQ_BODY));
+    expect(judgeFixture(ported)).toEqual(dropped);
+    expect(judgeFixture(fixtureCcd())).toEqual(dropped);
+    expect(judgeFixture(fixtureCcd(fixtureFn('_fixture_renamed', JQ_BODY)))).toEqual(dropped);
+    expect(judgeFixture(ported, FIXTURE_ROWS.filter((r) => r.name !== LEAVING))).toEqual(dropped);
   });
 
-  it('counts a banner port that moves the Python under another name as a new reader', () => {
-    const moved = `${withFunction('_transcript_limit_banner', JQ_BODY)}\n_limit_rows() {\n  python3 -c 'print(1)' < "$(_transcript_path "$1")"\n}\n`;
-    expect(judgeText(moved).problems.join('\n')).toMatch(/^_limit_rows reads/);
+  it('counts a port that moves the Python under another name as a new reader', () => {
+    const moved = fixtureCcd(fixtureFn(LEAVING, JQ_BODY), fixtureFn('_limit_rows', PY_BODY));
+    expect(judgeFixture(moved).problems.join('\n')).toMatch(/^_limit_rows reads/);
   });
 
   it.each(['_operator_choice_read', '_sanitize_anthropic'])('reds when %s goes, because the ruling keeps it', (name) => {
@@ -213,6 +236,18 @@ describe('the Python transcript readers in ccd (D-8070)', () => {
     expect(judgeText(readerWrites).problems.join('\n')).toContain('_operator_choice_read writes a file now');
     const writerReads = withFunction('_sanitize_anthropic', `  python3 -c 'print(1)' < "$1" # transcript`);
     expect(judgeText(writerReads).problems.join('\n')).toContain('_sanitize_anthropic no longer writes');
+  });
+
+  it.each([
+    ['open(p, "r+")'], ['open(p, "rb+")'], ['Path(p).write_text(s)'], ['Path(p).write_bytes(b)'], ['shutil.move(a, b)'],
+  ])('counts %s as writing a file', (write) => {
+    const readerWrites = withFunction('_operator_choice_read', `  python3 -c '${write}' # transcript`);
+    expect(judgeText(readerWrites).problems.join('\n')).toContain('_operator_choice_read writes a file now');
+  });
+
+  it('holds that line on function rows only: a program row that writes passes, so its why has to say so', () => {
+    const py = new Map(programs).set('lib/carry-dedupe.py', 'import os\nos.replace("a.jsonl.tmp", "a.jsonl")\n');
+    expect(judgeText(tree, ROWS, py).problems).toEqual([]);
   });
 
   describe('the escape', () => {

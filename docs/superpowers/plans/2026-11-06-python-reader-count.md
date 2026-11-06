@@ -12,6 +12,8 @@ writer stays. This is the code half of that ruling: a test that names them, so a
 | `_operator_choice_read` | reader | named by the ruling |
 | `_transcript_limit_banner` | reader, leaving | named by the ruling; the port is still to come |
 | `ccd-usage-sweep.py` | reader | the ruling's argument names it as staying |
-| `lib/carry-dedupe.py` | reader | the ruling did not name it; its `index` parses every row of a carried copy for `uuid` |
+| `lib/carry-dedupe.py` | reader | the ruling did not name it; its `index` parses every row of a carried copy for `uuid`. It rewrites no record, but it deletes a carried copy once proved and swaps identical sidecar files for hard links to the keeper's |
 | `_sanitize_anthropic` | writer | named by the ruling |
 | `_carry_py`, `cmd_carry_dedupe`, `_ws_archive_manifest` | no-read | they match the words and parse no record |
+
+The line between a reader and a writer is checked on function rows only. `ccd-usage-sweep.py` and `lib/carry-dedupe.py` both write files of their own, so the same check could not tell a new transcript writer among them.
