@@ -1,8 +1,13 @@
 // The two ladder arms of the Waiting on you routes (desktop-polish PL5a, D-7712): `/waiting`, the combined list, and
-// `/waiting/<id>`, one item. The screens they render (`WaitingScreen`, `ItemView`) take everything as props. The programme
-// view (`ProgrammeScreen`, PL5b) reads the store and the router itself, as a screen of its own, through the hooks and the
-// back button this file exports (`useHeard`, `useUnavailable`, `Back`). Ring L4: no decision is made here that the words
-// or the server did not make (a tick's order and refusals are the server's, the labels are `ledgerWords.ts`'s).
+// `/waiting/<id>`, one item. The screens they render (`WaitingScreen`, `ItemView`) take everything as props. The programme's
+// Goals page (`ProgrammeScreen`, PL5b; Goals only since PL11, D-7986) reads the store and the router itself, as a screen of its
+// own, through the hooks and the back button this file exports (`useHeard`, `useUnavailable`, `Back`). Ring L4: no decision is
+// made here that the words or the server did not make (a tick's order and refusals are the server's, the labels are
+// `ledgerWords.ts`'s).
+//
+// THERE IS ONE WAITING ON YOU PAGE (PL11, D-7986; spec §2, D29): the navigation, a programme box's chip and the Goals page all
+// open `/waiting`, the last two with its programme filter set (`waitingPath`, the one builder), and an item opened from it
+// steps along that list and goes back to it.
 //
 // THE CLOCK IS READ FRESH ON EVERY RENDER, never ticked (the rollup's rule, `useRollupClock`): an age is the screen's own
 // words, and the one label that depends on time, "ticked; coordinator not responding", is the server's `stale`, which it
@@ -19,16 +24,16 @@ import { programmeTitle } from '../fleet/runWords';
 import { api } from '../lib/api';
 import { LEDGER_REFUSAL_TEXT } from '../lib/refusalWords';
 import { navigate, useLocation } from '../lib/router';
-import { ROUTES, programmeIsOpenable, programmePath, sessionPath } from '../lib/routes';
+import { PROGRAMME_FILTER_QUERY, ROUTES, programmeIsOpenable, programmePath, sessionPath, waitingPath } from '../lib/routes';
 import { FleetBanners } from '../screens/FleetScreen';
 import { useFrameSet } from '../skins/frame';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
 import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
 import {
-  BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, EMPTY_WORD, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
-  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace, knownProgrammes,
-  listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
+  BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
+  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace,
+  goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
 import { ListGroup, WaitingScreen } from './WaitingScreen';
@@ -40,23 +45,28 @@ const WAITING_ROUTE = ROUTES.find((r) => r.id === 'waiting');
 const WAITING_PATH: string = WAITING_ROUTE?.path ?? '/';
 const WAITING_TITLE: string = WAITING_ROUTE?.title ?? '';
 
-/** The item path's query naming the list it was opened from (plan PL9), and the combined list's query naming its side
- *  rail's filter: both ride the URL, so a reload or a shared link keeps them. */
+/** The item path's query naming the list it was opened from (plan PL9): it rides the URL, so a reload or a shared link keeps it.
+ *  The combined list's own query, its side rail's filter, is `PROGRAMME_FILTER_QUERY` (`lib/routes.ts`, beside `waitingPath`). */
 export const FROM_QUERY = 'from';
-export const PROGRAMME_FILTER_QUERY = 'programme';
 
 /** The one builder of an item's path, `/waiting/<id>`, which the `item` row of the route table parses, with `?from=` naming the
  *  list it is opened from (plan PL9). The combined list, unfiltered, is the default and writes no query. */
 export const itemPath = (id: number, list: ItemList = COMBINED_LIST): string =>
-  `${WAITING_PATH}/${id}${list.at === 'waiting' && list.programme === null ? '' : `?${new URLSearchParams({ [FROM_QUERY]: fromWord(list) })}`}`;
+  `${WAITING_PATH}/${id}${list.programme === null ? '' : `?${new URLSearchParams({ [FROM_QUERY]: fromWord(list) })}`}`;
 
-/** The combined list's path with its side rail's filter (`WaitingScreen`'s `programme`: a slug, `NO_PROGRAMME_FILTER`, or `null`
- *  for every programme) as its query. */
-const filterPath = (programme: string | null): string =>
-  programme === null ? WAITING_PATH : `${WAITING_PATH}?${new URLSearchParams({ [PROGRAMME_FILTER_QUERY]: programme })}`;
+/** A list's own path: the combined list, with its side rail's filter as its query (`waitingPath`, the one builder). One arm:
+ *  there is one Waiting on you page (PL11, D-7986). */
+export const listPath = (list: ItemList): string => waitingPath(list.programme);
 
-/** The one builder of a list's own path: the combined list, with its side rail's filter as a query, or a programme's view. */
-export const listPath = (list: ItemList): string => (list.at === 'programme' ? programmePath(list.programme) : filterPath(list.programme));
+/** An item's way back, and where its Dismiss lands, with the name the way back shows: the Goals page it was opened from
+ *  (`goalsBack`, review 1537 F2, keeping review 1402's F3), named by its programme's title; else the list it settled to
+ *  (`listPath`), named Waiting on you. `named` is the list the item's URL names, `settled` the one it settled to. */
+export function backWay(named: ItemList, settled: ItemList, runs: readonly RunSummary[] | null): { to: string; name: string } {
+  const goals = goalsBack(named);
+  return goals !== null && programmeIsOpenable(goals)
+    ? { to: programmePath(goals), name: programmeTitle(goals, runs ?? []) }
+    : { to: listPath(settled), name: WAITING_TITLE };
+}
 
 /** The rows and runs this page has heard, or `null` for each it has not: see the file's header. */
 export function useHeard(store: FleetStore): { sessions: readonly FleetSession[] | null; runs: readonly RunSummary[] | null } {
@@ -93,7 +103,7 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
   const programme = new URLSearchParams(search).get(PROGRAMME_FILTER_QUERY);
   return (
     <WaitingScreen view={view} sessions={sessions} runs={runs} now={Date.now()} unavailable={unavailable} programme={programme}
-                   onFilter={(programme) => navigate(filterPath(programme), { replace: true })}
+                   onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
                    onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
   );
 }
@@ -107,7 +117,7 @@ export function ItemRouteAt({ param, store = useFleetStore }: { param: string | 
   return <ItemRoute id={param !== null && Number.isSafeInteger(id) ? id : null} store={store} />;
 }
 
-/** The programme view's way back to the fleet. On a desk the shell hides it (`.shell-detail .back-btn`): the fleet beside the
+/** The Goals page's way back to the fleet. On a desk the shell hides it (`.shell-detail .back-btn`): the fleet beside the
  *  pane is the way back there. */
 export function Back({ to, label }: { to: string; label: string }): ReactNode {
   return <BackButton className="wl-back" aria-label={label} onClick={() => navigate(to)}>‹</BackButton>;
@@ -127,13 +137,10 @@ function useGroups(store: FleetStore): ProgrammeGroup[] | null {
   return view === null ? null : groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []));
 }
 
-/** The list the item's URL names, settled by the one stale-list rule (`resolveList`) with the programmes this page knows
- *  (`knownProgrammes`, follow-up F3); the named list itself before the first `waiting` frame, when there is nothing to
- *  settle it against. */
-function useSettledList(store: FleetStore, named: ItemList, groups: readonly ProgrammeGroup[] | null): ItemList {
-  const view = store((s) => s.waiting);
-  const { runs } = useHeard(store);
-  return groups === null || view === null ? named : resolveList(named, groups, knownProgrammes(view, runs));
+/** The list the item's URL names, settled by the one stale-list rule (`resolveList`); the named list itself before the first
+ *  `waiting` frame, when there is nothing to settle it against. */
+function useSettledList(named: ItemList, groups: readonly ProgrammeGroup[] | null): ItemList {
+  return groups === null ? named : resolveList(named, groups);
 }
 
 /** One visit to an item: its id and the list it was opened from. */
@@ -178,15 +185,15 @@ function useShownList(visit: string | null): ItemList | null {
   return shown !== null && shown.visit === visit ? shown.list : null;
 }
 
-/** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with that
- *  list's name, and not the shell's back chevron, which a desk hides because the column beside the pane is the way out of a
- *  screen. A phone has no such column, and on a desk the column holds the list's rows but not its page (the filter's summary,
- *  the programme view's Goals), so this is the way to that page. */
-function ListBack({ list, runs, ref }: { list: ItemList; runs: readonly RunSummary[] | null; ref?: Ref<HTMLButtonElement> }): ReactNode {
-  const name = list.at === 'programme' ? programmeTitle(list.programme, runs ?? []) : WAITING_TITLE;
+/** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with the list's
+ *  name, and not the shell's back chevron, which a desk hides because the column beside the pane is the way out of a screen. A
+ *  phone has no such column, and on a desk the column holds the list's rows but not its page (the filter's rail and summary),
+ *  so this is the way to that page, with the filter it was opened under (PL11, D-7986). An item opened from its programme's
+ *  Goals page goes back to that page instead, named by its programme (`backWay`, review 1537 F2). */
+function ListBack({ way, ref }: { way: { to: string; name: string }; ref?: Ref<HTMLButtonElement> }): ReactNode {
   return (
-    <Button ref={ref} variant="ghost" size="fit" className="wi-back" aria-label={backLabel(name)} onClick={() => navigate(listPath(list))}>
-      <span aria-hidden="true">‹</span><span className="wi-back-name">{name}</span>
+    <Button ref={ref} variant="ghost" size="fit" className="wi-back" aria-label={backLabel(way.name)} onClick={() => navigate(way.to)}>
+      <span aria-hidden="true">‹</span><span className="wi-back-name">{way.name}</span>
     </Button>
   );
 }
@@ -204,8 +211,8 @@ type StepWay = 'prev' | 'next';
  *  the step landed: drawn always, empty with no place, and carrying the open item's title beside "N of M" (follow-up A-3), so
  *  a step that lands on the same "N of M" still announces. The shown "N of M" is hidden from assistive technology, which
  *  hears the region instead. */
-function ItemNav({ id, list, place, left, title, runs }: {
-  id: number | null; list: ItemList; place: ItemPlace | null; left: boolean; title: string; runs: readonly RunSummary[] | null;
+function ItemNav({ id, back, place, left, title }: {
+  id: number | null; back: { to: string; name: string }; place: ItemPlace | null; left: boolean; title: string;
 }): ReactNode {
   const pressed = useRef<StepWay | null>(null);
   const prevRef = useRef<HTMLButtonElement | null>(null);
@@ -228,7 +235,7 @@ function ItemNav({ id, list, place, left, title, runs }: {
   };
   return (
     <nav className="wi-nav" aria-label={BETWEEN_ITEMS_LABEL}>
-      <ListBack list={place?.list ?? list} runs={runs} ref={backRef} />
+      <ListBack way={back} ref={backRef} />
       <span className="sr-only" role="status">{positionWords(place, title)}</span>
       {place !== null && (
         <span className="wi-steps-nav">
@@ -252,9 +259,8 @@ function ItemNav({ id, list, place, left, title, runs }: {
  *  open item marked current when the list holds it. It follows the live order. It is the list the strip names (follow-up F3):
  *  the kept place's list as the item route publishes it (`useShownList`), or, before that, the live place's or the settled
  *  list, so it stays when the open item leaves the list (fix round 1, F6) and the strip and the column never disagree. It is
- *  drawn beside an item the list does not hold (recently cleared, gone): the column is the list's. A programme's view with
- *  nothing on the list says so, as the view does. Before the first `waiting` frame there is no list to draw, and the column
- *  shows `fleet`, what it shows elsewhere.
+ *  drawn beside an item the list does not hold (recently cleared, gone): the column is the list's. Before the first `waiting`
+ *  frame there is no list to draw, and the column shows `fleet`, what it shows elsewhere.
  *
  *  THE BANNERS (fix round 1, F1). A skin with no `Banners` part (Instrument) draws the fleet's banner stack inside its fleet
  *  column, which this column replaces, so here it mounts that same stack (`FleetBanners`) above the list: offline,
@@ -266,7 +272,7 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
   const groups = useGroups(store);
   const { runs } = useHeard(store);
   const named = useOpenedFrom();
-  const settled = useSettledList(store, named, groups);
+  const settled = useSettledList(named, groups);
   const set = useFrameSet();
   const id = Number(param);
   const valid = param !== null && Number.isSafeInteger(id);
@@ -280,7 +286,6 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
     <>
       {set !== null && set.Banners === null && <div className="wl-banners"><FleetBanners /></div>}
       <aside className="wl wl-beside" aria-label={BESIDE_LABEL}>
-        {drawnGroups.length === 0 && list.at === 'programme' && <p className="wl-note">{EMPTY_WORD}</p>}
         {drawnGroups.map((g) => (
           <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={id}
                      hue={g.program === null ? null : hues.get(g.program) ?? null}
@@ -300,11 +305,12 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   const groups = useGroups(store);
   const unavailable = useUnavailable(store, view !== null);
   const named = useOpenedFrom();
-  const list = useSettledList(store, named, groups);
+  const list = useSettledList(named, groups);
   const live = id === null || groups === null ? null : itemPlace(id, named, groups);
   const place = useKeptPlace(id, named, live);
   const item = id === null || view === null ? null : view.items.find((i) => i.id === id) ?? view.cleared.find((i) => i.id === id) ?? null;
   const back = place?.list ?? list;
+  const way = backWay(named, back, runs);
   // The list the strip names, for the column beside the item (`useShownList`), once a list has been heard.
   const visit = visitOf(id, named);
   const backWord = groups === null ? null : fromWord(back);
@@ -325,7 +331,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
       <ItemView key={item.id} item={item} now={Date.now()} programmeLive={programmeIsLive(item.program, runs)}
                 programme={{
                   name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,
-                  // The band's doors (desktop-polish PL10, D-7952; D26): the programme view, and its pinned spec in the Docs reader.
+                  // The band's doors (desktop-polish PL10, D-7952; D26): the programme's Goals page, and its pinned spec in the Docs reader.
                   href: programmeIsOpenable(item.program) ? programmePath(item.program) : null,
                   specHref: view === null ? null : programmeSpecHref(item.program, view.goals, runs ?? []),
                   homeProject: homeProjectOf(item.program, runs ?? []),
@@ -337,13 +343,13 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
                 onDismiss={async () => {
                   await api.dismissItem(item.id);
                   await refetchWaiting(store);
-                  navigate(listPath(back));
+                  navigate(way.to);
                 }} />
     );
   }
   return (
     <div className="wl-route">
-      <ItemNav id={id} list={list} place={place} left={place !== null && live === null} title={item?.title ?? ''} runs={runs} />
+      <ItemNav id={id} back={way} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );

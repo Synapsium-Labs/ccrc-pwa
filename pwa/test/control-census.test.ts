@@ -334,6 +334,10 @@ const CONTROLS: Record<string, string> = {
     + 'system\'s own ghost button — `buttonVariants()` carries `min-h-tap` in '
     + 'its base, which this census checks rather than trusts. An anchor, not a '
     + 'button, because it navigates to GitHub; the styling is the button\'s.',
+  'ledgers/ProgrammeScreen.tsx <a> (computed)':
+    'VARIANT buttonVariants. The Goals page\'s "N waiting on you" link to the one Waiting on you list, filtered to the '
+    + 'programme (desktop-polish PL11, D-7986): `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this '
+    + 'census checks. An anchor, not a button, because it navigates; it stands alone, so it is no in-sentence TextLink.',
   'session/MessageBubble.tsx <a> (none)':
     'INLINE. Links inside a sentence — the bare-URL splitter in a user turn. '
     + 'WCAG 2.2 SC 2.5.8 exempts a target that is "in a sentence or block of '

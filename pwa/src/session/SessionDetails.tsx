@@ -15,7 +15,7 @@
 // coordination row, so the header stays short until it is asked.
 import { useCallback, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Door, elapsedShort } from '@ccrc/ui';
+import { Door, Icon, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import { sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
@@ -24,6 +24,7 @@ import { WorkLine } from '../fleet/WorkLine';
 import { cardFacts, contextFact, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
+import { coordinationClauses } from './sessionHeaderView';
 
 /** A plain detail — one fact in words, its tooltip when it has one. */
 function Detail({ children, title }: { children: ReactNode; title?: string }): ReactNode {
@@ -39,19 +40,37 @@ function CoordLink({ glyph, label, to, children }: { glyph: string; label: strin
   );
 }
 
+/** THE GOALS DOOR (desktop-polish PL11, D-7986; spec §2, D30): the programme's own glyph, the one its box's kicker wears, and
+ *  its word, which chat.css shows from 1280; its accessible name and `title` name the programme
+ *  (`sessionHeaderView`'s `goals.label`, review 1537 A10). It opens that programme's Goals page. */
+export function GoalsDoor({ goals }: { goals: { readonly href: string; readonly label: string } }): ReactNode {
+  return (
+    <Door
+      className="chat-coord-link chat-coord-goals" glyph={<Icon name="workflow" />} aria-label={goals.label} title={goals.label}
+      onClick={() => navigate(goals.href)}
+    >
+      <span className="chat-coord-goals-word">Goals</span>
+    </Door>
+  );
+}
+
 /** Who this session works for — whose code, its programme and wave (a link to the run board) and its
- *  coordinator with its state (a link to that session). Under the name, before the meta row. */
-export function SessionCoordination({ facts, coordination }: {
+ *  coordinator with its state (a link to that session). Under the name, before the meta row.
+ *
+ *  GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1, ruled in fix round 1): `goals` is
+ *  the Goals door of the programme this session is in (`sessionHeaderView`'s `goals`), drawn LAST on this line, the line that
+ *  already names the programme, so the door takes no width from the title beside the header's doors, and the clauses before
+ *  it keep their places. On a phone Refined's rail scrolls this line sideways. At a desk, last on a line that wraps, it costs
+ *  the header at most its own row (review 1548, ruled in fix round 2); its word shows from 1280 (chat.css). `goals.slot` says
+ *  where else it stands (`GoalsSlot`). The programme's own glyph, the one its box's kicker wears. `null`/absent: no door. */
+export function SessionCoordination({ facts, coordination, goals = null }: {
   facts: SessionFactSet;
   coordination: Coordination | null;
+  goals?: { readonly href: string; readonly label: string } | null;
 }): ReactNode {
-  const ctx = contextFact(facts);
-  const run = ctx?.key === 'programme' ? (facts.heldRun ?? facts.activeRun) : null;
-  const workingOn = facts.workingOn ?? coordination?.workingOn ?? null;
-  const coordinatorName = facts.coordinatorName ?? coordination?.coordinator ?? null;
+  const { workingOn, run, from } = coordinationClauses(facts, coordination);
   const coordinatorId = coordination?.coordinatorId ?? null;
-  const from = coordinatorName ?? (coordination !== null && coordination.workingOn !== null ? coordination.card : null);
-  if (workingOn === null && run === null && from === null) return null;
+  if (workingOn === null && run === null && from === null && goals === null) return null;
   return (
     <div className="chat-coord" title={coordination === null ? undefined : coordinationLine(coordination).title}>
       {/* Each clause its own box, with no separator glyph between them: a wrapped line can never start
@@ -69,6 +88,7 @@ export function SessionCoordination({ facts, coordination }: {
       ) : (
         <span className="chat-coord-part">{`coordinated from ${from}`}</span>
       ))}
+      {goals !== null && <GoalsDoor goals={goals} />}
     </div>
   );
 }

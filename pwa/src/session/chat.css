@@ -2148,3 +2148,26 @@ button.metachip:active {
   color: var(--ink-secondary);
   background: var(--bg-page);
 }
+
+/* GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1 and review 1548 F1 to F3, ruled in fix
+   rounds 1 and 2): the Goals door at a desk, on the coordination line or after the last chip (`SessionCoordination`, `GoalsSlot`,
+   `HeaderGoalsKey`). Its glyph is the line's own height, so it adds none to the line, and its word shows from 1280; below that
+   the glyph stands alone, with the door's `title` and accessible name, as the header's doors do below 900. Last on a line that
+   wraps, it costs the header at most its own row. Layout and type only: its ink is `.chat-coord-link`'s. */
+.chat-coord-goals svg { width: 1em; height: 1em; }
+/* On a fine pointer it is the line's height, as the line's links are (above). The links' reset reaches only a `.chat-coord`:
+   after the last chip, and last in Refined's desk rail, the door stands in `.chat-meta`, so it carries its own reset. */
+@media (pointer: fine) {
+  .chat-coord-goals { min-height: 0; }
+}
+/* On a touch screen the door takes the tap floor (the operator's ruling of 2026-10-15: a mouse keeps the header its base height,
+   a coarse pointer takes the floor): 44 px tall, as every door there is, and as wide, which the glyph alone is not. In a
+   phone's header that costs no height (Back's row, Refined's sideways rail); at a desk, where the door may be the first tall
+   item of its row, it costs the header at most its own row (review 1548 F2, ruled in fix round 2). */
+@media (pointer: coarse) {
+  .chat-coord-goals { min-width: var(--tap-min); justify-content: center; }
+}
+.chat-coord-goals-word { display: none; }
+@media (min-width: 1280px) {
+  .chat-coord-goals-word { display: inline; }
+}

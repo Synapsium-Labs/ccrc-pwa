@@ -167,12 +167,14 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
       }
     });
 
-    it(`at ${width}: opened from the programme view, the steps stay in that programme and the way back returns to it`, async () => {
-      const { ctx, page, errors } = await open(skin, width, '/programmes/prog-a', ITEMS, false, '.pv .wl-item[data-item="4"]');
+    // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme view drew its own share of the list until
+    // PL11; a programme's list is now the one list filtered to it, and an item opened there steps along it and goes back to it.
+    it(`at ${width}: opened from the list filtered to a programme, the steps stay in that programme and the way back returns to it`, async () => {
+      const { ctx, page, errors } = await open(skin, width, '/waiting?programme=prog-a', ITEMS, false, '.wl-groups .wl-item[data-item="4"]');
       try {
-        await page.click('.pv .wl-item[data-item="4"]');
+        await page.click('.wl-groups .wl-item[data-item="4"]');
         await page.waitForSelector('.wi');
-        expect(await here(page)).toBe('/waiting/4?from=programme:prog-a');
+        expect(await here(page)).toBe('/waiting/4?from=waiting:prog-a');
         expect(await page.textContent('.wi-nav .wi-pos')).toBe('1 of 2');
         expect(await page.isDisabled('.wi-nav [aria-label="Previous item"]'), 'the first item has no previous').toBe(true);
         await page.click('.wi-nav [aria-label="Next item"]');
@@ -180,8 +182,9 @@ describe.each(SKINS)('moving between items in %s', (skin) => {
         expect(await page.isDisabled('.wi-nav [aria-label="Next item"]'), 'the last item has no next').toBe(true);
         expect(await drawn(page, '.wi-nav .wi-back')).toBe(true);
         await page.click('.wi-nav .wi-back');
-        await page.waitForSelector('.pv');
-        expect(await here(page)).toBe('/programmes/prog-a');
+        await page.waitForSelector('.wl-groups');
+        expect(await here(page)).toBe('/waiting?programme=prog-a');
+        expect(await page.locator('.wl-groups .wl-item').count(), 'the filtered list: prog-a\'s two items').toBe(2);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

@@ -247,6 +247,9 @@
 }
 .pv-card .pv-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
 .pv-card .pv-none { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+/* The Goals page's link to the one Waiting on you list, filtered to the programme (PL11, D-7986): a ghost control at its own
+   width, never stretched across the card. */
+.pv-card .pv-waiting { justify-self: start; }
 
 /* A stored secret (the operator's ruling on programme item 9; review 1416 F5): the programme screen's "Stored secrets" rows and
    the item's Stored block. A row's name, saved-when and asking item are separate lines, the name in mono as a slot is named

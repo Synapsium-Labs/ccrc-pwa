@@ -288,14 +288,88 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(screen.getByRole('heading', { name: 'Two' })).toBeTruthy();
   });
 
-  it('previous and next follow the list it was opened from: one programme\'s view, and the way back returns to it', () => {
+  // ONE WAITING ON YOU PAGE (desktop-polish PL11, D-7986; spec §2, D29): the programme view no longer draws a list of its own,
+  // so a link an older page wrote, naming that view, opens on the combined list filtered to the programme.
+  it('an old from=programme link opens the filtered list', () => {
     const nav = openAt(`/waiting/4?from=${encodeURIComponent('programme:prog-a')}`, 4);
     expect(within(nav).getByText('1 of 2')).toBeTruthy();
     fireEvent.click(within(nav).getByRole('button', { name: 'Next item' }));
     expect(location.pathname).toBe('/waiting/1');
-    expect(new URLSearchParams(location.search).get('from')).toBe('programme:prog-a');
-    fireEvent.click(within(nav).getByRole('button', { name: /^Back to / }));
+    expect(new URLSearchParams(location.search).get('from')).toBe('waiting:prog-a');
+    fireEvent.click(within(nav).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting?programme=prog-a');
+  });
+
+  // REVIEW 1537 F2 (keeping review 1402's F3, as ruled in fix round 1): an item opened from its programme's Goals page steps along
+  // that programme's filtered list, and its way back and its Dismiss return to the Goals page, never to a list the operator did
+  // not open. The way back is named by the programme (no runs frame here, so by its slug).
+  it("an item opened from its programme's Goals page steps along that programme's list and goes back to the Goals page", () => {
+    routedAt(`/waiting/4?from=${encodeURIComponent('goals:prog-a')}`);
+    expect(within(strip()).getByText('1 of 2')).toBeTruthy();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Next item' }));
+    expect(location.pathname).toBe('/waiting/1');
+    expect(new URLSearchParams(location.search).get('from')).toBe('goals:prog-a');
+    expect(within(strip()).getByText('2 of 2')).toBeTruthy();
+    expect((within(strip()).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Previous item' }));
+    expect(location.pathname).toBe('/waiting/4');
+    expect(new URLSearchParams(location.search).get('from')).toBe('goals:prog-a');
+    expect(within(strip()).queryByRole('button', { name: 'Back to Waiting on you' })).toBeNull();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to prog-a' }));
     expect(here()).toBe('/programmes/prog-a');
+  });
+
+  it("an item opened from Goals that the list does not hold (a modification's item, cleared) goes back to the Goals page", () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({
+      items: ITEMS.filter((i) => i.program === 'prog-b'), cleared: [itemView({ id: 9, program: 'prog-a', state: 'done', title: 'Nine' })],
+    }) }));
+    history.replaceState(null, '', `/waiting/9?from=${encodeURIComponent('goals:prog-a')}`);
+    render(<ItemRouteAt param="9" store={store} />);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to prog-a' }));
+    expect(here()).toBe('/programmes/prog-a');
+  });
+
+  it("Dismiss on an item opened from Goals returns to the Goals page", async () => {
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], runsFrameSeen: true, runs: [],
+      waiting: waitingView({ items: ITEMS }) }));
+    vi.spyOn(api, 'dismissItem').mockResolvedValue({ ok: true, item: itemView({ id: 4, state: 'dismissed' }) });
+    vi.spyOn(api, 'waiting').mockResolvedValue({ ok: true, waiting: waitingView() });
+    history.replaceState(null, '', `/waiting/4?from=${encodeURIComponent('goals:prog-a')}`);
+    render(<ItemRouteAt param="4" store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() => expect(here()).toBe('/programmes/prog-a'));
+  });
+
+  /** The two arms of the ladder as the app mounts them, following the router: the list at `/waiting`, an item under it. */
+  function Ladder({ store }: { store: ReturnType<typeof mk> }) {
+    const { path } = useLocation();
+    const id = /^\/waiting\/(\d+)$/.exec(path)?.[1] ?? null;
+    if (path === '/waiting') return <WaitingRoute store={store} />;
+    return id === null ? <p>at {path}</p> : <ItemRouteAt param={id} store={store} />;
+  }
+
+  it('an item opened from a filtered list steps along it and goes back to it', () => {
+    history.replaceState(null, '', '/waiting?programme=prog-b');
+    render(<Ladder store={rig()} />);
+    expect(screen.queryByRole('button', { name: /Four/ })).toBeNull(); // prog-a's: not on the filtered list
+    fireEvent.click(screen.getByRole('button', { name: /Three/ }));
+    expect(here()).toBe(`/waiting/3?from=${encodeURIComponent('waiting:prog-b')}`);
+    expect(within(strip()).getByText('1 of 2')).toBeTruthy();
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Next item' }));
+    expect(location.pathname).toBe('/waiting/2');
+    expect(within(strip()).getByText('2 of 2')).toBeTruthy();
+    expect((within(strip()).getByRole('button', { name: 'Next item' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting?programme=prog-b');
+    expect(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-b/ })
+      .getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByRole('button', { name: /Four/ })).toBeNull();
+    // Clearing the filter shows every programme.
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /All programmes/ }));
+    expect(here()).toBe('/waiting');
+    expect(screen.getByRole('button', { name: /Four/ })).toBeTruthy();
   });
 
   it('previous and next follow the list it was opened from: the side rail\'s filter to one programme', () => {
@@ -355,15 +429,15 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(here()).toBe('/waiting');
   });
 
-  it('a programme whose items are all cleared is still a programme: the way back from its cleared item is its page (follow-up F3)', () => {
+  it('a programme whose items are all cleared has nothing to filter to: the way back from its cleared item is the combined list', () => {
     const store = mk();
     act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({
       items: ITEMS.filter((i) => i.program === 'prog-b'), cleared: [itemView({ id: 9, program: 'prog-a', state: 'done', title: 'Nine' })],
     }) }));
-    history.replaceState(null, '', `/waiting/9?from=${encodeURIComponent('programme:prog-a')}`);
+    history.replaceState(null, '', `/waiting/9?from=${encodeURIComponent('waiting:prog-a')}`);
     render(<ItemRouteAt param="9" store={store} />);
-    fireEvent.click(within(strip()).getByRole('button', { name: /^Back to / }));
-    expect(here()).toBe('/programmes/prog-a');
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(here()).toBe('/waiting');
   });
 
   /** The column the frame draws beside the item on a desk (`ItemListColumn`), at `url`, with a stand-in for the fleet column. */
@@ -583,15 +657,17 @@ describe('the walk keeps its place while the operator stays on one item (fix rou
     expect(within(strip()).getByRole('status').textContent).toBe('');
   });
 
-  it('opening a programme\'s last item from its view, then the coordinator confirming it, keeps that programme\'s list beside it (follow-up F3)', () => {
+  it('opening a programme\'s last item from its filtered list, then the coordinator confirming it, keeps the place and goes back to that filter', () => {
     const store = rigOf([soon(30, { program: 'prog-b' }), soon(31)]);
-    open(store, `/waiting/31?from=${encodeURIComponent('programme:prog-a')}`);
+    open(store, `/waiting/31?from=${encodeURIComponent('waiting:prog-a')}`);
     expect(within(strip()).getByText('1 of 1')).toBeTruthy();
     push(store, [soon(30, { program: 'prog-b' })], [soon(31, { state: 'done', closedAt: NOW })]);
-    expect(within(strip()).getByRole('button', { name: 'Back to prog-a' })).toBeTruthy();
+    expect(within(strip()).getByText('1 of 1')).toBeTruthy(); // the kept place
+    // The filter has nothing left to show, so the list beside the item draws what that filter draws: every programme.
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
-    expect(within(beside).queryAllByRole('button').filter((b) => b.hasAttribute('data-item'))).toEqual([]); // not prog-b's 30
-    expect(within(beside).getByText('Nothing needs you.')).toBeTruthy();
+    expect(within(beside).queryAllByRole('button').filter((b) => b.hasAttribute('data-item')).map((b) => b.getAttribute('data-item'))).toEqual(['30']);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(location.pathname + location.search).toBe('/waiting?programme=prog-a');
   });
 
   it('the column draws the list the strip names: an item its from-list does not hold walks the combined list, before and after it leaves (follow-up F3)', () => {
@@ -613,15 +689,16 @@ describe('the walk keeps its place while the operator stays on one item (fix rou
   // Carry C (D-7951), review 1408 F2(b): the column draws the list the strip names even when nothing else can tell it which: the
   // open item has left its programme's list and its slug is no longer known (gone from the items and the cleared trail, no run
   // and no Goals naming it), so the settled list falls back to the combined one while the strip keeps the programme's view.
-  it('the open item gone and its programme no longer known: the column keeps the programme\'s list the strip names', () => {
+  it('the open item gone and its programme no longer on the list: the strip keeps the filtered list, and the column draws what it draws', () => {
     const store = rigOf([soon(30, { program: 'prog-b' }), soon(31)]);
-    open(store, `/waiting/31?from=${encodeURIComponent('programme:prog-a')}`);
+    open(store, `/waiting/31?from=${encodeURIComponent('waiting:prog-a')}`);
     expect(within(strip()).getByText('1 of 1')).toBeTruthy();
     push(store, [soon(30, { program: 'prog-b' })]); // 31 withdrawn: on no list, in no trail, and prog-a is named nowhere now
-    expect(within(strip()).getByRole('button', { name: 'Back to prog-a' })).toBeTruthy();
+    expect(strip().querySelector('.wi-pos')!.textContent).toBe('1 of 1'); // the kept place
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
-    expect(within(beside).queryAllByRole('button').filter((b) => b.hasAttribute('data-item'))).toEqual([]); // not prog-b's 30
-    expect(within(beside).getByText('Nothing needs you.')).toBeTruthy();
+    expect(within(beside).queryAllByRole('button').filter((b) => b.hasAttribute('data-item')).map((b) => b.getAttribute('data-item'))).toEqual(['30']);
+    fireEvent.click(within(strip()).getByRole('button', { name: 'Back to Waiting on you' }));
+    expect(location.pathname + location.search).toBe('/waiting?programme=prog-a');
   });
 
   // Carry C (D-7951), review 1408 F3: with the item gone and its place kept, the region says the place alone, never "2 of 3, ".

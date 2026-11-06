@@ -285,6 +285,8 @@ describe('document links go only to the Docs reader (plan PL10, spec D28)', () =
     ['a double-encoded dot-dot', { why: 'See https://b.example/docs/p/x/%252e%252e/specs/a.md now.' }],
     ['an artifact segment an encoded dot-dot would pop', { why: 'See https://x.example/artifact/..%2fy now.' }],
     ['a section directory an encoded dot-dot would pop', { why: 'See https://b.example/docs/p/specs/..%2fa.md now.' }],
+    // Review 1511 F6: the console's probe of a public artifacts page an encoded dot-dot would pop, pinned on this side too.
+    ['public artifacts an encoded dot-dot would pop', { why: 'See https://claude.ai/public/x/..%2fartifacts/abc now.' }],
     ['a segment still changing after four rounds', { why: 'See https://a.example/%2525252541bc now.' }],
     ['a five-deep artifact segment', { why: 'See https://claude.ai/%2525252561rtifact/abc now.' }],
   ])('the raise route refuses an artifact page or an outside document server as a document link: %s', async (_name, over) => {
