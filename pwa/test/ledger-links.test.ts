@@ -164,6 +164,20 @@ describe('the Docs reader address of a document and of a programme spec', () => 
     expect(docHref('README.md', HOME)).toBeNull();
   });
 
+  // Chat reading Task L (D-8062, R12): chat opens a document at the session's branch, so `docHref` takes a ref.
+  it('docHref with a bare ref opens the page at that ref', () => {
+    expect(docHref('docs/superpowers/specs/x.md', HOME, { kind: 'bare', name: 'ws/one' }))
+      .toBe('/docs/project-a/specs/x.md?ref=ws/one');
+    expect(docHref('docs/conventions/c.md', HOME, { kind: 'bare', name: 'main' })).toBe('/docs/project-a/conventions/c.md?ref=main');
+    expect(docHref('README.md', HOME, { kind: 'bare', name: 'main' })).toBeNull();
+    expect(docHref('docs/superpowers/specs/x.md', null, { kind: 'bare', name: 'main' })).toBeNull();
+  });
+
+  it('docHref with no ref is today\'s address', () => {
+    expect(docHref('docs/superpowers/specs/x.md', HOME, null)).toBe('/docs/project-a/specs/x.md');
+    expect(docHref('docs/superpowers/specs/x.md', HOME, null)).toBe(docHref('docs/superpowers/specs/x.md', HOME));
+  });
+
   it('specHref: only a spec path, as Goals has always drawn it', () => {
     expect(specHref('docs/superpowers/specs/2026-10-31-x-design.md', HOME)).toBe('/docs/project-a/specs/2026-10-31-x-design.md');
     expect(specHref('docs/superpowers/plans/x.md', HOME)).toBeNull();

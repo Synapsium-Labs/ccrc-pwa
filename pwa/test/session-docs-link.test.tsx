@@ -9,7 +9,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { FleetSession } from '../../shared/api';
-import { sessionDocsHref } from '../src/docs/docsLinks';
+import { sessionBranchRef, sessionDocsHref } from '../src/docs/docsLinks';
 import { SessionActionsSheet } from '../src/fleet/SessionActionsSheet';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import { fleetSession } from './fleetFixture';
@@ -100,6 +100,19 @@ describe('sessionDocsHref (spec 4.8, M4.L2)', () => {
       expect(link!.href).not.toContain('null');
     }
   });
+});
+
+// Chat reading Task L (D-8062, R12): chat's document links ask the same rule for the session's branch.
+describe('sessionBranchRef (chat reading Task L, D-8062)', () => {
+  it('a branch in the bare grammar is a bare ref', () => {
+    expect(sessionBranchRef('feat/renamed')).toEqual({ kind: 'bare', name: 'feat/renamed' });
+    expect(sessionBranchRef('ws/one')).toEqual({ kind: 'bare', name: 'ws/one' });
+  });
+
+  it.each([null, 'HEAD', 'refs/heads/main', 'a..b', 'x y', 'main.lock'])(
+    'sessionBranchRef refuses a branch outside the bare grammar: %j', (branch) => {
+      expect(sessionBranchRef(branch)).toBeNull();
+    });
 });
 
 describe('the actions sheet’s Docs row (spec 4.8, M4.L2)', () => {

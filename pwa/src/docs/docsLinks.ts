@@ -246,15 +246,23 @@ export function sessionDocsHref(s: FleetSession): SessionDocsLink | null {
   const project = s.project;
   if (!isDocsProject(project)) return null;
   const home = docsLocation({ kind: 'index' }, { kind: 'default-view', project });
-  const branch = s.branch !== null && isDocsBareRef(s.branch) ? s.branch : null;
-  if (branch === null) return { href: docsPageUrl(home), label: 'Docs, default branch', branch: null };
-  const at = docsLocation(home, { kind: 'same-page', project, ref: { kind: 'bare', name: branch } });
-  return { href: docsPageUrl(at), label: 'Docs on ' + branch, branch };
+  const ref = sessionBranchRef(s.branch);
+  if (ref === null) return { href: docsPageUrl(home), label: 'Docs, default branch', branch: null };
+  const at = docsLocation(home, { kind: 'same-page', project, ref });
+  return { href: docsPageUrl(at), label: 'Docs on ' + ref.name, branch: ref.name };
 }
 
-/** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, or null: no home
- *  project, a home the Docs grammar refuses, or a path outside the four sections or outside their path grammar. */
-export function docHref(repoPath: string, homeProject: string | null): string | null {
+/** The ref a session's Docs links open at: its worktree's branch as a bare ref when the branch is in the bare grammar, else
+ *  null (no branch, or one outside it), which links the default view. The one rule `sessionDocsHref` and chat's document links
+ *  share (chat reading Task L, D-8062, R12). */
+export function sessionBranchRef(branch: string | null): (DocsRefSpec & { kind: 'bare' }) | null {
+  return branch !== null && isDocsBareRef(branch) ? { kind: 'bare', name: branch } : null;
+}
+
+/** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, at `ref` (null, the
+ *  default: the project's default view, as the ledgers link), or null: no home project, a home the Docs grammar refuses, or a
+ *  path outside the four sections or outside their path grammar. Chat passes the session's branch (`sessionBranchRef`, R12). */
+export function docHref(repoPath: string, homeProject: string | null, ref: DocsRefSpec | null = null): string | null {
   if (homeProject === null || !isDocsProject(homeProject)) return null;
   for (const section of DOC_SECTION_SLUGS) {
     const dir = `${DOC_SECTIONS[section]}/`;
@@ -262,7 +270,7 @@ export function docHref(repoPath: string, homeProject: string | null): string | 
     const path = repoPath.slice(dir.length);
     if (!isDocsRelPath(path)) return null;
     return docsPageUrl(docsLocation(
-      { kind: 'project', project: homeProject, ref: null },
+      { kind: 'project', project: homeProject, ref },
       { kind: 'path', section, path, dirSlash: false },
     ));
   }
