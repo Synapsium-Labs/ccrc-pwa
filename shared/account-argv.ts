@@ -127,6 +127,8 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
     fields: {
       mode: { flag: '--mode', rule: { kind: 'enum', values: Object.freeze(['remove', 'discard', 'check']), spell: Object.freeze({ check: '--dry-run' }) } },
       deleteCodexAuth: { flag: '--delete-codex-auth', rule: { kind: 'flag' } },
+      // The remove sheet's Codex line turned off (D-8051 (3)): the verb's own flag for keeping the folder.
+      keepCodexAuth: { flag: '--keep-codex-auth', rule: { kind: 'flag' } },
     },
   },
   'roster': { cli: ['roster'], lane: false, stdin: 'none', fields: {} },

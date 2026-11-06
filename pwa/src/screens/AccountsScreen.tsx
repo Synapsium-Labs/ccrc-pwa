@@ -41,9 +41,13 @@
 // Mint a new token open the re-auth sheet, the switches A23's switch sheet, Paste a token A19's paste sheet. A token
 // lane's Replace token opens the mint first, with the paste its second way. Without the cap word, a token lane keeps
 // A19's paste arm alone.
+//
+// A CODEX LANE (accounts plan Task A25, D-8051; spec §9 row 5): where the fleet runs the ChatGPT sign-in (`account-codex-v1`
+// in `connect.caps`), its fold offers Sign in again, also a Signed-out one's primary fix, and it opens the re-auth sheet
+// with the lane's own method. The resume line and the banner follow that attempt too.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ACCOUNT_AUTH_CAP, isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CODEX_CAP, isArchivedRow, type AccountUsage, type ProjectedHome, type RosterWire } from '../../../shared/api';
 import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
@@ -52,12 +56,12 @@ import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
 import { CREDENTIAL_ACT_LABEL, ReauthSheet, troubleActs, type CredentialAct } from '../accounts/ReauthSheet';
-import { heldAttemptOf, isPastAdding, resumeSheetFor, switchTargetOf, type SignInMethod } from '../accounts/connectFlow';
+import { heldAttemptOf, isPastAdding, resumeSheetFor, switchTargetOf, waitsOnOperator, type AnthropicSignIn, type SignInMethod } from '../accounts/connectFlow';
 import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, REMOVE_ACT, REPLACE_TOKEN, rollUp, SIGN_IN_AGAIN, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
-import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
+import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, RESUME_CARD_LINE_APPROVE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { presenceOf } from '../fleet/presence';
@@ -350,9 +354,10 @@ export function AccountsScreen(): ReactNode {
   // The method switches and resume (accounts plan Task A23, D-7871): the switch sheet, and the connect sheet reopened on
   // an attempt this session started on a lane it added. Each keyed per opening, as above.
   const canSwitch = connect?.caps?.includes(ACCOUNT_AUTH_CAP) === true;
-  const [switching, setSwitching] = useState<{ id: string; to: SignInMethod; gen: number; resume?: HeldAttempt } | null>(null);
+  const canCodex = canSwitch && connect?.caps?.includes(ACCOUNT_CODEX_CAP) === true;
+  const [switching, setSwitching] = useState<{ id: string; to: AnthropicSignIn; gen: number; resume?: HeldAttempt } | null>(null);
   const [resumingConnect, setResumingConnect] = useState<{ id: string; held: HeldAttempt; gen: number } | null>(null);
-  const openSwitch = (id: string, to: SignInMethod, resume?: HeldAttempt): void =>
+  const openSwitch = (id: string, to: AnthropicSignIn, resume?: HeldAttempt): void =>
     setSwitching({ id, to, gen: ++sheetGen.current, ...(resume !== undefined ? { resume } : {}) });
   /** Continue: the sheet that runs this session's attempt on lane `id`, at its code field (spec §6.2). */
   const openResume = (id: string): void => {
@@ -360,7 +365,7 @@ export function AccountsScreen(): ReactNode {
     if (held === null) return;
     const kind = roster.find((r) => r.id === id)?.kind;
     const sheet = resumeSheetFor(kind, held.method, isPastAdding(lanes?.[id], accounts?.find((x) => x.wrapper === id)));
-    if (sheet === 'switch') openSwitch(id, held.method, held);
+    if (sheet === 'switch' && held.method !== 'openai-login') openSwitch(id, held.method, held);
     else if (sheet === 'reauth') openReauth(id, held.method, held);
     else setResumingConnect({ id, held, gen: ++sheetGen.current });
   };
@@ -388,7 +393,7 @@ export function AccountsScreen(): ReactNode {
   const openAct = (id: string, act: CredentialAct): void => {
     switch (act) {
       case 'switch-to-token': openSwitch(id, 'setup-token'); return;
-      case 'sign-in-again': openReauth(id, 'login'); return;
+      case 'sign-in-again': openReauth(id, roster.find((r) => r.id === id)?.kind === 'codex' ? 'openai-login' : 'login'); return;
       case 'mint-new-token': openReauth(id, 'setup-token'); return;
       case 'replace-token': openTokenReplace(id); return;
       case 'paste-token': openReplace(id); return;
@@ -518,7 +523,7 @@ export function AccountsScreen(): ReactNode {
           const switchTo = canSwitch ? switchTargetOf(entry) : null;
           // This session's attempt on the lane, waiting for its code (spec §6.2): the card's resume line.
           const held = heldAttemptOf(laneWire, now);
-          const waitingCode = held !== null && laneWire?.authAttempt?.state === 'waiting-code';
+          const waitingCode = held !== null && waitsOnOperator(held.method, laneWire?.authAttempt?.state);
           return (
             <section
               key={wrapper}
@@ -579,8 +584,8 @@ export function AccountsScreen(): ReactNode {
                   copy={trouble}
                   onCheck={canAct ? () => acts.check(wrapper) : undefined}
                   checking={acts.busy[wrapper] !== undefined}
-                  acts={canAct && entry?.provider === 'anthropic'
-                    ? troubleActs(answer.word, entry.kind, canSwitch).map((c) => ({
+                  acts={canAct && (entry?.provider === 'anthropic' || entry?.kind === 'codex')
+                    ? troubleActs(answer.word, entry.kind, canSwitch, canCodex).map((c) => ({
                       label: CREDENTIAL_ACT_LABEL[c.act], primary: c.primary, onOpen: () => openAct(wrapper, c.act),
                     }))
                     : undefined}
@@ -588,7 +593,7 @@ export function AccountsScreen(): ReactNode {
               )}
               {waitingCode && held !== null && (
                 <div className="acct-resume-line" data-resume={wrapper}>
-                  <span>{RESUME_CARD_LINE}</span>
+                  <span>{held.method === 'openai-login' ? RESUME_CARD_LINE_APPROVE : RESUME_CARD_LINE}</span>
                   <Button variant="primary" size="fit" disabled={blocked !== null} onClick={() => openResume(wrapper)}>{CONTINUE}</Button>
                   <Button
                     variant="ghost" size="fit" disabled={blocked !== null || cancellingAuth !== null}
@@ -653,6 +658,16 @@ export function AccountsScreen(): ReactNode {
                       variant="ghost" size="fit" disabled={!canAct}
                       aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
                       onClick={() => openReauth(wrapper, 'login')}
+                    >
+                      {SIGN_IN_AGAIN}
+                    </Button>
+                  )}
+                  {/* A Codex lane's Sign in again (spec §9 row 5; Task A25): where the fleet runs the ChatGPT sign-in. */}
+                  {entry?.kind === 'codex' && canCodex && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      onClick={() => openReauth(wrapper, 'openai-login')}
                     >
                       {SIGN_IN_AGAIN}
                     </Button>

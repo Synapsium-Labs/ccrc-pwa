@@ -8,7 +8,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { ACCOUNT_AUTH_CAP, ACCOUNT_CAPS, SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
+import { ACCOUNT_AUTH_CAP, ACCOUNT_CAPS, ACCOUNT_CODEX_CAP, SECRET_MASK, type AccountsResponse } from '../../shared/api.js';
+import { AUTH_URL_HOSTS } from '../../shared/accounts.js';
 import { buildServer, type Deps } from '../src/server.js';
 import { accountsConnect } from '../src/accounts/lanes.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
@@ -240,5 +241,19 @@ describe('connect.caps (D-7740)', () => {
       .toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: ['account-auth-v1'] });
     expect(accountsConnect({ ...at, ccdVerbs: null })).toEqual({ accountOps: 'unsupported', gate: 'armed', origin: 'https', caps: [] });
     expect(accountsConnect({ ...at, ccdVerbs: ['ws-new'] }).caps).toEqual([]);
+  });
+
+  it('holds the Codex word back until the ChatGPT sign-in has a measured host, so no sheet adds a lane it cannot sign in (D-8051 (1))', () => {
+    const at = { origin: 'https' as const, stepUpFreshUntil: null };
+    const verbs = ['account-v2', 'account-auth-v1', 'account-codex-v1'];
+    expect(ACCOUNT_CAPS as readonly string[]).toContain(ACCOUNT_CODEX_CAP);
+    // The table's answer today is the route's: `auth/start` refuses `method-unmeasured` while the list is empty.
+    expect(AUTH_URL_HOSTS['openai-login']).toEqual([]);
+    expect(accountsConnect({ ...at, ccdVerbs: verbs }).caps).toEqual(['account-v2', 'account-auth-v1']);
+    expect(accountsConnect({ ...at, ccdVerbs: verbs, hosts: { 'openai-login': [] } }).caps).not.toContain(ACCOUNT_CODEX_CAP);
+    // One act opens it: the host going into the table.
+    expect(accountsConnect({ ...at, ccdVerbs: verbs, hosts: { 'openai-login': ['auth.example.invalid'] } }).caps).toEqual(verbs);
+    // A measured host does not advertise what the fleet does not.
+    expect(accountsConnect({ ...at, ccdVerbs: ['account-v2'], hosts: { 'openai-login': ['auth.example.invalid'] } }).caps).toEqual(['account-v2']);
   });
 });

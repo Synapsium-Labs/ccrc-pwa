@@ -172,7 +172,7 @@ describe('which attempt it names (resumableAttempt)', () => {
     expect(resumableAttempt(null, now)).toBeNull();
     expect(resumableAttempt({ a: waiting(true, 'login', now - 1) }, now)).toBeNull();
     expect(resumableAttempt({ a: { ...OFF, authAttempt: { state: 'starting', expiresAt: now + 60_000, mine: true, attemptId: ATTEMPT, method: 'login' } } }, now)).toBeNull();
-    expect(resumableAttempt({ a: { ...OFF, authAttempt: { state: 'waiting-code', expiresAt: now + 60_000, mine: true, attemptId: ATTEMPT, method: 'openai-login' } } }, now)).toBeNull();
+    expect(resumableAttempt({ a: { ...OFF, authAttempt: { state: 'waiting-code', expiresAt: now + 60_000, mine: true, attemptId: ATTEMPT, method: 'openrouter-pkce' } } }, now)).toBeNull();
     const r = resumableAttempt({ b: waiting(true, 'login', now + 300_000), a: waiting(true, 'setup-token', now + 120_000) }, now);
     expect(r).toEqual({ id: 'a', held: { attemptId: ATTEMPT, method: 'setup-token', expiresAt: now + 120_000 } });
   });

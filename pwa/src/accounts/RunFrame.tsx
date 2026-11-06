@@ -1,12 +1,12 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button, buttonVariants, cn, toast, useDesk, useNow } from '@ccrc/ui';
 import {
-  COME_BACK, COPIED, COPY_LINK, OPEN_LINK, OPEN_TO_SIGN_IN, REMOTE_CONTROL_MARK, REMOTE_CONTROL_SCOPE, SIGN_IN_WITH,
-  WHAT_THIS_GRANTS, countdownWords, privateTabLine,
+  COME_BACK, COME_BACK_APPROVED, COPIED, COPY_CODE, COPY_LINK, DEVICE_CODE_LABEL, DEVICE_CODE_NOTE, OPEN_CHATGPT, OPEN_LINK, OPEN_TO_SIGN_IN,
+  REMOTE_CONTROL_MARK, REMOTE_CONTROL_SCOPE, SIGN_IN_WITH, WHAT_THIS_GRANTS, countdownWords, privateTabLine,
 } from '../fleet/accountWords';
 import { COPY_FAILED } from '../fleet/TroubleCard';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
-import { grantScopes, type SignInMethod } from './connectFlow';
+import { grantScopes, showsDeviceCode, type SignInMethod } from './connectFlow';
 
 /** One line of the step ledger: its words, and the instant it was written (this device's clock). */
 export interface LedgerLine { readonly text: string; readonly at: number }
@@ -53,22 +53,9 @@ export function RunFrame({ lines, live, waiting = false, children }: {
  *  it is, and the 52px of spec §6.2 step 5 from its own class. */
 const PRIMARY_ANCHOR = cn(buttonVariants({ variant: 'primary', size: 'fit' }), 'acct-open-primary');
 
-/**
- * THE URL CARD (spec §6.2 step 5, §6.3, §12.4; accounts plan Task A22, D-7849). `url` and `host` are what the SERVER
- * parsed and accepted (N2, spec §3.8): the mono host label is the server's `host`, never the file's text and never
- * hard-coded. The link opens in a new tab with `rel="noopener noreferrer"`, and is never persisted.
- *  - On a phone: **Copy link** is the primary, with "Paste it into a private tab …" (which account approves is the
- *    browser's claude.ai session), and Open ↗ is secondary; "Come back here to paste the code" (an installed PWA that
- *    leaves may be reloaded on return).
- *  - At ≥900: a 52px "Open claude.ai to sign in ↗" primary with the mono host beside it, and Copy link secondary.
- *  - The code field and Send share one row at every width, so Send stays beside the field when a phone's keyboard is up.
- *  - COPY TELLS THE TRUTH (spec §12.4): "Copied" only once `navigator.clipboard.writeText` resolves; on a refusal, or
- *    with no clipboard, the link is selected in a read-only mono field with "Couldn't copy: press and hold to copy".
- *  - "What this grants": the scopes the URL asks for, in a disclosure, Remote Control's marked.
- */
-export function UrlCard({ url, host, method }: { url: string; host: string; method: SignInMethod }): ReactNode {
-  const desk = useDesk();
-  const field = useRef<HTMLElement>(null);
+/** COPY TELLS THE TRUTH (spec §12.4): "Copied" only once `navigator.clipboard.writeText` resolves; on a refusal, or with
+ *  no clipboard, the state says so and `field`, drawn by then, is focused and selected for press-and-hold. */
+function useCopyTruth(text: string, field: RefObject<HTMLElement | null>): { copy: 'idle' | 'copied' | 'failed'; onCopy: () => void } {
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   const failed = (): void => {
     setCopy('failed');
@@ -85,9 +72,32 @@ export function UrlCard({ url, host, method }: { url: string; host: string; meth
     const clipboard: Clipboard | undefined = navigator.clipboard;
     if (clipboard === undefined) { failed(); return; }
     let written: Promise<void>;
-    try { written = clipboard.writeText(url); } catch { failed(); return; }
+    try { written = clipboard.writeText(text); } catch { failed(); return; }
     written.then(() => { setCopy('copied'); toast(COPIED); }, failed);
   };
+  return { copy, onCopy };
+}
+
+/**
+ * THE URL CARD (spec §6.2 step 5, §6.3, §12.4; accounts plan Task A22, D-7849). `url` and `host` are what the SERVER
+ * parsed and accepted (N2, spec §3.8): the mono host label is the server's `host`, never the file's text and never
+ * hard-coded. The link opens in a new tab with `rel="noopener noreferrer"`, and is never persisted.
+ *  - On a phone: **Copy link** is the primary, with "Paste it into a private tab …" (which account approves is the
+ *    browser's claude.ai session), and Open ↗ is secondary; "Come back here to paste the code" (an installed PWA that
+ *    leaves may be reloaded on return).
+ *  - At ≥900: a 52px "Open claude.ai to sign in ↗" primary with the mono host beside it, and Copy link secondary.
+ *  - The code field and Send share one row at every width, so Send stays beside the field when a phone's keyboard is up.
+ *  - COPY TELLS THE TRUTH (`useCopyTruth`): on a refusal, or with no clipboard, the link is selected in a read-only mono
+ *    field with "Couldn't copy: press and hold to copy".
+ *  - "What this grants": the scopes the URL asks for, in a disclosure, Remote Control's marked.
+ *  - THE CHATGPT SIGN-IN (spec §7.2 step 5; Task A25, D-8051) is this card with its own words: "Open the ChatGPT sign-in
+ *    page ↗", nothing to paste back, and no scopes, since its URL asks for none. `UserCodeWell` sits below it.
+ */
+export function UrlCard({ url, host, method }: { url: string; host: string; method: SignInMethod }): ReactNode {
+  const desk = useDesk();
+  const field = useRef<HTMLElement>(null);
+  const { copy, onCopy } = useCopyTruth(url, field);
+  const device = showsDeviceCode(method);
   const copyLabel = copy === 'copied' ? COPIED : COPY_LINK;
   const scopes = grantScopes(url);
   const open = (primary: boolean, label: string): ReactNode => (
@@ -99,7 +109,7 @@ export function UrlCard({ url, host, method }: { url: string; host: string; meth
     <div className="acct-url-card" data-desk={desk ? 'true' : undefined}>
       {desk ? (
         <div className="acct-url-acts">
-          {open(true, OPEN_TO_SIGN_IN)}
+          {open(true, device ? OPEN_CHATGPT : OPEN_TO_SIGN_IN)}
           <code className="acct-url-host">{host}</code>
           <Button variant="ghost" size="fit" className="acct-copy-link" onClick={onCopy}>{copyLabel}</Button>
         </div>
@@ -110,7 +120,7 @@ export function UrlCard({ url, host, method }: { url: string; host: string; meth
             {open(false, OPEN_LINK)}
           </div>
           <p className="acct-field-note">{privateTabLine(method)} <code className="acct-url-host">{host}</code></p>
-          <p className="acct-field-note">{COME_BACK}</p>
+          <p className="acct-field-note">{device ? COME_BACK_APPROVED : COME_BACK}</p>
         </>
       )}
       {copy === 'failed' && (
@@ -133,6 +143,26 @@ export function UrlCard({ url, host, method }: { url: string; host: string; meth
           </ul>
         </details>
       )}
+    </div>
+  );
+}
+
+/**
+ * THE USER CODE (spec §7.2 step 5; Task A25, D-8051): the device code the server accepted beside the URL, at 24px mono
+ * with `--tracking-caps` on one line, with its own Copy. It is not a secret, so it is plain text the operator can read
+ * across to the page; a Copy that fails selects it, as the URL card's does.
+ */
+export function UserCodeWell({ code }: { code: string }): ReactNode {
+  const field = useRef<HTMLElement>(null);
+  const { copy, onCopy } = useCopyTruth(code, field);
+  return (
+    <div className="acct-device">
+      <div className="acct-device-row">
+        <code ref={field} className="acct-device-code" tabIndex={0} aria-label={DEVICE_CODE_LABEL}>{code}</code>
+        <Button variant="ghost" size="fit" className="acct-device-copy" onClick={onCopy}>{copy === 'copied' ? COPIED : COPY_CODE}</Button>
+      </div>
+      <p className="acct-field-note">{DEVICE_CODE_NOTE}</p>
+      {copy === 'failed' && <p className="acct-fix-hold" role="status">{COPY_FAILED}</p>}
     </div>
   );
 }

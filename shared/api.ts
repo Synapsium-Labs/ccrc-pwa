@@ -12803,7 +12803,7 @@ export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 /** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
  *  subs, advertised by the box task that ships them (A16); each later wave appends its own word (`account-auth-v1`, A22's
  *  sign-in sheet, D-7849). Accounts plan Task A12 reads `account-v2` for `connect.accountOps`. */
-export const ACCOUNT_CAPS = ['account-v2', 'account-auth-v1'] as const;
+export const ACCOUNT_CAPS = ['account-v2', 'account-auth-v1', 'account-codex-v1'] as const;
 export type AccountCap = (typeof ACCOUNT_CAPS)[number];
 
 /** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
@@ -13311,9 +13311,12 @@ export interface AccountCredentialAnswer {
  *  characters, carried to the verb on stdin because it names a person) and the lane's placement. */
 export interface AccountSetBody { stated?: string; placement?: 'overflow' | 'full' }
 
+/** What a remove does with a Codex lane's sign-in folder (spec §11 step 4; D-8051 (3)): the sheet's line, on by default. */
+export type AccountCodexAuthFate = 'delete' | 'keep';
+
 /** `POST /api/accounts/:id/remove`'s body (spec §11): `remove` with the typed id, `discard` (no typed confirm), or
  *  `check`, the pre-check, which changes nothing. */
-export type AccountRemoveBody = { mode: 'remove'; confirmId: string } | { mode: 'discard' } | { mode: 'check' };
+export type AccountRemoveBody = { mode: 'remove'; confirmId: string; codexAuth?: AccountCodexAuthFate } | { mode: 'discard' } | { mode: 'check' };
 
 /** The credential kinds the removal ledger and the revoke checklist name (spec §11.3), each with its state at the
  *  provider and the page that revokes it, as words the sheet maps to its link: the box never answers a URL. A sign-in's
@@ -13369,6 +13372,11 @@ export interface AccountRevokeAckBody { laneId: string; kind: AtProviderKind }
  *  Sign in, so it is `ACCOUNT_CAPS`' second word (D-7849 (1)) and `connect.caps` offers it, and the Anthropic sheet
  *  opens on Mint, the first method of the provider table it does not narrow. */
 export const ACCOUNT_AUTH_CAP = 'account-auth-v1';
+/** The cap word of the ChatGPT lane (accounts plan Tasks A24 and A25, D-8051 (1)): `ccd caps` answers it once the box can
+ *  add a Codex lane, and it is `ACCOUNT_CAPS`' third word now the sheet that runs its sign-in has shipped. `connect.caps`
+ *  still holds it back while `AUTH_URL_HOSTS['openai-login']` is empty, because the start route would refuse that sign-in
+ *  (`accountsConnect`): no sheet may add a lane that it cannot then sign in. */
+export const ACCOUNT_CODEX_CAP = 'account-codex-v1';
 
 /** The words the sign-in routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in
  *  `REFUSAL_STATUS` (D-7793). The verb's own codes of the same spelling cross as these words, never as its sentence.

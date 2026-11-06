@@ -1,5 +1,5 @@
-import { laneNotReadyReason, neverEnabled, stateWordFor } from '../../../shared/accounts.js';
-import { ACCOUNT_CAPS, type AccountOriginClass, type AccountsConnect, type LaneWire, type RosterWire } from '../../../shared/api.js';
+import { AUTH_URL_HOSTS, laneNotReadyReason, neverEnabled, stateWordFor } from '../../../shared/accounts.js';
+import { ACCOUNT_CAPS, ACCOUNT_CODEX_CAP, type AccountOriginClass, type AccountsConnect, type LaneWire, type RosterWire } from '../../../shared/api.js';
 import type { AccountLimits, LaneStatesRead } from '../limits.js';
 import type { SecretMasker } from './mask.js';
 
@@ -55,11 +55,16 @@ export function lanesWire(
  *  (`account-v2` in its measured caps; no evidence is `unsupported`), the gate (only a session reader is ever sent
  *  this, so it is `armed`), `cfg.origin`'s class, this session's step-up freshness, absent when there is none, and
  *  which of `ACCOUNT_CAPS` the fleet advertises, in that list's order (D-7740): the connect sheet narrows each provider
- *  and method by the word it needs (N4), so a word this server's list does not name is never offered. */
+ *  and method by the word it needs (N4), so a word this server's list does not name is never offered. Nor is the Codex
+ *  word while the ChatGPT sign-in has no measured host (D-8051 (1)): the start route refuses `method-unmeasured` then, so
+ *  the sheet would add a lane, its ports and its folder, and leave it unable to sign in. Measuring the host opens it. */
 export function accountsConnect(o: {
   ccdVerbs: readonly string[] | null; origin: AccountOriginClass; stepUpFreshUntil: number | null;
+  hosts?: Readonly<Record<'openai-login', readonly string[]>>;
 }): AccountsConnect {
-  const caps = o.ccdVerbs === null ? [] : ACCOUNT_CAPS.filter((c) => o.ccdVerbs!.includes(c));
+  const hosts = o.hosts ?? AUTH_URL_HOSTS;
+  const caps = o.ccdVerbs === null ? []
+    : ACCOUNT_CAPS.filter((c) => o.ccdVerbs!.includes(c) && (c !== ACCOUNT_CODEX_CAP || hosts['openai-login'].length > 0));
   const accountOps = caps.includes(ACCOUNT_CAPS[0]) ? 'available' : 'unsupported';
   return {
     accountOps, gate: 'armed', origin: o.origin,

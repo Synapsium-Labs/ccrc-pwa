@@ -26,6 +26,11 @@
 // is `useSignInAttempt`'s (Task A23, D-7871 (2)), which the method switch sheet runs too; this file holds the add, the
 // check, the result and the sentences a new lane's terminal states say.
 //
+// THE CHATGPT LANE (Task A25, D-8051; spec §7.2): OpenAI has no method step, so the frame holds one line where the radio
+// would be, Confirm it's you and the primary. The attempt is the same one with no code to send: the run frame shows the
+// device-code card, the helper's `done` means the operator approved, and the check that follows starts the lane's
+// gateway. The result frame carries the compromise disclosure, and no wrong-account act: a Codex lane has no sign-out.
+//
 // RESUME (Task A23, D-7871 (2); spec §6.2): opened with `resume`, the sheet adopts the attempt the server holds for this
 // session on a lane it added, at the run frame, and the first poll brings back the URL and the code field.
 //
@@ -42,7 +47,7 @@ import { ApiError, api } from '../lib/api';
 import {
   ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
-  ADD_AND_SIGN_IN, DISCARD_LANE, DONE, SIGN_IN_LEDGER,
+  ADD_AND_SIGN_IN, CHATGPT_MODELS, DISCARD_LANE, DONE, SIGN_IN_LEDGER, checkingLine, signInLedger,
   STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, discardedDone, removeRefusal, removeUnknown,
   signOutConfirm, signOutRefused, signOutUnknown, statedRefused, STEP_UP_AGAIN_ADD,
 } from '../fleet/accountWords';
@@ -61,7 +66,7 @@ import {
   defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
 import { readLaneAfterSignOut } from './useOldCredential';
-import { SignInLive, WrongAccountAct, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
+import { SignInLive, WrongAccountAct, fieldOf, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { ProviderRow } from '../../../shared/providers';
 import '../fleet/fleet.css';
 
@@ -114,7 +119,8 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   const resumed = props.resume;
 
   const [frame, setFrame] = useState<Frame>(resumed !== undefined ? 'run' : 'provider');
-  const [provider, setProvider] = useState<DoorProvider | null>(resumed !== undefined ? 'anthropic' : null);
+  const [provider, setProvider] = useState<DoorProvider | null>(
+    resumed === undefined ? null : resumed.held.method === 'openai-login' ? 'openai' : 'anthropic');
   const [id, setId] = useState(resumed?.id ?? '');
   const [label, setLabel] = useState('');
   const [hue, setHue] = useState<Hue>(() => defaultHue(roster));
@@ -124,7 +130,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
   const [hasSecret, setHasSecret] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [ledger, setLedger] = useState<LedgerLine[]>(() =>
-    (resumed !== undefined ? [{ text: SIGN_IN_LEDGER.waiting, at: Date.now() }] : []));
+    (resumed !== undefined ? [{ text: signInLedger(resumed.held.method).waiting, at: Date.now() }] : []));
   const [lane, setLane] = useState<LaneWire | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [on, setOn] = useState(false);
@@ -158,8 +164,8 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     ? picked : choices?.selected ?? null;
 
   const check = async (): Promise<void> => {
-    write(LEDGER.checking(id));
-    status(LEDGER.checking(id));
+    write(checkingLine(id, method));
+    status(checkingLine(id, method));
     const t0 = Date.now();
     let refused: string | null = null;
     try {
@@ -189,13 +195,13 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
 
   /** The helper says `done`: the lane holds its credential, so the check runs (spec §6.2 step 8) into the result. */
   const signedIn = async (a: Attempt): Promise<void> => {
-    settle(a.method === 'login' ? SIGN_IN_LEDGER.signedIn : SIGN_IN_LEDGER.minted);
+    settle(signInLedger(a.method).done);
     setBusy(true);
     await check();
     if (live.current) setBusy(false);
   };
   const s = useSignInAttempt({
-    id, client: sc, blocked, write, settle, status, alert, endText: newLaneEnd(id),
+    id, client: sc, blocked, write, settle, status, alert, endText: newLaneEnd(id, method),
     onStart: () => { setWrongOpen(false); setFrame('run'); },
     onDone: (a) => { void signedIn(a); },
   });
@@ -220,7 +226,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     const read = await refresh();
     if (!live.current) return;
     if (read !== 'ok') {
-      const text = stillUnknownAfterUnknown(id);
+      const text = stillUnknownAfterUnknown(id, isSignInMethod(method));
       setUnread(true);
       setNotice(text);
       setFrame('run');
@@ -236,7 +242,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       if (isSignInMethod(method)) await s.start(method); else await check();
       return;
     }
-    const text = notFoundAfterUnknown(id);
+    const text = notFoundAfterUnknown(id, isSignInMethod(method));
     setNotice(text);
     setFrame('method');
     alert(text);
@@ -311,7 +317,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
         alert(r.text);
         return;
       }
-      const r = addRefusal(id, word) ?? { frame: 'method' as const, text: ADD_REFUSED };
+      const r = addRefusal(id, word, fieldOf(failure, 'verbCode')) ?? { frame: 'method' as const, text: ADD_REFUSED };
       setNotice(r.text);
       setFrame(r.frame);
       alert(r.text);
@@ -466,7 +472,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
           onLabel={setLabel}
           onHue={setHue}
           onBack={() => { setFrame('provider'); setNotice(null); status(FRAME_SAID.provider); }}
-          onContinue={() => { setNotice(null); setFrame('method'); status(FRAME_SAID.method); }}
+          onContinue={() => { setNotice(null); setFrame('method'); status(provider === 'openai' ? FRAME_SAID.chatgpt : FRAME_SAID.method); }}
           onPickAnother={() => { setFound(null); setAdopt(false); setId(''); status(PICK_ANOTHER_NAME); }}
           onUseThere={() => { setFound(null); setAdopt(true); setFrame('method'); status(FRAME_SAID.adopt); }}
         />
@@ -474,7 +480,10 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       break;
     case 'method':
       body = choices === null ? null : (
-        <MethodFrame choices={choices.choices} selected={method} onSelect={(m) => { setPicked(m); setNotice(null); }}>
+        <MethodFrame
+          choices={choices.choices} selected={method} onSelect={(m) => { setPicked(m); setNotice(null); }}
+          {...(provider === 'openai' ? { only: CHATGPT_MODELS } : {})}
+        >
           {method !== null && !runs && <p className="acct-notice">{NEEDS_APP_UPDATE}</p>}
           {method === 'paste' && runs && !blocked && (
             <SecretField label={TOKEN_FIELD_LABEL} handle={secret} onPresence={setHasSecret} describedBy={notice !== null ? noticeId : undefined} />
@@ -557,13 +566,15 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
             {...(isSignInMethod(method) ? {
               signIn: {
                 method,
-                wrongAccount: (
-                  <WrongAccountAct
-                    open={wrongOpen} onOpen={() => setWrongOpen(true)} onKeep={() => setWrongOpen(false)}
-                    confirm={signOutConfirm(id, method)} freshUntil={freshUntil} deps={props.stepUpDeps ?? NO_DEPS} busy={busy}
-                    offline={blocked} onSignOut={(stepUp) => { void signOutRestart(stepUp); }}
-                  />
-                ),
+                ...(method !== 'openai-login' ? {
+                  wrongAccount: (
+                    <WrongAccountAct
+                      open={wrongOpen} onOpen={() => setWrongOpen(true)} onKeep={() => setWrongOpen(false)}
+                      confirm={signOutConfirm(id, method)} freshUntil={freshUntil} deps={props.stepUpDeps ?? NO_DEPS} busy={busy}
+                      offline={blocked} onSignOut={(stepUp) => { void signOutRestart(stepUp); }}
+                    />
+                  ),
+                } : {}),
                 ...(method === 'setup-token' ? { onStated: (t: string) => { void saveStated(t); }, statedBusy, statedNotice } : {}),
               },
             } : {})}

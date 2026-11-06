@@ -1960,6 +1960,11 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   already names, so the first ChatGPT lane on a box takes that step. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
   the next `ccrc install` or `ccrc update` enables `ccrc-codex-usage@<id>.timer`. The next step is `auth-start --method
   openai-login`, then `check` and `enable`.
+  **The PWA runs the same steps** from Add account › OpenAI, with the sign-in page's link, its host and the device code on
+  one card, and Sign in again on the lane's fold. Until a box run measures the sign-in's host, `AUTH_URL_HOSTS` has none
+  for `openai-login` and `auth/start` refuses `method-unmeasured`, so `connect.caps` holds back `account-codex-v1`: the
+  row reads "Not available on this fleet yet" and no sheet adds a lane it can't sign in. Adding the measured host and
+  the code's shape to `shared/accounts.ts` opens it.
 - **A credential only ever arrives on a pipe.** `--credential -` is the only spelling — a literal would sit in
   world-readable argv — and a terminal on stdin is refused rather than prompted:
   `ccrc account add … --credential - < keyfile`. A `login` lane takes no `--credential`. The whole of stdin is

@@ -40,7 +40,7 @@ import { GuardedAct, RevokeItem } from './RemoveSheet';
 import { StatedField } from './ResultFrame';
 import { RestartList, restartableOn, useRestarts } from './RestartList';
 import { RunFrame, type LedgerLine } from './RunFrame';
-import type { SignInMethod } from './connectFlow';
+import type { AnthropicSignIn } from './connectFlow';
 import { useOldCredential } from './useOldCredential';
 import { SignInLive, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
 import type { StepUp, StepUpDeps } from './useStepUp';
@@ -53,7 +53,7 @@ export type SwitchClient = SignInRoutes
 export interface MethodSwitchSheetProps {
   id: string;
   /** The method the lane switches TO: `setup-token` from a sign-in lane, `login` from a token lane. */
-  to: SignInMethod;
+  to: AnthropicSignIn;
   open: boolean;
   onClose: () => void;
   connect: AccountsConnect | null;

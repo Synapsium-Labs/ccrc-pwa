@@ -500,7 +500,8 @@ function registerAccountWriteRoutes(app: FastifyInstance, deps: AccountRouteDeps
     const b = bodyOf(req);
     const mode = b?.['mode'];
     const shapeOk = b !== null && (
-      (mode === 'remove' && onlyKeys(b, ['mode', 'confirmId']) && typeof b['confirmId'] === 'string')
+      (mode === 'remove' && onlyKeys(b, ['mode', 'confirmId', 'codexAuth']) && typeof b['confirmId'] === 'string'
+        && (b['codexAuth'] === undefined || b['codexAuth'] === 'delete' || b['codexAuth'] === 'keep'))
       || ((mode === 'discard' || mode === 'check') && onlyKeys(b, ['mode'])));
     if (!shapeOk) return refuseRoute(reply, 'bad-request');
 
@@ -531,7 +532,12 @@ function registerAccountWriteRoutes(app: FastifyInstance, deps: AccountRouteDeps
           ? { sessions: verdict.sessions } : {});
       }
     }
-    const r = await deps.ops.run('remove', id, { mode: act });
+    // The sheet's Codex line (D-8051 (3)): each answer is the verb's own flag, and a body without it is the verb's default.
+    const codexAuth = mode === 'remove' ? b['codexAuth'] : undefined;
+    const r = await deps.ops.run('remove', id, {
+      mode: act,
+      ...(codexAuth === 'keep' ? { keepCodexAuth: 'true' } : codexAuth === 'delete' ? { deleteCodexAuth: 'true' } : {}),
+    });
     const ran = routeOutcomeOf(r);
     const ledger = ran.kind === 'ok' && r.kind === 'exited' ? removedLedgerOf(r.stdout) : null;
     if (ledger === null) {

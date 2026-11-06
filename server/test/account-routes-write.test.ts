@@ -352,6 +352,29 @@ describe('add: outcome unknown is never retried (spec §3.9, §6.2; D-5518)', ()
 });
 
 describe('remove, discard and the pre-check (spec §11)', () => {
+  it('the remove sheet\'s Codex line reaches the verb as its own flag, and only remove takes it (D-8051 (3))', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    for (const bad of [{ mode: 'remove', confirmId: LANE, codexAuth: 'maybe' }, { mode: 'discard', codexAuth: 'keep' }, { mode: 'check', codexAuth: 'keep' }]) {
+      const res = await post(r, `/api/accounts/${LANE}/remove`, bad, cookie);
+      expect(res.statusCode, JSON.stringify(bad)).toBe(REFUSAL_STATUS['bad-request']);
+    }
+    expect(r.calls).toEqual([]);
+    r.stub('remove', { out: REMOVED_ANSWER(r) });
+    const kept = await post(r, `/api/accounts/${LANE}/remove`, { mode: 'remove', confirmId: LANE, codexAuth: 'keep' }, cookie);
+    expect(kept.statusCode, kept.body).toBe(200);
+    expect(r.argv()).toEqual([`account remove --id=${LANE} --mode=remove --keep-codex-auth`]);
+  });
+
+  it('the Codex line ticked asks for the delete by name', async () => {
+    const r = await openApp();
+    const cookie = await fresh(r.app);
+    r.stub('remove', { out: REMOVED_ANSWER(r) });
+    const gone = await post(r, `/api/accounts/${LANE}/remove`, { mode: 'remove', confirmId: LANE, codexAuth: 'delete' }, cookie);
+    expect(gone.statusCode, gone.body).toBe(200);
+    expect(r.argv()).toEqual([`account remove --id=${LANE} --mode=remove --delete-codex-auth`]);
+  });
+
   it('remove\'s typed confirm must equal the id (confirm-mismatch), and nothing runs', async () => {
     const r = await openApp();
     const cookie = await fresh(r.app);
