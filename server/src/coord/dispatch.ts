@@ -432,6 +432,7 @@ async function spawnFresh(
   // `dispatchStartedAt` AND, only for a clean spawn, this session's `sessionBornAt`.
   const startedAt = Date.now();
   coord.markDispatchStarted(run.id, startedAt);
+  if (child !== null) coord.markHadChild(run.id);
   const res = await deps.runCcd(argv);
   // [registry-refused:refuses] a refused name new since BEFORE refuses the bind (the bind step decides it).
   const bind = decideDispatch({ step: 'bind', project: run.project, childSlug, beforeIds: before.plan,

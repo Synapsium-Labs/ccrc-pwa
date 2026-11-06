@@ -49,7 +49,7 @@ const run = (program: string, title: string, project: string, claimedBy: string,
   items: { done: 0, total: 0 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
     clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null,
+  childReclaim: null, reviewCap: null, hadChild: false,
 });
 
 const MIN = 60_000;

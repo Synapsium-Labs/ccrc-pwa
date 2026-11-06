@@ -2178,6 +2178,36 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE mail_deliveries ADD COLUMN revivedFrom INTEGER;
   CREATE INDEX mail_deliveries_by_revived ON mail_deliveries(revivedFrom) WHERE revivedFrom IS NOT NULL;
   `,
+  // ── 41: user_version 40 -> 41 ─────────────────────────────────────────────
+  // A run had a child (D-8068, the ruling of 2026-11-06 on D-7214): the fact the runs board used to gather in a browser
+  // set. 1 means this run held a child workspace. Its writers are `CoordStore.markHadChild`, which dispatch's fresh-spawn
+  // arm calls before it asks ccd for `--child <run>`, and `bindSession`, which passes it to a later wave bound to that
+  // session. `hydrateRun` reads it, with `sessionId`, into `RunSummary.hadChild`.
+  //
+  // ROWS STORED BEFORE THIS ENTRY ARE BACKFILLED, NOT READ AS "NO CHILD". A row that closed before the deploy can have its
+  // child reclaimed after it, and that row needs the re-read as much as a new one does. The evidence is the one the
+  // fresh-spawn arm leaves: a bound row with a `dispatchStartedAt` and no `child-omitted:` event (the journal of a spawn
+  // sent without `--child`), then every row bound to a session such a row names. The wrong answers it can give are of
+  // one kind: a row older than child marks reads 1, or a recycled name's later row does. Either costs one spare archive
+  // read per reclaim end, and neither can drop a re-read. Only that arm sends `--child`, and a later wave binds the
+  // session it names, so the one marked child it can miss is a run whose first attempt journalled the omission and whose
+  // retry reached a box that had gained the flag: that row stays 0 and is re-read on the chip triggers alone.
+  //
+  // ONE ADDITIVE COLUMN with a constant default, and one backfill: an older build opening a file at `user_version 41`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts 0. A row a rolled-back
+  // build dispatches therefore keeps 0 after the roll forward: the board re-reads it on the chip triggers alone, which
+  // is the old board's reading after a reload, and nothing worse. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 40 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN hadChild INTEGER NOT NULL DEFAULT 0;
+  UPDATE runs SET hadChild = 1
+    WHERE sessionId IS NOT NULL AND dispatchStartedAt IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'child-omitted:%');
+  UPDATE runs SET hadChild = 1
+    WHERE hadChild = 0 AND sessionId IN (SELECT m.sessionId FROM runs m WHERE m.hadChild = 1);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

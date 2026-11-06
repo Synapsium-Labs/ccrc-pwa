@@ -78,7 +78,7 @@ const runForA: RunSummary = {
   openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
   items: { done: 0, total: 0 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
-            briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null,
+            briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false,
 };
 
 // — the store, driven through its own socket —

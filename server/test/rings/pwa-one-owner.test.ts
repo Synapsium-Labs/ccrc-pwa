@@ -227,8 +227,8 @@ describe('the PWA folds on the server\'s compaction flag, and the prompt glyph h
 // `pwa/src` file compares a run's `sessionId` or `claimedBy` with a session id, or keys a session map on one, outside
 // the named readers in `fleet/runWords.ts` (`workerOf`, `coordinatorOf`, `claimedRunsOf`, `boundOpenRun`, and `runCard`,
 // the card lookup). Inside them the by-id lookups are named and counted: `workerOf`'s one (its closed-run arm, D-7205),
-// `runCard`'s two (D-7205) and `coordinatorOf`'s one (D-7207). `childRunsSeen` stays a named reader of the `.child` mark
-// (D-7214). The guess (`runForSession`, `runBelongsTo`) is gone, and the palette's order is the fleet tree's. Read
+// `runCard`'s two (D-7205) and `coordinatorOf`'s one (D-7207). `childRunsSeen` was deleted when the server took its question
+// over (D-8068). The guess (`runForSession`, `runBelongsTo`) is gone, and the palette's order is the fleet tree's. Read
 // through W7's census (`census-w7/pwa.ts#runMatchers`, whose FIXTURE rows red a matcher and a named lookup), imported in
 // the block so the file's header imports stay as other tasks append to them. Each count may only go down.
 describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
@@ -268,15 +268,8 @@ describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
     ]);
   });
 
-  it('childRunsSeen: 1 call, a named reader of the .child mark (D-7214), in useColdRuns; may only shrink', async () => {
-    const { runMatchers } = await import('../census-w7/pwa.js');
-    const calls = runMatchers().filter((s) => s.kind === 'childRunsSeen').map(site);
-    expect(calls.length).toBeLessThanOrEqual(1);
-    expect(calls).toEqual(['pwa/src/screens/useColdRuns.ts#useColdRuns']);
-  });
-
-  it('runForSession and runBelongsTo: 0 definitions in pwa/src', () => {
-    const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
+  it('runForSession, runBelongsTo and childRunsSeen (D-8068): 0 definitions in pwa/src', () => {
+    const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo', 'childRunsSeen'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
     expect(defs).toEqual([]);
   });
 

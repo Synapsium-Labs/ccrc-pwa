@@ -89,7 +89,7 @@ describe('useColdRuns: rereadOnTransitions', () => {
     sessionId: 'session-a', workspace: 'ws-a', branch: null, state: 'working', kind: 'work', reviews: null, claimedBy: 'coord-a', resumed: false, clearedAt: null,
     openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-    childReclaim: null, reviewCap: null, ...over });
+    childReclaim: null, reviewCap: null, hadChild: false, ...over });
 
   /** A finished run whose child's reclaim is still pending, so both reclaim transitions are due a re-read. */
   const finished = run(7, { state: 'done', closedAt: 2, sessionId: 'session-b', childReclaim: { word: 'pending', sentence: null, at: null } });

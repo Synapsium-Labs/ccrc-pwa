@@ -10,7 +10,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { ChildReclaimStatus, CoordCapsView, CoordStatus, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { childReclaimDoneRefreshDue, childRunsSeen } from '../src/fleet/runWords';
+import { childReclaimDoneRefreshDue, runHadChild } from '../src/fleet/runWords';
 import { childReclaimDoneAtOf } from '../src/fleet/childReclaimWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -28,7 +28,7 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 const sess = (over: Partial<FleetSession> = {}): FleetSession => (fleetSession({ id: 'ccrc-pwa-clear-cove', project: 'ccrc-pwa', workspace: 'clear-cove', branch: 'ws/clear-cove', bucket: 'working', ...over }));
@@ -47,8 +47,8 @@ const coordWith = (doneAt?: number, over: Partial<CoordStatus> = {}): CoordStatu
   pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [],
   ...(doneAt === undefined ? {} : { childReclaimDoneAt: doneAt }), ...over,
 });
-const finished = (id: number, word: ChildReclaimStatus['word'] | null): RunSummary =>
-  r({ id, state: 'done', closedAt: Date.now() - 60_000,
+const finished = (id: number, word: ChildReclaimStatus['word'] | null, hadChild = false): RunSummary =>
+  r({ id, state: 'done', closedAt: Date.now() - 60_000, hadChild,
       childReclaim: word === null ? null : { word, sentence: null, at: null } });
 
 /** One board whose cold read answers `rows`. The coord frame is already seen at
@@ -82,48 +82,41 @@ describe('childReclaimDoneAtOf — the one reader, absence permits', () => {
 });
 
 describe('childReclaimDoneRefreshDue — once per change, never a poll', () => {
-  const none = new Set<number>();
   it('is due on a change while a finished row reads pending, deferred or paused', () => {
     for (const word of ['pending', 'deferred', 'paused'] as const) {
-      expect(childReclaimDoneRefreshDue([finished(7, word)], none, T, T + 1), word).toBe(true);
+      expect(childReclaimDoneRefreshDue([finished(7, word)], T, T + 1), word).toBe(true);
     }
   });
 
   it('is due on ANY change: down as well as up, and from null; never only on an increase', () => {
-    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], none, T + 10, T + 5)).toBe(true);
-    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], none, null, T)).toBe(true);
+    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], T + 10, T + 5)).toBe(true);
+    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], null, T)).toBe(true);
   });
 
   it('is not due on null, or when nothing changed', () => {
-    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], none, T, null)).toBe(false);
-    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], none, T, T)).toBe(false);
+    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], T, null)).toBe(false);
+    expect(childReclaimDoneRefreshDue([finished(7, 'pending')], T, T)).toBe(false);
   });
 
-  it('reads a row with no chip as unsettled only when its run had a child', () => {
-    expect(childReclaimDoneRefreshDue([finished(7, null)], none, T, T + 1)).toBe(false);
-    expect(childReclaimDoneRefreshDue([finished(7, null)], new Set([7]), T, T + 1)).toBe(true);
+  it('reads a row with no chip as unsettled only when the server says its run had a child (D-8068)', () => {
+    expect(childReclaimDoneRefreshDue([finished(7, null)], T, T + 1)).toBe(false);
+    expect(childReclaimDoneRefreshDue([finished(7, null, true)], T, T + 1)).toBe(true);
   });
 
   it('is not due when every finished row is settled, nor for an open row', () => {
-    expect(childReclaimDoneRefreshDue([finished(7, 'reclaimed'), finished(8, 'refused')], new Set([7, 8]), T, T + 1))
+    expect(childReclaimDoneRefreshDue([finished(7, 'reclaimed', true), finished(8, 'refused', true)], T, T + 1))
       .toBe(false);
-    expect(childReclaimDoneRefreshDue([r({ id: 7, state: 'working' })], new Set([7]), T, T + 1)).toBe(false);
+    expect(childReclaimDoneRefreshDue([r({ id: 7, state: 'working', hadChild: true })], T, T + 1)).toBe(false);
   });
 });
 
-describe('childRunsSeen — which runs had a child, remembered across frames', () => {
-  it('takes a run a fleet frame marked as a child’s, and a finished row that carried a chip', () => {
-    const seen = childRunsSeen(new Set(), [
-      sess({ child: { kind: 'child', runId: 41 } }),
-      sess({ id: 'ccrc-pwa-keen-dune', child: { kind: 'unreadable' } }),
-      sess({ id: 'ccrc-pwa-calm-reef' }),
-    ], [finished(7, 'pending'), finished(8, null)]);
-    expect([...seen].sort((a, b) => a - b)).toEqual([7, 41]);
-  });
-
-  it('never forgets: a later frame without the child keeps the run', () => {
-    const once = childRunsSeen(new Set(), [sess({ child: { kind: 'child', runId: 41 } })], []);
-    expect([...childRunsSeen(once, [], [])]).toEqual([41]);
+describe('runHadChild — the one reader of the wire field (D-8068)', () => {
+  it('takes a literal true alone: an older server omits the key, and the wire is cast, never revived', () => {
+    expect(runHadChild({ hadChild: true })).toBe(true);
+    expect(runHadChild({ hadChild: false })).toBe(false);
+    expect(runHadChild({})).toBe(false);
+    expect(runHadChild({ hadChild: 1 })).toBe(false);
+    expect(runHadChild({ hadChild: 'true' })).toBe(false);
   });
 });
 
@@ -146,9 +139,9 @@ describe('the board re-reads the archive when the newest reclaim end changes (wa
     await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
   });
 
-  it('the race row: no chip, but this board saw its child in a fleet frame', async () => {
+  it('the race row: no chip, and the server says the run had a child', async () => {
     const child = sess({ child: { kind: 'child', runId: 7 } });
-    const { store, loadRuns } = await board([finished(7, null)], { doneAt: T, sessions: [child] });
+    const { store, loadRuns } = await board([finished(7, null, true)], { doneAt: T, sessions: [child] });
     act(() => { store.setState({ sessions: [] }); });           // the vanish: wave 5 sees no chip and stays quiet
     await settle();
     expect(loadRuns).toHaveBeenCalledTimes(1);
@@ -161,8 +154,8 @@ describe('the board re-reads the archive when the newest reclaim end changes (wa
     act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [sess()], fleetFrameSeen: true,
       coord: coordWith(T), coordFrameSeen: true }); });
     const loadRuns = vi.fn<() => Promise<{ runs: RunSummary[] }>>()
-      .mockResolvedValueOnce({ runs: [finished(7, 'pending')] })
-      .mockResolvedValue({ runs: [finished(7, null)] });
+      .mockResolvedValueOnce({ runs: [finished(7, 'pending', true)] })
+      .mockResolvedValue({ runs: [finished(7, null, true)] });
     render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
     await screen.findByRole('group', { name: /finished/i });
     act(() => { store.setState({ sessions: [] }); });           // wave 5's trigger: it reads, and races

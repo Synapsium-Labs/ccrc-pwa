@@ -969,6 +969,7 @@ interface RunRowDb {
   sessionBornAt: number | null;
   sessionBornFor: string | null;
   unattributed: number;
+  hadChild: number;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -989,7 +990,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed';
+  'r.sessionBornFor, r.unattributed, r.hadChild';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -3505,6 +3506,8 @@ export class CoordStore {
     // Only when the bind changes the occupant: a same-session re-statement (markDispatched after an adopted bind's
     // explicit null) must not date the run to an earlier occupant's birth.
     if (bornAt === undefined && changesOccupant) this.stampOccupantBirth(runId, sessionId);
+    // A later wave bound to a child held a child too (D-8068): the run its mark names is not the only row it ends.
+    if (changesOccupant) this.inheritHadChild(runId, sessionId);
     // NULL is a FIRST bind, not a re-bind, and it re-issues nothing: there is no
     // predecessor to inherit from, and every wave-1 dispatch on the box lands
     // here. The same-session case is a re-statement, not a change of occupant.
@@ -3525,6 +3528,14 @@ export class CoordStore {
       '(SELECT sessionBornAt AS at FROM runs WHERE sessionBornFor = ? AND sessionBornAt = dispatchStartedAt ' +
       'ORDER BY sessionBornAt DESC LIMIT 1) AS b WHERE runs.id = ? AND runs.sessionBornAt IS NULL',
     ).run(sessionId, sessionId, runId);
+  }
+
+  /** Run `runId`, just bound to `sessionId`, had a child when an earlier run bound to that session did (D-8068). A
+   *  recycled name can make this a row whose workspace is not that child: `RunSummary.hadChild` says what that costs. */
+  private inheritHadChild(runId: number, sessionId: string): void {
+    this.db.prepare(
+      'UPDATE runs SET hadChild = 1 WHERE id = ? AND EXISTS (SELECT 1 FROM runs m WHERE m.sessionId = ? AND m.hadChild = 1)',
+    ).run(runId, sessionId);
   }
 
   /**
@@ -3717,6 +3728,15 @@ export class CoordStore {
    *  moment being recorded. */
   markDispatchStarted(runId: number, at: number): void {
     this.db.prepare('UPDATE runs SET dispatchStartedAt = ? WHERE id = ?').run(at, runId);
+  }
+
+  /** This run's dispatch is asking ccd for a child (migration 41, D-8068). Written BEFORE `ws-add --child`, beside
+   *  `markDispatchStarted`, for that method's reason: a `ws-add` that comes back after the dispatch stopped reading is
+   *  still this run's child, and the dead-dispatch pass binds it with no further word from this arm. Sticky: a retry on
+   *  a box that lost `child-argv-v1` can still adopt the marked workspace of the attempt before it. `hydrateRun` answers
+   *  false until a session is bound, so an attempt that minted nothing says nothing. */
+  markHadChild(runId: number): void {
+    this.db.prepare('UPDATE runs SET hadChild = 1 WHERE id = ?').run(runId);
   }
 
   /** Dispatch's write: the workspace a run landed in, and whether it was a
@@ -4992,6 +5012,9 @@ export class CoordStore {
       // "accepted unattributed", every other value (0, the column default every
       // older row carries) is not. D-5531 reads it in the ask lane.
       unattributed: row.unattributed === 1,
+      // Migration 41 (D-8068). The column says a child was asked for or inherited, and the session says one was bound:
+      // a spawn that never bound, or a spent run `clearSession` emptied, held no child and has no chip to wait for.
+      hadChild: row.hadChild === 1 && row.sessionId !== null,
     };
   }
 

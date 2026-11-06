@@ -22,7 +22,7 @@ export const run = (id: number, claimedBy: string, sessionId: string | null, ove
   unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 /** An operator-facing question: a live pane's dialog that no coordinator holds (the ladder's `attention`). */

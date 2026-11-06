@@ -127,7 +127,8 @@ export const RUN_READERS: ReadonlySet<string> = new Set(['workerOf', 'coordinato
  *  - `lookup`: a `.get(…)` call (any receiver) whose one argument is a member expression ending in `.sessionId` or
  *    `.claimedBy`, the run-to-session map lookup where #746's recycled-id hazard lives (7 on the base); a `get` keyed on a
  *    session's own `id` is not one;
- *  - `runForSession` and `childRunsSeen`: each call of the two named readers (7 and 1 on the base);
+ *  - `runForSession`: each call of the named reader (7 on the base). `childRunsSeen` was counted beside it until the
+ *    server took its question over (D-8068);
  *  - `named`: a comparison or lookup inside one of `RUN_READERS` in `RUN_READER_FILE` (D-7182, D-7205, D-7207, C7d).
  *  KNOWN WIDTH: the receiver of a lookup is not typed, so a `.get(ev.sessionId)` on a non-run event would count (none
  *  on the base); a comparison through a renamed local is not seen. */
@@ -141,7 +142,7 @@ export function runMatchersIn(p: ParsedFile, file: string): W7Site[] {
   }
   for (const c of p.calls) {
     if (c.name === 'get' && c.callee.endsWith('.get') && c.args.length === 1 && c.args[0]!.kind === 'other' && RUN_KEY.test(c.args[0]!.text)) out.push(callSite(p, file, c, named(c.start) ? 'named' : 'lookup'));
-    else if (c.name === 'runForSession' || c.name === 'childRunsSeen') out.push(callSite(p, file, c, c.name));
+    else if (c.name === 'runForSession') out.push(callSite(p, file, c, c.name));
   }
   return out.sort((a, b) => a.line - b.line);
 }

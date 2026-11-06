@@ -566,7 +566,7 @@ describe('the Status view shows programmes, not children (G3)', () => {
     items: { done: 0, total: 0 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
       clearError: null, coordKickoffPendingSince: null },
-    childReclaim: null, reviewCap: null,
+    childReclaim: null, reviewCap: null, hadChild: false,
   });
   const on = (ws: string, project: string, bucket: string, status: string, extra: object = {}): object =>
     session(ws, bucket, status, { id: ws, project, workdir: `/w/${project}/${ws}`, ...extra });
