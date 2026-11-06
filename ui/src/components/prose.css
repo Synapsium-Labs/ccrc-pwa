@@ -236,6 +236,28 @@
     background: var(--bg-well);
     border-color: var(--well-bar-hair);
   }
+  /* CHAT COLOUR (chat reading Task C, D-8061; spec 2026-11-06 §3.1) — hue in
+     four places only, and chat only: T4a's scope keeps the Docs reader and an
+     opened recap at today's ink. `remarkChatMarks` (D-8060) writes the
+     attributes. A lead-in is marked at the top level only (a root paragraph or
+     an item of a root list), never in a callout or a quote, so the lead-in and
+     marker rules paint on the message column's --bg-page (audit.mjs's
+     INHERITED_GROUNDS). Amber is "on you", as everywhere in the console; blue
+     is the NOTE callout's hue. Names (the fourth place) are `.msg-assist a`. */
+  .msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='action'] { color: var(--status-attention-text); }
+  .msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='info'] { color: var(--acct-blue); }
+  .msg-assist:not(.doc-body):not(.compaction-body) :is(ul, ol)[data-after-lead='action'] > li::marker { color: var(--status-attention-text); }
+  /* STATUS LABELS — a status word in a label position, text on a solid tint:
+     each pair is one the callouts already use. */
+  .msg-assist:not(.doc-body):not(.compaction-body) [data-status] {
+    border-radius: var(--r-sm);
+    padding-inline: var(--sp-1);
+    font-weight: var(--weight-medium);
+  }
+  .msg-assist:not(.doc-body):not(.compaction-body) [data-status='ok'] { color: var(--status-busy-text); background: var(--accent-tint); }
+  .msg-assist:not(.doc-body):not(.compaction-body) [data-status='merged'] { color: var(--pr-merged); background: var(--acct-violet-tint); }
+  .msg-assist:not(.doc-body):not(.compaction-body) [data-status='wait'] { color: var(--status-attention-text); background: var(--status-attention-tint); }
+  .msg-assist:not(.doc-body):not(.compaction-body) [data-status='fail'] { color: var(--status-dead-text); background: var(--status-dead-tint-solid); }
   /* KEYCAPS — echoes the chrome .keycap language, sized to sit inline. */
   .msg-assist .kbd-combo { display: inline-flex; align-items: center; gap: 3px; vertical-align: baseline; }
   .msg-assist kbd {
