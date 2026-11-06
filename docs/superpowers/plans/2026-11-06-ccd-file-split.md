@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** split `ccd/ccd` (46,002 lines, 729 functions) into a small spine plus fixed libraries in `ccd/lib/`, assembled into one stamped file at install, with no behaviour change; then split `ccd/ccrc` too, with how its libraries load decided at the Phase D gate (Q7), and make new code land in the libraries.
+**Goal:** split `ccd/ccd` (46,002 lines and 729 functions at `4c677d328`) into a small spine plus fixed libraries in `ccd/lib/`, assembled into one stamped file at install, with no behaviour change; then split `ccd/ccrc` too, with how its libraries load decided at the Phase D gate (Q7), and make new code land in the libraries.
 
 **Architecture:** the tree holds the spine and the libraries. A source checkout loads the libraries at the spine's foot, as it does today. The installer inlines them at that same point, so the box holds one file that the launcher's digest covers from first byte to last. Functions move in 19 script-generated, byte-for-byte slices, smallest and least hot first, and each slice is its own PR.
 
@@ -32,7 +32,7 @@
 ## Review Focus
 
 1. A feature PR rebased across a move that keeps its old copy of a function. It must go red, never run two definitions (Task 1, `ccd-contexts`' "defines a function twice" row, pinned with a fixture).
-2. A live process re-sourcing its body during an update (`_pane_scope_detach` runs `source '$self'`). An assembled body must be whole on its own (Task 5).
+2. A live process re-sourcing its body during an update. Two routes do this by path: `_pane_scope_detach` runs `source '$self'`, and `carry-dedupe.py`'s `route()` runs `source "$1"`. An assembled body must be whole on its own (Task 5).
 3. A library whose bytes would merge lines or end early when inlined: no final newline, two final newlines, a NUL, a top-level `declare` without `-g`, a top-level `$1` (Tasks 4 and 5).
 4. Rollback to a body that still pins library files, with those files present or absent (Task 5).
 5. A full temp or root filesystem at start: the load holds no here-string today, and the assembled start must stay as free of temp files (Task 5 keeps the existing row).
@@ -43,6 +43,8 @@
 ## What Is Measured And What Is Inferred
 
 Everything here was measured at `4c677d328` unless it says otherwise. Hunk counts use git's hunk-header attribution (`git log -p -U0`, the last column-0 name before the hunk), so they are approximate: a hunk in a comment block between two functions counts for the one above it. Timings come from a development Mac (bash 5.3, perl `shasum`), not the fleet box.
+
+`main` has moved since. At `5dd21cdb2`, `ccd/ccd` holds 46,210 lines (+208) and 738 functions (+9), from 5 commits, and `ccd/contexts.tsv` has 9 more rows. All nine new functions are C1 or C4, so they fall into slices and the spine's count does not change. The tables below were not redone for this. An exit count that has to hold at run time compares with `moveBase`, not with a figure here.
 
 **Measured: size and heat**
 
@@ -123,7 +125,7 @@ Spine line numbers above the foot stay the committed ones, because everything is
 
 1. Assembly is deterministic: the same tree gives the same bytes.
 2. Each section carries its library's digest, and the release `MANIFEST` lists the same digest for the same file.
-3. The stamp covers the whole file, and the launcher's digest covers the stamped bytes. That is stronger than today: no byte of the body is outside the launcher's digest, and nothing is `eval`ed. One route skips the launcher: `_pane_scope_detach` sources the body by path, so nothing is checked there (Q2).
+3. The stamp covers the whole file, and the launcher's digest covers the stamped bytes. That is stronger than today: no byte of the body is outside the launcher's digest, and nothing is `eval`ed. Two routes skip the launcher, because each sources the body by path, so nothing is checked there (Q2): `_pane_scope_detach`, and `carry-dedupe.py`'s `route()`, which `cmd_carry_dedupe` hands `${BASH_SOURCE[0]}`. `_dispatch_swap` is not one: it execs `~/.local/bin/ccd`. Task 5 pins that both routes get a whole body.
 4. `ccd-entry-install.py --verify-body <tree> <home>` rebuilds the body and compares bytes. `ccrc doctor` shows that as one row (Q6): WARN for the first release, skipped where there is no ccd pair. It compares against this box's tree and reads no manifest, so a changed tree still passes.
 5. `grep -n 'ccd-section ' ~/.local/libexec/ccrc/ccd` is the file's table of contents.
 
@@ -236,11 +238,11 @@ Expected: FAIL, `pureMoveVerdict` not defined.
 
 - [ ] **Step 4: Implement `ccd-split.py`.** Fill the slice table from the table in Task 6. A region is found like this:
 
-1. A definition is a column-0 `name() {` line (729 today).
+1. A definition is a column-0 `name() {` line (729 at `4c677d328`).
 2. Its end is the first line, before the next definition, at which `bash -n` accepts the span with exit 0 and empty stderr. Stderr matters: an unclosed heredoc is only a warning. This handles all three forms without a list: 67 one-liners, 659 that close on a column-0 `}`, and 3 that close on `; }` (`_ws_supervise`, `_lc_intent`, `_lc_done`). It costs 3,929 `bash -n` runs at this size.
 3. Its lead is the `#` block directly above, stopping at a `# @ccd-lib:` line.
 4. A run is the regions of one slice with only comment and blank lines between them. A top-level statement or a `# @ccd-lib:` line ends the run.
-5. `regionProblems` then `eval`s each region alone in an empty shell. It must define exactly one function and no variable, or `move` refuses and names it. All 729 pass today.
+5. `regionProblems` then `eval`s each region alone in an empty shell. It must define exactly one function and no variable, or `move` refuses and names it. All 729 passed at `4c677d328`.
 
 `ccdCallGraph` does not use this rule: it stops at the next definition, so it sees a one-liner's following statements as its body. Step 5 of Task 6 allows for that.
 
@@ -251,7 +253,7 @@ Expected: 8 functions, about 3,709 lines, 1 run. Then, in a scratch copy with th
 
 - [ ] **Step 6: Run the tests, then commit.**
 
-Exit count: `ccd/ccd` unchanged, 729 functions; 729 regions pass `regionProblems`; 19 slices match in `programDump`. The pin suite runs on every PR through the guard list.
+Exit count: `ccd/ccd` unchanged, its function count equal to `moveBase`'s; every region passes `regionProblems`; 19 slices match in `programDump`. The pin suite runs on every PR through the guard list.
 
 ### Task 2: The ratchet reads the program as one, and CI follows the libraries
 
@@ -260,7 +262,7 @@ Q5 splits this task in two. Part A is the two list fixes, one small PR on test a
 #### Part A: the two list fixes (starts now, separate PR)
 
 **Files:**
-- Modify: `.github/ci/fast-plan.mjs`, `server/test/ci-fast-plan.test.ts`, `server/test/growthCheck.ts`, `server/test/growth-check.test.ts`
+- Modify: `.github/ci/fast-plan.mjs`, `server/test/ci-fast-plan.test.ts`, `server/test/growthCheck.ts`, `server/test/growth-check.test.ts`, `CLAUDE.md` ("What CI runs"), `README.md` (the same sentence)
 
 **Interfaces:**
 - Produces: `growthFiles(base, head, root): string[]`, the static list without its library entry, plus every `ccd/lib/*.sh` at either sha (`git ls-tree`). No library is ever named by hand, so no later PR has a list to forget.
@@ -280,11 +282,13 @@ it('every ccd/lib/*.sh is a growth-listed file, with no list to keep', () => {
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ci-fast-plan.test.ts test/growth-check.test.ts --maxWorkers=2`
 
-- [ ] **Step 3: Change the two lists.** `SESSION_HOOK_TRIGGERS` gains a `ccd/lib/` prefix match. The armed rows read `growthFiles`. That brings `train-proof.sh`, `delegation-lease.sh` and `ccrc-settings.sh` under the limit beside `disk-retention.sh`.
+- [ ] **Step 3: Change the two lists.** `SESSION_HOOK_TRIGGERS` gains a `ccd/lib/` prefix match. The `ci-fast-plan` row that pins the literal list changes with it, and so does every sentence naming the triggers: the header of `fast-plan.mjs`, "What CI runs" in `CLAUDE.md`, and the README. The armed rows read `growthFiles`. That brings `train-proof.sh`, `delegation-lease.sh` and `ccrc-settings.sh` under the limit beside `disk-retention.sh`.
+
+The D-6913 row (`ccd/lib/disk-retention.sh is held like ccd/ccd`) reads `GROWTH_FILES`, so it breaks when that entry leaves. Rewrite it to run over every `ccd/lib/*.sh` that `growthFiles` answers, with no library's name in it, and correct the comment on `GROWTH_FILES`.
 
 - [ ] **Step 4: Run, then commit.**
 
-Exit count: every `ccd/lib/*.sh` listed (4 today) with no library named in `growth-check.test.ts`; `ccd/ccd` unchanged.
+Exit count: every `ccd/lib/*.sh` listed (4 today); `GROWTH_FILES` holds no `ccd/lib/` entry, and no row of `growth-check.test.ts` names a library that exists (a fixture tree's made-up name is fine); `ccd/ccd` unchanged.
 
 #### Part B: the ratchet and the program row (held by Task 0)
 
@@ -317,8 +321,21 @@ it('FIXTURE: shrinking one library cannot pay for growing two', () => {
 it('FIXTURE: a revert passes: the deleted library is the shrink', () => {
   expect(growthOver([row('ccd/ccd', 1000), deletedLib(-1000), program(0)], [])).toEqual([]);
 });
-it('FIXTURE: one waiver on a library covers its file and the program, up to its maxDelta', () => {});
+it('FIXTURE: one waiver on a library covers its file up to maxDelta, and raises the program row by maxDelta', () => {});
+it('FIXTURE: an exemption on main for a member raises the program row by its cap; one that does not apply raises nothing', () => {
+  const rows = [row('ccd/ccd', 60), program(60)];
+  const over = growthOver(rows, []);
+  const named = [exemption({ pr: 1100, file: 'ccd/ccd', cap: 100 })];
+  expect(failing(growthVerdicts(rows, over, named, 1100, []))).toEqual([]);
+  expect(failing(growthVerdicts(rows, over, named, 1101, []))).toEqual(['ccd/ccd', 'ccd (program)']);
+  expect(failing(growthVerdicts(rows, over, named, 1100, ['server/test/growthCheck.ts']))).toEqual(['ccd/ccd', 'ccd (program)']);
+});
+it('FIXTURE: no waiver or exemption can name the program row', () => {
+  expect(parseExemptions(list(entry({ file: 'ccd (program)' })), files, today).problems).not.toEqual([]);
+});
 ```
+
+`failing` is the files of the verdicts whose `fails` is true.
 
 The rows stand on the shrink rule that exists today. `netGrowth` gives a new library a base of 0, so a move shows that library's whole size as its delta, and `growthOver` passes it only because `ccd/ccd` shrinks by at least as much. The spike measured the two as exactly equal in all 19 slices.
 
@@ -334,7 +351,11 @@ Run: `cd server && ./node_modules/.bin/vitest run test/shellcheck-ratchet.test.t
 
 The per-file rule stays, with one addition: a member of the program that is absent at head counts as a shrink of its whole size, so `git revert` and `unmove` pass. Every other file keeps today's rule.
 
-The program row is red over `GROWTH_LIMIT`, and it never counts as another row's shrink. That bounds the total, which the per-file rows cannot do, and it is tighter than today: `ccd/ccd` and `disk-retention.sh` each have 40 lines now, and the program gets 40 between them. A waiver or exemption the diff adds for a member raises the program row by that entry's own limit, so a feature needs one entry, not two.
+The program row is red over `GROWTH_LIMIT`, and it never counts as another row's shrink. That bounds the total, which the per-file rows cannot do, and it is tighter than today: `ccd/ccd` and `disk-retention.sh` each have 40 lines now, and the program gets 40 between them.
+
+Two kinds of entry raise the program row, each by its own limit, so a feature needs one entry, not two. A waiver the diff adds for a member raises it by `maxDelta`. An exemption on `origin/main` naming this PR and a member raises it by `cap`; an exemption is never in the diff, because `exemptionsOnMain` reads `main`'s copy only.
+
+No entry names the row itself: `ccd (program)` stays out of the file list that `parseExemptions` and `parseWaiverFiles` check against, so they refuse it. `growthVerdicts` decides this row last instead. It adds up the entries that applied to a member's row, and the program row fails only over `GROWTH_LIMIT` plus that sum. An entry that did not apply raises nothing: one over its limit, one on a member that is not over, or an exemption whose diff edits the check's own files.
 
 - [ ] **Step 6: Run, then commit.**
 
@@ -435,20 +456,20 @@ Expected: PASS.
 - [ ] **Step 6: Rehearse the end state.** In a scratch copy of the branch, `move` every slice, then run the whole server and agent suites with the guard on, beside the same suites on an untouched copy.
 Expected: no new red except the `ccrc-install-*` rows above, and no guard throw. A new red or throw is a scanner the inventory missed: convert it in this PR.
 
-Exit count: 0 test files hard-code the three library names as a list; 23 inventory files converted; 0 guard throws in the rehearsal; `ccd/ccd` 729 functions; `programDump` differs by `_ccd_lib_load` alone.
+Exit count: 0 test files hard-code the three library names as a list; 23 inventory files converted; 0 guard throws in the rehearsal; `ccd/ccd` functions equal to `moveBase`'s count; `programDump` differs by `_ccd_lib_load` alone.
 
 ### Task 5: Assemble at install
 
 **Ruled:** Q1 (join at install), Q2 (the three refusals leave installed boxes), Q6 (the doctor row). Held by Task 0 with the rest (Q5).
 
 **Files:**
-- Modify: `ccd/ccd-entry-install.py`, `ccd/ccd` (foot), `ccd/ccd-entry.py` (comment), `ccd/ccrc-doctor-checks`, `README.md` (the install-stamp section), `server/test/ccdWsHelpers.ts`, `server/test/ccd-lib-load.test.ts`, `server/test/ccd-install-stamp.test.ts`, `server/test/ccd-entry-install.test.ts`, `agent/test/deploy-verify.test.ts`
+- Modify: `ccd/ccd-entry-install.py`, `ccd/ccd` (foot), `ccd/contexts.tsv` (one K row, `_ccd_hash_pick`), `ccd/ccd-entry.py` (comment), `ccd/ccrc-doctor-checks`, `README.md` (the install-stamp section), `server/test/ccdWsHelpers.ts`, `server/test/ccd-lib-load.test.ts`, `server/test/ccd-install-stamp.test.ts`, `server/test/ccd-entry-install.test.ts`, `agent/test/deploy-verify.test.ts`
 - Create: `server/test/ccd-assembled-parity.test.ts`
 
 **Interfaces:**
 - Produces: `assemble_body(tree: str, body: bytes) -> bytes`: pins rendered, sections inlined, not yet stamped. `stamp_body` then runs as it does today.
 - Produces: CLI `--print-body <tree>` (stamped bytes on stdout) and `--verify-body <tree> <home>` (exit 0 same, 1 differ, naming the first differing section).
-- Produces: `_ccd_hash_pick` in `ccd/ccd`: the tool selection lifted from `_ccd_lib_load`, keeping `__CCD_HASH_CMD` and the `lib-hash` refusal. The installer's replacement for the load line runs it and sets `__CCD_LAYOUT=installed`.
+- Produces: `_ccd_hash_pick` in `ccd/ccd`: the tool selection lifted from `_ccd_lib_load`, keeping `__CCD_HASH_CMD` and the `lib-hash` refusal. The installer's replacement for the load line runs it and sets `__CCD_LAYOUT=installed`. It runs during load, so it is a K row and stays in the spine.
 - Consumes: `read_lib_table`.
 - Changes: `installedCcdBody` in `ccdWsHelpers.ts` shells out to `--print-body`, so the assembler has one implementation. Memoised by tree digest.
 
@@ -459,6 +480,9 @@ it('PIN: the installed body and the source form define the same program', () => 
   expect(dump(installed)).toEqual(dump(sourceForm));   // declare -f and declare -p, a fixture HOME
 });
 it('PIN: a body re-sourced by _pane_scope_detach is the whole program', () => {});
+it('PIN: a body sourced by carry-dedupe.py route() is the whole program', () => {
+  /* bash -c 'source "$1" && _carry_link_route "$2" "$3"' on the installed path, as route() runs it; it answers, and declare -F equals the program's */
+});
 it('PIN: an unusable TMPDIR does not refuse the start', () => {});
 it('PIN: a body restored from a backup finds its pinned libraries, present or restored', () => {});
 it('PIN: a tampered, missing or unreadable library refuses with lib-digest, lib-missing, lib-unreadable', () => {});
@@ -490,7 +514,7 @@ Run: `cd server && ./node_modules/.bin/vitest run test/ccd-assembled-parity.test
 - [ ] **Step 8: Rehearse the end state again.** As in Task 4 Step 6, now through the assembling installer.
 Expected: no new red at all. The 38 `ccrc-install-*` rows clear here.
 
-Exit count: 1 file holds ccd on an installed box; 0 `eval` of a library in an installed run; `declare -f` and `declare -p` dumps equal across both forms; 729 functions.
+Exit count: 1 file holds ccd on an installed box; 0 `eval` of a library in an installed run; `declare -f` and `declare -p` dumps equal across both forms; `ccd/ccd` functions = `moveBase`'s count plus 1, `_ccd_hash_pick`.
 
 - [ ] **Step 9: Soak.** The release runs on the test box for one full update and one `ccrc rollback` before the fleet takes it. The operator rolls it; a session never does.
 
@@ -512,7 +536,7 @@ No test or growth file changes in a slice: Task 4 moved the scanners to the prog
 - [ ] **Step 1: Preflight on a fresh `origin/main`.**
 
 Run: `.github/ci/ccd-split.py preflight <slice>`
-Expected: exit 0. Exit 1 names the PRs; skip to the next clear slice or wait.
+Expected: exit 0. Exit 1 names the PRs; skip to the next clear slice or wait. Until the lanes are live, a skip stays within slices 1 to 8 (see below).
 
 - [ ] **Step 2: Take the lane.** One tracked PR on `ccd/ccd`, per the lane rule.
 
@@ -545,7 +569,7 @@ git commit                                         # the merge commit, then a pl
 
 The PR keeps its number and its lane. The history only gains a commit, so there is no force-push and no exception to ask for. The pure-move pin then judges the regenerated move against the new merge-base. `ccd/ccd` takes about 3 commits a day, and `preflight` keeps open feature hunks out of the slice, so this should be rare.
 
-**Lanes before slice 9 (Q4).** Before slice 9 takes the lane, confirm that each hot library has its own lane. The change is not in this plan or this repository: the merge keeper's list is kept elsewhere, and it matches exact names, so a new library has no lane until it is listed. If the lanes are not live, the moves stop at slice 8 until they are.
+**Lanes before slice 9 (Q4).** This gates every slice from 9 to 19, in whatever order a skip reaches them. Before any of them takes the lane, confirm that each hot library has its own lane. The change is not in this plan or this repository: the merge keeper's list is kept elsewhere, and it matches exact names, so a new library has no lane until it is listed. If the lanes are not live, the moves stay within slices 1 to 8, and stop when those are done or blocked, until they are.
 
 **The slices.** Line, run and function counts are as of `4c677d328`, by Task 1's region rule, and so is the open-overlap column. `plan` recomputes the counts at move time, and `preflight` the overlap. Hunks are 30 days. "Spine lines after" includes the pointer lines, one per run: 249 in total.
 
@@ -575,7 +599,7 @@ Row order mixes size and heat on purpose: a 3,709-line slice with 4 hunks is che
 
 **Exit count per slice, computed at test time from `moveBase` and HEAD, and stored nowhere:** `ccd/ccd` functions = the base count minus the record's; `ccd/contexts.tsv` rows unchanged; `declare -F` count unchanged; `programDump` unchanged; spliced text unchanged apart from the one `__CCD_LIBS` line; `ccd (program)` delta 0; shellcheck group pin unchanged; no library over 6,000 lines.
 
-**Phase B exit:** 31 functions in `ccd/ccd`, all K rows plus `_ccd_lib_load` and `_roster_fp_to`; under 4,300 lines; 22 shell libraries in the table, every one measured by the growth check.
+**Phase B exit:** 32 functions in `ccd/ccd`, all K rows plus `_ccd_lib_load` and `_roster_fp_to`: the table's 31, measured before Task 5, and `_ccd_hash_pick`; under 4,300 lines; 22 shell libraries in the table, every one measured by the growth check.
 
 ---
 
@@ -608,8 +632,14 @@ Exit count: `homelessNewFunctions` = 0 on `main`.
 - [ ] **Step 1: Write the failing rows.**
 
 ```ts
-it('a waiver added for ccd/ccd waives nothing', () => {
-  expect(parseWaiverFiles(newCcdCcdEntry, growthFiles(base, head, dir)).entries).toEqual([]);
+it('a waiver added for ccd/ccd waives nothing, and voids no other entry', () => {
+  const parsed = parseWaiverFiles(ledgerOf('ccd/ccd', 'ccd/lib/docs.sh'), growthFiles(base, head, dir));
+  expect(parsed.problems).toEqual([]);
+  const rows = [row('ccd/ccd', 60), row('ccd/lib/docs.sh', 60), program(120)];
+  expect(failing(growthVerdicts(rows, growthOver(rows, []), [], null, [], parsed.entries))).toEqual(['ccd/ccd']);
+});
+it('a merge-base that still holds the ccd/ccd entries parses clean', () => {
+  expect(waiversInDiff(files, baseWithTheNine, head, dir).problems).toEqual([]);
 });
 it('ccd/ccd may grow by SPINE_LIMIT, the other files by GROWTH_LIMIT', () => {
   expect(growthOver([row('ccd/ccd', SPINE_LIMIT + 1)], [])).toEqual(['ccd/ccd']);
@@ -624,13 +654,32 @@ it('a shrink elsewhere pays for ccd/ccd only when the program total does not gro
 it('a slice reverted after this task still passes', () => {
   expect(growthOver([row('ccd/ccd', 1000), deletedLib(-1000), program(0)], [])).toEqual([]);
 });
+it('a named PR over 40 lines passes ccd/ccd and the program, up to its cap', () => {
+  const failed = (d: number) => {
+    const rows = [row('ccd/ccd', d), program(d)];
+    return failing(growthVerdicts(rows, growthOver(rows, []), [exemption({ pr: 1100, file: 'ccd/ccd', cap: 100 })], 1100, []));
+  };
+  expect(failed(60)).toEqual([]);
+  expect(failed(101)).toEqual(['ccd/ccd', 'ccd (program)']);
+});
+it('a named PR for 11 to 40 lines passes on a cap of 41, and a lower cap is refused', () => {
+  const rows = [row('ccd/ccd', 20), program(20)];
+  expect(failing(growthVerdicts(rows, growthOver(rows, []), [exemption({ pr: 1100, file: 'ccd/ccd', cap: 41 })], 1100, []))).toEqual([]);
+  expect(parseExemptions(list(entry({ file: 'ccd/ccd', cap: 20 })), files, today).entries).toEqual([]);
+});
 ```
 
-- [ ] **Step 2: Implement.** `SPINE_LIMIT = 10`: a new verb's dispatcher row and its capability word fit. `growthOver` no longer lets a new file under `L1_L2_NEW_FILE_DIRS` pass `ccd/ccd`, and it counts another file's shrink for `ccd/ccd` only when `ccd (program)` does not grow, so a revert or `unmove` still passes. The named-PR exemption in `growth-exemptions.json` stays, the operator's own door and now the only one. Its list is empty today, and each exception is a merged change naming the PR, which has no UI control yet and none in this plan. Libraries keep `GROWTH_LIMIT` and the waiver ledger, and each is listed (Task 2), so a library waiver is real: 41 lines in `ccd/lib/workspace.sh` is red in the file and in the program until the PR adds one.
+- [ ] **Step 2: Implement.** `SPINE_LIMIT = 10`: a new verb's dispatcher row and its capability word fit. `growthOver` no longer lets a new file under `L1_L2_NEW_FILE_DIRS` pass `ccd/ccd`, and it counts another file's shrink for `ccd/ccd` only when `ccd (program)` does not grow, so a revert or `unmove` still passes. The row's words name `SPINE_LIMIT`, not `GROWTH_LIMIT`.
+
+The waiver route closes in `matchWaiver`, not in the parse. `matchWaiver` answers nothing for `ccd/ccd`, and `parseWaiverFiles` goes on accepting it as a listed file. It must not be a parse problem: any problem empties the whole ledger, so one stray `ccd/ccd` entry would void every library's waiver, and so would a merge-base that still holds the 9 entries.
+
+The named-PR exemption in `growth-exemptions.json` stays, the operator's own door and now the only one. An entry on `main` clears both rows: `matchExemptions` clears `ccd/ccd`, and Task 2 Part B's raise clears `ccd (program)`. `parseExemptions` keeps its one rule, a cap above `GROWTH_LIMIT`, so a named exception for 11 to 40 lines still carries a cap of at least 41, and it allows that much. The list is empty today, and each exception is a merged change naming the PR, which has no UI control yet and none in this plan.
+
+Libraries keep `GROWTH_LIMIT` and the waiver ledger, and each is listed (Task 2), so a library waiver is real: 41 lines in `ccd/lib/workspace.sh` is red in the file and in the program until the PR adds one.
 
 - [ ] **Step 3: Delete those waiver files, run, commit.**
 
-Exit count: 0 `ccd/ccd` waivers (9 at `5dd21cdb2`), 1,148 waived lines closed; the new-file route closed and the shrink route bounded for `ccd/ccd`; 12 waivers left at that sha, the `ccd/ccrc` 7 for Phase D.
+Exit count: 0 `ccd/ccd` waivers (9 at `5dd21cdb2`), 1,148 waived lines closed; the new-file route closed and the shrink route bounded for `ccd/ccd`; a named PR over 40 lines passes both rows up to its cap; 12 waivers left at that sha, the `ccd/ccrc` 7 for Phase D.
 
 ### Task 9: Retire the old installed files (one stable release after Task 5)
 
@@ -694,7 +743,7 @@ The operator ruled all eight questions on 2026-11-06 (D-8048), each as recommend
 *Ruled: join at install.* `ccd-entry-install.py`, the one writer of the stamp, assembles on every path, including `deploy.sh`. Every box runs one shell file, covered by the launcher's digest. Redactor files keep their own pins; `transcript.jq` and `carry-dedupe.py` stay separate. It costs Task 5 as planned and one soak on the test box.
 
 **Q2. May `lib-missing`, `lib-unreadable` and `lib-digest` go from an installed box?** After Task 5 the installed body reads no library file, so those refusals cannot happen.
-*Ruled: yes.* A tampered install refuses at the launcher with `entry-body-digest`, exit status still 125. This is the one observable change in the programme. Source checkouts keep the three refusals, and `lib-hash` stays, so a box with no hashing tool still refuses. `_pane_scope_detach` sources the body by path and skips the launcher, so that one route is not pinned.
+*Ruled: yes.* A tampered install refuses at the launcher with `entry-body-digest`, exit status still 125. This is the one observable change in the programme. Source checkouts keep the three refusals, and `lib-hash` stays, so a box with no hashing tool still refuses. `_pane_scope_detach` and `carry-dedupe.py`'s `route()` source the body by path and skip the launcher, so neither route is digest-checked: today the load checks the library pins there, and after Task 5 nothing does. Task 5 pins only that each gets a whole body.
 
 **Q3. May the shellcheck pin rise once, on a new measure?** The rule is that a pin only goes down. Summing per file would reach 299 on a pure move.
 *Ruled: yes, lint the spliced program.* The pin is re-set once to the measured count, about 154, and `ccrc-settings.sh` takes its own pin of 6, so the total goes from 142 to about 160. Like for like that is 136 to about 154, a rise of 18. A move then cannot change the count. It takes one rebaseline with a comment saying why, and the PR lists the new findings by code. The rebaseline is held (Q5), and must land before slice 1.
