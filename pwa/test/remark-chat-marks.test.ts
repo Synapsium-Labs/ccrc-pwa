@@ -91,6 +91,19 @@ describe('status labels', () => {
     expect(strongs.map((n) => props(n)[MARK_ATTR.status] ?? null)).toEqual(['wait', null]);
   });
 
+  // Fix round 1 (review 1574 F-B): the whole content must be plain text; code or a link inside the bold is never marked.
+  it('S2 does not mark a bold holding inline code or a link', () => {
+    const tree = mdast('A **done** one, a **`done`** one and a **[done](https://example.com/d)** one.');
+    const strongs = all(tree).filter((n) => n.type === 'strong');
+    expect(strongs.map((n) => props(n)[MARK_ATTR.status] ?? null)).toEqual(['ok', null, null]);
+  });
+
+  // Fix round 1 (review 1574 P4, ruling 5): the header row keeps plain text.
+  it('S1 does not label a header cell', () => {
+    const tree = mdast('| Done | #651 |\n|---|---|\n| Failed | x |\n');
+    expect(withAttr(tree, MARK_ATTR.status).map((n) => n.value)).toEqual(['Failed']);
+  });
+
   it('S1 splits a table cell\'s first status word', () => {
     const tree = mdast('| state | note |\n|---|---|\n| Failed, exit 1 | Failure is not a word |\n');
     const cells = all(tree).filter((n) => n.type === 'tableCell');
@@ -164,6 +177,18 @@ describe('lead-ins', () => {
     ].join('\n'));
     const lists = tree.children!.filter((n) => n.type === 'list');
     expect(lists.map((n) => props(n)[MARK_ATTR.afterLead] ?? null)).toEqual(['action', null, null]);
+  });
+
+  // Fix round 1 (review 1574 F-C): "directly after" means the next block; a heading, a fence or another list between
+  // ends it.
+  it.each<[string, string]>([
+    ['a heading', '## Heading'],
+    ['a fence', '```\ncode\n```'],
+    ['another list', '* first list'],
+  ])('a list after an action lead-in with %s between is not marked', (_name, between) => {
+    const tree = mdast(['**What to do:**', '', between, '', '1. step', ''].join('\n'));
+    const lists = tree.children!.filter((n) => n.type === 'list');
+    expect(lists.at(-1)!.data?.hProperties?.[MARK_ATTR.afterLead] ?? null).toBeNull();
   });
 });
 

@@ -7,8 +7,10 @@
 // What it writes:
 //   - a text node becomes `markRuns`' runs: a name is a text node drawn as a `span` carrying `MARK_ATTR.kind` and
 //     `MARK_ATTR.id`, a status word in S3's position a `span` carrying `MARK_ATTR.status`;
-//   - S2: a `strong` whose whole text is a status word carries `MARK_ATTR.status`;
-//   - S1: a `tableCell` whose first child is text starting with a status word has that word split off as a status span;
+//   - S2: a `strong` whose whole content is plain text that is a status word carries `MARK_ATTR.status` (a bold holding
+//     inline code or a link is never marked: fix round 1, review 1574 F-B);
+//   - S1: a body cell (not the header row's) whose first child is text starting with a status word has that word split
+//     off as a status span (fix round 1, review 1574 P4);
 //   - a root-level paragraph, or the first paragraph of an item of a root-level list, that opens with a `strong`
 //     `leadKind` reads as a lead-in gives that `strong` `MARK_ATTR.lead`; a root-level list straight after a root-level
 //     paragraph with an action lead-in carries `MARK_ATTR.afterLead`. A lead-in inside a quote or a callout is not
@@ -79,7 +81,7 @@ function markLeads(root: MdNode): void {
   }
 }
 
-/** S1: a table cell's first text, split when it starts with a status word. */
+/** S1: a body cell's first text, split when it starts with a status word. */
 function splitLeadingStatus(cell: MdNode): void {
   const first = cell.children?.[0];
   if (first?.type !== 'text' || first.data?.hName !== undefined) return;
@@ -115,8 +117,12 @@ export function remarkChatMarks(): (tree: unknown) => void {
     const stack: MdNode[] = [root];
     while (stack.length > 0) {
       const node = stack.pop()!;
-      if (node.type === 'tableCell') splitLeadingStatus(node);
-      if (node.type === 'strong') {
+      if (node.type === 'table') {
+        // S1 reads body rows only: the first row is the header.
+        const rows = node.children ?? [];
+        for (let r = 1; r < rows.length; r += 1) for (const cell of rows[r]!.children ?? []) splitLeadingStatus(cell);
+      }
+      if (node.type === 'strong' && (node.children ?? []).every((c) => c.type === 'text')) {
         const tone = statusTone(plainText(node));
         if (tone !== null) setAttr(node, MARK_ATTR.status, tone);
       }

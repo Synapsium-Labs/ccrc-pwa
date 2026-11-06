@@ -55,8 +55,42 @@ describe('ordinary words the grammar leaves as text (negatives)', () => {
     ['x/docs/a.md', 'x/docs/a.md'],
     ['docs/a/../b.md', 'docs/a/../b.md'],
     ['docs/a.mdx', 'docs/a.mdx'],
+    // Fix round 1 (review 1574). F-A: a letter outside the BMP bounds a name like any other letter.
+    ['an astral letter before (𠀀#1)', '𠀀#1'],
+    ['an astral letter after (#1𝐀)', '#1𝐀'],
+    // F-D: a commit is not preceded by `.`, `/` or `-`.
+    ['feat-4c677d328', 'branch feat-4c677d328'],
+    ['v1.2.4c677d328', 'tag v1.2.4c677d328'],
+    ['a/4c677d328', 'path a/4c677d328'],
+    // F-E: a document path does not run on into `/` or `-`.
+    ['docs/a.md/x', 'docs/a.md/x'],
+    ['docs/a.md-bak', 'docs/a.md-bak'],
+    // Ruling 4 (G2): a commit is not followed by `-`, nor by `.` and a word character; a document path not by `.` and
+    // a word character.
+    ["a UUID's head (4c677d32-…)", '4c677d32-e29b-41d4-a716-446655440000'],
+    ['a UUID (550e8400-…)', '550e8400-e29b-41d4-a716-446655440000'],
+    ['abc1234.ts', 'edit abc1234.ts'],
+    ['docs/plan.md.bak', 'docs/plan.md.bak'],
+    // Ruling 4 (G3): an exponent shape (digits, one `e`, digits) is no commit; a colour is no PR.
+    ['1e10000', 'about 1e10000'],
+    ['10e1000', 'about 10e1000'],
+    ['e1234567', 'code e1234567'],
+    ['#a3f (a 3-digit colour)', 'colour #a3f'],
+    ['#1a2b3c (a 6-digit colour)', 'colour #1a2b3c'],
+    ['color: #ff00aa;', 'color: #ff00aa;'],
   ])('%s', (_name, text) => {
     expect(marksOf(text)).toEqual([]);
+  });
+
+  // Ruling 4: a commit at a sentence's end is still one, and a digits-only `#333` or `#000000` is still a PR mark
+  // (L's repository rule decides whether it links).
+  it.each<[string, string, Mark]>([
+    ['at abc1234. (sentence end)', 'at abc1234.', { kind: 'commit', id: 'abc1234', text: 'abc1234' }],
+    ['#333', 'see #333', { kind: 'pr', id: '333', text: '#333' }],
+    ['#000000', 'see #000000', { kind: 'pr', id: '000000', text: '#000000' }],
+    ['docs/a.md. (sentence end)', 'read docs/a.md.', { kind: 'doc', id: 'docs/a.md', text: 'docs/a.md' }],
+  ])('%s is still a name', (_name, text, mark) => {
+    expect(marksOf(text)).toEqual([mark]);
   });
 
   // The small-id rule is Task L's: the recogniser marks it, and `chat-refs.test.ts` holds that it stays text.

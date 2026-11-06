@@ -84,9 +84,31 @@ export type MarkRun =
   | { kind: 'status'; text: string; tone: StatusTone };
 
 /** A word character, in any script: a letter, a combining mark, a digit or `_`. A name never starts or ends against
- *  one, so `C#1`, `item3` and a hex run straight after `é` are not names. */
+ *  one, so `C#1`, `item3` and a hex run straight after `é` are not names. Read by whole code point, so a letter
+ *  outside the BMP (`𝐀`, `𠀀`) bounds a name like any other (fix round 1, review 1574 F-A). */
 const WORD = /[\p{L}\p{M}\p{N}_]/u;
-const isWord = (c: string): boolean => c !== '' && WORD.test(c);
+const isWordPoint = (cp: number | undefined): boolean => cp !== undefined && WORD.test(String.fromCodePoint(cp));
+
+/** Whether the character starting at `at` is a word character; `false` at the end. */
+function wordAfter(text: string, at: number): boolean {
+  return isWordPoint(text.codePointAt(at));
+}
+
+/** Whether the character ending just before `at` is a word character, a surrogate pair read whole; `false` at the
+ *  start. */
+function wordBefore(text: string, at: number): boolean {
+  if (at <= 0) return false;
+  const pair = at >= 2 && /[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(text.slice(at - 2, at));
+  return isWordPoint(text.codePointAt(pair ? at - 2 : at - 1));
+}
+
+/** Whether a name ending at `end` runs on as a file name or a longer token: `.` and then a word character
+ *  (`abc1234.ts`, `docs/plan.md.bak`). A `.` that ends a sentence does not (fix round 1, ruling 4). */
+const runsOnAfterDot = (text: string, end: number): boolean => text.charAt(end) === '.' && wordAfter(text, end + 1);
+
+/** A number in exponent notation, or `e` and digits: digits, one `e`, digits (`1e10000`, `e1234567`). Hex in that shape
+ *  is never taken for a commit (fix round 1, ruling 4: the smallest rule that refuses both). */
+const EXPONENT = /^\d*e\d+$/;
 
 /** What may not stand right before a document path or a commit, besides a word character. */
 const PATHISH = new Set(['.', '/', '-']);
@@ -115,19 +137,22 @@ function nameAt(text: string, at: number): { mark: Mark; end: number } | null {
   if (m) {
     const end = at + m[0].length;
     const after = text.charAt(end);
-    if (!isWord(after) && after !== '/' && after !== '-' && !m[0].split('/').includes('..')) {
+    if (!wordAfter(text, end) && after !== '/' && after !== '-' && !runsOnAfterDot(text, end) && !m[0].split('/').includes('..')) {
       return { mark: { kind: 'doc', id: m[0], text: m[0] }, end };
     }
   }
   for (const [re, kind] of KEYWORDS) {
     m = stickyAt(re, text, at);
-    if (m && !isWord(text.charAt(at + m[0].length))) {
+    if (m && !wordAfter(text, at + m[0].length)) {
       return { mark: { kind, id: m[1]!, text: m[0] }, end: at + m[0].length };
     }
   }
   m = pathOk ? stickyAt(COMMIT, text, at) : null;
-  if (m && !isWord(text.charAt(at + m[0].length)) && /\d/.test(m[0]) && /[a-f]/.test(m[0])) {
-    return { mark: { kind: 'commit', id: m[0], text: m[0] }, end: at + m[0].length };
+  if (m === null) return null;
+  const end = at + m[0].length;
+  const shaShape = /\d/.test(m[0]) && /[a-f]/.test(m[0]) && !EXPONENT.test(m[0]);
+  if (shaShape && !wordAfter(text, end) && text.charAt(end) !== '-' && !runsOnAfterDot(text, end)) {
+    return { mark: { kind: 'commit', id: m[0], text: m[0] }, end };
   }
   return null;
 }
@@ -137,7 +162,7 @@ function spacedWord(text: string, at: number): { word: string; end: number } | n
   const m = stickyAt(SPACED_WORD, text, at);
   if (m === null) return null;
   const end = at + m[0].length;
-  return isWord(text.charAt(end)) ? null : { word: m[1]!, end };
+  return wordAfter(text, end) ? null : { word: m[1]!, end };
 }
 
 /** S3's tail after a name or a subject ending at `at`: whitespace, at most one `STATUS_LINKERS` word and more
@@ -172,7 +197,7 @@ export function markRuns(text: string): readonly MarkRun[] {
   };
   let i = 0;
   while (i < text.length) {
-    if (isWord(text.charAt(i - 1))) {
+    if (wordBefore(text, i)) {
       i += 1;
       continue;
     }
@@ -206,7 +231,7 @@ export function wholeMark(text: string): Mark | null {
  *  one (or is longer than one: `Failure`). */
 export function leadingStatus(text: string): { word: string; tone: StatusTone } | null {
   const m = /^[A-Za-z]+/.exec(text);
-  if (m === null || isWord(text.charAt(m[0].length))) return null;
+  if (m === null || wordAfter(text, m[0].length)) return null;
   const tone = statusTone(m[0]);
   return tone === null ? null : { word: m[0], tone };
 }
