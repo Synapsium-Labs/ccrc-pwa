@@ -885,7 +885,7 @@ describe('delegation PR7: the adoption marker has no writer in the tree (W5-X1)'
   it('the files that name its constant are the definer and the lane\'s adopt step, and none reaches a write', () => {
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('DELEGATION_ADOPT_MARKER')).map(rel).sort();
-    expect(holders).toEqual([DEFINER]);
+    expect(holders).toEqual(['server/src/coord/delegationAdoptStep.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });

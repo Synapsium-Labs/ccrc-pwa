@@ -97,6 +97,7 @@ import { DelegationDurability, type DelegationDurableBatch } from './coord/deleg
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
 import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
 import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
+import { adoptionHealthShown, emptyAdoptLaneMemory, runAdoptStep } from './coord/delegationAdoptStep.js';
 import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
 import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import { nodeDelegationFilePort } from './coord/delegation-file-port.js';
@@ -10257,6 +10258,8 @@ class DelegationLane {
   private absentListings = { counts: new Map<string, number>(), heads: new Map<string, string>(), uncensused: 0 };
   /** PR6: the carrier step's memory (standing refusals, logged refusals, known-released unowned carriers) and its last counts. */
   private readonly carrierMemory = emptyCarrierLaneMemory();
+  /** PR7: the adoption step's memory (the decider's watch, the standing attention keys, the audits asked and held, the logged lines). */
+  private readonly adoptMemory = emptyAdoptLaneMemory();
   private verdicts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
   private reconciled = false;
   /** When (the pass's clock) the last reconcile completed: the breaker vouches for the counts only while it is recent (M-1). */
@@ -10728,8 +10731,9 @@ class DelegationLane {
     const unlisted = this.durable !== null && this.durable.tailQuarantineUnmeasured();
     // PR5b (D-7852): unreleased leases whose project the last census did not reach; absent while none, so an older reader sees no change.
     const uncensused = this.absentListings.uncensused, carriers = delegationCarrierHealthShown(this.carrierMemory.health);   // PR6
+    const adoption = adoptionHealthShown(this.adoptMemory);                                                                    // PR7
     return { ...health, ...(healed === null ? {} : { lastTailHeal: healed }), ...(unlisted ? { tailQuarantineUnmeasured: true as const } : {}),
-      ...(uncensused > 0 ? { uncensusedLeases: uncensused } : {}), ...(carriers === null ? {} : { carriers }) };
+      ...(uncensused > 0 ? { uncensusedLeases: uncensused } : {}), ...(carriers === null ? {} : { carriers }), ...(adoption === null ? {} : { adoption }) };
   }
 
   /** Wave 4: the projection as of the last pass, decided in L1 (`projectDelegation`); null while there is nothing measured to
@@ -10937,6 +10941,14 @@ class DelegationLane {
             const out = await durable.releaseLease({ ...r, at: formatDelegationInstant(pass.now), resolvesThrough: null }).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
             if (out instanceof Error || out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release ${out instanceof Error ? `threw: ${out.message}` : `refused: ${out.refusal}: ${out.detail}`}`);
             else { this.absentListings.counts.delete(r.leaseId); this.absentListings.heads.delete(r.leaseId); }
+          }
+          // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
+          if (durable.state().phase === 'ready' && !pass.signal.aborted) {
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
+            await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
+              notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
+            }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, registryListed: this.registryListed,
+              incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
           }
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();

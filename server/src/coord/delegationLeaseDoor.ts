@@ -77,9 +77,11 @@ async function readyApplier(d: LeaseDoorDeps): Promise<{ durable: DelegationDura
 /** The box has the carrier's writer (`ccdCan`'s `leaseMark` row, the verb question asked once), so a keep waits for the read-back. */
 const carrierMarks = (d: LeaseDoorDeps): boolean => ccdCan(d.fleetState, 'leaseMark');
 
-/** The box can hold a tree: it marks the carrier, takes the orphan act's lock while it does (D-8037), and its orphan rung skips a held tree. */
-const boxHolds = (d: LeaseDoorDeps): boolean =>
-  carrierMarks(d) && capSupported(d.fleetState, LEASE_MARK_LOCK_CAP) && capSupported(d.fleetState, ORPHAN_LEASE_CAP);
+/** The box can hold a tree: it marks the carrier, takes the orphan act's lock while it does (D-8037), and its orphan rung skips a held tree
+ *  (D-8040). The ONE predicate: the doors and the lane's adoption step (PR7) both ask it. Unmeasured capabilities answer false. */
+export const boxHoldsTrees = (fleetState: Pick<FleetState, 'ccdVerbs'> | undefined): boolean =>
+  ccdCan(fleetState, 'leaseMark') && capSupported(fleetState, LEASE_MARK_LOCK_CAP) && capSupported(fleetState, ORPHAN_LEASE_CAP);
+const boxHolds = (d: LeaseDoorDeps): boolean => boxHoldsTrees(d.fleetState);
 
 /** One act through a PR5b door, turned into the doors' answer; a throw (a fold refusal, a failed application) is not confirmed durable. */
 async function settle(durable: DelegationDurability, act: () => Promise<DelegationLeaseActOutcome>): Promise<LeaseDoorAnswer | 'moved'> {
