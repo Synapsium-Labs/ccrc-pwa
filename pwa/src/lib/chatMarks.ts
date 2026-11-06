@@ -39,9 +39,10 @@ export const STATUS_SUBJECTS: readonly string[] = ['ci', 'checks', 'tests', 'sui
 /** At most one of these may stand between a subject and its status word (S3). Lower case. */
 export const STATUS_LINKERS: readonly string[] = ['is', 'was', 'now'];
 
-/** Words that turn a status word around when they stand before it in its clause, or behind a colon right after it as
- *  its count ("passed: 0 of 12"): S3 then gives no label (chat reading Task C fix round 1, review 1584 F1; departure
- *  c-s3-negation, amending spec 3.3). Lower case, each a whole word. */
+/** Words that turn a status word around when they stand before it in its clause: S3 then gives no label (chat reading
+ *  Task C fix rounds 1 and 2, reviews 1584 F1 and 1592; departure c-s3-negation, amending spec 3.3). Lower case, each a
+ *  whole word, read with any `.`, `-` or `/` joining it to more word characters. Behind a colon right after the status
+ *  word only a count of zero does it: `ZERO_COUNT_AFTER`. */
 export const STATUS_NEGATORS: readonly string[] = ['no', 'none', 'not', 'never', 'nothing', '0', 'zero'];
 
 /** Bold openings that ask the operator to act (C1). Lower case; `leadKind` reads them. */
@@ -184,35 +185,104 @@ function statusAfter(text: string, at: number): { start: number; end: number; to
   return tone === null ? null : { start: next.end - next.word.length, end: next.end, tone };
 }
 
-/** Where a clause ends: `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the text's end, or a line break. */
-const CLAUSE_END = /[.!?;,:](?=\s|$)|\n/g;
 /** Where a sentence ends: `.`, `!` or `?` followed by a space or the text's end, or a line break. */
 const SENTENCE_END = /[.!?](?=\s|$)|\n/g;
-/** A whole word, digits included, for the negator test: `10` is one word, never `0`. */
-const NEGATOR_WORD = /[\p{L}\p{M}\p{N}_]+/gu;
-/** A colon right after a status word and the word behind it (`passed: 0 of 12`). */
-const COUNT_AFTER = /\s*:\s*([\p{L}\p{M}\p{N}_]+)/uy;
+/** One step of the negator scan: a clause end (group 1: `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the
+ *  text's end, or a line break), or a whole word, digits included, with any `.`, `-` or `/` joining it to more word
+ *  characters (`10`, `v0.0.1003`, `no-op`, `docs/no.md` are each one word; review 1592 F3). */
+const NEGATION_TOKEN = /([.!?;,:](?=\s|$)|\n)|[\p{L}\p{M}\p{N}_]+(?:[.\-/][\p{L}\p{M}\p{N}_]+)*/gu;
+/** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N", "/N" or
+ *  the clause's end ("passed: 0 of 12", "failed: none."; review 1592 F2). */
+const ZERO_COUNT_AFTER = /\s*:\s*(?:0|zero|none)(?:\s+of\s+\p{N}|\/\p{N}|(?=[^\S\n]*(?:[.!?;,:](?=\s|$)|\n|$)))/iuy;
 
 const isNegator = (word: string): boolean => STATUS_NEGATORS.includes(word.toLowerCase());
 
-/** Whether S3 withholds the label on the status word at `start`..`end` (c-s3-negation): a negator stands before it in
- *  its clause or is its count behind a colon, or its sentence ends in `?`. The mark before it stays either way. */
-function labelWithheld(text: string, start: number, end: number): boolean {
-  let clauseFrom = 0;
-  for (const m of text.slice(0, start).matchAll(CLAUSE_END)) clauseFrom = (m.index ?? 0) + m[0].length;
-  for (const m of text.slice(clauseFrom, start).matchAll(NEGATOR_WORD)) if (isNegator(m[0])) return true;
-  const count = stickyAt(COUNT_AFTER, text, end);
-  if (count !== null && isNegator(count[1]!)) return true;
-  SENTENCE_END.lastIndex = end;
-  const close = SENTENCE_END.exec(text);
-  return close !== null && close[0] === '?';
+/** Where a recognised name stands, in the scanned text's offsets. */
+interface Span {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** S3's withholding over one text (c-s3-negation): a text node's own, or, through the plugin, the flattened text of its
+ *  whole block, so a negator or a `?` in a neighbouring text node counts (review 1592 F4). It reads, for each label,
+ *  only the label's clause before it and its sentence after it. Labels are asked in order, so the scan only moves
+ *  forward: one pass over the text, however many labels and text nodes it holds (review 1592 F1). A label asked
+ *  before the last one restarts the scan, so the answer never depends on the order, only the cost does. */
+export class LabelScan {
+  private readonly names: Span[] = [];
+  private tokens = new RegExp(NEGATION_TOKEN.source, NEGATION_TOKEN.flags);
+  private pending: RegExpExecArray | null | undefined;
+  private skip = 0;
+  private clauseFrom = 0;
+  private negatorAt = -1;
+  private sentenceEnd: RegExpExecArray | null | undefined;
+  private lastStart = 0;
+  private readonly text: string;
+
+  constructor(text: string) {
+    this.text = text;
+  }
+
+  /** A recognised name at `start`..`end`: its own words are not negators (`run 0`, `#0`). */
+  name(start: number, end: number): void {
+    this.names.push({ start, end });
+  }
+
+  /** Whether the label on the status word at `start`..`end` is withheld: a negator stands before it in its clause,
+   *  its count behind a colon is zero, or its sentence ends in `?`. */
+  withheld(start: number, end: number): boolean {
+    if (start < this.lastStart) this.restart();
+    this.lastStart = start;
+    for (;;) {
+      if (this.pending === undefined) this.pending = this.tokens.exec(this.text);
+      const m = this.pending;
+      if (m === null || m.index >= start) break;
+      this.pending = undefined;
+      if (m[1] !== undefined) {
+        this.clauseFrom = m.index + m[0].length;
+        continue;
+      }
+      while (this.skip < this.names.length && this.names[this.skip]!.end <= m.index) this.skip += 1;
+      const inName = this.skip < this.names.length && this.names[this.skip]!.start <= m.index;
+      if (!inName && isNegator(m[0])) this.negatorAt = m.index;
+    }
+    if (this.negatorAt >= this.clauseFrom) return true;
+    if (stickyAt(ZERO_COUNT_AFTER, this.text, end) !== null) return true;
+    let close = this.sentenceEnd;
+    if (close === undefined || (close !== null && close.index < end)) {
+      SENTENCE_END.lastIndex = end;
+      close = this.sentenceEnd = SENTENCE_END.exec(this.text);
+    }
+    return close !== null && close[0] === '?';
+  }
+
+  private restart(): void {
+    this.names.sort((x, y) => x.start - y.start);
+    this.tokens = new RegExp(NEGATION_TOKEN.source, NEGATION_TOKEN.flags);
+    this.pending = undefined;
+    this.skip = 0;
+    this.clauseFrom = 0;
+    this.negatorAt = -1;
+    this.sentenceEnd = undefined;
+  }
+}
+
+/** Where a text node stands in its block, for S3's label check only: the block's `LabelScan` and the node's offset in
+ *  the block's flattened text. The plugin asks a block's text nodes in document order. */
+export interface LabelContext {
+  readonly scan: LabelScan;
+  readonly offset: number;
 }
 
 /** `text` split into runs: names, status words in S3's label position (right after a name or a `STATUS_SUBJECTS`
  *  word, with at most one `STATUS_LINKERS` word between), and the text between. The runs' texts joined are `text`,
- *  and no two text runs are adjacent. Never inside code: the plugin calls it on text nodes only. */
-export function markRuns(text: string): readonly MarkRun[] {
+ *  and no two text runs are adjacent. Never inside code: the plugin calls it on text nodes only. `context`, the node's
+ *  place in its block, is read by S3's withholding only: it never makes or moves a name or a label. */
+export function markRuns(text: string, context?: LabelContext): readonly MarkRun[] {
   const runs: MarkRun[] = [];
+  const offset = context?.offset ?? 0;
+  let own: LabelScan | undefined;
+  const scan = (): LabelScan => context?.scan ?? (own ??= new LabelScan(text));
   let plainFrom = 0;
   const plainUpTo = (to: number): void => {
     if (to > plainFrom) runs.push({ kind: 'text', text: text.slice(plainFrom, to) });
@@ -220,7 +290,7 @@ export function markRuns(text: string): readonly MarkRun[] {
   /** After a name or a subject ending at `end`: its status label, if S3 finds one; where the scan goes on. */
   const labelAfter = (end: number): number => {
     const s = statusAfter(text, end);
-    if (s === null || labelWithheld(text, s.start, s.end)) return end;
+    if (s === null || scan().withheld(s.start + offset, s.end + offset)) return end;
     plainUpTo(s.start);
     runs.push({ kind: 'status', text: text.slice(s.start, s.end), tone: s.tone });
     plainFrom = s.end;
@@ -236,6 +306,7 @@ export function markRuns(text: string): readonly MarkRun[] {
     if (name !== null) {
       plainUpTo(i);
       runs.push({ kind: 'mark', mark: name.mark });
+      scan().name(i + offset, name.end + offset);
       plainFrom = name.end;
       i = labelAfter(name.end);
       continue;
