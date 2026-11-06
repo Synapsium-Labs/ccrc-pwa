@@ -326,8 +326,13 @@ D-6992):
   reopens the most expensively earned safety property in the repo.
 - **A repository interface over `CoordStore`.** `DatabaseSync`'s *synchrony is a
   concurrency invariant*, stated in the store's own docstring.
-- **Splitting `coord/routes.ts` one-file-per-resource**, or a shared auth middleware —
-  D-36/D-39 are the price tag for two copies of one auth gate.
+- **Splitting `coord/routes.ts` one-file-per-resource**, or a shared auth middleware.
+  Re-affirmed by the operator on 2026-11-06 (D-8066), on new grounds: moving existing routes
+  stays rejected for the cost of the move, and because a moved route leaves what
+  `coord-pause-route.test.ts` reads. The old ground, "two copies of one auth gate", no longer
+  describes the code: the gate is one shared function, `checkMailToken` (`coord/token.ts`), and
+  D-36/D-39 happened at each call site. A **new** group of routes may have its own file if it
+  uses that gate and joins `box-token-census.test.ts`, as `coord/ledgersRoutes.ts` does.
 - **A `MAIL_DELIVERY_TRANSITIONS` table.** `RUN_TRANSITIONS` earns its place by encoding
   ~15 edges clients read as refusals; delivery has one invariant, so it gets one
   enforcement point (increment 5), not a table.
