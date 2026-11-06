@@ -22,3 +22,16 @@ run.
   267 files with no residue. Each version has 13 measured cells and one unmeasured cell, `interrupt-exit` (D-8064).
   `wf-iso-resume` misses its `r1-resumed` probe on each, as on all 14 versions before: that is an outcome, not an unmeasured
   cell. The raw root was removed after the capture's commit, and the rig README's leftover check printed nothing.
+- **A typed `/compact` fires two SubagentStops from 2.1.311** (D-8065, amended). On each of the five new versions the
+  compaction fires two SubagentStops between PreCompact and PostCompact, each with no agent type and an id no SubagentStart
+  named; 2.1.280 to 2.1.299 fire one. `session-hook-compact-carry.test.ts`'s row admits one or more and pins the count by
+  version range, and a row runs the real hook over 2.1.319's own payloads and holds that the second stop keeps the main
+  state as the first does.
+
+## Measured, not departures
+
+- **The hook's compaction comment is stale.** The comment above `compactions-write-no-hookstate` (D-5239) in
+  `ccd/session-hook.sh` still says a typed `/compact` fires "a SubagentStop". From 2.1.311 it fires two. Two readings,
+  which the fixtures do not decide: (i) a manual compaction now runs two agents, a real lane change; (ii) newer builds
+  retry the compaction against the mock, whose default reply is no summary, a rig artefact. The hook is out of this run's
+  scope, so the comment stands; the coordinator carries it to the Rider.
