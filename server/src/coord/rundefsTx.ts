@@ -1,5 +1,6 @@
 // D-5896 (ARCH-05, #551): the TRANSACTION half of `rundefs.ts`. The server's own mail writes live here. They are
-// `queueSystemMail`, its body `insertSystemMailTx`, and the stall watch's `queueStallNotice`. Each runs under `tx`.
+// `queueSystemMail`, its body `insertSystemMailTx`, the stall watch's `queueStallNotice` and the run-less `queueRunlessNotice`
+// (its run-less arm, shared with the delegation lane's lease notices). Each runs under `tx`.
 // `rundefs.ts` keeps the pure half: the markers, the hold-reason rule, the sibling rule and the mail vocabulary.
 // A policy file that needs only a marker now loads no transaction code. `tx` comes from `./tx.js` and not
 // `./db.js`, so even the two policy files that queue mail (`close.ts`, `kickoff.ts`) load no `node:sqlite`.
@@ -107,13 +108,13 @@ export function insertSystemMailTx(
   const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
   // Structurally impossible inside the caller's transaction — the row was
   // inserted three lines up and nothing else can see it. THROWN rather than
-  // ignored because both callers run this under `tx`, which rolls back on
+  // ignored because every caller runs this under `tx`, which rolls back on
   // throw and rethrows. If the impossible happens, the whole mail is withdrawn
   // (and, under `queueStallNotice`, a run notice's observation row with it: a
-  // run-less notice writes none) rather than accepted with the placeholder
+  // run-less notice, `queueRunlessNotice`'s, writes none) rather than accepted with the placeholder
   // envelope, which carries no `ack:` line and so names no delivery id to ack.
   //
-  // The throw ESCAPES to every caller, deliberately. Two functions call this
+  // The throw ESCAPES to every caller, deliberately. Three functions call this
   // one. The first is `queueSystemMail`, and through it that function's seven
   // callers in five files: `close.ts`'s `closeRun` and its module-private
   // `closeReviewRun` (the review close's own rejection), `dispatch.ts`'s
@@ -122,7 +123,8 @@ export function insertSystemMailTx(
   // (the ask pre-emption lane's parent nudge) and `FleetWatcher.sweepLanding`
   // (the merge queue's two landing notices, landing-order wave 2, which
   // catches the throw per row). The second is `queueStallNotice`
-  // below, the stall watch's notices, on a run or run-less. Both callers' false arms already mean
+  // below, the stall watch's notices on a run; its run-less arm is the third, `queueRunlessNotice`,
+  // which the delegation lane's lease notices call too. Every caller's false arm already means
   // "declined", a different and true statement a failure must not borrow.
   //
   // THAT LIST NAMES ITS CALLERS, and carries no line numbers, deliberately.
@@ -174,18 +176,32 @@ export function queueStallNotice(
   run: Pick<RunRow, 'id' | 'program' | 'wave' | 'waveOf'> | null,
   n: { detail: string; at: number; toId: string; kind: MailKind; subject: string; body: string },
 ): StallNoticeQueued {
+  if (run === null) return queueRunlessNotice(coord, n);
   return tx(coord.db, (): StallNoticeQueued => {
-    if (run === null) {
-      if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
-      const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
-        kind: n.kind, subject: n.subject, body: n.body });
-      return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
-    }
     const seen = coord.insertStallObservation(run.id, n.detail, n.at);
     if (!seen.recorded) return { queued: false, why: seen.why };
     const q = insertSystemMailTx(coord, run, { fromId: 'operator', toId: n.toId, runId: run.id,
       kind: n.kind, subject: n.subject, body: n.body });
     return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
+  });
+}
+
+/**
+ * A run-less notice from `operator`, deduped on its SUBJECT across every delivery state, in ONE transaction: `hasMailWithSubject`, then
+ * `insertSystemMailTx`. A subject already sent (outstanding, delivered, acked or parked) answers `duplicate` and writes nothing, so a
+ * notice whose subject names its fact (a lease and its generation, never a pass instant) is queued exactly once across restarts. The
+ * run-less arm of `queueStallNotice` (a coordinator's or a registry row's notice) and the delegation lane's lease notices call it. `tx`
+ * is not re-entrant: no caller may hold one around this.
+ */
+export function queueRunlessNotice(
+  coord: WatcherCoordPort,
+  n: { toId: string; kind: MailKind; subject: string; body: string },
+): StallNoticeQueued {
+  return tx(coord.db, (): StallNoticeQueued => {
+    if (coord.hasMailWithSubject('operator', null, n.toId, n.subject)) return { queued: false, why: 'duplicate' };
+    const q = insertSystemMailTx(coord, null, { fromId: 'operator', toId: n.toId, runId: null,
+      kind: n.kind, subject: n.subject, body: n.body });
+    return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: null };
   });
 }
 
