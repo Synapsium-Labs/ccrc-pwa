@@ -44,15 +44,15 @@ The column that holds the transcript, the inline ask, the strips and the compose
 
 ```mermaid
 flowchart LR
-  P["The pane<br/>(minus the gutter)"] --> C{"Wider than<br/>the skin's cap?"}
-  C -- "no" --> F["The column is the pane"]
-  C -- "yes" --> K["The column is the cap,<br/>centred in the pane"]
-  F --> S["Inside the column"]
-  K --> S
-  S --> PR["Prose: at most the chat prose measure,<br/>from the left edge"]
-  S --> W["Code, tables, tool cards, images:<br/>the full column"]
-  S --> B["Strips, inline ask, composer:<br/>the full column"]
-  S --> U["User bubble: right edge,<br/>at most 70% of the column"]
+  f1P["The pane<br/>(minus the gutter)"] --> f1C{"Wider than<br/>the skin's cap?"}
+  f1C -- "no" --> f1F["The column is the pane"]
+  f1C -- "yes" --> f1K["The column is the cap,<br/>centred in the pane"]
+  f1F --> f1S["Inside the column"]
+  f1K --> f1S
+  f1S --> f1PR["Prose: at most the chat prose measure,<br/>from the left edge"]
+  f1S --> f1W["Code, tables, tool cards, images:<br/>the full column"]
+  f1S --> f1B["Strips, inline ask, composer:<br/>the full column"]
+  f1S --> f1U["User bubble: right edge,<br/>at most 70% of the column"]
 ```
 *Figure 1. How the desk layout is decided. The skin sets the cap and the prose measure; everything except prose takes the column.*
 
@@ -121,15 +121,15 @@ A word from the status list is coloured only in a label position. Anywhere else 
 
 ```mermaid
 flowchart TD
-  W["A status word in a text node"] --> X{"Inside code, a fence<br/>or a link?"}
-  X -- "yes" --> N["Ink: never marked"]
-  X -- "no" --> A{"First word of a table cell?"}
-  A -- "yes" --> L["Label"]
-  A -- "no" --> B{"The whole text of a bold span?"}
-  B -- "yes" --> L
-  B -- "no" --> R{"Straight after a named object<br/>or a CI subject?"}
-  R -- "yes" --> L
-  R -- "no" --> N
+  f2W["A status word in a text node"] --> f2X{"Inside code, a fence<br/>or a link?"}
+  f2X -- "yes" --> f2N["Ink: never marked"]
+  f2X -- "no" --> f2A{"First word of a table cell?"}
+  f2A -- "yes" --> f2L["Label"]
+  f2A -- "no" --> f2B{"The whole text of a bold span?"}
+  f2B -- "yes" --> f2L
+  f2B -- "no" --> f2R{"Straight after a named object<br/>or a CI subject?"}
+  f2R -- "yes" --> f2L
+  f2R -- "no" --> f2N
 ```
 *Figure 2. The three label positions. A word reaches a label only through one of them.*
 
@@ -168,18 +168,18 @@ Avoiding mislinks of ordinary numbers:
 
 ```mermaid
 flowchart LR
-  A["Assistant text"] --> P["remarkChatMarks<br/>(both plugin lists)"]
-  G["chatMarks.ts (L1)<br/>name grammar, status words,<br/>subjects, action lead-ins"] --> P
-  P --> H["Tree with marks:<br/>kind and id, no URL"]
-  H --> R["CHAT_COMPONENTS (L4)<br/>mark becomes link or text"]
-  U["User text"] --> LK["linkify (L4)<br/>URLs, then names"]
-  G --> LK
-  LK --> R
-  X["Chat context (L4)<br/>repo slug, project, branch,<br/>known runs and items"] --> RH["refHref (L1)<br/>mark plus context to an address"]
-  R --> RH
-  RH --> N{"In-app?"}
-  N -- "yes" --> IA["inAppClick"]
-  N -- "no" --> EX["openExternal"]
+  f3A["Assistant text"] --> f3P["remarkChatMarks<br/>(both plugin lists)"]
+  f3G["chatMarks.ts (L1)<br/>name grammar, status words,<br/>subjects, action lead-ins"] --> f3P
+  f3P --> f3H["Tree with marks:<br/>kind and id, no URL"]
+  f3H --> f3R["CHAT_COMPONENTS (L4)<br/>mark becomes link or text"]
+  f3U["User text"] --> f3LK["linkify (L4)<br/>URLs, then names"]
+  f3G --> f3LK
+  f3LK --> f3R
+  f3X["Chat context (L4)<br/>repo slug, project, branch,<br/>known runs and items"] --> f3RH["refHref (L1)<br/>mark plus context to an address"]
+  f3R --> f3RH
+  f3RH --> f3N{"In-app?"}
+  f3N -- "yes" --> f3IA["inAppClick"]
+  f3N -- "no" --> f3EX["openExternal"]
 ```
 *Figure 3. Recognising is context-free and runs wherever the Markdown parses, including the worker. Resolving needs the session's context and happens at render time.*
 
