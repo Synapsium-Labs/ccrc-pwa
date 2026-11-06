@@ -119,6 +119,24 @@ describe('the chat draws a name as a link (chat reading Task L, D-8062)', () => 
     }
   });
 
+  // Review 1586 F2 and F3: a protocol-relative address keeps today's external arm; it neither throws (which dropped the whole
+  // message to the plain-text fallback) nor routes to the console path it resolves to.
+  it.each(['//', '///', '//a%', '//4294967296/x', '//host/runs', '//evil.example/s/abc', '//host/waiting/340'])(
+    'a link to the protocol-relative %j keeps the external arm and the message renders as Markdown', (href) => {
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      const { container } = assistant(`Open [this](${href}) now.`);
+      const body = container.querySelector('.msg-assist')!;
+      expect(body.querySelector('pre.msg-plain'), href).toBeNull();
+      expect(body.querySelector('p')?.textContent, href).toBe('Open this now.');
+      const [a, ...rest] = anchors(container);
+      expect(rest, href).toEqual([]);
+      expect(a!.getAttribute('target'), href).toBe('_blank');
+      expect(a!.getAttribute('rel'), href).toBe('noopener noreferrer');
+      fireEvent.click(a!);
+      expect(open, href).toHaveBeenCalledTimes(1);
+      expect(location.pathname, href).toBe('/s/sess-a');
+    });
+
   it('the worker path draws the same links as the sync path', async () => {
     const body = 'Merged #651 at 4c677d328; run 1527 and item 340 wait. Read `docs/superpowers/plans/p.md`. [board](/runs)';
     const sync = assistant(body).container.querySelector('.msg-assist')!.innerHTML;
@@ -151,5 +169,42 @@ describe('the chat draws a name as a link (chat reading Task L, D-8062)', () => 
     expect(withNull).toBe(without);
     expect(without).not.toContain('<a ');
     expect(without).toContain('Merged #651 at 4c677d328; run 1527 waits. Read <code class="md-code">docs/superpowers/plans/p.md</code>.');
+  });
+});
+
+// Review 1586 F1: never a link inside a link. A whole-name code span inside a Markdown link draws the link's own anchor alone,
+// so one click does one thing: the link's.
+describe('a name inside a link draws that link alone (chat reading Task L, D-8062)', () => {
+  const GH = 'https://github.com/owner-a/repo-a';
+  it.each([
+    ['[`#651`](https://example.com/x)', 'https://example.com/x'],
+    ['[`run 1527`](/runs)', '/runs'],
+    [`[\`docs/superpowers/specs/x-design.md\`](${GH}/blob/main/docs/superpowers/specs/x-design.md)`, `${GH}/blob/main/docs/superpowers/specs/x-design.md`],
+    [`[\`4c677d328\`](${GH}/commit/4c677d328)`, `${GH}/commit/4c677d328`],
+  ])('%s draws one anchor and one click does one thing', (md, href) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { container } = assistant(`See ${md} now.`);
+    const all = anchors(container);
+    expect(all).toHaveLength(1);
+    const a = all[0]!;
+    expect(a.getAttribute('href')).toBe(href);
+    const code = a.querySelector('code');
+    expect(code?.className).toBe('md-code');
+    fireEvent.click(code!);
+    if (href.startsWith('/')) {
+      expect(open).not.toHaveBeenCalled();
+      expect(location.pathname + location.search).toBe(href);
+    } else {
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith(href, '_blank', 'noopener,noreferrer');
+      expect(location.pathname).toBe('/s/sess-a');
+    }
+  });
+
+  it('the same code span outside a link still links', () => {
+    const { container } = assistant('See `#651` and [`#651`](https://example.com/x).');
+    expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual([
+      'https://github.com/owner-a/repo-a/issues/651', 'https://example.com/x',
+    ]);
   });
 });

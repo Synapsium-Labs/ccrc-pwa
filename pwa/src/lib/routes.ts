@@ -201,18 +201,30 @@ export function matchRoute(path: string): RouteMatch | null {
 const CONSOLE_PATH = /^(\/[A-Za-z0-9._~%/-]*)([?#][^\s]*)?$/;
 
 /** A console path as the browser resolves it (dot-segments, `%2e` ones too), or null when it resolves to another origin's
- *  shape (`//host/…`): the path a tap opens, which is the one `matchRoute` must judge (review 1466 F8). */
+ *  shape (`//host/…`) or the URL parser refuses it: the path a tap opens, which is the one `matchRoute` must judge (review 1466
+ *  F8). Never throws (review 1586 F2). */
 function resolvedPath(path: string): string | null {
-  const resolved = new URL(path, 'https://console.invalid').pathname;
+  let resolved: string;
+  try {
+    resolved = new URL(path, 'https://console.invalid').pathname;
+  } catch {
+    return null;
+  }
   return resolved.startsWith('//') ? null : resolved;
 }
+
+/** A protocol-relative address (`//host…`, or `/\host…`, which a browser reads the same way): another origin's, never a console
+ *  path, refused before it is resolved, because it resolves to its host's path (`//host/runs` to `/runs`; review 1586 F3). */
+const PROTOCOL_RELATIVE = /^\/[/\\]/;
 
 /** The in-app address a console path is, or null (moved here from `ledgers/ledgerLinks.ts`, its console-path arm, so the ledgers
  *  and chat ask one decision: chat reading Task L, D-8062). A path the console routes (`matchRoute`, asked of the path as the
  *  browser resolves it) becomes that resolved path plus its query or fragment. Null for anything else: not a console path, the
- *  bare root, a protocol-relative `//host` or `/\host`, a dot-segment escape that resolves to another origin's shape, or a
- *  path the table does not route. */
+ *  bare root, a protocol-relative address (`//host…` or `/\host…`, refused before it is resolved, whatever path it would
+ *  resolve to), a dot-segment escape that resolves to another origin's shape, a path the URL parser refuses, or a path the
+ *  table does not route. Never throws: chat's `a` arm asks it of every Markdown link (review 1586 F2). */
 export function routedHref(text: string): string | null {
+  if (PROTOCOL_RELATIVE.test(text)) return null;
   const m = CONSOLE_PATH.exec(text);
   if (m === null || m[1] === undefined || m[1] === '/') return null;
   const path = resolvedPath(m[1]);

@@ -299,11 +299,18 @@ export function ChatLink({ target, children }: { target: RefTarget; children?: R
   );
 }
 
+/** True under a Markdown link's anchor (chat's `a` arm provides it): a name there draws as text, so a link never holds a link
+ *  and one click does one thing, the link's (review 1586 F1). The remark plugin marks nothing inside a link, but a whole-name
+ *  code span is decided at render time (R13), where only this tells it it sits inside one. */
+const InsideLinkContext = createContext(false);
+
 /** A recognised name: a link where `refHref` resolves it with the session's context (`ChatRefsContext`), else its text only. No
- *  context (a chat with no session around it) or no address keeps the name plain text, never a link that goes nowhere. */
+ *  context (a chat with no session around it), no address, or a place inside a link keeps the name plain text, never a link
+ *  that goes nowhere and never a link inside a link. */
 export function ChatRef({ mark, children }: { mark: Mark; children?: ReactNode }): ReactNode {
   const ctx = useContext(ChatRefsContext);
-  const target = ctx === null ? null : refHref(mark, ctx);
+  const insideLink = useContext(InsideLinkContext);
+  const target = ctx === null || insideLink ? null : refHref(mark, ctx);
   return target === null ? <>{children}</> : <ChatLink target={target}>{children}</ChatLink>;
 }
 
@@ -346,7 +353,11 @@ export const CHAT_COMPONENTS: Components = {
     // A path the console routes moves within the app (Task L); anything else, an unrouted or protocol-relative path included,
     // keeps the external arm.
     const inApp = href === undefined ? null : routedHref(href);
-    return <ChatLink target={inApp === null ? { href: href ?? '', external: true } : { href: inApp, external: false }}>{children}</ChatLink>;
+    return (
+      <ChatLink target={inApp === null ? { href: href ?? '', external: true } : { href: inApp, external: false }}>
+        <InsideLinkContext value>{children}</InsideLinkContext>
+      </ChatLink>
+    );
   },
   img({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;

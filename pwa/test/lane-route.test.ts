@@ -73,4 +73,14 @@ describe('routedHref', () => {
     'is null for a path the console must not open in the app: %j', (text) => {
       expect(routedHref(text)).toBeNull();
     });
+
+  // Review 1586 F2 and F3: a protocol-relative address is refused before it is resolved, so it never throws and never routes
+  // to the console path it would resolve to (`//host/runs` resolves to `/runs`).
+  it.each([
+    '//', '///', '//a%', '//a%25', '//a%20b', '//4294967296/x', '//host/runs', '//evil.example/s/abc', '//host/waiting/340',
+    '/\\host/runs',
+  ])('never throws and is null for the protocol-relative %j', (text) => {
+    expect(() => routedHref(text)).not.toThrow();
+    expect(routedHref(text)).toBeNull();
+  });
 });
