@@ -42,7 +42,7 @@ import {
   goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
-import { ListGroup, WaitingScreen } from './WaitingScreen';
+import { ListGroup, NotCurrentLine, WaitingScreen } from './WaitingScreen';
 import { actsOpen, itemSource, listSource } from './savedCopy';
 import { refetchWaiting } from './waitingStore';
 import './ledgers.css';
@@ -371,9 +371,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   return (
     <div className="wl-route">
       <ItemNav id={id} back={way} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
-      {source.kind === 'saved' && item !== null && (
-        <p className="wl-note" role="status" data-current="false">{savedListWords(source.savedAt, now)}</p>
-      )}
+      {source.kind === 'saved' && item !== null && <NotCurrentLine words={savedListWords(source.savedAt, now)} />}
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );

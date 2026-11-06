@@ -164,6 +164,12 @@ export function ClearedTrail({ items, where, now }: {
   );
 }
 
+/** The line over a list or an item drawn from the device's saved copy, saying it is not current (console speed, Task C4;
+ *  spec §2.6, D16): ONE leaf, drawn by this screen and by the item's route, in the place the waiting line stands. */
+export function NotCurrentLine({ words }: { words: string }): ReactNode {
+  return <p className="wl-note" role="status" data-current="false">{words}</p>;
+}
+
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
   const pick = (programme: string | null): void => props.onFilter?.(programme);
@@ -196,7 +202,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   return (
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
-      {props.notCurrent !== undefined && <p className="wl-note" role="status" data-current="false">{props.notCurrent}</p>}
+      {props.notCurrent !== undefined && <NotCurrentLine words={props.notCurrent} />}
       {empty
         ? <p className="wl-note">{EMPTY_WORD}</p>
         : (
