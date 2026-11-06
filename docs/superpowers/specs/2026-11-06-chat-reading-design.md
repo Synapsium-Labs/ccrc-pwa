@@ -1,14 +1,14 @@
 # Chat reading at a desk: width, colour and links
 
-**Spec** · 2026-11-06 · Status: Draft · Owner: the desktop-polish coordinator · Linear: none · Related: `docs/superpowers/specs/2026-10-31-programme-ledgers-design.md` (D27, D28), `docs/superpowers/plans/2026-10-22-desktop-polish.md` (T4a, D-7234), mockup `docs/superpowers/specs/2026-11-06-chat-reading-mockup.html`
+**Spec** · 2026-11-06 · Status: Approved 2026-11-06 · Owner: the desktop-polish coordinator · Linear: none · Related: `docs/superpowers/specs/2026-10-31-programme-ledgers-design.md` (D27, D28), `docs/superpowers/plans/2026-10-22-desktop-polish.md` (T4a, D-7234), mockup `docs/superpowers/specs/2026-11-06-chat-reading-mockup.html`, plan `docs/superpowers/plans/2026-11-06-chat-reading.md`
 
 ## In short
 
-The operator asked for three things in the session chat at a desk: use the pane's width, use colour in the assistant's prose, and link the names the chat uses to their objects. This spec proposes all three for the chat only; phones and the Docs reader do not change.
+The operator asked for three things in the session chat at a desk: use the pane's width, use colour in the assistant's prose, and link the names the chat uses to their objects. This spec sets all three for the chat only; the width changes at a desk only, and the Docs reader does not change.
 **Width:** the chat column grows with the pane, up to a cap per skin. Prose keeps a readable measure. Code, tables, tool cards, the strips and the composer take the full column.
 **Colour:** prose gains hue in four places only: bold lead-ins, status words in a label position, links to named objects, and the markers of an action list. Every colour is an existing palette token, and every pair measured at 4.80:1 or better in all twelve palettes.
 **Links:** one pure recogniser module marks `#n`, `run N`, `item N`, repository document paths and commit SHAs. The renderer resolves each mark to a console page, the Docs reader or GitHub, and the existing `linkify` uses the same module for user text.
-**Please check:** the four calls in §6 marked as waiting on you, and the mockup.
+**Decided:** the operator approved the recommendations on 2026-11-06 ("Chat design - as recommended"), so every call in §6 is agreed: the wide column, blue informational lead-ins, document links at the session's branch, and a whole-span name in inline code links.
 
 ## 1. Context
 
@@ -38,7 +38,7 @@ What exists on `main` (sourced):
 
 This section covers how the chat uses the pane from 900 px up. Below 900 px nothing changes.
 
-### 2.1 The recommendation: a wide column, with prose kept to a measure
+### 2.1 The chosen layout: a wide column, with prose kept to a measure
 
 The column that holds the transcript, the inline ask, the strips and the composer grows with the pane up to a cap set by the skin. Inside it, prose (paragraphs, lists, headings, quotes, callouts) keeps a readable measure and starts at the column's left edge. Code blocks, tables, tool cards and images take the full column, as do the strips and the composer. The user's bubble stays right-aligned, so it now sits at the column's right edge, as in most chat apps.
 
@@ -67,11 +67,11 @@ Notes for the planner:
 - `--measure-chat` already exists, so only its values change. `--measure-chat-prose` is a new length role in `SKIN_TOKENS`; it is a length, not a colour, so the rule that a skin owns no colour still holds. The chat reads it in `chat.css`, scoped to `.chat-item .msg-assist`. `--measure-prose` and the Docs reader do not change.
 - The column keeps `min(var(--measure-chat), 100%)`, so with the inspector rail open it still yields to the pane.
 - The inline ask keeps its rule of being 2 × `--sp-4` narrower than the column, so it lines up with the cards.
-- Footing: the px figures for ch are judgement (Geist's "0" at about 0.6 em). Plan step 1 measures them in the browser at 1280, 1600 and 2560 px.
+- Footing: the px figures for ch are judgement (Geist's "0" at about 0.6 em). The plan's width task measures them in the browser at 1280, 1600 and 2560 px.
 
 ### 2.2 The alternative: widen the centred column
 
-Keep today's centred column and raise `--measure-chat` to about 1040 px (Refined) and 1120 px (Instrument). Prose stays at 72ch, centred inside the column. This is a one-token change with no layout work. It also keeps "the middle only" shape the operator objected to, and on a 2560 px pane it still leaves more than half the pane empty. It is the fallback if the operator prefers centred reading.
+Keep today's centred column and raise `--measure-chat` to about 1040 px (Refined) and 1120 px (Instrument). Prose stays at 72ch, centred inside the column. This is a one-token change with no layout work. It also keeps "the middle only" shape the operator objected to, and on a 2560 px pane it still leaves more than half the pane empty. Not chosen (R1, 2026-11-06).
 
 | | Recommended (§2.1) | Alternative (§2.2) |
 |---|---|---|
@@ -161,7 +161,7 @@ Avoiding mislinks of ordinary numbers:
 - **Only after a keyword.** A bare number never links; `run`, `review`, `item` or `#` must come first.
 - **Small ids must be known.** A `run N` or `item N` whose number has fewer than three digits links only when the console already holds that run or item (the runs frame, the Waiting on you store). This keeps "run 2 times" and "item 3 of the list" as text.
 - **A repository is required.** `#n` and a commit link only when the session's project has a measured repo (`state: 'named'`). Otherwise they stay text, never a link to a guess.
-- **Never inside code.** A fenced block, an inline code span, an existing link and an image are never touched.
+- **Never inside code, with one exception.** A fenced block, an existing link and an image are never touched. An inline code span is touched only when its whole text is one recognised name (R13), such as a document path or a commit SHA written in backticks; the span then links as that name and keeps its code look. Any other inline code span stays as it is.
 - **A name the renderer cannot resolve renders as plain text**, never as link-coloured text that goes nowhere.
 
 ### 4.2 One module decides, the renderer acts
@@ -184,7 +184,7 @@ flowchart LR
 *Figure 3. Recognising is context-free and runs wherever the Markdown parses, including the worker. Resolving needs the session's context and happens at render time.*
 
 - **`pwa/src/lib/chatMarks.ts` (L1, new).** It holds the one recogniser table: the name grammar, the status words, the subjects and the action lead-ins, each written once. It exports `markRuns(text)`, which splits plain text into text runs and marks, and `refHref(mark, ctx)`, which returns an address or `null`.
-- **`remarkChatMarks` (L1, new).** It walks mdast text nodes, skipping `inlineCode`, `code`, `link`, `linkReference` and `html`. It replaces each mark with a node carrying `data-mark-kind` and `data-mark-id` (and a class on lead-in paragraphs and status labels). It writes no URL. It joins `CHAT_REMARK_PLUGINS` and the worker's chat-profile list, never the docs profile.
+- **`remarkChatMarks` (L1, new).** It walks mdast text nodes, skipping `inlineCode`, `code`, `link`, `linkReference` and `html` (a whole-span name in inline code is resolved at render time, R13). It replaces each mark with a node carrying `data-mark-kind` and `data-mark-id` (and a class on lead-in paragraphs and status labels). It writes no URL. It joins `CHAT_REMARK_PLUGINS` and the worker's chat-profile list, never the docs profile.
 - **Resolving happens at render time.** The worker caches its parse by text, so a parse cannot see the session's repo or the known ids. The mark carries kind and id only. `CHAT_COMPONENTS` resolves it through `refHref` with a chat context that `SessionScreen` provides, and draws a link or plain text.
 - **`CHAT_COMPONENTS.a` stops sending every link to a new tab.** An in-app address (one starting with `/`) navigates through `inAppClick`. An external one keeps `openExternal`.
 - **`linkify` stays the one owner for user text.** It keeps its URL split, and runs `markRuns` over the text between URLs, so `#651` in the operator's own message links too. No second linkifier is added.
@@ -204,38 +204,40 @@ This section lists the checks a plan must include.
 
 ## 6. Decisions
 
-Each decision is marked as the coordinator's call (proposed, to be confirmed) or as waiting on the operator.
+The operator approved the recommendations on 2026-11-06 in the words "Chat design - as recommended". That settled the four calls that waited on them (R1, R5, R12, R13) to the recommended answers and confirmed the coordinator's calls, so every row is agreed.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
-| R1 | Desk layout | Wide column with prose at a measure; widen the centred column | Wide column, prose measured and left-aligned: it uses the pane and keeps lines readable | Waiting |
-| R2 | Column caps | Per skin; one value | Refined 1200 px, Instrument the pane (a log skin); prose 76ch and 88ch | Proposed |
-| R3 | Prose measure token | Change `--measure-prose`; new chat role | New role `--measure-chat-prose`, so the Docs reader keeps 72ch | Proposed |
-| R4 | Where hue goes | Everywhere useful; four places only | Lead-ins, status labels, names, action-list markers; body ink unchanged | Proposed |
-| R5 | Informational lead-ins | NOTE blue; bold ink only | NOTE blue, so every block has an anchor; ink only is the quieter option | Waiting |
-| R6 | Status recognition | Any occurrence; label positions only | Three label positions (§3.3), so ordinary uses of a word stay ink | Proposed |
-| R7 | Status colours | New tokens; the callouts' pairs | The callouts' pairs, already gated in every palette | Proposed |
-| R8 | Where recognising lives | In the renderer; one L1 module | `chatMarks.ts` plus one remark plugin, with resolving at render time | Proposed |
-| R9 | User-text links | Second linkifier; extend `linkify` | Extend `linkify`, the existing owner | Proposed |
-| R10 | Run target | New `/runs/<n>`; query on `/runs` | `/runs?run=<n>` now; a run page later | Proposed |
-| R11 | Small ids | Always link; digits floor; floor or known | Three or more digits, or an id the console already holds | Proposed |
-| R12 | Document links' ref | Default view; the session's branch | The session's branch, as `sessionDocsHref` does, so a spec written on that branch opens | Waiting |
-| R13 | Names in inline code | Never; when the whole span is one name | Never in this release; a whole-span name (a path, a SHA) is the open question below | Waiting |
-| R14 | D-N, mail, session ids | Now; later | Later: each needs a new read or route (§4.1) | Proposed |
+| R1 | Desk layout | Wide column with prose at a measure; widen the centred column | Wide column, prose measured and left-aligned: it uses the pane and keeps lines readable. The operator, 2026-11-06 | Agreed |
+| R2 | Column caps | Per skin; one value | Refined 1200 px, Instrument the pane (a log skin); prose 76ch and 88ch | Agreed |
+| R3 | Prose measure token | Change `--measure-prose`; new chat role | New role `--measure-chat-prose`, so the Docs reader keeps 72ch | Agreed |
+| R4 | Where hue goes | Everywhere useful; four places only | Lead-ins, status labels, names, action-list markers; body ink unchanged | Agreed |
+| R5 | Informational lead-ins | NOTE blue; bold ink only | NOTE blue for informational lead-ins, amber for action lead-ins, so every block has an anchor. The operator, 2026-11-06 | Agreed |
+| R6 | Status recognition | Any occurrence; label positions only | Three label positions (§3.3), so ordinary uses of a word stay ink | Agreed |
+| R7 | Status colours | New tokens; the callouts' pairs | The callouts' pairs, already gated in every palette | Agreed |
+| R8 | Where recognising lives | In the renderer; one L1 module | `chatMarks.ts` plus one remark plugin, with resolving at render time | Agreed |
+| R9 | User-text links | Second linkifier; extend `linkify` | Extend `linkify`, the existing owner | Agreed |
+| R10 | Run target | New `/runs/<n>`; query on `/runs` | `/runs?run=<n>` now; a run page later | Agreed |
+| R11 | Small ids | Always link; digits floor; floor or known | Three or more digits, or an id the console already holds | Agreed |
+| R12 | Document links' ref | Default view; the session's branch | The session's branch, as `sessionDocsHref` does, so a spec written on that branch opens. The operator, 2026-11-06 | Agreed |
+| R13 | Names in inline code | Never; when the whole span is one name | When the whole span is one recognised name it links and keeps its code look; any other span never. The operator, 2026-11-06 | Agreed |
+| R14 | D-N, mail, session ids | Now; later | Later: each needs a new read or route (§4.1) | Agreed |
 
 ## Where things stand
 
 ### Agreed
 
-- The three asks and their scope (chat only, desk only for width, phones and Docs reader unchanged): the operator, 2026-11-06.
+- The three asks and their scope (chat only, desk only for width, the Docs reader unchanged): the operator, 2026-11-06.
 - Every colour is an existing palette token, and the chat's rules are scoped away from the Docs reader, as under D-7234.
+- **R1:** a wide column, with prose held to a readable measure (§2.1). The operator, 2026-11-06: "Chat design - as recommended".
+- **R5:** informational lead-ins in the NOTE blue, action lead-ins in amber (§3.1). The operator, 2026-11-06, in the same words.
+- **R12:** a document path in a session opens at that session's branch (§4.1). The operator, 2026-11-06, in the same words.
+- **R13:** an inline code span whose whole text is one recognised name becomes a link (§4.1). The operator, 2026-11-06, in the same words.
+- The coordinator's calls R2 to R4, R6 to R11 and R14, as §6 states them, confirmed by the same approval.
 
 ### Waiting on you
 
-- **R1:** the wide column with measured prose (recommended), or the wider centred column. See the mockup.
-- **R5:** informational lead-ins in the NOTE blue, or bold ink with only the action lead-ins in amber.
-- **R12:** whether a document path in a session opens at that session's branch (recommended) or at the default branch.
-- **R13:** whether an inline code span whose whole text is one name (a document path, a commit) becomes a link. Models usually put paths in code spans, so with "never" most document paths stay unlinked.
+- Nothing. The plan, `docs/superpowers/plans/2026-11-06-chat-reading.md`, is next.
 
 ### Later
 
