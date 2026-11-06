@@ -8,10 +8,10 @@ Leftovers from the architecture epic audit. One PR.
 
 The spec's W2 exit reads "7 → 1" ladders and "6 readers → 1 reading plus 4 named policies". Measured on this tree:
 
-- **`statusLadders()` reads 2**, `presenceOf` and `FleetWatcher.mailPass`. The mail pass weighs the pane, the `.hibernated` stamp and the lifecycle itself to choose its gate.
-- **`rawTurnWordReaders()` reads 10**, `turnWordOf` and nine readers still comparing the word they hold: six stall lane functions, the idle-compact nudge, `interruptVerdict` and its route in `buildServer`.
+- **`statusLadders()` reads 2 functions and 10 facts**: `presenceOf` and `FleetWatcher.mailPass`. The mail pass weighs the pane, the `.hibernated` stamp and the lifecycle itself to choose its gate.
+- **`rawTurnWordReaders()` reads 10 functions and 14 comparisons**: `turnWordOf` and nine readers still comparing the word they hold: six stall lane functions, the idle-compact nudge, `interruptVerdict` and its route in `buildServer`.
 
-Neither is moved here: both would be behaviour work with their own characterization. The pins hold them where they are, so the counts can only go down. `changeLatchSites()` at 0 needed no pin: `single-definition/advance-switches.test.ts` has held it since D-5861.
+Neither is moved here: both would be behaviour work with their own characterization. The pins hold them where they are, so the counts can only go down. Both queries list one row per site, not one per function: `buildServer` holds the routes, so a list of functions would miss a new route that reads the raw word. `changeLatchSites()` at 0 needed no pin: `single-definition/advance-switches.test.ts` has held it since D-5861.
 
 ## One behaviour note
 
