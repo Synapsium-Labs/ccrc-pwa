@@ -152,19 +152,33 @@ describe('the key hints under the composer', () => {
 });
 
 describe('the reading column', () => {
-  it('the transcript\'s column reads min(var(--measure-chat), 100%)', () => {
+  /** Every `@media (min-width: 900px)` block of chat.css, as its list of rules (selector list, body). The block may hold
+   *  more than the column's rule (D-8059 adds the chat prose measure and the user bubble beside it). */
+  const deskBlocks = (): { selectors: string[]; body: string }[][] => {
     const css = readFileSync(path.join(SRC, 'session', 'chat.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    const block = /@media \(min-width: 900px\) \{\s*([^{}]*)\{([^}]*)\}\s*\}/g;
-    const found = [...css.matchAll(block)].find((m) => (m[1] ?? '').split(',').map((s) => s.trim()).includes('.chat-item'));
+    const block = /@media \(min-width: 900px\) \{((?:\s*[^{}]*\{[^}]*\})*)\s*\}/g;
+    return [...css.matchAll(block)].map((m) => [...(m[1] ?? '').matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map((r) => ({ selectors: (r[1] ?? '').split(/,(?![^(]*\))/).map((s) => s.trim().replace(/\s+/g, ' ')), body: r[2] ?? '' })));
+  };
+  const columnBlock = () => deskBlocks().find((rules) => rules.some((r) => r.selectors.includes('.chat-item')));
+
+  it('the transcript\'s column reads min(var(--measure-chat), 100%)', () => {
+    const found = columnBlock()?.find((r) => r.selectors.includes('.chat-item'));
     expect(found, 'a ≥900 rule for .chat-item').toBeDefined();
-    const selectors = found?.[1] ?? '';
-    const body = found?.[2] ?? '';
-    const list = selectors.split(',').map((s) => s.trim());
+    const list = found?.selectors ?? [];
+    const body = found?.body ?? '';
     expect(list).toEqual(expect.arrayContaining(['.chat-item', '.composer']));
     expect(body).toMatch(/max-width:\s*min\(var\(--measure-chat\),\s*100%\)/);
     expect(body).toMatch(/margin-inline:\s*auto/);
     // A max-width, never a fixed width: at 1600 with the inspector rail the column has to yield.
     expect(body).not.toMatch(/(^|[;\s])width:\s*var\(--measure-chat\)/);
+  });
+
+  it('the prose rule sits inside the same ≥900 block family as the column rule', () => {
+    // D-8059: the chat prose measure applies where the column does, from 900 up, and never on a phone.
+    const prose = columnBlock()?.find((r) => r.selectors.some((s) => s.startsWith('.chat-item .msg-assist > :is(')));
+    expect(prose, 'the chat prose rule, in the column\'s ≥900 block').toBeDefined();
+    expect(prose?.body ?? '').toMatch(/max-width:\s*var\(--measure-chat-prose\)/);
   });
 });
 
