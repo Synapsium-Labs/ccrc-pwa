@@ -23,7 +23,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { LC_CAP_TOKEN } from '../src/coord/mirrorplan.js';
 import { genFile } from './lifecycleHelpers.js';
-import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS, readArchivedHeld } from '../../shared/api.js';
+import { LC_ACT_UNKNOWN, LC_DIR_NAME, LIFECYCLE_ACTS, delegationCarrierHealthOf, readArchivedHeld } from '../../shared/api.js';
 import { EXPIRE_CAP } from '../src/ccdargv.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { DELEGATION_JOURNAL_FILE, DELEGATION_TORN_DIR, buildDelegationJournalRecord, encodeDelegationJournalRecord } from '../src/coord/delegation-journal.js';
@@ -438,6 +438,22 @@ describe('/api/fleet/health: the delegation observation health (wave 3, Task 13)
       } finally { await app.close(); }
     });
   }
+
+  it('W5-K14: the delegation block carries the lane\'s carrier counts as the lane reports them, and nothing else moves', async () => {
+    const { app, watcher, runLane } = await lane();
+    try {
+      await runLane();
+      const before = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect('carriers' in before.delegation!, 'a lane that counted nothing writes no member').toBe(false);
+      expect(delegationCarrierHealthOf(before.delegation! as never)).toBeNull();
+      const counts = { marked: 2, pending: 0, unsupported: 0, mismatched: 1, unmeasured: 0, unowned: 0, refused: 3 };
+      (watcher as unknown as { delegationLane(): { carrierMemory: { health: unknown } } }).delegationLane().carrierMemory.health = counts;
+      const after = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Body;
+      expect(delegationCarrierHealthOf(after.delegation! as never), 'read through its one reader (review 1546 F7)').toEqual(counts);
+      const { carriers: _c, ...rest } = after.delegation!;
+      expect(rest).toEqual(before.delegation);
+    } finally { await app.close(); }
+  });
 
   it('an old fleet (a `ccd caps` list without the token) is unmeasured on the wire, never a zero or an eligible', async () => {
     const { app, runLane } = await lane({}, ['caps', 'ws-rm']);

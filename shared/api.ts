@@ -12155,12 +12155,36 @@ export interface DelegationObservationHealth {
    * from an older server: absence says none was counted, never that every lease was reached by an older lane.
    */
   uncensusedLeases?: number;
+  /**
+   * Wave 5 (PR6, D-8035): the lane's carrier step, counted, never acted on beyond its own marks. The counts are those of the last pass
+   * that planned the step. Absent whenever every count is zero, and from an older server: absence says nothing was counted, never that
+   * every carrier is marked. Read it through `delegationCarrierHealthOf`.
+   */
+  carriers?: DelegationCarrierHealth;
+}
+
+/** Wave 5 (PR6): what the lane's carrier step counted in its last pass (`server/src/coord/delegation-carrier.ts#planCarrierSteps`).
+ *  `marked`: leases whose journalled `seen` equals their generation, where no read this pass contradicted it (a lease not re-read this
+ *  pass is counted from the journal). `pending`: marks the per-pass bound left for a later pass. `unsupported`: leases that would get a
+ *  step on a box that reports `lease-mark-v1` (a released lease that never had a carrier gets none) on a box that does not, and leases
+ *  whose mark would hold a tree on a box that does not report `lease-mark-lock-v1` (D-8037). `mismatched`: a carrier ahead of its lease
+ *  or naming another sequence, state or identity, never overwritten. `unmeasured`: a carrier or listing that did not read. `unowned`: an
+ *  unreleased carrier no journal lease owns. `refused`: leases whose last mark the box refused in a word that stands until their
+ *  generation or tree changes, or until thirty passes have gone by (D-8039). */
+export interface DelegationCarrierHealth {
+  marked: number; pending: number; unsupported: number; mismatched: number; unmeasured: number; unowned: number; refused: number;
 }
 
 /** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every
  *  unreleased lease's project, or an older server's block, whose 0 never says an older lane reached them all). */
 export function delegationUncensusedLeasesOf(health: Pick<DelegationObservationHealth, 'uncensusedLeases'>): number {
   return typeof health.uncensusedLeases === 'number' ? health.uncensusedLeases : 0;
+}
+
+/** `carriers`' one reader (review 1546 F7): absence permits and reads as null, nothing counted (every count of the last pass that planned
+ *  the step was zero, or an older server's block). */
+export function delegationCarrierHealthOf(health: Pick<DelegationObservationHealth, 'carriers'>): DelegationCarrierHealth | null {
+  return typeof health.carriers === 'object' && health.carriers !== null ? health.carriers : null;
 }
 
 /** A torn delegation-journal tail the server healed: a crash or a failed append left a partial last line, the server kept those bytes

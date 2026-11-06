@@ -294,6 +294,9 @@ export interface NativeRemovedInput {
 
 /** Two consecutive successful listings with the admin record absent release the lease (spec §5.5). */
 export const DELEGATION_NATIVE_REMOVED_LISTINGS = 2;
+/** PR6 ruling 2 (review 1498 F4): at most this many native-removed releases a pass, oldest lease first (by its creating journal
+ *  sequence). A candidate past the cap keeps its count and head, and releases at a later pass only if that pass's listing still misses it. */
+export const DELEGATION_LEASE_RELEASES_PER_PASS = 8;
 
 /** One release `planNativeRemoved` asks for: the lease at the generation it read, why, and the last head a census saw (D-7796). */
 export interface NativeRemovedRelease {
@@ -313,6 +316,8 @@ export interface NativeRemovedRelease {
  * its count. The returned memory holds every unreleased lease with a count above 0, and the last head seen, a release candidate included:
  * the lane forgets a candidate only once its door answers `applied` or `unchanged` (D-8025, review 1498 F1), so a release that does
  * not land is planned again at the next listing with the same head. `uncensused` is the lane's health count (decided here, D-8025).
+ * At most `DELEGATION_LEASE_RELEASES_PER_PASS` releases are asked a pass, oldest lease first (PR6 ruling 2); a candidate past the cap is
+ * kept in the memory like any other.
  */
 export function planNativeRemoved(input: NativeRemovedInput): {
   release: readonly NativeRemovedRelease[];
@@ -325,7 +330,9 @@ export function planNativeRemoved(input: NativeRemovedInput): {
   const memory = new Map<string, number>();
   const lastHeads = new Map<string, string>();
   let uncensused = 0;
-  for (const lease of input.checkpoint.leases) {
+  const oldestFirst = [...input.checkpoint.leases].sort((a, b) => a.creatingJournalSequence - b.creatingJournalSequence
+    || (a.leaseId < b.leaseId ? -1 : a.leaseId > b.leaseId ? 1 : 0));
+  for (const lease of oldestFirst) {
     if (lease.releasedAt !== null) continue;
     const key = delegationTreeKey(lease.project, lease.adminRecord);
     const head = (input.censused.has(lease.project) ? input.heads.get(key) : undefined) ?? input.lastHeads.get(lease.leaseId);
@@ -340,7 +347,7 @@ export function planNativeRemoved(input: NativeRemovedInput): {
     if (input.listed.has(key) && !input.absent.has(key)) { keep(0); continue; }   // present, or a record whose tree is gone
     const count = prior + 1;
     keep(count);                                                    // a candidate too, until its release lands (review 1498 F1)
-    if (count < DELEGATION_NATIVE_REMOVED_LISTINGS) continue;
+    if (count < DELEGATION_NATIVE_REMOVED_LISTINGS || release.length >= DELEGATION_LEASE_RELEASES_PER_PASS) continue;   // past the cap: kept, counted
     release.push({ leaseId: lease.leaseId, expectGeneration: lease.generation,
       releaseReason: lease.disposition === 'promoted' ? 'transferred' : 'native-removed', lastHeadSha: head ?? null });
   }

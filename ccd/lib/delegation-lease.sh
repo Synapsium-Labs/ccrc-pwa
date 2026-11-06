@@ -333,8 +333,9 @@ cmd_ws_lease_mark() {   # ccd ws-lease-mark --lease <uuid> --generation <n> ... 
   { exec {lfd}>>"$dir/.locks/$lease.lock"; } 2>/dev/null \
     || { _dl_mark_refuse unmeasured "the lock $dir/.locks/$lease.lock could not be opened"; return 1; }
   flock -n "$lfd" || { exec {lfd}>&-; _dl_mark_refuse busy "another ws-lease-mark holds the lock of lease $lease"; return 1; }
+  _DL_ORPHAN_FDS=()
   _ws_reclaim_contained _dl_mark_locked; rc=$?
-  exec {lfd}>&-
+  for lfd in "$lfd" ${_DL_ORPHAN_FDS[@]+"${_DL_ORPHAN_FDS[@]}"}; do exec {lfd}>&-; done   # the lease lock, then each orphan lock (ruling 1)
   return "$rc"
 }
 
@@ -391,6 +392,28 @@ _dl_mark_locked() {   # everything the lock serialises (the flags, $dir and $rec
          || { _dl_mark_refuse no-tree "$common holds no worktree record $rec with a tree; nothing was written"; return 1; } ;;
     *) _dl_mark_refuse unmeasured "$DL_WHY"; return 1 ;;
   esac
+  # PR6 ruling 1 (review 1475 F11): the orphan act's own lock (`cmd_ws_orphan`'s `$REG/.orphan-<s16>.lock`), so a carrier is never
+  # written between `ws-orphan`'s in-lock ladder read and its `git worktree remove`. Its s16 is over the path the orphan census prints,
+  # git's RECORDED spelling ($DL_TREE_REC, the porcelain list's line); the physical one is locked too when it differs, in one fixed
+  # order, each with -n: no wait, so no cycle with `ws-orphan`, which holds the same lock while its rung reads the carrier. Held through
+  # the carrier's rename; `cmd_ws_lease_mark` closes them. A release never takes one. Like `ws-orphan`'s, the lock files are never removed.
+  if [[ -n "$tp" && "$state" != released ]]; then
+    local sp sp16 ofd spellings want
+    # review 1546 F11 and 1547 F4: the list is measured, and exactly one lock per distinct spelling is taken, or nothing is written
+    spellings=$(printf '%s\n' "$DL_TREE_REC" "$tp" | LC_ALL=C sort -u) && [[ -n "$spellings" ]] \
+      || { _dl_mark_refuse unmeasured "the spellings of the tree $tp could not be ordered; nothing was written"; return 1; }
+    while IFS= read -r sp; do
+      [[ -n "$sp" ]] || continue
+      sp16=$(printf '%s' "$sp" | _plat_sha256 | cut -d' ' -f1 | cut -c1-16) && [[ "$sp16" =~ ^[0-9a-f]{16}$ ]] \
+        || { _dl_mark_refuse unmeasured "the orphan lock of $sp could not be named"; return 1; }
+      { exec {ofd}>>"$REG/.orphan-$sp16.lock"; } 2>/dev/null \
+        || { _dl_mark_refuse unmeasured "the orphan lock $REG/.orphan-$sp16.lock could not be opened"; return 1; }
+      _DL_ORPHAN_FDS+=("$ofd")
+      flock -n "$ofd" || { _dl_mark_refuse busy "the orphan act holds the lock of the tree $sp; nothing was written"; return 1; }
+    done <<< "$spellings"
+    want=1; [[ -n "$DL_TREE_REC" && "$DL_TREE_REC" != "$tp" ]] && want=2   # review 1547 F4: one lock per distinct spelling, counted without sort
+    (( ${#_DL_ORPHAN_FDS[@]} == want )) || { _dl_mark_refuse unmeasured "took ${#_DL_ORPHAN_FDS[@]} orphan locks of the tree $tp for $want spellings; nothing was written"; return 1; }
+  fi
   if [[ -n "$tp" ]]; then
     # rule 6: no link below the root that holds the tree, as git recorded it
     troot=''

@@ -290,13 +290,13 @@ function rig(w: World, seams: Record<string, unknown> = {}): Rig {
 
 // ── the timing vocabulary (design: the phases, their enclosers, what `block` sums) ─────────────────────────────────────
 
-const TOP = ['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile'];
+const TOP = ['noteSessions', 'open', 'recover', 'root', 'load', 'expire', 'owners', 'flush', 'upkeep', 'prune', 'compact', 'reconcile', 'leaseActs'];
 const INNER = ['pre', 'readMetas', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
 const PARTS = ['attempts', 'leases', 'intervals', 'absence', 'repair'];
 const TIME_KEYS = [...TOP, ...INNER, ...PARTS, 'rewrite'];
 /** What `block` sums: the BLOCKING phases. Never the reads (`open recover root load owners readMetas`), `rewrite` (it overlaps its
  *  callers), `reconcile` (its parts are) or the effect parts (inside `effects`). */
-const BLOCK = ['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
+const BLOCK = ['noteSessions', 'expire', 'flush', 'upkeep', 'prune', 'compact', 'leaseActs', 'pre', 'prep', 'build', 'pairs', 'forced', 'lostForced', 'policy', 'effects'];
 const ENCLOSERS: Record<string, string[]> = {
   ...Object.fromEntries(INNER.map((k) => [k, ['reconcile']])),
   ...Object.fromEntries(PARTS.map((k) => [k, ['effects', 'reconcile']])),
@@ -906,6 +906,17 @@ describe('D-5692 R2: strictly more than 1,000 ms of BLOCKING time writes the lin
 });
 
 // ── R3 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe('PR6 ruling 2 (review 1498 F4): leaseActs is a blocking phase, so the slow line shows its own time', () => {
+  it('1,500 ms in leaseActs alone writes the line, counted in block and leaseActs, and none of it in other', async () => {
+    const sc = await scenario('std', { leaseActs: 1500 });
+    expect(sc.lines, 'leaseActs alone is slow enough to write the line').toHaveLength(1);
+    const m = parse(sc.lines[0]!);
+    expect(m.get('leaseActs')).toBe(1500);
+    expect(m.get('block'), 'block sums leaseActs').toBe(1500);
+    expect(m.get('other'), 'its time no longer sits in other').toBe(0);
+  });
+});
 
 describe('D-5692 R3: 1,500 ms inside a phase or part is that phase\'s, its enclosers\', and no other\'s', () => {
   interface Case { key: string; shape: Shape; rewriteAfter?: 'flush' | 'repair'; title: string }
