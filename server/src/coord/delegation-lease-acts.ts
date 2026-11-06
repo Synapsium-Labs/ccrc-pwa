@@ -10,7 +10,7 @@
 //
 // O5-8 is ruled (c): a resolve acts on a LEASE only. A `tree-<key>` is resolved as the unreleased lease on that tree, never by minting
 // one, and a tree with no unreleased lease refuses `tree-unleased`.
-import { isLeaseDoorRefusal, type LeaseDoorRefusal } from '../../../shared/api.js';
+import { isLeaseDoorRefusal, isSessionIdShape, type LeaseDoorRefusal } from '../../../shared/api.js';
 import {
   parseDelegationInstant,
   type DelegationAttemptMark,
@@ -46,6 +46,44 @@ export function parseLeaseTarget(param: string): LeaseDoorTarget | null {
   return tree === null ? null : { kind: 'tree', treeKey: tree[1]! };
 }
 
+// ── The requests, as the routes receive them (each refusal is `bad-request`) ────────────────────────────────────────────
+
+type BadRequest = { ok: false; detail: string };
+const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const keysAre = (v: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(v).sort().join(',') === [...keys].sort().join(',');
+
+/** Retain's body is exactly `{byId, byUuid}` (a session id and a non-empty string), then `:lease` is a lease id: in that order. */
+export function parseRetainRequest(body: unknown, param: string): { ok: true; leaseId: string; byId: string; byUuid: string } | BadRequest {
+  if (!isObject(body) || !keysAre(body, ['byId', 'byUuid'])) return { ok: false, detail: 'the body is exactly {byId, byUuid}' };
+  const { byId, byUuid } = body;
+  if (typeof byId !== 'string' || !isSessionIdShape(byId) || typeof byUuid !== 'string' || byUuid === '') {
+    return { ok: false, detail: 'byId is a session id and byUuid a non-empty string' };
+  }
+  const target = parseLeaseTarget(param);
+  if (target?.kind !== 'lease') return { ok: false, detail: 'the path names a lease id (a lowercase UUID)' };
+  return { ok: true, leaseId: target.leaseId, byId, byUuid };
+}
+
+/** The operator's keep carries no body (or `{}`), and `:lease` is a lease id. */
+export function parseOperatorRetainRequest(body: unknown, param: string): { ok: true; leaseId: string } | BadRequest {
+  if (body !== undefined && body !== null && !(isObject(body) && keysAre(body, []))) return { ok: false, detail: 'the body is empty: {}' };
+  const target = parseLeaseTarget(param);
+  if (target?.kind !== 'lease') return { ok: false, detail: 'the path names a lease id (a lowercase UUID)' };
+  return { ok: true, leaseId: target.leaseId };
+}
+
+/** The resolve's body is exactly `{action: 'attach', parent}` or `{action: 'foreign'}`, and `:lease` is a lease id or `tree-<64 hex>`. */
+export function parseResolveRequest(body: unknown, param: string):
+  { ok: true; target: LeaseDoorTarget; action: 'attach' | 'foreign'; parent: string | null } | BadRequest {
+  const attach = isObject(body) && keysAre(body, ['action', 'parent']) && body['action'] === 'attach'
+    && typeof body['parent'] === 'string' && isSessionIdShape(body['parent']);
+  const foreign = isObject(body) && keysAre(body, ['action']) && body['action'] === 'foreign';
+  if (!attach && !foreign) return { ok: false, detail: 'the body is exactly {action: \'attach\', parent: <session id>} or {action: \'foreign\'}' };
+  const target = parseLeaseTarget(param);
+  if (target === null) return { ok: false, detail: 'the path names a lease id (a lowercase UUID) or tree-<64 lowercase hex>' };
+  return { ok: true, target, action: attach ? 'attach' : 'foreign', parent: attach ? (body as { parent: string }).parent : null };
+}
+
 type Refused = { ok: false; refusal: LeaseDoorRefusal; detail: string };
 const no = (refusal: LeaseDoorRefusal, detail: string): Refused => ({ ok: false, refusal, detail });
 
@@ -57,7 +95,8 @@ type KeepInput = {
   lease: DelegationLeaseRow | undefined; carrier: DelegationLeaseCarrierRow | undefined;
   /** `conflictingTreeKeys(checkpoint)`. */
   conflicting: ReadonlySet<string>;
-  /** The box reports `lease-mark-v1`, `lease-mark-lock-v1` and `orphan-lease-v1` (`capSupported`), so a held tree is marked and skipped. */
+  /** The box reports the carrier mark, its orphan lock and the orphan rung (`LEASE_MARK_CAP`, `LEASE_MARK_LOCK_CAP`, `ORPHAN_LEASE_CAP`), so a
+   *  held tree is marked and skipped. */
   boxHolds: boolean;
   /** The box reports the carrier-mark capability, so a keep waits for the carrier to be read back (`decideLeaseTransition`). */
   carrierRequired: boolean;

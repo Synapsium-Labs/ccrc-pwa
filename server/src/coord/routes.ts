@@ -43,6 +43,8 @@ import { retireExecutor } from '../retireExecutor.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
+import { operatorRetainLease, resolveLease, retainLease, type LeaseDoorDeps } from './delegationLeaseDoor.js';
+import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
@@ -85,7 +87,7 @@ import {
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type AdvanceOk, type StallConfirmRequired, type StallWatchEffective, type StallWatchStages, type StallWatchView, type StallWriteEffect,
-  type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView,
+  type ReviewCapAsk, type ReviewCapLiftAnswer, type ReviewCapView, type LeaseDoorAnswer,
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal } from '../../../shared/refusal.js';
 import { CHECKS_MAIL_TOKEN, type ChecksMode } from '../../../shared/landing.js';
@@ -4440,6 +4442,37 @@ export function registerCoordRoutes(
       explicitIntentAt: mine?.explicitIntentAt ?? null, effective: mine?.effective ?? false, effectiveBasis: mine?.effectiveBasis ?? [],
       projection, incarnationAfter,
     });
+  });
+
+  /**
+   * Delegation wave 5 PR8: the lease doors (body in `delegationLeaseDoor.ts`, decisions in `delegation-lease-acts.ts`). The path parameter
+   * is `:lease`, never `:id` (`routes.test.ts`'s integer pin). Retain is a lease parent's (or its coordinator's) through `ccrc-api`: box
+   * token, EXEMPT from the session gate like the intent route. `operator-retain` and `resolve` are the operator's, session-gated when
+   * armed and never EXEMPT; they consult no box token. Each answers a `LeaseDoorAnswer`; a refusal goes through `refuseRoute`.
+   */
+  const leaseDeps = (coord: CoordStore, w: NonNullable<typeof watcher>): LeaseDoorDeps => ({ io: deps.io, registryDir: deps.cfg.registryDir,
+    fleetState: deps.fleetState, applier: () => w.delegationApplier(), runStampsNaming: (id) => coord.delegationRunStampsNaming(id), now: () => Date.now() });
+  const leaseAnswer = (reply: FastifyReply, a: LeaseDoorAnswer) => (a.ok ? reply.code(200).send(a) : refuseRoute(reply, a.error, { detail: a.detail }));
+  const leaseParam = (req: FastifyRequest): string => (req.params as { lease: string }).lease;
+  app.post('/api/leases/:lease/retain', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/leases/:lease/retain')) return;
+    const r = parseRetainRequest(req.body, leaseParam(req));
+    if (!r.ok) return refuseRoute(reply, 'bad-request', { detail: r.detail });
+    if (!(await requireAttribution(reply, r.byId, r.byUuid, 'byUuid'))) return;
+    return leaseAnswer(reply, await retainLease(leaseDeps(deps.coord, watcher), r));
+  });
+  app.post('/api/leases/:lease/operator-retain', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    const r = parseOperatorRetainRequest(req.body, leaseParam(req));
+    if (!r.ok) return refuseRoute(reply, 'bad-request', { detail: r.detail });
+    return leaseAnswer(reply, await operatorRetainLease(leaseDeps(deps.coord, watcher), r.leaseId));
+  });
+  app.post('/api/leases/:lease/resolve', async (req, reply) => {
+    if (!deps.coord || watcher === undefined) return notConfigured(reply);
+    const r = parseResolveRequest(req.body, leaseParam(req));
+    if (!r.ok) return refuseRoute(reply, 'bad-request', { detail: r.detail });
+    return leaseAnswer(reply, await resolveLease(leaseDeps(deps.coord, watcher), r));
   });
 
   // Programme ledgers (plan PL3): the coordinator's item and goals routes. Handlers live in `ledgersRoutes.ts`

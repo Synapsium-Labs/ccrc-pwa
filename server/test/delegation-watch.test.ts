@@ -1007,6 +1007,33 @@ const at = (n: number): number => NOW + n * STEP;
 const leasesOf = (home: string) => disk(home).checkpoint?.leases ?? [];
 const attemptsOf = (home: string) => disk(home).checkpoint?.attempts ?? [];
 
+// Delegation wave 5 PR8 (D-7822): the operator's "not delegated" is final for the tree. The lease is released `foreign` through PR5b's door
+// (the one `POST /api/leases/:lease/resolve` calls); correlation then requests no new lease and records no attempt for that tree, and
+// the frame shows neither a lease row nor an unowned row for it. The tree re-created with another creation base is a new tree.
+describe('W5-R8c: a lease released foreign is final for its tree', () => {
+  it('two passes after the release link nothing; the same tree on another creation base is linked as a new lease', async () => {
+    const w = await rawTreeWorld();
+    const census = { demo: [OLD, RAW] };
+    for (let i = 0; i < 3; i++) await censusPass(w, at(i), census);
+    const [lease] = leasesOf(w.home);
+    expect(lease).toMatchObject({ adminRecord: 'raw-tree', releasedAt: null, generation: 0 });
+    const applier = (await w.watcher.delegationApplier())!;
+    expect(await applier.releaseLease({ leaseId: lease!.leaseId, expectGeneration: 0, releaseReason: 'foreign', at: formatDelegationInstant(at(2) + 1000),
+      lastHeadSha: null, resolvesThrough: null })).toMatchObject({ kind: 'applied', state: 'released' });
+    const attempts = attemptsOf(w.home).length;
+    for (let i = 3; i < 5; i++) await censusPass(w, at(i), census);
+    expect(leasesOf(w.home).map((l) => [l.leaseId, l.releasedAt === null]), 'no new lease is requested').toEqual([[lease!.leaseId, false]]);
+    expect(attemptsOf(w.home), 'no attempt is recorded').toHaveLength(attempts);
+    const frame = w.watcher.currentDelegation();
+    expect(frame?.leases.filter((l) => l.adminRecord === 'raw-tree')).toEqual([]);
+    expect(frame?.unowned.filter((u) => u.adminRecord === 'raw-tree')).toEqual([]);
+    const reborn = record('demo', 'raw-tree', { claudeBase: 'c'.repeat(40) });
+    for (let i = 5; i < 8; i++) await censusPass(w, at(i), { demo: [OLD, reborn] });
+    const open = leasesOf(w.home).filter((l) => l.releasedAt === null);
+    expect(open.map((l) => [l.adminRecord, l.creationBase]), 'another creation base is another tree').toEqual([['raw-tree', 'c'.repeat(40)]]);
+  });
+});
+
 describe('rung 4 end to end: a raw worktree the session itself created becomes a journaled lease identity, and nothing else', () => {
   it('is waited on for two passes (a ccd workspace may be being BORN), then linked and leased on the third', async () => {
     const w = await rawTreeWorld();

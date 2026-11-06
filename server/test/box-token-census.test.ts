@@ -291,7 +291,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'forty-two', 'forty-three', 'forty-four', 'forty-five', 'forty-six', 'forty-seven', 'forty-eight', 'forty-nine',
   'fifty', 'fifty-one', 'fifty-two', 'fifty-three', 'fifty-four', 'fifty-five', 'fifty-six', 'fifty-seven', 'fifty-eight',
   // Landing order wave 5f: the two attributed landing writes, fifty-seven machine lanes and sixty in all.
-  'fifty-nine', 'sixty'];
+  'fifty-nine', 'sixty',
+  // Delegation wave 5 PR8: the lease parent's Retain, fifty-eight machine lanes and sixty-one in all.
+  'sixty-one'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

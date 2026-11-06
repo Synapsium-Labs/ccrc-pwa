@@ -292,6 +292,14 @@ describe('canonical coordination id route census', () => {
     ]);
   });
 
+  it('W5-R13 (delegation wave 5 PR8): the lease doors name their parameter `:lease`, never `:id` (a lease id is a UUID, not an integer)', () => {
+    const src = readFileSync(new URL('../src/coord/routes.ts', import.meta.url), 'utf8');
+    const paths = [...src.matchAll(/^  app\.(get|post)\(\s*'([^']+)'/gm)].map((m) => m[2]!);
+    expect(paths.filter((p) => p.startsWith('/api/leases/'))).toEqual(
+      ['/api/leases/:lease/retain', '/api/leases/:lease/operator-retain', '/api/leases/:lease/resolve']);
+    expect(coordIdPathRoutes().filter((r) => r.routePath.startsWith('/api/leases/')), 'no lease route under the integer `:id`').toEqual([]);
+  });
+
   it('leaves no `:id` route off the parser, and no second spelling in the file', () => {
     // The inverse scan. Positive census ∩ every `:id` registration must be the
     // whole of the latter — so a route added tomorrow with its own coercion

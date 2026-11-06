@@ -302,6 +302,10 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/scope-sweep',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
+    // Delegation wave 5 PR8: the lease doors of the operator (keep, attach, not delegated), acts of the PWA on a delegated worktree.
+    // No machine lane calls them and the PWA holds no box token, so the caps argument holds; neither is EXEMPT, so armed they sit
+    // behind the session gate. Retain, the door of the lease parent, is a box-token lane (`requireMailToken`) and is not here.
+    '/api/leases/:lease/operator-retain', '/api/leases/:lease/resolve',
   ]);
 
   /** The two mechanisms that count as "the token was checked" — the shared
