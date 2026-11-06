@@ -12,14 +12,15 @@ import { cleanup, render } from '@testing-library/react';
 import Markdown, { defaultUrlTransform, type Components, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { HIGHLIGHT_GRAMMARS } from '../src/lib/highlightNames';
-import { syncTestStore, withSyncStore } from './highlightTestStore';
+import { syncTestStore, withSyncHighlight, withSyncStore } from './highlightTestStore';
 import type { Root as HastRoot } from 'hast';
 import { CHAT_COMPONENTS, ChatMarkdown } from '../src/lib/markdown';
 import { remarkAlerts } from '../src/lib/remarkAlerts';
+import { remarkChatMarks } from '../src/lib/remarkChatMarks';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import {
-  CHAT_ALIAS_TAGS, CHAT_CORPUS, CHAT_UNREGISTERED_TAGS, RECAP_CASE, languageCases, type CorpusCase,
+  CHAT_ALIAS_TAGS, CHAT_CORPUS, CHAT_MARKS_CASES, CHAT_UNREGISTERED_TAGS, RECAP_CASE, languageCases, type CorpusCase,
 } from './markdownCorpus';
 
 afterEach(cleanup);
@@ -35,7 +36,7 @@ const STORE = syncTestStore('chat');
 /** The sync path: what chat renders for a message of at most 4 KiB, react-markdown end to end. */
 const viaMarkdown = (src: string): string =>
   renderToStaticMarkup(withSyncStore(
-    <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={CHAT_COMPONENTS}>{src}</Markdown>,
+    <Markdown remarkPlugins={[remarkGfm, remarkAlerts, remarkChatMarks]} components={CHAT_COMPONENTS}>{src}</Markdown>,
     STORE,
   ));
 
@@ -63,11 +64,11 @@ const EXTRA: readonly CorpusCase[] = [
 ];
 
 describe('M4.P10: renderHast over parseMarkdown equals <Markdown> with chat components', () => {
-  const cases: readonly CorpusCase[] = [...CHAT_CORPUS, ...languageCases(TAGS), RECAP_CASE, ...EXTRA];
+  const cases: readonly CorpusCase[] = [...CHAT_CORPUS, ...languageCases(TAGS), RECAP_CASE, ...EXTRA, ...CHAT_MARKS_CASES];
 
-  it('covers the corpus, every language tag and the extra cases', () => {
+  it('covers the corpus, every language tag, the extra cases and the marks cases', () => {
     expect(TAGS.length).toBeGreaterThan(CHAT_ALIAS_TAGS.length + CHAT_UNREGISTERED_TAGS.length);
-    expect(cases.length).toBe(CHAT_CORPUS.length + TAGS.length + 1 + EXTRA.length);
+    expect(cases.length).toBe(CHAT_CORPUS.length + TAGS.length + 1 + EXTRA.length + CHAT_MARKS_CASES.length);
   });
 
   it.each(cases)('$name', (c) => {
@@ -78,6 +79,36 @@ describe('M4.P10: renderHast over parseMarkdown equals <Markdown> with chat comp
     const out = viaRenderHast(EXTRA[0]!.text);
     expect(out).not.toContain('javascript:');
     expect(out).toContain('href=""');
+  });
+});
+
+// Chat's marks (chat reading at a desk, Task M, D-8060): the parity above holds the two paths equal over
+// `CHAT_MARKS_CASES`; these hold that what they agree on is the marked output, and that the sync path's own plugin
+// list, not only this file's copy of it, carries the plugin.
+describe('M4.P10 over chat marks: both paths draw the status labels and lead-ins, and a mark as its text', () => {
+  const every = CHAT_MARKS_CASES.find((c) => c.name === 'marks-every-kind')!;
+
+  it('every tone, both lead-ins and the list after an action lead-in, not just equal', () => {
+    const out = viaRenderHast(every.text);
+    for (const tone of ['ok', 'merged', 'wait', 'fail']) expect(out, tone).toContain(`data-status="${tone}"`);
+    expect(out).toContain('<strong data-lead="action">What to do (either one):</strong>');
+    expect(out).toContain('data-lead="info"');
+    expect(out).toContain('<ol data-after-lead="action">');
+    expect(out).toContain('<td><span data-status="fail">Failed</span>, exit 1</td>');
+    expect(out).toContain('<strong data-status="merged">merged</strong>');
+  });
+
+  it('a mark draws its text only: no mark attribute reaches the markup', () => {
+    const out = viaRenderHast(every.text);
+    expect(out).not.toContain('data-mark-');
+    expect(out).toContain('Merge #651 once CI <span data-status="ok">green</span>.');
+    expect(out).toContain('Run 1527 is <span data-status="wait">blocked</span>');
+  });
+
+  it('ChatMarkdown, the sync path with its own plugin list, equals the worker path', () => {
+    for (const c of CHAT_MARKS_CASES) {
+      expect(renderToStaticMarkup(withSyncHighlight(<ChatMarkdown text={c.text} />)), c.name).toBe(viaRenderHast(c.text));
+    }
   });
 });
 

@@ -12,12 +12,14 @@ import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown, parseWithoutPrescan, settleHast, type ParseOutcome } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import { prescanMarkdown, utf8ByteLength } from '../src/lib/markdownGuard';
-import { CHAT_CORPUS, RECAP_CASE } from './markdownCorpus';
+import { CHAT_CORPUS, CHAT_MARKS_CASES, RECAP_CASE } from './markdownCorpus';
+import { MARK_ATTR } from '../src/lib/chatMarks';
 
 interface AnyNode {
   type: string;
   tagName?: string;
   value?: string;
+  properties?: Record<string, unknown>;
   children?: AnyNode[];
 }
 
@@ -67,6 +69,43 @@ function brAsChatText(docs: ParseOutcome, chat: ParseOutcome): ParseOutcome {
   return { ...docs, tree };
 }
 
+/** The attributes chat's marks plugin writes (Task M, D-8060), which the docs profile never carries. */
+const CHAT_MARK_ATTRS: readonly string[] = Object.values(MARK_ATTR);
+const isMarkSpan = (n: AnyNode): boolean =>
+  n.type === 'element' && n.tagName === 'span'
+  && (Object.hasOwn(n.properties ?? {}, MARK_ATTR.kind) || Object.hasOwn(n.properties ?? {}, MARK_ATTR.status));
+
+/** Whether any node of `o`'s tree carries one of chat's mark attributes. */
+function chatMarked(o: ParseOutcome): boolean {
+  if (o.kind !== 'tree') return false;
+  return nodes(o.tree).some((n) => CHAT_MARK_ATTRS.some((a) => Object.hasOwn(n.properties ?? {}, a)));
+}
+
+/** `o` with chat's marks undone (Task M's amendment to A16): every mark or status span replaced by its children, every
+ *  other mark attribute deleted, and then adjacent text nodes joined, since the plugin split one text node into
+ *  several. Explicit stack, on a copy. */
+function unmark(o: ParseOutcome): ParseOutcome {
+  if (o.kind !== 'tree') return o;
+  const tree = structuredClone(o.tree) as unknown as AnyNode;
+  const stack: AnyNode[] = [tree];
+  while (stack.length > 0) {
+    const n = stack.pop()!;
+    for (const a of CHAT_MARK_ATTRS) if (n.properties) delete n.properties[a];
+    if (!n.children) continue;
+    const flat: AnyNode[] = [];
+    for (const c of n.children) {
+      for (const k of isMarkSpan(c) ? c.children ?? [] : [c]) {
+        const last = flat[flat.length - 1];
+        if (k.type === 'text' && last?.type === 'text') flat[flat.length - 1] = { type: 'text', value: (last.value ?? '') + (k.value ?? '') };
+        else flat.push(k);
+      }
+    }
+    n.children = flat;
+    for (const c of flat) stack.push(c);
+  }
+  return { ...o, tree: tree as unknown as HastRoot };
+}
+
 /** Inputs holding a raw `<br>`, `<br/>` or `<br />` (A16): each differs between the two profiles, only by `br`. */
 const BR_INPUTS: readonly string[] = [
   'a<br>b',
@@ -95,21 +134,37 @@ describe('the outcome for ordinary Markdown', () => {
   });
 
   // Amended by W5 Task 4 to A16's form: equal, except on inputs that hold `<br>`, `<br/>` or `<br />`, which differ
-  // only by `br` elements in the docs profile. The corpus holds none, so every corpus case is still strictly equal.
-  it("A16: the 'chat' and 'docs' profiles give equal outcomes, except that a raw <br> is a br element in 'docs'; one argument means 'chat'", () => {
+  // only by `br` elements in the docs profile. Amended again by chat reading Task M (D-8060): and except chat's mark
+  // attributes, which `unmark` undoes. An input chat marks nothing in is still held strictly equal, as before.
+  it("A16: the 'chat' and 'docs' profiles give equal outcomes, except that a raw <br> is a br element in 'docs' and chat's mark attributes, undone by unmark; one argument means 'chat'", () => {
     const holdsBr = /<br(?: ?\/)?>/;
     const cases = [
-      ...[...CHAT_CORPUS, RECAP_CASE].map((c) => ({ name: c.name, text: c.text })),
+      ...[...CHAT_CORPUS, RECAP_CASE, ...CHAT_MARKS_CASES].map((c) => ({ name: c.name, text: c.text })),
       ...BR_INPUTS.map((text) => ({ name: text, text })),
     ];
+    let marked = 0;
     for (const { name, text } of cases) {
       const chat = parseMarkdown(text, 'chat');
       const docs = parseMarkdown(text, 'docs');
       expect(parseMarkdown(text), name).toEqual(chat);
-      expect(brAsChatText(docs, chat), name).toEqual(chat);
-      if (!holdsBr.test(text)) expect(docs, name).toEqual(chat);
+      if (chatMarked(chat)) {
+        marked += 1;
+        expect(unmark(brAsChatText(docs, chat)), name).toEqual(unmark(chat));
+      } else {
+        expect(brAsChatText(docs, chat), name).toEqual(chat);
+        if (!holdsBr.test(text)) expect(docs, name).toEqual(chat);
+      }
     }
+    expect(marked).toBe(CHAT_MARKS_CASES.length);
     for (const text of BR_INPUTS) expect(parseMarkdown(text, 'docs'), text).not.toEqual(parseMarkdown(text, 'chat'));
+  });
+
+  it('the docs profile carries no chat mark', () => {
+    const every = CHAT_MARKS_CASES.find((c) => c.name === 'marks-every-kind')!.text;
+    const attrsIn = (o: ParseOutcome): Set<string> =>
+      new Set(nodes(treeOf(o)).flatMap((n) => Object.keys(n.properties ?? {}).filter((k) => CHAT_MARK_ATTRS.includes(k))));
+    expect(attrsIn(parseMarkdown(every, 'chat'))).toEqual(new Set(CHAT_MARK_ATTRS));
+    expect(attrsIn(parseMarkdown(every, 'docs'))).toEqual(new Set());
   });
 });
 
