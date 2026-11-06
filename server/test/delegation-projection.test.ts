@@ -554,3 +554,26 @@ describe('PR7: the lease row\'s disposition and expiry (W5-W1, W5-W2)', () => {
   });
 });
 
+// Review 1564 F2 (carried into PR7; RULED accept): `treeLeaseOf` stays ownership-blind, so an unowned row and a `tree-<key>` resolve
+// name the same lease; and its order (oldest first by first observation, then lease id) is pinned both ways.
+describe('1564 F2: the tree\'s lease, ownership-blind, in its one order', () => {
+  it('the moved worktree: the attempt\'s path is not owned and the lease\'s path is, so the unowned row stands and names that lease', () => {
+    const owned = lease({ leaseId: 'l1', adminRecord: 't1', canonicalPath: `/wt/${PROJECT}/slug-1` });
+    const out = projectDelegation(input({ leases: [owned], attempts: [conflict()], sessions: [alive('p'), alive(`${PROJECT}-slug-1`)] }));
+    expect(out.leases, 'the lease row is skipped: a ccd workspace owns its path').toEqual([]);
+    expect(out.unowned.map((u) => [u.adminRecord, u.leaseId])).toEqual([['t1', 'l1']]);
+    const notOwned = projectDelegation(input({ leases: [owned], attempts: [conflict()], sessions: [alive('p')] }));
+    expect(notOwned.unowned.map((u) => [u.adminRecord, u.leaseId]), 'CONTROL: unowned, the same lease is named').toEqual([['t1', 'l1']]);
+  });
+
+  it('the order: two hidden candidates name the one observed first, whatever their ids; at one instant, the lower id', () => {
+    const later = lease({ leaseId: 'aaaaaaaa-0000-4000-8000-000000000001', adminRecord: 't1', firstObservedAt: at(14) });
+    const earlier = lease({ leaseId: 'ffffffff-0000-4000-8000-000000000002', adminRecord: 't1', firstObservedAt: at(13) });
+    const byInstant = projectDelegation(input({ leases: [later, earlier], attempts: [conflict()] }));
+    expect(byInstant.unowned.map((u) => u.leaseId), 'first observed wins over the lower id').toEqual([earlier.leaseId]);
+    const high = lease({ leaseId: 'cccccccc-0000-4000-8000-000000000003', adminRecord: 't1', firstObservedAt: at(13) });
+    const low = lease({ leaseId: 'bbbbbbbb-0000-4000-8000-000000000004', adminRecord: 't1', firstObservedAt: at(13) });
+    const byId = projectDelegation(input({ leases: [high, low], attempts: [conflict()] }));
+    expect(byId.unowned.map((u) => u.leaseId), 'at one instant the lower id wins, whatever the list order').toEqual([low.leaseId]);
+  });
+});

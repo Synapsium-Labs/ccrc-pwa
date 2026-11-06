@@ -95,12 +95,17 @@ async function settle(durable: DelegationDurability, act: () => Promise<Delegati
     expiresAt: out.state === 'released' ? null : lease?.cleanupDueAt ?? null, carrier: 'pending' };
 }
 
-/** Decide and act, again once when the lease moved under the act; past that the act answers `not-ready`. */
+/** Decide and act, again once when the lease moved under the act; past that the act answers `not-ready`. A throw anywhere in the decision
+ *  step (the claimant read, an instant that does not parse) answers `not-ready` too and journals nothing: every write the step makes is
+ *  PR5b's door, inside `settle`, after the decision (review 1564 F5). */
 async function decideAndAct(d: LeaseDoorDeps, step: (durable: DelegationDurability, cp: DelegationCheckpointV1) => Promise<LeaseDoorAnswer | 'moved'>): Promise<LeaseDoorAnswer> {
   for (let i = 0; i < ATTEMPTS; i++) {
     const ready = await readyApplier(d);
     if (!('durable' in ready)) return ready;
-    const out = await step(ready.durable, ready.cp);
+    let out: LeaseDoorAnswer | 'moved';
+    try { out = await step(ready.durable, ready.cp); } catch (err) {
+      return no('not-ready', `the act could not be decided (${err instanceof Error ? err.message : String(err)}) — retry`);
+    }
     if (out !== 'moved') return out;
   }
   return no('not-ready', 'the lease moved while this act was queued — retry');
