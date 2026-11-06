@@ -459,10 +459,14 @@ describe('PR6 fix round 1 (review 1546): the lane re-reads, bounds and orders', 
     await censusPass(w, at(5));
     expect(byTreeReads()).toBe(1);
     const memory = laneOf(w)['carrierMemory'] as { pass: number; notRan: Map<string, number> };
-    memory.pass = memory.notRan.get(lease.leaseId)! + DELEGATION_CARRIER_REFUSAL_RETRY_PASSES - 1;
+    // review 1549 F3: the bound's lower edge, the last pass inside it: still measured, and still held out of `notIndexed`
+    memory.pass = memory.notRan.get(lease.leaseId)! + DELEGATION_CARRIER_REFUSAL_RETRY_PASSES - 2;
     await censusPass(w, at(6));
-    expect(byTreeReads(), 'at the bound: measured once more, and then not indexed').toBe(1);
+    expect(byTreeReads(), 'one pass inside the bound: measured').toBe(1);
+    expect(memory.notRan.has(lease.leaseId), 'one pass inside the bound: still a mark that did not run').toBe(true);
     await censusPass(w, at(7));
+    expect(byTreeReads(), 'at the bound: measured once more, and then not indexed').toBe(1);
+    await censusPass(w, at(8));
     expect(byTreeReads(), 'past the bound: no by-tree read').toBe(0);
   }, ROW_MS);
 
@@ -705,4 +709,54 @@ describe('PR6 on a fixture box: the real ws-lease-mark answers the lane', () => 
     const tree = path.join(F.main(h), '.claude', 'worktrees', 'raw-tree');
     expect(h.sh(`_dl_orphan_rung ${q(F.main(h))} ${q(tree)}; echo "rc=$?"`).trim().split('\n').pop(), 'the orphan rung reads the tree not held').toBe('rc=0');
   }, ROW_MS);
+});
+
+// Review 1549 (PR6, carried into PR7): F2 and F4, through `planCarrierPass` itself over a stub FleetIO (the leases directory lists no
+// carrier; the by-tree directory lists what the row says), so each row reads exactly what the memory decides.
+describe('1549 F2 and F4: the carrier pass\'s memory', () => {
+  const FLEET = { ccdVerbs: ['caps', LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP] };
+  const L1 = '11111111-1111-4111-8111-111111111111', L2 = '22222222-2222-4222-8222-222222222222';
+  const stubIO = (byTree: Record<string, string>) => ({
+    readdirMeasured: async (p: string) => (p.endsWith('/by-tree') ? { ok: true as const, entries: Object.keys(byTree) } : { ok: true as const, entries: [] as string[] }),
+    readFileMeasured: async (p: string) => {
+      const name = p.slice(p.lastIndexOf('/') + 1);
+      return name in byTree ? { ok: true as const, content: `${byTree[name]}\n` } : { ok: false as const, reason: 'absent' as const };
+    },
+  });
+  const two = (over1: Partial<DelegationLeaseRow>, over2: Partial<DelegationLeaseRow>): DelegationCheckpointV1 => {
+    const a = leaseRow({ leaseId: L1, adminRecord: 'wt-1', creatingJournalSequence: 1, currentJournalSequence: 1, ...over1 });
+    const b = leaseRow({ leaseId: L2, adminRecord: 'wt-2', creatingJournalSequence: 2, currentJournalSequence: 2, ...over2 });
+    return { ...checkpointWithLease(), leases: [a, b], lineage: [] };
+  };
+  const marksOf = (steps: readonly { kind: string; args?: { leaseId: string } }[]): string[] => steps.flatMap((s) => (s.kind === 'mark' ? [s.args!.leaseId] : []));
+
+  it('F2: a lease that answered unmeasured leaves the deferred group once a read-back journals seen, and is composed ahead of a deferred older one', async () => {
+    const memory = emptyCarrierLaneMemory();
+    memory.unmeasured.set(L1, 1).set(L2, 2);                         // both answered unmeasured; the older first
+    const d = { io: stubIO({}), registryDir: '/fixture/reg' };
+    // the newer one's carrier was read back equal and journalled seen: it is up to date, so it leaves the group
+    await planCarrierPass(d as never, two({ generation: 1, carrierGenerationSeen: 0 }, { generation: 1, carrierGenerationSeen: 1 }), memory,
+      { fleetState: FLEET, nowMs: NOW, census: [], workdirs: [] });
+    expect([...memory.unmeasured.keys()]).toEqual([L1]);
+    // its generation moves: it is composed first, the still-deferred older one after it
+    const next = await planCarrierPass(d as never, two({ generation: 1, carrierGenerationSeen: 0 }, { generation: 2, carrierGenerationSeen: 1 }), memory,
+      { fleetState: FLEET, nowMs: NOW, census: [], workdirs: [] });
+    expect(marksOf(next.steps as never)).toEqual([L2, L1]);
+  });
+
+  it('F4: an entry written late names a lease already measured without one; it is measured again and healed', async () => {
+    const memory = emptyCarrierLaneMemory();
+    memory.notIndexed.add(L1);                                        // measured earlier with no entry naming it
+    const released = '2026-10-15T10:00:00.000Z';
+    const cp = two({ generation: 2, carrierGenerationSeen: 1, releasedAt: released }, { generation: 2, carrierGenerationSeen: 1, releasedAt: released });
+    const key = 'a'.repeat(64);
+    // the other released lease asks for the by-tree read; the late entry names L1
+    const first = await planCarrierPass({ io: stubIO({ [key]: L1 }), registryDir: '/fixture/reg' } as never, cp, memory, { fleetState: FLEET, nowMs: NOW, census: [], workdirs: [] });
+    expect(memory.notIndexed.has(L1), 'named by an entry: no longer measured without one').toBe(false);
+    expect(marksOf(first.steps as never)).toEqual([L1]);
+    // the pass after: the other lease is measured without an entry, and L1 is still asked for, so its heal is still composed
+    const second = await planCarrierPass({ io: stubIO({ [key]: L1 }), registryDir: '/fixture/reg' } as never, cp, memory, { fleetState: FLEET, nowMs: NOW, census: [], workdirs: [] });
+    expect(memory.notIndexed.has(L2)).toBe(true);
+    expect(marksOf(second.steps as never)).toEqual([L1]);
+  });
 });

@@ -194,8 +194,10 @@ export function planCarrierSteps(input: {
     const released = lease.releasedAt !== null;
     const upToDate = upToDateOf(lease);
     if (!input.supported) {                                           // rule 1: only a lease that would get a step on a supported box
+      // review 1549 F1: a box that reads nothing has no read-back, so a released lease counts from journal evidence: its carrier was
+      // read back at some generation (`carrierGenerationSeen` above 0), so the box held one, which a supported box would mark released
       const rb = input.readBack.get(lease.leaseId);
-      if (lease.generation === 0 ? !released : !upToDate && (!released || rb?.kind === 'carrier')) health.unsupported += 1;
+      if (lease.generation === 0 ? !released : !upToDate && (!released || (lease.carrierGenerationSeen ?? 0) > 0 || rb?.kind === 'carrier')) health.unsupported += 1;
       continue;
     }
     if (lease.generation === 0) { if (!released) spend({ kind: 'mint', leaseId: lease.leaseId, expectGeneration: 0 }, lease.leaseId); continue; }   // rule 2
