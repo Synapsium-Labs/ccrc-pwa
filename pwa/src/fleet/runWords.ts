@@ -420,6 +420,12 @@ export function resumeNote(
  *  away. A fold, not a removal: nothing is dropped from the archive. */
 export const FINISHED_FOLD = 20;
 
+/** What the board says when a run named by `/runs?run=<id>` (chat reading Task L, D-8062) is in neither the live frame nor the
+ *  archive pages read so far: it may be older than the pages loaded, or no run at all. */
+export function runNotLoadedLine(id: number): string {
+  return `Run ${id} is not among the runs loaded here.`;
+}
+
 /** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
  *  a closed row (`formatAge` over `dispatchedAt`, `resumeNote`'s title,
  *  `childReclaimTitle`) is minute-grained. The step's lag ADDS to the board's own:
