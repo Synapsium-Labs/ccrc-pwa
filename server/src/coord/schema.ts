@@ -2191,7 +2191,9 @@ export const MIGRATIONS: readonly string[] = [
   // one kind: a row older than child marks reads 1, or a recycled name's later row does. Either costs one spare archive
   // read per reclaim end, and neither can drop a re-read. Only that arm sends `--child`, and a later wave binds the
   // session it names, so the one marked child it can miss is a run whose first attempt journalled the omission and whose
-  // retry reached a box that had gained the flag: that row stays 0 and is re-read on the chip triggers alone.
+  // retry reached a box that had gained the flag: that row stays 0 and is re-read on the chip triggers alone. After this
+  // entry the live writers add a second wrong 1 of the same price: `markHadChild` is sticky, so a failed attempt keeps its
+  // mark with no session, a later bind to a session that is no child reads true, and later waves inherit it.
   //
   // ONE ADDITIVE COLUMN with a constant default, and one backfill: an older build opening a file at `user_version 41`
   // takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and inserts 0. A row a rolled-back

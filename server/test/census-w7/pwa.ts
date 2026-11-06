@@ -599,6 +599,20 @@ export const oldAnswerDoorPaths = (): W7Site[] =>
 
 // ─── C7p. the retired operator answer doors (D-7194, D-7540) ────────────────────────────────────────────────────────
 
+/** The one reader of `RunSummary.hadChild` (D-8068), as `file#symbol`. The wire is cast, never revived, and an older server
+ *  omits the key, so a second reader that took it as a boolean would answer differently from this one on some row. */
+export const HAD_CHILD_READER = 'pwa/src/fleet/runWords.ts#runHadChild';
+
+/** Every name `hadChild` in the PWA's sources: a property read, a type member or a destructured binding. KNOWN WIDTH: a
+ *  computed `run['hadChild']` is not seen, and a comment is not code. */
+export function hadChildNamesIn(p: ParsedFile, file: string): W7Site[] {
+  return identifierReferences(p.text, file, new Set(['hadChild'])).map((r) => {
+    const hit = lineOffset(p.text, r.line, 'hadChild');
+    return { file, symbol: enclosingSymbol(p, hit), line: r.line, text: r.context.slice(0, 140), kind: '' };
+  });
+}
+export const hadChildNames = (): W7Site[] => overPwa(hadChildNamesIn);
+
 /** The four old operator answer doors W3 Q3f's family replaced, which W7 C7p's server half retires after its PWA half
  *  (D-7540). `/dialog/tab` is not one: it answers nothing and stays a session door. */
 export const RETIRED_ANSWER_DOORS: readonly string[] = ['/ask', '/dialog', '/dialog/text', '/dialog/multi'];

@@ -7,7 +7,7 @@ a stale label until the next read.
 
 **The ruling.** The operator's ruling of 2026-11-06 on D-7214, which differs from the recommendation to keep the set: have
 the server say a run had a child, through a new field on finished runs, and delete the browser's memory. This meets the
-consolidation spec's exit for ARCH-61 ("`childRunsSeen` goes") through a field the spec did not name, because
+consolidation spec's exit for ARCH-61 ("`childRunsSeen` goes") through the new field D-8066 recorded, because
 `RunSummary.childIds` names only open runs. D-7214 stays as the record of why `childIds` could not do it.
 
 - **D-8068 (2026-11-06)** — run-had-child: `runs.hadChild` (migration 41) and `RunSummary.hadChild` say a run held a child
@@ -27,6 +27,15 @@ wave 1, and both rows end when it is reclaimed. The old set held the wave 5 row 
 
 The read is `hadChild === 1 && sessionId !== null`: a spawn that never bound held nothing.
 
+`inheritHadChild` selects rows by `sessionId`, so the ARCH-62 census counts it. It is named in `NOT_BINDING_SITES`, not
+routed through `runsNamingSession` or `bindingRunsOf`: it is one UPDATE inside a binding writer, no run is returned, neither
+reader's row carries the column, and both answer failure on one unrepresentable row, which must not fail a bind over a flag
+that costs one spare read.
+
+Two ratchets hold the shape. `rings/pwa-one-owner.test.ts` reds any name `hadChild` in `pwa/src` outside `runHadChild`.
+`run-had-child.test.ts` lists the composers of a `--child` argv, each of which owes `markHadChild`: `wsAddWorkerBase` has
+no caller today, and wiring the promoting dispatch reds that list until its row is added.
+
 ## The four pinned rows
 
 `pwa/test/w7-cold-runs-children.test.tsx` keeps each row's `loadRuns` counts, with the fixture now carrying the server's
@@ -40,7 +49,8 @@ Backfilled by migration 41, not read as false, because a row closed before the d
 it. The evidence is the fresh-spawn arm's: a bound row with a `dispatchStartedAt` and no `child-omitted:` event, then every
 row bound to a session such a row names. Pinned in `server/test/run-had-child.test.ts`. A wrong true (a row older than
 child marks, or a recycled name's later row) costs one spare archive read per reclaim end. Nothing refuses, renders or
-reclaims on the field.
+reclaims on the field. Live rows have one more wrong true at the same price: `markHadChild` is sticky, so a failed attempt
+keeps its mark with no session, a later bind to a session that is no child reads true, and later waves inherit it.
 
 ## Versions
 

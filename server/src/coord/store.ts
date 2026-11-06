@@ -3530,8 +3530,10 @@ export class CoordStore {
     ).run(sessionId, sessionId, runId);
   }
 
-  /** Run `runId`, just bound to `sessionId`, had a child when an earlier run bound to that session did (D-8068). A
-   *  recycled name can make this a row whose workspace is not that child: `RunSummary.hadChild` says what that costs. */
+  /** Run `runId`, just bound to `sessionId`, had a child when an earlier run bound to that session did (D-8068). This
+   *  can read true of a workspace that is no child: a recycled name, or a mark that outlived its attempt
+   *  (`markHadChild`, sticky) on a row that then bound another session, and later waves inherit either.
+   *  `RunSummary.hadChild` says what that costs. */
   private inheritHadChild(runId: number, sessionId: string): void {
     this.db.prepare(
       'UPDATE runs SET hadChild = 1 WHERE id = ? AND EXISTS (SELECT 1 FROM runs m WHERE m.sessionId = ? AND m.hadChild = 1)',

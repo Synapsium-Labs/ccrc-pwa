@@ -268,6 +268,20 @@ describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
     ]);
   });
 
+  // `runHadChild` is the field's one reader (D-8068): only a literal `true` counts, because an older server omits the key.
+  it('CONTROL: a read of hadChild outside runHadChild is seen, a destructured one too, and a comment is not', async () => {
+    const { fixture, hadChildNamesIn } = await import('../census-w7/pwa.js');
+    const src = '// run.hadChild\nexport const a = (r: R) => r.hadChild;\nexport const b = ({ hadChild }: R) => hadChild;\n';
+    expect(hadChildNamesIn(fixture(src), 'pwa/src/fixture.tsx').map((s) => s.symbol)).toEqual(['a', 'b', 'b']);
+  });
+
+  it('hadChildNames(): only runHadChild names the field in pwa/src', async () => {
+    const { HAD_CHILD_READER, hadChildNames } = await import('../census-w7/pwa.js');
+    const names = hadChildNames().map(site);
+    expect(names.length).toBeGreaterThan(0);
+    expect([...new Set(names)]).toEqual([HAD_CHILD_READER]);
+  });
+
   it('runForSession, runBelongsTo and childRunsSeen (D-8068): 0 definitions in pwa/src', () => {
     const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo', 'childRunsSeen'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
     expect(defs).toEqual([]);

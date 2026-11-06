@@ -5,11 +5,15 @@
 // pwa/test/w7-cold-runs-children.test.tsx.
 import { describe, it, expect, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { CCD_ARGV } from '../src/ccdargv.js';
 import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
+import { CCD_ARGV_SAMPLES } from './ccdArgvSamples.js';
+import { REPO, walkSrc } from './rings/walkSrc.js';
+import { identifierReferences } from './scan/parse.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -137,5 +141,25 @@ describe('the store: what a run had, on the wire', () => {
     const all = s.runs({ includeClosed: true });
     if (!all.ok) throw new Error('fixture runs unreadable');
     expect(all.runs.map(toRunSummary).find((r) => r.id === id)).toMatchObject({ id, hadChild: true });
+  });
+});
+
+// `--child` is how a run gets a child, so every composer of an argv that sends it owes `markHadChild`. No test can follow
+// that across a future dispatch arm, so this holds the list of composers instead: wiring `wsAddWorkerBase` (delegation
+// broker wave 5, its promoting dispatch) reds here until its row is added, beside a test of that arm's mark as
+// dispatch-child-argv.test.ts has for this one. KNOWN WIDTH: an entry reached through a computed key is not seen.
+describe('every composer of a --child argv marks the run (D-8068)', () => {
+  const MARKED: readonly string[] = ['server/src/coord/dispatch.ts wsAddWorker'];
+  const entries = CCD_ARGV as unknown as Record<string, (...a: unknown[]) => readonly string[]>;
+  const sends = Object.entries(CCD_ARGV_SAMPLES).filter(([k, a]) => entries[k]!(...a).includes('--child')).map(([k]) => k).sort();
+
+  it('the argvs that send --child are these two', () => {
+    expect(sends).toEqual(['wsAddWorker', 'wsAddWorkerBase']);
+  });
+
+  it('only the marking arms compose one', () => {
+    const composers = walkSrc({ roots: ['server/src'], min: 300, match: /\.ts$/ }).filter((f) => f !== 'server/src/ccdargv.ts')
+      .flatMap((f) => identifierReferences(readFileSync(path.join(REPO, f), 'utf8'), f, new Set(sends)).map((r) => `${f} ${r.name}`));
+    expect(composers).toEqual(MARKED);
   });
 });

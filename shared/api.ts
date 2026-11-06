@@ -7000,8 +7000,9 @@ export interface RunSummary {
    * the child served, the hand-over wave's row included.
    *
    * A ROW STORED BEFORE THE FIELD reads through migration 41's backfill, never as a flat false. The answer can be true
-   * for a run with no marked child (a row older than child marks, or a recycled name's later row), which costs one
-   * spare archive read per reclaim end and nothing else. Nothing refuses, renders or reclaims on it.
+   * for a run with no marked child (a row older than child marks, or a recycled name's later row), and on a live row
+   * for one whose failed attempt kept its mark and then bound a session that is no child. Each costs one spare archive
+   * read per reclaim end and nothing else. Nothing refuses, renders or reclaims on it.
    *
    * Written and read on the server alone: the fleet box sends no new frame, so a fleet on another version is no concern
    * of this field. ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a
