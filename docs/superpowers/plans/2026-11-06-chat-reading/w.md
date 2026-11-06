@@ -66,3 +66,49 @@ Each applied, the named files run, restored from a saved copy, sha checked.
 | 3 | `--measure-chat-prose` removed from `SKIN_TOKENS` | `chat-width.test.ts` "SKIN_TOKENS.density names …"; `skin-identity.test.ts` "holds on the tree" and "reds a palette token planted inside one of Instrument's @media blocks" |
 | 4 | the column's `min(…, 100%)` dropped | `refined-session.test.tsx` "the transcript's column reads min(var(--measure-chat), 100%)"; browser green (layout-equivalent, above) |
 | 5 | the prose rule's media query removed | browser "390 is unchanged" (both skins); `chat-width.test.ts` and `refined-session.test.tsx`'s prose-rule cases |
+
+## Fix round 1 (review 1578)
+
+What changed, by the coordinator's rulings:
+
+- **F2.** The user's bubble at 900 and up is `max-width: min(70%, var(--measure-chat-prose))`, so a user turn is never
+  wider than the reply beside it. Pinned in the browser: the bubble is at most the paragraph's width in every desk view,
+  and sits at `min(70% of the column, the prose measure)`; the scrape pins the new value. The spec amendment is the
+  coordinator's to record.
+- **F9.** `.msg-attach` takes the same cap at 900 and up. The browser test's user turn carries a document clip with a
+  long name, so the attachment grid reaches its cap; it is never wider than the bubble and shares its right edge.
+- **F3.** The measure resolves once, on `.msg-assist`: `@property --chat-prose-cap { syntax: '<length>'; inherits: true;
+  initial-value: 0px }` in chat.css, set by `.chat-item .msg-assist { --chat-prose-cap: var(--measure-chat-prose) }` and
+  read by the prose children's cap. **The scrape is updated, not kept:** it now names the registered property (its
+  `@property` rule, its `<length>` syntax, `inherits: true`), the one rule that sets it from `var(--measure-chat-prose)`,
+  and the children reading `var(--chat-prose-cap)`. In the browser, the h1's and h2's max-width equal the paragraph's in
+  both skins (before: Refined 1038.2 / 882.4 px against 755.8; Instrument 1202.1 / 1021.8 against 875.2). prose.css and
+  the Docs reader's `--measure-prose` are untouched.
+- **F8.** At 390, both skins, the bubble is 85% of the column (browser).
+- **F7, F11.** Comments corrected: ask-inline's 1600-with-rail case now exercises the `100%` arm; its two-line question's
+  narrowest card is Instrument's 1280 (about 830 px of text); instrument.css's reading column is the whole detail pane;
+  refined-session's header names its new case; ui/README.md names `--measure-chat-prose`.
+- **F10.** The repeated `toHaveLength(10)` is gone; `proseMeasureList()` still throws unless prose.css has its one
+  measure rule.
+
+Departure, by slug:
+
+- **`w-f3-census-entry-for-the-registered-length`.** `.chat-item .msg-assist { --chat-prose-cap: … }` sets a custom
+  property on a ui-owned class, which `ui-package-boundary.test.ts`'s appearance census counts as a reach-in (it exempts
+  layout properties only). The rule carries no colour, border or type, and it cannot move to prose.css, which the Docs
+  reader shares, so it is recorded in the census with that reason (claimed, 3704). Found by the whole pwa suite's first
+  run of this round; tests only, inside the ruling's bounds.
+
+Mutants, re-run on this round's tree (each restored from a saved copy, sha checked):
+
+| # | Mutant | Red |
+|---|---|---|
+| 1 | ≥1600 `--measure-chat: 820px` put back | scrape "no width block …"; browser column and full-column cases (Refined 1600 both, 2560) |
+| 2 | the chat prose rule deleted | scrape prose-children case; refined-session prose case; browser "prose is held" (7 views), "headings share" (7), bubble (4) |
+| 3 | `--measure-chat-prose` out of `SKIN_TOKENS` | scrape "SKIN_TOKENS.density …"; skin-identity's two cases |
+| 4 | the column's `min(…, 100%)` dropped | refined-session column case (browser equivalent, as before) |
+| 5 | the prose rules out of the ≥900 block | browser "390 is unchanged" (both skins); scrape prose and registered-length cases; refined-session prose case |
+| 6 | the bubble back to `70%` | scrape bubble/attachments case; browser bubble case at Refined 2560, Refined 1600 rail hidden, Instrument 2560 |
+| 7 | `.msg-attach` dropped from the cap | scrape bubble/attachments case; browser bubble case (attachments wider than the bubble, 7 views) |
+| 8 | `@property --chat-prose-cap` removed | scrape registered-length case; browser "headings share the paragraphs' measure" (7 views) |
+| 9 | the base `.msg-user` 85% → 70% | browser "390 is unchanged" (both skins); the scrapes stay green, as ruled (a browser pin) |
