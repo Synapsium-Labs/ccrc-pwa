@@ -1,0 +1,15 @@
+/* The reader lab page (native Docs reader, the reader lab plan of 2026-11-03, Task 10). Layout only, and no colour of its
+   own: the text inherits the page's ink, so every skin and theme draws it. The stage holds the lab's frames
+   and its reader mounts while a run is under way; the popup frame's button must be visible to be tapped. */
+.reader-lab-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.reader-lab-row { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-1) var(--sp-2); align-items: baseline; }
+.reader-lab-word { font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono); }
+.reader-lab-detail { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.reader-lab-result {
+  margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-mono) var(--font-mono);
+}
+.reader-lab-stage { display: grid; gap: var(--sp-2); min-inline-size: 0; }
+.reader-lab-stage > iframe { display: block; inline-size: 100%; block-size: 8rem; border: 0; }
+.reader-lab-mount { position: relative; inline-size: 100%; block-size: 16rem; }
+.reader-lab-mount iframe { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; border: 0; }

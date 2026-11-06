@@ -38,7 +38,8 @@ import {
 } from '../src/coord/delegation-model.js';
 import { DelegationDurability, type DelegationProjectionPort } from '../src/coord/delegation-checkpoint.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
-import type { DelegationHealthInput } from '../../shared/api.js';
+import { delegationCarrierHealthOf, delegationUncensusedLeasesOf, type DelegationHealthInput, type DelegationObservationHealth } from '../../shared/api.js';
+import { delegationCarrierHealthShown } from '../src/coord/delegation-carrier.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = Date.UTC(2026, 9, 15, 10, 30, 0);                    // 2026-10-15T10:30Z: the hour 10:00 is still open
@@ -271,6 +272,26 @@ describe('the assembled health carries the checkpoint\'s own anchors and the pas
       'circuitBreaker', 'conflicting', 'lastCheckpointRevision', 'lastIngestedAt', 'lastJournalSequence', 'measuredSessionHours', 'mode',
       'stageGate', 'unmeasured', 'unmeasuredRate', 'unmeasuredSessionHours', 'unresolved', 'windowEndedAt', 'windowStartedAt',
     ]);
+  });
+
+  it('PR5b (review 1498 F5): an older-shape block, without uncensusedLeases, still parses, and the one reader reads it absent as 0', () => {
+    const older = JSON.parse(JSON.stringify(delegationObservationHealthOf(inputFrom(cpWith(grid(2, 0)))))) as DelegationObservationHealth;
+    expect('uncensusedLeases' in older, 'the assembled block never carries the member: the lane adds it').toBe(false);
+    expect(delegationUncensusedLeasesOf(older)).toBe(0);
+    const wire = JSON.parse(JSON.stringify({ ...older, uncensusedLeases: 3 })) as DelegationObservationHealth;
+    expect(delegationUncensusedLeasesOf(wire), 'a present member is read as sent').toBe(3);
+  });
+
+  it('W5-K14: an older-shape block, without carriers, still parses; the lane writes the member only when it counted something', () => {
+    const older = JSON.parse(JSON.stringify(delegationObservationHealthOf(inputFrom(cpWith(grid(2, 0)))))) as DelegationObservationHealth;
+    expect('carriers' in older, 'the assembled block never carries the member: the lane adds it').toBe(false);
+    expect(delegationCarrierHealthOf(older), 'review 1546 F7: the one reader reads absence as nothing counted').toBeNull();
+    const counts = { marked: 3, pending: 1, unsupported: 0, mismatched: 0, unmeasured: 2, unowned: 0, refused: 1 };
+    const wire = JSON.parse(JSON.stringify({ ...older, carriers: counts })) as DelegationObservationHealth;
+    expect(delegationCarrierHealthOf(wire), 'a present member is read as sent').toEqual(counts);
+    expect(delegationCarrierHealthShown(counts)).toEqual(counts);
+    expect(delegationCarrierHealthShown({ marked: 0, pending: 0, unsupported: 0, mismatched: 0, unmeasured: 0, unowned: 0, refused: 0 })).toBeNull();
+    expect(delegationCarrierHealthShown(null)).toBeNull();
   });
 });
 

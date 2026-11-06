@@ -537,6 +537,7 @@ _ws_reclaim_workdir_shared	C4
 _ws_reclaim_recorded	C4
 _ws_reclaim_recorded_git	C4
 _ws_reclaim_recorded_crumb	C4
+_ws_reclaim_recorded_archive	C4
 _ws_reclaim_moved_check	C4
 _ws_reclaim_resolve	C4
 _ws_reclaim_resolvable	C4

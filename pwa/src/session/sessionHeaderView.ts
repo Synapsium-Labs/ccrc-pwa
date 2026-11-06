@@ -4,16 +4,17 @@
 // a chip or its order changes in one place. It is the header's own derivation moved out, not a second one: the bucket
 // and its `dead` override, the status word, the chips in the order the header draws them, the ⋯ menu's items
 // (`sessionMenu`, the menu's own reader, each with its command id) and Stop's state. The hooks stay in the part: it
-// passes the clock (`now`, ticking at `headerTickMs`) and the pointer query (`finePointer`) in.
+// passes the clock (`now`, ticking at `headerTickMs`), the pointer query (`finePointer`) and the desk query (`desk`) in.
 import {
   backgroundWork, backgroundWords, isArchivedRow, sessionWithCoordinator, withCoordinatorWords,
   type FleetSession, type PrState, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import { restartWords, type RestartWords } from '../lib/restart';
+import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { hibernatedSince } from '../fleet/hibernated';
-import { headerStatusWord } from '../fleet/sessionFacts';
+import { contextFact, headerStatusWord } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
 import { hasPrCap } from './prCap';
@@ -40,6 +41,11 @@ export interface SessionHeaderViewInput {
   now: number;
   /** `(pointer: fine)`: where a physical Escape key exists the Stop cap is absent. */
   finePointer: boolean;
+  /** The desk query (`useDesk`, 900 px and wider): where the Goals door stands (`goals.slot`). Absent: below 900. */
+  desk?: boolean;
+  /** The session's programme, its slug (`sessionProgramme`, read off its fleet row and the runs) and its title
+   *  (`programmeTitle`), or `null`/absent: in none. */
+  programme?: { readonly slug: string; readonly title: string } | null;
 }
 
 /** The status strip's four tints (chat.css's `status-line--*`). */
@@ -83,6 +89,40 @@ export interface SessionHeaderView {
   menu: SessionMenuEntry[];
   /** The interrupt: shown where no Escape key exists, enabled only while the LIVE status is busy. */
   stop: { shown: boolean; enabled: boolean };
+  /** GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30): the door to the Goals page of the programme this
+   *  session is in, through the one programme-path builder (`programmePath`), or `null`: a session in no programme, or one whose
+   *  programme's slug the page would refuse (never a dead door). `label` is its accessible name and title, "Goals: <the
+   *  programme's title>", which begins with the word the door shows (review 1537 A10). */
+  goals: { href: string; label: string; slot: GoalsSlot } | null;
+}
+
+/** Where the Goals door stands (desktop-polish PL11, D-7986; review 1537 F1 and review 1548 M5, ruled in fix rounds 1 and 2),
+ *  in the shared header's terms; each skin's chrome draws the slot it is given:
+ *    - `back-row`: below 900, a glyph-only key first of the doors on Back's row, which has room for it;
+ *    - `coordination-line`: at a desk, last on the coordination line, the line that already names the programme;
+ *    - `chip-row`: at a desk, when that line has no clause of its own (`hasCoordinationClause`: a coordinator that holds no
+ *      run, whose runs bind its workers), after the last chip.
+ *  At a desk the door costs the header at most its own row (its height and its row's gap), and below 900 nothing
+ *  (`goals-door-height.browser.test.ts`). */
+export type GoalsSlot = 'back-row' | 'coordination-line' | 'chip-row';
+
+/** The coordination line's clauses, each `null` when it has none: whose code it works on, its programme's run (a coordinator's
+ *  own hold, or a child's run), and who coordinates it. One derivation: the line (`SessionCoordination`) draws it, and
+ *  `hasCoordinationClause` asks it. */
+export function coordinationClauses(facts: SessionFactSet, coordination: Coordination | null) {
+  const ctx = contextFact(facts);
+  const run = ctx?.key === 'programme' ? (facts.heldRun ?? facts.activeRun) : null;
+  const workingOn = facts.workingOn ?? coordination?.workingOn ?? null;
+  const coordinatorName = facts.coordinatorName ?? coordination?.coordinator ?? null;
+  const from = coordinatorName ?? (coordination !== null && coordination.workingOn !== null ? coordination.card : null);
+  return { workingOn, run, from };
+}
+
+/** Whether the coordination line has a clause of its own to draw, beside which the Goals door can stand (PL11, D-7986; review
+ *  1537 F1). A coordinator that holds no run of its own has none: its runs bind its workers. */
+export function hasCoordinationClause(facts: SessionFactSet, coordination: Coordination | null): boolean {
+  const { workingOn, run, from } = coordinationClauses(facts, coordination);
+  return workingOn !== null || run !== null || from !== null;
 }
 
 // THE bucket — the server's, never this header's. It used to OR `dialogPending`/`hookState` into an `attention` of its
@@ -153,7 +193,7 @@ export function deepLinkFallback(
 
 export function sessionHeaderView({
   session, status, statusUpdatedAt, queuedField = null, fallback, roster = [], repo = null, coordination = null,
-  facts = null, now, finePointer,
+  facts = null, now, finePointer, desk = false, programme = null,
 }: SessionHeaderViewInput): SessionHeaderView {
   // Live stream status wins; the fleet snapshot fills in before it connects (`liveStatus`, the screen's one derivation).
   const st: SessionStatus | null = liveStatus(status, session);
@@ -236,5 +276,10 @@ export function sessionHeaderView({
   if (facts !== null) chips.push({ kind: 'details', facts, coordination });
   if (hasPrCap(session)) chips.push({ kind: 'pr', pr: session.pr });
 
-  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy } };
+  const lined = facts !== null && hasCoordinationClause(facts, coordination);
+  const slot: GoalsSlot = !desk ? 'back-row' : lined ? 'coordination-line' : 'chip-row';
+  const goals = programme !== null && programmeIsOpenable(programme.slug)
+    ? { href: programmePath(programme.slug), label: `Goals: ${programme.title}`, slot }
+    : null;
+  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
 }

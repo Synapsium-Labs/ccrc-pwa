@@ -11,10 +11,11 @@
 // and must not claim the list is fresh either. (2) It re-polls when the page
 // becomes visible, because a phone that slept through three polls should not
 // show a 3-minute-old "vX is out" as current.
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { UpdatesView } from '../../../shared/api';
 import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 import { asUpdatesView } from './updatesRead';
 import { sameJson } from '../lib/sameJson';
 
@@ -25,6 +26,9 @@ import { sameJson } from '../lib/sameJson';
  *  the same rows again. The visibility refresh covers a phone that slept
  *  through polls. */
 export const UPDATES_POLL_MS = 60_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount. */
+const CACHE_KEY = settingsKey('updates');
 
 /** Why the latest poll produced no view — two words, because the screen says
  *  two different things: `not-configured` is a box with no control plane (a
@@ -75,14 +79,17 @@ const failureOf = (err: unknown): UpdatesFailure =>
  * after some event from one issued before it (D-4273).
  */
 export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
+  // The last answer kept from an earlier mount (console speed C2), drawn at once through the reader. `seq` stays 0: no
+  // read of THIS mount has landed, so a hold waiting on a read issued after a tap keeps waiting (D-4273).
   const [state, setState] = useState<{ view: UpdatesView | null; failure: UpdatesFailure | null; seq: number }>(
-    { view: null, failure: null, seq: 0 });
-  const { reload } = usePoll({
+    () => ({ view: asUpdatesView(peek(CACHE_KEY)?.raw), failure: null, seq: 0 }));
+  const { reload: load } = usePoll({
     pollMs,
-    request: () => api.updates(),
+    request: (signal) => api.updates({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome, issue) => {
       if (outcome.ok) {
         const view = asUpdatesView(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         // An equal good answer keeps the previous view's reference (C8, D-6440), so its readers do not re-render, but
         // `seq` still takes this read's number: HaltBanner reads it as the issue of the last good read (D-4273).
         setState((prev) => (view === null
@@ -90,11 +97,18 @@ export function useUpdatesView(pollMs: number = UPDATES_POLL_MS): UpdatesPoll {
           : { view: sameJson(prev.view, view) ? prev.view : view, failure: null, seq: issue }));
       } else {
         const failure = failureOf(outcome.err);
+        // A box with no control plane: the kept answer goes, so the next mount never draws it (fix round 1).
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: prev.view, failure, seq: prev.seq }));
       }
     },
   });
-  // Memoised (C6, D-6438): `reload` is `usePoll`'s `useCallback([])`, so the plane changes only when a poll lands.
+  // A caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed or failed branch, an ack or a
+  // move; console speed C2 fix rounds 1 and 2), with a few re-reads that follow no write (the collector's
+  // marker-still-controls answer, Linear's legacy act), which cost only a Loading on the next visit. The kept answer
+  // goes first: leaving Settings before the re-read lands (which aborts it) must not bring a pre-write view back.
+  const reload = useCallback((): number => { forget(CACHE_KEY); return load(); }, [load]);
+  // Memoised (C6, D-6438): `reload` is a `useCallback` over `usePoll`'s stable one, so the plane changes only when a poll lands.
   return useMemo(
     () => ({ view: state.view, failure: state.failure, seq: state.seq, reload }),
     [state.view, state.failure, state.seq, reload],

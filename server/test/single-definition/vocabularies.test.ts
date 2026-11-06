@@ -1444,3 +1444,17 @@ describe('W5-V4: the orphan hold vocabularies, one definition each, in delegatio
     expect(Number(/^__DL_HOLD_MARGIN_S=(\d+)\b/m.exec(lib)?.[1]) * 1000).toBe(mod.DELEGATION_ORPHAN_HOLD_MARGIN_MS);
   });
 });
+
+// Delegation broker wave 5, PR6 (review 1546 F13): the carrier lane's retried refusals, a closed list of `LEASE_MARK_REFUSALS` words
+// the planner reads through `isStandingMarkRefusal` alone, so `busy` and `unmeasured` are spelled as that set in one place.
+describe('delegation wave 5 PR6: the carrier lane\'s retried refusals are one list', () => {
+  it('DELEGATION_CARRIER_RETRIED_REFUSALS is declared once, in delegation-carrier.ts, from LEASE_MARK_REFUSALS\' words, and named nowhere else', async () => {
+    const DEF = /^\s*(?:export\s+)?(?:const|let|var)\s+DELEGATION_CARRIER_RETRIED_REFUSALS\b/m;
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['server/src/coord/delegation-carrier.ts']);
+    expect(ALL.filter((f) => readFileSync(f, 'utf8').includes('DELEGATION_CARRIER_RETRIED_REFUSALS')).map(rel)).toEqual(['server/src/coord/delegation-carrier.ts']);
+    const { DELEGATION_CARRIER_RETRIED_REFUSALS } = await import('../../src/coord/delegation-carrier.js');
+    const { LEASE_MARK_REFUSALS } = await import('../../../shared/api.js');
+    expect([...DELEGATION_CARRIER_RETRIED_REFUSALS]).toEqual(['busy', 'unmeasured']);
+    for (const w of DELEGATION_CARRIER_RETRIED_REFUSALS) expect(LEASE_MARK_REFUSALS).toContain(w);
+  });
+});

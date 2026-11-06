@@ -16,6 +16,7 @@ import { Button, QuickConfirm, Section, useNow } from '@ccrc/ui';
 import { formatAge } from '../../fleet/formatReset';
 import { ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api, apiErrorText } from '../../lib/api';
+import { writeOutcomeUnknown } from '../../lib/apiError';
 import { authPostureChanged } from '../../lib/auth';
 import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../../lib/passkey';
 import type { PasskeysRead } from './SettingsDataProvider';
@@ -89,6 +90,8 @@ export function YourSignInCard({ status, passkeys, refreshAuth }: {
     } catch (err) {
       // The ceremony's own failure and the box's refusal read differently: a Cancel is not a rejected key.
       result.say(err instanceof PasskeyCeremonyError ? SIGN_IN_TEXT.cancelled : apiErrorText(err), 'refusal');
+      // An answer that never arrived may follow a stored key: forget the kept pair and read it again, as a success does.
+      if (!(err instanceof PasskeyCeremonyError) && writeOutcomeUnknown(err)) refreshAuth();
     } finally {
       setBusy(false);
     }
@@ -106,6 +109,8 @@ export function YourSignInCard({ status, passkeys, refreshAuth }: {
       authPostureChanged();
     } catch (err) {
       result.say(apiErrorText(err), 'refusal');
+      // The server may have removed the key before the answer was lost: forget the kept pair and read it again.
+      if (writeOutcomeUnknown(err)) refreshAuth();
     } finally {
       setBusy(false);
     }

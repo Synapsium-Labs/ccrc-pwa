@@ -5,6 +5,7 @@
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { RunsPageAnswer } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
@@ -18,6 +19,7 @@ import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
 import { questionAnswerRequest } from '../session/answerLifecycle';
 import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
+import { READER_LAB_RUNS_PATH, readerLabClosePath, readerLabProbePath, readerLabRunPath } from '../../../shared/readerLab';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
   type DocsRefreshResponse, type DocsTreeResponse,
@@ -689,7 +691,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `nextBefore`, the cursor of the next page. An older server ignores both parameters and answers the whole archive
      *  with no `nextBefore`, which a caller reads as the last page. */
     runsPage: (limit: number, before: number | null, opts?: ReadOpts) =>
-      getJson<{ runs: RunSummary[]; nextBefore?: number }>(
+      getJson<RunsPageAnswer>(
         `/api/runs?closed=1&limit=${limit}${before === null ? '' : `&before=${before}`}`, opts),
     /** `GET /api/runs/:id` (D-6799) - one run plus the `spend` its bound sessions
      *  have accrued per the usage sweep; `spend` is unmeasured, with a reason, when
@@ -996,6 +998,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         }),
       };
     })(),
+    /**
+     * The reader lab's door (the reader lab plan of 2026-11-03, Task 9; the reader lab design, section 4). Through
+     * `request`, so a 401 raises the one login overlay and every other refusal rejects with its `ApiError`; the lab's run
+     * turns the answers into its words (`readerLab/run.ts`). `open` and `read` resolve the parsed body unchecked, which
+     * `readerLab/wire.ts` checks; `probe` is the console's own request to the probe, with its session, the cookie
+     * check's control.
+     */
+    readerLab: {
+      open: (): Promise<unknown> => postJson<unknown>(READER_LAB_RUNS_PATH),
+      read: (nonce: string): Promise<unknown> => getJson<unknown>(readerLabRunPath(nonce)),
+      close: (nonce: string): Promise<void> => post(readerLabClosePath(nonce)),
+      probe: async (nonce: string): Promise<void> => {
+        await request(readerLabProbePath(nonce, 'cookie-console'));
+      },
+    },
   };
 }
 

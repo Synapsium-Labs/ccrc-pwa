@@ -365,6 +365,17 @@ describe('UpdateMoveSheet — what one confirm sends', () => {
   });
 });
 
+describe('UpdateMoveSheet — a first request whose answer never arrives (console speed C2)', () => {
+  it('re-polls, because it may have been written, and stays open', async () => {
+    vi.spyOn(api, 'applyUpdate').mockRejectedValue(new TypeError('network connection was lost'));
+    const { onClose, onDone } = mount(plan(UP));
+    fireEvent.click(screen.getByRole('button', { name: 'Update v0.0.10' }));
+    await screen.findByRole('alert');
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
 describe('UpdateMoveSheet — a refusal is said in the sheet, which stays open', () => {
   it('a refusal on the first node leaves the second unsent', async () => {
     const err = refusal('no-rollback-cap');

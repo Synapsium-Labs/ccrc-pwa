@@ -313,3 +313,70 @@ describe('the header names the session (desktop polish T3c, D-6333)', () => {
       .toEqual({ title: 'project-a', crumb: null, wrapper: 'lane' });
   });
 });
+
+// GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30): the view decides the Goals door once, from the
+// session's programme, through the one programme-path builder; the header and Refined's chrome draw what it says.
+describe('the Goals door (PL11)', () => {
+  const base = { session: fleetSession({ id: 'project-a-quiet-basin', project: 'project-a', workspace: 'quiet-basin' }),
+    status: 'idle' as SessionStatus, statusUpdatedAt: null, now: 0, finePointer: true };
+  const PROG_A = { slug: 'prog-a', title: 'Programme A' };
+  it('a session in a programme has a door to that programme\'s Goals page, named by it; one in none has none', () => {
+    // Its name begins with the word it shows and names the programme, as the chip's does (review 1537 A10).
+    expect(sessionHeaderView({ ...base, programme: PROG_A }).goals)
+      .toEqual({ href: '/programmes/prog-a', label: 'Goals: Programme A', slot: 'back-row' });
+    expect(sessionHeaderView({ ...base, programme: null }).goals).toBeNull();
+    expect(sessionHeaderView(base).goals).toBeNull();
+  });
+  it('a programme whose page would refuse its slug has no door, never a dead one', () => {
+    expect(sessionHeaderView({ ...base, programme: { slug: 'old.name', title: 'Old' } }).goals).toBeNull();
+  });
+  // REVIEW 1548 M5: the door's slot is the view's, beside `finePointer`, and the header draws the slot it is given. Below 900
+  // Back's row; at a desk the coordination line, or after the last chip when that line has no clause of its own (a
+  // coordinator that holds no run: its runs bind its workers).
+  it("the view decides the door's slot: Back's row below 900; at a desk the coordination line, or the chip row when that line has no clause", () => {
+    const p = hostProps(allChips(), 'idle');
+    const slot = (desk: boolean, coordination: Coordination | null): string | undefined =>
+      sessionHeaderView({ ...p, coordination, now: NOW, finePointer: true, desk, programme: PROG_A }).goals?.slot;
+    expect(slot(false, COORDINATION)).toBe('back-row');
+    expect(slot(false, null)).toBe('back-row');
+    expect(slot(true, COORDINATION)).toBe('coordination-line');
+    expect(slot(true, null)).toBe('chip-row');
+  });
+  // ONE door, in the slot that costs the header no height (review 1537 F1, ruled in fix round 1): on Back's row below 900, on
+  // the coordination line from 900. Nothing else in the header changes: its own children are the same, but for the key.
+  for (const desk of [false, true]) {
+    it(`${desk ? 'at a desk' : 'on a phone'}: the header draws the one door the view decides, ${desk ? 'on the coordination line' : "on Back's row"}, and nothing else changes`, () => {
+      vi.stubGlobal('matchMedia', (q: string) => ({
+        matches: desk && q.includes('min-width: 900px'),
+        media: q, addEventListener: () => {}, removeEventListener: () => {},
+        addListener: () => {}, removeListener: () => {}, onchange: null, dispatchEvent: () => false,
+      }));
+      const p = hostProps(allChips(), 'idle');
+      const without = render(createElement(SessionHeaderHost, p));
+      const before = Array.from(without.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
+      const coordBefore = without.container.querySelector('.chat-coord')?.children.length;
+      expect(screen.queryByRole('button', { name: /^Goals/ })).toBeNull();
+      cleanup();
+      const withGoals = render(createElement(SessionHeaderHost, { ...p, programme: PROG_A }));
+      const after = Array.from(withGoals.container.querySelectorAll('.chat-head > *')).map((e) => e.className);
+      const doors = screen.getAllByRole('button', { name: 'Goals: Programme A' });
+      expect(doors).toHaveLength(1);
+      const door = doors[0]!;
+      if (desk) {
+        expect(after).toEqual(before);
+        expect(door.closest('.chat-coord')).not.toBeNull();
+        // Last on the line: the clauses before it keep their places.
+        expect(withGoals.container.querySelector('.chat-coord')!.lastElementChild).toBe(door);
+        expect(withGoals.container.querySelector('.chat-coord')!.children.length).toBe(coordBefore! + 1);
+      } else {
+        expect(after.filter((c) => !c.includes('keycap--goals'))).toEqual(before);
+        expect(door.parentElement?.classList.contains('chat-head')).toBe(true);
+      }
+      history.replaceState(null, '', '/');
+      fireEvent.click(door);
+      expect(location.pathname).toBe('/programmes/prog-a');
+      history.replaceState(null, '', '/');
+    });
+  }
+
+});

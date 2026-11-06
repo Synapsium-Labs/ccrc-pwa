@@ -18,6 +18,7 @@ import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
+import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
 // policy — the house port pattern. This read exists to feed that policy and
@@ -3834,6 +3835,12 @@ export class CoordStore {
       `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?) ` +
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[]);
+  }
+
+  /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
+  runsPage(opts: { limit: number; before?: number; pinned: readonly number[] }): RunsPage {
+    return runsPageQuery(this.db, opts, { columns: RUN_ROW_COLUMNS, terminalStatesSql: TERMINAL_RUN_STATES_SQL },
+      (rows) => this.hydrateRuns(rows as RunRowDb[]));
   }
 
   /**

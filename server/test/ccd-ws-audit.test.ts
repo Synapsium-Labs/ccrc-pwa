@@ -3307,7 +3307,9 @@ describe('the per-child ladder in the reap eval (D2)', () => {
     const a = refusal(wt);
     expect(a.verdict).toBe('child-record-stale');
     expect(a.detail).toContain('agent-vanished');
-    expect(a.detail).toMatch(/worktree prune/);
+    // D-7999: the remedy is the scoped removal of this one record, never a repository-wide prune.
+    expect(a.detail).toContain(`worktree remove ${child}`);
+    expect(a.detail).not.toMatch(/worktree prune/);
 
     // `_ws_child_manifest`'s own independent walk (D4) reports the SAME
     // entry as REGISTERED — `stray:false` — because `main` really does

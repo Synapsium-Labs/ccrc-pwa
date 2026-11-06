@@ -12,11 +12,15 @@ import type { StallConfirmRequired, StallWatchView } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
 import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 import { usePoll } from '../lib/usePoll';
+import { forget, peek, put, settingsKey } from '../lib/screenCache';
 import { isRecord } from '../lib/wire';
 import { asStallConfirm, asStallWatchView } from './stallWatchRead';
 
 /** The read's cadence: the stall sweep's own (60 s), so a faster read would fetch the same answer again. */
 export const STALL_WATCH_POLL_MS = 60_000;
+
+/** This read's key in the screen cache: its last good answer is drawn at once on the next mount; a write forgets it. */
+const CACHE_KEY = settingsKey('stall-watch');
 
 /** Why the latest poll produced no view. `not-configured` is a server with no stall-watch settings to offer (a box with
  *  no coordination database, or an older build without the route), which the section renders INSTEAD of any view that
@@ -83,24 +87,33 @@ export function stallWriteRefusal(err: unknown): StallWriteRefusal {
  */
 export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWatchPoll {
   const [state, setState] = useState<{ view: StallWatchView | null; failure: StallWatchFailure | null }>(
-    { view: null, failure: null });
+    () => ({ view: asStallWatchView(peek(CACHE_KEY)?.raw), failure: null }));
   const { reload: load, supersede } = usePoll({
     pollMs,
-    request: () => api.stallWatch(),
+    request: (signal) => api.stallWatch({ signal }),   // aborted when the hook unmounts or a write supersedes it
     onOutcome: (outcome) => {
       if (outcome.ok) {
         const view = asStallWatchView(outcome.raw);
+        if (view !== null) put(CACHE_KEY, outcome.raw, Date.now());
         setState((prev) => (view === null ? { view: prev.view, failure: 'failed' } : { view, failure: null }));
       } else {
         const failure = settingsReadFailure(outcome.err);
+        // The server says the route is not here: the kept answer goes, so the next mount never draws its radios
+        // (fix round 1, extending a-dropped-view-forgets-its-key). The view of THIS mount stays as before.
+        if (failure === 'not-configured') forget(CACHE_KEY);
         setState((prev) => ({ view: prev.view, failure }));
       }
     },
   });
 
-  const reload = useCallback(() => { load(); }, [load]);
+  // A caller of `reload` is a write's re-read (the section's `.finally`, an unconfirmed or failed branch, an ack or a
+  // move; console speed C2 fix rounds 1 and 2), with a few re-reads that follow no write (the collector's
+  // marker-still-controls answer, Linear's legacy act), which cost only a Loading on the next visit. The kept answer
+  // goes first: leaving Settings before the re-read lands (which aborts it) must not bring a pre-write view back.
+  const reload = useCallback(() => { forget(CACHE_KEY); load(); }, [load]);
   const settle = useCallback((view: StallWatchView) => {
     supersede();   // every poll issued before this write now lands stale
+    forget(CACHE_KEY);   // the kept answer is from before the write; the next read keeps the new one
     setState({ view, failure: null });
   }, [supersede]);
   return { view: state.view, failure: state.failure, reload, settle };

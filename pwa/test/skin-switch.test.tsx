@@ -49,6 +49,8 @@ import type { ChatEvent, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { askFixture } from './askFixtures';
 import { pairedFrames } from './wirePairing';
+import { runRow } from './ledgersFixture';
+import { withRunBinding } from './runBindingFixture';
 
 const made = vi.hoisted(() => ({
   terms: [] as unknown[],
@@ -568,6 +570,95 @@ describe("the session screen mounts the skin's chrome", () => {
       // The crumb comes before the title in the document.
       expect(got.order & Node.DOCUMENT_POSITION_FOLLOWING, skin).toBeTruthy();
       toInstrument();
+    }
+  });
+});
+
+// GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1, ruled in fix round 1): a session in a
+// programme shows a Goals icon in its chrome, in both skins, and it opens that programme's Goals page. The session's programme is
+// read off its fleet row and the runs the store holds (`sessionProgramme`), never a field of its own. A session in no programme
+// shows none. ONE door is drawn, in the slot the view gives it (`goals.slot`; goals-door-height.browser.test.ts measures what
+// it costs): in Instrument below 900 on Back's row, and from 900 on the coordination line, or after the last chip for a
+// coordinator, which has no coordination line of its own; in Refined on a phone first on the coordination line in its rail,
+// and at a desk the rail's last item (review 1548 F1). Its name names the programme (review 1537 A10).
+describe('the Goals icon in a session\'s chrome', () => {
+  const COORDINATOR = fleetSession({ id: 'lane-a-project-a', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null });
+  const RUNS = [runRow({ id: 7, program: 'prog-a', sessionId: WS.id, claimedBy: COORDINATOR.id, homeProject: 'project-a' } as never)];
+  /** Open `session`, with the coordinator's row in the fleet too, so a worker's coordination line names it. */
+  const openIn = (session: FleetSession, runs: typeof RUNS): void => {
+    const rows = session.id === COORDINATOR.id ? [session] : [session, COORDINATOR];
+    act(() => useFleetStore.setState({ conn: 'open', runs, runsFrameSeen: true }));
+    act(() => useFleetStore.setState({ sessions: withRunBinding(rows.map((r) => ({ ...r, status: 'idle' as const })), runs) }));
+    navigate(`/s/${session.id}`);
+    render(<App />);
+    act(() => getSessionStore(session.id).setState({ uuid: 'u1', status: 'idle', events: EVENTS }));
+  };
+  /** A fine pointer, at a desk width (`(min-width: 900px)` matches) or a phone's. */
+  const stubWidth = (desk: boolean): void => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q.includes('pointer: fine') || (desk && q.includes('min-width: 900px')),
+      media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+  };
+  /** The one Goals door in the header, and where it stands. */
+  const door = (skin: string): { el: HTMLElement; slot: string } => {
+    const head = document.querySelector<HTMLElement>('.chat-head')!;
+    const all = within(head).getAllByRole('button', { name: /^Goals: / });
+    expect(all, `${skin}: one door`).toHaveLength(1);
+    const el = all[0]!;
+    const slot = el.closest('.chat-coord') !== null ? 'coordination line' : el.closest('.chat-meta') !== null ? 'chip row'
+      : el.parentElement === head ? "Back's row" : 'elsewhere';
+    return { el, slot };
+  };
+  afterEach(() => { act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false })); });
+
+  for (const desk of [false, true]) {
+    it(`${desk ? 'at a desk' : 'on a phone'}: a session in a programme shows one Goals icon in both skins, named by its programme, and it opens that programme's Goals page`, () => {
+      stubWidth(desk);
+      for (const skin of ['Refined', 'Instrument']) {
+        if (skin === 'Instrument') toInstrument();
+        openIn(WS, RUNS);
+        const { el, slot } = door(skin);
+        // Refined at a desk: the last item of its one rail, where it can add no more than its own line (review 1548 F1).
+        expect(slot, skin).toBe(skin === 'Instrument' ? (desk ? 'coordination line' : "Back's row") : desk ? 'chip row' : 'coordination line');
+        if (skin === 'Refined' && desk) expect(document.querySelector('.ref-chip-rail')!.lastElementChild, skin).toBe(el);
+        expect(el.getAttribute('aria-label'), skin).toBe('Goals: prog-a');
+        expect(el.getAttribute('title'), skin).toBe('Goals: prog-a');
+        fireEvent.click(el);
+        expect(location.pathname, skin).toBe('/programmes/prog-a');
+        cleanup();
+        navigate('/');
+      }
+    });
+
+    // REVIEW 1537 A9: the door for a coordinator, whose programme is the run it claims (its runs bind its workers, not it).
+    it(`${desk ? 'at a desk' : 'on a phone'}: a coordinator shows the Goals icon of the programme whose run it claims, and it opens that Goals page`, () => {
+      stubWidth(desk);
+      for (const skin of ['Refined', 'Instrument']) {
+        if (skin === 'Instrument') toInstrument();
+        openIn(COORDINATOR, RUNS);
+        const { el, slot } = door(skin);
+        expect(slot, skin).toBe(skin === 'Instrument' ? (desk ? 'chip row' : "Back's row") : desk ? 'chip row' : 'coordination line');
+        if (skin === 'Refined' && desk) expect(document.querySelector('.ref-chip-rail')!.lastElementChild, skin).toBe(el);
+        fireEvent.click(el);
+        expect(location.pathname, skin).toBe('/programmes/prog-a');
+        cleanup();
+        navigate('/');
+      }
+    });
+  }
+
+  it('a session in no programme shows no Goals icon', () => {
+    for (const desk of [false, true]) {
+      stubWidth(desk);
+      for (const skin of ['Refined', 'Instrument']) {
+        if (skin === 'Instrument') toInstrument();
+        openIn(WS, []);
+        expect(within(document.querySelector('.chat-head') as HTMLElement).queryByRole('button', { name: /^Goals/ }), skin).toBeNull();
+        cleanup();
+        navigate('/');
+      }
     }
   });
 });

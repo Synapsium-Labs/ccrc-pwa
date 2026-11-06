@@ -38,6 +38,7 @@ import {
 import { HighlighterContext, type HighlighterContextValue } from '../lib/highlighterContext';
 import { ChatMarkdown, HighlightedCode } from '../lib/markdown';
 import { utf8ByteLength } from '../lib/markdownGuard';
+import { longestFrameGap } from '../lib/frameGap';
 import {
   DOCS_HIGHLIGHT_PAGE_HTML_MAX_CHARS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_RENDER_GATE_BYTES, HIGHLIGHT_BLOCK_DEADLINE_MS,
   HIGHLIGHT_BOOT_BUDGET_MS, HIGHLIGHT_PAGE_MAX_TIMEOUTS, HIGHLIGHT_PAGE_WORKER_MS, HIGHLIGHT_STREAM_DEBOUNCE_MS,
@@ -158,18 +159,10 @@ async function until(deps: MeasureDeps, test: () => boolean, capMs: number): Pro
   return null;
 }
 
-/** The longest gap between animation frames while `during` runs. */
+/** The longest gap between animation frames while `during` runs: `lib/frameGap.ts`'s one measure, which the reader lab
+ *  shares (the reader lab plan, refinement (j)), rounded as R19 has always rounded it. */
 async function longestGap(deps: MeasureDeps, during: Promise<unknown>): Promise<number> {
-  let done = false;
-  void during.then(() => { done = true; }, () => { done = true; });
-  let last = await deps.frame();
-  let gap = 0;
-  while (!done) {
-    const t = await deps.frame();
-    gap = Math.max(gap, t - last);
-    last = t;
-  }
-  return round(gap);
+  return round(await longestFrameGap(deps.frame, during));
 }
 
 interface Page { readonly text: string; readonly codeChars: number; readonly blocks: number; readonly link: Omit<DocLinkContextValue, 'urls'> }

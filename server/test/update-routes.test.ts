@@ -363,7 +363,7 @@ describe('GET /api/updates carries the box-token view (Task B6, D-4392)', () => 
     expect(r.statusCode, r.body).toBe(200);
     const view = r.json() as UpdatesView;
     expect(view.boxToken).toEqual(BT_VIEW);
-    expect(Object.keys(view).sort()).toEqual(['boxToken', 'catalogue', 'intent', 'nodes', 'releases']);
+    expect(Object.keys(view).sort()).toEqual(['boxToken', 'catalogue', 'intent', 'nodes', 'releases', 'releasesTotal']);
   });
 
   it('reads view() at REQUEST time, once per request — a later answer shows the later state', async () => {
@@ -1167,5 +1167,36 @@ describe('POST /api/updates/intent dispatches in the same request (update-manage
     // Let the run finish before the fixture closes: the refused parent is a halting spawn-failed.
     await vi.waitFor(() => expect(f.coord.node(SERVER_LABEL)!.updateState).toBe('failed'), { timeout: 3000 });
     expect(calls, 'the move reached the local spawn once').toHaveLength(1);
+  });
+});
+
+// Console speed S2, step 4: `GET /api/updates` sends the release WINDOW (`releaseWindow`, `update/releaseWindow.ts`)
+// and `releasesTotal`, the whole catalogue's size. The store's own `releases()` stays whole for the planner.
+describe('GET /api/updates sends the release window (console speed S2)', () => {
+  const MANY = 45;
+  const manyReleases = (): ReleaseListingRow[] => Array.from({ length: MANY }, (_, i) => ({
+    tag: `v0.0.${i + 1}`, channel: (i % 3 === 0 ? 'stable' : 'dev') as 'stable' | 'dev', publishedAt: 1_000 + i, commitSha: null,
+    tarballUrl: `https://example.invalid/ccrc-v0.0.${i + 1}.tar.gz`, bundleListed: true, notes: null, draft: false,
+  }));
+
+  it('GET /api/updates sends the window and releasesTotal', async () => {
+    const f = await open();
+    expect(f.coord.applyReleaseListing(manyReleases(), 4_000, 'complete').ok).toBe(true);
+    plant(f.coord, measured({ currentVersion: `v0.0.${MANY}`, highestVersion: `v0.0.${MANY}` }));
+    const view = (await f.app.inject({ method: 'GET', url: '/api/updates' })).json() as UpdatesView;
+    expect(view.releasesTotal).toBe(MANY);
+    expect(view.releases.length).toBeGreaterThanOrEqual(30);
+    expect(view.releases.length).toBeLessThan(MANY);
+    expect(view.releases.some((r) => r.tag === `v0.0.${MANY}`)).toBe(true);   // the newest and the installed row
+    expect(view.releases.some((r) => r.tag === 'v0.0.1')).toBe(false);        // the oldest is left out of the window
+  });
+
+  it('planDispatch still reads the whole catalogue', async () => {
+    const f = await open();
+    expect(f.coord.applyReleaseListing(manyReleases(), 4_000, 'complete').ok).toBe(true);
+    plant(f.coord, measured({ currentVersion: `v0.0.${MANY}`, highestVersion: `v0.0.${MANY}` }));
+    await f.app.inject({ method: 'GET', url: '/api/updates' });
+    // The window is the wire's; the store (the planner's and the release notice's source) keeps every row.
+    expect(f.coord.releases()).toHaveLength(MANY);
   });
 });

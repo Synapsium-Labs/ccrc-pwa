@@ -55,7 +55,7 @@ import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { parsedFile } from './scan/symbols.js';
+import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -957,7 +957,7 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
     'ccd/ccd', 'ccd/lib/delegation-lease.sh', 'ccd/ccd-entry.py', 'agent/src/whitelist.ts', 'server/src/ccdargv.ts',
     'server/src/remote/runner.ts', 'shared/api.ts']],
   ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, ['ccd/ccd', 'server/src/ccdargv.ts']],
-  ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh']],
+  ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh', 'server/src/coord/delegationCarrierMark.ts']],
   ['delegation-adopt', /delegation-adopt/, []],
   ['promotesLease', /\bpromotesLease\b/, []],
 ];
@@ -1215,8 +1215,9 @@ describe('8. the closed scope census', () => {
     arms.push(union.slice(armStart));
     const armsTrimmed = arms.map((a) => a.trim()).filter((a) => a !== '');
     expect(armsTrimmed.filter((a) => !a.startsWith('{')), 'every FleetMsg arm is an inline object type').toEqual([]);
+    // `beat` is console speed S2's per-socket heartbeat (leave 14950), an additive frame an older app drops.
     expect(armsTrimmed.map((a) => /^\{\s*type:\s*'([a-z-]+)'/.exec(a)?.[1]), 'the frame union is main\'s seven plus `delegation` and the programme ledgers\' `waiting`').toEqual(
-      ['hello', 'fleet', 'notice', 'runs', 'coord', 'divergence', 'pools', 'delegation', 'waiting']);
+      ['hello', 'fleet', 'notice', 'beat', 'runs', 'coord', 'divergence', 'pools', 'delegation', 'waiting']);
     // the frame's literal is the socket's alone (a subset, so this is green before the socket sends it and on PR2's branch)
     const literal = filesUnder('server/src', /\.ts$/).filter((f) => /\b(type|t):\s*'delegation'/.test(code(read(f))));
     expect(literal.filter((f) => f !== 'server/src/server.ts'), 'a server file outside the socket that writes the frame').toEqual([]);
@@ -1263,10 +1264,29 @@ describe('8. the closed scope census', () => {
       const family = caps.filter((c) => /(^|-)lease|delegation|adopt|carrier/i.test(c));
       expect(family).toContain('delegation-events-v1');
       for (const c of family) {
-        expect(['delegation-events-v1', 'lease-mark-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1'], c).toContain(c);
+        expect(['delegation-events-v1', 'lease-mark-v1', 'lease-mark-lock-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1'], c).toContain(c);
       }
     } finally { h.cleanup(); }
     expect(DELEGATION_EVENTS_CAP).toBe('delegation-events-v1');
+  });
+
+  // W5-K15 (delegation wave 5 PR6): the carrier verb is composed in ONE place, `markLeaseCarrier`, and only the lane's `leaseActs`
+  // phase calls it (PR9 adds `server/src/coord/dispatch.ts` to this row; PR8 adds none: its doors leave the mark to the lane).
+  it('W5-K15: the carrier mark is composed only through markLeaseCarrier, and only the lane\'s leaseActs phase calls it', () => {
+    // Keyed on the parse (scan/parse.ts calls, scan/symbols.ts spans), never on literal source text.
+    const SRC = filesUnder('server/src', /\.ts$/);
+    const callsOf = (f: string, callee: string): number => parsedFile(f).calls.filter((c) => c.callee === callee).length;
+    expect(SRC.filter((f) => callsOf(f, 'CCD_ARGV.leaseMark') > 0), 'the builder\'s one caller').toEqual(['server/src/coord/delegationCarrierMark.ts']);
+    expect(SRC.filter((f) => callsOf(f, 'markLeaseCarrier') > 0), 'markLeaseCarrier\'s callers').toEqual(['server/src/watch.ts']);
+    expect(callsOf('server/src/watch.ts', 'markLeaseCarrier'), 'one call site').toBe(1);
+    const run = callsIn(symbolOf('server/src/watch.ts', 'DelegationLane.run'));
+    const open = run.find((c) => c.name === 'phase' && c.args[1]?.text === 'leaseActs');
+    expect(open, 'DelegationLane.run opens the leaseActs phase').toBeDefined();
+    const close = run.find((c) => c.callee === 'endActs' && c.start > open!.start);
+    expect(close, 'and ends it').toBeDefined();
+    const mark = run.find((c) => c.callee === 'markLeaseCarrier');
+    expect(mark, 'the one call is in DelegationLane.run').toBeDefined();
+    expect(mark!.start > open!.end && mark!.end < close!.start, 'inside the leaseActs phase').toBe(true);
   });
 
   it('the complete future-facing columns exist, and no wave-3 writer can transition or populate them beyond inert initialization', async () => {

@@ -11,8 +11,9 @@
 // PL5b (D-7713): the waiting chip rides the same fixture. `billing` holds 100 open items, so its chip prints its WIDEST
 // figure, "99+ waiting on you" (the cap every badge reads); `search-index` holds 3; `port-api` holds only an item being
 // checked, so it has no chip. Every width, skin and palette below measures the chip as drawn: inside its box, with the kicker
-// not overflowing, at 4.5:1, and at the 44 px tap floor under a coarse pointer. The chip opens the programme view
-// (`/programmes/<slug>`), measured at the same widths: no sideways scroll, no page error, its name on the surface in the hue.
+// not overflowing, at 4.5:1, and at the 44 px tap floor under a coarse pointer. The chip opens the one Waiting on you list
+// filtered to its programme (PL11, D-7986), and the box's title opens the programme's Goals page (`/programmes/<slug>`), each
+// measured at the same widths: no sideways scroll, no page error, the programme's name on the surface in the hue.
 //
 // MUTATION TABLE (plan Task G2 Step 8; RUN, this file alone, each mutant restored from a saved copy, sha checked): see
 // the PR body; the decider's and the card's mutants are in test/programme-box*.test.ts*.
@@ -326,15 +327,44 @@ describe.each(SKINS)('every programme box opens its view and links its spec in %
   }
 });
 
-// PL5b: the chip is a door. Tapping it opens the programme's view, laid out as the prototype's view 2: no sideways scroll at
-// any width, no page error, Goals beside this programme's share of the list, the programme's name in its hue on the surface.
-describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) => {
+// PL5b, as PL11 (D-7986; spec §2, D29) left it: the chip is a door to the one Waiting on you list, filtered to the programme,
+// with every one of the programme's rows on it and the rail's filter set; the programme's own page is its Goals page, reached
+// from the box's title, laid out as the prototype's view 2 with no list of its own: Goals beside a "N waiting on you" link to
+// that filtered list. No sideways scroll at any width, no page error, the programme's name in its hue on the surface.
+describe.each(SKINS)('the chip opens the filtered list in %s (PL11)', (skin) => {
+  for (const width of WIDTHS) {
+    it(`at ${width}: the chip opens /waiting?programme=billing, its items and question, with the rail's filter set`, async () => {
+      const { ctx, page, errors } = await open(skin, 'light', width);
+      try {
+        await page.click('section.pg-box[data-hue="cyan"] .pg-waiting');
+        await page.waitForSelector('.wl-groups .wl-item', { timeout: 10_000 });
+        await page.waitForTimeout(300);
+        expect(await page.evaluate(() => location.pathname + location.search)).toBe('/waiting?programme=billing');
+        const m = await page.evaluate(() => ({
+          sideScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          rows: document.querySelectorAll('.wl-groups .wl-item').length,
+          groups: [...document.querySelectorAll('.wl-groups .wl-group')].map((g) => g.getAttribute('data-program')),
+          pressed: document.querySelector('.wl-rail [aria-pressed="true"] .wl-rail-name')?.textContent ?? '',
+        }));
+        expect(m.sideScroll, 'sideways scroll').toBe(0);
+        expect(m.groups).toEqual(['billing']);
+        expect(m.rows, 'every open item of the programme is a row, and the question').toBe(101);
+        expect(m.pressed).toBe('Billing rework');
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
+describe.each(SKINS)('the programme\'s Goals page, opened from the title in %s', (skin) => {
   for (const theme of THEMES) {
     for (const width of WIDTHS) {
-      it(`at ${width} (${theme}): the chip opens /programmes/billing, with Goals, its items and question, and no sideways scroll`, async () => {
+      it(`at ${width} (${theme}): the title opens /programmes/billing, with Goals and a link to its 101 on the list, and no sideways scroll`, async () => {
         const { ctx, page, errors } = await open(skin, theme, width);
         try {
-          await page.click('section.pg-box[data-hue="cyan"] .pg-waiting');
+          await page.click('section.pg-box[data-hue="cyan"] a.pg-title-door');
           await page.waitForSelector('.pv', { timeout: 10_000 });
           await page.waitForSelector('.pg-goals .pg-goals-text', { timeout: 10_000 });
           await page.waitForTimeout(300);
@@ -365,6 +395,7 @@ describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) =>
               title: document.querySelector('.pv-head .pv-title')?.textContent ?? '',
               heading: document.querySelector('.pv-card .pv-h')?.textContent ?? '',
               rows: document.querySelectorAll('.pv .wl-item').length,
+              waitingLink: [document.querySelector('.pv a.pv-waiting')?.textContent ?? '', document.querySelector('.pv a.pv-waiting')?.getAttribute('href') ?? ''],
               nameRatio: ratio(kicker), nameColour: getComputedStyle(kicker).color, hueColour,
               pending: document.querySelector('.pg-goals-pending')?.textContent ?? '',
               pendingRatio: ratio(document.querySelector('.pg-goals-pending')!),
@@ -377,16 +408,18 @@ describe.each(SKINS)('the programme view, opened from the chip in %s', (skin) =>
           expect(m.sideScroll, 'sideways scroll').toBe(0);
           expect(m.overflowing, 'a panel wider than its frame').toEqual([]);
           expect(m.title).toBe('Billing rework');
-          // The view counts what the combined list counts: the 100 open items and the asking worker's question.
-          expect(m.heading).toBe('Waiting on you · 101');
-          expect(m.rows, 'every open item of the programme is a row, and the question').toBe(101);
+          // The page draws no list of its own; it counts what the combined list counts, the 100 open items and the asking
+          // worker's question, as a link to that list filtered to the programme.
+          expect(m.heading).toBe('Waiting on you');
+          expect(m.rows, 'no row of the list on the Goals page').toBe(0);
+          expect(m.waitingLink).toEqual(['101 waiting on you', '/waiting?programme=billing']);
           expect(m.nameColour, 'the name is drawn in the programme\'s hue').toBe(m.hueColour);
           expect(m.nameRatio, 'the name on the surface').toBeGreaterThanOrEqual(4.5);
           expect(m.inShortRatio).toBeGreaterThanOrEqual(4.5);
           expect(m.pending).toBe('spec update pending (PR #77)');
           expect(m.pendingRatio, 'a pending change on the attention tint').toBeGreaterThanOrEqual(4.5);
           expect(m.specLink).toBe('/docs/project-a/specs/2026-10-31-billing-design.md');
-          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3?from=programme%3Abilling'); // naming this view as the list it came from (plan PL9)
+          expect(m.itemLink, 'the change that came from item 3 links to it').toBe('/waiting/3?from=goals%3Abilling'); // the filtered list, its way back this Goals page (plan PL9; PL11; review 1537 F2)
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

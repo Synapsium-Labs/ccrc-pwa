@@ -375,6 +375,9 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
       };
     case 'notice':
       return { ...s, events: [...s.events, localDivider(msg.message)] };
+    // The heartbeat belongs to the socket (the watchdog in `lib/ws.ts` reads it); the store keeps its state.
+    case 'beat':
+      return s;
     default:
       // Two guarantees, not one. `satisfies never` keeps the compile-time
       // exhaustiveness this switch had before this arm existed: add a

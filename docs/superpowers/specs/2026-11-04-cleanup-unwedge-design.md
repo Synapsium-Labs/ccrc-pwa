@@ -358,16 +358,15 @@ reclaims again, and R2's line shows any row that still holds. The five rows git 
 
 - The operator's item 36 (2026-11-04): build the four fixes as a new task set.
 - Four tasks, D-7999 (R1), D-8000 (R2), D-8001 (R3), D-8002 (R4), issued for this plan.
+- D3, ruled 2026-11-05: no. An archive record written before this change does not place its row.
+- D6, ruled 2026-11-05: no narrowing. ccd's hold for rows with no durable record stays box-wide. The narrowing in #2294's
+  fix (#2309) is closed unmerged. Contract R94 stands, and a gone pane or a stopped unit does not turn a hold into a
+  removal. A block is to be named and carry its own control, through R2.
+- The one-time act on `row-a` and `row-b` was done on 2026-11-04 by recreating each tree with `git worktree add`.
 
 ### Waiting on you
 
-- D3: should an archive record written before this change place its row by `.workdir` as it reads now? The drafter
-  recommends no; then the two live rows need your one-time act (§10).
-- D6: ccd's hold for rows with no durable record stays box-wide. A narrower rule (for example, an archived row whose
-  archive time precedes the child's birth) would need a new proof and has a box-move hole (a copied tree is born
-  again on the new box). The drafter recommends not building any narrowing in this set.
 - D12: build the collector's box-move release, or rule once on the roots it would take.
-- The one-time act on `row-a` and `row-b` (§10), whichever you choose.
 
 ### Later
 

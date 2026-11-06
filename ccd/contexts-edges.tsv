@@ -193,6 +193,7 @@ _transcript_path -> _ws_realpath
 _typed_note -> _reg_get
 _typed_note -> _reg_set
 _ws_archive_manifest -> _reg_get
+_ws_archive_manifest -> _reg_read
 _ws_archive_manifest -> _transcript_path
 _ws_collect_audit_doc -> _lc_emit
 _ws_collect_finish -> _lc_done
@@ -284,6 +285,7 @@ _ws_reclaim_locked -> _lc_intent
 _ws_reclaim_locked -> _lc_tx
 _ws_reclaim_locked -> _reg_get
 _ws_reclaim_locked -> _reg_set
+_ws_reclaim_recorded_archive -> _reg_read
 _ws_reclaim_recorded_crumb -> _reg_read
 _ws_reclaim_recorded_git -> _reg_read
 _ws_reclaim_resume_eval -> _child_runid_valid

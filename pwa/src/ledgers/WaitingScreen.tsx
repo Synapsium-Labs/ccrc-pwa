@@ -1,4 +1,5 @@
-// The combined "Waiting on you" list (desktop-polish PL5a, D-7712; spec §2; the prototype's view 1). Pure over what the shell
+// The combined "Waiting on you" list (desktop-polish PL5a, D-7712; spec §2; the prototype's view 1), the ONE Waiting on you
+// page since PL11 (D-7986, D29): a programme's chip and Goals page open it filtered to that programme. Pure over what the shell
 // holds: the waiting view (`null` until the first frame or read), the fleet's sessions (their questions join the list from
 // the `attention` bucket, so nothing new is stored for them) and runs, and the page clock. It routes nowhere itself: the
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
@@ -12,7 +13,7 @@ import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf,
-  programmeIsLive, questionRows, resolveList, summaryCounts, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
+  programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import { SpecLink } from './GoalsPanel';
 import { programmeSpecHref } from './ledgerLinks';
@@ -93,8 +94,8 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
   );
 }
 
-/** One programme's rows: its items and its sessions' questions, as the list and the programme view both draw them, and as
- *  the list beside an open item draws them, with that item marked current (plan PL9). */
+/** One programme's rows: its items and its sessions' questions, as the list draws them, and as the list beside an open item
+ *  draws them, with that item marked current (plan PL9). */
 export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
 }): ReactNode {
@@ -135,7 +136,8 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
 }
 
 /** "Recently cleared": what the coordinator confirmed in the last seven days, each struck through with when. `where` names the
- *  programme beside a row where the list holds several; a single programme's view leaves it out. Nothing is drawn for none. */
+ *  programme beside a row where the list holds several; the list filtered to one programme leaves it out. Nothing is drawn for
+ *  none. */
 export function ClearedTrail({ items, where, now }: {
   items: readonly ItemView[]; where?: (item: ItemView) => string; now: number;
 }): ReactNode {
@@ -184,7 +186,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   // What is drawn is that list's groups (`listGroups`, the one reader the item's steps use too).
   const shown = noProgramme ? groups.filter((g) => g.program === null) : listGroups(list, groups);
   const pressed = (program: string | null): boolean => (program === null ? noProgramme : list.programme === program);
-  const words = summaryWords(summaryCounts(view.items, questions));
+  // The pills count what is drawn (`shownSummary`, review 1537 F4): under a filter, that filter's share alone.
+  const words = summaryWords(shownSummary(shown));
   const empty = groups.length === 0;
   return (
     <div className="wl">
@@ -224,7 +227,11 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
             </div>
           </>
         )}
-      <ClearedTrail items={view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />
+      {/* The trail follows the filter (PL11, D-7986): the programme's page lost its own trail, so the list filtered to one
+          programme holds that programme's, without naming it on every row, and the sessions in no programme have none. */}
+      {list.programme !== null
+        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} />
+        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />}
     </div>
   );
 }

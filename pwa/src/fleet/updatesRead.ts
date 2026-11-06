@@ -111,6 +111,8 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
     // The box-token card's field (D-4392) rides through untouched: this guard does not judge it, its ONE reader
     // (`readBoxTokenView`, lib/api.ts) does, and a rebuild that dropped it would blank the card for a bad node row.
     ...(raw.boxToken !== undefined ? { boxToken: raw.boxToken as UpdatesView['boxToken'] } : {}),
+    // The catalogue's size (console speed S2) rides through the same way: its one reader (`releaseWindow`) judges it.
+    ...(raw.releasesTotal !== undefined ? { releasesTotal: raw.releasesTotal as UpdatesView['releasesTotal'] } : {}),
   };
 }
 

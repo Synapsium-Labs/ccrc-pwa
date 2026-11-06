@@ -1278,6 +1278,10 @@ export const SHED_DEPS_CAP = 'shed-deps-v1';
  *  `ws-lease-mark --lease <id> ...`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
  *  `echo lease-mark-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence. */
 export const LEASE_MARK_CAP = 'lease-mark-v1';
+/** The `ccd caps` token that says this box's carrier mark takes the orphan act's lock (`$REG/.orphan-<s16>.lock`, PR6 ruling 1,
+ *  D-8037) for every state but `released`. Spelled ONCE in `server/src`; ccd's `echo lease-mark-lock-v1` is the other. READ IT WITH
+ *  `capSupported`, which refuses on no evidence: a mark of a state that holds a tree is composed only behind it. */
+export const LEASE_MARK_LOCK_CAP = 'lease-mark-lock-v1';
 /** The `ccd caps` token that says this box's ccd has the lease audit (delegation broker wave 5, PR2): `ws-lease-audit
  *  --lease <id> --generation <n> [--holders]`, in `ccd/lib/delegation-lease.sh`. Spelled ONCE in `server/src`; ccd's
  *  `echo lease-audit-v1` is the other. READ IT WITH `capSupported`/`ccdCan`, which refuse on no evidence: a box without

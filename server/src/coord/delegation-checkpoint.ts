@@ -35,6 +35,8 @@ import {
   type DelegationActivityNaturalKey,
   type DelegationActivitySourceKind,
   type DelegationEventEnvelopeV1,
+  type DelegationCarrierState,
+  type DelegationLeaseReleaseReason,
   type DelegationTailHeal,
 } from '../../../shared/api.js';
 import {
@@ -122,7 +124,17 @@ import {
   type DelegationCompactionSkipReason,
   type DelegationRecordNaming,
 } from './delegation-compaction.js';
-import { foldLeaseCarrierSeen, foldLeaseRelease, foldLeaseTransition } from './delegation-lease-state.js';
+import {
+  decideLeaseRelease,
+  decideLeaseTransition,
+  delegationCarrierStateOf,
+  foldLeaseCarrierSeen,
+  foldLeaseRelease,
+  foldLeaseTransition,
+  promoteRunMismatch,
+  type DelegationLeaseActRefusal,
+  type DelegationLeaseTransitionReason,
+} from './delegation-lease-state.js';
 
 /** The checkpoint's file name under the coordination directory (`~/.ccrc`). */
 export const DELEGATION_CHECKPOINT_FILE = 'delegation-checkpoint.json';
@@ -498,6 +510,8 @@ export interface DelegationLeaseRecordFact {
   sequence: number;
   journalId: string;
   writesGeneration: boolean;
+  /** PR5b: what the record did, so a door can tell its own replay (`unchanged`): a transition's reason, `released`, or `seen`. */
+  act: DelegationLeaseTransitionReason | 'released' | 'seen';
 }
 
 /**
@@ -859,6 +873,13 @@ export class DelegationCheckpointBuilder {
   coveredEndsCount(): number { return this.coveredEnds; }
 
   activityOf(activityId: string): DelegationActivityRow | undefined { return this.activities.get(activityId); }
+  /** PR5b: what a lease door decides from: the lease row, its carrier row, and what the record that wrote its current generation did
+   *  (`undefined` when no such record is retained). */
+  leaseActView(leaseId: string): { lease: DelegationLeaseRow | undefined; carrier: DelegationLeaseCarrierRow | undefined; lastAct: DelegationLeaseRecordFact['act'] | undefined } {
+    const lease = this.leases.get(leaseId);
+    const last = lease === undefined ? undefined : this.leaseRecords.get(leaseId)?.find((r) => r.writesGeneration && r.sequence === lease.currentJournalSequence);
+    return { lease, carrier: this.carriers.get(leaseId), lastAct: last?.act };
+  }
   appliedPosition(): { sequence: number; journalId: string | null; digest: string | null } {
     return { sequence: this.appliedSequence, journalId: this.appliedJournalId, digest: this.appliedDigest };
   }
@@ -894,7 +915,8 @@ export class DelegationCheckpointBuilder {
 
   private noteLeaseRecord(record: DelegationJournalRecordV1, entry: Exclude<DelegationJournalEntryV1, { kind: 'evidence-accepted' | 'lease-created' }>): void {
     const prior = this.leaseRecords.get(entry.leaseId) ?? [];
-    this.leaseRecords.set(entry.leaseId, [...prior, { sequence: record.sequence, journalId: record.journalId, writesGeneration: entry.kind !== 'lease-carrier-seen' }]);
+    const act = entry.kind === 'lease-transition' ? entry.reason : entry.kind === 'lease-released' ? 'released' : 'seen';
+    this.leaseRecords.set(entry.leaseId, [...prior, { sequence: record.sequence, journalId: record.journalId, writesGeneration: act !== 'seen', act }]);
   }
 
   private touchSession(e: DelegationEventEnvelopeV1): void {
@@ -2076,6 +2098,44 @@ export type DelegationLeaseOutcome =
   | { kind: 'duplicate'; leaseId: string }
   | { kind: 'refused'; reason: DelegationLeaseRefusalReason; detail: string; heldBy?: string };
 
+/** PR5b: a lease transition, as a door is asked for it (plan "## PR5", Interfaces). The door builds the `lease-transition` entry from
+ *  the request and its decision; `lineageClose` and `lineageOpenRun` are derived from the reason (`transfer` and `runId` for `promote`,
+ *  null for every other), never carried. */
+export interface DelegationLeaseTransitionRequest {
+  leaseId: string;
+  expectGeneration: number;
+  reason: DelegationLeaseTransitionReason;
+  at: string;
+  expiresAt: string | null;
+  /** D-7968: the activity's terminal-evidence instant, which the entry carries on `adopt` only (PR7's caller writes the clamped value). */
+  terminalEvidenceAt: string | null;
+  runId: number | null;
+  promotedSession: string | null;
+  auditEvidence: string | null;
+  /** The caller measured the carrier-mark capability on the box (`capSupported`); the door passes it into `decideLeaseTransition`. The
+   *  durability layer knows no capability, so it never derives this itself; the replay fold passes `false` (D-7806). */
+  carrierRequired: boolean;
+  /** PR8's resolve of a conflicting tree; null elsewhere. */
+  resolvesThrough: DelegationAttemptMark | null;
+}
+
+/** PR5b: a lease release, as a door is asked for it. */
+export interface DelegationLeaseReleaseRequest {
+  leaseId: string;
+  expectGeneration: number;
+  releaseReason: DelegationLeaseReleaseReason;
+  at: string;
+  lastHeadSha: string | null;
+  resolvesThrough: DelegationAttemptMark | null;
+}
+
+/** What a lease door did: appended one record (`applied`), found its own request already applied (`unchanged`, nothing appended), or
+ *  declined with the decision's word (`refused`). A request the fold refuses is not an outcome: the door's promise rejects. */
+export type DelegationLeaseActOutcome =
+  | { kind: 'applied'; leaseId: string; generation: number; state: DelegationCarrierState; sequence: number; applied: DelegationApplyOutcome }
+  | { kind: 'unchanged'; leaseId: string; generation: number; state: DelegationCarrierState }
+  | { kind: 'refused'; refusal: DelegationLeaseActRefusal; detail: string };
+
 export type DelegationMetaOutcome =
   | { kind: 'opened'; activityId: string; applied: DelegationApplyOutcome }
   | { kind: 'already-open'; activityId: string }
@@ -2888,6 +2948,93 @@ export class DelegationDurability {
       if (record === undefined) throw new Error(`the append plan skipped the lease-created entry for the minted lease ${leaseId}`);
       return { kind: 'created', leaseId, lineageId, sequence: record.sequence, applied };
     });
+  }
+
+  // ── PR5b: the lease doors, beside createLease ──────────────────────────────────────────────────────────────────────
+  //
+  // Each runs in `createLease`'s shape: on the queue, ready or refused `not-ready`, decided by the SAME L1 decision the replay fold uses
+  // (`delegation-lease-state.ts`), one entry built from that decision, one `commitLocked`, answered with the record's sequence. A request
+  // whose act and `expectGeneration + 1` already wrote the lease's current generation, with the same identity (a promote's run, a
+  // release's reason: D-8026, live only), is its own replay and answers `unchanged`, appending nothing (spec §5.12); one that differs falls
+  // through to the decision, which refuses it (`stale-generation`, or `lease-released` for a release). A request the fold calls bad (an
+  // `adopt` with no `terminalEvidenceAt`, a keep with no `expiresAt`, a `transfer` with no run) rejects the promise with `fold-refused`,
+  // as `createLease`'s does, and appends nothing: it is never a `refused` answer. None of them calls `randomUUID`.
+
+  /** A lease transition: the table's row for `req.reason`, with the request's own `carrierRequired` (D-7806). */
+  transitionLease(req: DelegationLeaseTransitionRequest): Promise<DelegationLeaseActOutcome> {
+    return this.enqueue(async () => {
+      const unready = this.leaseActUnready();
+      if (unready !== null) return unready;
+      const { lease, carrier, lastAct } = this.builder.leaseActView(req.leaseId);
+      if (lease !== undefined && lease.generation === req.expectGeneration + 1 && lastAct === req.reason
+        && (req.reason !== 'promote' || carrier?.promotedRun === req.runId)) {                 // D-8026: the same run's promote, only
+        return { kind: 'unchanged', leaseId: req.leaseId, generation: lease.generation, state: delegationCarrierStateOf(lease, carrier) };
+      }
+      const d = decideLeaseTransition(lease, carrier, { reason: req.reason, expectGeneration: req.expectGeneration, carrierRequired: req.carrierRequired });
+      if (!d.ok) return { kind: 'refused', refusal: d.refusal, detail: d.detail };
+      const promote = req.reason === 'promote';         // review 1462 M6: the request carries neither lineage field; promote derives both
+      const mismatch = promote ? promoteRunMismatch(carrier, req.runId) : null;       // live only, never replay's (D-8024)
+      if (mismatch !== null) return { kind: 'refused', refusal: 'wrong-disposition', detail: mismatch };
+      const entry: DelegationJournalEntryV1 = {
+        kind: 'lease-transition', leaseId: req.leaseId, generation: d.generation, reason: req.reason, to: d.to, at: req.at,
+        expiresAt: req.expiresAt, terminalEvidenceAt: req.terminalEvidenceAt, runId: req.runId, promotedSession: req.promotedSession,
+        auditEvidence: req.auditEvidence, lineageClose: promote ? 'transfer' : null, lineageOpenRun: promote ? req.runId : null,
+        resolvesThrough: req.resolvesThrough,
+      };
+      return this.commitLeaseAct(entry, d.to);
+    });
+  }
+
+  /** A lease release (`decideLeaseRelease`): any unreleased state but `transferring`. It frees the lease's identity and canonical path. */
+  releaseLease(req: DelegationLeaseReleaseRequest): Promise<DelegationLeaseActOutcome> {
+    return this.enqueue(async () => {
+      const unready = this.leaseActUnready();
+      if (unready !== null) return unready;
+      const { lease, carrier } = this.builder.leaseActView(req.leaseId);
+      // Nothing follows a release, so a released lease one generation past the request, for the request's reason, is its replay.
+      if (lease !== undefined && lease.releasedAt !== null && lease.generation === req.expectGeneration + 1
+        && carrier?.releaseReason === req.releaseReason) {                                     // D-8026: the same reason's release, only
+        return { kind: 'unchanged', leaseId: req.leaseId, generation: lease.generation, state: 'released' };
+      }
+      const d = decideLeaseRelease(lease, carrier, { expectGeneration: req.expectGeneration });
+      if (!d.ok) return { kind: 'refused', refusal: d.refusal, detail: d.detail };
+      return this.commitLeaseAct({
+        kind: 'lease-released', leaseId: req.leaseId, generation: d.generation, releaseReason: req.releaseReason, at: req.at,
+        lastHeadSha: req.lastHeadSha, resolvesThrough: req.resolvesThrough,
+      }, 'released');
+    });
+  }
+
+  /** The box's carrier was read back at `generation`: decided by `foldLeaseCarrierSeen`, the replay fold's own decision, a released
+   *  lease included (review 1451 F9). A generation it already holds (or a lower one) changes nothing and answers `unchanged`. */
+  noteCarrierSeen(req: { leaseId: string; generation: number; at: string }): Promise<DelegationLeaseActOutcome> {
+    return this.enqueue(async () => {
+      const unready = this.leaseActUnready();
+      if (unready !== null) return unready;
+      const { lease, carrier } = this.builder.leaseActView(req.leaseId);
+      const entry = { kind: 'lease-carrier-seen', leaseId: req.leaseId, generation: req.generation, at: req.at } as const;
+      const seen = foldLeaseCarrierSeen(lease, entry);
+      if (!seen.ok) return { kind: 'refused', refusal: seen.refusal, detail: seen.detail };
+      const state = delegationCarrierStateOf(seen.lease, carrier);
+      if (seen.lease === lease) return { kind: 'unchanged', leaseId: req.leaseId, generation: seen.lease.generation, state };
+      return this.commitLeaseAct(entry, state);
+    });
+  }
+
+  /** The lease doors' `not-ready`, as an answer rather than `requireReady`'s throw, so a caller reads one outcome union. */
+  private leaseActUnready(): DelegationLeaseActOutcome | null {
+    if (this.current.phase === 'ready' && this.failureNow === null) return null;
+    return { kind: 'refused', refusal: 'not-ready', detail: this.failureNow === null ? 'the applier is reconstructing' : `${this.failureNow.phase}: ${this.failureNow.detail}` };
+  }
+
+  /** One lease entry made durable (journal, checkpoint, projection) through `commitLocked`; the fold re-decides it on the clone. */
+  private async commitLeaseAct(entry: Exclude<DelegationJournalEntryV1, { kind: 'evidence-accepted' | 'lease-created' }>, state: DelegationCarrierState): Promise<DelegationLeaseActOutcome> {
+    const applied = await this.commitLocked({ items: [{ entry, acceptedAt: nowInstant(this.deps.now()) }], mutate: null, force: false });
+    const record = applied.appended.find((r) => r.entry.kind === entry.kind);
+    // Unreachable: the append planner skips only evidence and creations. If it ever happens nothing was journalled, and no answer may say so.
+    if (record === undefined) throw new Error(`the append plan skipped the ${entry.kind} entry for lease ${entry.leaseId}`);
+    const lease = this.builder.leaseActView(entry.leaseId).lease;
+    return { kind: 'applied', leaseId: entry.leaseId, generation: lease?.generation ?? entry.generation, state, sequence: record.sequence, applied };
   }
 
   private validateLeaseRequest(r: DelegationLeaseCreationRequest): DelegationLeaseOutcome | null {
