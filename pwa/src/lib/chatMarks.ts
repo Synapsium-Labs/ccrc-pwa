@@ -39,6 +39,11 @@ export const STATUS_SUBJECTS: readonly string[] = ['ci', 'checks', 'tests', 'sui
 /** At most one of these may stand between a subject and its status word (S3). Lower case. */
 export const STATUS_LINKERS: readonly string[] = ['is', 'was', 'now'];
 
+/** Words that turn a status word around when they stand before it in its clause, or behind a colon right after it as
+ *  its count ("passed: 0 of 12"): S3 then gives no label (chat reading Task C fix round 1, review 1584 F1; departure
+ *  c-s3-negation, amending spec 3.3). Lower case, each a whole word. */
+export const STATUS_NEGATORS: readonly string[] = ['no', 'none', 'not', 'never', 'nothing', '0', 'zero'];
+
 /** Bold openings that ask the operator to act (C1). Lower case; `leadKind` reads them. */
 export const ACTION_LEADS: readonly string[] = [
   'what to do', 'to do', 'your call', 'decision needed', 'what i need from you', 'action',
@@ -179,6 +184,30 @@ function statusAfter(text: string, at: number): { start: number; end: number; to
   return tone === null ? null : { start: next.end - next.word.length, end: next.end, tone };
 }
 
+/** Where a clause ends: `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the text's end, or a line break. */
+const CLAUSE_END = /[.!?;,:](?=\s|$)|\n/g;
+/** Where a sentence ends: `.`, `!` or `?` followed by a space or the text's end, or a line break. */
+const SENTENCE_END = /[.!?](?=\s|$)|\n/g;
+/** A whole word, digits included, for the negator test: `10` is one word, never `0`. */
+const NEGATOR_WORD = /[\p{L}\p{M}\p{N}_]+/gu;
+/** A colon right after a status word and the word behind it (`passed: 0 of 12`). */
+const COUNT_AFTER = /\s*:\s*([\p{L}\p{M}\p{N}_]+)/uy;
+
+const isNegator = (word: string): boolean => STATUS_NEGATORS.includes(word.toLowerCase());
+
+/** Whether S3 withholds the label on the status word at `start`..`end` (c-s3-negation): a negator stands before it in
+ *  its clause or is its count behind a colon, or its sentence ends in `?`. The mark before it stays either way. */
+function labelWithheld(text: string, start: number, end: number): boolean {
+  let clauseFrom = 0;
+  for (const m of text.slice(0, start).matchAll(CLAUSE_END)) clauseFrom = (m.index ?? 0) + m[0].length;
+  for (const m of text.slice(clauseFrom, start).matchAll(NEGATOR_WORD)) if (isNegator(m[0])) return true;
+  const count = stickyAt(COUNT_AFTER, text, end);
+  if (count !== null && isNegator(count[1]!)) return true;
+  SENTENCE_END.lastIndex = end;
+  const close = SENTENCE_END.exec(text);
+  return close !== null && close[0] === '?';
+}
+
 /** `text` split into runs: names, status words in S3's label position (right after a name or a `STATUS_SUBJECTS`
  *  word, with at most one `STATUS_LINKERS` word between), and the text between. The runs' texts joined are `text`,
  *  and no two text runs are adjacent. Never inside code: the plugin calls it on text nodes only. */
@@ -191,7 +220,7 @@ export function markRuns(text: string): readonly MarkRun[] {
   /** After a name or a subject ending at `end`: its status label, if S3 finds one; where the scan goes on. */
   const labelAfter = (end: number): number => {
     const s = statusAfter(text, end);
-    if (s === null) return end;
+    if (s === null || labelWithheld(text, s.start, s.end)) return end;
     plainUpTo(s.start);
     runs.push({ kind: 'status', text: text.slice(s.start, s.end), tone: s.tone });
     plainFrom = s.end;
