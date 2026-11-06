@@ -10757,7 +10757,7 @@ _acct_or_validate() {   # <what-still-stands> -> ACCT_KEY_ARGS, or refuses
   _acct_or_read_key
   case "$ACCT_KEY_VERDICT" in
     ok) ;;
-    wrong-key-kind) ACCT_CREDENTIAL=""; _acct_refuse 1 wrong-key-kind "That's a management key, which can't run models and must never sit in a session's environment. Add it as the management key instead. $stands" ;;
+    wrong-key-kind) ACCT_CREDENTIAL=""; _acct_refuse 1 wrong-key-kind "That's a management key, which can't run models and must never sit in a session's environment. Paste an ordinary key instead; this build has nowhere to keep a management key. $stands" ;;
     key-rejected) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That key was refused by OpenRouter (HTTP 401). $stands" ;;
     key-unverified) ACCT_CREDENTIAL=""; _acct_refuse 1 key-unverified "OpenRouter's answer (HTTP $ACCT_KEY_STATUS) didn't prove what kind of key this is, so it could not be checked: $stands" ;;
     no-answer) ACCT_CREDENTIAL=""; _acct_refuse 1 key-unverified "OpenRouter didn't answer, so the key could not be checked: $stands Try again." ;;

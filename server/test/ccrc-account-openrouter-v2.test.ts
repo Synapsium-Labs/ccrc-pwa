@@ -132,6 +132,8 @@ describe('the key is checked first (spec §8.3, D-5520)', () => {
     scriptKey(home, 200, { data: body });
     const r = ccrcRun(home, addArgs(), `${KEY}\n`, env);
     refuses(r, 1, 'wrong-key-kind');
+    expect(r.stdout + r.stderr).toContain('Paste an ordinary key instead; this build has nowhere to keep a management key.');
+    expect(r.stdout + r.stderr).not.toContain('Add it as the management key');
     expect(r.stdout + r.stderr).not.toContain(KEY);
     expectNothingWritten(home);
   });
