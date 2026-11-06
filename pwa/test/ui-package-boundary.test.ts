@@ -213,6 +213,15 @@ const APPEARANCE_CENSUS: Record<string, string> = {
   'chat.css .term-keys .keycap':
     "the terminal keycap's ground, every colour a color-mix over --ink-on-well "
     + '— the one the gate could not follow into a variant.',
+  // A LENGTH, NOT A LOOK (D-8059, fix round 1 F3). The rule sets one custom
+  // property and no appearance: `--chat-prose-cap`, a registered <length>,
+  // resolved from `--measure-chat-prose` on the chat's own `.msg-assist` so its
+  // prose children (headings included) inherit one px measure instead of each
+  // resolving `ch` in its own font. It cannot live in prose.css: that sheet is
+  // shared with the Docs reader, whose `--measure-prose` must not change.
+  'chat.css .chat-item .msg-assist':
+    "the chat's prose measure, resolved once into a registered length; no colour, "
+    + 'border or type, and the Docs reader keeps prose.css as it is.',
 };
 
 /** Every declared property name in a rule body, custom properties included. */
