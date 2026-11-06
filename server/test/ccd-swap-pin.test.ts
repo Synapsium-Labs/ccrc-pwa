@@ -229,6 +229,291 @@ describe('D-3097: cmd_swap mints the pin, and only on the operator path', () => 
   });
 });
 
+// ── D-6181: the characterization (spec §3.3, D4) ────────────────────────────
+// Today's answers over the rows D-6181 touches. "today:" rows are the ones its
+// behaviour commit flips; "kept:" rows it must not. The other kept rows of the
+// task (the rescue above the pin, the automatic clear, `pin-ended`, the floored
+// `pin-hold`, `prefer`'s clear) are the D-3097 to D-3099 blocks above, unchanged.
+
+/** `_avail` answering per account: `claude-a` (the row's current, pinned
+ *  account) at its ceiling, every other account with room. */
+const STUBS_CUR_AT_CEILING = (target = 'claude'): string =>
+  STUBS(PROMPT, target).replace('_avail() { return 0; };', '_avail() { [[ "$1" != claude-a ]]; };');
+
+const epoch = (): number => Math.floor(Date.now() / 1000);
+
+describe('D-6181 characterization: the pin', () => {
+  it('flipped by D4 (was today: pin-hold, no move): a pin minted 25 h ago, home recovered → pin-expired, home', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 3600} ttl"`);
+    tick();
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    expect(swapLog()).toMatch(/pin-expired myid: pinned to claude-a until ttl/);
+    expect(swapLog()).not.toMatch(/pin-hold/);
+    expect(pin()).toBeNull();
+  });
+
+  it('flipped by D4 (was today: pin-hold): a pin on an account whose five reads 100 → the ceiling-leave runs', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() + 3600} ttl"`);
+    tick(STUBS_CUR_AT_CEILING());
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    expect(swapLog()).not.toMatch(/pin-hold/);
+  });
+
+  it('flipped by D4 (was today: pin-hold): a pin minted while home’s seven read 99 with sevenResetAt passed → pin-expired at that reset', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 60} reset"`);
+    tick();
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    expect(swapLog()).toMatch(/pin-expired myid: pinned to claude-a until reset/);
+  });
+});
+
+describe('D-6181 characterization: the ceiling-leave', () => {
+  it('kept: a session at its ceiling whose target is home dispatches on the tick even while home’s slot is taken', () => {
+    // A ceiling-leave pays overage on every turn while it waits, so it is
+    // never staggered (spec §3.1): the slot files below must not delay it.
+    seed(); sessionJson();
+    const slots = reg('.affslot');
+    fs.mkdirSync(slots, { recursive: true });
+    fs.writeFileSync(path.join(slots, 'claude'), String(epoch()));
+    fs.writeFileSync(path.join(slots, '.fleet'), String(epoch()));
+    tick(STUBS_CUR_AT_CEILING());
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+  });
+
+  it('kept: a ceiling-leave to a non-home account logs auto-home and dispatches on the affinity arm', () => {
+    seed(); sessionJson();
+    tick(STUBS_CUR_AT_CEILING('claude-b').replace(
+      '_dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };',
+      '_dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; echo "arm $3" >> "$HOME/ccd-calls"; };'));
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-b`]);
+    expect(h.calls()).toContain('arm affinity');
+    expect(swapLog()).toMatch(/auto-home myid: claude-a -> claude-b \[home=claude\]/);
+  });
+});
+
+// ── D-6181: the pin expires and never holds a session at the ceiling ───────
+
+/** The carry stubbed down to the registry flip (the D-3097 block's stubs). */
+const SWAP_STUBS_6181 = `
+  _svc_stop() { :; }; _svc_start() { :; }; cmd_ensure() { :; };
+  _swap_beat() { :; }; _swap_beat_stop() { :; };
+  _transcript_matches() { echo found; }; _swap_carry_jsonl() { :; };
+  _swap_carry_sidecars() { :; }; _sanitize_anthropic() { :; };
+  _lc_done() { :; }; _account_still_rostered() { :; }; _wrapper_rostered_now() { return 0; };
+  tmux() { case "\${1:-}" in has-session) echo "can't find session: x" >&2; return 1 ;; esac; }; sleep() { :; };`;
+
+/** The pin readers as they stood before D-6181 (origin/main at D-6180, their
+ *  comments dropped): a supervisor still on the older ccd during a deploy, or a
+ *  revert, reads the registry the new cmd_swap writes through exactly these. */
+const BASE_PIN_READERS = `
+_swap_pin_tick() {
+  local id="$1" w="$2" pin rc
+  [[ -e "$REG/$id.swappin" ]] || return 0
+  pin=$(_reg_read "$id" swappin); rc=$?
+  [[ "$rc" -eq 0 ]] || return 0
+  [[ "$pin" == "$w" ]] && return 0
+  rm -f -- "$REG/$id.swappin"
+  rm -f -- "$REG/$id.swappinnote"
+  echo "$(date '+%F %T') pin-ended $id: pinned to $pin, now on $w" >> "$REG/swap.log"
+  return 0
+}
+_swap_pinned() {
+  local pin rc
+  [[ -e "$REG/$1.swappin" ]] || return 1
+  pin=$(_reg_read "$1" swappin); rc=$?
+  [[ "$rc" -eq 0 ]] || return 0
+  [[ "$pin" == "$2" ]]
+}`;
+
+const limits = (account: string, o: Record<string, number>): void => {
+  const d = path.join(h.home, '.cc-limits');
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, `${account}.json`), JSON.stringify({ ts: epoch(), ...o }));
+};
+const expiry = (id = ID): { at: number; why: string } | null => {
+  const v = h.reg(id, 'swappinexp');
+  if (v === null) return null;
+  const m = /^(\d+) (reset|ttl)$/.exec(v);
+  expect(m, `swappinexp is not "<epoch> <reset|ttl>": ${v}`).not.toBeNull();
+  return { at: Number(m![1]), why: m![2]! };
+};
+const DAY = 86400;
+
+describe('D-6181: cmd_swap records the pin’s expiry beside it', () => {
+  it('the operator path writes the pin unchanged and swappinexp with an expiry and why', () => {
+    seed('claude');
+    h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
+    expect(pin()).toBe('claude-a');   // one word, byte-identical: every older reader keeps holding it
+    const e = expiry();
+    expect(e).not.toBeNull();
+    expect(e!.at).toBeGreaterThan(epoch());
+  });
+
+  it('the expiry is home’s blocked window’s raw reset when sooner than 24 h', () => {
+    seed('claude');
+    const reset = epoch() + 7200;
+    limits('claude', { five: 99, fiveResetAt: reset, seven: 40, sevenResetAt: epoch() + 5 * DAY });
+    h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
+    expect(expiry()).toEqual({ at: reset, why: 'reset' });
+  });
+
+  it('the expiry is 24 h when no home window was blocked', () => {
+    seed('claude');
+    limits('claude', { five: 40, fiveResetAt: epoch() + 7200, seven: 40, sevenResetAt: epoch() + 5 * DAY });
+    const before = epoch();
+    h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
+    const e = expiry()!;
+    expect(e.why).toBe('ttl');
+    expect(e.at).toBeGreaterThanOrEqual(before + DAY);
+    expect(e.at).toBeLessThanOrEqual(epoch() + DAY);
+  });
+
+  it('a pin written by the new cmd_swap is held by the base _swap_pinned and survives the base _swap_pin_tick', () => {
+    seed('claude');
+    h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
+    const out = h.sh(`${BASE_PIN_READERS}
+      _swap_pin_tick ${ID} claude-a; _swap_pinned ${ID} claude-a && echo held`);
+    expect(out).toBe('held');
+    expect(pin()).toBe('claude-a');
+  });
+
+  it('every pin clear removes swappinexp with it: the automatic swap and pin-ended', () => {
+    seed('claude');
+    h.sh(`_reg_set ${ID} swappin claude; _reg_set ${ID} swappinexp "${epoch() + 600} ttl"`);
+    h.sh(`${SWAP_STUBS_6181} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude-a`);
+    expect(pin()).toBeNull();
+    expect(h.reg(ID, 'swappinexp')).toBeNull();
+    h.sh(`_reg_set ${ID} swappin claude-b; _reg_set ${ID} swappinexp "${epoch() + 600} ttl"`);
+    h.sh(`_swap_pin_tick ${ID} claude-a`);
+    expect(swapLog()).toMatch(/pin-ended myid: pinned to claude-b, now on claude-a/);
+    expect(h.reg(ID, 'swappinexp')).toBeNull();
+  });
+
+  it('cmd_prefer removes swappinexp with the pin', () => {
+    seed('claude-a');
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() + 600} ttl"`);
+    h.sh(`_lc_done() { :; }; _account_still_rostered() { :; }; cmd_prefer ${ID} claude-a`);
+    expect(pin()).toBeNull();
+    expect(h.reg(ID, 'swappinexp')).toBeNull();
+  });
+});
+
+describe('D-6181: the pin ends at its expiry', () => {
+  it('a pin past its expiry ends with pin-expired, swappinexp is removed, and the session goes home', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 60} reset"`);
+    tick();
+    expect(swapLog()).toMatch(/pin-expired myid: pinned to claude-a until reset/);
+    expect(pin()).toBeNull();
+    expect(h.reg(ID, 'swappinexp')).toBeNull();
+    expect(h.reg(ID, 'swappinnote')).toBeNull();
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+  });
+
+  it('a pin before its expiry still holds', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() + 600} ttl"`);
+    tick();
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).toMatch(/pin-hold myid/);
+  });
+
+  it('a pinned account at its ceiling lets the ceiling-leave run; landing elsewhere ends the pin, and with no target the pin holds again once the account recovers', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() + 6 * 3600} ttl"`);
+    // At the ceiling with nowhere to go: the pin is not what keeps it there.
+    tick(STUBS_CUR_AT_CEILING().replace('_swap_target() { echo claude; };', '_swap_target() { :; };'));
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).not.toMatch(/pin-hold/);
+    expect(pin()).toBe('claude-a');
+    // The account recovers, home has room: the pin holds again.
+    tick();
+    expect(dispatches()).toEqual([]);
+    expect(swapLog()).toMatch(/pin-hold myid/);
+    // At the ceiling with a target: the leave runs, and the landing ends the pin.
+    h.sh(`rm -f "$REG/${ID}.swappinnote"`);
+    tick(STUBS_CUR_AT_CEILING());
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude`]);
+    h.sh(`${SWAP_STUBS_6181} CCD_SWAP_AUTO=1 cmd_swap ${ID} claude`);
+    expect(pin()).toBeNull();
+    expect(h.reg(ID, 'swappinexp')).toBeNull();
+  });
+
+  it('a legacy pin gets swappinexp from the first read', () => {
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappin claude-a`);
+    const before = epoch();
+    tick();
+    const e = expiry()!;
+    expect(e.why).toBe('ttl');
+    expect(e.at).toBeGreaterThanOrEqual(before + DAY);
+    expect(e.at).toBeLessThan(epoch() + 2 * DAY);
+    expect(pin()).toBe('claude-a');
+    expect(dispatches()).toEqual([]);   // given an expiry, not ended
+  });
+
+  it('a pin minted by the base cmd_swap beside a stale swappinexp gets a fresh legacy expiry', () => {
+    // A revert (or an old supervisor mid-deploy) clears the pin but not its
+    // expiry; the base cmd_swap then mints a one-word pin beside that stale
+    // field. An expiry older than its pin is not that pin's: it reads legacy.
+    seed(); sessionJson();
+    h.sh(`_reg_set ${ID} swappinexp "${epoch() - 60} ttl"; touch -t 202001010000 "$REG/${ID}.swappinexp"
+          _reg_set ${ID} swappin claude-a`);
+    const before = epoch();
+    tick();
+    expect(swapLog()).not.toMatch(/pin-expired/);
+    expect(pin()).toBe('claude-a');
+    expect(dispatches()).toEqual([]);
+    const e = expiry()!;
+    expect(e.why).toBe('ttl');
+    expect(e.at).toBeGreaterThanOrEqual(before + DAY);
+  });
+
+  it('legacy pins on 17 rows, read on one tick, get 17 distinct expiries', () => {
+    const ids = Array.from({ length: 17 }, (_, i) => `s-${String.fromCharCode(97 + i).repeat(4)}`);
+    const T = 2_000_000_000;
+    h.sh(ids.map((id) => `_reg_set ${id} swappin claude-a`).join('; '));
+    h.sh(`_now_s_to() { printf -v "$1" '%s' ${T}; }; ${ids.map((id) => `_swap_pin_tick ${id} claude-a`).join('; ')}`);
+    const ats = ids.map((id) => expiry(id)!.at);
+    expect(new Set(ats).size).toBe(17);
+    for (const at of ats) {
+      expect(at).toBeGreaterThanOrEqual(T + DAY);
+      expect(at).toBeLessThan(T + 2 * DAY);
+    }
+    // The offset is spread over the day, not bunched: the 17 span over 6 hours.
+    expect(Math.max(...ats) - Math.min(...ats)).toBeGreaterThan(6 * 3600);
+  });
+
+  it('the off marker restores pin-hold at 25 h and at the ceiling', () => {
+    seed(); sessionJson();
+    fs.writeFileSync(reg('swap-pin-expiry-off'), '');
+    h.sh(`_reg_set ${ID} swappin claude-a; _reg_set ${ID} swappinexp "${epoch() - 3600} ttl"`);
+    tick();
+    expect(dispatches()).toEqual([]);
+    expect(pin()).toBe('claude-a');
+    expect(swapLog()).toMatch(/pin-hold myid/);
+    h.sh(`rm -f "$REG/${ID}.swappinnote"`);
+    tick(STUBS_CUR_AT_CEILING());
+    expect(dispatches()).toEqual([]);
+    expect(swapLog().match(/pin-hold myid/g)).toHaveLength(2);
+    // A legacy pin is given no expiry while the marker stands.
+    h.sh(`rm -f "$REG/${ID}.swappinexp"`);
+    tick();
+    expect(h.reg(ID, 'swappinexp')).toBeNull();
+    // The marker is read on every call, never cached: one shell, the marker
+    // removed then put back, the same expired pin each time.
+    fs.rmSync(reg('swap-pin-expiry-off'));
+    h.sh(`_reg_set ${ID} swappinexp "${epoch() - 60} ttl"; _swap_pin_tick ${ID} claude-a
+          touch "$REG/swap-pin-expiry-off"; _reg_set ${ID} swappin claude-a
+          _reg_set ${ID} swappinexp "${epoch() - 60} ttl"; _swap_pin_tick ${ID} claude-a`);
+    expect(swapLog().match(/pin-expired myid/g)).toHaveLength(1);
+    expect(pin()).toBe('claude-a');
+  });
+});
+
 describe('D-3099: an explicit `prefer` supersedes a pin', () => {
   it('setting home by hand removes the pin, so one session never has two answers', () => {
     // `prefer` says "keep it here" in the field the affinity arm actually
@@ -259,7 +544,7 @@ describe('source pins: the two properties no fixture can observe', () => {
     expect(pinCheck, 'the pin check fell below the hold; keep it beside its own argument').toBeLessThan(hold);
   });
 
-  it('the pin carries no epoch, so nothing about it can expire or reach arithmetic', () => {
+  it('the pin itself carries no epoch: its expiry is its own field (D-6181), so the pin never reaches arithmetic', () => {
     // "The operator picked this account" does not become less true after an
     // hour. The file holds ONE account name; the end of a pin is a measurement
     // (`_swap_pin_tick`), never a clock — and a field with no number in it is a

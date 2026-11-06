@@ -295,8 +295,14 @@ _pane_outside_box	C3
 _pane_hard_blocked	C3
 _pane_limit_banner	C3
 _undecidable_cause	C1
+_swap_pin_expiry_off	C1
+_swap_pin_legacy_offset_to	C1
 _swap_pin_tick	C1
+_swap_pin_expiry_to	C1
 _swap_pinned	C1
+_affinity_slot_take	C1
+_affinity_cur_serves	C1
+_swap_stagger_off	C1
 _auto_swap_check	C1
 _swap_idle_gate	C1
 _swap_bg_hold	C1
@@ -439,6 +445,7 @@ _limit_num_in_to	C1
 _limit_json_num_to	C1
 _limit_pick_to	C1
 _limit_field	C1
+_limit_reset_to	C1
 _share_pct_to	C1
 _file_read_to	K
 _reg_get_to	C1
