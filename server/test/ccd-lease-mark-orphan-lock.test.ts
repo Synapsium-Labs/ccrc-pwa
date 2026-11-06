@@ -96,6 +96,20 @@ describe('ruling 1: a carrier mark takes the orphan act\'s lock, and never waits
     expect(F.mark(h).doc, 'with the real sort it is written').toMatchObject({ ok: true, answer: 'written' });
   }, 60_000);
 
+  it('review 1547 F4: a sort that prints only one of two distinct spellings takes one lock of two, and the mark refuses unmeasured', () => {
+    F.agentTree(h);
+    const link = path.join(h.home, 'projects-link');
+    fs.symlinkSync(path.join(h.home, 'projects'), link);
+    const recorded = path.join(link, 'demo', '.claude', 'worktrees', 'agent-a');
+    fs.writeFileSync(path.join(F.main(h), '.git', 'worktrees', 'agent-a', 'gitdir'), `${recorded}/.git\n`);
+    const pre = `PROJECTS_ROOT=${link}; sort() { head -n 1; };`;
+    const r = F.mark(h, {}, pre);
+    expect(r.doc, JSON.stringify(r.doc)).toMatchObject({ ok: false, refusal: 'unmeasured' });
+    expect(String(r.doc.detail), 'refused by the lock count, not later').toContain('took 1 orphan locks of the tree');
+    expect(fs.existsSync(F.carrierPath(h)), 'no carrier').toBe(false);
+    expect(byTree(), 'no by-tree entry').toEqual([]);
+  }, 60_000);
+
   it('D-8037 (review 1546 F2): ccd caps reports lease-mark-lock-v1 beside lease-mark-v1', () => {
     const caps = h.sh('cmd_caps').split('\n');
     expect(caps).toContain('lease-mark-v1');

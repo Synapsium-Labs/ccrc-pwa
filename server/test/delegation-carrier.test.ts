@@ -12,8 +12,8 @@ import { checkpointWithLease, leaseRow } from './delegationLeaseFixture.js';
 
 const NOW = Date.parse('2026-11-10T12:00:00Z');
 const INC = '11111111-2222-4333-8444-555555555555';
-const none = (): { refused: Map<string, StandingMarkRefusal>; censusRow: Map<string, string>; indexed: Set<string>; deferred: Set<string> } =>
-  ({ refused: new Map(), censusRow: new Map(), indexed: new Set<string>(), deferred: new Set<string>() });
+const none = (): { refused: Map<string, StandingMarkRefusal>; censusRow: Map<string, string>; indexed: Set<string>; deferred: Map<string, number> } =>
+  ({ refused: new Map(), censusRow: new Map(), indexed: new Set<string>(), deferred: new Map<string, number>() });
 type PlanInput = Parameters<typeof planCarrierSteps>[0];
 const plan = (checkpoint: DelegationCheckpointV1, over: Partial<PlanInput> = {}) =>
   planCarrierSteps({ checkpoint, readBack: new Map(), supported: true, lockSupported: true, nowMs: NOW, pass: 1, ...none(), ...over });
@@ -53,9 +53,12 @@ describe('planCarrierSteps', () => {
     const b = plan(behind, { supported: false, readBack: new Map([[behind.leases[0]!.leaseId, { kind: 'absent' }]]) });
     expect(b.steps).toEqual([]);
     expect(b.health).toMatchObject({ unsupported: 1, marked: 0, pending: 0 });
-    // review 1546 F13: every lease the planner would step on but cannot counts, a released one included
+    // review 1547 F5: only a lease the planner would give a step on a supported box counts; a released lease that never had a carrier
+    // (rule 3 gives it none) counts nothing, while a released lease whose carrier reads behind does
     const gone = checkpointWithLease({ generation: 2, carrierGenerationSeen: 1, releasedAt: '2026-11-10T00:00:00.000Z' });
-    expect(plan(gone, { supported: false }).health).toMatchObject({ unsupported: 1 });
+    const goneId = gone.leases[0]!.leaseId;
+    expect(plan(gone, { supported: false, readBack: new Map([[goneId, { kind: 'absent' }]]) }).health.unsupported).toBe(0);
+    expect(plan(gone, { supported: false, readBack: new Map([[goneId, carrier(bodyOf(gone.leases[0]!, { generation: 1 }))]]) }).health.unsupported).toBe(1);
   });
 
   it('W5-K3: a carrier behind the journal is re-marked at the journal generation; an equal one is seen', () => {
@@ -251,12 +254,23 @@ describe('planCarrierSteps', () => {
     const cp = many(10, (i) => ({ generation: i < 9 ? 1 : 0 }));
     const ids = cp.leases.map((l) => l.leaseId);
     const absent = new Map<string, CarrierReadBack>(ids.slice(0, 9).map((id) => [id, { kind: 'absent' }]));
-    const r = plan(cp, { readBack: absent, deferred: new Set(ids.slice(0, 9)) });
+    const r = plan(cp, { readBack: absent, deferred: new Map(ids.slice(0, 9).map((id) => [id, 1])) });
     const named = r.steps.map((s) => (s.kind === 'mark' ? s.args.leaseId : s.leaseId));
     expect(named, 'the new lease is minted first, then seven of the nine').toEqual([ids[9], ...ids.slice(0, 7)]);
     expect(r.health.pending).toBe(2);
     expect(plan(cp, { readBack: absent }).steps.map((s) => (s.kind === 'mark' ? s.args.leaseId : s.leaseId)), 'none deferred: oldest first')
       .toEqual(ids.slice(0, 8));
+  });
+
+  it('D-8039 (review 1547 F3): within the unmeasured group, the least recently attempted lease goes first, oldest first among equals', () => {
+    const cp = many(9, () => ({ generation: 1 }));
+    const ids = cp.leases.map((l) => l.leaseId);
+    const absent = new Map<string, CarrierReadBack>(ids.map((id) => [id, { kind: 'absent' }]));
+    const deferred = new Map<string, number>(ids.map((id, i) => [id, i === 8 ? 3 : 4]));   // the newest last answered at pass 3, the rest at 4
+    const r = plan(cp, { readBack: absent, deferred });
+    expect(r.steps.map((s) => (s.kind === 'mark' ? s.args.leaseId : '')), 'the newest first, then seven of the rest, oldest first')
+      .toEqual([ids[8], ...ids.slice(0, 7)]);
+    expect(r.health.pending).toBe(1);
   });
 
   it('the census row says the tree state, head, lock and the registry workdirs at or inside it, and nothing else', () => {

@@ -168,28 +168,36 @@ export function carrierReadsOf(checkpoint: DelegationCheckpointV1, lastRead: Rea
 
 /**
  * The carrier steps of one pass (plan "## PR6", rules 1-8), oldest lease first by its creating journal sequence. `readBack` holds what
- * the lane read (`carrierReadsOf`): a lease with no entry was not read this pass and is `marked` when its `carrierGenerationSeen` equals
- * its generation (read back equal when last read), else `unmeasured`; an entry for an id the checkpoint does not hold is an unowned
- * carrier (rule 8). `indexed` names the leases a by-tree entry names (rule 3's heal), or `'unmeasured'`, which composes no heal and
+ * the lane read (`carrierReadsOf`): a lease with no entry was not read this pass and is `marked` when its journalled `seen` equals its
+ * generation and no read this pass contradicted it, else `unmeasured`. The re-verify reads are optional: an unreadable leases listing
+ * reads nothing, and only the leases that NEEDED a read (those behind) count `unmeasured`. An entry for an id the checkpoint does not
+ * hold is an unowned carrier (rule 8). `indexed` names the leases a by-tree entry names (rule 3's heal), or `'unmeasured'`, which composes no heal and
  * counts the lease `unmeasured`. `lockSupported`: the box takes the orphan lock, without which no mark of a state that holds a tree is
- * composed (D-8037). `pass` is the lane's pass ordinal (D-8039's bound), and `deferred` names the leases whose last mark answered
- * `unmeasured`: they take the budget after every other lease (D-8039).
+ * composed (D-8037). `pass` is the lane's pass ordinal (D-8039's bound), and `deferred` maps the leases whose last mark answered
+ * `unmeasured` to the pass of that answer: they take the budget after every other lease, least recently attempted first (D-8039).
  */
 export function planCarrierSteps(input: {
   checkpoint: DelegationCheckpointV1; readBack: ReadonlyMap<string, CarrierReadBack>; supported: boolean; lockSupported: boolean;
   nowMs: number; pass: number; refused: ReadonlyMap<string, StandingMarkRefusal>; censusRow: ReadonlyMap<string, string>;
-  indexed: ReadonlySet<string> | 'unmeasured'; deferred: ReadonlySet<string>;
+  indexed: ReadonlySet<string> | 'unmeasured'; deferred: ReadonlyMap<string, number>;
 }): { steps: readonly CarrierStep[]; health: DelegationCarrierHealth } {
   const health: DelegationCarrierHealth = { marked: 0, pending: 0, unsupported: 0, mismatched: 0, unmeasured: 0, unowned: 0, refused: 0 };
   const carriers = new Map((input.checkpoint.leaseCarriers ?? []).map((c) => [c.leaseId, c] as const));
   const owned = new Set(input.checkpoint.leases.map((l) => l.leaseId));
   const steps: CarrierStep[] = [];
-  const first: CarrierStep[] = [], last: CarrierStep[] = [];         // D-8039: a lease whose last mark answered `unmeasured` goes last
-  const spend = (step: CarrierStep, id: string): void => { (input.deferred.has(id) ? last : first).push(step); };
+  const first: CarrierStep[] = [], last: { step: CarrierStep; at: number }[] = [];   // D-8039: an `unmeasured` lease goes last
+  const spend = (step: CarrierStep, id: string): void => {
+    const at = input.deferred.get(id);
+    if (at === undefined) first.push(step); else last.push({ step, at });
+  };
   for (const lease of [...input.checkpoint.leases].sort(order)) {
     const released = lease.releasedAt !== null;
     const upToDate = upToDateOf(lease);
-    if (!input.supported) { if (!upToDate) health.unsupported += 1; continue; }                     // rule 1, released leases included
+    if (!input.supported) {                                           // rule 1: only a lease that would get a step on a supported box
+      const rb = input.readBack.get(lease.leaseId);
+      if (lease.generation === 0 ? !released : !upToDate && (!released || rb?.kind === 'carrier')) health.unsupported += 1;
+      continue;
+    }
     if (lease.generation === 0) { if (!released) spend({ kind: 'mint', leaseId: lease.leaseId, expectGeneration: 0 }, lease.leaseId); continue; }   // rule 2
     const carrier = carriers.get(lease.leaseId);
     const rb = input.readBack.get(lease.leaseId);
@@ -219,7 +227,8 @@ export function planCarrierSteps(input: {
     spend({ kind: 'mark', args }, lease.leaseId);                     // rules 3 and 7
   }
   let budget = DELEGATION_CARRIER_MARKS_PER_PASS;                     // rule 7: oldest first within each group
-  for (const step of [...first, ...last]) { if (budget > 0) { budget -= 1; steps.push(step); } else health.pending += 1; }
+  const lastSteps = last.sort((a, b) => a.at - b.at).map((x) => x.step);   // least recently attempted first; stable: oldest among equals
+  for (const step of [...first, ...lastSteps]) { if (budget > 0) { budget -= 1; steps.push(step); } else health.pending += 1; }
   for (const [id, rb] of input.readBack) {                            // rule 8
     if (owned.has(id)) continue;
     if (rb.kind === 'carrier' && rb.body.state !== 'released') health.unowned += 1;

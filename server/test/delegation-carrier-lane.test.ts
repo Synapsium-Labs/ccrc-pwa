@@ -305,7 +305,7 @@ describe('PR6 fix round 1 (review 1546): the lane re-reads, bounds and orders', 
     const applier = (await w.watcher.delegationApplier())!;
     const rb = new Map([[lease.leaseId, { kind: 'carrier' as const, body: bodyFor(lease) }]]);
     const planOf = () => planCarrierSteps({ checkpoint: applier.state().checkpoint as DelegationCheckpointV1, readBack: rb, supported: true,
-      lockSupported: true, nowMs: NOW, pass: 1, refused: new Map(), censusRow: new Map(), indexed: new Set(), deferred: new Set() });
+      lockSupported: true, nowMs: NOW, pass: 1, refused: new Map(), censusRow: new Map(), indexed: new Set(), deferred: new Map() });
     expect(planOf().steps).toEqual([{ kind: 'seen', leaseId: lease.leaseId, generation: 1 }]);
     expect((await applier.noteCarrierSeen({ leaseId: lease.leaseId, generation: 1, at: iso(at(3)) })).kind).toBe('applied');
     const second = planOf();
@@ -442,6 +442,81 @@ describe('PR6 fix round 1 (review 1546): the lane re-reads, bounds and orders', 
     expect(release, 'one release, then the cut').toHaveBeenCalledTimes(1);
     expect(leasesOf(w).filter((l) => l.releasedAt !== null)).toHaveLength(1);
   }, ROW_MS);
+  it('D-8034 (review 1547 F2): a lease whose mark did not run stops costing the by-tree read thirty passes after it', async () => {
+    const w = await rawTreeWorld();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    w.answer = () => ({ ran: false, ok: false, stdout: '', stderr: '', killed: true, signal: 'SIGTERM', reason: 'timeout', detail: 'a fixture timeout' });
+    const lease = await linked(w);
+    await censusPass(w, at(3));
+    const applier = (await w.watcher.delegationApplier())!;
+    expect((await applier.releaseLease({ leaseId: lease.leaseId, expectGeneration: 1, releaseReason: 'foreign', at: iso(at(3)), lastHeadSha: null,
+      resolvesThrough: null })).kind).toBe('applied');
+    w.answer = written;
+    const byTreeReads = (): number => w.reads.splice(0).filter((r) => r.startsWith('dir ') && r.endsWith('/delegation/leases/by-tree')).length;
+    byTreeReads();
+    await censusPass(w, at(4));
+    expect(byTreeReads(), 'inside the bound: measured every pass').toBe(1);
+    await censusPass(w, at(5));
+    expect(byTreeReads()).toBe(1);
+    const memory = laneOf(w)['carrierMemory'] as { pass: number; notRan: Map<string, number> };
+    memory.pass = memory.notRan.get(lease.leaseId)! + DELEGATION_CARRIER_REFUSAL_RETRY_PASSES - 1;
+    await censusPass(w, at(6));
+    expect(byTreeReads(), 'at the bound: measured once more, and then not indexed').toBe(1);
+    await censusPass(w, at(7));
+    expect(byTreeReads(), 'past the bound: no by-tree read').toBe(0);
+  }, ROW_MS);
+
+  it('D-8039 (review 1547 F3): a lease that answered unmeasured once is composed again within two passes, ahead of eight that always do', async () => {
+    const recs = [OLD, RAW, ...Array.from({ length: 8 }, (_, i) => record(`unm-${i}`)), record('blip-tree')];
+    const w = await rawTreeWorld();
+    let blip = true;
+    w.answer = (argv) => {
+      const rec = recordOf(argv);
+      if (rec.startsWith('unm-')) return refuse('unmeasured');
+      if (rec === 'blip-tree' && blip) { blip = false; return refuse('unmeasured'); }   // transient
+      writeCarrier(w, flagsOf(argv));
+      return written(argv);
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const make = maker(w, await linked(w, recs));
+    for (let i = 0; i < 8; i++) await make(`unm-${i}`, i);
+    for (let n = 3; n < 7; n++) await censusPass(w, at(n), recs);
+    const late = await make('blip-tree', 40);
+    const tries = (): number => marks(w).filter((f) => f.lease === late).length;
+    await censusPass(w, at(7), recs);                                  // minted
+    await censusPass(w, at(8), recs);
+    expect(tries(), 'composed once, and answered unmeasured').toBe(1);
+    await censusPass(w, at(9), recs);
+    await censusPass(w, at(10), recs);
+    expect(tries(), 'composed again within two passes').toBe(2);
+    await censusPass(w, at(11), recs);
+    expect(leasesOf(w).find((l) => l.leaseId === late)!.carrierGenerationSeen).toBe(1);
+  }, ROW_MS);
+
+  it('F9 (review 1547 F4a): a lease moved between the pass\'s plan and its step composes nothing that pass, and is marked at the next', async () => {
+    const w = await rawTreeWorld();
+    const first = await linked(w);
+    const second = await maker(w, first)('second-tree', 1);
+    const recs = [OLD, RAW, record('second-tree')];
+    await censusPass(w, at(3), recs);                                  // the first is marked (no carrier written), the second minted
+    const applier = (await w.watcher.delegationApplier())!;
+    const keep = { at: iso(at(3)), expiresAt: iso(at(3) + 7 * 86_400_000), terminalEvidenceAt: null, runId: null, promotedSession: null,
+      auditEvidence: null, carrierRequired: false, resolvesThrough: null };
+    let moved = false;
+    w.answer = async (argv) => {
+      if (!moved && flagsOf(argv).lease === first.leaseId) {             // the second moves while the first's mark runs
+        moved = true;
+        expect((await applier.transitionLease({ leaseId: second, expectGeneration: 1, reason: 'retain', ...keep })).kind).toBe('applied');
+      }
+      return written(argv);
+    };
+    const before = marks(w).length;
+    await censusPass(w, at(4), recs);
+    expect(moved).toBe(true);
+    expect(marks(w).slice(before).map((f) => f.lease), 'the moved lease composes nothing this pass').toEqual([first.leaseId]);
+    await censusPass(w, at(5), recs);
+    expect(marks(w).slice(before).filter((f) => f.lease === second)).toEqual([expect.objectContaining({ generation: '2', state: 'retained' })]);
+  }, ROW_MS);
 });
 
 describe('PR6 fix round 1 (review 1546 F6c): the reads one carrier pass makes', () => {
@@ -470,6 +545,25 @@ describe('PR6 fix round 1 (review 1546 F6c): the reads one carrier pass makes', 
     expect(memory.health).toMatchObject({ marked: 10, unowned: 0, mismatched: 0 });
     await pass();
     expect(reads.splice(0), 'the two left over first, then the least recently read; no unowned, no by-tree').toEqual([`dir ${dir}`, ...[8, 9, 0, 1, 2, 3, 4, 5].map(file)]);
+  });
+  it('review 1547 F4b: an unowned carrier whose body names another lease reads malformed, counts unmeasured, and is read again', async () => {
+    const home = mkTmp('ccrc-carrier-reads-');
+    const registryDir = path.join(home, '.cc-sessions');
+    const dir = path.join(registryDir, 'delegation', 'leases');
+    mkdirSync(dir, { recursive: true });
+    const other = leaseRow({ leaseId: id(42), releasedAt: '2026-11-10T00:00:00.000Z', generation: 1 });
+    writeFileSync(path.join(dir, `${id(41)}.json`), JSON.stringify(bodyFor(other, { releaseReason: 'foreign' })));
+    const cp: DelegationCheckpointV1 = { ...checkpointWithLease(), leases: [], lineage: [] };
+    const { io, reads } = countingIO();
+    const memory = emptyCarrierLaneMemory();
+    const pass = () => planCarrierPass({ io, registryDir }, cp, memory, { fleetState: { ccdVerbs: [LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP] }, nowMs: NOW,
+      census: [], workdirs: [] });
+    for (const n of [1, 2]) {
+      await pass();
+      expect(reads.splice(0), `pass ${n}`).toEqual([`dir ${dir}`, `file ${dir}/${id(41)}.json`]);
+      expect(memory.health, `pass ${n}`).toMatchObject({ unmeasured: 1, unowned: 0 });
+    }
+    expect(memory.releasedUnowned.size, 'never remembered as released').toBe(0);
   });
 });
 
