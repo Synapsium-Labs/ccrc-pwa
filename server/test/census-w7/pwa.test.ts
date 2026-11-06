@@ -18,7 +18,7 @@ import {
   requestPollsIn, runMatchers, runMatchersIn, sessionPathLiterals, sessionPathLiteralsIn, showSite, singleReaders, singleReadersIn,
   storageOwners, storageOwnersIn, storageTypes, storageTypesIn, viewerWordsAsPresence, viewerWordsAsPresenceIn, viewerNamesAsPresence, viewerNamesAsPresenceIn, persistedPresenceWords, persistedPresenceWordsIn, type W7Site,
 } from './pwa.js';
-import { transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
+import { runMembershipIn, transcriptCopyRules, transcriptCopyRulesIn } from './pwa.js';
 import { ENSURE_OWNER, SESSION_PATH_OWNER } from './pwa.js';
 
 const F = 'pwa/src/fixture.tsx';
@@ -89,6 +89,21 @@ describe('W7 PWA census: FIXTURE rows (each query against one counted site and o
       ['comparison', 'r.claimedBy === s.id'], ['lookup', 'sessionById.get(run.claimedBy)'],
       ['runForSession', 'runForSession(runs, s)'], ['childRunsSeen', 'childRunsSeen(new Set(), [s], runs)'],
     ]);
+  });
+
+  it('runMembership: a .has on a run key and a local closure over .has count; a .has on a session id, and a closure with no .has, do not (D-8049)', () => {
+    const got = run(runMembershipIn, [
+      'export function f(runs: R[], asking: Set<string>, s: S, r: R) {',
+      '  const waits = (id: string | null): boolean => id !== null && asking.has(id);',
+      '  const named = (id: string | null): string => String(id);',
+      '  waits(r.sessionId);',
+      '  waits(s.id);',
+      '  named(r.claimedBy);',
+      '  asking.has(r.claimedBy);',
+      '  asking.has(s.id);',
+      '}',
+    ].join('\n'));
+    expect(got.map((s) => [s.kind, s.text])).toEqual([['closure', 'waits(r.sessionId)'], ['has', 'asking.has(r.claimedBy)']]);
   });
 
   it('runMatchers: a lookup inside a named run reader in runWords.ts reports as named; the same text elsewhere, or in another symbol, is a lookup (C7d, D-7182)', () => {

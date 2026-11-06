@@ -16,6 +16,7 @@ import path from 'node:path';
 import { REFINED } from '@ccrc/ui';
 import { declaredValues } from './cssRule';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 import { itemView, waitingView } from './ledgersFixture';
 
@@ -198,17 +199,15 @@ describe('the app bar (W2 Task S4b)', () => {
     const run = (id: number, state: string, sessionId: string, claimedBy: string): RunSummary =>
       ({ id, program: 'p', state, closedAt: null, sessionId, claimedBy }) as unknown as RunSummary;
     // Its worker waits on you; its coordinator does; neither does; closed, though its worker waits.
-    act(() => useFleetStore.setState({
-      runs: [run(1, 'working', 'ask', 'calm'), run(2, 'planned', 'calm', 'ask'), run(3, 'working', 'calm', 'calm'), run(4, 'done', 'ask', 'calm')],
-      runsFrameSeen: true,
-    }));
+    const runs = [run(1, 'working', 'ask', 'calm'), run(2, 'planned', 'calm', 'ask'), run(3, 'working', 'calm', 'calm'), run(4, 'done', 'ask', 'calm')];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true, sessions: withRunBinding(sessions, runs) }));
     expect(within(primary()).getByRole('button', { name: 'Runs, 2 needs you' })).toBeInTheDocument();
   });
 
   it('a badge prints at most 99+, while the tab\'s name carries the real count', () => {
     atWidth(1280);
     render(<App />);
-    const runs = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, program: 'p', state: 'working', closedAt: null, sessionId: 'ask', claimedBy: null }) as unknown as RunSummary);
+    const runs = Array.from({ length: 120 }, (_, i) => ({ id: i + 1, program: 'p', state: 'working', closedAt: null, sessionId: null, claimedBy: 'ask' }) as unknown as RunSummary);
     act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
     const tab = within(primary()).getByRole('button', { name: 'Runs, 120 needs you' });
     expect(tab).toHaveTextContent(/99\+$/);

@@ -9,7 +9,7 @@ import type { WaitingView } from '../../../shared/ledgers';
 import { questionRows, waitingTotal } from '../ledgers/ledgerWords';
 import { useFleetChrome } from './FleetChrome';
 import { operatorAsk } from './rollup';
-import { isRunClosed, runState } from './runWords';
+import { coordinatorOf, isRunClosed, runState, workerOf } from './runWords';
 
 /** A badge's printed cap, the one definition every badge reads (R32's F1): the accessible name carries the real number. */
 export const BADGE_PRINT_CAP = 99;
@@ -32,14 +32,15 @@ export function waitingOnYou(sessions: readonly FleetSession[] | null): number |
   return sessions === null ? null : sessions.filter(operatorAsk).length;
 }
 
-/** The open runs (`!isRunClosed`) whose worker (`sessionId`) or coordinator (`claimedBy`) session is `operatorAsk`; no
- *  run state itself waits on the operator (D-6170). A run counts once even when both are waiting. `null` when either
- *  input is `null` (no runs frame, or no fleet frame). Sessions are matched by `FleetSession.id`. */
+/** The open runs (`!isRunClosed`) whose worker or coordinator session is `operatorAsk`; no run state itself waits on the
+ *  operator (D-6170). A run counts once even when both are waiting. `null` when either input is `null` (no runs frame, or
+ *  no fleet frame). The worker is `workerOf`'s, the session the wire binds to the run, so a recycled worker id that is
+ *  asking counts nothing here (D-8049); the coordinator is `coordinatorOf`'s, by id. */
 export function runsNeedYou(runs: readonly RunSummary[] | null, sessions: readonly FleetSession[] | null): number | null {
   if (runs === null || sessions === null) return null;
-  const asking = new Set(sessions.filter(operatorAsk).map((s) => s.id));
-  const waits = (id: string | null): boolean => id !== null && asking.has(id);
-  return runs.filter((r) => !isRunClosed(r) && (waits(r.sessionId) || waits(r.claimedBy))).length;
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const asks = (s: FleetSession | null): boolean => s !== null && operatorAsk(s);
+  return runs.filter((r) => !isRunClosed(r) && (asks(workerOf(r, byId)) || asks(coordinatorOf(r, byId)))).length;
 }
 
 /** The fleet's runs line, after "Runs · ": `—` before the runs frame (`null`), "N active" counting the runs whose state
