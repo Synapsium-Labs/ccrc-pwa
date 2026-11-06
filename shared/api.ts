@@ -12186,6 +12186,11 @@ export interface DelegationObservationHealth {
    * every carrier is marked. Read it through `delegationCarrierHealthOf`.
    */
   carriers?: DelegationCarrierHealth;
+  /**
+   * Wave 5 (PR7): the lane's adoption step, as of its last pass. Absent whenever every count is zero (D-8035's rule), and from an older
+   * server: absence says nothing was counted, never that nothing waits. Read it through `delegationAdoptionHealthOf`.
+   */
+  adoption?: DelegationAdoptionHealth;
 }
 
 /** Wave 5 (PR6): what the lane's carrier step counted in its last pass (`server/src/coord/delegation-carrier.ts#planCarrierSteps`).
@@ -12198,6 +12203,23 @@ export interface DelegationObservationHealth {
  *  generation or tree changes, or until thirty passes have gone by (D-8039). */
 export interface DelegationCarrierHealth {
   marked: number; pending: number; unsupported: number; mismatched: number; unmeasured: number; unowned: number; refused: number;
+}
+
+/** Wave 5 (PR7): what the lane's adoption step decided in its last pass (the server's L1 decider, `decideAdoption`).
+ *  `mode`: `live` adopts, `shadow` (the operator's adoption marker absent) only records what it would adopt, `suspended` waits on the
+ *  breaker, `unmeasured` when the marker or the breaker did not read. `adopted`: adoptions decided this pass. `wouldAdopt`: the ones
+ *  shadow only recorded. `waiting`: leases waiting on their carrier's read-back, the settle or the breaker. `unchanged`: an audit proved the tree
+ *  unchanged, so it stays `ephemeral`. `unaudited`: audits past the per-pass bound. `conflicting`: leases waiting for the operator's
+ *  resolve. `unsupported`: leases a box that cannot hold a tree leaves waiting. `uncensused`: leases whose project the census did not
+ *  reach. `owed`: notices derived from durable state and not queued this pass (mail held, or the recipient unmeasured). */
+export interface DelegationAdoptionHealth {
+  mode: 'live' | 'shadow' | 'suspended' | 'unmeasured'; adopted: number; wouldAdopt: number; waiting: number; unchanged: number;
+  unaudited: number; conflicting: number; unsupported: number; uncensused: number; owed: number;
+}
+
+/** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block). */
+export function delegationAdoptionHealthOf(health: Pick<DelegationObservationHealth, 'adoption'>): DelegationAdoptionHealth | null {
+  return typeof health.adoption === 'object' && health.adoption !== null ? health.adoption : null;
 }
 
 /** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every
