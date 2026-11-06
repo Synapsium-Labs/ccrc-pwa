@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { BASH, CCRC_SRC, CHECKS_SRC, REPO, doctorEnv, healthy, installDoctorHooks, lineFor, realPath, runDoctor, shq, stub } from './ccrc-doctorFixture.js';
 
 removeTmpFixturesEachTest();
@@ -55,7 +56,7 @@ function plantEngine(home: string): string {
 
 /** One check alone, sourced, with its verdict line, its remedy and the full output. */
 function check(home: string, name: string, env: NodeJS.ProcessEnv = {}, os = 'linux'): { line: string; remedy: string; code: number; out: string } {
-  const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\nCCD_OS=${os}; _check_${name}`],
+  const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\nCCD_OS=${os}; _check_${name}`],
     { env: { ...doctorEnv(home), ...env }, encoding: 'utf8', timeout: 60_000 });
   const out = r.stdout ?? '';
   const lines = out.split('\n');
