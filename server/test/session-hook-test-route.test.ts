@@ -201,6 +201,17 @@ const BODY_IS_TEXT = [
   lines('git commit -F - <<< "msg" && cat <<\'EOF\'', 'npm test', 'EOF'),
   // A body naming systemd-run is text too, where the arm that sees it runs on every session.
   lines("gh pr create --body-file - <<'EOF'", 'systemd-run --user --scope npx vitest run', 'EOF'),
+  // A command line continued over a backslash-newline is one line.
+  lines('gh pr create --title t \\', "  --body-file - <<'EOF'", TICKED, 'EOF'),
+  lines("git commit \\", "  -F - <<'EOF'", 'npm test', 'EOF'),
+  lines("cat <<'EOF' \\", '  > notes.md', 'npm test', 'EOF'),
+  lines('cd server && \\', "  git commit -F - <<'EOF'", 'npm test', 'EOF'),
+  lines('gh pr create --title "a \\', 'b" --body-file - <<\'EOF\'', 'npm test', 'EOF'),
+  // A test program by name, or a package script by name, stands beside a body.
+  lines("npm ci && git commit -F - <<'EOF'", 'npm test', 'EOF'),
+  lines("yarn run build && git commit -F - <<'EOF'", 'npm test', 'EOF'),
+  lines("pnpm lint && git commit -F - <<'EOF'", 'npm test', 'EOF'),
+  lines("ccrc test --heavy -- npx vitest run && git commit -F - <<'EOF'", 'npm test', 'EOF'),
 ];
 const BODY_RUNS_OR_UNREAD = [
   // Fed to a shell.
@@ -305,6 +316,63 @@ const BODY_RUNS_OR_UNREAD = [
   // A line the reader knows only part of keeps the old reading whole, here a body beside one that does run.
   lines("cat <<'A'", 'npm test', 'A', "bash <<'B'", 'echo hello', 'B'),
   lines("docker ps && gh pr create --body-file - <<'EOF'", TICKED, 'EOF'),
+  // A backslash-newline joins two lines, so the command after it is the one that takes the body.
+  lines('cd /tmp && \\', "  bash -s <<'EOF'", 'npm test', 'EOF'),
+  lines('true && \\', "  sh <<'EOF'", 'npm test', 'EOF'),
+  lines('A=1 \\', "  bash <<'EOF'", 'npm test', 'EOF'),
+  lines("cat <<'EOF' | \\", '  bash', 'npm test', 'EOF'),
+  lines("cat <<'EOF' | \\", '  xargs -I{} sh -c {}', 'npm test', 'EOF'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'true && \\', '  bash r.sh'),
+  lines('true && \\', '  eval "$(cat <<\'EOF\'', 'npm test', 'EOF', ')"'),
+  lines('true && \\', '  bash -c "$(cat <<\'EOF\'', 'npm test', 'EOF', ')"'),
+  lines('true && \\', "  ssh box bash -s <<'EOF'", 'npm test', 'EOF'),
+  lines("cat <<'EOF' | \\", '  sudo bash', 'npm test', 'EOF'),
+  // A backslash-newline inside a word: bash joins the word, and the reader does not follow it.
+  lines('ba\\', "sh <<'EOF'", 'npm test', 'EOF'),
+  lines('$\\', "(cat <<'EOF'", 'npm test', 'EOF', ')'),
+  lines("echo <\\", "<'EOF'", 'npm test', 'EOF'),
+  // A body that reaches a program through a group, a loop or a continuation hangs on it all the same.
+  lines("{ npx bash; } <<'EOF'", 'npm test', 'EOF'),
+  lines("( npx bash ) <<'EOF'", 'npm test', 'EOF'),
+  lines("if true; then npx bash; fi <<'EOF'", 'npm test', 'EOF'),
+  lines('{', '  npx bash', "} <<'EOF'", 'npm test', 'EOF'),
+  lines("{ pnpm exec bash; } <<'EOF'", 'npm test', 'EOF'),
+  lines("{ npm exec -- bash; } <<'EOF'", 'npm test', 'EOF'),
+  lines("while read -r c; do npx bash -c \"$c\"; done <<'EOF'", 'npm test', 'EOF'),
+  lines("while read -r c; do npx $c; done <<'EOF'", 'vitest run', 'EOF'),
+  lines('npx bash \\', "  <<'EOF'", 'npm test', 'EOF'),
+  lines('npx \\', "  bash <<'EOF'", 'npm test', 'EOF'),
+  // And so does a test program by name: no body feeds a group, a loop or a test program.
+  lines("{ npx vitest run a.test.ts; } <<'EOF'", 'npm test', 'EOF'),
+  lines("( npx vitest run a.test.ts ) <<'EOF'", 'npm test', 'EOF'),
+  lines("if true; then npx vitest run a.test.ts; fi <<'EOF'", 'npm test', 'EOF'),
+  lines("while read -r c; do npx vitest run a.test.ts; done <<'EOF'", 'npm test', 'EOF'),
+  lines('npx vitest run a.test.ts \\', "  <<'EOF'", 'npm test', 'EOF'),
+  // A body held in a variable reaches a test program through any spelling of the variable.
+  lines("read -r X <<'EOF'", 'vitest run', 'EOF', 'npx $X'),
+  lines("read -r X <<'EOF'", 'npm test', 'EOF', 'npx bash -c "$X"'),
+  lines('printf -v X %s "$(cat <<\'EOF\'', 'vitest run', 'EOF', ')"', 'npx $X'),
+  lines('X=" $(cat <<\'EOF\'', 'vitest run', 'EOF', ')"', 'npx $X'),
+  lines('X=a"$(cat <<\'EOF\'', 'npm test', 'EOF', ')"', 'npx bash -c "${X#a}"'),
+  lines("read -r X <<'EOF'", 'test/*.test.ts', 'EOF', 'npx vitest run $X'),
+  lines("read -r X <<'EOF'", 'npm test', 'EOF', 'A=$X npx vitest run a.test.ts'),
+  // A body written to a file and run through a test program.
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npx bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npx sh < r.sh'),
+  lines("tee r.sh <<'EOF' >/dev/null", 'npm test', 'EOF', 'chmod +x r.sh; npx ./r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npm exec -- bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'bunx bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'pnpm exec bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'pnpx bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'pnpm dlx bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'yarn bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'yarn run bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'bun run r.sh'),
+  lines("cat > build.sh <<'EOF'", 'npm test', 'EOF', 'bun run build.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'bun r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', "npx -c 'bash r.sh'"),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'ccrc test -- bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'ccrc other vitest'),
 ];
 describe('a heredoc body that nothing runs is text (D-8052)', () => {
   it.each(BODY_IS_TEXT)('%j reads light and is allowed', (cmd) => {
