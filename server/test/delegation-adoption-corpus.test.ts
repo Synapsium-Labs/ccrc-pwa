@@ -4,7 +4,6 @@
 // capture's own admin records and metas, and the adoption decider is given the audit answer the scenario's name states and a settled
 // watch. Every home is a fixture: nothing reads or writes the live `~/.ccrc` or `~/.cc-sessions`, and the tmux the hook asks is a stub.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
@@ -22,6 +21,7 @@ import {
 } from '../src/coord/delegation-adoption.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -98,7 +98,7 @@ async function replay(version: string, scenario: string): Promise<{ checkpoint: 
     mkdirSync(admin, { recursive: true });
     let born = false;
     for (const e of capture.events) {
-      const r = spawnSync('bash', [HOOK], { input: JSON.stringify(e.payload), encoding: 'utf8', timeout: 60_000, env: {
+      const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(e.payload), encoding: 'utf8', timeout: 60_000, env: {
         ...process.env, OSTYPE: '', HOME: home, PATH: `${path.join(home, 'bin')}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
         CLAUDE_CODE_SESSION_ID: e.envSid, CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: INC, CLAUDE_CODE_EXECPATH: '' } });
       expect(r.status, `${version}/${scenario} seq ${e.seq}: the hook exits 0`).toBe(0);
