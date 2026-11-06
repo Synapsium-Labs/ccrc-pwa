@@ -33,9 +33,17 @@ describe('refHref (chat reading Task L, D-8062)', () => {
   });
 
   it('a repository that is not owner/name stays text', () => {
-    for (const repo of ['owner-a', 'owner-a/repo-a/x', '../x', 'owner-a/..', 'owner-a/.', 'owner a/repo', '']) {
+    for (const repo of ['owner-a', 'owner-a/repo-a/x', '../x', 'owner-a/..', 'owner-a/.', 'owner a/repo', '', '-a/b', 'a/-b']) {
       expect(refHref(mark('#651', 'pr'), { ...ctx, repo }), repo).toBeNull();
     }
+  });
+
+  // Review 1586 A1: the console's one GitHub repository grammar (`parseGithubRepo`) decides, so a slug written with `.git`
+  // links to the repository itself.
+  it('a repository is read with the console\'s one GitHub grammar', () => {
+    expect(refHref(mark('#651', 'pr'), { ...ctx, repo: 'owner-a/repo-a.git' })).toEqual({
+      href: 'https://github.com/owner-a/repo-a/issues/651', external: true,
+    });
   });
 
   it('run 1527 opens /runs?run=1527', () => {
