@@ -30,7 +30,7 @@ import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   DONE, LEDGER, MINT_INSTEAD, NEW_TOKEN_LABEL, REPLACE_SAVE, REVOKE_PAGES, STEP_UP_AGAIN_REPLACE,
-  TOKEN_CLEARED_REPLACE, addRefusal, laneActRefusal, replaceIntro, replaceLedger, replaceRefusal, replaceUnknown,
+  TOKEN_CLEARED_REPLACE, addRefusal, checkedLine, laneActRefusal, replaceIntro, replaceLedger, replaceRefusal, replaceUnknown,
   restartLead, revokeOldWords,
 } from '../fleet/accountWords';
 import { CompromiseSteps } from './CompromiseSteps';
@@ -104,9 +104,9 @@ export function ReplaceSheet(props: ReplaceSheetProps): ReactNode {
     setChecking(true);
     write(LEDGER.checking(id));
     try {
-      await client.accountCheck(id);
+      const a = await client.accountCheck(id);
       if (!live.current) return;
-      settle(LEDGER.checked);
+      settle(checkedLine(a.lane));
     } catch (e) {
       if (!live.current) return;
       settle(laneActRefusal('check', id, e));

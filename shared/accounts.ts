@@ -154,8 +154,22 @@ const resetLine = (resetAt: number | null | undefined, now: number): string => {
 const checkedAgo = (at: number, now: number): string => `checked ${shortSpan(now - at)} ago`;
 const limitSource = (window: '5h' | '7d', resetAt: number | null | undefined, now: number): string =>
   `${window} limit reached${resetLine(resetAt, now)}`;
-const unreachedSource = (at: number, now: number): string =>
-  `the last check couldn't reach the provider · ${checkedAgo(at, now)} · nothing was learned about the credential`;
+/** What a check that learned nothing says of the credential. */
+export const NOTHING_LEARNED = 'nothing was learned about the credential; it may be fine';
+/** What a check that neither passed nor was refused found, as the words after "it" or "the last check", and what that
+ *  means for the credential. `unreachable` covers a 5xx too (`classify`), and `unknown` every provider answer with no row
+ *  of its own and a probe that printed no JSON, so neither may say more than this (D-8051 (16)). A word this table doesn't know reads as `unknown`. */
+const CHECK_FINDINGS: Readonly<Record<string, { readonly found: string; readonly credential: string }>> = {
+  unreachable: { found: "couldn't reach the provider, or got a server error back", credential: NOTHING_LEARNED },
+  timeout: { found: "didn't get an answer in time", credential: NOTHING_LEARNED },
+  unknown: { found: "got no answer ccrc can read as a pass or a refusal", credential: "don't rely on the credential until a check passes" },
+};
+export const checkFinding = (verdict: string): { readonly found: string; readonly credential: string } =>
+  CHECK_FINDINGS[Object.hasOwn(CHECK_FINDINGS, verdict) ? verdict : 'unknown']!;
+const inconclusiveSource = (verdict: string, at: number, now: number): string => {
+  const { found, credential } = checkFinding(verdict);
+  return `the last check ${found} · ${checkedAgo(at, now)} · ${credential}`;
+};
 const mintedTokenSource = (mintedAt: number, now: number): string => {
   const left = mintedAt + MINTED_TOKEN_LIFETIME_MS - now;
   const months = Math.floor((now - mintedAt) / (DAY_MS * 365.25 / 12));
@@ -173,8 +187,9 @@ const keyExpirySource = (expiresAt: number, now: number): string => {
  * THE ONE STATE WORD (D-5517, spec §4.1; created by Task A12 ahead of A2, D-6058 (3)): the first row of the table that applies, with its source. Pure, L1 policy
  * in L0: the server derives `LaneWire.state` from it, and nothing re-derives a word elsewhere.
  *
- *  - Off: the kill switch. Signed out: a sign-out the box records (D-7992), or a 401, from the `authdead` marker or a last
- *    check of `auth-dead`, whatever its age (D-5755 (5): the last measured verdict). Rate-limited: a window at 100% or more, or an OpenRouter key whose
+ *  - Off: the kill switch. Signed out: a sign-out the box records (D-7992), a 401 from the `authdead` marker, or a last
+ *    check of `auth-dead`, whatever its age (D-5755 (5): the last measured verdict). That verdict claims no status: `classify`
+ *    writes it for a 401, a 403 and "Not logged in", which made no request (D-8051 (20)). Rate-limited: a window at 100% or more, or an OpenRouter key whose
  *    `limit_remaining` is 0 or less.
  *  - Expiring, from three sources and never from another kind's file: a minted Anthropic token whose estimated year
  *    ends in under 30 d (a pasted token has no `mintedAt`); an OpenRouter key at 10% or less of a limit it has; an
@@ -194,7 +209,7 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
 
   if (st?.signedOutAt !== undefined) return { word: 'signed-out', source: 'signed out on the fleet host', at: st.signedOutAt };
   if (check?.verdict === 'auth-dead') {
-    return { word: 'signed-out', source: `HTTP 401 · ${checkedAgo(check.at, now)}`, at: check.at };
+    return { word: 'signed-out', source: `the provider refused its credential, or it has none · ${checkedAgo(check.at, now)}`, at: check.at };
   }
   if (i.authDead) return { word: 'signed-out', source: 'HTTP 401' };
 
@@ -228,7 +243,7 @@ export function stateWordFor(i: StateWordInput): AccountStateAnswer {
     return { word: 'not-checked', source: `last ${checkedAgo(check.at, now)}`, at: check.at };
   }
   if (check.verdict === 'ok') return { word: 'signed-in', source: checkedAgo(check.at, now), at: check.at };
-  return { word: 'inconclusive', source: unreachedSource(check.at, now), at: check.at };
+  return { word: 'inconclusive', source: inconclusiveSource(check.verdict, check.at, now), at: check.at };
 }
 
 /** The reset instants (epoch seconds) a Rate-limited source counts down to: the telemetry row's, which is what

@@ -185,6 +185,9 @@ describe('refusals are worded from their code (D-7732)', () => {
   it('every word the routes answer has its sentence, and a sentence in a code field is not printed', () => {
     const e = (body: unknown): unknown => ({ status: 409, body });
     expect(laneActRefusal('switch', 'lane-a', e({ error: 'not-ready', reason: 'check-failed' }))).toBe(notReadyWords('check-failed'));
+    // The verb ran, and the lane-state file didn't take it: nothing the screen holds is this check's result (D-8051 (17)).
+    expect(laneActRefusal('check', 'lane-a', e({ error: 'check-unrecorded' })))
+      .toBe("The check ran, but its result couldn't be read back from the fleet host, so what this screen shows for lane-a is out of date. Run it on the fleet host to see the result: ccrc account check --id lane-a");
     expect(laneActRefusal('switch', 'lane-a', e({ error: 'lane-busy' }))).toBe('lane-a is busy with another account change. Try again in a moment.');
     expect(laneActRefusal('switch', 'lane-a', e({ error: 'outcome-unknown' })))
       .toBe("The fleet host didn't answer in time, so whether lane-a was switched is unknown. The screen reads it again.");

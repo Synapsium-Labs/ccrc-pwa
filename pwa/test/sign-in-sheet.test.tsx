@@ -29,7 +29,7 @@ const CONNECT = (): AccountsConnect => ({
   accountOps: 'available', gate: 'armed', origin: 'https', caps: [...ACCOUNT_CAPS], stepUpFreshUntil: Date.now() + 3_600_000,
 });
 const LANE_NEW: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
-const LANE_READY: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true };
+const LANE_READY: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true, check: { verdict: 'ok', at: Date.now() } };
 const ATTEMPT = 'a'.repeat(32);
 const LOGIN_CODE = 'A'.repeat(48) + '#' + 'b'.repeat(43);
 const URL_OF = (scope: string): string =>

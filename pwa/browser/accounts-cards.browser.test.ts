@@ -60,7 +60,7 @@ const ACCOUNTS = {
       state: { word: 'signed-in', source: 'checked 4m ago', at: now - 240_000 }, check: checked('ok', 240_000),
       identity: 'someone@example.invalid', identitySource: 'measured', ready: true,
     },
-    'lane-b': { state: { word: 'signed-out', source: 'HTTP 401 · checked 2h ago', at: now - 7_200_000 }, ready: false, notReadyReason: 'not-checked' },
+    'lane-b': { state: { word: 'signed-out', source: 'the provider refused its credential, or it has none · checked 2h ago', at: now - 7_200_000 }, ready: false, notReadyReason: 'not-checked' },
     'lane-c': { state: { word: 'rate-limited', source: '5h limit reached · resets in 1h 12m' }, ready: true },
     'lane-d': { state: { word: 'off', source: 'Off on the fleet host' }, keyHint: 'sk-or-v1-…a3f9', validatedAt: now - 2 * 86_400_000, ready: true },
     'lane-e': { state: { word: 'signed-in', source: 'checked 9m ago', at: now - 540_000 }, ready: true },
@@ -348,9 +348,9 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         await app.page.waitForTimeout(1_000);
         const later = await readOffline(app.page);
         const sourceOf = (lane: string): string => later.cards.find((c) => c.lane === lane)?.source ?? '';
-        expect(sourceOf('lane-b')).toBe('HTTP 401 · checked 3h ago');
+        expect(sourceOf('lane-b')).toBe('the provider refused its credential, or it has none · checked 3h ago');
         expect(await app.page.locator(`${CARDS}[data-lane='lane-b'] .acct-trouble-wrong`).textContent())
-          .toBe("lane-b's token was refused (HTTP 401) 3h ago.");
+          .toBe("lane-b's token was refused, or it has none (3h ago).");
         expect(sourceOf('lane-a')).toBe('checked 1h ago');
         expect(sourceOf('lane-e')).toBe('checked 1h ago');
         expect(sourceOf('lane-c')).toMatch(/^5h limit reached · resets in 1[01]m$/);

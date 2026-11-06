@@ -47,7 +47,7 @@ import { MoveSessionsSheet } from '../fleet/MoveSessionsSheet';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { ConfirmItsYou } from './ConfirmItsYou';
-import { managedCodex } from './connectFlow';
+import { managedCodex, recordedOnly } from './connectFlow';
 import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import '../fleet/fleet.css';
 
@@ -210,7 +210,8 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
   const [typed, setTyped] = useState('');
   /** The Codex line (spec §11 step 4): on by default. */
   const [deleteFolder, setDeleteFolder] = useState(true);
-  const codexLane = managedCodex(readRoster().find((r) => r.id === id));
+  const row = readRoster().find((r) => r.id === id);
+  const codexLane = managedCodex(row);
   // One answer for what the sheet says and what it sends, so neither can drift from the line.
   const codexAuth = codexLane ? (deleteFolder ? 'delete' as const : 'keep' as const) : undefined;
   const [notice, setNotice] = useState<string | null>(null);
@@ -427,11 +428,11 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
             </>
           ) : (
             <>
-              <p className="acct-field-note">{removeConsequence(id, codexAuth)}</p>
+              <p className="acct-field-note">{removeConsequence(id, recordedOnly(row) ? 'recorded' : codexAuth)}</p>
               {codexLane && (
                 <div className="acct-revoke" data-codex-folder="true">
                   <OptionRow
-                    label={CODEX_FOLDER_LINE} checked={deleteFolder} disabled={blocked !== null}
+                    label={CODEX_FOLDER_LINE} checked={deleteFolder} disabled={blocked !== null || busy}
                     onClick={() => setDeleteFolder((d) => !d)}
                   />
                   {!deleteFolder && <p className="acct-field-note">{CODEX_FOLDER_KEPT}</p>}

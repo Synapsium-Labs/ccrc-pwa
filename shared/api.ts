@@ -13242,8 +13242,8 @@ export interface FleetHealth {
  *  `lane-act-refused`   the verb refused for a reason of its own (409); its code rides `verbCode` when it is a word,
  *                       never its sentence.
  *  `outcome-unknown`    the act outran its bound or its answer was lost (502): the box may have acted, so the server
- *                       reconciled and the screen re-reads; it is never retried on its own (D-5518). */
-export const ACCOUNT_ROUTE_REFUSALS = ['lane-busy', 'last-enabled-home', 'lane-act-refused', 'outcome-unknown'] as const;
+ *                       reconciled and the screen re-reads; it is never retried on its own (D-5518). `check-unrecorded`: a check ran and the lane state doesn't hold it (502, D-8051 (17)). */
+export const ACCOUNT_ROUTE_REFUSALS = ['lane-busy', 'last-enabled-home', 'lane-act-refused', 'outcome-unknown', 'check-unrecorded'] as const;
 export type AccountRouteRefusal = (typeof ACCOUNT_ROUTE_REFUSALS)[number];
 
 /** `POST /api/accounts/:id/check`'s 200 (spec §13.1): the lane as the server reads it after the check and its seed. */

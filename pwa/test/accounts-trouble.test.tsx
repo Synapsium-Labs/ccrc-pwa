@@ -84,7 +84,7 @@ describe('the Refined Accounts card: one state word per lane (D-7718)', () => {
     expect(cards().map((c) => c.dataset['lane'])).toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e']);
     expect(cards().map((c) => c.dataset['state'])).toEqual(['signed-out', 'rate-limited', 'signed-in', 'off', 'signed-in']);
     // Each trouble card says what is wrong, its effect and its fix.
-    expect(within(card('lane-b')).getByText("lane-b's token was refused (HTTP 401) 2h ago.")).toBeInTheDocument();
+    expect(within(card('lane-b')).getByText("lane-b's token was refused, or it has none (2h ago).")).toBeInTheDocument();
     expect(within(card('lane-c')).getByText('lane-c reached its 5-hour limit.')).toBeInTheDocument();
     expect(within(card('lane-c')).getByText(/^Resets in 1h 1[12]m\./)).toBeInTheDocument();
     expect(card('lane-a').querySelector('.acct-trouble')).toBeNull();
@@ -162,13 +162,13 @@ describe('the Refined Accounts card: one state word per lane (D-7718)', () => {
   it("a held answer's source ages on the card's clock, as the card's other ages do (D-7718 (10))", () => {
     // The answer the server wrote an hour ago, held since (the link down, the store keeping its last good read).
     const held = lanesAt(now - 3_600_000);
-    expect(held['lane-b']!.state.source).toBe('HTTP 401 · checked 2h ago');
+    expect(held['lane-b']!.state.source).toBe('the provider refused its credential, or it has none · checked 2h ago');
     expect(held['lane-c']!.state.source).toMatch(/^5h limit reached · resets in 2h 1[12]m$/);
     show(held);
     const source = (id: string): string => card(id).querySelector('.accounts-state-source')?.textContent ?? '';
     // The source and the trouble line say the same age, from the same instant.
-    expect(source('lane-b')).toBe('HTTP 401 · checked 3h ago');
-    expect(within(card('lane-b')).getByText("lane-b's token was refused (HTTP 401) 3h ago.")).toBeInTheDocument();
+    expect(source('lane-b')).toBe('the provider refused its credential, or it has none · checked 3h ago');
+    expect(within(card('lane-b')).getByText("lane-b's token was refused, or it has none (3h ago).")).toBeInTheDocument();
     expect(source('lane-a')).toBe('checked 1h ago');
     // The countdown counts down to the telemetry row's reset, as "Resets in" under it does.
     expect(source('lane-c')).toMatch(/^5h limit reached · resets in 1h 1[12]m$/);

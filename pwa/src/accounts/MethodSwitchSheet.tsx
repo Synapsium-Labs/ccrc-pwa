@@ -32,7 +32,7 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   CLOSE, DONE, KEEP_IT, LEDGER, METHOD_LINES, REVOKE_PAGES,
   SIGN_IN_LEDGER, SIGN_OLD_OUT, SIGN_OLD_OUT_ANYWAY, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OLD_OUT,
-  SWITCH_CLOSE_TOKEN, SWITCH_START, atProviderWords, bothHeld, identityLine, laneActRefusal, restartLead, revokeOldWords,
+  SWITCH_CLOSE_TOKEN, SWITCH_START, atProviderWords, bothHeld, checkedLine, identityLine, laneActRefusal, restartLead, revokeOldWords,
   signOldOutDanger, signOldOutRefused, statedRefused, switchEnd, switchIntro, switchLedger, switchRestartLead, switchTitle,
 } from '../fleet/accountWords';
 import { CompromiseSteps } from './CompromiseSteps';
@@ -128,7 +128,9 @@ export function MethodSwitchSheet(props: MethodSwitchSheetProps): ReactNode {
       const r = await client.accountCheck(id);
       if (!live.current) return;
       setChecked(r.lane);
-      settle(LEDGER.checked);
+      const line = checkedLine(r.lane);
+      settle(line);
+      if (line !== LEDGER.checked) refused = line;
     } catch (e) {
       if (!live.current) return;
       refused = laneActRefusal('check', id, e);

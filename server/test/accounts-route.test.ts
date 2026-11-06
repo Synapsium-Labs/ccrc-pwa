@@ -199,14 +199,14 @@ describe('GET /api/accounts', () => {
     // The lane kind (D-5517, D-5751): `rosterKindOf`'s answer per entry —
     // upstream is anthropic by construction, a secrets file makes a token lane,
     // and `gpt` (`external`, no provider) is undeclared, so it carries
-    // telemetry and nothing else.
+    // telemetry and `managed: false`, the mark of a lane ccrc only records (D-8051 (13)).
     const signIn = { provider: 'anthropic' as const, kind: 'sign-in' as const, telemetry: 'anthropic' as const };
     const token = { provider: 'anthropic' as const, kind: 'token' as const, telemetry: 'anthropic' as const };
     expect(roster).toEqual([
       { id: 'claude', label: 'claude', hue: 'cyan', homeAble: true, hidden: false, pool: null, ...signIn, resolvedPool: untaggedDeclared },
       { id: 'claude-a', label: 'claude-a', hue: 'violet', homeAble: true, hidden: false, pool: null, ...token, resolvedPool: untaggedDeclared },
       { id: 'claude-b', label: 'team·b', hue: 'blue', homeAble: true, hidden: false, pool: null, ...signIn, resolvedPool: untaggedDeclared },
-      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null, telemetry: 'none', resolvedPool: untaggedDeclared },
+      { id: 'gpt', label: 'gpt', hue: 'magenta', homeAble: false, hidden: false, pool: null, telemetry: 'none', managed: false, resolvedPool: untaggedDeclared },
       { id: 'claude-d', label: 'claude-d', hue: 'green', homeAble: true, hidden: false, pool: null, ...token, resolvedPool: untaggedDeclared },
     ]);
   });
@@ -227,8 +227,8 @@ describe('GET /api/accounts', () => {
     expect(roster).toHaveLength(5);
     const base = ['hidden', 'homeAble', 'hue', 'id', 'label', 'pool', 'resolvedPool', 'telemetry'];
     for (const entry of roster) {
-      // `gpt` is undeclared (`external`, no provider): no provider, no kind.
-      const kind = entry.id === 'gpt' ? [] : ['kind', 'provider'];
+      // `gpt` is undeclared (`external`, no provider): no provider, no kind, and `managed: false` (D-8051 (13)).
+      const kind = entry.id === 'gpt' ? ['managed'] : ['kind', 'provider'];
       expect(Object.keys(entry).sort(), entry.id).toEqual([...base, ...kind].sort());
     }
   });

@@ -51,7 +51,7 @@ const EXPIRING = {
   state: { word: 'expiring', source: 'token minted 11 months ago · about 4 weeks left · estimated', at: MINTED_AT },
   ready: true, check: { verdict: 'ok', at: now - 60_000 }, mintedAt: MINTED_AT, identity: 'someone@example.invalid', identitySource: 'stated',
 };
-const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
+const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true, check: { verdict: 'ok', at: now } };
 const ROSTER = [rostered('lane-a', 'cyan', 'sign-in'), rostered('lane-b', 'violet', 'token'), rostered('lane-c', 'blue', 'token'), rostered('lane-d', 'green', 'sign-in')];
 const ACCOUNTS = {
   accounts: [acct('lane-a', { authDead: true }), acct('lane-b', { authDead: true }), acct('lane-c'), acct('lane-d')],
