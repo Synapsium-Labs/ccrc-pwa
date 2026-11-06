@@ -1,6 +1,6 @@
 # Runs screen rebuild (design)
 
-**Spec** · 2026-11-04 · Status: rev 4, draft for the operator, with the review of rev 1 applied, the operator's answers to Q1 to Q5 recorded, and the operator's sixteen checks of 2026-11-06 applied · Issue: #1518 · Updates: `2026-10-20-runs-auto-expire-and-programme-view-design.md` (the ruled "Auto-expire + programme view", #1013) and its plan `docs/superpowers/plans/2026-10-21-runs-auto-expire-and-programme-view.md`
+**Spec** · 2026-11-04 · Status: rev 5, draft for the operator, with the review of rev 1 applied, the operator's answers to Q1 to Q5 recorded, the operator's sixteen checks of 2026-11-06 applied, and the review of rev 4 and its plan applied · Issue: #1518 · Updates: `2026-10-20-runs-auto-expire-and-programme-view-design.md` (the ruled "Auto-expire + programme view", #1013) and its plan `docs/superpowers/plans/2026-10-21-runs-auto-expire-and-programme-view.md`
 
 This document defines no D-numbers. The plan allocates them. Every D-number cited here is already defined on `origin/main`.
 
@@ -8,7 +8,7 @@ This document defines no D-numbers. The plan allocates them. Every D-number cite
 - **Live figures** come from one read-only snapshot at 21:30 UTC on 2026-11-04, compared with one at 15:12 UTC the same day. **[M]** marks a measured figure, **[I]** an inferred one.
 - **Programmes and projects** are counts or "programme A". Run numbers are kept, so a builder can replay the figures.
 - **"Ruled spec"** means the 2026-10-20 document. Its rule numbers (R1 to R8), lane rows (E1 to E5) and decisions (G1 to G6) keep their meanings here.
-- **"Author's call"** marks a choice the author made. A1 to A34 are listed in §4.2, and the operator accepted them as written on 2026-11-05. A35 to A44 are in §4.5. They fill in what the checks of 2026-11-06 left open, and the operator has not yet seen them.
+- **"Author's call"** marks a choice the author made. A1 to A34 are listed in §4.2, and the operator accepted them as written on 2026-11-05. A35 to A53 are in §4.5. They fill in what the checks of 2026-11-06 and the review of rev 4 left open, and the operator has not yet seen them. A25, A29 and A4's line for overtaken work were accepted earlier and are changed by A48, A46 and A47, and each says so.
 - **"Q1 to Q5"** are the five choices only the operator could settle, listed in §4.3 with their recommendations. The operator answered all five on 2026-11-05, each as recommended. The body is written to those answers and names the question wherever it rests on one.
 - **"Check 1" to "check 16"** are the operator's answers of 2026-11-06 to the sixteen questions the first frames raised, listed in §4.4. Where a check and an older line disagreed, the older line has been changed. An accepted call or answer it changed says so.
 - **What the review already answered** is in §20.
@@ -120,7 +120,7 @@ The operator accepted all of these as written on 2026-11-05. Each began as the a
 | A1 | Extend the shipped `/programmes/<slug>`, not the ruled `/runs/p/<slug>` | Improve what exists. D29 and D26 of the ledgers spec already make it the programme's page, so a second one would split it | Build `/runs/p/<slug>` as ruled, and link the two |
 | A2 | A search box on `/runs`, the Cmd-K palette, and a working `/runs/<id>` for open and closed runs. The number shows on the detail screen and in search results, not on cards | Keeps "card = glance, header = superset" and still finds a run by number | Print the number on every row, which reverses D-5589 and D-6170 |
 | A3 | Bulk abandon of a selected stuck group with one confirm, plus the ruled auto-expiry | Auto-close reaches 18 of 26; a person clears the rest in a few taps | Auto-close only, which leaves 8 forever, or bulk only, which never ends the inflow |
-| A4 | What counts as stuck: the five reasons and their ages in §7 | Each fits the live data, and 24 hours clears normal runs (open to close p90 is 12.3 h) | Other ages. The numbers are in one table, so they are cheap to change |
+| A4 | What counts as stuck: the five reasons and their ages in §7. A47 changes one row line | Each fits the live data, and 24 hours clears normal runs (open to close p90 is 12.3 h) | Other ages. The numbers are in one table, so they are cheap to change |
 | A5 | One source for the programme chip and `/waiting`: one PWA selector (§8.7) | The two must never disagree, and D29 leaves one page | Per-surface counts, as today |
 | A6 | Close as done or superseded: no new close. Abandon stays the one ending, keeps state `failed`, and records why. The screen says "closed by you: overtaken", never "failed" (§9.3) | `done` means a verified finish, which only the coordinator's close proves. "Superseded" is a reason, not a state | A new `superseded` state, which touches every run reader, or an operator `done`, which would be untrue |
 | A7 | Server facts: fix title overwriting, the 500-by-id window for lookup, and last activity (§11) | Search and proof of abandon rest on them | Build the screen on today's names, which do not identify a run |
@@ -141,11 +141,11 @@ The operator accepted all of these as written on 2026-11-05. Each began as the a
 | A22 | A withdraw or a decline of an end request sends the asker a system mail, in the same transaction as the move (§10) | "Asker is told" has no writer: the withdraw route sends no mail today | Tell nobody, and let the asker find out |
 | A23 | `act` runs inside the abandon hold: `withAbandon` passes into the ledger routes, and `act` answers as the abandon route does (§10) | §9.1's sheet reads abandon's refusals and `childReclaim` fields, and the arm must run inside `coordMutex` | A new answer shape, which the sheet would have to read twice |
 | A24 | A repeat from the same asker is refused for 24 hours after a decline or a withdraw, unless the run's stuck reason has changed (§10) | "One open request per run" stops only a concurrent one, so a declined request could return at once | No limit |
-| A25 | B5, B6 and B7 wait for B3, and F28 waits for C2 (§6.2, §15) | B5 moves Resume onto B2's detail and adds to B3's Advanced route, B6's confirm reuses B3's sheet, B7's control sits on Advanced, and F28 uses C2's cache | Rev 1's gates, which understate these |
+| A25 | B5, B6 and B7 wait for B3, and F28 waits for C2 (§6.2, §15). Changed by A48: B5 and B7 also wait for B4 | B5 moves Resume onto B2's detail and adds to B3's Advanced route, B6's confirm reuses B3's sheet, B7's control sits on Advanced, and F28 uses C2's cache | Rev 1's gates, which understate these |
 | A26 | A programme's ending is derived from its work runs, like "open" (§8.2.3, §11.6) | Abandoning the last open run sets `programs.state` to `abandoned`, so clearing a leftover review would mark a completed programme abandoned | Read `programs.state`, and change what a close retires |
 | A27 | "Re-opens" means a new run with a new id, and a pin holds what that leaves alone (§3, §18) | `openRun`'s conflict arm leaves `programs.state` alone, and a review must name a run at `awaiting-review` | Make a re-open revive the programme, which changes `soleActiveCoordinator` |
 | A28 | `owner-gone` keeps §7's literal rule. A plain stop gets a softer line, and an absent claimant with no history gets no verdict until a lane refusal raises an item (§7) | 417 needs any stop with no successor, but G2 says a plain stop never closes, so the line must not say the run is past saving. Check 4 then dropped "Nothing can finish this" for every run | Narrow the rule to E3s, which loses 417 |
-| A29 | One new optional field, `blockedBy`. `waitsOn` gets a full state mapping. The Waiting band's age comes from `lastMoveAt` (§7) | "Waits behind a stuck run" links to a run no field names, and the band's "over a day" has no field | A second age field |
+| A29 | One new optional field, `blockedBy` (A46 adds a second, `coordinatorGone`). `waitsOn` gets a full state mapping. The Waiting band's age comes from `lastMoveAt` (§7) | "Waits behind a stuck run" links to a run no field names, and the band's "over a day" has no field | A second age field |
 | A30 | `find` reads who closed a run from stored columns, and returns open runs on the first page only (§11.2, §11.4) | The `closedBy` chips filter on it and the budget is 20 ms. A closed-at cursor cannot order open runs | A correlated lookup of the newest `run_events` row, which reads every closed row under a `closedBy` filter |
 | A31 | B1's pin "a reused number is exact" means a number that also matches a `reviews` target or a title still resolves to the run with that id, with the other matches under their own headings (§15) | Rev 1's wording was unclear | |
 | A32 | "Closed today" is the operator's local day: the PWA sends its own midnight (§8.2, §11.6) | The server computes the count, but the operator's phone has the timezone | The box's day, or a rolling 24 hours |
@@ -224,20 +224,29 @@ Eight flaws were listed beside the checks. This revision fixes the ones that are
 
 ### 4.5 Calls made in applying the checks
 
-The checks and flaws left these open. They are the author's, and the operator sees them with the frames. "Instead" names the option not taken.
+The checks, the flaws and the review of rev 4 left these open. They are the author's, and the operator sees them with the frames. "Instead" names the option not taken.
 
 | # | Call | Why | Instead |
 |---:|---|---|---|
-| A35 | "In 20 h" counts to `stuck.closes.at`: the moment the row's own clocks run out, from the lane's durable anchor. It never counts from the run's age (§7) | R5 says a grace accrues only across unbroken passes, so a 50-day-old run can honestly be 20 h from a close | Count from the run's age, which reads "overdue" on every old run |
+| A35 | "In 20 h" counts to `stuck.closes.at`: the moment the row's own clocks run out, from that row's own anchor. Only E1 and E4, whose ruled conditions name activity, let activity move it. It never counts from the run's age (§7) | R5 says a grace accrues only across unbroken passes, so a 50-day-old run can honestly be 20 h from a close. An anchor that moved on activity for every row would let a row read "in 40 min" after its run had closed | Count from the run's age, which reads "overdue" on every old run, or one anchor for every row |
 | A36 | At zero, an armed row says "ccrc closes this soon" and a shadow row says "ccrc would close this now". It never says "in 0", and it never counts up (§7) | R7's budget means zero is not the moment of the close, and shadow never closes at all | Hide the time at zero, which leaves a shadow row silent about why it is listed |
 | A37 | On a card, armed runs win over shadow runs, and the time shown is always the soonest among those counted (§8.2.2) | Check 3 left both open. Soonest is the first thing that can happen, and it can only prove early | Latest, or a range, which does not fit one line |
 | A38 | "One short scroll" means the last head's bottom edge sits no more than half a visible height below the fold. The visible height stops at the bottom bar (§8.2) | Check 12 needs a measure a test can hold. Half a screen fits a 667px phone by the frames' figures [I] | A fixed pixel figure, which a tall phone passes for nothing |
-| A39 | A head's "oldest N days" is the largest age any of its rows can show, from the same `stuck.since`, in whole days rounded down (§8.2.1, §11.2) | The frames had heads 5 days above their rows because they read different dates | Age from `openedAt` on the head, which is what caused the gap |
+| A39 | A head's "oldest N days" is the largest age any of its rows can show, from the same `stuck.since`, in whole days rounded down, and in hours under a day. Every reason's row line carries that age (A47) (§8.2.1, §11.2) | The frames had heads 5 days above their rows because they read different dates | Age from `openedAt` on the head, which is what caused the gap |
 | A40 | One run in a group: the control says "Abandon 1…" and opens §9.1's sheet for that run, not the list (§9.2) | "Abandon all 1…" reads wrongly, and a list of one with a tick box adds nothing | Keep the group sheet for one run |
-| A41 | Every run in a group act ends in exactly one of five results, and the sheet or toast counts them all, so the numbers add up. Closed today follows the server (§9.2) | The frames dropped Stuck by 11 with 9 abandoned, and no count said where the other 2 went | Say only the abandoned count |
-| A42 | The strip reads "Back to Search results" when the page was opened from a search, and "Back to Runs" from anywhere else, a cold link included (§8.4) | Check 16 names two labels. Browser Back still returns to a programme page or `/waiting` | A label per door, which adds words for little use |
+| A41 | Every run in a group act ends in exactly one of six results, and the sheet or toast counts them all, so the numbers add up. Closed today follows the server (§9.2) | The frames dropped Stuck by 11 with 9 abandoned, and no count said where the other 2 went | Say only the abandoned count |
+| A42 | The strip reads "Back to Search results" when the page was opened from a search, and "Back to Runs" from anywhere else, a cold link included. The origin rides the URL as `?q=`, the way Waiting's `?from=` does (§8.4) | Check 16 names two labels. Browser Back still returns to a programme page or `/waiting`. `navigate` writes null history state, so history state could not carry it, and a query survives a reload or a shared link | A label per door, which adds words for little use |
 | A43 | One marker wins in this order: "needs you", "holds a workspace", "holds a session" (§8.2.1) | An item carries at most one marker (D-5545), and a run may fit all three | Show the held marker first, which hides what the operator must do |
-| A44 | Only the release sentence needs the workspace name added, as "Its workspace is <name>." The child and "cannot tell" sentences already name it. A run with a session and no recorded name leaves the name out (§9.1) | `workspaceOf` falls back to the run number, and "Its workspace is 83" is untrue | Keep the fallback |
+| A44 | Only the release sentence needs the workspace name added, as "Its workspace is <name>." The child and "cannot tell" sentences already name it. A branch is called a branch, never a workspace, and a run with a session and neither leaves the name out (§9.1) | `workspaceOf` falls back to the branch and then the run number, and "Its workspace is 83" or "Its workspace is <branch>" is untrue | Keep the fallback |
+| A45 | The verdict lives in one in-memory reader, `RunVerdicts`, which the lane row writes and every answer reads through `withVerdicts`. The abandon arm reads it inside the hold (§7, §9.3) | The frame alone cannot serve the record read, the programmes read or the abandon arm. One pass rebuilds it, so it needs no table. A close in the first pass after a restart reads "closed by you" | A table, which writes every pass and adds a migration for a fact a pass can rebuild |
+| A46 | One more optional field, `coordinatorGone`, from the same pass. Resume, the sheet's coordinator line and the Who facts read it (§9.1, §9.5, §11.2). This adds to A29 | §9.5 says the server's verdict decides, and no wire field carried it: `waitsOn` says `nobody` for a gone worker too | Keep `coordinatorPresence`, which hides Resume for a claimant with no fleet row (F25) |
+| A47 | Overtaken's row line gains its age: "A later wave moved on 28 days ago". `since` is when the first later wave left planned. This changes A4's line, which the operator accepted | The old line had no age, so the head's "oldest 28 days" sat over rows that showed none, against A39 and F5 | Drop the age from that one head, which makes it the only head without one |
+| A48 | B5 and B7 start after B4, and the surfaces above the list leave in B4 (§15). This changes A25 | Cards change `stuckWords.ts`, the board's order needs `StuckBand`, and B7's check reads the screen's words. The top-of-board and 667-tall measures cannot pass while the switches sit above the band | Keep B5 and B7 beside B4, and move those pins to B5, which leaves B4's relief unmeasured |
+| A49 | The group loop asks where each run stands: `in-group`, `moved` or `closed`. A run gone from the frame has closed. Each call has a 30-second limit, and a call with no answer is a sixth result, "no answer" (§9.2) | The frame drops a closed run at once, so a yes-or-no check called it "left alone", which is false. C1 sets no limit on a POST, so a hung call would leave Stop unable to end the loop, and a timed-out call may still have closed its run | Count a timed-out call as "not reached", which may be untrue |
+| A50 | `/runs/<id>` replaces #2394's `/runs?run=<id>`. Chat links build `/runs/<id>`. An old `?run=` address is replaced by it on arrival, so `?run=` and `?q=` never meet, and no arrival has to find a row folded under a head (§6.2) | #2394 documents its query as lasting "until a page for one run exists". One address per run is goal 3 | Keep the query and teach its arrival to open folds |
+| A51 | The broad pane is mounted by one column reading in the PWA, from the same 1240 that the CSS rule uses. §8.1 stays one rule, and `/runs/advanced` opens a run beside its list with `?open=<id>` (§8.1, §8.6) | CSS can lay out a pane but not decide to mount it, and the same route must be a page in a narrower column | A width check per screen, which is a second rule |
+| A52 | The sheet drops its lane sentence, and the context line alone says when ccrc closes the run (§9.1) | The context line is repeated verbatim and already carries the time, so the sentence said it twice: what check 13 removed. It also leaves B7 no sheet change | Keep G5's sentence, and add a second close time to the sheet |
+| A53 | In shadow, a close the lane would refuse sets `closes` null and raises no item. Armed, it also raises §12.2's item (§7) | "Would close this now" is untrue for a run with an open PR, and a shadow lane acts on nothing | Leave the shadow row as it is, which promises a close that never comes |
 
 ## 5. Measured defects and their fixes
 
@@ -255,7 +264,7 @@ Today's measured behaviour sits beside each fix. Ids in the first column are sta
 | F8 | The row and the sheet speak different words, so neither can be checked against the other | The sheet repeats the row's name and context line verbatim | B3 |
 | F9 | Abandon gives no proof. No toast, except when a sibling claims the workspace | Toast with a door to the record | B3 |
 | F10 | Finished holds the newest 500 by id, so 23 of 52 open runs would vanish on abandon. Run 410 did. S2 as landed (#2341) pages by id, and page one also carries any run that closed at or after that page's oldest close, so a just-closed old run stays on it [read from code, not run]. Older pages still walk by id, so nothing lists every close in close order | A read ordered by close time, and a record route for any run | B1, B3 |
-| F11 | "Awaiting review" is wrong for 9 of 13: their reviews are done and they wait on a coordinator | `waitsOn` from the server; the word becomes "reviewed" | B1, B4 |
+| F11 | "Awaiting review" is wrong for 9 of 13: their reviews are done and they wait on a coordinator | `waitsOn` from the server; the word becomes "reviewed", and the row says what it waits on (§7) | B1, B2 |
 | F12 | 25 of 52 rows are inert but look tappable: nothing in `fleet.css` selects `[data-inert]` | No inert rows. Every row opens the detail | B2 |
 | F13 | Abandon sits on all 52 rows, with no danger styling, at 64x44 and 11px | Only on items that ask, in the danger-ghost shape, at a 44px target | B4 |
 | F14 | Abandon jumps when spend loads: wrapped on 49 of 49 rows at 390, 45 of 49 at Refined 1280. Spend alone makes the board 38% taller (7074px against 5132px at Refined 1280) | Spend moves to the detail screen; nothing async remains on a row | B2 |
@@ -265,11 +274,11 @@ Today's measured behaviour sits beside each fix. Ids in the first column are sta
 | F18 | The closed read is 612 KB on every mount, against 41.8 KB for open | S2 pages it; the board moves to the slim find read | B3 |
 | F19 | Every door into the board lands unfocused: Inbox, session header, hold cell, Collect lane | Each opens `/runs/<id>` or the programme page | B2 |
 | F20 | "Runs, N needs you" has no matching mark on any row | The row carries a "needs you" marker from the one selector | B5 |
-| F21 | Five surfaces sit above the list. "Waiting on you" names both a band on `/runs` and the `/waiting` page | Bands move (§8.2); review caps join `/waiting` | B5, B6 |
+| F21 | Five surfaces sit above the list. "Waiting on you" names both a band on `/runs` and the `/waiting` page | Bands move (§8.2); review caps join `/waiting` | B4, B6 |
 | F22 | `groupRuns` has no production caller, so W0's "awaiting-review is waiting" changed nothing on screen | Delete it and its test; the server's verdict replaces it | B5 |
 | F23 | Abandon's 400 and 413 say "a reason this build does not recognise"; the sheet never shows the server's `detail` | The sheet shows `detail` | B3 |
 | F24 | `api.abandonRun` drops `childReclaim` and `childReclaimWhy` | It keeps them, and the toast uses them | B3 |
-| F25 | The Resume door hides for a claimant with no fleet row, though the server would accept the act. The heir is a hand-typed session id. On an all-terminal programme the door repeats on every row | Resume moves to the detail and programme page, with a picker | B5 |
+| F25 | The Resume door hides for a claimant with no fleet row, though the server would accept the act. The heir is a hand-typed session id. On an all-terminal programme the door repeats on every row | Resume moves to the detail and programme page, from the server's verdict, with a picker | B5 |
 | F26 | A coordinator's only close refuses a run with no session (`not-dispatched`), and it has no other door | §10 end requests; §12 lanes | B6, B7 |
 | F27 | Copy says "program"; the rest of the product says "programme" | "Start a programme" and the empty state | B5 |
 | F28 | Fold count and scroll are lost on any visit to a session | The board's fold state and scroll survive a return | B2, on C2's cache |
@@ -300,13 +309,13 @@ First measured against open PRs and running work at 21:30 UTC on 2026-11-04. The
 
 | Work | State | Overlap | What it means here |
 |---|---|---|---|
-| Console speed S2 | Merged, #2341 | `useColdRuns.ts`, `runWords.ts`, `stores/fleet.ts`, the `GET /api/runs` handler, new `coord/runsPage.ts`, `store.ts`, `RunSummary` | **Was the highest overlap, and no longer holds anything.** B1 builds on what landed: `api.runsPage`, and `GET /api/runs` with `limit` and `before` |
+| Console speed S2 | Merged, #2341 | `useColdRuns.ts`, `runWords.ts`, `stores/fleet.ts`, the `GET /api/runs` handler, new `coord/runsPage.ts`, `store.ts`, `RunSummary` | **Was the highest overlap, and no longer holds anything.** B1 builds on what landed. The board is `api.runsPage`'s one PWA caller, and the Inbox and Mail keep the unpaged read. B3 moves Finished to `find`, and B4 retires the paged PWA read with the last surface that used it. `GET /api/runs` with `limit` and `before` stays on the server |
 | #2290, console speed C1 | Merged | `RunsScreen` is lazy; a 20-second limit and `ApiTimeout` on every GET | B2 uses `ApiTimeout` for its "could not load" state |
 | #2286, PL10 | Merged | `lib/routes.ts`, `places.ts`, `PhoneBar`, `FleetScreen.tsx`, `control-census.test.ts`, all of `pwa/src/ledgers/` | B2's route lands on top of it |
 | PL11 | Merged, #2343 | `ProgrammeScreen` is Goals; `/waiting` has its filter | B5 no longer waits on it |
 | S1 and C2 | Merged, #2305 and #2318 | S1 changed the watcher tick; C2 added a screen cache | B7 no longer waits on S1. F28 can use C2's cache |
 | #2289, #2239 | Merged | `coord/routes.ts` elsewhere | Keep new routes away from `reclaim-pause` |
-| #2394, chat names link to their objects | Open | `RunRow.tsx`, `RunsScreen.tsx`, `runWords.ts` | New since rev 3. Whichever lands second rebases. B2 must keep what it adds to a row |
+| #2394, chat names link to their objects | Open | `RunRow.tsx`, `RunsScreen.tsx`, `runWords.ts`, `lib/routes.ts`, `WaitingRoutes.tsx`, `ledgerWords.ts`, `ProgrammeScreen.tsx`, `useColdRuns.ts`, `control-census.test.ts` | New since rev 3. It adds `/runs?run=<id>`, row arrival and "Run N is not among the runs loaded here", documented as lasting until a page for one run exists. B2 is that page, so A50 replaces the query. Whichever lands second rebases |
 | Delegation waves | Landing | Optional `RunSummary` fields, readers in `runWords.ts`, run-table migrations | Take the next free migration slot when you land; assume no number. The schema is at `user_version 40` |
 | #119, the worker heartbeat | Open | The stall ladder | Holds B9 alone |
 | #1610 draft | Stale | Census tests | Stale since 2026-10-27; ignore |
@@ -316,7 +325,7 @@ First measured against open PRs and running work at 21:30 UTC on 2026-11-04. The
 - This repository is public: cite #1518, and name no tracker ids, hosts, accounts, sessions, or other projects.
 - Wire additions are optional, with one PWA reader each, and a skew test in both directions. `FLEET_PROTO` is not bumped.
 - About 30 test files name these components, including `runs-screen`, `runs-glance`, `runs-health`, `abandon-sheet`, `resume-sheet`, `run-groups`, `runs-finished-fold`, `control-census`, `markup-census`, `contrast`, `fleet-css` and `danger-buttons`. Plan their edits with each wave.
-- Moving a band breaks two pointers: `ArchiveSheet` tells the operator to use "the coordinator pause switch on the Runs screen", and `CollectLaneSection` links to `/runs` for resume. B5 updates both.
+- Moving a band breaks two pointers: `ArchiveSheet` tells the operator to use "the coordinator pause switch on the Runs screen", and `CollectLaneSection` links to `/runs` for resume. B4 updates both.
 
 ## 7. What "stuck" means
 
@@ -331,7 +340,7 @@ The table is author's call A4. First match wins. Any uncertain reading means no 
 | 1 | `owner-gone` | The claimant measures dead on `ClaimantVerdict` (archived, forgotten, removed, or stopped with no successor) for 1 hour; or the run started and its worker reads stopped, not hibernated, with no move for 24 hours. Hibernated is never gone | Owner gone | "Coordinator archived 49 days ago", "Coordinator stopped 8 days ago. Nothing has moved since" or "Worker stopped 8 days ago. Nothing has moved since" | 5 | 65, 66, 83: E3 or E1. 417, 848: no row |
 | 2 | `start-never-landed` | Planned; `dispatchStartedAt` set; `dispatchedAt` null; over 1 hour | Start never finished | "Started 8 days ago and never landed" | 2 | 1085: E1r, under R1. 1257: no row |
 | 3 | `review-of-closed` | Planned review whose target run is closed; over 1 hour | Review of finished work | "The work it reviews closed 30 days ago" | 12 | E1r |
-| 4 | `overtaken` | Planned work; a later wave of the programme has left planned; over 24 hours | Overtaken by later waves | "Later waves moved on without it" | 7 | No row (A11) |
+| 4 | `overtaken` | Planned work; a later wave of the programme has left planned; over 24 hours | Overtaken by later waves | "A later wave moved on 28 days ago" | 7 | No row (A11) |
 | 5 | `never-started` | Planned work; over 7 days; nothing else open in the programme | Never started | "Opened 23 days ago and never started" | 2 | E1 |
 | | **Total** | | | | **28** | 18 by a lane, 10 by a person |
 
@@ -349,6 +358,8 @@ The table is author's call A4. First match wins. Any uncertain reading means no 
 | Awaiting review, a review open | 3 | awaiting review | "Waits on a reviewer." |
 | Working over 8 days, worker alive | 1 (1009) | working | "No move in 9 days." It reads as stalled on its programme card |
 
+One reader, `runWaitLine`, gives these lines, and B2 lands it. "No move in N days." is for a run at `dispatched` or `working` whose `lastMoveAt` is over a day old, in whole days rounded down. A run in any other case, or from an older server with no `waitsOn`, keeps today's line.
+
 **On the wire.** Two optional fields carry this (§11.2). `waitsOn` answers "who has the next move": `worker`, `reviewer`, `coordinator`, `merge-queue` or `nobody`. It has no `operator` value, by D-6170: "waits on you" comes only from the one needs-you source.
 
 | State | `waitsOn` (A29) |
@@ -363,21 +374,23 @@ The table is author's call A4. First match wins. Any uncertain reading means no 
 
 One more optional field, `blockedBy?: number | null`, names the stuck run a planned run waits behind, so "Waits behind a stuck run." has a run to link to. The "Waiting on its coordinator" band takes runs at `awaiting-review` whose `waitsOn` is `coordinator` and whose `lastMoveAt` is over a day old. It needs no age field of its own.
 
-**Ages.** `stuck.since` is when the reason began: the coordinator's archive or stop, the worker's stop, the start, the target's close, the later wave leaving planned, or the opening. A row's age and its head's "oldest" both read it (A39).
+**Ages.** `stuck.since` is when the reason began: the coordinator's archive or stop, the worker's stop, the start, the target's close, the first later wave leaving planned, or the opening. A row's age and its head's "oldest" both read it (A39). Under a day both read hours: "closed 5 h ago", "oldest 5 h". One day reads "1 day".
 
-**What "in 20 h" counts down to (A35).** `stuck.closes` is `{at, armed}`, or null when no lane row applies. `at` is the moment the row's own clocks run out. It says nothing about the run's age, so a run 50 days old can honestly read "in 20 h". The clock starts from the row's anchor: the later of the last activity (R4) and the first pass of the unbroken series (R5).
+**What "in 20 h" counts down to (A35).** `stuck.closes` is `{at, armed}`, or null when no lane row applies. `at` is the moment the row's own clocks run out. It says nothing about the run's age, so a run 50 days old can honestly read "in 20 h". Each row has its own anchor, and it moves only when the lane's own clock moves, so a stuck reason and a close cannot disagree. "First pass" means the first pass of the unbroken series (R5) on which the row's condition held, leaving out the grace itself.
 
-| Row | `at` |
-|---|---|
-| E1 | Anchor plus 72 h. When armed, also no earlier than 24 h after the warning's `deliveredAt` |
-| E1r, E2, E3, the crash row | Anchor plus 1 h |
-| E3s, E4 | Anchor plus 24 h |
-| E5 | The next pass |
+| Row | Anchor | `at` | Does activity move it? |
+|---|---|---|---|
+| E1 | The later of the programme's last activity (R4) and the first pass | Anchor plus 72 h. When armed, also no earlier than 24 h after the warning's `deliveredAt` | Yes, the programme's |
+| E1r, E2, E3 | The first pass | Anchor plus 1 h | No |
+| The crash row | The first pass, which is `dead_claimants.firstDeadAt` | Anchor plus 1 h | No |
+| E3s | The first pass | Anchor plus 24 h | No |
+| E4 | The latest of the run's last activity (R4), the first pass and, after #119, `workerLastSeen` | Anchor plus 24 h | Yes, the run's |
+| E5 | None | The next pass | No |
 
 Three consequences:
 - **The times differ.** A review of finished work has a 1-hour grace, so it reaches zero an hour into shadow, while a never-started run counts down from up to 72 h. "In 20 h" in this document is a sample of the form, not a figure every row shares.
-- **The clock can go back up.** Activity or a gap restarts a grace (R4, R5). The row says so on the next pass.
-- **No clock, no time.** `closes` is null when the row cannot say: while the lane holds (R3), for a pass with an uncertain reading (R2), and for an armed E1 whose warning has not been delivered, because the lane never closes past that. The row then reads "Nothing closes this on its own", which is true for as long as it lasts. In shadow no warning is sent, so a shadow E1 row counts the 72 h alone.
+- **The clock can go back up.** Activity restarts E1 and E4, and no other row: only their ruled conditions name it. A mail or a dispatch attempt on an E1r run moves nothing, because the lane would still close on time. A gap restarts any row with a grace (R5). The row says so on the next pass.
+- **No clock, no time.** `closes` is null when the row cannot say: while the lane holds (R3), for a pass with an uncertain reading (R2), for an armed E1 whose warning has not been delivered, and whenever the lane would refuse the close: an open PR or unpushed commits (R6), an unreadable `.child` marker (R1), or a busy worker under a gone coordinator. The row then reads "Nothing closes this on its own", which is true for as long as it lasts. In shadow no warning is sent, so a shadow E1 row counts the 72 h alone, and a refusal raises no item, because a shadow lane acts on nothing (A53).
 
 **What the row says as it runs down (A36).** The server sends `at`, and the PWA counts down on its own page clock, so nothing arrives late and no frame is needed to tick.
 
@@ -386,15 +399,20 @@ Three consequences:
 | Armed | ccrc closes this in 20 h | ccrc closes this soon |
 | Shadow | ccrc would close this in 20 h | ccrc would close this now |
 
-Time left reads in minutes under an hour ("in 40 min"), in whole hours under 48 ("in 20 h") and in days from there ("in 3 days"), always rounded up, so it never says "in 0". An armed row at zero is waiting on the next pass or R7's budget. If the lane refuses the close, `closes` goes null and §12.2's item gives the row its "needs you" marker. A shadow row at zero stays as it is until its group is armed or its condition ends, which is true and is what the operator reads before arming.
+Time left reads in minutes under an hour ("in 40 min"), in whole hours under 48 ("in 20 h") and in days from there ("in 3 days"), always rounded up, so it never says "in 0". An armed row at zero is waiting on the next pass or R7's budget. If an armed lane refuses the close, `closes` goes null and §12.2's item gives the row its "needs you" marker. A shadow row at zero stays as it is until its group is armed or its condition ends, which is true and is what the operator reads before arming.
 
-**Cadence.** The verdict needs `ClaimantVerdict`, which reads the journal. So it runs on the registry pass, as a read-only row of `LANE_SCHEDULE`, and the runs frame stamps the latest answer. It adds no statement to the 2-second tick. A verdict can lag by one pass, and before the first pass `stuck` is absent, which draws nothing.
+**Cadence and where the answer lives (A45).** The verdict needs `ClaimantVerdict`, which reads the journal. So it runs on the registry pass, as a read-only row of `LANE_SCHEDULE`, and adds no statement to the 2-second tick. Its answers go to one in-memory reader, `RunVerdicts`: `stuck`, `waitsOn`, `blockedBy` and `coordinatorGone` per open run. The run-close lane writes `closes` into it from B7. Everything else only reads it:
+- `withVerdicts`, beside `withLastMoves`, stamps the fields on every answer that carries a `RunSummary`: the runs frame, its cold start, `GET /api/runs`, `GET /api/runs/:id` and the record read. So a run's header and its row read the same answer.
+- `GET /api/programmes` folds it into its aggregate.
+- The abandon arm reads the run's reason from it, inside the hold (§9.3).
+
+A verdict can lag by one pass. Before the first pass, the reader is empty: `stuck` is absent, which draws nothing, and an abandon in that window records no reason, so it reads "closed by you". A restart empties it the same way.
 
 ## 8. Screens
 
 ### 8.1 One layout rule
 
-Today there is one board in both skins, with no responsive layout beyond one rule under 480. That is right in spirit: a skin is a token axis. So the layout follows the width of the board's own column, through one `container-type: inline-size` rule, as Settings already does. Skins change the column's width through their tokens and change nothing else.
+Today there is one board in both skins, with no responsive layout beyond one rule under 480. That is right in spirit: a skin is a token axis. So the layout follows the width of the board's own column, through one `container-type: inline-size` rule, as Settings already does. Skins change the column's width through their tokens and change nothing else. One thing CSS cannot do is decide whether to mount the right pane, so a column reading in the PWA answers that from the same 1240 (A51).
 
 Measured columns [M, harness]:
 
@@ -460,7 +478,7 @@ Never started · 2 · oldest 23 days                 [Abandon all 2…]
 
 - **Order (check 14).** Always the five above, in that order, whatever their sizes. A head with no runs is left out, and the others close up. Heads never swap while the operator clears them, so a nearly empty group can sit above a bigger one. This reading order is not §7's matching order, which only decides which reason a run gets.
 - **Fold (check 11).** Folded by default at every width. Open or closed is remembered per viewer. Open heads at wide put the first programme card 2,776px down a list pane 888px tall, about three screens. Folded, it should sit near 742px [I, from the laptop figure].
-- **Age (A39).** "Oldest N days" is the largest age in the group, from `stuck.since`, so the head never shows an age none of its rows can show. Days are whole and rounded down, on the head and the row alike.
+- **Age (A39).** "Oldest N days" is the largest age in the group, from `stuck.since`, so the head never shows an age none of its rows can show. Every reason's row line carries that age, Overtaken's included (A47). Days are whole and rounded down, and under a day both read hours, on the head and the row alike.
 - **The group control.** It counts only what may go in bulk (A13). Live: 12, 7, 2 of 5, 2 of 2, and none of the 2 in "Start never finished", which holds no group control. So 23 of 28 can clear in bulk, across 9 claimants and 11 programmes, and 5 go singly: 83, 417, 848, 1085, 1257 [M]. §9.2 gives its words, including for a single run.
 - **The held-back line (check 15).** Any head with a run that cannot go in bulk shows the line, so a head with no control says why. One run reads "1 holds a workspace or session: one at a time".
 - **Stuck is not needs-you.** It never counts in a badge (D-6170). A run becomes needs-you only through a lane refusal or an end request.
@@ -501,7 +519,7 @@ Programme A
 
 - **Name:** the programme's name. Tapping opens `/programmes/<slug>`.
 - **Lamp and word:** paused, stuck (every open run is stuck), stalled or moving (check 10). The word keeps the motion and the marker says "needs you", so a card gives two facts, not one fact twice. `boxState` puts needs first, so the pure state step moves out of `programmeBoxes.ts` for cards to call without it. The step needs no coordinator row: a programme with a gone coordinator has no box, and those are the ones the card must show.
-- **Context line:** when a run is stuck, the count, then what happens next. Every stuck run closes: "3 stuck · ccrc closes them in 20 h". None does: "3 stuck · nothing closes them on its own". Some do: "3 stuck · ccrc closes 1 in 20 h" (check 3). Shadow reads "would close" in each form, and zero reads as §7 says: "ccrc would close 1 now", "ccrc closes 1 soon". When armed and shadow runs mix, the armed ones are counted and the shadow ones are not. The time is always the soonest among those counted (A37). Otherwise the wave counts and last move. The counts are the ruled spec's waves: working, waiting, queued, done. Reviews nest under their wave and are never counted apart.
+- **Context line:** when a run is stuck, the count, then what happens next. Every stuck run closes: "3 stuck · ccrc closes them in 20 h". None does: "3 stuck · nothing closes them on its own". Some do: "3 stuck · ccrc closes 1 in 20 h" (check 3). One stuck run reads "it": "1 stuck · ccrc closes it in 20 h", "1 stuck · nothing closes it on its own". Shadow reads "would close" in each form, and zero reads as §7 says: "ccrc would close 1 now", "ccrc closes 1 soon". When armed and shadow runs mix, the armed ones are counted and the shadow ones are not. The time is always the soonest among those counted (A37). Otherwise the wave counts and last move. The counts are the ruled spec's waves: working, waiting, queued, done. Reviews nest under their wave and are never counted apart.
 - **Marker:** "needs you · N" from the one selector, which links to `/waiting` filtered to the programme (D29).
 - **Stuck runs stay in the card's counts.** The Stuck band is a second view of them, not a move.
 
@@ -558,7 +576,7 @@ New route: `/^\/runs\/(\d+)\/?$/`, with `accepts` refusing anything that is not 
 - The context line.
 - The marker.
 
-**The way back (check 16, A42).** A strip above the header, the one Waiting items use, with `backLabel`'s words: "Back to Search results" when the page was opened from a search, keeping the query, and "Back to Runs" from anywhere else, a cold link included. It shows at every width where the run is a page. It is not drawn in the wide right pane, where the list is the way back.
+**The way back (check 16, A42).** A strip above the header, the one Waiting items use, with `backLabel`'s words: "Back to Search results" when the page was opened from a search, keeping the query, and "Back to Runs" from anywhere else, a cold link included. A search result links to `/runs/<id>?q=<query>`, so the origin rides the URL and a reload or a shared link keeps it (A42). It shows at every width where the run is a page. It is not drawn in the wide right pane, where the list is the way back.
 
 **Actions, under the header.**
 
@@ -567,8 +585,10 @@ New route: `/^\/runs\/(\d+)\/?$/`, with `accepts` refusing anything that is not 
 | Abandon | The run is open |
 | Open the session | A session exists, or existed and can be opened |
 | Open the coordinator | The claimant has a session |
-| Resume | The coordinator reads dead (§9.5) |
+| Resume | `coordinatorGone` is set (§9.5) |
 | Lift cap | The run's review cap is waiting |
+
+Abandon lands in B3 with its sheet, Resume in B5 with its picker, and the others with the page in B2. An open run with no verdict still shows Abandon: that is the guard for a wrong or uncertain verdict (§7, §18).
 
 A closed run shows no Abandon, and leads with the close. Its word is `closeWords` (§9.3), and the line beneath carries only what the word lacks (check 5):
 
@@ -590,7 +610,7 @@ The same rule gives a closed search result its line.
 | Work | Workspace; branch; pull requests; items done, from `/items`; suite and checks, from `/signals`; unread mail; spend, in today's words: "≈ $X.XX · out N", from `runSpendLine` |
 | Trail | Every recorded event, newest first: time, in words, by whom |
 
-**The trail** is the one place that says how a run got here. Stall observations fold into one line per run of them: "6 stall checks, 2 to 4 Nov". `causedBy` reads as "you", "ccrc" or "the coordinator". The detail is shown as stored, through the existing redaction profile.
+**The trail** is the one place that says how a run got here. Stall observations fold into one line per run of them: "6 stall checks, 2 to 4 Nov". `causedBy` reads as "you", "ccrc", "the coordinator" or, for a session id, "a session". The detail is shown as stored, through the existing redaction profile. When `olderEvents` is above zero the trail ends "N older events not shown."
 
 **A number with no run:** "There is no run 9999." with a link back to the board. **A failed read:** "Could not load this run. Try again."
 
@@ -600,7 +620,7 @@ The same rule gives a closed search result its line.
 |---|---|---|
 | Phone 360 to 430 | A page. The strip and Back return to where the operator came from, with folds and scroll kept. Header, actions wrapping, facts as label over value, trail last. Long branch names wrap | The same, on Instrument's tokens |
 | Laptop 1280 to 1470 | A page in the column, with the strip. Facts in two columns, label beside value | The same, column about 860 |
-| Wide 1900+ | A page, column 1056, with the strip. Facts in two columns | The right pane of the list, as the fleet list stays beside a session. Facts in two columns. No strip, and Back is not drawn |
+| Wide 1900+ | A page, column 1056, with the strip. Facts in two columns | The right pane of the list, as the fleet list stays beside a session. Facts in two columns. No strip, and Back is not drawn. The open run's row is marked as current. With `?q=`, the list shows the results |
 
 ### 8.5 The programme page, `/programmes/<slug>` (A1)
 
@@ -608,7 +628,7 @@ PL11 makes this the Goals page: Goals, what the programme waits on, Stored secre
 
 - **The header is a superset of the card:** every card element verbatim, plus the current wave (`programmeCurrentWave`, as ruled), all four wave counts, the coordinator and its word with a link, and the pending-close line per reason.
 - **Open waves.** One entry per wave, newest first, using the same run row. A review nests under its wave. A stuck row carries its Abandon.
-- **Closed waves.** A fold, newest close first, from `GET /api/runs/find?program=<slug>`, each with who closed it: "done", "closed by the coordinator", "closed by ccrc: never started" or "closed by you: overtaken".
+- **Closed waves.** A fold, newest close first, from `GET /api/runs/find?program=<slug>`, each with §9.3's word and §8.4's line: "done", with the line "Closed by the coordinator, 2 Nov at 11:20"; "closed by ccrc: never started" or "closed by you: overtaken", with the date alone.
 - **The ruled wave stepper is dropped (Q2).** Numbers reach 91, three pairs repeat and `waveOf` is usually null [M], so a stepper cannot draw honestly. The list above says the same.
 - **Resume** sits on this page's head when the coordinator reads dead, once, not on each row (F25).
 - **Doors in:** every programme card; the Fleet box title (D26, already planned); a run's detail; `inboxTarget`'s run kinds, which now open `/runs/<id>`; the session header's link.
@@ -627,7 +647,7 @@ Reached from the foot of the board, at every width. It is the ruled ledger, kept
 
 1. **Switches.** Coordination pause (the toggle lives here, and the board's banner shows only while paused, which the ruled spec left with no way to switch it on), `CapsControl`, `ChildReclaimBanner`.
 2. **What ccrc closes on its own.** One row per lane group: state (off, shadow, on), the would-close list with reasons, closes and refusals in the last 7 days, and the control that arms it (§12.3).
-3. **All runs.** Every run from `GET /api/runs/find`, in close-time order with open runs first, 50 at a time with "Show older". Filter chips: Open, Closed by you, Closed by ccrc, Closed by coordinators. The chip choice is in the URL. This list lands first, in B3; the switches and lane rows join it in B5 and B7.
+3. **All runs.** Every run from `GET /api/runs/find`, in close-time order with open runs first, 50 at a time with "Show older". Filter chips: Open, Closed by you, Closed by ccrc, Closed by coordinators. The chip choice is in the URL. This list lands first, in B3. An open hit reads its word and line from the live frame, by id, because `RunHit` carries no verdict. The switches join it in B4 and the lane rows in B7.
 
 **Per width:**
 
@@ -635,7 +655,7 @@ Reached from the foot of the board, at every width. It is the ruled ledger, kept
 |---|---|---|
 | Phone 360 to 430 | One column; chips wrap | The same |
 | Laptop 1280 to 1470 | One column; lane rows on one line | The same |
-| Wide 1900+ | One column, page cap | Broad layout: the All runs list with the open run beside it |
+| Wide 1900+ | One column, page cap | Broad layout: the All runs list with the open run beside it. The URL gains `?open=<id>` (A51) |
 
 ### 8.7 Waiting on you, and one needs-you source (A5)
 
@@ -664,14 +684,15 @@ Where: a stuck row, a run's detail screen, and an item that asks. Nowhere else.
 | Sheet title | Abandon run 206? |
 | Sheet lines | The row's name, verbatim. The row's context line, verbatim. A "See this run" link to the detail |
 | Consequence | `abandonConsequence`'s sentence, without its opening "Abandon run 206?" (check 13). The words are below |
-| When a lane applies | "ccrc would close this itself in 20 h." (G5's sentence, kept). Armed: "ccrc closes this itself in 20 h." At zero: "ccrc would close this itself now." or "ccrc closes this itself soon." |
-| When a worker is alive | "Its worker is still running." |
-| The coordinator | "Its coordinator is told." Left out when the coordinator is gone |
+| When a worker is alive | "Its worker is still running." When `waitsOn` is `worker` |
+| The coordinator | "Its coordinator is told." Left out when `coordinatorGone` is set |
 | Confirm | Abandon run 206 (danger) |
 | Cancel | Keep it |
 | Success toast | "Run 206 abandoned." Action: "Open record", to `/runs/206` |
 | Success, sibling holds the workspace | Today's toast: "Run 206 abandoned — <workspace> is still claimed by another open run." With the same action |
 | Success, child workspace | "Run 206 abandoned. Its workspace is being reclaimed." When `childReclaim` says so |
+
+**No lane sentence (A52).** The sheet repeats the row's context line, which already says when ccrc closes the run. A second sentence would give the time twice, the repeat check 13 removed. So when B7 fills `closes`, the sheet changes through the line alone.
 
 **The consequence sentences (check 13, A44).** The title already says "Abandon run 206?", so the sentence no longer repeats it. It keeps the workspace's name, because this is the one place the plain sheet names it and the sheet exists to confirm the right run.
 
@@ -682,7 +703,15 @@ Where: a stuck row, a run's detail screen, and an item that asks. Nowhere else.
 | A child workspace | Today's sentence from "<name> is a child workspace" on |
 | Cannot tell | Today's sentence from "This board cannot tell" on |
 
-`<name>` is the workspace, or the branch when no workspace is recorded. A run with a session and neither, such as 83, leaves the name out: "A release destroys nothing…", and "This workspace" where a child sentence needs a subject. It never falls back to the run number. This changes wording that `abandon-sheet.test.tsx` pins, and B3 moves those pins.
+`<name>` is the recorded workspace, and only that. It never falls back to the run number, and a branch is never called a workspace:
+
+| Recorded | Release | Child | Cannot tell |
+|---|---|---|---|
+| A workspace | Its workspace is ws-a. A release destroys nothing… | ws-a is a child workspace, so… | This board cannot tell whether ws-a is a child workspace… |
+| A branch alone | Its branch is b-a. A release destroys nothing… | The workspace on b-a is a child workspace, so… | This board cannot tell whether the workspace on b-a is a child workspace… |
+| Neither, such as 83 | A release destroys nothing… | Its workspace is a child workspace, so… | This board cannot tell whether its workspace is a child workspace… |
+
+This changes wording that `abandon-sheet.test.tsx` pins, and B3 moves those pins.
 
 Refusals stay in the sheet, which stays open:
 
@@ -721,11 +750,16 @@ Where: a Stuck head. Only runs that hold no session and no workspace go in (A13)
 | While running | "Abandoning 5 of 12…" with a Stop control, which stops after the run in flight |
 | Success toast | "12 runs abandoned." Action: "See them", to All runs filtered to closed by you |
 | Nothing refused, some not abandoned | Still a toast, which adds each result that happened: "11 runs abandoned. 1 started moving and was left alone. See them" (check 8). "2 had already closed." joins it the same way |
-| Part done | Only a refusal or a stop keeps the sheet: "9 abandoned, 2 had already closed, 1 not:", then each run not abandoned with its sentence. A run left alone is said here too, as the sheet is open anyway. Done closes it |
+| Part done | Only a refusal, a call with no answer or a stop keeps the sheet: "9 abandoned, 2 had already closed, 1 not:", then each run that was not abandoned, with its sentence. "Not" counts refused, no answer and not reached. A run left alone is said here too, as the sheet is open anyway: "1 started moving and was left alone." Done closes it |
+| The sentence for a refused run | The refusal's words from §9.1 |
+| The sentence for no answer | "No answer. It may have closed." With an "Open record" link |
+| The sentence for not reached | "Not reached." |
 
-**How it works (A12).** The PWA calls the existing `POST /api/runs/:id/abandon` once per run, one at a time. Before each call it re-reads the live frame: a run that left its group is skipped. A 409 means "already closed", so it counts as that and continues. A 501, a 502 or `registry-unmeasurable` stops the loop, because the fault is the whole box's (A33). Closing the tab midway is safe: each run is its own recorded act, and the group simply holds fewer.
+**How it works (A12).** The PWA calls the existing `POST /api/runs/:id/abandon` once per run, one at a time. Before each call it re-reads the live frame and asks where the run stands (A49). A run gone from the frame has closed, because the frame holds every open run and drops a closed one at once, so it counts as already closed. A run still there under another reason, or none, or now holding a session or workspace, has moved, so it is left alone. A 409 means "already closed", so it counts as that and continues. A 501, a 502 or `registry-unmeasurable` stops the loop, because the fault is the whole box's (A33). Closing the tab midway is safe: each run is its own recorded act, and the group simply holds fewer.
 
-**The counts add up (A41).** Every run the operator confirmed ends in exactly one of five results: abandoned, already closed, left alone, refused, or not reached, which is what a Stop or a stopping fault leaves. The sentences above report all but zero counts, so the board's fall in Stuck always matches them. A run that had already closed left Stuck by someone else's act. Closed today counts each close under whoever made it, from the server: it re-reads when the loop ends, and never adds locally.
+**A call with no answer (A49).** C1 sets no time limit on a POST unless the caller passes one, so the loop passes `ABANDON_CALL_MS`, 30 seconds, on each call. A bulk run holds no session or workspace, so its abandon has no fleet act to wait on. A timeout or a network failure stops the loop. The server may still have closed that run, so it counts as no answer, never as not reached, and it is not retried. Stop therefore ends the loop within one limit.
+
+**The counts add up (A41).** Every run the operator confirmed ends in exactly one of six results: abandoned, already closed, left alone, refused, no answer, or not reached, which is what a Stop or a stopping fault leaves. The sentences above report all but zero counts. So the board's fall in Stuck matches them, except that a run with no answer may or may not fall, which its sentence says. A run that had already closed left Stuck by someone else's act. Closed today counts each close under whoever made it, from the server: it re-reads when the loop ends, and never adds locally.
 
 **No limiter stands in the way.** `POST /api/runs/:id/abandon` has none. Only `GET /api/runs/:id` has one, at 600 a minute, and the detail screen calls it once.
 
@@ -756,7 +790,7 @@ There is no new control. The simplest honest answer is one ending, with its reas
 
 **Old closes read short (check 7).** A run closed before B1 stores no reason, so run 410 can read "closed by you" at most, and even that is unread until B1's first step says who closed it (§19). The frames show the full form only on a run closed after reasons are stored, such as 206.
 
-**The route still reads no body** (D-280). The server takes the reason from the stuck verdict at the act. The caller says nothing, and the server records what it measured.
+**The route still reads no body** (D-280). The server takes the reason from `RunVerdicts` at the act, inside the hold, and writes `abandon:<reason>` (§7, A45). The caller says nothing, and the server records what it measured. With no verdict there is no reason, and the run reads "closed by you".
 
 ### 9.4 The other controls
 
@@ -776,7 +810,7 @@ There is no new control. The simplest honest answer is one ending, with its reas
 
 The word stays, because the sheet also revives and mails. It moves off the row to the detail screen and the programme page head.
 
-- **Shown when** the coordinator reads dead, including a claimant with no fleet row, which today hides the door (F25). The server's verdict decides, not `coordinatorPresence`.
+- **Shown when** `coordinatorGone` is set, including for a claimant with no fleet row, which today hides the door (F25). The server's verdict decides, not `coordinatorPresence`, which only answers for an older server that sends no such field.
 - **Step 3 gets a picker:** live coordinators of the programme's project, by name, in place of the typed id. "Enter a session id" stays below it as a fallback.
 - **The lead sentence, always first:** "Only if this work should go on. A dead programme is abandoned, not handed over." This holds the rule "Abandon, never Reclaim". An owner-gone stuck row carries Abandon and never Resume.
 
@@ -876,10 +910,13 @@ All additive. Each carries the defect it fixes. Migrations take the next free sl
 | `runTitle?` | §11.1 | F6 | `runRowName` |
 | `closedBy?: 'coordinator' \| 'operator' \| 'sweep' \| null` | Who closed it, from `runs.closedBy`. Any other stored value gives no `closedBy` | F16 | `closeWords` |
 | `closeDetail?: string \| null` | Why, from `runs.closeDetail`, redacted | F16 | `closeWords` |
-| `waitsOn?` | §7 | F11 | `runStateWord` |
-| `blockedBy?: number \| null` | §7, A29 | F5 | `stuckLine` |
+| `waitsOn?` | §7 | F11 | `runWaitLine`, `runStateWord` |
+| `blockedBy?: number \| null` | §7, A29 | F5 | `runWaitLine` |
+| `coordinatorGone?: true` | The claimant measures dead on `ClaimantVerdict`, whether or not it has a fleet row (A46). Absent when alive or uncertain | F25 | `coordinatorGoneOf` |
 | `stuck?: {reason, since, closes} \| null` | §7. `since` is when the reason began (A39). `closes` is `{at, armed}`, or null when no lane row applies or the row has no clock (A35). B1 always sends null, and B7 fills it | F5 | `runStateWord`, `stuckLine` |
 | `lastMoveAt?` | Already on the frame (D-7334). The cold read now calls `withLastMoves` too, so no second field is added; the ruled `lastActAt` is dropped | F16 | `runLastMove`, today's reader |
+
+`stuck`, `waitsOn`, `blockedBy` and `coordinatorGone` all read through `RunVerdicts` (§7).
 
 The ruled rule R4's wider activity (dispatch attempts, busy turns) stays inside the lane. The screen shows `lastMoveAt` alone, so it never shows two different "last moved" times.
 
@@ -907,18 +944,19 @@ The 500-by-id cap in `CoordStore.runs()` stays for the callers that use it. The 
 
 Dual gate, like its siblings. One read, no spend, no agent link, so it is fast even with the link down.
 
-- **Answer:** `{ok, run: RunSummary, events: RunRecordEvent[], reviewedBy: RunHit[]}`.
-- **`RunRecordEvent`:** `{at, from, to, by: 'coordinator' | 'operator' | 'sweep' | 'session', detail}`. `detail` goes through the existing redaction profile.
-- **Stall observations** fold into one row per unbroken span, and the newest 200 rows are sent, with `olderEvents` counting the rest.
+- **Answer:** `{ok, run: RunSummary, events: RunRecordEvent[], reviewedBy: RunHit[], olderEvents}`.
+- **`run`** carries the same fields a row does, `stuck`, `waitsOn`, `blockedBy` and `coordinatorGone` included, through `withVerdicts` (§7), so the header can repeat the row verbatim.
+- **`RunRecordEvent`:** `{at, from, to, by: 'coordinator' | 'operator' | 'sweep' | 'session', detail, folded?: {count, untilAt}}`. `detail` goes through the existing redaction profile.
+- **Stall observations** fold into one row per unbroken span, which carries `folded`, and the newest 200 rows are sent, with `olderEvents` counting the rest.
 - `run_events` has no retention, `runs.closedAt` exists (`schema.ts`), and `server/src` has no DELETE on `run_events` or `runs`. So the record is lasting without new storage.
 
 `GET /api/runs/:id` keeps its spend join and its budget, and the detail screen calls it once.
 
 ### 11.6 `GET /api/programmes`
 
-The ruled `GET /api/programs`, spelled as the ledger routes are. A cold read, aggregated in SQL, session only.
+The ruled `GET /api/programs`, spelled as the ledger routes are. A cold read, session only. One aggregate statement gives the run facts. `stuck` and `pendingClose` are not in SQL: they fold in from `RunVerdicts` (§7), and before the first pass both are absent.
 
-- **Per programme:** `{slug, title, currentWave, waveOf, claimedBy, waves: {working, waiting, queued, done, failed}, stuck, lastMoveAt, ending, pendingClose}`.
+- **Per programme:** `{slug, title, currentWave, waveOf, claimedBy, waves: {working, waiting, queued, done, failed}, stuck, lastMoveAt, ending, pendingClose}`. `stuck` is a count, and `pendingClose` is one `{reason, count, soonestAt, armed}` per reason with a clock.
 - **At the top:** `closedToday: {operator, sweep, coordinator}`, counted from `since`, the operator's local midnight as the PWA computes it, and clamped to the last 48 hours (A32). The counts link to All runs with the same value as `closedSince`.
 - It derives "open" from runs, never from `programs.state`. OA-R4 (stale programme rows) is unmeasured, and this avoids depending on it.
 - **`ending` comes from runs too (A26).** It reads the work runs and ignores reviews. Abandoning a programme's last open run sets `programs.state` to `abandoned` (`closeRun`'s retirement check), so reading that column would mark a completed programme abandoned when a leftover review is cleared.
@@ -941,7 +979,7 @@ The ruled `untold` rows land in B3, not B7, because bulk abandon closes runs und
 | `POST /api/items/:id/decline` | session; never box token | B6 |
 | `GET/POST /api/coord/run-close` | session | B7 |
 
-`POST /api/runs/:id/abandon` changes in one way only: the arm writes `abandon:<reason>` from the verdict it reads. Its gate, its unread body and its answers stay.
+`POST /api/runs/:id/abandon` changes in one way only: the arm writes `abandon:<reason>` from what `RunVerdicts` holds for the run. Its gate, its unread body and its answers stay.
 
 ## 12. Auto-close: the ruled lanes, re-measured
 
@@ -972,7 +1010,7 @@ Over today's 28 planned runs, approximately. Activity here comes from run stamps
 - **The rows land in the ruled order** (E1 and E1r, then E3, E3s and E5, then E2 and E4), after S1.
 - **`lastDispatchAttemptAt`** stays as ruled. R4 otherwise stands; only the screen's reading of "last move" differs (§11.2).
 - **The lane schedule.** `LANE_SCHEDULE` has landed, so the lane uses a row of it and adds no clock.
-- **A close the lane refuses** becomes an item, through §10's writer, raised by ccrc. It shows at once, and B7's wider `action` carries the ruled doors on its row (A19): for an open PR, "Open the PR"; for unpushed commits under a gone coordinator, "Hand to a coordinator" (`ResumeSheet` at step 3) and "Abandon anyway", with the line "The branch stays on disk."; for a busy worker, "Open the worker". An undelivered E1 warning raises one too, with "Open the coordinator". The lane closes the item through `settle` when it re-measures and the reason has gone.
+- **A close an armed lane refuses** becomes an item, through §10's writer, raised by ccrc. It shows at once, and B7's wider `action` carries the ruled doors on its row (A19): for an open PR, "Open the PR"; for unpushed commits under a gone coordinator, "Hand to a coordinator" (`ResumeSheet` at step 3) and "Abandon anyway", with the line "The branch stays on disk."; for a busy worker, "Open the worker". An undelivered E1 warning raises one too, with "Open the coordinator". The lane closes the item through `settle` when it re-measures and the reason has gone.
 - **OA-R0 to R4** were read today where they can be. OA-R0 and OA-R4 need `run_events` and `programs.state` read on the controller. B1's first step reads them.
 
 ### 12.3 Arming (A15)
@@ -1041,23 +1079,23 @@ Each wave is its own PR, or a short series. Each lands its characterisation pins
 | Wave | What | Gate | Key pins |
 |---|---|---|---|
 | **B1. Server facts** | §11.1, §11.2, §11.3, §11.4, §11.5. The stuck reader as a read-only lane row. First step: read `run_events` for OA-R0 and who closed 410, replay §7 on live data and report it | The frames seen; next migration slot | Skew tests both ways; the title no longer moves on open; the migration keeps the old title on the newest run; `find` orders by close time; a closed run below any read floor comes back; a number that also matches a `reviews` target or a title still resolves to the run with that id, with the other matches under their own headings (A31); the stored close columns equal the terminal `run_events` row; an unknown `causedBy` gives no `closedBy`; a closed run's word comes from `closeWords`; hibernated is never `owner-gone`; an absent claimant with no history gets no verdict; an uncertain reading gives no verdict; `stuck.closes` is null until B7 |
-| **B2. Find and open** | Route, §8.3, §8.4, palette, doors (F19), row tap, no inert rows, spend off the row, fold and scroll kept | B1 | `/runs/410` opens a closed run; every row opens; no row fires a read; card facts within header facts; no number on a card; phone reaches a run by number; the way-back strip names where the page was opened from and is absent in the wide right pane |
-| **B3. Abandon with proof** | §9.1, the `/runs/advanced` route with its All runs list, the board's Finished list in close order, `closeWords`, `untold` and the notice, F23, F24 | B2 | Toast on every success; an old run heads the list after abandon; the sheet repeats the row verbatim; D-280's negative pin stays; a refusal keeps the sheet open; no consequence sentence opens with the title; none prints a run number as a workspace |
-| **B4. Stuck band** | §8.2.1, §9.2, the Waiting on its coordinator band | B3 | Bulk leaves out a held run; a run that moved is skipped; a run that joins after the sheet opens is not added; 501, 502 and `registry-unmeasurable` stop the loop; Abandon only on items that ask; stuck never counts in a badge; a re-open is a new id and leaves `programs.state` alone; heads keep their fixed order while clearing; heads fold at every width; every head within one short scroll at 667 tall; a held-back head shows its line; the five results add up to the list; every phone link is 44px |
-| **B5. Programmes** | §8.2.2, §8.2.3, §8.5, the switches of §8.6, §8.7's selector, the Closed today line, `GET /api/programmes`, bands move, F25, F27, delete `groupRuns` | B1, B3 | Every badge reads the selector; a programme with a gone coordinator has a card; a leftover review's abandon leaves a finished programme "complete"; `ArchiveSheet` and `CollectLaneSection` pointers updated; every width, skin and theme |
+| **B2. Find and open** | Route, §8.1's layout rule and the broad pane, §8.3, §8.4, palette, doors (F19), row tap, what a run waits on (§7), the board's empty and failed states, no inert rows, spend off the row, fold and scroll kept, A50 | B1 | `/runs/410` opens a closed run; every row opens; no row fires a read; card facts within header facts; no number on a card; phone reaches a run by number; the way-back strip names where the page was opened from and is absent in the wide right pane; the page's controls and trail; each §7 line on its row; `instrument.css` and `refined.css` gain no run rules |
+| **B3. Abandon with proof** | §9.1, Abandon on the run page, the `/runs/advanced` route with its All runs list, the board's Finished list in close order, `closeWords`, `untold` and the notice, F23, F24 | B2 | Toast on every success; an old run heads the list after abandon; the sheet repeats the row verbatim; D-280's negative pin stays; a refusal keeps the sheet open; no consequence sentence opens with the title; none prints a run number as a workspace |
+| **B4. Stuck band** | The top of the board (the switches go to Advanced, the review cap band goes below the band), §8.2.1, §9.2, the Waiting on its coordinator band | B3 | Bulk leaves out a held run; a run that moved is skipped; a run that joins after the sheet opens is not added; 501, 502 and `registry-unmeasurable` stop the loop; Abandon only on items that ask; stuck never counts in a badge; a re-open is a new id and leaves `programs.state` alone; heads keep their fixed order while clearing; heads fold at every width; every head within one short scroll at 667 tall; a held-back head shows its line; the six results add up to the list; every phone link is 44px |
+| **B5. Programmes** | §8.2.2, §8.2.3, §8.5, §8.7's selector, the Closed today line, `GET /api/programmes`, F25, F27, delete `groupRuns` | B1, B4 | Every badge reads the selector; a programme with a gone coordinator has a card; a leftover review's abandon leaves a finished programme "complete"; the first card near 742px at Instrument 1920; every width, skin and theme |
 | **B6. Action on the item and end requests** | §10, review caps on `/waiting` | B3, B5 | All of §10's pins; a held item stays off every list and badge, and its coordinator can still withdraw it; a coordinator's withdraw wins; the asker is mailed on withdraw and decline; a repeat is refused until the period ends or the reason changes; `act` runs inside the hold and answers as abandon does; abandoning a last open run closes its own item; `parseRaise` still refuses `action` |
-| **B7. Never-started runs close themselves** | The ruled W1, as amended by §12; the control on Advanced | B1, B3. B6 for §12.2's items | The ruled W1 pins; E1r's check on a live session; arming from the UI; `closes.at` from the anchor, never the age; both zero forms |
+| **B7. Never-started runs close themselves** | The ruled W1, as amended by §12; the control on Advanced | B4. B6 for §12.2's items | The ruled W1 pins; E1r's check on a live session; arming from the UI; `closes.at` from each row's own anchor, never the age; activity moves E1's `at` and never E1r's; a shadow refusal reads `closes` null and raises no item; both zero forms |
 | **B8. Coordinator gone** | The ruled W2, as amended | B7 | The ruled W2 pins |
 | **B9. Worker gone** | The ruled W5, as amended | #119 | The ruled W5 pins; 417 and 848 reach a row |
 
 ```
 the frames seen ─▶ B1 ─▶ B2 ─▶ B3 ─▶ B4
-                               B3 ─▶ B5 ─▶ B6
-                               B3 ─▶ B7 ─▶ B8     (§12.2's items need B6)
+                                     B4 ─▶ B5 ─▶ B6
+                                     B4 ─▶ B7 ─▶ B8     (§12.2's items need B6)
 #119 ─────────────────────────────▶ B9
 ```
 
-B2 to B4 are the operator's relief, and they need nothing from the lanes. B5 and B7 can run beside B4, once B3 lands (A25).
+B2 to B4 are the operator's relief, and they need nothing from the lanes. B5 and B7 start after B4 and can run beside each other (A48). B5 changes `stuckWords.ts` and places `StuckBand`, and B7's last check reads the screen's words, so neither can run beside B4 as rev 4 said.
 
 ## 16. Binding rules, and how this holds them
 
@@ -1066,7 +1104,7 @@ B2 to B4 are the operator's relief, and they need nothing from the lanes. B5 and
 | Action on the item | Operator, 2026-11-04 | Stuck rows, stuck heads, `/waiting` rows: one tap plus a confirm | `control-census`; B6 pins |
 | Card = glance, header = superset | D-5545 | §8.1's item rules; detail and programme headers repeat every card element | `card-header-facts`, extended to runs and programmes |
 | Every width | Operator | A per-width table for each screen in §8 | Width harness at 360, 390, 1280, 1470, 1920 |
-| Two skins, a token axis | Operator | One layout rule on column width; `instrument.css` and `refined.css` gain no `.run` rules | A census of those files; skins × widths × themes |
+| Two skins, a token axis | Operator | One layout rule on column width; `instrument.css` and `refined.css` gain no `.run` rules | A census of those files, in B2; skins × widths × themes |
 | Operator actions live in the UI | Operator | Every act here has a control. Lane arming moves off markers (§12.3) | `control-census` |
 | One state word | Spec rule | `runStateWord`, from the existing reader and server fields. The PWA adds no liveness reader | A new single-definition pin |
 | Improve what exists first | Operator | §5 sets each measured defect beside its fix; the ruled design is updated, not replaced | Review |
@@ -1126,7 +1164,7 @@ Measured before B1 and after each wave, with the same scripts. Page budgets are 
 - The width harness was not rerun for the 21:30 snapshot. Run row code and its CSS are unchanged, so the per-row figures stand.
 - Column widths at 1470 were not measured. §8.1's thresholds assume they fall between the 1280 and 1920 figures.
 - The page budgets in §17 and the `find` budget are estimates.
-- The figures for checks 11 and 12 come from the frames, not the built screen and not a device. The 742px and the half-screen measure are inferred, so B4 re-measures both.
+- The figures for checks 11 and 12 come from the frames, not the built screen and not a device. The 742px and the half-screen measure are inferred. B4 re-measures the half-screen figure and B5, once cards exist, the 742px.
 - S2's page-one behaviour in F10 was read from code. It was not run.
 
 ## 20. What the review asked, and the answers

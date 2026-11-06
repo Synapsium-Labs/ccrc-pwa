@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Fastify, `node:sqlite` (`coord.db`), React, vitest, the `pwa/browser` Chrome leg.
 
-**Spec:** `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (rev 4). Read it with this plan. Numbers such as §9.2, A35 and "check 12" are the spec's. Exact words on screen are in the spec and are not repeated here unless a test needs them.
+**Spec:** `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (rev 5). Read it with this plan. Numbers such as §9.2, A35 and "check 12" are the spec's. Exact words on screen are in the spec and are not repeated here unless a test needs them. Tasks with a letter, such as 7a, were added after review, so that earlier references to a task number still hold.
 
 ## What holds this work
 
@@ -26,11 +26,11 @@ The operator's note was that board builds wait on S2. Read at `origin/main` `5dd
 | #2343, PL11 (Goals page, `/waiting` filter) | B5 | Clear. Merged |
 | #2305, S1 (the watcher tick) | B7 | Clear. Merged |
 | #119, the worker heartbeat | B9 alone | **Holding.** Open |
-| #2394, chat names link to their objects | Nothing, but it touches `RunRow.tsx`, `RunsScreen.tsx` and `runWords.ts` | Open. Whichever lands second rebases |
+| #2394, chat names link to their objects | Nothing, but it touches `RunRow.tsx`, `RunsScreen.tsx`, `runWords.ts`, `lib/routes.ts`, `WaitingRoutes.tsx`, `ledgerWords.ts`, `ProgrammeScreen.tsx`, `useColdRuns.ts` and `control-census.test.ts` | Open. Whichever lands second rebases. Task 9 says how `/runs/<id>` replaces its `/runs?run=<id>` (A50) |
 
 Merged is not deployed: whether S2 is live on the boxes was not read, and no build step here needs it. Re-read this table when the frames clear, because the base will have moved.
 
-**Order inside the work:** B1, B2, B3, B4 in a line. B5 and B7 can run beside B4 once B3 lands. B6 follows B5, B8 follows B7, and B7's refused-close items (Task 27) need B6. Each wave is its own PR or a short series.
+**Order inside the work:** B1, B2, B3, B4 in a line. B5 and B7 both start after B4, and can run beside each other (A48). B5 cannot run beside B4: Task 18 changes B4's `stuckWords.ts`, and Task 20 places B4's `StuckBand`. B7 cannot either: Task 25 ends by running B4's `stuck-words`. B6 follows B5, B8 follows B7, and B7's refused-close items (Task 27) need B6. Each wave is its own PR or a short series.
 
 ## Global Constraints
 
@@ -52,7 +52,7 @@ Merged is not deployed: whether S2 is live on the boxes was not read, and no bui
 
 1. **A phone clock ahead of the server.** `closes.at` reads as past too soon. Expected: the row shows the zero form, never a negative time and never "in 0". Pinned in Task 13.
 2. **A long sheet on a short phone.** The child-workspace sentence (about 300 characters) under a 122-character title at 360 by 667. Expected: Confirm and Cancel stay reachable, and the sheet scrolls inside itself. Pinned in Task 10.
-3. **The link drops during a bulk abandon.** A timeout or network failure on one call, where the run's fate is unknown. Expected: the loop stops, that run counts as not reached, the sheet re-reads the frame before reporting, and nothing is retried blind. Pinned in Task 14.
+3. **The link drops during a bulk abandon.** A timeout or network failure on one call, where the run's fate is unknown. C1 puts no limit on a POST, so the loop passes its own. Expected: the loop stops within `ABANDON_CALL_MS`, that run counts as no answer and says it may have closed, the runs after it count as not reached, and nothing is retried blind. Pinned in Task 14.
 4. **An odd address.** `/runs/0`, `/runs/007`, `/runs/99999999999999999999`, `/runs/410/`. Expected: only canonical positive safe integers open a run page, the slash form included, and the others fall to the router's ordinary miss, with no read sent. Pinned in Task 7.
 5. **A new PWA on an older server.** No `stuck`, and `find` answers 404. Expected: the board reads as today, and search says "Could not search closed runs. Showing open runs only." Pinned in Task 8.
 
@@ -63,6 +63,7 @@ Merged is not deployed: whether S2 is live on the boxes was not read, and no bui
 | File | Ring, context | Holds | Task |
 |---|---|---|---|
 | `server/src/coord/runStuck.ts` (new) | L1, Coordination | `runStuck`, `runWaitsOn`, `blockedByOf` | 4 |
+| `server/src/coord/runVerdicts.ts` (new) | L3 | `RunVerdicts`, the one in-memory holder of the pass's answers | 4 |
 | `server/src/coord/runFind.ts` (new) | L3 | the find query, beside `runsPage.ts` | 5 |
 | `server/src/coord/runRecord.ts` (new) | L3 | events, stall folding | 6 |
 | `server/src/coord/programmesRead.ts` (new) | L3 | `GET /api/programmes` aggregate | 16 |
@@ -70,9 +71,11 @@ Merged is not deployed: whether S2 is live on the boxes was not read, and no bui
 | `shared/api.ts`, `shared/ledgers.ts` | L0 | wire types, three item moves | 2 to 6, 21 |
 | `pwa/src/fleet/stuckWords.ts` (new) | L1, PWA | heads' order, `stuckLine`, `closeWhen`, card line | 13 |
 | `pwa/src/fleet/closeWords.ts` (new) | L1, PWA | `closeWords`, `closedLine` | 3 |
-| `pwa/src/fleet/groupAbandon.ts` (new) | L1 and L4 | the loop and its five results | 14 |
+| `pwa/src/fleet/groupAbandon.ts` (new) | L1 and L4 | the loop and its six results | 14 |
 | `pwa/src/fleet/GroupAbandonSheet.tsx` (new) | L4 | the sheet | 14 |
-| `pwa/src/screens/RunDetailScreen.tsx` (new) | L4 | `/runs/<id>` | 7 |
+| `pwa/src/screens/RunDetailScreen.tsx` (new) | L4 | `/runs/<id>`, as a page or the right pane | 7, 7a, 9a, 10, 19 |
+| `pwa/src/screens/RunTrail.tsx`, `pwa/src/fleet/trailWords.ts` (new) | L4, L1 | the trail and its words | 7a |
+| `pwa/src/screens/runColumn.ts` (new) | L1 and L4 | the column's name, from the one set of thresholds | 9a |
 | `pwa/src/screens/RunFind.tsx`, `useRunFind.ts` (new) | L4 | search box and results | 8 |
 | `pwa/src/screens/StuckBand.tsx` (new) | L4 | heads and rows | 13 |
 | `pwa/src/screens/RunsAdvancedScreen.tsx` (new) | L4 | `/runs/advanced` | 11, 20, 26 |
@@ -100,7 +103,7 @@ This is a report, not code. It needs the operator's yes for a read-only look at 
 **Interfaces:**
 - Produces: `runs.title TEXT NULL`; `RunSummary.runTitle?: string | null`; `POST /api/runs` body gains optional `programmeTitle`; `programmeNameFromSlug(slug: string): string`.
 
-- [ ] **Step 1: Write the failing tests.** `an open leaves programs.title alone`, `a run keeps its own title after a later open`, `programmeTitle is used only for a new programme row`, `the migration copies programs.title to the newest run and sets programs.title to the slug as words` (`programme-a` gives `Programme a`), `earlier runs keep a null title`. PWA: `runRowName prefers runTitle`, `an older server with no runTitle names the row as today`.
+- [ ] **Step 1: Write the failing tests.** `an open leaves programs.title alone`, `a run keeps its own title after a later open`, `programmeTitle is used only for a new programme row`, `the migration copies programs.title to the newest run and sets programs.title to the slug as words` (`programme-a` gives `Programme a`), `earlier runs keep a null title`, `the restore statement puts each programme's old title back`. That statement lives in this test, and Rollback names it. PWA: `runRowName prefers runTitle`, `an older server with no runTitle names the row as today`.
 - [ ] **Step 2: Run** `cd server && npx vitest run --maxWorkers=2 test/run-titles.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement.** Both `ON CONFLICT(slug)` arms stop writing `title`. The coordinator skill sends `programmeTitle`.
 - [ ] **Step 4: Run** the same file and `coordinator-skill.test.ts`, then `pwa/test/run-row-name.test.ts`. Expected: PASS.
@@ -117,7 +120,7 @@ This is a report, not code. It needs the operator's yes for a read-only look at 
 - Produces: `runs.closedBy`, `runs.closeDetail` (nullable); `closeRun` gains optional `detail`; `RunClosedBy = 'coordinator' | 'operator' | 'sweep'`; `RunSummary.closedBy?`, `closeDetail?`.
 - Produces: `closeWords(run: Pick<RunSummary,'state'|'closedBy'|'closeDetail'>): string | null`; `closedLine(run, fmt: (ms: number) => string): string`; `runStateWord(run: RunSummary): string`.
 
-- [ ] **Step 1: Write the failing tests.** Server: `advanceInner writes the close columns in the statement that writes closedAt`, `the stored columns equal the terminal run_events row`, `the migration fills them from that row`, `an unknown causedBy gives no closedBy`, `the abandon arm writes abandon:<reason> from the verdict it reads`. PWA, one case per row of §9.3's table, plus check 5:
+- [ ] **Step 1: Write the failing tests.** Server: `advanceInner writes the close columns in the statement that writes closedAt`, `the stored columns equal the terminal run_events row`, `the migration fills them from that row`, `an unknown causedBy gives no closedBy`, `closeRun passes its detail to the final advance`. The abandon arm's reason needs Task 4's reader, so its pin is there. PWA, one case per row of §9.3's table, plus check 5:
 
 ```ts
 expect(closeWords({ state: 'failed', closedBy: 'operator', closeDetail: 'abandon:overtaken' })).toBe('closed by you: overtaken');
@@ -132,20 +135,22 @@ expect(runStateWord(run({ state: 'failed', closedBy: 'operator' }))).not.toBe('f
 - [ ] **Step 4: Run** both files, `run-last-move`, `runs-screen`. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 4: The stuck verdict (§7, §11.2, A4, A28, A29, A39)
+### Task 4: The stuck verdict and its one reader (§7, §9.3, §11.2, A4, A28, A29, A39, A45, A46)
 
 **Files:**
-- Create: `server/src/coord/runStuck.ts`
-- Modify: `server/src/laneSchedule.ts` (one read-only row), `server/src/watch.ts` (stamp the answer on the runs frame), `shared/api.ts`, `pwa/src/fleet/runWords.ts`
+- Create: `server/src/coord/runStuck.ts`, `server/src/coord/runVerdicts.ts`
+- Modify: `server/src/laneSchedule.ts` (one read-only row), `server/src/coord/runWire.ts` (`withVerdicts`), `server/src/watch.ts` and `server/src/server.ts` (the frame and its cold start), `server/src/coord/routes.ts` (`GET /api/runs`, `GET /api/runs/:id`, and `withAbandon`'s arm), `shared/api.ts`, `pwa/src/fleet/runWords.ts`
 - Test: `server/test/run-stuck.test.ts` (new), `server/test/run-stuck-skew.test.ts` (new)
 
 **Interfaces:**
-- Produces in `shared/api.ts`: `StuckReason = 'owner-gone' | 'start-never-landed' | 'review-of-closed' | 'overtaken' | 'never-started'`; `RunStuck = { reason: StuckReason; since: number; closes: { at: number; armed: boolean } | null }`; `RunWaitsOn = 'worker' | 'reviewer' | 'coordinator' | 'merge-queue' | 'nobody'`; `RunSummary.stuck?: RunStuck | null`, `waitsOn?: RunWaitsOn`, `blockedBy?: number | null`.
-- Produces: `runStuck(facts: RunStuckFacts, nowMs: number): RunStuck | null`, `runWaitsOn(facts: RunStuckFacts): RunWaitsOn | undefined`, `blockedByOf(facts: RunStuckFacts): number | null`. All pure.
+- Produces in `shared/api.ts`: `StuckReason = 'owner-gone' | 'start-never-landed' | 'review-of-closed' | 'overtaken' | 'never-started'`; `RunStuck = { reason: StuckReason; since: number; closes: { at: number; armed: boolean } | null }`; `RunWaitsOn = 'worker' | 'reviewer' | 'coordinator' | 'merge-queue' | 'nobody'`; `RunSummary.stuck?: RunStuck | null`, `waitsOn?: RunWaitsOn`, `blockedBy?: number | null`, `coordinatorGone?: true`.
+- Produces: `runStuck(facts: RunStuckFacts, nowMs: number): RunStuck | null`, `runWaitsOn(facts: RunStuckFacts): RunWaitsOn | undefined`, `blockedByOf(facts: RunStuckFacts): number | null`, `claimantGone(facts: RunStuckFacts): boolean`. All pure.
+- Produces in `runVerdicts.ts`: `RunVerdict = { stuck: RunStuck | null; waitsOn?: RunWaitsOn; blockedBy: number | null; coordinatorGone: boolean }`; `RunVerdicts = { replace(answers: ReadonlyMap<number, RunVerdict>): void; setCloses(closes: ReadonlyMap<number, RunStuck['closes']>): void; of(id: number): RunVerdict | null; all(): ReadonlyMap<number, RunVerdict> }`. The lane row is `replace`'s one caller. `setCloses` has none until Task 25.
+- Produces in `runWire.ts`: `withVerdicts<R extends { readonly id: number }>(verdicts: RunVerdicts, runs: readonly R[]): R[]`. In `close.ts`: `abandonDetail(verdict: RunVerdict | null): string | null`, which gives `abandon:<reason>`, or null with no verdict.
 
-- [ ] **Step 1: Write the failing tests.** One per row of §7's table in first-match order, with its age boundary: `owner-gone at 1 h of a dead claimant, not at 59 min`, `start-never-landed over 1 h`, `review-of-closed over 1 h`, `overtaken over 24 h`, `never-started over 7 days with nothing else open`. Also `hibernated is never owner-gone`, `an absent claimant with no history gets no verdict`, `an uncertain reading gives no verdict`, `closes is null on every verdict` (until Task 25), and one `since` case per reason (A39). The `waitsOn` table of §7, row by row. `waitsOn has no operator value` as a type pin. Skew: `a frame with no stuck draws nothing`. PWA, in `close-words.test.ts`: `runStateWord says stuck and reviewed`, `an older server reads as today`.
+- [ ] **Step 1: Write the failing tests.** One per row of §7's table in first-match order, with its age boundary: `owner-gone at 1 h of a dead claimant, not at 59 min`, `start-never-landed over 1 h`, `review-of-closed over 1 h`, `overtaken over 24 h`, `never-started over 7 days with nothing else open`. Also `hibernated is never owner-gone`, `an absent claimant with no history gets no verdict`, `an uncertain reading gives no verdict`, `closes is null on every verdict` (until Task 25), and one `since` case per reason (A39), overtaken's being the first later wave to leave planned. `a claimant with no fleet row that reads dead is coordinatorGone`, `hibernated and uncertain leave it absent`. The reader: `the frame, its cold start, GET /api/runs and GET /api/runs/:id all carry the verdict`, `an empty reader stamps nothing`, `a run gone from a pass loses its entry`. The arm, in `coord-abandon.test.ts`: `the abandon arm writes abandon:<reason> from what RunVerdicts holds`, `it reads inside the hold`, `with no verdict it writes no detail and the run reads closed by you`, `the route still reads no body`. The `waitsOn` table of §7, row by row. `waitsOn has no operator value` as a type pin. Skew: `a frame with no stuck draws nothing`. PWA, in `close-words.test.ts`: `runStateWord says stuck and reviewed`, `an older server reads as today`.
 - [ ] **Step 2: Run** the two files. Expected: FAIL.
-- [ ] **Step 3: Implement.** `runStateWord` gains its two arms, in this order after `closeWords`: "stuck" when `stuck` is set, then "reviewed" when awaiting review and `waitsOn` is `coordinator`. Add the `LANE_SCHEDULE` row `{ name: 'runStuck', cadenceMs: RUN_STUCK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null }`, with `RUN_STUCK_SWEEP_MS = 60_000`. It adds no statement to the 2-second tick. A verdict may lag by one pass, and before the first pass `stuck` is absent.
+- [ ] **Step 3: Implement.** `runStateWord` gains its two arms, in this order after `closeWords`: "stuck" when `stuck` is set, then "reviewed" when awaiting review and `waitsOn` is `coordinator`. Add the `LANE_SCHEDULE` row `{ name: 'runStuck', cadenceMs: RUN_STUCK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null }`, with `RUN_STUCK_SWEEP_MS = 60_000`. It adds no statement to the 2-second tick. A verdict may lag by one pass, and before the first pass, or after a restart, the reader is empty, so `stuck` is absent and an abandon records no reason. `withAbandon`'s arm reads `verdicts.of(runId)` and passes `abandonDetail` as `closeRun`'s detail.
 - [ ] **Step 4: Run** the two files and the lane schedule's census. Expected: PASS.
 - [ ] **Step 5: Commit**, with Task 1's replay in the PR body.
 
@@ -159,7 +164,7 @@ expect(runStateWord(run({ state: 'failed', closedBy: 'operator' }))).not.toBe('f
 **Interfaces:**
 - Produces: `RunHit` and the answer `{ok, exact, runs, reviewsOf, next}` as §11.4 says; `api.findRuns(q: RunFindQuery, opts?: ReadOpts): Promise<RunFindAnswer>`.
 
-- [ ] **Step 1: Write the failing tests.** `closed runs order by closedAt, not id`, `a closed run below any read floor comes back`, `a number that also matches a reviews target or a title resolves to that id, the others under their own headings`, `open runs come on the first page only, outside limit`, `scope=open has no next`, `the cursor walks closed runs alone`, `% and _ in q are escaped`, `closedBy filters on the stored column`, `session only`, `120 a minute`, and `a page under 20 ms at 10,000 seeded rows`.
+- [ ] **Step 1: Write the failing tests.** `closed runs order by closedAt, not id`, `a closed run below any read floor comes back`, `a number that also matches a reviews target or a title resolves to that id, the others under their own headings`, `open runs come on the first page only, outside limit`, `scope=open has no next`, `the cursor walks closed runs alone`, `% and _ in q are escaped`, `closedBy filters on the stored column`, `closedSince keeps closes at or after it`, `program keeps one slug's runs`, `a bad closedSince or program is 400`, `closedBy with closedSince equals the Closed today count for that closer`, `session only`, `120 a minute`, and `a page under 20 ms at 10,000 seeded rows`.
 - [ ] **Step 2: Run** the file. Expected: FAIL.
 - [ ] **Step 3: Implement** beside `runsPage.ts`, with the same structural `RunsDb` port. One statement per part. No hydrate, no join to `run_events`.
 - [ ] **Step 4: Run** the file. Expected: PASS.
@@ -173,9 +178,10 @@ expect(runStateWord(run({ state: 'failed', closedBy: 'operator' }))).not.toBe('f
 - Test: `server/test/run-record.test.ts` (new)
 
 **Interfaces:**
-- Produces: `RunRecordEvent`; the answer `{ok, run, events, reviewedBy, olderEvents}`; `api.runRecord(id: number, opts?: ReadOpts)`.
+- Consumes: `withVerdicts`.
+- Produces: `RunRecordEvent`, with `folded?: {count, untilAt}`; the answer `{ok, run, events, reviewedBy, olderEvents}`; `api.runRecord(id: number, opts?: ReadOpts)`.
 
-- [ ] **Step 1: Write the failing tests.** `any run reads, open or closed, however old`, `stall observations fold into one row per unbroken span`, `the newest 200 rows with olderEvents counting the rest`, `detail goes through the redaction profile`, `dual gate`, `no agent link is needed`, and `the cold read carries lastMoveAt`.
+- [ ] **Step 1: Write the failing tests.** `any run reads, open or closed, however old`, `the record's run carries stuck, waitsOn, blockedBy and coordinatorGone as a frame row does`, `stall observations fold into one row per unbroken span, with its count and end`, `the newest 200 rows with olderEvents counting the rest`, `detail goes through the redaction profile`, `dual gate`, `no agent link is needed`, and `the cold read carries lastMoveAt`.
 - [ ] **Step 2: Run** the file. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the file. Expected: PASS.
@@ -183,21 +189,53 @@ expect(runStateWord(run({ state: 'failed', closedBy: 'operator' }))).not.toBe('f
 
 ## Wave B2: find and open (D-8072)
 
-### Task 7: The run page (§8.4, F16, check 5, check 16)
+### Task 7: The run page: route, header, facts and way back (§8.4, F16, check 5, check 16, A42)
 
 **Files:**
 - Create: `pwa/src/screens/RunDetailScreen.tsx`
-- Modify: `pwa/src/lib/routes.ts`, `pwa/src/ledgers/WaitingRoutes.tsx` (lift the way-back strip so both screens share it)
+- Modify: `pwa/src/lib/routes.ts`, `pwa/src/lib/api.ts` (`/items`, `/signals`, which have no PWA caller today), `pwa/src/app.tsx`, `pwa/src/ledgers/WaitingRoutes.tsx` (lift the way-back strip so both screens share it)
 - Test: `pwa/test/run-detail.test.tsx` (new), `pwa/test/card-header-facts.test.tsx`
 
 **Interfaces:**
 - Consumes: `api.runRecord`, `api.run`, `closeWords`, `closedLine`, `runSpendLine`, `backLabel`.
-- Produces: route id `run`, `/^\/runs\/(\d+)\/?$/`, `accepts: isRunId`; `runPath(id: number): string`; `WayBack({ to, label })`.
+- Produces: route id `run`, `/^\/runs\/(\d+)\/?$/`, `accepts: isRunId`; `runPath(id: number, q?: string): string`; `runQueryOf(search: string): string | null`; `WayBack({ to, label })`.
 
-- [ ] **Step 1: Write the failing tests.** `/runs/410 opens a closed run`, `0, 007 and a number past safe integer are refused and send no read`, `/runs/410/ opens`, `a slow spend read delays one line and nothing else`, `spend reads ≈ $X.XX · out N`, `a closed run shows no Abandon`, `the line carries only what the word lacks`, `an absent fact is left out, except Last move, which says None recorded`, `There is no run 9999.`, `Could not load this run. Try again. on ApiTimeout`, `the strip says Back to Search results and keeps the query`, `the strip says Back to Runs from a cold link`, `no strip in the wide right pane`, and `every row element appears verbatim in the header`.
+- [ ] **Step 1: Write the failing tests.** `/runs/410 opens a closed run`, `0, 007 and a number past safe integer are refused and send no read`, `/runs/410/ opens`, `a slow spend read delays one line and nothing else`, `spend reads ≈ $X.XX · out N`, `a closed run shows no Abandon`, `the line carries only what the word lacks`, `an absent fact is left out, except Last move, which says None recorded`, `There is no run 9999.`, `Could not load this run. Try again. on ApiTimeout`, `the strip says Back to Search results and keeps the query`, `a reload of /runs/410?q=x keeps that strip`, `the strip says Back to Runs from a cold link`, `the facts come in §8.4's order, under their five groups`, `items, suite and checks, and unread mail read from their own calls`, and `every row element appears verbatim in the header`, with a row carrying `stuck`, `waitsOn` and a marker. Task 9a pins the right pane, which has no strip.
 - [ ] **Step 2: Run** the files. Expected: FAIL.
-- [ ] **Step 3: Implement.** The strip's origin rides history state, so a reload that loses it reads "Back to Runs". Move the strip with its pins green first, in a commit of its own.
+- [ ] **Step 3: Implement.** The strip's origin rides the URL as `?q=`. `navigate` (`lib/router.ts`) writes null history state and takes none, and Waiting's own strip rides `?from=` for the same reason, so a reload keeps the label. Move the strip with its pins green first, in a commit of its own.
 - [ ] **Step 4: Run** the files plus `waiting-routes`. Expected: PASS.
+- [ ] **Step 5: Commit.**
+
+### Task 7a: The run page's controls and trail (§8.4, §9.4, F16)
+
+**Files:**
+- Create: `pwa/src/screens/RunTrail.tsx`, `pwa/src/fleet/trailWords.ts`
+- Modify: `pwa/src/screens/RunDetailScreen.tsx`
+- Test: `pwa/test/run-detail.test.tsx`, `pwa/test/trail-words.test.ts` (new), `pwa/test/control-census.test.ts`
+
+**Interfaces:**
+- Consumes: `sessionPath`, `LiftCapSheet`, `RunRecordEvent`.
+- Produces: `trailLine(e: RunRecordEvent, fmt: (ms: number) => string): string`; `trailBy(by: RunRecordEvent['by']): string`; `olderEventsLine(n: number): string | null`.
+
+Abandon joins these controls in Task 10, and Resume in Task 19, each with its own sheet.
+
+- [ ] **Step 1: Write the failing tests.**
+
+```ts
+expect(trailBy('operator')).toBe('you');
+expect(trailBy('sweep')).toBe('ccrc');
+expect(trailBy('coordinator')).toBe('the coordinator');
+expect(trailBy('session')).toBe('a session');
+expect(trailLine(stallSpan({ count: 6, from: '2 Nov', until: '4 Nov' }), fmt)).toBe('6 stall checks, 2 to 4 Nov');
+expect(olderEventsLine(0)).toBeNull();
+expect(olderEventsLine(12)).toBe('12 older events not shown.');
+```
+
+Page: `Open the session shows when a session exists or existed and can be opened`, `no session, no control`, `Open the coordinator shows when the claimant has a session`, `Lift cap shows when the run's review cap is waiting and opens LiftCapSheet`, `each control is one tap to its place`, `the trail lists every event newest first, as time, words and who`, `the trail sits last at every width`, `the detail shows through the redaction profile as stored`, and `a closed run still shows its trail`.
+
+- [ ] **Step 2: Run** them. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** them. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
 ### Task 8: Finding a run (§8.3, F1, F2, F4)
@@ -208,52 +246,99 @@ expect(runStateWord(run({ state: 'failed', closedBy: 'operator' }))).not.toBe('f
 - Test: `pwa/test/run-find.test.tsx` (new), `pwa/test/command-registry.test.ts`
 
 **Interfaces:**
-- Consumes: `api.findRuns`, `runPath`.
+- Consumes: `api.findRuns`, `runPath`, `runQueryOf`.
 - Produces: `parseRunNumber(text: string): number | null` for "410", "#410", "run 410"; `useRunFind(q: string): { exact, open, closed, reviewsOf, failed }`.
 
-- [ ] **Step 1: Write the failing tests.** `the three spellings mean run 410`, `open runs filter at once from the frame`, `closed runs arrive 200 ms after typing stops`, `?q= holds the query across a reload`, `a whole number and Enter opens /runs/<id>`, `clearing restores the board with its folds and scroll`, `no Abandon on a result`, `Reviews of run 410 sits below the exact hit`, the three failure sentences, `a 404 from find on an older server reads Could not search closed runs`, `/ focuses the box on /runs`. Palette: `a number offers Open run 410`, `other text offers Find runs matching`, `the palette reads no server`.
+- [ ] **Step 1: Write the failing tests.** `the three spellings mean run 410`, `open runs filter at once from the frame`, `closed runs arrive 200 ms after typing stops`, `?q= holds the query across a reload`, `a whole number and Enter opens /runs/<id>`, `clearing restores the board with its folds and scroll`, `a result opens /runs/<id>?q=<query>`, `no Abandon on a result`, `Reviews of run 410 sits below the exact hit`, the three failure sentences, `a 404 from find on an older server reads Could not search closed runs`, `/ focuses the box on /runs`. Palette: `a number offers Open run 410`, `other text offers Find runs matching`, `the palette reads no server`.
 - [ ] **Step 2: Run** the files. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** the files plus `command-layer`. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 9: Every row opens (F7, F12, F14, F15, F19, F28, A9, A10)
+### Task 9: Every row opens, says what it waits on, and the board's states (§7, §8.2, F7, F11, F12, F14, F15, F19, F28, A9, A10, A50)
 
 **Files:**
-- Modify: `pwa/src/screens/RunRow.tsx`, `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/inboxTarget.ts`, the session header link, the hold cell and Collect lane links
+- Modify: `pwa/src/screens/RunRow.tsx`, `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/runWords.ts`, `pwa/src/fleet/inboxTarget.ts`, the session header link, the hold cell and Collect lane links, and `pwa/src/lib/routes.ts` if #2394 has landed
 - Delete: `pwa/src/screens/useRunSpend.ts` if no caller remains
-- Test: `pwa/test/runs-screen.test.tsx`, `pwa/test/inbox-target.test.ts`, `pwa/test/run-spend-line.test.tsx`, `pwa/browser/runs-widths.browser.test.ts` (new)
+- Test: `pwa/test/runs-screen.test.tsx`, `pwa/test/inbox-target.test.ts`, `pwa/test/run-spend-line.test.tsx`, `pwa/test/run-wait-line.test.ts` (new), `pwa/browser/runs-widths.browser.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `runPath`; C2's `screenCache` for fold and scroll.
+- Consumes: `runPath`; C2's `screenCache` for fold and scroll; `ApiTimeout`.
+- Produces: `runWaitLine(run: RunSummary, nowMs: number): string | null`, the one reader of §7's lines, in `runWords.ts`. Null means today's line.
 
-- [ ] **Step 1: Write the failing tests.** `no row carries data-inert`, `a tap on any row opens /runs/<id>`, `mounting the board fires no GET /api/runs/:id`, `every door lands on /runs/<id> or the programme page`, `a return from a session keeps folds and scroll`. Browser: `a phone reaches a run by number`, with the width matrix set up once for later waves.
+- [ ] **Step 1: Write the failing tests.**
+
+```ts
+expect(runWaitLine(run({ state: 'planned', blockedBy: 1012 }), now)).toBe('Waits behind a stuck run.');
+expect(runWaitLine(run({ state: 'planned', waitsOn: 'coordinator' }), now)).toBe('Waits for its coordinator to start it.');
+expect(runWaitLine(run({ state: 'awaiting-review', waitsOn: 'coordinator' }), now)).toBe('Reviews done. Waits on its coordinator.');
+expect(runWaitLine(run({ state: 'awaiting-review', waitsOn: 'reviewer' }), now)).toBe('Waits on a reviewer.');
+expect(runWaitLine(run({ state: 'working', waitsOn: 'worker', lastMoveAt: now - 9 * DAY }), now)).toBe('No move in 9 days.');
+expect(runWaitLine(run({ state: 'working', waitsOn: 'worker', lastMoveAt: now - 23 * H }), now)).toBeNull();
+expect(runWaitLine(run({ state: 'planned', waitsOn: undefined }), now)).toBeNull();
+```
+
+Rows: `no row carries data-inert`, `a tap on any row opens /runs/<id>`, `mounting the board fires no GET /api/runs/:id`, `every door lands on /runs/<id> or the programme page`, `a return from a session keeps folds and scroll`, `a row shows runWaitLine in place of its ordinary line`. Board: `No runs open. with no open run`, `Could not load runs. Try again. on ApiTimeout, with a Try again control`, `Try again reads again`, `a list not yet heard says Loading and never no runs`, `reconnecting keeps today's line`. Browser: `a phone reaches a run by number`, with the width matrix set up once for later waves.
+
+If #2394 has landed, also (A50): `runsRunHref builds /runs/<id>`, `/runs?run=410 is replaced by /runs/410, and Back skips it`, `/runs?run=410&q=x goes to the run`, and `/runs?run=9999 reads There is no run 9999.` on the run page.
 - [ ] **Step 2: Run** them. Expected: FAIL.
-- [ ] **Step 3: Implement.** Rebase over #2394 if it has landed, and keep what it adds to a row.
+- [ ] **Step 3: Implement.** If #2394 has landed, rebase over it: `runsRunHref` builds `runPath(id)`, and `/runs?run=<id>` stays only for old chat text, which the board replaces with `/runs/<id>`. That way `?run=` and `?q=` never meet, and no arrival has to find a row folded under a Stuck head. `runNotLoadedLine` and the board's `useArrival`, `arrived` and `rowRef` leave, and `runs-arrival.test.tsx` moves to the pins above. `useArrival` stays for accounts. Its route comment, "the runs route's one query", is corrected. If #2394 lands after B2, it takes these on its own rebase.
 - [ ] **Step 4: Run** them, the browser leg included. Expected: PASS.
+- [ ] **Step 5: Commit.**
+
+### Task 9a: One layout rule and the broad pane (§8.1, §8.2 to §8.4 per-width tables, §16, A9, A51, check 16)
+
+**Files:**
+- Create: `pwa/src/screens/runColumn.ts`
+- Modify: `pwa/src/screens/RunsScreen.tsx`, `pwa/src/screens/RunDetailScreen.tsx`, `pwa/src/screens/RunFind.tsx`, `pwa/src/app.tsx` (the `run` route mounts the board in a broad column), `pwa/src/fleet/fleet.css`
+- Test: `pwa/test/run-column.test.ts` (new), `pwa/test/runs-broad.test.tsx` (new), `pwa/test/skin-axis-census.test.ts` (new), `pwa/browser/runs-widths.browser.test.ts`
+
+**Interfaces:**
+- Produces: `RUN_COLUMN = { medium: 640, cards: 840, broad: 1240 } as const`; `columnName(width: number): 'narrow' | 'medium' | 'broad'`; `useColumnName(ref: RefObject<HTMLElement>): 'narrow' | 'medium' | 'broad'`, one `ResizeObserver`. `RunDetailScreen` gains `pane?: boolean`.
+
+The `container-type: inline-size` rule sits on the board's own column, as Settings' does. Rows, stuck heads and cards take their medium and broad forms from it, each in its own task: rows here, heads in Task 13, cards in Task 18. Task 11 adds Advanced's pane on this same reading.
+
+- [ ] **Step 1: Write the failing tests.**
+
+```ts
+expect(columnName(639)).toBe('narrow');
+expect(columnName(640)).toBe('medium');
+expect(columnName(1239)).toBe('medium');
+expect(columnName(1240)).toBe('broad');
+```
+
+Census: `fleet.css's @container thresholds equal RUN_COLUMN`, `instrument.css and refined.css hold no .run, .stuck or .programme-card rule`, `the board's container rule is the only one on its column`. Broad: `/runs with no run open reads Select a run to see it here.`, `a row opens in the right pane and the URL becomes /runs/<id>`, `a cold /runs/410 in a broad column draws the list and the pane`, `the pane has no strip and no Back`, `the open row is marked current`, `/runs/410?q=x keeps the results in the list`, `a result opens in the pane`, `narrower than broad, the same URL is a page with its strip`. Browser, at each width, skin and theme: `360, 390 are narrow; 1280, 1470 are medium; 1920 is medium in Refined and broad in Instrument`, `the pane sits at about 40 and 60 percent`, `the search box is sticky under the header on a phone and tops the list pane when broad`, `facts are label over value when narrow and two columns from medium`, `long branch names wrap`, and `medium rows run on one line where the text fits, with the control at the right`.
+
+- [ ] **Step 2: Run** them. Expected: FAIL.
+- [ ] **Step 3: Implement.** One rule, on column width. Skins change the column through their tokens and nothing else (§8.1, Q2).
+- [ ] **Step 4: Run** them, the browser leg included. Record the measured column at 1470, which spec §19 lists as unmeasured. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
 ## Wave B3: abandon with proof (D-8073)
 
-### Task 10: The single sheet (§9.1, check 13, F8, F9, F23, F24, A44)
+### Task 10: The single sheet, and Abandon on the run page (§8.4, §9.1, check 13, F8, F9, F23, F24, A44, A52)
 
 **Files:**
-- Modify: `pwa/src/fleet/AbandonSheet.tsx`, `pwa/src/lib/api.ts` (`abandonRun` keeps `childReclaim`, `childReclaimWhy`)
-- Test: `pwa/test/abandon-sheet.test.tsx`, `pwa/browser/abandon-sheet.browser.test.ts` (new)
+- Modify: `pwa/src/fleet/AbandonSheet.tsx`, `pwa/src/screens/RunDetailScreen.tsx`, `pwa/src/lib/api.ts` (`abandonRun` keeps `childReclaim`, `childReclaimWhy`, and takes optional `opts?: ReadOpts`), `pwa/src/fleet/runWords.ts` (`coordinatorGoneOf`)
+- Test: `pwa/test/abandon-sheet.test.tsx`, `pwa/test/run-detail.test.tsx`, `pwa/browser/abandon-sheet.browser.test.ts` (new)
 
 **Interfaces:**
-- Produces: `abandonConsequence(run, child)` keeps its signature with new sentences; `workspaceNameOf(run): string | null` replaces the private `workspaceOf` and never returns the run number.
+- Produces: `abandonConsequence(run, child)` keeps its signature with new sentences; `workspaceSubject(run): { subject: string; Subject: string }` replaces the private `workspaceOf`. It gives the recorded workspace, "the workspace on <branch>" or "its workspace", and never the run number. `coordinatorGoneOf(run, presence): boolean` is the field's one reader: an older server's absent field falls back to `presence === 'dead'`.
 
 - [ ] **Step 1: Move the pinned sentences and write the failing tests.** This is an intended wording change, so the `NOT_CHILD`, `CHILD`, `UNKNOWN` and `NO_SESSION` pins change in the same commit as the code:
 
 ```ts
 expect(abandonConsequence(noSession, 'unknown')).toBe('It holds no workspace of its own, so it has none to release or reclaim.');
 expect(abandonConsequence(run({ workspace: 'ws-a' }), 'not-child')).toBe('Its workspace is ws-a. A release destroys nothing: the worktree survives, the record stays.');
+expect(abandonConsequence(run({ workspace: null, branch: 'b-a' }), 'not-child')).toBe('Its branch is b-a. A release destroys nothing: the worktree survives, the record stays.');
 expect(abandonConsequence(run({ workspace: null, branch: null }), 'not-child')).toBe('A release destroys nothing: the worktree survives, the record stays.');
+expect(abandonConsequence(run({ workspace: null, branch: 'b-a' }), 'child')).toMatch(/^The workspace on b-a is a child workspace, so/);
+expect(abandonConsequence(run({ workspace: null, branch: null }), 'child')).toMatch(/^Its workspace is a child workspace, so/);
+expect(abandonConsequence(run({ workspace: null, branch: null }), 'unknown')).toMatch(/^This board cannot tell whether its workspace is a child workspace\./);
 for (const c of ['not-child', 'child', 'unknown'] as const) expect(abandonConsequence(run(), c)).not.toMatch(/^Abandon run/);
 ```
 
-Also `the sheet repeats the row's name and context line verbatim`, `See this run links to the detail`, a toast test for each of the three success rows, a test for each refusal row with `the sheet stays open`, `400 and 413 show the server's detail`, and D-280's negative pin unchanged. Browser: `at 360 by 667 the child sentence under a 122-character title leaves Confirm and Cancel reachable`.
+Also `the sheet repeats the row's name and context line verbatim`, `the sheet states a close time once, in that line`, `Its worker is still running. shows when waitsOn is worker and not otherwise`, `Its coordinator is told. shows, and is left out when coordinatorGone is set`, `See this run links to the detail`, a toast test for each of the three success rows, a test for each refusal row with `the sheet stays open`, `400 and 413 show the server's detail`, and D-280's negative pin unchanged. Run page: `an open run shows Abandon`, `an open run with no verdict still shows Abandon`, `an open run with a wrong stuck reason still shows Abandon`, `the page uses this same sheet`, `after an abandon the page shows the close`. Browser: `at 360 by 667 the child sentence under a 122-character title leaves Confirm and Cancel reachable`.
 
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -264,14 +349,14 @@ Also `the sheet repeats the row's name and context line verbatim`, `See this run
 
 **Files:**
 - Create: `pwa/src/screens/RunsAdvancedScreen.tsx`
-- Modify: `pwa/src/lib/routes.ts`, `pwa/src/screens/RunsScreen.tsx` (Finished reads `findRuns`)
-- Test: `pwa/test/runs-advanced.test.tsx` (new), `pwa/test/runs-finished-fold.test.tsx`, `pwa/test/runs-pages.test.tsx`
+- Modify: `pwa/src/lib/routes.ts`, `pwa/src/screens/RunsScreen.tsx` (Finished reads `findRuns`), `pwa/src/fleet/fleet.css`
+- Test: `pwa/test/runs-advanced.test.tsx` (new), `pwa/test/runs-finished-fold.test.tsx`, `pwa/test/runs-pages.test.tsx`, `pwa/browser/runs-widths.browser.test.ts`
 
 **Interfaces:**
-- Consumes: `api.findRuns`.
+- Consumes: `api.findRuns`, `useColumnName`, `RunDetailScreen`'s `pane`.
 - Produces: `runsAdvancedPath(filter?: RunsFilter): string`; `RunsFilter = 'open' | 'by-you' | 'by-ccrc' | 'by-coordinators'`.
 
-- [ ] **Step 1: Write the failing tests.** `open runs first, then close order, 50 at a time with Show older`, `the chip is in the URL`, `a just-abandoned old run heads All runs and Finished`, `the board no longer calls runsPage for Finished`. S2's `runsPage` stays for the Inbox and Mail, which keep their own read.
+- [ ] **Step 1: Write the failing tests.** `open runs first, then close order, 50 at a time with Show older`, `the chip is in the URL`, `a just-abandoned old run heads All runs and Finished`, `Finished no longer reads the paged archive`, `an open hit reads its word and line from the live frame`, `in a broad column a row opens beside the list with ?open=<id>`, and, per §8.6's table, `chips wrap on a phone`. The board is `api.runsPage`'s one PWA caller, and the Inbox and Mail keep the unpaged `loadColdRuns`. After this task the paged arm of `useColdRuns` feeds only `ChildReclaimBanner` (`cold`, RunsScreen.tsx line 336). Task 12a takes that last use away.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** them. Expected: PASS.
@@ -295,11 +380,25 @@ The ruled plan's W1 text holds for this part, unchanged but for its wave.
 
 Starts when Task 1's replay is reported.
 
-### Task 13: Heads and rows (§7, §8.2, §8.2.1, checks 1, 2, 4, 6, 9, 11, 12, 14, 15, A35 to A39, A43)
+### Task 12a: The top of the board (§8.2, §8.6, §9.4, F21, A48)
+
+The surfaces above the list leave first, so Task 13's top-of-board and 667-tall pins measure the real board. `ReviewCapBand` cannot leave until review caps join `/waiting` in Task 24, so it sits below the band until then.
+
+**Files:**
+- Modify: `pwa/src/screens/RunsScreen.tsx`, `pwa/src/screens/RunsAdvancedScreen.tsx`, `pwa/src/screens/useColdRuns.ts`, `pwa/src/stores/fleet.ts`, `pwa/src/fleet/runWords.ts`, `pwa/src/fleet/ArchiveSheet.tsx`, `pwa/src/fleet/CollectLaneSection.tsx`
+- Test: `pwa/test/runs-screen.test.tsx`, `pwa/test/runs-advanced.test.tsx`, `pwa/test/runs-pages.test.tsx`, `pwa/test/api-timeout.test.ts`
+
+- [ ] **Step 1: Write the failing tests.** `CapsControl and ChildReclaimBanner render on Advanced and not on the board`, `the pause toggle lives under Advanced`, `Start a programme sits in the header's actions slot`, `only the header, the search box and the paused banner sit above the list`, `ReviewCapBand sits below where the band goes`, `ChildReclaimBanner names a closed run from All runs' hits`, `ArchiveSheet and CollectLaneSection point at the new places`, `the Inbox and Mail still read the unpaged archive`.
+- [ ] **Step 2: Run** them. Expected: FAIL.
+- [ ] **Step 3: Implement.** `RunHit` carries what the banner's run context needs: `program`, `programTitle`, `wave`, `waveOf` and `kind`. With that use gone, `api.runsPage`, the paged arm of `useColdRuns`, the store's `runPages` and `mergeFirstRunPage` have no caller, so they leave with their pins. The server keeps `limit` and `before` on `GET /api/runs` (§11.4).
+- [ ] **Step 4: Run** them. Expected: PASS.
+- [ ] **Step 5: Commit.**
+
+### Task 13: Heads and rows (§7, §8.2, §8.2.1, checks 1, 2, 4, 6, 9, 11, 12, 14, 15, A35 to A39, A43, A47)
 
 **Files:**
 - Create: `pwa/src/fleet/stuckWords.ts`, `pwa/src/screens/StuckBand.tsx`
-- Modify: `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/fleet.css`
+- Modify: `pwa/src/screens/RunsScreen.tsx`, `pwa/src/screens/RunRow.tsx` (Abandon leaves the ordinary row), `pwa/src/fleet/fleet.css`
 - Test: `pwa/test/stuck-words.test.ts` (new), `pwa/test/stuck-band.test.tsx` (new), `pwa/test/danger-buttons.test.tsx`, `pwa/test/control-census.test.ts`, `pwa/browser/runs-widths.browser.test.ts`
 
 **Interfaces:**
@@ -319,18 +418,20 @@ expect(closeWhen(now + 19.2 * H, now)).toBe('in 20 h');
 expect(closeWhen(now + 60 * H, now)).toBe('in 3 days');
 expect(closeWhen(now + 1, now)).toBe('in 1 min');
 expect(stuckLine(ownerGoneArchived49, now)).toBe('Coordinator archived 49 days ago · Nothing closes this on its own');
+expect(stuckLine(overtaken28, now)).toBe('A later wave moved on 28 days ago · Nothing closes this on its own');
+expect(stuckLine(reviewClosed5h, now)).toBe('The work it reviews closed 5 h ago · Nothing closes this on its own');
 expect(runMarker(run({ sessionId: 's', workspace: null }), false)).toBe('holds a session');
 expect(heldBackLine(1)).toBe('1 holds a workspace or session: one at a time');
 ```
 
-Also, in `stuck-band`: `heads keep the fixed order when Review falls to 1`, `an empty head leaves and nothing else moves`, `heads fold by default at every width`, `an opened head is remembered per viewer`, `a head's oldest equals the largest age on its rows, in whole days`, `Start never finished shows the held-back line and no control`, `no would-close appears while every closes is null`, `Abandon sits only on stuck rows`, and `stuck never counts in a badge`. Census: `no healthy run renders above the band`, and `Closed today sits below it` joins Task 20. Browser, at each width, skin and theme: `the last head's bottom is within half a visible height of the fold at 667 tall`, `the visible height stops at the bottom bar`, `the last fold scrolls clear of the bar`, `every link on a phone is at least 44px`, `first programme card under 800px at Instrument 1920`.
+Also, in `stuck-band`: `heads keep the fixed order when Review falls to 1`, `an empty head leaves and nothing else moves`, `heads fold by default at every width`, `an opened head is remembered per viewer`, `a head's oldest equals the largest age its rows show, for every reason, in whole days and in hours under a day`, `Start never finished shows the held-back line and no control`, `no would-close appears while every closes is null`, `Abandon sits only on stuck rows`, and `stuck never counts in a badge`. Census: `no healthy run renders above the band`. Task 20 pins Closed today below it, and Task 24 pins the final order. Browser, at each width, skin and theme: `the last head's bottom is within half a visible height of the fold at 667 tall`, `the visible height stops at the bottom bar`, `the last fold scrolls clear of the bar`, `every link on a phone is at least 44px`, `a head's group control sits on its own line when narrow and at the right from medium`. Task 20 pins the first card's place, because cards land in Task 18.
 
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.** Rows and heads take the clock from the one page clock. Nothing in the row reads the network.
-- [ ] **Step 4: Run** them, the browser leg included. Record the measured heads' end and first-card figures in the PR body, against the spec's inferred 742px. Expected: PASS.
+- [ ] **Step 4: Run** them, the browser leg included. Record the measured heads' end in the PR body, against the spec's half-screen measure. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 14: Abandon a group (§9.2, checks 8, A12, A13, A33, A34, A40, A41)
+### Task 14: Abandon a group (§9.2, checks 8, A12, A13, A33, A34, A40, A41, A49)
 
 **Files:**
 - Create: `pwa/src/fleet/groupAbandon.ts`, `pwa/src/fleet/GroupAbandonSheet.tsx`
@@ -342,19 +443,23 @@ Also, in `stuck-band`: `heads keep the fixed order when Review falls to 1`, `an 
 - Produces:
 
 ```ts
+const ABANDON_CALL_MS = 30_000;   // C1 sets no limit on a POST, so the loop passes this
+type GroupStanding = 'in-group' | 'moved' | 'closed';
 interface GroupResult {
   abandoned: number[]; alreadyClosed: number[]; leftAlone: number[];
-  refused: { id: number; sentence: string }[]; notReached: number[];
+  refused: { id: number; sentence: string }[]; noAnswer: number[]; notReached: number[];
 }
+groupStanding(run: RunSummary | undefined, reason: StuckReason): GroupStanding;  // undefined: gone from the frame, so closed
 runGroupAbandon(list: readonly number[], deps: {
-  abandon(id: number): Promise<AbandonAnswer>;
-  stillInGroup(id: number): boolean;
+  abandon(id: number): Promise<AbandonAnswer>;   // api.abandonRun(id, { timeoutMs: ABANDON_CALL_MS })
+  standing(id: number): GroupStanding;
   stopped(): boolean;
   onStep(done: number): void;
 }): Promise<GroupResult>;
 groupControlWords(free: number, total: number): string | null;
 groupToast(r: GroupResult): string | null;   // null when the sheet must stay
 groupSummary(r: GroupResult): string;
+groupRunSentence(r: GroupResult, id: number): string;
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -368,10 +473,20 @@ expect(groupControlWords(0, 2)).toBeNull();
 expect(groupToast(res({ abandoned: 11, leftAlone: 1 }))).toBe('11 runs abandoned. 1 started moving and was left alone.');
 expect(groupToast(res({ abandoned: 1 }))).toBe('1 run abandoned.');
 expect(groupToast(res({ abandoned: 9, alreadyClosed: 2, refused: 1 }))).toBeNull();
+expect(groupToast(res({ abandoned: 10, alreadyClosed: 2 }))).toBe('10 runs abandoned. 2 had already closed.');
+expect(groupToast(res({ abandoned: 3, noAnswer: 1 }))).toBeNull();
+expect(groupToast(res({ abandoned: 3, notReached: 2 }))).toBeNull();
 expect(groupSummary(res({ abandoned: 9, alreadyClosed: 2, refused: 1 }))).toBe('9 abandoned, 2 had already closed, 1 not:');
+expect(groupSummary(res({ abandoned: 3, noAnswer: 1, notReached: 2 }))).toBe('3 abandoned, 3 not:');
+expect(groupRunSentence(res({ noAnswer: [7] }), 7)).toBe('No answer. It may have closed.');
+expect(groupRunSentence(res({ notReached: [7] }), 7)).toBe('Not reached.');
+expect(groupStanding(undefined, 'overtaken')).toBe('closed');
+expect(groupStanding(stuckRun('never-started'), 'overtaken')).toBe('moved');
+expect(groupStanding(run({ stuck: null }), 'overtaken')).toBe('moved');
+expect(groupStanding(heldStuckRun('overtaken'), 'overtaken')).toBe('moved');
 ```
 
-Loop: `one call at a time`, `a run that left the group is skipped as left alone`, `409 counts as already closed and continues`, `501, 502 and registry-unmeasurable stop the loop`, `a timeout stops the loop and leaves the run not reached, with no retry`, `Stop finishes the run in flight`, `a run that joins after the sheet opens is not added`, and `every confirmed id ends in exactly one result`. Sheet: `a held run is never listed`, `unticking follows in the title and confirm`, `down to one uses the singular words`, `Abandon 1… opens the single sheet`, `no list when one run is free`, `left alone shows in the sheet only when it stays open`, `Closed today re-reads when the loop ends and never adds locally`. Risk pin: `a re-open is a new id and leaves programs.state alone`, in `server/test/run-reopen.test.ts`.
+Loop: `one call at a time`, `each call passes ABANDON_CALL_MS`, `a run that moved is left alone`, `a run someone else closed counts as already closed, and the toast says so`, `409 counts as already closed and continues`, `501, 502 and registry-unmeasurable stop the loop, that run refused and the rest not reached`, `a timeout or a network failure stops the loop, that run no answer and the rest not reached, with no retry`, `Stop finishes the run in flight, within one limit`, `a run that joins after the sheet opens is not added`, and `every confirmed id ends in exactly one result`. Sheet: `a held run is never listed`, `unticking follows in the title and confirm`, `down to one uses the singular words`, `Abandon 1… opens the single sheet`, `no list when one run is free`, `left alone shows in the sheet only when it stays open`, `no answer links to the run's record`, `onDone fires once when the loop ends`. Task 20 hangs Closed today's re-read on that. Risk pin: `a re-open is a new id and leaves programs.state alone`, in `server/test/run-reopen.test.ts`.
 
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.** No new route (A12).
@@ -400,9 +515,10 @@ Loop: `one call at a time`, `a run that left the group is skipped as left alone`
 - Test: `server/test/programmes-read.test.ts` (new)
 
 **Interfaces:**
-- Produces: `ProgrammeRow` with the fields of §11.6; `pendingClose` per reason, from `stuck.closes`; `closedToday: {operator, sweep, coordinator}`; `api.programmes(since: number)`.
+- Consumes: `RunVerdicts`.
+- Produces: `ProgrammeRow` with the fields of §11.6; `stuck`, a count, and `pendingClose`, one `{reason, count, soonestAt, armed}` per reason with a clock, both folded in from `RunVerdicts.all()`; `closedToday: {operator, sweep, coordinator}`; `api.programmes(since: number)`.
 
-- [ ] **Step 1: Write the failing tests.** `open comes from runs, never programs.state`, `a leftover review's abandon leaves a finished programme complete`, `since is clamped to the last 48 hours`, `one aggregate statement`, `session only`, and `a programme with a gone coordinator has a row`.
+- [ ] **Step 1: Write the failing tests.** `open comes from runs, never programs.state`, `a leftover review's abandon leaves a finished programme complete`, `since is clamped to the last 48 hours`, `one aggregate statement gives the run facts`, `stuck and pendingClose fold in from RunVerdicts, and the stuck count equals its entries for that programme`, `before the first pass both are absent`, `session only`, and `a programme with a gone coordinator has a row`.
 - [ ] **Step 2: Run** the file. Expected: FAIL.
 - [ ] **Step 3: Implement** `programmeCurrentWave`, which the ruled spec names and main does not have yet.
 - [ ] **Step 4: Run** the file. Expected: PASS.
@@ -426,13 +542,13 @@ D-8049's `runsNeedYou` already reads the run binding. Fold it in, keeping its ch
 - [ ] **Step 4: Run** them plus `runs-health` and `status-programmes`. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 18: Programme cards and Finished (§8.2.2, §8.2.3, checks 3, 10, A37)
+### Task 18: Programme cards and Finished (§8.1, §8.2.2, §8.2.3, checks 3, 10, A37)
 
 **Files:**
 - Create: `pwa/src/screens/ProgrammeCard.tsx`, `pwa/src/screens/usePrograms.ts`
-- Modify: `pwa/src/fleet/programmeBoxes.ts` (extract the state step), `pwa/src/fleet/stuckWords.ts`, `pwa/src/screens/RunsScreen.tsx`
+- Modify: `pwa/src/fleet/programmeBoxes.ts` (extract the state step), `pwa/src/fleet/stuckWords.ts`, `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/fleet.css`
 - Delete: `pwa/src/fleet/runGroups.ts`, `pwa/test/run-groups.test.ts` (F22)
-- Test: `pwa/test/programme-card.test.tsx` (new), `pwa/test/stuck-words.test.ts`, `pwa/test/programme-box.test.ts`
+- Test: `pwa/test/programme-card.test.tsx` (new), `pwa/test/stuck-words.test.ts`, `pwa/test/programme-box.test.ts`, `pwa/browser/runs-widths.browser.test.ts`
 
 **Interfaces:**
 - Produces: `motionState(lastMoveAt, now, quietMs, paused): 'paused' | 'stalled' | 'moving'`; `boxState` calls it after its needs step, and its answers stay pinned. `cardWord(motion, everyOpenRunStuck): string`. `programmeStuckLine(stuck: readonly RunStuck[], nowMs: number): string`.
@@ -445,37 +561,40 @@ expect(programmeStuckLine(mixed, now)).toBe('3 stuck · ccrc would close 1 in 20
 expect(programmeStuckLine(mixedArmed, now)).toBe('3 stuck · ccrc closes 1 in 20 h');
 expect(programmeStuckLine([s(null), s(null), s(null)], now)).toBe('3 stuck · nothing closes them on its own');
 expect(programmeStuckLine(allAt20h, now)).toBe('3 stuck · ccrc closes them in 20 h');
+expect(programmeStuckLine([s(null)], now)).toBe('1 stuck · nothing closes it on its own');
+expect(programmeStuckLine([s({ at: now + 20 * H, armed: true })], now)).toBe('1 stuck · ccrc closes it in 20 h');
+expect(programmeStuckLine([s({ at: now + 20 * H, armed: false })], now)).toBe('1 stuck · ccrc would close it in 20 h');
 ```
 
-Also `the soonest time shows when times differ`, `armed wins over shadow`, `the zero forms read now and soon`, `a needing card keeps its motion word and carries needs you · 1`, `boxState's answers are unchanged`, `a programme with a gone coordinator has a card`, `no run number on a card`, `a card's facts all appear in its header`, and the three Finished endings.
+Also `the soonest time shows when times differ`, `armed wins over shadow`, `the zero forms read now and soon`, `a needing card keeps its motion word and carries needs you · 1`, `boxState's answers are unchanged`, `a programme with a gone coordinator has a card`, `no run number on a card`, `a card's facts all appear in its header`, and the three Finished endings. Browser: `cards are one across under 840, two across at 860, 912 and 1056, and one across in the broad list`.
 
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** them, then the browser matrix. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 19: The programme page's Runs section (§8.5, §9.5, F25)
+### Task 19: The programme page's Runs section, and Resume on both pages (§8.4, §8.5, §9.5, F25, A46)
 
 **Files:**
-- Modify: `pwa/src/ledgers/ProgrammeScreen.tsx`, `pwa/src/fleet/ResumeSheet.tsx`
-- Test: `pwa/test/programme-screen.test.tsx`, `pwa/test/resume-sheet.test.tsx`
+- Modify: `pwa/src/ledgers/ProgrammeScreen.tsx`, `pwa/src/screens/RunDetailScreen.tsx`, `pwa/src/screens/RunRow.tsx` (Resume leaves the row), `pwa/src/fleet/ResumeSheet.tsx`
+- Test: `pwa/test/programme-screen.test.tsx`, `pwa/test/run-detail.test.tsx`, `pwa/test/resume-sheet.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** `the header is a superset of the card`, `open waves newest first with reviews nested`, `a stuck row carries its Abandon`, `closed waves read through find with their close word`, `Resume sits once on the head, shown from the server's verdict`, `a claimant with no fleet row still shows Resume`, `step 3 offers a picker with the typed id below it`, `the lead sentence comes first`, and `an owner-gone row carries Abandon and never Resume`.
+- [ ] **Step 1: Write the failing tests.** `the header is a superset of the card`, `open waves newest first with reviews nested`, `a stuck row carries its Abandon`, `closed waves read through find with their close word and line`, `done reads with Closed by the coordinator on its line`, `Resume sits once on the head, shown from coordinatorGone`, `Resume shows on the run page from coordinatorGone`, `a live coordinator shows no Resume on either page`, `no row carries Resume`, `a claimant with no fleet row still shows Resume`, `an older server with no field reads coordinatorPresence`, `step 3 offers a picker with the typed id below it`, `the lead sentence comes first`, and `an owner-gone row carries Abandon and never Resume`.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.** No second programme page (A1).
 - [ ] **Step 4: Run** them. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
-### Task 20: Bands move, Closed today, and the words (§8.2, §8.6, F21, F27, A32)
+### Task 20: Closed today, the first card's place, and the words (§8.2, F27, A32, check 11)
 
 **Files:**
-- Modify: `pwa/src/screens/RunsScreen.tsx`, `pwa/src/screens/RunsAdvancedScreen.tsx`, `pwa/src/fleet/ArchiveSheet.tsx`, `pwa/src/fleet/CollectLaneSection.tsx`, `pwa/src/fleet/StartProgramSheet.tsx`
-- Test: `pwa/test/runs-screen.test.tsx`, `pwa/test/runs-advanced.test.tsx`
+- Modify: `pwa/src/screens/RunsScreen.tsx`, `pwa/src/fleet/StartProgramSheet.tsx`
+- Test: `pwa/test/runs-screen.test.tsx`, `pwa/test/group-abandon-sheet.test.tsx`, `pwa/browser/runs-widths.browser.test.ts`
 
-- [ ] **Step 1: Write the failing tests.** `the board's order is header, search, paused banner, Stuck, Closed today, Waiting band, programmes, quiet, Finished, foot`, `Closed today links each count to All runs with closedSince`, `it shows only once a close landed today`, `midnight is the operator's local day`, `the pause toggle lives under Advanced`, `ArchiveSheet and CollectLaneSection point at the new places`, `Start a programme replaces every "program" on this screen`.
+- [ ] **Step 1: Write the failing tests.** `the board's order is header, search, paused banner, Stuck, Closed today, Waiting band, ReviewCapBand, programmes, quiet, Finished, foot`, `Closed today links each count to All runs with closedSince`, `it shows only once a close landed today`, `midnight is the operator's local day`, `Closed today re-reads when a group loop ends and never adds locally`, `Start a programme replaces every "program" on this screen`. Browser: `first programme card under 800px at Instrument 1920`.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** them, then the full matrix. Check §17's page budgets, and report them. Expected: PASS.
+- [ ] **Step 4: Run** them, then the full matrix. Check §17's page budgets, and report them with the first card's measured place, against the spec's inferred 742px. Expected: PASS.
 - [ ] **Step 5: Commit.**
 
 ## Wave B6: action on the item and end requests (D-8076)
@@ -535,7 +654,7 @@ The rulings this wave carries: an item that asks carries its own control, and a 
 - Delete: `pwa/src/fleet/ReviewCapBand.tsx`
 - Test: `pwa/test/waiting-screen.test.tsx`, `pwa/test/abandon-sheet.test.tsx`, `pwa/test/control-census.test.ts`
 
-- [ ] **Step 1: Write the failing tests.** `an end-run row carries Abandon run and Keep the run, at the right from 640 and on their own line below it`, `Abandon run opens the single sheet and calls act`, `Keep the run confirms and calls decline`, `the row line ends in one of the three origins`, `a held item is on no list or badge`, `a review cap is a /waiting row with Lift cap on it`, and `/runs has one surface called Waiting on you, which is none`.
+- [ ] **Step 1: Write the failing tests.** `an end-run row carries Abandon run and Keep the run, at the right from 640 and on their own line below it`, `Abandon run opens the single sheet and calls act`, `Keep the run confirms and calls decline`, `the row line ends in one of the three origins`, `a held item is on no list or badge`, `a review cap is a /waiting row with Lift cap on it`, `/runs has one surface called Waiting on you, which is none`, and `the board's order is exactly §8.2's, with no ReviewCapBand`.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** them, then the browser matrix for `/waiting`. Expected: PASS.
@@ -545,15 +664,15 @@ The rulings this wave carries: an item that asks carries its own control, and a 
 
 Reuse the ruled plan's Task W1 (`2026-10-21-runs-auto-expire-and-programme-view.md`, D-6171) with the amendments of spec §12, and leave out the `untold` rows, which Task 12 landed. Read `lastDispatchAttemptAt`, the warning, the budget and rules R1 to R8 from it.
 
-### Task 25: The lane rows E1 and E1r, and `closes` (§7, §12, A35, A36)
+### Task 25: The lane rows E1 and E1r, and `closes` (§7, §12, A35, A36, A53)
 
-**Files:** as W1 lists, on one `LANE_SCHEDULE` row, plus `server/src/coord/runStuck.ts`.
+**Files:** as W1 lists, on one `LANE_SCHEDULE` row, plus `server/src/coord/runStuck.ts` and `server/src/coord/runVerdicts.ts`.
 - Test: as W1 lists, plus `server/test/run-stuck-closes.test.ts` (new)
 
 **Interfaces:**
-- Produces: `closesOf(row: LaneRowName, anchor: LaneAnchor, warning: WarningRead | null, armed: boolean): { at: number; armed: boolean } | null`. The lane and the verdict read the same predicates.
+- Produces: `rowAnchor(row: LaneRowName, facts: LaneAnchorFacts): number | null`, which gives §7's anchor per row and is the one place a row's activity enters; `closesOf(row: LaneRowName, anchor: number | null, warning: WarningRead | null, armed: boolean): { at: number; armed: boolean } | null`. The lane and the verdict read the same predicates. The lane writes the answers with `RunVerdicts.setCloses`, in its own pass.
 
-- [ ] **Step 1: Write the failing tests.** W1's pins, plus: `at comes from the anchor, never the run's age`, `a 50-day-old run in its first pass reads the full grace`, `E1r is anchor plus 1 h`, `shadow E1 is anchor plus 72 h`, `armed E1 is no earlier than deliveredAt plus 24 h`, `armed E1 with no delivery has closes null`, `closes is null while the lane holds and on an uncertain reading`, `activity moves at later`, `a refused close sets closes null and raises the item`, `E1r's check on a live session` for run 1085's shape.
+- [ ] **Step 1: Write the failing tests.** W1's pins, plus: `at comes from the anchor, never the run's age`, `a 50-day-old run in its first pass reads the full grace`, `E1r is anchor plus 1 h`, `shadow E1 is anchor plus 72 h`, `armed E1 is no earlier than deliveredAt plus 24 h`, `armed E1 with no delivery has closes null`, `closes is null while the lane holds and on an uncertain reading`, `activity on the programme moves E1's at later`, `a mail or a dispatch attempt leaves E1r's at where it was`, `a gap restarts E1r's at`, `closes.at never reads later than the moment the lane closes`, `in shadow, a run with an open PR or unpushed commits has closes null, reads Nothing closes this on its own and raises no item`, `armed, a refused close sets closes null`, `E1r's check on a live session` for run 1085's shape.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.** Land after B3, in shadow.
 - [ ] **Step 4: Run** them, then `stuck-words` to confirm the screen needed no change. Expected: PASS.
@@ -592,7 +711,7 @@ Reuse the ruled plan's Task W1 (`2026-10-21-runs-auto-expire-and-programme-view.
 
 Reuse the ruled Task W2 (D-6172) with spec §12's amendments. `closesOf` gains these rows at §7's graces.
 
-- [ ] **Step 1: Write the failing tests.** W2's pins, plus `E3 and the crash row read anchor plus 1 h`, `E3s anchor plus 24 h`, `E5 the next pass`, `run 83's shape reads the held marker and closes through E1 or E3`.
+- [ ] **Step 1: Write the failing tests.** W2's pins, plus `E3 and the crash row read the first pass plus 1 h`, `E3s the first pass plus 24 h`, `E5 the next pass`, `activity leaves E3, E3s, E5 and the crash row where they were`, `a busy worker under a gone coordinator has closes null`, `run 83's shape reads the held marker and closes through E1 or E3`.
 - [ ] **Step 2: Run** them, then implement, then run them again. Expected: FAIL, then PASS.
 - [ ] **Step 3: Commit.**
 
@@ -602,7 +721,7 @@ Reuse the ruled Task W2 (D-6172) with spec §12's amendments. `closesOf` gains t
 
 Reuse the ruled Task W5 (D-6175) with spec §12's amendments. This does not start until #119 lands.
 
-- [ ] **Step 1: Write the failing tests.** W5's pins, plus `417 and 848's shapes reach a row`, `E2 anchor plus 1 h`, `E4 anchor plus 24 h`.
+- [ ] **Step 1: Write the failing tests.** W5's pins, plus `417 and 848's shapes reach a row`, `E2 the first pass plus 1 h, and activity leaves it there`, `E4 the latest of its run's last activity, the first pass and workerLastSeen, plus 24 h`, `activity on the run moves E4's at later`, `activity on a sibling run does not`.
 - [ ] **Step 2: Run** them, then implement, then run them again. Expected: FAIL, then PASS.
 - [ ] **Step 3: Commit.**
 
@@ -612,16 +731,18 @@ After each PWA wave, run the same scripts and compare with spec §17. After B4 t
 
 ## Rollback
 
-Each PWA wave reverts as its PR. New wire fields are optional, so a revert leaves older readers working. Migrations only add. Lanes fall back to shadow from Advanced.
+Each PWA wave reverts as its PR. New wire fields are optional, so a revert leaves older readers working. Lanes fall back to shadow from Advanced.
+
+Migrations add columns and an index, with one exception: Task 2's migration rewrites every `programs.title`, so reverting B1's code leaves the new short names in place. To restore them, run the statement that `run-titles.test.ts` pins, which sets each `programs.title` from its newest run's `title` (spec §18). `RunVerdicts` is in memory, so it needs no rollback.
 
 ## Deviations found
 
 Issued by the allocator on 2026-11-06, one per wave, and defined here. None has shipped.
 
 - **D-8071 (2026-11-06)** — B1, the runs screen's server facts: a run keeps its own title, the close columns are stored, one stuck verdict, `GET /api/runs/find` and `GET /api/runs/:id/record`.
-- **D-8072 (2026-11-06)** — B2, find and open: `/runs/<id>` for any run, the search box and palette entries, every row opens, and spend leaves the row.
+- **D-8072 (2026-11-06)** — B2, find and open: `/runs/<id>` for any run, its controls and trail, one layout rule with the broad pane, the search box and palette entries, every row opens and says what it waits on, and spend leaves the row.
 - **D-8073 (2026-11-06)** — B3, abandon with proof: the sheet's new sentences and toast, `/runs/advanced` with All runs in close order, and the coordinator told of a close.
-- **D-8074 (2026-11-06)** — B4, the Stuck band: heads in a fixed order and folded at every width, group abandon with five results that add up, and the Waiting on its coordinator band.
+- **D-8074 (2026-11-06)** — B4, the Stuck band: the switches leave the top of the board, heads in a fixed order and folded at every width, group abandon with six results that add up, and the Waiting on its coordinator band.
 - **D-8075 (2026-11-06)** — B5, programmes: `GET /api/programmes`, one needs-you selector, cards that keep their motion word, the programme page's Runs section, and Closed today below the band.
 - **D-8076 (2026-11-06)** — B6, action on the item: end requests with the coordinator first, `act` and `decline`, and review caps on `/waiting`.
 - **D-8077 (2026-11-06)** — B7, never-started runs close themselves, as D-6171 amended by the rebuild spec: `stuck.closes` from the lane's anchor, arming from Advanced, and refused closes as items.
