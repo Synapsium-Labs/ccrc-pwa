@@ -5,6 +5,7 @@
 //   Refined's set without a chrome, or a chrome drawing the esc cap ....... "one chip rail from the view, no esc"
 //   the hints line without the pointer query .............................. "…under a fine pointer only"
 //   the column a fixed `width: var(--measure-chat)` ....................... "…reads min(var(--measure-chat), 100%)"
+//   the chat prose rule moved out of the column's ≥900 block (D-8059) ..... "the prose rule sits inside the same ≥900 block family…"
 //   a sheet or an Escape binding moved into the chrome ..................... "the chrome holds no sheet and no Escape effect"
 //   the crumb typed in whenever it changes, renames or not (C12 item 2) ..... "Refined's crumb, corrected by the row…"
 import { readFileSync } from 'node:fs';
@@ -189,7 +190,10 @@ describe('the reading column', () => {
     // D-8059: the chat prose measure applies where the column does, from 900 up, and never on a phone.
     const prose = columnBlock()?.find((r) => r.selectors.some((s) => s.startsWith('.chat-item .msg-assist > :is(')));
     expect(prose, 'the chat prose rule, in the column\'s ≥900 block').toBeDefined();
-    expect(prose?.body ?? '').toMatch(/max-width:\s*var\(--measure-chat-prose\)/);
+    // The children read the registered length `.msg-assist` resolves from `--measure-chat-prose` (fix round 1, F3).
+    expect(prose?.body ?? '').toMatch(/max-width:\s*var\(--chat-prose-cap\)/);
+    const source = columnBlock()?.find((r) => r.selectors.includes('.chat-item .msg-assist'));
+    expect(source?.body ?? '', 'the length is set in the same block, from the token').toMatch(/--chat-prose-cap:\s*var\(--measure-chat-prose\)/);
   });
 });
 

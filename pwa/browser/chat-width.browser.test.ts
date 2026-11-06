@@ -10,9 +10,13 @@
 //     (Refined 76ch, Instrument 88ch, resolved in the paragraph's own font) or the column, and starts at its left edge;
 //   - "code, tables and the composer take the full column": the code block, the table and the inline ask are the
 //     column's content width and the composer is the column;
-//   - "the user bubble sits at the column's right edge, at most 70% wide";
+//   - "the user bubble sits at the column's right edge, at most 70% wide and never wider than the prose" (fix round 1,
+//     F2: `min(70%, var(--measure-chat-prose))`), with its attachments no wider than it (F9);
+//   - "headings share the paragraphs' measure": the h1's and h2's max-width is the paragraph's (F3, the measure resolved
+//     once on `.msg-assist`);
 //   - "no horizontal page scroll": the page never scrolls sideways, and the 300-column block scrolls inside its well;
-//   - "390 is unchanged": on a phone the paragraph's max-width is the shared `--measure-prose` and the column is the pane.
+//   - "390 is unchanged": on a phone the paragraph's max-width is the shared `--measure-prose`, the column is the pane
+//     and the user bubble is 85% of it (F8).
 // The expected figures come from the spec's values, not from the tokens, so the first four are red on a tree that
 // still has 780 and 72ch.
 //
@@ -72,8 +76,11 @@ const PARAGRAPH = Array.from({ length: 900 }, (_, i) => WORDS[i % WORDS.length])
 const WIDE_LINE = Array.from({ length: 30 }, (_, i) => `col_${String(i).padStart(4, '0')}`).join(' ').padEnd(300, '=');
 const TABLE = ['| one | two | three | four | five | six |', '|---|---|---|---|---|---|',
   '| a cell | b cell | c cell | d cell | e cell | f cell |', '| a | b | c | d | e | f |'].join('\n');
-const ASSISTANT = `${PARAGRAPH}\n\n\`\`\`text\n${WIDE_LINE}\n\`\`\`\n\n${TABLE}`;
-const USER = Array.from({ length: 80 }, (_, i) => WORDS[(i + 3) % WORDS.length]).join(' ');
+const HEADING = Array.from({ length: 40 }, (_, i) => WORDS[(i + 5) % WORDS.length]).join(' ');
+const ASSISTANT = `# ${HEADING}\n\n## ${HEADING}\n\n${PARAGRAPH}\n\n\`\`\`text\n${WIDE_LINE}\n\`\`\`\n\n${TABLE}`;
+/** A sent document with a long name: the attachment grid's max-content is that name, so it reaches its cap (F9). */
+const DOC_CLIP = `/w/.cc-clips/lane-a-project-a/clip-${'notes-'.repeat(50)}end.md`;
+const USER = `${DOC_CLIP}\n${Array.from({ length: 80 }, (_, i) => WORDS[(i + 3) % WORDS.length]).join(' ')}`;
 const BACKLOG = {
   type: 'backlog', uuid: 'u-1', offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
   events: [
@@ -113,6 +120,8 @@ interface Measure {
   paragraph: Box;
   /** The paragraph's computed max-width, and `--measure-prose` resolved in the same place. */
   paragraphMax: string;
+  /** The h1's and the h2's computed max-width (fix round 1, F3). */
+  headingMax: string[];
   measureProse: string;
   /** One ch, and the spec's chat prose measure, in px in the paragraph's own font. */
   ch: number;
@@ -123,6 +132,7 @@ interface Measure {
   ask: Box | null;
   composer: Box;
   bubble: Box;
+  attach: Box | null;
   pageSide: number;
 }
 
@@ -191,6 +201,7 @@ async function openAndMeasure(view: View): Promise<{ measured: Measure; errors: 
         content: { left: r.left + padL, right: r.right - padR, width: r.width - padL - padR },
         paragraph: box(paragraph),
         paragraphMax: getComputedStyle(paragraph).maxWidth,
+        headingMax: ['H1', 'H2'].map((tag) => getComputedStyle([...assist.children].find((c) => c.tagName === tag)!).maxWidth),
         ...out,
         code: box(assist.querySelector('.code-block')!),
         codeScrolls: pre.scrollWidth > pre.clientWidth + 1,
@@ -198,6 +209,7 @@ async function openAndMeasure(view: View): Promise<{ measured: Measure; errors: 
         ask: ask === null ? null : box(ask),
         composer: box(document.querySelector('.composer')!),
         bubble: box(document.querySelector('.chat-item .msg-user')!),
+        attach: (() => { const a = document.querySelector('.chat-item .msg-attach'); return a === null ? null : box(a); })(),
         pageSide: doc.scrollWidth - window.innerWidth,
       };
     }, SPEC[view.skin]!.proseCh);
@@ -259,12 +271,24 @@ describe('the chat at a desk: a wide column, prose held to a measure (D-8059)', 
           near(m.composer.width, column, 'the composer');
         });
 
-        it('the user bubble sits at the column\'s right edge, at most 70% wide', () => {
+        it('the user bubble sits at the column\'s right edge, at most 70% wide and never wider than the prose', () => {
           const m = measured!;
           near(m.bubble.right, m.content.right, 'the bubble\'s right edge');
           expect(m.bubble.width, `the bubble (${m.bubble.width}) against 70% of ${m.content.width}`).toBeLessThanOrEqual(0.7 * m.content.width + 1);
-          // 80 words fill the bubble, so it reaches its cap: a 70% that has gone back to 85% is wider than this.
-          expect(m.bubble.width).toBeGreaterThan(0.7 * m.content.width - 2);
+          // Fix round 1, F2: a user turn is never wider than the reply beside it (Instrument 2560 and Refined 1600 with
+          // the rail hidden are where 70% of the column passes the prose).
+          expect(m.bubble.width, `the bubble (${m.bubble.width}) against the paragraph (${m.paragraph.width})`).toBeLessThanOrEqual(m.paragraph.width + 1);
+          // 80 words fill the bubble, so it reaches its cap: 85%, or a bare 70%, is wider than this where it binds.
+          near(m.bubble.width, Math.min(0.7 * m.content.width, m.proseMeasure), 'the bubble at its cap');
+          // F9: the attachments above it are never wider than it, and share its right edge.
+          expect(m.attach, 'premise: the turn has an attachment').not.toBeNull();
+          expect(m.attach!.width, `the attachments (${m.attach!.width}) against the bubble (${m.bubble.width})`).toBeLessThanOrEqual(m.bubble.width + 1);
+          near(m.attach!.right, m.content.right, 'the attachments\' right edge');
+        });
+
+        it('headings share the paragraphs\' measure', () => {
+          const m = measured!;
+          expect(m.headingMax, `h1 and h2 against the paragraph's ${m.paragraphMax}`).toEqual([m.paragraphMax, m.paragraphMax]);
         });
       }
 
@@ -279,6 +303,8 @@ describe('the chat at a desk: a wide column, prose held to a measure (D-8059)', 
         it('390 is unchanged', () => {
           const m = measured!;
           expect(m.paragraphMax, 'the phone paragraph caps at the shared --measure-prose').toBe(m.measureProse);
+          // F8: the phone bubble stays at 85% of the column (80 words fill it).
+          near(m.bubble.width, 0.85 * m.content.width, 'the phone bubble at 85%');
           near(m.column.width, m.pane, 'the column is the pane');
         });
       }

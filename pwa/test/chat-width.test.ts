@@ -7,7 +7,9 @@
 //   Instrument's log column left at 860, or its prose role missing ............. "Instrument declares …"
 //   the role dropped from the skin catalogue ..................................... "SKIN_TOKENS.density names …"
 //   the chat prose rule deleted, or its selector list drifting from prose.css's . "at ≥900, .chat-item .msg-assist's prose …"
-//   the user bubble left at 85% at a desk ......................................... "at ≥900, .msg-user reads max-width: 70%"
+//   the measure resolved per element again (no registered length) ................ "the chat measure is resolved once …"
+//   the user bubble left at 85%, or at 70% with no prose cap (fix round 1, F2) .... "at ≥900, .msg-user and .msg-attach …"
+//   the attachments left at 85% beside a capped bubble (F9) ...................... "at ≥900, .msg-user and .msg-attach …"
 //   the shared measure, or the Docs reader's, re-pointed at the chat role ........ "prose.css's measure rule still reads …"
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -23,6 +25,8 @@ const PROSE = read('ui/src/components/prose.css');
 const CHAT = read('pwa/src/session/chat.css');
 const DOCS = read('pwa/src/docs/docs.css');
 const INSTRUMENT = ":root[data-skin='instrument']";
+/** The registered length the chat's prose children read (fix round 1, F3), set on `.msg-assist` from the token. */
+const CAP = '--chat-prose-cap';
 
 /** The body of every TOP-LEVEL block whose prelude starts `@media`, with its prelude, in source order. Comments are
  *  stripped first, so a brace in prose cannot unbalance the walk. */
@@ -99,27 +103,43 @@ describe('the column and the chat prose measure, as tokens (D-8059)', () => {
 });
 
 describe('the chat\'s rules at a desk (D-8059)', () => {
-  it('at ≥900, .chat-item .msg-assist\'s prose children read max-width: var(--measure-chat-prose)', () => {
+  it('at ≥900, .chat-item .msg-assist\'s prose children read max-width: var(--chat-prose-cap)', () => {
     const list = proseMeasureList();
     expect(list, 'premise: the measure list read from prose.css').toEqual(['p', 'ul', 'ol', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'hr', '.callout']);
     const want = norm(`.chat-item .msg-assist > :is(${list.join(', ')})`);
     const desk = mediaBlocks(CHAT).filter((b) => b.prelude === DESK);
     const hits = desk.flatMap((b) => rules(b.body)).filter((r) => r.prelude === want).map((r) => declValue(r.body, 'max-width'));
-    expect(hits).toEqual(['var(--measure-chat-prose)']);
+    expect(hits).toEqual([`var(${CAP})`]);
     // Nowhere else: below 900 the shared measure holds (spec §2: nothing changes on a phone).
     const everywhere = rules(CHAT).filter((r) => r.prelude === want);
     expect(everywhere, 'the chat prose rule is written once, inside the ≥900 block').toHaveLength(1);
   });
 
-  it('at ≥900, .msg-user reads max-width: 70%', () => {
+  it('the chat measure is resolved once, on .msg-assist, as a registered length whose source is --measure-chat-prose', () => {
+    // Fix round 1, F3: `ch` resolves in each element's own font, so a heading capped at `76ch` ran past the paragraphs.
+    // A registered <length> computes to px where it is set, on `.msg-assist`, and its children inherit that one length.
+    const registered = rules(CHAT).filter((r) => r.prelude === `@property ${CAP}`);
+    expect(registered, `one @property ${CAP}`).toHaveLength(1);
+    expect(declValue(registered[0]!.body, 'syntax')).toBe("'<length>'");
+    expect(declValue(registered[0]!.body, 'inherits')).toBe('true');
     const desk = mediaBlocks(CHAT).filter((b) => b.prelude === DESK);
-    const values = desk.flatMap((b) => rules(b.body)).filter((r) => listed(r.prelude, '.msg-user'))
-      .map((r) => declValue(r.body, 'max-width')).filter((v) => v !== null);
-    expect(values).toEqual(['70%']);
+    const set = desk.flatMap((b) => rules(b.body)).filter((r) => r.prelude === '.chat-item .msg-assist').map((r) => declValue(r.body, CAP));
+    expect(set).toEqual(['var(--measure-chat-prose)']);
+    // Set nowhere else, so below 900 nothing reads it.
+    expect(rules(CHAT).filter((r) => declValue(r.body, CAP) !== null)).toHaveLength(1);
+  });
+
+  it('at ≥900, .msg-user and .msg-attach read max-width: min(70%, var(--measure-chat-prose))', () => {
+    const desk = mediaBlocks(CHAT).filter((b) => b.prelude === DESK);
+    for (const sel of ['.msg-user', '.msg-attach']) {
+      const values = desk.flatMap((b) => rules(b.body)).filter((r) => listed(r.prelude, sel))
+        .map((r) => declValue(r.body, 'max-width')).filter((v) => v !== null);
+      expect(values, sel).toEqual(['min(70%,var(--measure-chat-prose))']);
+    }
   });
 
   it('prose.css\'s measure rule still reads var(--measure-prose), and docs.css\'s .doc-body still reads var(--measure-prose)', () => {
-    expect(proseMeasureList()).toHaveLength(10);
+    proseMeasureList(); // throws unless prose.css has its one measure rule, on var(--measure-prose)
     expect(declValue(ruleIn(DOCS, '.doc-body'), 'max-width')).toBe('var(--measure-prose)');
     expect(stripComments(PROSE)).not.toMatch(/--measure-chat/);
     expect(stripComments(DOCS)).not.toMatch(/--measure-chat/);
