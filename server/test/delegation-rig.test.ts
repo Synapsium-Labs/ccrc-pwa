@@ -1452,18 +1452,24 @@ describe('every scenario\'s scripted fan-out passes today\'s session hook', () =
   const HOOK = path.join(TREE, 'ccd/session-hook.sh');
   const SESSION_ID = 'rig-hookcap';
   const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
-  type Entry = { tool_use?: { name?: string; nameAny?: string[]; input?: unknown } };
-  /** Every scripted Agent, Task or Workflow call, as [scenario, tool, input]; a `nameAny` entry once per name it lists. */
+  type ToolUse = { name?: string; nameAny?: string[]; input?: unknown };
+  type Entry = { tool_use?: ToolUse; blocks?: Array<{ tool_use?: ToolUse }> };
+  /** Every scripted Agent, Task or Workflow call, as [scenario, tool, input], read from every place the mock answers a
+   *  tool_use from (mockapi.mjs#blocksOf): each of `entries`, `default` and `sideDefault`, through its `blocks` when it has
+   *  them and its `tool_use` when not. A `nameAny` entry counts once per name it lists, and a missing `input` is sent as
+   *  `{}`, as the mock sends it. */
   const fanOuts = (): Array<[string, string, unknown]> => {
     const dir = path.join(RIG, 'scenarios');
     const out: Array<[string, string, unknown]> = [];
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort()) {
-      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as { entries: Entry[]; default?: Entry };
-      for (const e of [...s.entries, ...(s.default ? [s.default] : [])]) {
-        const t = e.tool_use;
-        if (!t) continue;
-        for (const name of t.nameAny ?? (t.name ? [t.name] : [])) {
-          if (name === 'Agent' || name === 'Task' || name === 'Workflow') out.push([f.replace(/\.json$/, ''), name, t.input]);
+      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as { entries: Entry[]; default?: Entry; sideDefault?: Entry };
+      for (const e of [...s.entries, ...(s.default ? [s.default] : []), ...(s.sideDefault ? [s.sideDefault] : [])]) {
+        for (const b of e.blocks ?? (e.tool_use ? [{ tool_use: e.tool_use }] : [])) {
+          const t = b.tool_use;
+          if (!t) continue;
+          for (const name of t.nameAny ?? (t.name ? [t.name] : [])) {
+            if (name === 'Agent' || name === 'Task' || name === 'Workflow') out.push([f.replace(/\.json$/, ''), name, t.input ?? {}]);
+          }
         }
       }
     }
@@ -1496,6 +1502,10 @@ describe('every scenario\'s scripted fan-out passes today\'s session hook', () =
     expect(deny('Workflow', { script: "await agent('x', { label: 'x' })\n" }), 'control: Workflow').not.toBeNull();
     const calls = fanOuts();
     expect(new Set(calls.map(([s]) => s)).size, 'the scenarios that fan out').toBe(11);
+    // A scenario inlines its workflow script: a `scriptPath` would be read on this host, where the hook allows a missing file.
+    for (const [s, tool, input] of calls) {
+      if (tool === 'Workflow') expect(Object.keys(input as object), `${s}: the script is inline`).not.toContain('scriptPath');
+    }
     for (const [s, tool, input] of calls) expect(deny(tool, input), `${s}: ${tool}`).toBeNull();
   }, 120_000);
 });
