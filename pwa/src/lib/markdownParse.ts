@@ -2,7 +2,7 @@
 // pure: it runs in the parse worker and in tests, and it never throws. In order:
 //   1. the pre-scan (`markdownGuard.ts`); a refusal ends here;
 //   2. react-markdown's own processor, called stage by stage: remark-parse, then remark-gfm and the alert
-//      callouts, then remark-rehype with raw HTML kept as `raw` nodes; `runSync(parse(src), src)`;
+//      callouts (and, in the chat profile, chat's marks), then remark-rehype with raw HTML kept as `raw` nodes; `runSync(parse(src), src)`;
 //   3. every `raw` node becomes a `text` node, so raw HTML renders as literal text, never as markup; in the docs
 //      profile alone, a `raw` node whose whole value is `<br>`, `<br/>` or `<br />` becomes an empty `br` element
 //      instead (the 2026-10-12 spec's A16; W5 Task 4): built here, never parsed, so nothing else is markup;
@@ -23,6 +23,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
 import { remarkAlerts } from './remarkAlerts';
+import { remarkChatMarks } from './remarkChatMarks';
 import { keystrokeParts, prescanMarkdown } from './markdownGuard';
 import { DOCS_MAX_RENDER_ELEMENTS, MD_MAX_TREE_DEPTH } from './markdownLimits';
 
@@ -39,14 +40,14 @@ export type ParseOutcome =
   | { kind: 'worker-unavailable' } // runner only
   | { kind: 'worker-failed'; error: string }; // runner only
 
-/** Chat's plugin order (`ChatMarkdown`'s list): GFM, then the alert callouts. */
-const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkAlerts];
-
-/** The remark plugins by profile: one list for both. `markdown-parse.test.ts` holds the two profiles' outcomes
- *  equal except for step 3's docs `<br>` (A16), so a divergence here is a deliberate change that reds it first. */
+/** The remark plugins by profile. Chat's is `ChatMarkdown`'s list: GFM, the alert callouts, then chat's marks
+ *  (chat reading Task M, D-8060: names, status labels and lead-ins as data attributes, never a URL). The docs profile
+ *  has the first two only: the Docs reader carries no chat mark. `markdown-parse.test.ts` holds the two profiles'
+ *  outcomes equal except for step 3's docs `<br>` (A16) and chat's mark attributes, so any other divergence here is a
+ *  deliberate change that reds it first. */
 const PLUGINS_BY_PROFILE: Readonly<Record<MarkdownProfile, PluggableList>> = {
-  chat: REMARK_PLUGINS,
-  docs: REMARK_PLUGINS,
+  chat: [remarkGfm, remarkAlerts, remarkChatMarks],
+  docs: [remarkGfm, remarkAlerts],
 };
 
 /** A hast node as the two walks see it. */

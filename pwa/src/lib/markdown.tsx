@@ -21,6 +21,8 @@ import React, {
   createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
 } from 'react';
 import { remarkAlerts } from './remarkAlerts';
+import { remarkChatMarks } from './remarkChatMarks';
+import { MARK_ATTR } from './chatMarks';
 import { LANG_LABEL, codeLanguage } from './highlightNames';
 import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
 import {
@@ -297,7 +299,8 @@ function ImageLink({ href, alt }: { href: string | undefined; alt: string }): Re
 /** Open in the external browser (a bare `<a>` in a standalone PWA would try to
  *  navigate the app itself), and render image URLs inline as tap-to-open images,
  *  except a source `isRefusedChatImageSrc` refuses, which stays a plain link, or,
- *  when the url transform left it empty, the image's alt text. */
+ *  when the url transform left it empty, the image's alt text. A mark's span
+ *  draws its text only. */
 export const CHAT_COMPONENTS: Components = {
   ...SHARED_COMPONENTS,
   a({ href, children }) {
@@ -326,6 +329,13 @@ export const CHAT_COMPONENTS: Components = {
       );
     }
     return <ImageLink href={href} alt={alt ?? ''} />;
+  },
+  // Chat's marks (chat reading Task M, D-8060): a span `remarkChatMarks` drew for a name carries its kind and id and no
+  // URL, and renders its text only, so an unresolved name is plain text. Task L resolves it here. Any other span (a
+  // status label) renders as itself.
+  span({ node: _node, ...props }) {
+    if (Object.hasOwn(props, MARK_ATTR.kind)) return <>{props.children}</>;
+    return <span {...props} />;
   },
 };
 
@@ -391,9 +401,9 @@ export function countChatTableCells(src: string): number {
   return (maxPipes + 1) * lines;
 }
 
-/** Chat's remark plugins: GFM, then the alert callouts. One constant, so every render hands react-markdown the same
- *  list. */
-const CHAT_REMARK_PLUGINS: NonNullable<MarkdownOptions['remarkPlugins']> = [remarkGfm, remarkAlerts];
+/** Chat's remark plugins: GFM, the alert callouts, then chat's marks (Task M, D-8060), as the parse worker's chat
+ *  profile lists them. One constant, so every render hands react-markdown the same list. */
+const CHAT_REMARK_PLUGINS: NonNullable<MarkdownOptions['remarkPlugins']> = [remarkGfm, remarkAlerts, remarkChatMarks];
 
 /** At most `CHAT_SYNC_MAX_BYTES`: the pre-scan, then `countChatTableCells`'s upper bound on the cells its tables could
  *  draw, then react-markdown on the main thread, exactly as before. The sync path has no element cap of its own (the

@@ -30,6 +30,8 @@ const LIB = path.join(PWA, 'src', 'lib');
 const ROOTS: readonly string[] = [
   'markdownLimits.ts', 'markdownGuard.ts', 'remarkAlerts.ts', 'markdownParse.ts', 'markdownWorker.ts',
   'readerRenderJob.ts', 'readerLimits.ts',
+  // Chat's marks (chat reading Task M, D-8060): the chat profile's plugin and the recogniser table it reads.
+  'chatMarks.ts', 'remarkChatMarks.ts',
 ];
 /**
  * The shared kernel files the closure reaches, relative to the package: the one UTF-8 byte counter, which

@@ -8,6 +8,7 @@
 // W4 creates: only `MessageBubble`, the corpus, React's server renderer, RTL and highlight.js's core (the same
 // instance `MessageBubble` registers its grammars on).
 // From W5h-a (base spec 4.15's M4.M1, amended) it also imports the registry as data and the test store, and renders under that store, so the stored files are unchanged (the settled output). Never regenerate them.
+// Chat reading Task M (D-8060) adds chat's marks plugin to both render paths; its reviewed list of goldens to change is EMPTY: no corpus case holds a name, a status label, a lead-in or a list after one, so every stored file is byte-identical.
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';

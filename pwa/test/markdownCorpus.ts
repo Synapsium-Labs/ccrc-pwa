@@ -271,6 +271,51 @@ export const CHAT_CORPUS: readonly CorpusCase[] = [
   },
 ];
 
+/** Chat's marks (chat reading at a desk, Task M, D-8060): messages holding every name kind, every status tone in each
+ *  of S1, S2 and S3, both lead-in kinds and a list after an action lead-in, beside the places no mark may reach. They
+ *  are not in `CHAT_CORPUS`, so they add no golden file: the goldens hold today's output, which marks leave alone except
+ *  by their added attributes. `render-hast.test.tsx` holds the two render paths equal over them, and
+ *  `markdown-parse.test.ts` the two profiles. */
+export const CHAT_MARKS_CASES: readonly CorpusCase[] = [
+  {
+    name: 'marks-every-kind',
+    text: [
+      '**What to do (either one):**',
+      '',
+      '1. Merge #651 once CI green.',
+      '2. Read docs/superpowers/specs/2026-11-06-chat-reading-design.md at @4c677d328.',
+      '',
+      "**Why I can't do it.** Run 1527 is blocked, review 1544 passed and item 34 is now waiting.",
+      '',
+      '| check | state |',
+      '|---|---|',
+      '| tests | Failed, exit 1 |',
+      '| build | **merged** |',
+      '| suite | Refused by the gate |',
+      '',
+      '- **Your call.** run 2 times, or not.',
+      '- **Actions:** none from me.',
+      '',
+    ].join('\n'),
+  },
+  {
+    name: 'marks-out-of-reach',
+    text: [
+      '> [!NOTE]',
+      '> **What to do:** nothing inside a callout; #652 merged here is still a name.',
+      '',
+      '`run 1528` and `#653` in code, [run 1529](https://example.com/r) as a link, https://example.com/x/#654 as an autolink.',
+      '',
+      '```',
+      'run 1530 is blocked',
+      '```',
+      '',
+      'A red herring, the value passed to the parser, C#1, deadbeef and 1234567 stay ink.',
+      '',
+    ].join('\n'),
+  },
+];
+
 /** A recap that `MessageBubble` folds into the compaction card (its event carries the server's `compaction` flag,
  *  D-7187). Its Markdown body is the second Markdown site, which renders only once the card is opened. */
 export const RECAP_CASE: CorpusCase = {
