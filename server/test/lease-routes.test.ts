@@ -203,6 +203,9 @@ describe('W5-R9: retain\'s refusal order, by name, one request each (the intent 
   it('token, body, path, attribution, incarnation, applier, lease, claimant, disposition, then 200', async () => {
     const w = await world();
     expect((await retain(w, w.x, undefined, {})).statusCode, 'no box token').toBe(401);
+    // the token is checked before the body: no token AND a bad body answers 401, never 400 (W5-RM3)
+    const both = await retain(w, 'not-a-lease', { byId: PARENT.id, byUuid: PARENT.uuid, extra: 1 }, {});
+    expect([both.statusCode, both.json().error], 'no box token and a bad body').toEqual([401, 'unauthenticated']);
     const extra = await retain(w, w.x, { byId: PARENT.id, byUuid: PARENT.uuid, extra: 1 });
     expect([extra.statusCode, extra.json().error], 'an extra key').toEqual([400, 'bad-request']);
     const shape = await retain(w, 'not-a-lease');
@@ -248,6 +251,16 @@ describe('W5-R9: retain\'s refusal order, by name, one request each (the intent 
     w.coord.bindSession(run.id, PARENT.id);
     expect(w.coord.advance(run.id, 'failed', 'test-close').ok).toBe(true);
     w.coord.db.prepare('UPDATE runs SET openedAt = ?, closedAt = ? WHERE id = ?').run(D0, D0 + DAY, run.id);
+    // D-7818: 501 newer closed runs of other sessions push the worker's run out of the bounded read; the door reads every run that
+    // named the parent, so the coordinator is still named
+    for (let i = 0; i < 501; i++) {
+      const other = w.coord.openRun({ program: `program-z${i}`, title: 'run-z', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'coord-b-demo' });
+      if (!('id' in other)) throw new Error('openRun refused');
+      w.coord.bindSession(other.id, `lane-z${i}-demo`);
+      expect(w.coord.advance(other.id, 'failed', 'test-close').ok).toBe(true);
+    }
+    const bounded = w.coord.delegationRunStamps();
+    expect(bounded.ok && bounded.runs.some((r) => r.id === run.id), 'CONTROL: the bounded read no longer holds the run').toBe(false);
     const res = await retain(w, w.x, { byId: COORD.id, byUuid: COORD.uuid });
     expect([res.statusCode, res.json().disposition]).toEqual([200, 'retained']);
     const other = await retain(w, w.r, { byId: OTHER.id, byUuid: OTHER.uuid });
@@ -376,7 +389,7 @@ describe('W5-R12b: each door commits through the real SQLite projection, and eve
     expect(() => assertDelegationCheckpointProjectable(synthetic)).toThrow(/names the activity .*which has no row/);
     const act = w.coord.db.prepare('SELECT * FROM delegation_activities LIMIT 1').get() as Record<string, unknown>;
     const cols = Object.keys(act);
-    const row = { ...act, activityId: 'z'.repeat(64), upstreamId: 'attached-z', sourceKind: 'attached' };
+    const row: Record<string, unknown> = { ...act, activityId: 'z'.repeat(64), upstreamId: 'attached-z', sourceKind: 'attached' };
     expect(() => w.coord.db.prepare(`INSERT INTO delegation_activities (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`)
       .run(...cols.map((c) => row[c] as never))).toThrow(/CHECK/);
   });
