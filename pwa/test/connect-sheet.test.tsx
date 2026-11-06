@@ -12,12 +12,13 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ConnectSheet, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
 import { defaultHue, methodChoices } from '../src/accounts/connectFlow';
 import {
-  DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, notFoundAfterUnknown, offlineRefusal,
+  DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, checkedLine, notFoundAfterUnknown, offlineRefusal,
   resultDone, stillUnknownAfterUnknown,
 } from '../src/fleet/accountWords';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore } from '../src/stores/fleet';
+import { FAILED_CHECKS } from './failedChecks';
 
 const lane = (id: string, hue: RosterWire['hue']): RosterWire => ({
   id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'token',
@@ -26,7 +27,7 @@ const ROSTER: RosterWire[] = [lane('lane-a', 'cyan'), lane('lane-b', 'violet')];
 const FRESH = (): AccountsConnect => ({
   accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2'], stepUpFreshUntil: Date.now() + 300_000,
 });
-const LANE_READY: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true };
+const LANE_READY: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true, check: { verdict: 'ok', at: Date.now() } };
 const LANE_NEW: LaneWire = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
 const TOKEN = 'sk-ant-oat01-' + 'Q'.repeat(60);
 
@@ -516,6 +517,21 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     await shown(/Checked: one test reply in \d+\.\d s/);
   });
 
+  it.each(FAILED_CHECKS)('a check answered %s says what it found: no "Checked" line, and the alert says it too (D-8051 (12))', async (_name, failed, line) => {
+    const client = fakeClient({ accountCheck: async () => ({ ok: true as const, lane: failed }) });
+    sheet({ client });
+    toMethod();
+    paste();
+    addLane();
+    const on = await screen.findByRole('button', { name: 'Turn it on' });
+    expect(on).toBeDisabled();
+    expect(document.querySelector('.acct-ledger')).toHaveTextContent(line);
+    expect(document.querySelector('.acct-ledger')).not.toHaveTextContent(LEDGER.checked);
+    // The result frame's latency line says "Checked: one test reply" too, and no test reply came.
+    expect(screen.queryByText(/Checked: one test reply/)).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('connect-alert')).toHaveTextContent(line));
+  });
+
   it('a check that never answers holds Turn it on the same way, and says so', async () => {
     const client = fakeClient({ accountCheck: async () => { throw new TypeError('network'); } });
     sheet({ client });
@@ -539,5 +555,30 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     await shown('That token was refused (HTTP 401). Nothing was saved.');
     expect(document.body.textContent).not.toContain('PLANTED-TEXT');
     expect(screen.getByTestId('connect-alert')).toHaveTextContent('That token was refused');
+  });
+});
+
+describe('checkedLine: the one reader of an answered check (D-8051 (12))', () => {
+  const at = Date.now();
+  const verdict = (v: string): Pick<LaneWire, 'check'> => ({ check: { verdict: v, at } });
+
+  it("says Checked only for a verdict of `ok`", () => {
+    expect(checkedLine(verdict('ok'))).toBe(LEDGER.checked);
+  });
+
+  it.each(FAILED_CHECKS)('%s reads as what it found', (_name, failed, line) => {
+    expect(checkedLine(failed)).toBe(line);
+  });
+
+  it("names the classifier's other two findings, and says nothing it did not learn", () => {
+    expect(checkedLine(verdict('timeout')))
+      .toBe("The check did not pass: the lane didn't answer in time. Nothing was learned about the credential; it may be fine.");
+    expect(checkedLine(verdict('unknown')))
+      .toBe('The check did not pass: it got no clear answer. Nothing was learned about the credential; it may be fine.');
+  });
+
+  it("a word it doesn't know is not a pass, and an inherited name is not a word", () => {
+    expect(checkedLine(verdict('some-new-word'))).toBe(checkedLine(verdict('unknown')));
+    expect(checkedLine(verdict('constructor'))).toBe(checkedLine(verdict('unknown')));
   });
 });

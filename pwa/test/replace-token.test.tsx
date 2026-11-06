@@ -8,11 +8,12 @@ import type { AccountsConnect, FleetSession, LaneWire, RosterWire } from '../../
 import { CompromiseSteps, compromiseStepsFor } from '../src/accounts/CompromiseSteps';
 import { ReplaceSheet, type ReplaceClient, type ReplaceSheetProps } from '../src/accounts/ReplaceSheet';
 import {
-  COMPROMISE_TITLE, NEW_TOKEN_LABEL, REPLACE_SAVE, laneSignedOut, noCheckedCredential, replaceIntro, replaceRefusal, restartLead,
+  COMPROMISE_TITLE, LEDGER, NEW_TOKEN_LABEL, REPLACE_SAVE, laneSignedOut, noCheckedCredential, replaceIntro, replaceRefusal, restartLead,
   revokeRecord, type OldCredential,
 } from '../src/fleet/accountWords';
 import { ApiError } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
+import { FAILED_CHECKS } from './failedChecks';
 import { fleetSession } from './fleetFixture';
 
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -46,7 +47,7 @@ const storeWith = (sessions: FleetSession[] = [running]): FleetStore => {
 function fakeClient(o: Partial<ReplaceClient> = {}): { [K in keyof ReplaceClient]: Mock<ReplaceClient[K]> } {
   return {
     accountCredential: vi.fn<ReplaceClient['accountCredential']>(o.accountCredential ?? (async () => ({ ok: true as const, lane: LANE_READY }))),
-    accountCheck: vi.fn<ReplaceClient['accountCheck']>(o.accountCheck ?? (async () => ({ ok: true as const, lane: LANE_READY }))),
+    accountCheck: vi.fn<ReplaceClient['accountCheck']>(o.accountCheck ?? (async () => ({ ok: true as const, lane: LANE_CHECKED }))),
     accountRevokeAck: vi.fn<ReplaceClient['accountRevokeAck']>(o.accountRevokeAck ?? (async () => ({ ok: true as const }))),
     stop: vi.fn<ReplaceClient['stop']>(o.stop ?? (async () => undefined as never)),
   };
@@ -226,6 +227,15 @@ describe('Replace token by paste (spec §9)', () => {
     expect(screen.queryByRole('button', { name: 'Restart' })).toBeNull();
     expect(field().value).toBe('');
     expect(document.body.innerHTML).not.toContain(TOKEN);
+  });
+
+  it.each(FAILED_CHECKS)('a fresh check answered %s says what it found, never "Checked" (D-8051 (12))', async (_name, failed, line) => {
+    const client = fakeClient({ accountCheck: async () => ({ ok: true as const, lane: failed }) });
+    sheet(client);
+    pasteAndSave();
+    await waitFor(() => expect(client.accountCheck).toHaveBeenCalledWith('lane-c'));
+    expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.queryByText(LEDGER.checked)).toBeNull();
   });
 
   it('the revoke item can be left unticked, and the record says so', async () => {

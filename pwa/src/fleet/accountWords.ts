@@ -13,6 +13,9 @@ import { SWAP_REFUSALS, type AccountsConnect, type AccountUsage, type LaneNotRea
 import type { RouteRefusal } from '../../../shared/refusal';
 import { formatAge, formatReset } from './formatReset';
 
+/** What a check that found no answer says of the credential: the trouble card's words and the ledger's alike. */
+const NOTHING_LEARNED = 'Nothing was learned about the credential; it may be fine.';
+
 /** The lamp: a glyph and its word, never a glyph alone (spec §4.1; identity core). One row per state word, in the
  *  words' own precedence, so a new word is a compile error here before it is a lamp with no name. */
 export const STATE_LAMPS: { readonly [W in AccountStateWord]: { readonly glyph: string; readonly word: string } } = {
@@ -275,7 +278,7 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         }
         : {
           wrong: "The last check couldn't reach the provider.",
-          effect: 'Nothing was learned about the credential; it may be fine.',
+          effect: NOTHING_LEARNED,
           lead: 'Check it again on the fleet host:',
           commands: [fixCommands.check(id)],
           move: null,
@@ -458,6 +461,24 @@ export const LEDGER = {
   on: '✓ On · new sessions can land here. Swap rotation includes it within a minute.',
   reading: "… reading the fleet host's accounts again",
 } as const;
+
+/** What a check found, by the verdict the box recorded (`deploy/account-op.mjs`'s `classify`). `ok` is not a row. */
+const CHECK_FOUND: Readonly<Record<string, string>> = {
+  'auth-dead': `${STATE_LAMPS['signed-out'].word.toLowerCase()}. The provider refused this lane's credential, or it has none.`,
+  unreachable: `it couldn't reach the provider. ${NOTHING_LEARNED}`,
+  timeout: `the lane didn't answer in time. ${NOTHING_LEARNED}`,
+  unknown: `it got no clear answer. ${NOTHING_LEARNED}`,
+};
+/** An answered check's ledger line (D-8051 (12)). The check route answers 200 with the lane whatever the probe found, so
+ *  a resolved call is not a pass: only a verdict of `ok` says Checked. A verdict this table doesn't know reads as no clear
+ *  answer, and a lane with none at all says so. Neither is ever a pass. */
+export function checkedLine(lane: Pick<LaneWire, 'check'>): string {
+  const verdict = lane.check?.verdict;
+  if (verdict === 'ok') return LEDGER.checked;
+  const found = verdict === undefined ? `the fleet host recorded no result. ${NOTHING_LEARNED}`
+    : Object.hasOwn(CHECK_FOUND, verdict) ? CHECK_FOUND[verdict]! : CHECK_FOUND['unknown']!;
+  return `The check did not pass: ${found}`;
+}
 
 /** Outcome unknown (spec §6.2's terminal states): the add's answer never came. */
 export const OUTCOME_UNKNOWN = "The fleet host didn't answer in time. The lane may exist; checking…";
@@ -682,8 +703,14 @@ export const READING_LANE = (id: string): string => `Reading ${id} on the fleet 
 export const typedConfirmLabel = (id: string): string => `Type ${id} to confirm`;
 /** What Remove deletes. A managed Codex lane's credential is its sign-in folder, so its sentence follows that lane's line
  *  and never says the credential goes: turned off, the verb keeps the folder. Turned on, the verb still keeps one that is
- *  outside ccrc's home, that another lane reaches, or whose fate it can't read, so the sentence says "if". */
-export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep'): string => {
+ *  outside ccrc's home, that another lane reaches, or whose fate it can't read, so the sentence says "if". A lane ccrc only
+ *  records (`recorded`, D-8051 (13)) has its own: the verb keeps that lane's launcher and any secrets file it names, and
+ *  runs no sign-out, so all it takes is the roster row and the records beside it. */
+export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep' | 'recorded'): string => {
+  if (codexFolder === 'recorded') {
+    return `Removing ${id} takes it off the fleet host's roster, with the records kept about it. `
+      + 'Its launcher, whatever credential that launcher uses, its config folder and its transcripts stay: ccrc only records this lane.';
+  }
   if (codexFolder === 'keep') {
     return `Removing ${id} deletes everything that runs it on the fleet host. Its ChatGPT sign-in folder, config folder and transcripts stay.`;
   }

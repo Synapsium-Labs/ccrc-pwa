@@ -14,13 +14,14 @@ import {
 import { MethodSwitchSheet, type MethodSwitchSheetProps, type SwitchClient } from '../src/accounts/MethodSwitchSheet';
 import { AUTH_POLL_MS } from '../src/accounts/useSignInAttempt';
 import {
-  CODE_FIELD_LABEL, SEND_CODE, SIGN_OLD_OUT, SIGN_OLD_OUT_ANYWAY, STATED_LABEL, SWITCH_CLOSE_TOKEN, SWITCH_START, SWITCH_TO_SIGN_IN,
+  CODE_FIELD_LABEL, LEDGER, SEND_CODE, SIGN_OLD_OUT, SIGN_OLD_OUT_ANYWAY, STATED_LABEL, SWITCH_CLOSE_TOKEN, SWITCH_START, SWITCH_TO_SIGN_IN,
   SWITCH_TO_TOKEN, signOldOutDanger, switchEnd, switchTitle,
 } from '../src/fleet/accountWords';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
+import { FAILED_CHECKS } from './failedChecks';
 import { fleetSession } from './fleetFixture';
 
 const ATTEMPT = 'd'.repeat(32);
@@ -221,6 +222,17 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
     await waitFor(() => expect(b.client.accountSignOut).toHaveBeenCalledWith('lane-b'));
     // G23 unmeasured: the provider's side is not claimed.
     expect(await screen.findByText(/Whether that also ended the sign-in at Anthropic is unmeasured/)).toBeInTheDocument();
+  });
+
+  it.each(FAILED_CHECKS)('a fresh check answered %s says what it found, never "Checked", and the alert says it (D-8051 (12))', async (_name, failed, line) => {
+    const b = fakeBox();
+    b.client.accountCheck.mockResolvedValue({ ok: true, lane: failed });
+    sheet(b);
+    await runToDone(b, 'setup-token');
+    await waitFor(() => expect(b.client.accountCheck).toHaveBeenCalledWith('lane-b'));
+    await waitFor(() => expect(document.querySelector('.acct-ledger')).toHaveTextContent(line));
+    expect(document.querySelector('.acct-ledger')).not.toHaveTextContent(LEDGER.checked);
+    await waitFor(() => expect(screen.getByTestId('switch-alert')).toHaveTextContent(line));
   });
 
   it('with no session on the lane, the sign-out is a plain button from the start', async () => {

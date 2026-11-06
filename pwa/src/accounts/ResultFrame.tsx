@@ -115,7 +115,8 @@ export function ResultFrame(p: ResultFrameProps): ReactNode {
           {p.signIn.wrongAccount}
         </div>
       )}
-      {p.latencyMs !== null && <p className="acct-result-line">{checkLatency(p.latencyMs)}</p>}
+      {/* "Checked: one test reply": a check that did not pass got none, and the ledger says what it found. */}
+      {p.latencyMs !== null && p.lane?.check?.verdict === 'ok' && <p className="acct-result-line">{checkLatency(p.latencyMs)}</p>}
       {/* With no lane read, the notice IS the held reason, drawn once beneath the primary. */}
       {p.notice !== null && !unchecked && <p className="acct-notice">{p.notice}</p>}
       {p.on ? (

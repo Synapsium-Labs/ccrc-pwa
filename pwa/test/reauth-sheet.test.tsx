@@ -18,6 +18,7 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
+import { FAILED_CHECKS } from './failedChecks';
 import { fleetSession } from './fleetFixture';
 
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -165,7 +166,7 @@ describe('each act asks for step-up before any request (spec §9: "Every one of 
 // ── The sheet itself, against a fake box ────────────────────────────────────────────────────────────────────────────
 
 type Status = AccountAuthStatusAnswer;
-function fakeBox(checked: LaneWire = READY): {
+function fakeBox(checked: LaneWire = CHECKED_B): {
   box: { status: Status; expiresAt: number };
   client: { [K in keyof ReauthClient]: Mock<ReauthClient[K]> };
 } {
@@ -220,6 +221,16 @@ async function walk(b: Box, primary: string, code: string): Promise<void> {
 }
 
 describe('every re-auth ends the same way (spec §9)', () => {
+  it.each(FAILED_CHECKS)('a fresh check answered %s says what it found, never "Checked" (D-8051 (12))', async (_name, failed, line) => {
+    const b = fakeBox();
+    b.client.accountCheck.mockResolvedValue({ ok: true, lane: failed });
+    sheet(b, { onPaste: vi.fn(), lane: { ...CHECKED_B, identity: 'someone@example.invalid', identitySource: 'stated' } });
+    await walk(b, MINT_NEW_TOKEN, 'C'.repeat(40));
+    await waitFor(() => expect(b.client.accountCheck).toHaveBeenCalledWith('lane-b'));
+    expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.queryByText(LEDGER.checked)).toBeNull();
+  });
+
   it('each ends with the restart list, the revoke item for a replaced token, and a fresh check', async () => {
     // Mint a new token on a token lane, with one live session on it.
     const live = fleetSession({ id: 'lane-b:p-one', wrapper: 'lane-b', home: 'lane-b', project: 'p-one', title: 'one' });

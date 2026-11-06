@@ -15,7 +15,7 @@ const ROSTER: RosterWire[] = [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', home
 const CONNECT: AccountsConnect = {
   accountOps: 'available', gate: 'armed', origin: 'https', caps: ['account-v2'], stepUpFreshUntil: Date.now() + 3_600_000,
 };
-const LANE: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true };
+const LANE: LaneWire = { state: { word: 'signed-in', source: 'checked just now' }, ready: true, check: { verdict: 'ok', at: Date.now() } };
 
 function mount(over: Partial<ConnectSheetProps> = {}): { props: ConnectSheetProps; rerender: (p: Partial<ConnectSheetProps>) => void } {
   const props: ConnectSheetProps = {
