@@ -423,6 +423,19 @@ describe('Replace key validates first (`credential`, spec §9)', () => {
     expect(readFileSync(join(home, 'curl-stdin'), 'utf8')).toContain(`Authorization: Bearer ${KEY_NEW}\n`);
   });
 
+  it('a new key whose answer leaves a fact out keeps none of the old key\'s facts: its credit is not the old key\'s', () => {
+    const { home, env } = box('ccrc-or-replace-facts-');
+    scriptKey(home, 200, { data: { ...KEY_BODY, limit_remaining: 0 } });
+    expect(ccrcRun(home, ['account', 'check', '--id', LANE], '', env).code).toBeLessThanOrEqual(1);
+    expect(laneState(home, LANE)).toMatchObject({ credit: { limit: 20, limit_remaining: 0 }, keyLabel: 'ccrc lane-d' });
+    scriptKey(home, 200, { data: {} });
+    const r = replace(home, env);
+    expect(r.code, r.stderr).toBe(0);
+    const state = laneState(home, LANE);
+    expect(state).toMatchObject({ keyHint: 'sk-or-v1-…b26b', keySource: 'pasted' });
+    for (const old of ['credit', 'keyLabel', 'keyLimit', 'limitReset']) expect(state, old).not.toHaveProperty(old);
+  });
+
   it('a compatible lane is not asked of OpenRouter', () => {
     const home = laneBox('ccrc-or-compatible-');
     const env = plantCurl(home);

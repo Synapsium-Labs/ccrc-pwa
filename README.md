@@ -1950,7 +1950,7 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   check, then `GET https://openrouter.ai/api/v1/key` with `curl -H @-`, the bearer header on stdin as one line. A 401
   refuses `key-rejected`, a key whose `is_management_key` or `is_provisioning_key` is true `wrong-key-kind`, and anything
   else `key-unverified`; there is no "save anyway". The lane state keeps the key hint, how the key came, its label,
-  limit, reset and credit, and `check` reads the credit again. `--placement overflow` (the default) writes `homeAble:
+  limit, reset and credit, a new key's facts replacing the old key's whole, and `check` reads the credit again. `--placement overflow` (the default) writes `homeAble:
   false`, so the lane takes a session only when one is sent to it, and `full` writes `homeAble: true`; no other provider
   takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
   `anthropic/claude-<class>-<version>` of each class, refusing `catalogue-unreachable` with nothing written when the

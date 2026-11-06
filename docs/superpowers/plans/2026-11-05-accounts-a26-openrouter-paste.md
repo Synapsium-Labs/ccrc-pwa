@@ -4,7 +4,7 @@
 
 **Before this change:** `add --provider openrouter` wrote whatever it was handed, with `telemetry: "anthropic"`, `homeAble: true` and no models unless the operator typed them. Nothing read the key's credit. `--placement` was an unknown argument, although the agent's argv table has carried it since A8.
 
-**Gates:** #565, #435 and #410 are merged. A26a (#763, 06f4ccab6) is first in v0.0.369, and the fleet runs v0.0.989, which `git tag --contains` lists, so both parsers on the box take `telemetry: "openrouter"`. A16 is merged.
+**Gates:** #565, #435 and #410 are merged. A26a (#763, 06f4ccab6) is first in v0.0.369, and the fleet runs v0.0.993, which `git tag --contains` lists, so both parsers on the box take `telemetry: "openrouter"`. A16 is merged.
 
 **Change:**
 - `ccd/ccrc`:
@@ -41,12 +41,13 @@
 | a `:batch` id admitted | ccrc-account-openrouter-v2 | "never suggests a variant…" |
 | the registry step's subshell removed | ccrc-account-openrouter-v2 | "a models lock it cannot open…" |
 | the scratch left on a refusal | ccrc-account-openrouter-v2 | "a refused key leaves no catalogue behind" |
+| the old facts kept through a new key | ccrc-account-openrouter-v2 | "a new key whose answer leaves a fact out…" |
 
 **Per width × skin × mode:** no UI in all sixteen cells. A27 is the first screen that shows an OpenRouter lane's key, credit or models.
 
 ## Deviations found
 
-- **D-8023 (2026-11-05)** — Task A26 as built, ten decisions its Files list and shape did not make.
+- **D-8023 (2026-11-05)** — Task A26 as built, eleven decisions its Files list and shape did not make.
   1. **`init` runs after the roster entry, and the catalogue is what runs first.** The plan has `add` run `ccrc models <id> init openrouter` before it writes the key, but `init` refuses `no-such-account` until the roster names the lane, and it merges into the lane's `settings.json`. What the plan's order is for, that an unreadable catalogue writes nothing, holds: the catalogue is fetched and the map chosen before the key is even read, and `init` follows the converge on that same file, which is spec §8.3 step 4's order.
   2. **What "suggested" means.** OpenRouter's catalogue names no suggested model, and `init openrouter` seeds nothing, so nothing on `main` answered the spec's sentence. The rule is `suggestedClasses`: per class, the newest visible `anthropic/claude-<class>-<version>`, by `compareVersions`, `:batch` and other variants excluded. Measured against the public catalogue on 2026-11-05: 30 Anthropic ids, all in this grammar. A catalogue with no id for opus, sonnet or haiku refuses `catalogue-unreachable`, because the screen's sentence is true of it too. `fable` fills when the catalogue lists one, as the spec allows.
   3. **The seed does not ask the ownership question.** `discovery add` on an openrouter lane checks `~/.handoff/providers-whitelist.json` against the model's endpoints. The seed does not: spec §8.5 names the public catalogue and no key, and a box with no whitelist file would refuse every add. Each later `discovery add` still passes through it. This is the one place a registry's discovery list skips that check, so it is named here for the reviewers.
@@ -57,5 +58,6 @@
   8. **`selectable: true` is not a field.** The roster has no account-level `selectable`, and `ACCOUNT_KEYS` would warn on one: every lane is pickable. So `overflow` writes only `homeAble: false`.
   9. **`keyLabel` is a new lane-state field,** and `credit` keeps `usage` and `is_free_tier` beside the two figures the reader takes. `laneStateOf` and `LaneWire` are unchanged: the label and the usage line reach the wire with the screen that shows them, A27.
   10. **`ccrc-models-probe` changes,** though the Files list does not name it, because Step 1's "every OpenRouter call" includes its catalogue fetch.
+  11. **A new key's facts replace the old key's whole.** The lane state merges, and a 200 may leave a fact out ("a fact off its grammar is left out"), so a Replace key would have kept the old key's credit beside the new key's hint, and a fresh key could read `credit used up`. `--key-source` marks a new key, and `lane-state` drops the hint and the four facts before it writes what the answer said. `check` passes no source, so a reading that leaves a fact out keeps the last one.
 
   Known limits: a lane removed and added again under its old id keeps the class registry `remove` left (`init` answers `created: false`), so the roster's fresh map and that registry can differ until `ccrc models <id> rm` has run first. A TERM between a Replace key's rename and its lane-state write leaves the old hint and credit beside the new key, with `check` already cleared. `--method pkce` with a pasted key, which `check-add` still admits, is validated like a paste and reads `pasted` until A28.

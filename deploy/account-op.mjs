@@ -533,7 +533,7 @@ function suffixFreeClass(accounts, suffix, file) {
  *  `homeAble: true` AND `telemetry: 'anthropic'` are facts about a GENERATED
  *  wrapper, the mirror of `declaredEntry`'s two: it sets CLAUDE_CONFIG_DIR, so
  *  ccd can land a session on it, and the statusline writes
- *  ~/.cc-limits/<id>.json for it (statusline-command.sh:244-251). An OpenRouter
+ *  ~/.cc-limits/<id>.json for it (statusline-command.sh). An OpenRouter
  *  lane takes its placement (spec §8.4: `overflow` is `homeAble: false`) and its
  *  own telemetry, and a compatible lane reports none (D-5521). `homeAble` is
  *  what `_ws_least_loaded` reads and `$REG/<id>-disabled` is what holds the lane
@@ -1575,7 +1575,10 @@ function opLaneState(a) {
     set.identity = a['identity'];
     set.identitySource = a['identity-source'];
   }
-  const failed = laneStateWrite(home, id, mode, set, clears, a['file']);
+  // `--key-source` MARKS A NEW KEY (D-8023 (11)): what the last key's answer said goes, so an answer that leaves a fact out
+  // never puts the old key's credit beside the new key's hint. `check` passes no source, and keeps its last reading.
+  const dropped = a['key-source'] === undefined ? clears : [...clears, 'keyHint', ...KEY_FACT_FIELDS];
+  const failed = laneStateWrite(home, id, mode, set, dropped, a['file']);
   if (failed !== null) { refuse(failed[0], failed[1]); return 1; }
   return 0;
 }
