@@ -10,9 +10,10 @@ import { useEffect, useRef, useState } from 'react';
  *  read brings it. The last key arrived at is held, so each value arrives once and a re-render never moves focus again; a
  *  second value on the same mount arrives once. No key, or a key with no row, clears the mark and the record, so a later
  *  return to the key that was arrived at arrives again (the shell's reset will have put the pane back at the top). `rows` is
- *  the screen's own map of its mounted rows, read when the effect runs. `hold` (the runs board's, review 1586 F4): while the
- *  row arrived at is missing only because it is moving (a run that closed, between its active row and its Finished one), the
- *  mark and the record stay, so the row it comes back as is marked and never arrived at twice. Accounts passes none. */
+ *  the screen's own map of its mounted rows, read when the effect runs. `hold` (the runs board's, review 1597, fix round 2
+ *  ruling 2): each value arrives once, so the record and the mark stay while the row arrived at is missing and only a change
+ *  of key clears them (a run that closes leaves its active row before its Finished one is drawn; the row it comes back as is
+ *  marked and never arrived at twice). Accounts passes none, and its row going missing clears them as before. */
 export function useArrival<K>(key: K | null, rowExists: boolean, rows: ReadonlyMap<K, HTMLElement>, hold = false): K | null {
   const arrivedAt = useRef<K | null>(null);
   const [arrived, setArrived] = useState<K | null>(null);

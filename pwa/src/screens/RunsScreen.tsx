@@ -293,15 +293,16 @@ export function RunsScreen({
   // The arrival at `?run=<id>` (chat reading Task L, D-8062), on the accounts screen's mechanism (`useArrival`): the run's row
   // exists once a group that holds it is drawn. When neither the live frame nor the archive pages read so far hold it, the
   // board says so, but only once both have answered (`runsFrameSeen`, and the archive read `ok` with no re-read on its way):
-  // before that it says nothing. A run that closes under its own page leaves the frame before the re-read that brings it back
-  // in Finished; the archive last read it open, or that re-read is out, so its arrival is held, not undone (review 1586 F4).
+  // before that it says nothing. One rule (review 1597, fix round 2 ruling 2): a followed run arrives once per value of `?run=`,
+  // so the board holds the record while the row is missing (`hold`, always) and only a change of key clears it; and the line
+  // waits for a re-read issued after the row left the frame, because `useColdRuns` raises `reading` in the render that sees
+  // a run leave. A run that closes under its own page so keeps its one arrival and its mark, whatever the archive held.
   const rowRefs = useRef(new Map<number, HTMLElement>());
   const rowRef = useCallback((id: number, el: HTMLLIElement | null): void => {
     if (el === null) rowRefs.current.delete(id); else rowRefs.current.set(id, el);
   }, []);
   const runRowExists = runId !== null && !noSignalYet && (runAtFinished >= 0 || active.some((r) => r.id === runId));
-  const runMoving = runId !== null && (coldReading || (cold ?? []).some((r) => r.id === runId && !isRunClosed(r)));
-  const arrivedRun = useArrival(runId, runRowExists, rowRefs.current, runMoving);
+  const arrivedRun = useArrival(runId, runRowExists, rowRefs.current, true);
   const runNotLoaded = runId !== null && !runRowExists && runsFrameSeen && coldState === 'ok' && !coldReading;
 
   // A finished row reads `finishedClock(now)`, not the 1 s tick (D-6442): its

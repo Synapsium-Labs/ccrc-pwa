@@ -150,6 +150,128 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
     expect(notLoaded(1527)).toBeNull();
   });
 
+  // Review 1597 (fix round 2, ruling 2): one rule for the arrival. A followed run arrives once per value of `?run=`, and the line
+  // is said only after an archive read that started after the row left the frame has answered without it.
+  /** Every insertion of the not-loaded line into the document, however briefly it stood. */
+  const watchLine = (id: number): { inserted: () => number; stop: () => void } => {
+    let n = 0;
+    const text = runNotLoadedLine(id);
+    const obs = new MutationObserver((records) => {
+      for (const r of records) for (const node of r.addedNodes) if ((node.textContent ?? '').includes(text)) n += 1;
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return { inserted: () => { obs.takeRecords().forEach((r) => r.addedNodes.forEach((node) => { if ((node.textContent ?? '').includes(text)) n += 1; })); return n; }, stop: () => obs.disconnect() };
+  };
+  const rowFocusSpy = (): (() => number) => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    return () => focus.mock.contexts.filter((el) => (el as Element).classList.contains('run-row')).length;
+  };
+
+  // The review's J1: the render in which the frame drops the arrived run inserts no line, not even for one render.
+  it.each([false, true])('when the arrived run leaves the frame no line is inserted, not for one render (strict %s)', async (strict) => {
+    const b = board(runsRunHref(1527), [run(1527)], strict);
+    await waitFor(() => expect(b.reads.length).toBeGreaterThan(0));
+    const mounted = b.reads.length;   // StrictMode runs the mount's read twice
+    for (const r of [...b.reads]) await r.resolve({ runs: [run(1527)] });
+    const line = watchLine(1527);
+    act(() => { b.store.setState({ runs: [] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(mounted + 1));
+    await b.reads[mounted]!.resolve({ runs: [closed(1527, 1_000)] });
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
+    expect(line.inserted()).toBe(0);
+    line.stop();
+  });
+
+  // The review's J2 (and K1): the run was dispatched after the mount's archive read, so that read never held it, and it closes
+  // under its own page: one scroll, one focus, no line.
+  it('a run the mount\'s read never held, closing under its own page, arrives once', async () => {
+    const rowFocuses = rowFocusSpy();
+    const b = board(runsRunHref(1527), [run(1527)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [] });
+    expect(b.scrolled()).toEqual([rowOf(1527)]);
+    const line = watchLine(1527);
+    act(() => { b.store.setState({ runs: [] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    await b.reads[1]!.resolve({ runs: [closed(1527, 1_000)] });
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
+    expect(b.scrolled()).toHaveLength(1);
+    expect(rowFocuses()).toBe(1);
+    expect(line.inserted()).toBe(0);
+    line.stop();
+  });
+
+  // The review's GAP-A: a same-mount change of `?run=` (history Back or Forward, an edited address) to a run dispatched after the
+  // mount's read, which then closes under its own page: that run arrives once.
+  it('a same-mount ?run= to a run dispatched after the mount\'s read arrives once when it closes', async () => {
+    const rowFocuses = rowFocusSpy();
+    const b = board(runsRunHref(1526), [run(1526, { sessionId: 'sess-b', workspace: 'ws-b' })]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [] });
+    act(() => { b.store.setState({ runs: [run(1526, { sessionId: 'sess-b', workspace: 'ws-b' }), run(1527)] }); });
+    act(() => { navigate(runsRunHref(1527)); });
+    expect(b.scrolled()).toEqual([rowOf(1526), rowOf(1527)]);
+    const line = watchLine(1527);
+    act(() => { b.store.setState({ runs: [run(1526, { sessionId: 'sess-b', workspace: 'ws-b' })] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    await b.reads[1]!.resolve({ runs: [closed(1527, 1_000)] });
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
+    expect(b.scrolled()).toHaveLength(2);
+    expect(rowFocuses()).toBe(2);
+    expect(line.inserted()).toBe(0);
+    line.stop();
+  });
+
+  // The review's P2: the record is cleared when the key changes, even to a run with no row, so a return to the first run arrives.
+  it('a change of ?run= to a run with no row clears the record, and the return arrives again', async () => {
+    const b = board(runsRunHref(1527), [run(1527)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [run(1527), run(999)] });
+    expect(b.scrolled()).toEqual([rowOf(1527)]);
+    act(() => { navigate(runsRunHref(999)); });
+    act(() => { navigate(runsRunHref(1527)); });
+    expect(b.scrolled()).toEqual([rowOf(1527), rowOf(1527)]);
+    expect(document.activeElement).toBe(rowOf(1527));
+  });
+
+  // The review's P11, replaced (ruling 2): the arrived run leaves the frame, the re-read answers without it and the line is said;
+  // "Show older" brings it back closed. Once per value of `?run=`: no second scroll or focus, and the row keeps its mark.
+  it('an arrived run said missing and brought back by Show older keeps its one arrival and its mark', async () => {
+    const rowFocuses = rowFocusSpy();
+    const b = board(runsRunHref(1527), [run(1527)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [run(1527)] });
+    expect(b.scrolled()).toEqual([rowOf(1527)]);
+    act(() => { b.store.setState({ runs: [] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    await b.reads[1]!.resolve({ runs: [closed(1600, 60_000)], nextBefore: 1600 });
+    expect(notLoaded(1527)).not.toBeNull();
+    act(() => { screen.getByRole('button', { name: 'Show older' }).click(); });
+    await waitFor(() => expect(b.reads).toHaveLength(3));
+    expect(b.reads[2]!.before).toBe(1600);
+    await b.reads[2]!.resolve({ runs: [closed(1527, 120_000)] });
+    await act(async () => {});
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
+    expect(notLoaded(1527)).toBeNull();
+    expect(b.scrolled()).toHaveLength(1);
+    expect(rowFocuses()).toBe(1);
+  });
+
+  // The review's P5: two re-reads out; the older settling does not end the reading, so no line until the newer answers.
+  it('with two re-reads out, the older one answering says no line', async () => {
+    const b = board(runsRunHref(1527), [run(1527), run(1600)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [run(1527), run(1600)] });
+    act(() => { b.store.setState({ runs: [run(1600)] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    act(() => { b.store.setState({ runs: [] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(3));
+    await b.reads[1]!.resolve({ runs: [] });
+    expect(notLoaded(1527)).toBeNull();
+    await b.reads[2]!.resolve({ runs: [] });
+    expect(notLoaded(1527)).not.toBeNull();
+  });
+
   // Review 1586 F4: a mount over archive pages the store already holds re-reads them; a run they lack is said missing only once
   // this mount's own read has answered.
   it('over pages the store holds, a run they lack is said missing only once this mount\'s read answers', async () => {
