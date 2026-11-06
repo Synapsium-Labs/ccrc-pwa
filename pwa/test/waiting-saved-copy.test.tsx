@@ -12,7 +12,8 @@ import { createFleetStore } from '../src/stores/fleet';
 import { FleetChromeProvider } from '../src/fleet/FleetChrome';
 import { placeBadge, useNavBadges } from '../src/fleet/navBadges';
 import { ItemRoute, WaitingRoute } from '../src/ledgers/WaitingRoutes';
-import { NOT_CURRENT_ACTS_WORD, NO_FRAME_WORD, SAVED_ROWS_WORD } from '../src/ledgers/ledgerWords';
+import { GONE_WORD, NOT_CURRENT_ACTS_WORD, NO_FRAME_WORD, SAVED_ROWS_WORD } from '../src/ledgers/ledgerWords';
+import { runRow } from './ledgersFixture';
 import { fleetSession } from './fleetFixture';
 import { MIN, itemView, waitingView } from './ledgersFixture';
 
@@ -116,15 +117,25 @@ describe('an item opened on a cold start', () => {
     secretSet: { at: Date.now() - 10 * MIN, tail: 'ab12', masked: true },
   });
 
-  it('an item from the saved copy draws with Mark done, Dismiss, Save and Remove disabled and says why', () => {
+  /** The secret panel's field, once its sign-in read has landed: from then on Save is held by `current` alone (review
+   *  1556 R4 X2), never by a panel still asking. */
+  const secretFieldReady = async (): Promise<HTMLInputElement> => {
+    const field = screen.getByLabelText(/secret|value|token/i, { selector: 'input' }) as HTMLInputElement;
+    await waitFor(() => expect(field.disabled).toBe(false));
+    return field;
+  };
+
+  it('an item from the saved copy draws with Mark done, Dismiss, Save and Remove disabled and says why', async () => {
     const store = coldStart({ list: waitingView({ items: [savedItem, secretItem] }) });
     const first = render(<ItemRoute id={7} store={store} />);
     expect(screen.getByText('Saved item')).toBeTruthy();
     expect(statusTexts()).toContain('Saved on this device 4m ago, not current. Waiting for live data…');
     expect((screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getAllByText(NOT_CURRENT_ACTS_WORD)).toHaveLength(1);
-    // The input stays enabled, so an answer can be typed while waiting.
+    // The input stays enabled, so an answer can be typed while waiting; Mark done stays off with one typed (R4 X10).
     expect((screen.getByRole('textbox', { name: /your value/i }) as HTMLInputElement).disabled).toBe(false);
+    fireEvent.change(screen.getByRole('textbox', { name: /your value/i }), { target: { value: '4' } });
+    expect((screen.getByRole('button', { name: 'Mark done' }) as HTMLButtonElement).disabled).toBe(true);
     first.unmount();
 
     // Dismiss is drawn for a programme the runs frame says has ended.
@@ -135,6 +146,7 @@ describe('an item opened on a cold start', () => {
 
     act(() => store.setState({ runsFrameSeen: false, runs: [] }));
     render(<ItemRoute id={9} store={store} />);
+    fireEvent.change(await secretFieldReady(), { target: { value: 'a-value' } });
     expect((screen.getByRole('button', { name: /save/i }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: /remove/i }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getAllByText(NOT_CURRENT_ACTS_WORD)).toHaveLength(1);
@@ -156,7 +168,7 @@ describe('an item opened on a cold start', () => {
     second.unmount();
     act(() => store.setState({ runsFrameSeen: false, runs: [] }));
     render(<ItemRoute id={9} store={store} />);
-    const field = screen.getByLabelText(/secret|value|token/i, { selector: 'input' });
+    const field = await secretFieldReady();
     fireEvent.change(field, { target: { value: 'a-value' } });
     fireEvent.submit(field.closest('form') as HTMLFormElement);
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
@@ -184,6 +196,33 @@ describe('an item opened on a cold start', () => {
     expect(done.disabled).toBe(false);
     fireEvent.click(done);
     await waitFor(() => expect(tick).toHaveBeenCalledWith(7, '4'));
+  });
+
+  // Review 1556 R4 X8: the item's twin of the list's case.
+  it('an item on a box with no coordination database says so, not the saved copy', async () => {
+    vi.spyOn(api, 'waiting').mockRejectedValue(new ApiError(503, { ok: false, error: 'not-configured' }));
+    const store = coldStart();
+    render(<ItemRoute id={7} store={store} />);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/coordination/i);
+    expect(screen.queryByText('Saved item')).toBeNull();
+    expect(screen.queryByText(/not current/)).toBeNull();
+  });
+
+  // Review 1556 R4 X7 (departure c4-item-not-in-copy-waits): only the live list can say an item is gone.
+  it('an item the saved copy does not hold keeps waiting, never "gone"', () => {
+    const store = coldStart();
+    render(<ItemRoute id={99} store={store} />);
+    expect(statusTexts()).toContain(NO_FRAME_WORD);
+    expect(screen.queryByText(GONE_WORD)).toBeNull();
+  });
+
+  // Review 1556 M3: the saved item's band draws its Spec link from the copy, as the list does.
+  it('the saved item\'s band links the spec the copy pins', () => {
+    const goals = { program: 'prog-a', specPath: 'docs/superpowers/specs/2026-10-31-prog-a-design.md', inShort: null, inShortAt: null, modifications: [] };
+    const store = coldStart({ list: waitingView({ items: [savedItem], goals: [goals] as never }) });
+    act(() => store.setState({ runsFrameSeen: true, runs: [runRow({ id: 1, program: 'prog-a', homeProject: 'project-a' } as never)] }));
+    render(<ItemRoute id={7} store={store} />);
+    expect(screen.getByRole('link', { name: /^Spec for/ }).getAttribute('href')).toBe('/docs/project-a/specs/2026-10-31-prog-a-design.md');
   });
 
   it('the item strip on a saved copy has the way back alone', () => {

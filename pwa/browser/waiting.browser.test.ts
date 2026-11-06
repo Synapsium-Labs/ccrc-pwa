@@ -274,6 +274,17 @@ describe.each(SKINS)('a cold start with a saved list in %s', (skin) => {
         expect((await page.evaluate(notCurrentLine))?.text).toMatch(/not current/);
         expect(await page.locator('button', { hasText: 'Mark done' }).isDisabled()).toBe(true);
         expect(await page.textContent('.wi-act')).toContain('You can act on this item once live data arrives.');
+        // Review 1556 R3: the item page's line is the list page's line, in size and ink.
+        const look = (): { size: string; ink: string } | null => {
+          const el = document.querySelector('.wl-note[data-current="false"]');
+          if (el === null) return null;
+          const k = getComputedStyle(el);
+          return { size: k.fontSize, ink: k.color };
+        };
+        const onItem = await page.evaluate(look);
+        await page.goto(server!.origin + '/waiting');
+        await page.waitForSelector('.wl-group', { timeout: 20_000 });
+        expect(onItem, 'the item page draws the line as the list page does').toEqual(await page.evaluate(look));
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

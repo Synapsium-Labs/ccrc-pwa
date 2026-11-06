@@ -1661,9 +1661,6 @@ describe('fleet store', () => {
     });
   });
 
-  // Build 7 / Task 10: additive, so no FLEET_PROTO bump — an already-deployed
-  // PWA must drop this frame exactly like `{type:'mystery'}` above, and this
-  // build must accept it once it knows the shape.
   // Console speed, Task C4 (spec §2.6, D16): the device's copy of the Waiting list is its own field, hydrated once and
   // never written into `waiting`, so every reader that asks whether this page has heard the list answers as before.
   describe('the saved Waiting list (waitingSaved)', () => {
@@ -1724,6 +1721,9 @@ describe('fleet store', () => {
     });
   });
 
+  // Build 7 / Task 10: additive, so no FLEET_PROTO bump — an already-deployed
+  // PWA must drop this frame exactly like `{type:'mystery'}` above, and this
+  // build must accept it once it knows the shape.
   describe('the `runs` frame', () => {
     const runSummary = (id: number, state: string) => ({
       id, program: 'build7', programTitle: 'Fleet coordination', wave: 1, waveOf: 3,

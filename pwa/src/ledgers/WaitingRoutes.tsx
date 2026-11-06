@@ -354,7 +354,8 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
                   name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,
                   // The band's doors (desktop-polish PL10, D-7952; D26): the programme's Goals page, and its pinned spec in the Docs reader.
                   href: programmeIsOpenable(item.program) ? programmePath(item.program) : null,
-                  specHref: view === null ? null : programmeSpecHref(item.program, view.goals, runs ?? []),
+                  // From the list the item is drawn from, the copy included, as the list draws it (review 1556 M3).
+                  specHref: drawnList === null ? null : programmeSpecHref(item.program, drawnList.goals, runs ?? []),
                   homeProject: homeProjectOf(item.program, runs ?? []),
                 }}
                 onTick={async (answer) => {
@@ -371,7 +372,8 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   return (
     <div className="wl-route">
       <ItemNav id={id} back={way} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
-      {source.kind === 'saved' && item !== null && <NotCurrentLine words={savedListWords(source.savedAt, now)} />}
+      {/* In `.wl`, as the route's other notes are, so it takes the list's meta size, ink and padding (review 1556 R3). */}
+      {source.kind === 'saved' && item !== null && <div className="wl"><NotCurrentLine words={savedListWords(source.savedAt, now)} /></div>}
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );
