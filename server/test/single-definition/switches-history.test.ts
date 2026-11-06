@@ -864,3 +864,28 @@ describe('the pane-scope stop switch: its definer, the verb\'s one write, the ac
       .some((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))).map(rel)).toEqual([]);
   });
 });
+
+// Delegation broker wave 5, PR7 (Task 5.7.1, W5-X1). `$REG/delegation-adopt` arms the delegation lane's adoption (O5-7 (a)):
+// absent, the lane only records what it would adopt. The operator touches it by hand on the fleet box after reading the
+// health's `adoption.wouldAdopt`, so no line of shell names it, its one spelling is its definer (an L0 file that reaches no
+// `node:` module), and the files that name its constant read it from a registry listing and reach no write.
+describe('delegation PR7: the adoption marker has no writer in the tree (W5-X1)', () => {
+  const NAME = 'delegation-adopt';
+  const DEFINER = 'shared/switches.ts';
+  const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+
+  it('no shell line names it, and its one TS spelling is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).split('\n').some((l) => new RegExp(`['"\`]${NAME}['"\`]`).test(l))).map(rel).sort(),
+      `spelled as a literal on a code line outside ${DEFINER}`).toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  it('the files that name its constant are the definer and the lane\'s adopt step, and none reaches a write', () => {
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('DELEGATION_ADOPT_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER]);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});

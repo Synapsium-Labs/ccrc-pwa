@@ -105,6 +105,9 @@ export const SCOPE_SWEEP_LIVE_MARKER = 'scope-sweep-live';
  *  provably dead. It means nothing unless `scope-sweep-live` also stands. Absent, the arm records `would-stop (busy)` with
  *  the process list. Its one writer is `ccd scope-sweep-busy`, behind `POST /api/coord/scope-sweep` (D-7994). */
 export const SCOPE_SWEEP_BUSY_LIVE_MARKER = 'scope-sweep-busy-live';
+/** `$REG/delegation-adopt`: arms the delegation lane's adoption (spec §5.6). Absent, the lane only records what it would adopt
+ *  (O5-7 (a)). No writer in the tree: the operator touches it by hand on the fleet box after reading `adoption.wouldAdopt`. */
+export const DELEGATION_ADOPT_MARKER = 'delegation-adopt';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */
 export const SWITCH_OWNER_MAP = {
@@ -297,6 +300,11 @@ export const SWITCHES = {
     storage: { marker: SCOPE_SWEEP_BUSY_LIVE_MARKER }, default: 'absent: shadow, the sweep records the busy scopes it would stop',
     owner: 'C4', meaning: 'With the sweep itself live, a busy scope whose session has been provably dead for six hours is stopped too, inside the same three a minute.',
     writer: 'ccd scope-sweep-busy, through POST /api/coord/scope-sweep',
+  },
+  [DELEGATION_ADOPT_MARKER]: {
+    storage: { marker: DELEGATION_ADOPT_MARKER }, default: 'absent: shadow, the lane records what it would adopt', owner: 'C5',
+    meaning: 'The delegation lane adopts a changed worktree whose delegated activity has terminal evidence, and mails its owner.',
+    writer: 'hand-only',
   },
   [PANE_SCOPE_STOP_LIVE_MARKER]: {
     storage: { marker: PANE_SCOPE_STOP_LIVE_MARKER }, default: 'absent: shadow, a stop only logs what it would stop',

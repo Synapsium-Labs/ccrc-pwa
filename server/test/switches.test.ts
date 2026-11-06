@@ -23,7 +23,7 @@ import { isMarkerState } from '../../shared/api.js';
 import { sqlStatementsIn, sqlStatementsInFile, symbolOf } from './scan/symbols.js';
 import {
   ASKS_DISABLED_MARKER, CHILD_RECLAIM_DISABLED_MARKER, CHILD_STALE_RECLAIM_LIVE_MARKER, CHILD_SUPERSEDED_RECLAIM_LIVE_MARKER, COLLECT_LOOSE_LIVE_MARKER, DEPS_SHED_LIVE_MARKER, DRIFT_PUSH_LIVE_MARKER,
-  NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
+  DELEGATION_ADOPT_MARKER, NESTED_RESCUE_LIVE_MARKER, ORPHAN_TREE_LIVE_MARKER, ORPHAN_TREE_RESCUE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER, markerSwitchNames, readSwitches,
 } from '../../shared/switches.js';
 
 /** Today's marker values, typed once here as the table the switchboard must equal. `asks-disabled` is `watch.ts`'s
@@ -85,7 +85,9 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(TESTBOX_REMOTE_LIVE_MARKER).toBe('testbox-remote-live');
     // D-7902: the deliberate stop's pane-scope stop switch, written by a ccd verb behind a route, read by ccd's own act.
     expect(PANE_SCOPE_STOP_LIVE_MARKER).toBe('pane-scope-stop-live');
-    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live'].sort());
+    // Delegation PR7 (W5-X1): the adoption marker, a hand-armed row with no writer in the tree.
+    expect(DELEGATION_ADOPT_MARKER).toBe('delegation-adopt');
+    expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());
   });
 
@@ -189,8 +191,8 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(readSwitches(null)[TESTBOX_REMOTE_LIVE_MARKER]).toBe('unmeasurable');
   });
 
-  it('the table has 36 rows: 32 markers and 4 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994)', () => {
-    expect([rows.length, markerRows.length, settingRows.length]).toEqual([36, 32, 4]);
+  it('the table has 37 rows: 33 markers and 4 settings (30 at the test box contract\'s base; roll-idle-targets the third setting, dispatch-abandon-choice the fourth; pane-scope-stop-live, D-7902; the sweep\'s two switches, D-7994; delegation-adopt, delegation PR7)', () => {
+    expect([rows.length, markerRows.length, settingRows.length]).toEqual([37, 33, 4]);
   });
 
   it('D-7902: the pane-scope stop switch is C2\'s, absent means shadow, its writer is the Settings route, and it sits before the test box row', () => {
