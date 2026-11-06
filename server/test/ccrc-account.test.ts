@@ -46,6 +46,7 @@ import {
   killLaneProcesses, MANAGER_STANDIN_MARK, plantCodexUsage, plantForeignUsage, plantSystemd, portAccepts, psArgs, spawnFakeLitellm,
   systemctlCalls, systemdRunCalls,
 } from './codexLaneFixture.js';
+import { shadowAccountOp } from './laneStateFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { CLOSED_AUTH_BASE, plantBackendCredential } from './codexAuthFixture.js';
 
@@ -2296,7 +2297,7 @@ describe('ccrc account add: the ordered write', () => {
         kind: 'generated', provider: 'compatible', baseUrl: 'https://orchard-api/v1',
         secretsFile: '.cc-secrets/lab-dev0-compatible.env',
       },
-      homeAble: true, hue: 'amber', telemetry: 'anthropic',
+      homeAble: true, hue: 'amber', telemetry: 'none',
     });
     // APPENDED, never re-ordered: every other account is byte-identical and in
     // its original position, because the roster is USER-OWNED and this verb is
@@ -2559,28 +2560,7 @@ describe('ccrc account add: the ordered write', () => {
  *  importing it RUNS it, argv and all. */
 function staleAtBox(prefix: string, missingOp: string): string {
   const home = box(prefix);
-  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
-  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
-  // AND THE REST OF `deploy/` IS STILL THERE. A box with one stale file is what
-  // this fixture stands in for; a box MISSING `gen-accounts.mjs` is a different
-  // one, and it refuses at `accounts-sh` long before the op under test — which
-  // is what the third case below measured the first time it ran. The two cases
-  // above never reach `_acct_converge`, so this changes nothing for them.
-  for (const f of readdirSync(join(REPO, 'deploy'))) {
-    if (f === 'account-op.mjs') continue;
-    symlinkSync(join(REPO, 'deploy', f), join(home, 'ccrc', 'deploy', f));
-  }
-  const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
-  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
-    `if (process.argv[2] === ${JSON.stringify(missingOp)}) {`,
-    '  process.stderr.write("usage: node deploy/account-op.mjs <refuse|providers|roster'
-      + '|candidates|check-add> [--<key> <value>]\\u2026\\n");',
-    '  process.exitCode = 2;',
-    '} else {',
-    `  await import(${real});`,
-    '}',
-    '',
-  ].join('\n'));
+  shadowAccountOp(home, missingOp);
   return home;
 }
 
@@ -8349,8 +8329,12 @@ describe('ccrc account credential', () => {
         exec: { kind: 'generated', provider: 'openrouter',
           secretsFile: '.cc-secrets/orchard-api-openrouter.env' } }]);
     plantTmux(home, []);
+    // An OpenRouter key is validated first (accounts plan Task A26): a `curl` that answers the 200, ahead of the poison.
+    const or = join(home, 'or-bin');
+    mkdirSync(or, { recursive: true });
+    writeFileSync(join(or, 'curl'), `#!/bin/sh\n${MANAGER_STANDIN_MARK}\ncat >/dev/null\nprintf '{"data":{"is_management_key":false,"is_provisioning_key":false}}\\n200'\n`, { mode: 0o755 });
     const r = run(home, ['account', 'credential', '--id', 'orchard-api', '--credential', '-'],
-      `${CANARY}\n`);
+      `${CANARY}\n`, { PATH: `${or}:${env(home)['PATH'] ?? ''}` });
     expect(r.code, r.stderr).toBe(0);
     const f = join(home, '.cc-secrets', 'orchard-api-openrouter.env');
     expect(readFileSync(f, 'utf8')).toBe(`export ANTHROPIC_AUTH_TOKEN=${CANARY}\n`);
@@ -11287,12 +11271,13 @@ describe('ccrc account add: re-add safety (accounts plan Task A16; G4, G20)', ()
     expect(readFileSync(join(cfg, '.claude.json'), 'utf8')).toContain('someone@example.invalid');
   });
 
-  it('`ccd caps` lists `account-v2`', () => {
+  it('`ccd caps` lists `account-v2` and `account-openrouter-v2`', () => {
     const home = box('ccrc-account-a16-caps-');
     seedBoxRoster(home, FIXTURE_ROSTER);   // ccd sources the projection before any verb
     const r = spawnSync(BASH, [CCD, 'caps'], { env: env(home), encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout.split('\n')).toContain('account-v2');
     expect(r.stdout.split('\n')).toContain('account-v1');
+    expect(r.stdout.split('\n')).toContain('account-openrouter-v2');
   });
 });

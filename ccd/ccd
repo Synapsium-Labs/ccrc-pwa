@@ -9223,6 +9223,9 @@ EOF
   # `account-codex-v1` (N4; accounts plan Task A24): `ccrc account add --provider openai`, `remove`'s delete of the
   # lane's sign-in folder and `set --method openai-login` are on this box.
   echo account-codex-v1
+  # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
+  # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
+  echo account-openrouter-v2
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now

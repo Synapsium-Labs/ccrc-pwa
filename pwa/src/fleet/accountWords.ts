@@ -743,7 +743,8 @@ export function atProviderWords(kind: string, state: string, keyHint: string | u
     case 'openrouter-key':
       return {
         lead: 'The key still works at OpenRouter and can still spend credit. Delete it at',
-        tail: keyHint === undefined ? '.' : ` (it's the key named after this lane, ${keyHint}).`,
+        // By its ending, the one thing the box knows of it: a pasted key was named at OpenRouter by whoever made it.
+        tail: keyHint === undefined ? '.' : ` (it's the key ending in ${keyHint.slice(keyHint.indexOf('…'))}).`,
       };
     case 'codex':
       return { lead: 'The ChatGPT sign-in stays authorised. Remove it at', tail: '.' };

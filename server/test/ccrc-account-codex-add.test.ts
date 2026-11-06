@@ -43,7 +43,6 @@ async function codexBox(prefix: string, opts: { roster?: unknown; runtime?: bool
   homes.push(home);
   plantCodexBins(home);
   if (opts.runtime !== false) plantFakeRuntime(home);
-  symlinkSync(join(REPO, 'ccd', 'ccrc-models-probe'), join(home, 'ccrc', 'ccd', 'ccrc-models-probe'));
   return { home, base: String(await freePort()) };
 }
 
