@@ -131,7 +131,8 @@ import {
   type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
   type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
-import { claimExpiry, type LivenessProbe } from './coord/claims.js';
+import { claimExpiry, claimVerdictOf, type LivenessProbe } from './coord/claims.js';
+import { rowStanding } from './sessionReading.js';
 import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
@@ -1982,9 +1983,9 @@ export class FleetWatcher {
   private delegationClosing: Promise<void> | null = null;
   /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
    *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
-  sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
+  sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[], refused: ReadonlySet<string> = new Set()): Promise<void> {
     if (this.delegationClosing !== null) return Promise.resolve();
-    const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); })
+    const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions, refused); })
       .finally(() => { this.delegationSweeps.delete(run); });
     this.delegationSweeps.add(run);
     return run;
@@ -1998,14 +1999,14 @@ export class FleetWatcher {
   /** After a pass that ran: project, and broadcast on a CHANGE of content (`asOf` excluded, so an unchanged projection is not
    *  re-sent each minute). A refused or throwing runs read skips the frame and leaves the last one standing (`emitRuns`, D-2545).
    *  A null projection after a frame WITHDRAWS it, once: a lane that cannot project must not leave old liveness on screen. */
-  private emitDelegation(sessions: readonly LaneSession[]): void {
+  private emitDelegation(sessions: readonly LaneSession[], refused: ReadonlySet<string>): void {
     const coord = this.deps.coord;
     if (!coord) return;
     let wire: DelegationProjectionWire | null;
     try {
       const read = coord.delegationRunStamps(DELEGATION_PROJECTION_CLOSED_RUNS);
       if (!read.ok) { console.warn(`ccrc-server: the delegation frame skipped a pass: runs refused (${read.detail})`); return; }
-      wire = this.delegationLane().projection(sessions, read.runs);
+      wire = this.delegationLane().projection(sessions, read.runs, refused);
     } catch (err) { console.warn(`ccrc-server: the delegation frame skipped a pass (${err instanceof Error ? err.message : String(err)})`); return; }
     if (wire === null) { this.withdrawDelegation(); return; }
     const json = JSON.stringify({ ...wire, asOf: '' });
@@ -2917,7 +2918,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the DELEGATION lane (wave 3, Task 13) is a sibling at the census's own cadence, on this tick's
       // `sessions` and registry rows. It reads spool buckets over the agent link, so awaiting it would put the dialog detector and the
       // busy->idle push behind a slow remote read; it is single-flight and has its own budget (`DelegationLane`).
-      void this.sweepDelegation(sessions, records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepDelegation(sessions, records, registryRead.refused).catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // `connected` alone is not "this read was complete"; the snapshot decision and its rationale live in
@@ -6354,9 +6355,12 @@ export class FleetWatcher {
    * hard cap still fells it — and is checked BEFORE the absent test, which
    * would answer `gone` (slug `tick-lanes-hold-a-refused-id`). A holder with
    * no listed row at all still reads `gone`.
+   *
+   * A listed row reads through `rowStanding` (D-6908): a holder restarting, or one tmux did not answer for, is doubt
+   * too; asleep and dead holders are `gone`.
    */
   private claimProbe(
-    sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+    sessions: readonly ClaimProbeRow[],
     refused: ReadonlySet<string>,
   ): LivenessProbe {
     const byId = new Map(sessions.map((s) => [s.id, s]));
@@ -6366,7 +6370,7 @@ export class FleetWatcher {
         const s = byId.get(id);
         if (s === undefined) return 'gone';                 // the fleet no longer lists it
         if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
-        return s.status === 'dead' ? 'gone' : 'running';
+        return claimVerdictOf(rowStanding(s));
       },
     };
   }
@@ -6390,7 +6394,7 @@ export class FleetWatcher {
    * lapse lane below keeps the honest verdict, which is where "doubt is not
    * death" does its other half of the work.
    */
-  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
+  renewClaims(sessions: readonly ClaimProbeRow[], refused: ReadonlySet<string>): void {
     this.runLaneSync('claimRenew', () => {
       const now = Date.now();
       const store = this.deps.coord;
@@ -6408,7 +6412,7 @@ export class FleetWatcher {
    *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
    *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
    *  `lapseClaimRow` lapses, never deletes. */
-  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
+  lapseClaims(sessions: readonly ClaimProbeRow[], refused: ReadonlySet<string>): void {
     this.runLaneSync('claimLapse', () => {
       const now = Date.now();
       const store = this.deps.coord;
@@ -9864,7 +9868,9 @@ export interface DelegationLaneStall {
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
  *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
  *  reason: absent reads as no stop evidence (D-5433). */
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>>;
+/** What the claim sweeps read of a frame row: `Pick` is deliberate, so a test need not fabricate a whole `FleetSession`. */
+type ClaimProbeRow = Pick<FleetSession, 'id' | 'unmeasured'> & Partial<Pick<FleetSession, 'presence' | 'lifecycle'>>;
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt' | 'presence' | 'lifecycle'>>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'> & Partial<Pick<SessionRecord, 'workdir'>>;   // PR6: workdirs key a standing refusal
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
@@ -10738,12 +10744,12 @@ class DelegationLane {
    *  (a measured absence needs two successful censuses). Not stored; never a durable write. It projects the census the last pass
    *  read (`passCensus`), never a second read: a census read is a pass's own (`delegation-sweep-clock.test.ts` counts them). */
   private passCensus: DelegationCensusPass | null = null;
-  projection(sessions: readonly DelegationProjectionSession[], runs: readonly DelegationProjectionRun[]): DelegationProjectionWire | null {
+  projection(sessions: readonly DelegationProjectionSession[], runs: readonly DelegationProjectionRun[], refused: ReadonlySet<string>): DelegationProjectionWire | null {
     const census = this.passCensus;
     if (this.durable === null || census === null || !this.registryListed || !this.reconciled || this.reconciliations < 2) return null;
     const state = this.durable.state();
     if (state.phase !== 'ready') return null;
-    return projectDelegation({ checkpoint: state.checkpoint, census, absences: [...this.absences.values()], sessions, runs });
+    return projectDelegation({ checkpoint: state.checkpoint, census, absences: [...this.absences.values()], sessions, refused, runs });
   }
 
   // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────

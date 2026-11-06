@@ -29,6 +29,7 @@ import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { claimantMeasuredDead, measureClaimant } from '../src/coord/reclaim.js';
+import { projectDelegation } from '../src/coord/delegation-projection.js';
 import { deadCoordinatorCrash } from '../src/deadCoordinator.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
@@ -197,11 +198,11 @@ const EXPECTED: Record<string, Observed> = {
   "a live pane, live file unreadable": { frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', presence: 'alive/null', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
   "a live pane, the pane pid read failed": { frame: 'busy+unmeasured/unsupervised', liveRow: 'busy+unmeasured/unsupervised', presence: 'alive/null', resolve: 'ok:busy', claimProbe: 'running', measuredDead: false, crash: 'alive' },
   "a live pane outranks a stop stamp": { frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', presence: 'alive/null', resolve: 'ok:idle', claimProbe: 'running', measuredDead: false, crash: 'alive' },
-  "tmux did not answer": { frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'unknown/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
+  "tmux did not answer": { frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'unknown/null', resolve: 'ok:dead', claimProbe: 'unmeasurable', measuredDead: false, crash: 'unmeasurable' },
   "gone + a stop stamp": { frame: 'dead/stopped', liveRow: 'dead/stopped', presence: `dead/${SEC * 1000}`, resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'stopped' },
   "gone + a stop stamp + hibernated": { frame: 'dead/stopped', liveRow: 'dead/stopped', presence: 'asleep/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
   "gone + a long-gone heartbeat, stale hibernated stamp": { frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'dead/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'crashed' },
-  "gone + a fresh supervisor heartbeat (restarting)": { frame: 'dead/restarting', liveRow: 'dead/restarting', presence: 'alive/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
+  "gone + a fresh supervisor heartbeat (restarting)": { frame: 'dead/restarting', liveRow: 'dead/restarting', presence: 'alive/null', resolve: 'ok:dead', claimProbe: 'unmeasurable', measuredDead: false, crash: 'alive' },
 };
 
 describe('the other liveness ladders, on the same rows (today\'s answers, differences included)', () => {
@@ -232,6 +233,40 @@ describe('claimProbe reads a refused id as doubt before it can read it gone', ()
     expect(probe.liveness(ID)).toBe('unmeasurable');
     expect(probe.liveness(OTHER)).toBe('gone');
   });
+});
+
+// D-6908, the ruled change this file's header asks for. BEFORE is the old expression, run on the same real frame row, so
+// it stays measured rather than remembered. Both readers go through `rowStanding`, so they cannot disagree on doubt.
+describe('claimProbe and the delegation card read the same rows, before and after D-6908', () => {
+  const AFTER: readonly { name: string; claim: readonly [string, string]; card: readonly [string, string] }[] = [
+    { name: 'tmux did not answer', claim: ['gone', 'unmeasurable'], card: ['stale', 'unmeasured'] },
+    { name: 'gone + a fresh supervisor heartbeat (restarting)', claim: ['gone', 'unmeasurable'], card: ['stale', 'unmeasured'] },
+    { name: 'gone + a stop stamp + hibernated', claim: ['gone', 'gone'], card: ['stale', 'asleep'] },
+    { name: 'gone + a stop stamp', claim: ['gone', 'gone'], card: ['stale', 'stale'] },
+    { name: 'gone + a long-gone heartbeat, stale hibernated stamp', claim: ['gone', 'gone'], card: ['stale', 'stale'] },
+    { name: 'a live pane, live file idle', claim: ['running', 'running'], card: ['live', 'live'] },
+  ];
+  for (const { name, claim, card } of AFTER) {
+    it(`${name}: claim ${claim.join(' -> ')}, card ${card.join(' -> ')}`, async () => {
+      const w = world(ROWS.find((x) => x.name === name)!);
+      const fleet = await assembleFleet(w.io, w.cfg, w.tmux, liveStateReaderOver(w.io));
+      const s = fleet.find((x) => x.id === w.id)!;
+      expect(s.status === 'dead' ? 'gone' : 'running').toBe(claim[0]);
+      expect(s.status === 'dead' ? 'stale' : 'live').toBe(card[0]);
+      const watcher = new FleetWatcher(testDeps(w.home) as never, new Bus(), 10_000);
+      const probe = (watcher as unknown as { claimProbe(s: unknown, r: ReadonlySet<string>): { liveness(id: string): string } })
+        .claimProbe(fleet, new Set());
+      expect(probe.liveness(w.id)).toBe(claim[1]);
+      const at = '2026-11-06T10:00:00.000Z';
+      const out = projectDelegation({
+        checkpoint: { activities: [{ activityId: 'a1', parentId: w.id, parentIncarnation: 'inc-1', sourceKind: 'agent', upstreamId: 'up',
+          displayName: null, executionState: 'running', openedAt: at, lastEventAt: at, endedAt: null } as never], leases: [], attempts: [] },
+        census: { measuredAt: NOW, projects: new Map(), incarnations: new Map([[w.id, { kind: 'measured', incarnation: 'inc-1' }]]) },
+        absences: [], sessions: fleet, refused: new Set(), runs: [],
+      });
+      expect(out.activities.map((a) => a.liveness)).toEqual([card[1]]);
+    });
+  }
 });
 
 describe('liveRowFor is a fresh one-row reading at the act (ARCH-48, #783)', () => {

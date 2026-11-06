@@ -1,4 +1,5 @@
 import { CLAIM_LEASE_MS, type ClaimConflict, type PeerDeliverable } from '../../../shared/api.js';
+import type { RowStanding } from '../sessionReading.js';
 
 /**
  * L1: pure, clock-free, fs-free, fastify-free — `journalparse.ts`'s exact
@@ -153,6 +154,15 @@ export type LivenessVerdict = 'running' | 'gone' | 'unmeasurable';
 export interface LivenessProbe {
   liveness(sessionId: string): LivenessVerdict;
 }
+
+/** A holder's verdict from its frame row (D-6908). Doubt is `unmeasurable`, so a holder restarting, or one tmux did not
+ *  answer for, keeps its claim until the hard cap. A sleeper reads `gone`: it takes no claim and the `claim` hold keeps a
+ *  holder awake, so a claim on one is left over and lapses at its standing lease. */
+const CLAIM_VERDICT: Readonly<Record<RowStanding, LivenessVerdict>> = {
+  here: 'running', doubt: 'unmeasurable', asleep: 'gone', gone: 'gone',
+};
+
+export const claimVerdictOf = (standing: RowStanding): LivenessVerdict => CLAIM_VERDICT[standing];
 
 export type ClaimExpiryDecision =
   | { readonly act: 'renew'; readonly expiresAt: number }

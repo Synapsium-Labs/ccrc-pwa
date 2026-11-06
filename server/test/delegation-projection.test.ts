@@ -73,7 +73,7 @@ function census(
     incarnations: new Map(Object.entries(incarnations)),
   };
 }
-const alive = (id: string, over: Partial<DelegationProjectionSession> = {}): DelegationProjectionSession => ({ id, status: 'idle', ...over });
+const alive = (id: string, over: Partial<DelegationProjectionSession> = {}): DelegationProjectionSession => ({ id, presence: 'alive', lifecycle: 'running', ...over });
 function run(id: number, sessionId: string, claimedBy: string | null, openedMin: number, closedMin: number | null): DelegationProjectionRun {
   return { id, sessionId, claimedBy, openedAt: ms(openedMin), closedAt: closedMin === null ? null : ms(closedMin) };
 }
@@ -81,14 +81,15 @@ function input(over: {
   activities?: DelegationActivityRow[]; leases?: DelegationLeaseRow[]; attempts?: DelegationAttemptRow[];
   carriers?: DelegationLeaseCarrierRow[];
   census?: DelegationProjectionInput['census']; absences?: { project: string; adminRecord: string }[];
-  sessions?: DelegationProjectionSession[]; runs?: DelegationProjectionRun[];
+  sessions?: DelegationProjectionSession[]; refused?: ReadonlySet<string>; runs?: DelegationProjectionRun[];
 }): DelegationProjectionInput {
   return {
     checkpoint: {
       activities: over.activities ?? [], leases: over.leases ?? [], attempts: over.attempts ?? [],
       ...(over.carriers === undefined ? {} : { leaseCarriers: over.carriers }),
     },
-    census: over.census ?? census(), absences: over.absences ?? [], sessions: over.sessions ?? [alive('p')], runs: over.runs ?? [],
+    census: over.census ?? census(), absences: over.absences ?? [], sessions: over.sessions ?? [alive('p')],
+    refused: over.refused ?? new Set(), runs: over.runs ?? [],
   };
 }
 
@@ -113,8 +114,34 @@ describe('projectDelegation: activity rows and liveness', () => {
   });
 
   it('W4-P3: a dead parent reads stale, never live', () => {
-    const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', { status: 'dead' })] }));
+    const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', { presence: 'dead', lifecycle: 'orphan' })] }));
     expect(out.activities.map((a) => a.liveness)).toEqual(['stale']);
+  });
+
+  // D-6908: every row read `stale` before; the frame's real rows are driven in `session-ladders-characterization.test.ts`.
+  it.each([
+    ['a sleeping parent has its own word', { presence: 'asleep', lifecycle: 'stopped' }, 'asleep'],
+    ['a parent tmux did not answer for is doubt', { presence: 'unknown', lifecycle: 'orphan' }, 'unmeasured'],
+    ['a restarting parent is doubt', { presence: 'alive', lifecycle: 'restarting' }, 'unmeasured'],
+    ['a parent row with no presence said nothing, which is doubt', { presence: undefined, lifecycle: null }, 'unmeasured'],
+  ] as const)('%s', (_name, row, word) => {
+    const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', row)] }));
+    expect(out.activities.map((a) => a.liveness)).toEqual([word]);
+  });
+
+  it('a parent the listing refused is doubt, though no row lists it; one simply unlisted stays stale', () => {
+    const one = (refused: ReadonlySet<string>) =>
+      projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [], refused })).activities[0]!.liveness;
+    expect(one(new Set(['p']))).toBe('unmeasured');
+    expect(one(new Set())).toBe('stale');
+  });
+
+  it('an ended activity reads ended whatever its parent, so a sleeper shows no entry for finished work', () => {
+    const out = projectDelegation(input({
+      activities: [activity({ activityId: 'a1', executionState: 'ended', endedAt: at(15) })],
+      sessions: [alive('p', { presence: 'asleep', lifecycle: 'stopped' })],
+    }));
+    expect(out.activities).toEqual([]);
   });
 
   it('W4-P4: another incarnation reads stale; an unmeasured or absent incarnation reads unmeasured; an unknown execution unmeasured', () => {

@@ -53,7 +53,7 @@ const fixture = () => {
     };
     for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
   };
-  const running = (id: string) => ({ id, status: 'idle' as const, unmeasured: [] as const });
+  const running = (id: string) => ({ id, presence: 'alive' as const, lifecycle: 'running' as const, unmeasured: [] as const });
   return { home, cfg, coord, bus, watcher, claim, plantRecord, running,
            records: () => readRegistry(localIO, cfg) };
 };
@@ -130,8 +130,8 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_LEASE_MS + 1);                          // past the lease…
-    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }], NO_REFUSED);
-    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }], NO_REFUSED);
+    h.watcher.renewClaims([{ id: 'demo-quiet-basin', presence: 'alive', lifecycle: 'running', unmeasured: ['uuid'] }], NO_REFUSED);
+    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', presence: 'alive', lifecycle: 'running', unmeasured: ['uuid'] }], NO_REFUSED);
     expect(h.coord.activeClaims()).toHaveLength(1);        // …and still held
     expect(h.coord.activeClaims()[0]!.expiresAt).toBe(NOW + CLAIM_LEASE_MS + 1 + CLAIM_LEASE_MS);
   });
@@ -143,7 +143,7 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_LEASE_MS + 1);
-    h.watcher.renewClaims([{ id: 'demo-quiet-basin', status: 'idle', unmeasured: ['uuid'] }], NO_REFUSED);
+    h.watcher.renewClaims([{ id: 'demo-quiet-basin', presence: 'alive', lifecycle: 'running', unmeasured: ['uuid'] }], NO_REFUSED);
     const rival = h.coord.claimAttempt({
       project: 'demo', paths: ['server/src/io.ts'], sessionId: 'demo-calm-mesa',
       uuid: 'u-2', runId: null, intent: 'rival', now: NOW + CLAIM_LEASE_MS + 2,
@@ -168,9 +168,41 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     const h = fixture();
     h.claim();
     at(NOW + CLAIM_LEASE_MS + 1);
-    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', status: 'dead', unmeasured: [] }], NO_REFUSED);
+    h.watcher.lapseClaims([{ id: 'demo-quiet-basin', presence: 'dead', lifecycle: 'orphan', unmeasured: [] }], NO_REFUSED);
     expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject(
       { state: 'lapsed', endedBy: 'session-gone' });
+  });
+
+  // D-6908. BEFORE: both rows read gone, so the claim lapsed at its standing lease. AFTER: both are doubt.
+  it.each([
+    ['restarting (a supervisor beats over a gone pane)', { presence: 'alive', lifecycle: 'restarting' }],
+    ['one tmux did not answer for', { presence: 'unknown', lifecycle: 'orphan' }],
+  ] as const)('a holder %s renews past its lease, and the hard cap still fells it', (_name, row) => {
+    const h = fixture();
+    const c = h.claim();
+    const held = [{ id: 'demo-quiet-basin', ...row, unmeasured: [] }];
+    at(NOW + CLAIM_LEASE_MS - 1_000);
+    h.watcher.renewClaims(held, NO_REFUSED);
+    expect(h.coord.activeClaims()[0]!.expiresAt).toBe(NOW + 2 * CLAIM_LEASE_MS - 1_000);
+    at(NOW + CLAIM_LEASE_MS + 1);                          // the first lease has run out
+    h.watcher.lapseClaims(held, NO_REFUSED);
+    expect(h.coord.activeClaims().map((x) => x.id)).toEqual([c.id]);
+    at(NOW + CLAIM_HARD_CAP_MS + 1);
+    h.watcher.renewClaims(held, NO_REFUSED);
+    h.watcher.lapseClaims(held, NO_REFUSED);
+    expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject({ state: 'lapsed', endedBy: 'hard-cap' });
+  });
+
+  it('a SLEEPING holder stays gone (D-6908): no renewal, and the claim lapses at its standing lease', () => {
+    const h = fixture();
+    const c = h.claim();
+    const asleep = [{ id: 'demo-quiet-basin', presence: 'asleep' as const, lifecycle: 'stopped' as const, unmeasured: [] }];
+    at(NOW + CLAIM_LEASE_MS - 1_000);
+    h.watcher.renewClaims(asleep, NO_REFUSED);
+    expect(h.coord.activeClaims()[0]!.expiresAt).toBe(c.expiresAt);
+    at(NOW + CLAIM_LEASE_MS + 1);
+    h.watcher.lapseClaims(asleep, NO_REFUSED);
+    expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject({ state: 'lapsed', endedBy: 'session-gone' });
   });
 
   it("the HARD CAP lapses even a measured-running holder — doubt cannot hold forever", () => {

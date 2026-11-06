@@ -169,6 +169,24 @@ function presenceOf(f: SessionFacts): Verdict {
   return { presence: 'alive', why: 'lifecycleAlive', substrate: 'absent' };
 }
 
+/** What one frame row says of whether its session is still there, for a reader that must tell doubt from gone. Four
+ *  words, because the two callers (`claimVerdictOf`, the delegation frame's `livenessOf`) answer each one differently.
+ *  `doubt` is the row whose pane says nothing: tmux did not answer (`unknown`), or a supervisor still beats over a gone
+ *  pane (`alive` with lifecycle `restarting`, the one lifecycle that reads alive with no pane). */
+export type RowStanding = 'here' | 'doubt' | 'asleep' | 'gone';
+
+/** D-6908, on the wire's `presence` rather than the old `status === 'dead'`, which is every pane tmux did not call live.
+ *  A row with no `presence` said nothing, and nothing said is doubt (an older row; `shared/api.ts` on `presence`). */
+export function rowStanding(row: { readonly presence?: Presence; readonly lifecycle?: SessionLifecycle | null }): RowStanding {
+  switch (row.presence) {
+    case 'alive': return row.lifecycle === 'restarting' ? 'doubt' : 'here';
+    case 'asleep': return 'asleep';
+    case 'dead': return 'gone';
+    case 'unknown':
+    case undefined: return 'doubt';
+  }
+}
+
 const turnOf = (f: SessionFacts): TurnReading => {
   if (f.row !== 'present') return { word: 'unknown', why: 'noRow' };
   if (f.pane === 'gone') return { word: 'unknown', why: 'noPane' };

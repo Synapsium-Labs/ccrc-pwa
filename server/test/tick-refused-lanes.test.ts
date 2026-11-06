@@ -317,7 +317,7 @@ describe('the claim lease lanes hold a claim whose holder is a listed-but-refuse
     return res.claims[0]!;
   };
   /** The tick's `sessions`, as the claim lanes read them: the valid row, running. `--actor` is in none. */
-  const SESSIONS: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[] = [{ id: GOOD, status: 'idle', unmeasured: [] }];
+  const SESSIONS: readonly Pick<FleetSession, 'id' | 'presence' | 'lifecycle' | 'unmeasured'>[] = [{ id: GOOD, presence: 'alive', lifecycle: 'running', unmeasured: [] }];
   const rowOf = (coord: CoordStore, id: number) => {
     const row = coord.claimsForProject('demo', true).find((c) => c.id === id);
     if (row === undefined) throw new Error('fixture: the claim row is gone');
