@@ -849,6 +849,13 @@ describe('the coordinator skill: linkage', () => {
       // the stopped session's pane scope. A coordinator told about it would be told how to arm or disarm the stop of
       // its own workers' leftovers. The forbid-mention case below forbids it.
       'POST /api/coord/pane-scope-stop',
+      // DELEGATION BROKER wave 5 PR8 — Retain is NAMED THROUGH ITS CLIENT VERB, the intent route's reason: the reference
+      // `delegated-worktrees.md` tells the coordinator to run `ccrc-api leases retain`, and the closed client owns the path. The
+      // operator's two lease doors are session-gated and never a coordinator's, for `POST /api/coord/pause`'s reason: naming them
+      // would be an invitation to keep, attach or disown a worktree in the operator's name.
+      'POST /api/leases/:lease/retain',
+      'POST /api/leases/:lease/operator-retain',
+      'POST /api/leases/:lease/resolve',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
