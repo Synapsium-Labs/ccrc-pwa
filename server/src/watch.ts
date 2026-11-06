@@ -160,7 +160,7 @@ import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/run
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
-import { notify, noticeSink } from './notice.js';
+import { notify, noticeSink, notifyPushOnly } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -1803,7 +1803,9 @@ export class FleetWatcher {
    * mark exists to stop, and a missed one is still shown by the fleet's update line and the settings screen.
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
-   * `pushOne` is about a session and this is about the fleet. A server-role process only: the push
+   * `pushOne` is about a session and this is about the fleet. So it goes through `notifyPushOnly`, the funnel's
+   * send-only door: being in the funnel gates nothing here, and this mark is the only once-only guard the push has.
+   * A server-role process only: the push
    * subscriptions are this box's disk (`push.ts`'s header), and the notify mode is the fleet row's alone.
    * With no push service (no VAPID keys — `index.ts` builds `push` only then) it decides and marks NOTHING:
    * a mark with no sender would answer `pushed` for a push nobody sent and use the tag up for good, so a
@@ -1852,10 +1854,7 @@ export class FleetWatcher {
     const copy = releasePushCopy(n, summary);
     const payload: PushPayload = { title: copy.title, body: copy.body, tag: copy.tag, url: copy.url };
     const tag = n.tag;
-    const sending = sender.notify(payload);
-    void sending.catch((e: unknown) => {
-      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the fleet's update line and the settings screen still show the release`);
-    });
+    notifyPushOnly({ push: sender }, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
     return { did: 'pushed', tag, payload };
   }
 
