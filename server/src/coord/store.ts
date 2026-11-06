@@ -884,10 +884,6 @@ export type StallObservation =
  *  is `episode`, PR landing in ccrc stage 1). */
 export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
 
-/** The delegation stamp reads' five columns (`delegationRunStamps`, `delegationRunStampsNaming`). */
-const DELEGATION_RUN_STAMP_COLUMNS =
-  'CAST(id AS TEXT) AS idText, sessionId, claimedBy, CAST(openedAt AS TEXT) AS openedText, CAST(closedAt AS TEXT) AS closedText';
-
 /** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
 export type DelegationRunStampsResult =
   | { ok: true; runs: DelegationProjectionRun[] }
@@ -3913,25 +3909,11 @@ export class CoordStore {
    * hydration (a periodic lane must not pay it). Same clamp, same `persistedInt` proof and the same ALL-OR-FAILURE rule.
    */
   delegationRunStamps(closedLimit?: number): DelegationRunStampsResult {
-    return this.delegationStampsOf(this.db.prepare(
-      `SELECT ${DELEGATION_RUN_STAMP_COLUMNS} FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} OR id IN ` +
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, CAST(openedAt AS TEXT) AS openedText, CAST(closedAt AS TEXT) AS closedText ' +
+      `FROM runs WHERE state NOT IN ${TERMINAL_RUN_STATES_SQL} OR id IN ` +
       `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?) ORDER BY id`,
-    ).all(clampMailLimit(closedLimit ?? 500)));
-  }
-
-  /**
-   * Delegation broker wave 5 PR8 (D-7818): `delegationRunStamps`' five columns over EVERY run, open or closed, whose `sessionId` is the
-   * given session, with no limit (the runs one session ever named, which stay few). The lease acts' claimant rule
-   * (`delegation-lease-acts.ts#leaseCoordinatorOf`) reads it, never the bounded read, whose newest-500-closed window a lease kept for
-   * weeks outlives. The same `persistedInt` proof and the same ALL-OR-FAILURE rule.
-   */
-  delegationRunStampsNaming(sessionId: string): DelegationRunStampsResult {
-    return this.delegationStampsOf(this.db.prepare(`SELECT ${DELEGATION_RUN_STAMP_COLUMNS} FROM runs WHERE sessionId = ? ORDER BY id`).all(sessionId));
-  }
-
-  /** The two stamp reads' one decoder: every row proved, or the first unreadable one named. */
-  private delegationStampsOf(raw: unknown[]): DelegationRunStampsResult {
-    const rows = raw as { idText: string; sessionId: string | null; claimedBy: string | null; openedText: string; closedText: string | null }[];
+    ).all(clampMailLimit(closedLimit ?? 500)) as unknown as { idText: string; sessionId: string | null; claimedBy: string | null; openedText: string; closedText: string | null }[];
     const runs: DelegationProjectionRun[] = [];
     for (const r of rows) {
       const id = persistedInt(r.idText, 'run id');

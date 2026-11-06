@@ -9,7 +9,7 @@
 import type { DelegationCarrierState, LeaseDoorAnswer, LeaseDoorRefusal } from '../../../shared/api.js';
 import type { FleetIO } from '../io.js';
 import type { FleetState } from '../fleetstate.js';
-import { LEASE_MARK_CAP, LEASE_MARK_LOCK_CAP, ORPHAN_LEASE_CAP, capSupported } from '../ccdargv.js';
+import { LEASE_MARK_LOCK_CAP, ORPHAN_LEASE_CAP, capSupported, ccdCan } from '../ccdargv.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import type { DelegationDurability, DelegationLeaseActOutcome } from './delegation-checkpoint.js';
@@ -17,9 +17,10 @@ import { formatDelegationInstant, type DelegationCheckpointV1 } from './delegati
 import { DELEGATION_LEASE_EXPIRY_MS } from './delegation-lease-state.js';
 import { conflictingTreeKeys } from './delegation-conflicts.js';
 import {
-  decideOperatorRetain, decideResolve, decideRetain, leaseCoordinatorOf, type LeaseDoorTarget, type ResolveAnswer,
+  decideOperatorRetain, decideResolve, decideRetain, leaseCoordinatorOf, type LeaseDoorTarget, type LeaseResolveAnswer,
 } from './delegation-lease-acts.js';
-import type { DelegationRunStampsResult } from './store.js';
+import type { CoordStore } from './store.js';
+import type { StampedRun } from './runBinding.js';
 
 export interface LeaseDoorDeps {
   io: Pick<FleetIO, 'readFileMeasured'>;
@@ -27,12 +28,35 @@ export interface LeaseDoorDeps {
   fleetState: Pick<FleetState, 'ccdVerbs'> | undefined;
   /** The watcher's one applier (`watcher.delegationApplier()`); null while the lane has none open. */
   applier: () => Promise<DelegationDurability | null>;
-  /** `CoordStore#delegationRunStampsNaming`: every run that ever named the session, unbounded (D-7818). */
-  runStampsNaming: (sessionId: string) => DelegationRunStampsResult;
+  /** Every run that ever named the session, unbounded (D-7818): `runStampsOfSeries` over the store. */
+  runStampsNaming: (sessionId: string) => RunStampsRead;
   now: () => number;
 }
 
 const no = (error: LeaseDoorRefusal, detail: string): LeaseDoorAnswer => ({ ok: false, error, detail });
+
+/** The claimant rule's runs, every one, or why none is given (all-or-failure). */
+export type RunStampsRead = { ok: true; runs: readonly StampedRun[] } | { ok: false; detail: string };
+
+/**
+ * D-7818 and D-8042: every run that ever named `sessionId`, open or closed, with no limit, each with its interval. It is composed
+ * from two readers the store already has, never a store method of its own: the binding's own series (`CoordStore#bindingRunsOf`,
+ * every run the session works on or claims, any state, unbounded), then each run's interval by its id (`CoordStore#run`, a run-keyed
+ * read). A fifth session-keyed run reader would break the ARCH-62 census's ceiling of four (`run-session-census.test.ts`). The series
+ * also holds the runs the session claims; `claimantAt` reads only the ones that name it as worker. All-or-failure: one unreadable
+ * run fails the read. It costs one run read per run in the series, on a door that is rare.
+ */
+export function runStampsOfSeries(coord: Pick<CoordStore, 'bindingRunsOf' | 'run'>, sessionId: string): RunStampsRead {
+  const series = coord.bindingRunsOf(sessionId);
+  if (!series.ok) return { ok: false, detail: series.detail };
+  const runs: StampedRun[] = [];
+  for (const b of series.runs) {
+    const read = coord.run(b.id);
+    if (!read.ok) return { ok: false, detail: read.detail };
+    if (read.run !== null) runs.push({ id: read.run.id, sessionId: read.run.sessionId, claimedBy: read.run.claimedBy, openedAt: read.run.openedAt, closedAt: read.run.closedAt });
+  }
+  return { ok: true, runs };
+}
 /** How many times a door decides again when the lease moved between its read and its act (`stale-generation`, the lane's carrier mint). */
 const ATTEMPTS = 2;
 
@@ -54,9 +78,12 @@ async function readyApplier(d: LeaseDoorDeps): Promise<{ durable: DelegationDura
   return { durable, cp: state.checkpoint as DelegationCheckpointV1 };
 }
 
+/** The box has the carrier's writer (`ccdCan`'s `leaseMark` row, the verb question asked once), so a keep waits for the read-back. */
+const carrierMarks = (d: LeaseDoorDeps): boolean => ccdCan(d.fleetState, 'leaseMark');
+
 /** The box can hold a tree: it marks the carrier, takes the orphan act's lock while it does (D-8037), and its orphan rung skips a held tree. */
 const boxHolds = (d: LeaseDoorDeps): boolean =>
-  capSupported(d.fleetState, LEASE_MARK_CAP) && capSupported(d.fleetState, LEASE_MARK_LOCK_CAP) && capSupported(d.fleetState, ORPHAN_LEASE_CAP);
+  carrierMarks(d) && capSupported(d.fleetState, LEASE_MARK_LOCK_CAP) && capSupported(d.fleetState, ORPHAN_LEASE_CAP);
 
 /** One act through a PR5b door, turned into the doors' answer; a throw (a fold refusal, a failed application) is not confirmed durable. */
 async function settle(durable: DelegationDurability, act: () => Promise<DelegationLeaseActOutcome>): Promise<LeaseDoorAnswer | 'moved'> {
@@ -84,7 +111,7 @@ async function decideAndAct(d: LeaseDoorDeps, step: (durable: DelegationDurabili
 const keepRequest = (d: LeaseDoorDeps, leaseId: string, expectGeneration: number, reason: 'retain' | 'operator-retain' | 'attach') => {
   const at = d.now();
   return { leaseId, expectGeneration, reason, at: formatDelegationInstant(at), expiresAt: formatDelegationInstant(at + DELEGATION_LEASE_EXPIRY_MS),
-    terminalEvidenceAt: null, runId: null, promotedSession: null, auditEvidence: null, carrierRequired: capSupported(d.fleetState, LEASE_MARK_CAP) };
+    terminalEvidenceAt: null, runId: null, promotedSession: null, auditEvidence: null, carrierRequired: carrierMarks(d) };
 };
 
 /**
@@ -102,7 +129,7 @@ export async function retainLease(d: LeaseDoorDeps, req: { leaseId: string; byId
     if (!stamps.ok) return no('not-ready', `the runs that named ${lease!.parentId} are unreadable (${stamps.detail}) — retry`);
     const decided = decideRetain({ lease, carrier: cp.leaseCarriers?.find((c) => c.leaseId === req.leaseId), byId: req.byId,
       byIncarnation: inc.incarnation, coordinator: lease === undefined ? null : leaseCoordinatorOf(lease, stamps.runs),
-      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: capSupported(d.fleetState, LEASE_MARK_CAP) });
+      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: carrierMarks(d) });
     if (!decided.ok) return no(decided.refusal, decided.detail);
     return settle(durable, () => durable.transitionLease({ ...keepRequest(d, req.leaseId, decided.expectGeneration, 'retain'), resolvesThrough: null }));
   });
@@ -118,7 +145,7 @@ export async function retainLease(d: LeaseDoorDeps, req: { leaseId: string; byId
 export async function operatorRetainLease(d: LeaseDoorDeps, leaseId: string): Promise<LeaseDoorAnswer> {
   return decideAndAct(d, async (durable, cp) => {
     const decided = decideOperatorRetain({ lease: cp.leases.find((l) => l.leaseId === leaseId), carrier: cp.leaseCarriers?.find((c) => c.leaseId === leaseId),
-      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: capSupported(d.fleetState, LEASE_MARK_CAP) });
+      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: carrierMarks(d) });
     if (!decided.ok) return no(decided.refusal, decided.detail);
     return settle(durable, () => durable.transitionLease({ ...keepRequest(d, leaseId, decided.expectGeneration, 'operator-retain'), resolvesThrough: null }));
   });
@@ -129,8 +156,8 @@ export async function operatorRetainLease(d: LeaseDoorDeps, leaseId: string): Pr
 export async function resolveLease(d: LeaseDoorDeps, req: { target: LeaseDoorTarget; action: 'attach' | 'foreign'; parent: string | null }): Promise<LeaseDoorAnswer> {
   const parentInc = req.action === 'attach' && req.parent !== null ? await incarnationOf(d, req.parent) : null;
   return decideAndAct(d, async (durable, cp) => {
-    const decided: ResolveAnswer = decideResolve({ target: req.target, action: req.action, parent: req.parent, checkpoint: cp,
-      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: capSupported(d.fleetState, LEASE_MARK_CAP),
+    const decided: LeaseResolveAnswer = decideResolve({ target: req.target, action: req.action, parent: req.parent, checkpoint: cp,
+      conflicting: conflictingTreeKeys(cp), boxHolds: boxHolds(d), carrierRequired: carrierMarks(d),
       liveParent: (id) => (id === req.parent && parentInc?.kind === 'measured' ? { incarnation: parentInc.incarnation } : null) });
     if (!decided.ok) return no(decided.refusal, decided.detail);
     if (decided.act === 'release') {

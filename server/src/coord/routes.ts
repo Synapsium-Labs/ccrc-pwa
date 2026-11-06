@@ -43,7 +43,7 @@ import { retireExecutor } from '../retireExecutor.js';
 import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
-import { operatorRetainLease, resolveLease, retainLease, type LeaseDoorDeps } from './delegationLeaseDoor.js';
+import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type LeaseDoorDeps } from './delegationLeaseDoor.js';
 import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
@@ -4451,7 +4451,7 @@ export function registerCoordRoutes(
    * armed and never EXEMPT; they consult no box token. Each answers a `LeaseDoorAnswer`; a refusal goes through `refuseRoute`.
    */
   const leaseDeps = (coord: CoordStore, w: NonNullable<typeof watcher>): LeaseDoorDeps => ({ io: deps.io, registryDir: deps.cfg.registryDir,
-    fleetState: deps.fleetState, applier: () => w.delegationApplier(), runStampsNaming: (id) => coord.delegationRunStampsNaming(id), now: () => Date.now() });
+    fleetState: deps.fleetState, applier: () => w.delegationApplier(), runStampsNaming: (id) => runStampsOfSeries(coord, id), now: () => Date.now() });
   const leaseAnswer = (reply: FastifyReply, a: LeaseDoorAnswer) => (a.ok ? reply.code(200).send(a) : refuseRoute(reply, a.error, { detail: a.detail }));
   const leaseParam = (req: FastifyRequest): string => (req.params as { lease: string }).lease;
   app.post('/api/leases/:lease/retain', async (req, reply) => {

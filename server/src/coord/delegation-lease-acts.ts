@@ -26,8 +26,8 @@ import { claimantAt, type StampedRun } from './runBinding.js';
 /**
  * O5-4 (a)'s ONE claimant rule (D-7843): the coordinator the lease's parent worked for when the lease was first observed, exactly the
  * frame's R9 (`claimantAt`, as `delegation-projection.ts#projectDelegation` nests the row). Retain reads it here; PR7's digest recipient
- * and PR9's promote gate import it. `runs` is `CoordStore#delegationRunStampsNaming(lease.parentId)`, every run that ever named the
- * parent, never the bounded `delegationRunStamps()`, whose newest-500-closed window a long-kept lease outlives (D-7818).
+ * and PR9's promote gate import it. `runs` is every run that ever named the parent (`delegationLeaseDoor.ts#runStampsOfSeries`,
+ * D-8042), never the bounded `delegationRunStamps()`, whose newest-500-closed window a long-kept lease outlives (D-7818).
  */
 export function leaseCoordinatorOf(lease: Pick<DelegationLeaseRow, 'parentId' | 'firstObservedAt'>, runs: readonly StampedRun[]): string | null {
   return claimantAt(runs, lease.parentId, parseDelegationInstant(lease.firstObservedAt));
@@ -151,7 +151,7 @@ export function decideOperatorRetain(input: KeepInput): KeepAnswer<'operator-ret
   return decideKeep(lease, input, 'operator-retain');
 }
 
-export type ResolveAnswer =
+export type LeaseResolveAnswer =
   | { ok: true; act: 'transition'; leaseId: string; reason: 'attach'; expectGeneration: number; resolvesThrough: DelegationAttemptMark | null }
   | { ok: true; act: 'release'; leaseId: string; expectGeneration: number; resolvesThrough: DelegationAttemptMark | null }
   | Refused;
@@ -182,7 +182,7 @@ export function decideResolve(input: {
   checkpoint: Pick<DelegationCheckpointV1, 'leases' | 'leaseCarriers' | 'attempts'>;
   conflicting: ReadonlySet<string>; boxHolds: boolean; carrierRequired: boolean;
   liveParent: (id: string) => { incarnation: string } | null;
-}): ResolveAnswer {
+}): LeaseResolveAnswer {
   const found = leaseOfTarget(input.checkpoint, input.target);
   if ('ok' in found) return found;
   const lease = found;

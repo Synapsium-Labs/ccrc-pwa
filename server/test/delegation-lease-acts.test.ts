@@ -17,6 +17,7 @@ import {
 } from '../src/coord/delegation-model.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { runStampsOfSeries } from '../src/coord/delegationLeaseDoor.js';
 import { LEASE_DOOR_REFUSALS } from '../../shared/api.js';
 import { leaseRow } from './delegationLeaseFixture.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -118,7 +119,7 @@ describe('leaseCoordinatorOf', () => {
     expect(frame.leases.map((l) => [l.parentId, l.via])).toEqual([[leaseCoordinatorOf(worker, closed), 'lane-a-demo']]);
   });
 
-  it('W5-R3c: fed delegationRunStampsNaming, the rule names the coordinator past 501 newer closed runs; fed delegationRunStamps() it answers null', () => {
+  it('W5-R3c (D-8042): fed runStampsOfSeries, the rule names the coordinator past 501 newer closed runs; fed delegationRunStamps() it answers null', () => {
     const store = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-lease-acts-'), 'coord.db')));
     let n = 0;
     const open = (claimedBy: string) => {
@@ -135,20 +136,22 @@ describe('leaseCoordinatorOf', () => {
       store.bindSession(other, `lane-z${i}-demo`);
       expect(store.advance(other, 'failed', 'test-close').ok).toBe(true);
     }
-    const naming = store.delegationRunStampsNaming('lane-a-demo');
+    // the coordinator's own run claims the worker too: the series holds every run the worker works on or claims
+    const naming = runStampsOfSeries(store, 'lane-a-demo');
     if (!naming.ok) throw new Error(naming.detail);
-    expect(naming.runs.map((r) => r.id)).toEqual([mine]);
+    expect(naming.runs).toEqual([{ id: mine, sessionId: 'lane-a-demo', claimedBy: 'coord-a-demo', openedAt: atMin(10), closedAt: atMin(40) }]);
     expect(leaseCoordinatorOf(worker, naming.runs)).toBe('coord-a-demo');
     // CONTROL: the bounded read holds the open runs and the newest 500 closed ones, so the worker's run is outside it
     const bounded = store.delegationRunStamps();
     if (!bounded.ok) throw new Error(bounded.detail);
     expect(bounded.runs.some((r) => r.id === mine)).toBe(false);
     expect(leaseCoordinatorOf(worker, bounded.runs)).toBeNull();
-    // all-or-failure, like its sibling
+    // a session that names no run reads none; all-or-failure: one unreadable run in the series fails the whole read
+    expect(runStampsOfSeries(store, 'lane-q-demo')).toEqual({ ok: true, runs: [] });
     store.db.exec('PRAGMA ignore_check_constraints = ON');
-    store.db.prepare('UPDATE runs SET openedAt = 0 WHERE id = ?').run(mine);
+    store.db.prepare('UPDATE runs SET wave = 0 WHERE id = ?').run(mine);
     store.db.exec('PRAGMA ignore_check_constraints = OFF');
-    expect(store.delegationRunStampsNaming('lane-a-demo')).toEqual({ ok: false, kind: 'run-unreadable', detail: 'openedAt is not a positive safe integer' });
+    expect(runStampsOfSeries(store, 'lane-a-demo')).toMatchObject({ ok: false });
   });
 });
 
