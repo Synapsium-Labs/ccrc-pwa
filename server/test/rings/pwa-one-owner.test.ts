@@ -250,6 +250,24 @@ describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
     ]);
   });
 
+  // D-8049: "is this id listed", asked of a run's raw id. Each row left asks where a run RENDERS or whether a row exists
+  // (a list membership before the binding is read), and says nothing about whose worker it is; a door that decides that
+  // reads `workerOf`. `inboxTarget`'s is an event's id, by the query's untyped receiver.
+  it('runMembership(): the membership checks on a run\'s raw id are these 7 and no others; may only shrink (D-8049)', async () => {
+    const { runMembership } = await import('../census-w7/pwa.js');
+    const sites = runMembership().map((s) => `${site(s)} ${s.text}`);
+    expect(sites.length).toBeLessThanOrEqual(7);
+    expect(sites.sort()).toEqual([
+      'pwa/src/fleet/fleetTree.ts#latestPerSession byId.has(r.sessionId)',
+      'pwa/src/fleet/inboxTarget.ts#inboxTarget sessionsById.has(ev.sessionId)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.claimedBy)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.claimedBy)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.claimedBy)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.sessionId)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.sessionId)',
+    ]);
+  });
+
   it('childRunsSeen: 1 call, a named reader of the .child mark (D-7214), in useColdRuns; may only shrink', async () => {
     const { runMatchers } = await import('../census-w7/pwa.js');
     const calls = runMatchers().filter((s) => s.kind === 'childRunsSeen').map(site);

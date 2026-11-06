@@ -147,6 +147,26 @@ export function runMatchersIn(p: ParsedFile, file: string): W7Site[] {
 }
 export const runMatchers = (): W7Site[] => overPwa(runMatchersIn);
 
+/** "Is this run's session listed", asked of a run's raw `sessionId` or `claimedBy` (D-8049): a `.has(…)` call whose one
+ *  argument ends in one of them, and a call of a closure bound in the same file that does so through its parameter
+ *  (`const waits = (id) => asking.has(id); waits(r.sessionId)`, which `runMatchers` passes over: its lookup reads the
+ *  call's own argument). A recycled worker id answers these exactly as a bound one does (#746), so a door that decides
+ *  something about a run's worker reads `workerOf`, not this. Kind `has` or `closure`; the may-only-shrink pin is
+ *  `rings/pwa-one-owner.test.ts`'s run-binding block.
+ *  KNOWN WIDTH: the closure must be a `const` in the same file whose text has `.has(`; one imported, or one that reaches
+ *  the set through a further call, is not seen. The receiver is not typed, so `.has(ev.sessionId)` on an event counts. */
+export function runMembershipIn(p: ParsedFile, file: string): W7Site[] {
+  const out: W7Site[] = [];
+  const closures = new Set(p.bindings.filter((b) => /=>/.test(b.init) && /\.has\(/.test(b.init)).map((b) => b.name));
+  for (const c of p.calls) {
+    if (c.args.length !== 1 || c.args[0]!.kind !== 'other' || !RUN_KEY.test(c.args[0]!.text)) continue;
+    if (c.name === 'has' && c.callee.endsWith('.has')) out.push(callSite(p, file, c, 'has'));
+    else if (closures.has(c.callee)) out.push(callSite(p, file, c, 'closure'));
+  }
+  return out.sort((a, b) => a.line - b.line);
+}
+export const runMembership = (): W7Site[] => overPwa(runMembershipIn);
+
 // ─── 4. hand-written request polls (ARCH-30's remainder, C7b and C7m) ──────────────────────────────────────────────
 
 /** A `setInterval(…)` call whose enclosing symbol also calls an `api.*` member, in a file outside `pwa/src/lib/usePoll.ts`

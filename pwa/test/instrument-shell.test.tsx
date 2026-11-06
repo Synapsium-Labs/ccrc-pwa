@@ -239,6 +239,7 @@ import type { AccountUsage, FleetSession, NotifyEvent, RunSummary } from '../../
 import { api } from '../src/lib/api';
 import { poolLagText } from '../src/fleet/poolLag';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
 
@@ -740,11 +741,11 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
   // Refined's desk bar read, so the rail's Runs door counts the open runs that need the operator as theirs do.
   it("the rail's Runs door says 'needs you' with the count the phone bar and Refined's tab show", () => {
     stubAt(1280);
-    const sessions = waitingFleet(1);
     const runs = [
       { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
       { id: 2, state: 'working', closedAt: null, sessionId: 'held-child', claimedBy: null },
     ] as unknown as RunSummary[];
+    const sessions = withRunBinding(waitingFleet(1), runs);
     act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
     try {
       mount('/', sessions);

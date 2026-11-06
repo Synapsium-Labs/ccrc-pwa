@@ -20,6 +20,8 @@
 //   a second print-cap literal (AppBar's own PRINT_CAP)  "the badge's print cap has one definition"
 //   `runsNeedYou` ignores the coordinator .............. "a run counts only while …", refined-shell "the Runs badge counts …"
 //   `runsNeedYou` counts a closed run .................. "a run counts only while …", refined-shell "the Runs badge counts …"
+//   the worker arm back to the raw `sessionId` (D-8049)  "a recycled worker id that is asking …", "an older server sends no
+//                                                        binding …"; `rings/pwa-one-owner.test.ts`'s membership row
 //   FleetScreen's mail door ungated on the fleet frame . fleet-screen "the mail door counts the sessions waiting on the
 //                                                        operator, never the unread mail"
 //   `useNavBadges` ungated on the fleet frame .......... refined-shell "no badge at zero; …", instrument-shell (three cases)
@@ -37,6 +39,7 @@ import { ACTIVE_RUN_STATES, IDLE_RUN_STATES, type RunState, type RunSummary } fr
 import { BADGE_PRINT_CAP, badgePrint, runsLineLabel, runsNeedYou, waitingItemsCount, waitingOnYou } from '../src/fleet/navBadges';
 import { fleetSession } from './fleetFixture';
 import { itemView, waitingView } from './ledgersFixture';
+import { withRunBinding } from './runBindingFixture';
 
 const SRC_DIR = path.join(import.meta.dirname, '..', 'src');
 
@@ -65,7 +68,20 @@ describe('the needs-you counts (T2d, D-6330)', () => {
       run(5, 'done', 'w6', 'i2'), // closed: no
       run(6, 'working', 'ghost-a', 'ghost-b'), // on no session: no
     ];
-    expect(runsNeedYou(runs, sessions)).toBe(3);
+    expect(runsNeedYou(runs, withRunBinding(sessions, runs))).toBe(3);
+  });
+
+  // D-8049: the worker arm reads the binding (`workerOf`), so a recycled id that is asking is not this run's worker.
+  it('a recycled worker id that is asking does not count; the run still counts when its coordinator asks', () => {
+    const openRun = { id: 9, state: 'working' as const, claimedBy: null };
+    const recycled = fleetSession({ id: 'w1', bucket: 'attention', run: openRun, openRun });
+    expect(runsNeedYou([run(1, 'working', 'w1', 'i1')], [recycled, idle('i1')])).toBe(0);
+    expect(runsNeedYou([run(1, 'working', 'w1', 'c1')], [recycled, attention('c1')])).toBe(1);
+  });
+
+  it('an older server sends no binding, so an open run finds no worker and only its coordinator counts (the skew row)', () => {
+    expect(runsNeedYou([run(1, 'working', 'w1', 'i1')], [attention('w1'), idle('i1')])).toBe(0);
+    expect(runsNeedYou([run(1, 'working', 'w1', 'c1')], [attention('w1'), attention('c1')])).toBe(1);
   });
 
   it('null before the fleet frame; null before the runs frame', () => {
