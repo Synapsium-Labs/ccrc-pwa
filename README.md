@@ -6815,7 +6815,11 @@ typecheck through `ccrc test`. The session hook reads every Bash call that could
 --classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
 flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
 its own on every session (`ccrc test -- systemd-run … <test>` included) and, on a fleet box (Linux, a registered
-session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-7298): the sessions are
+session), a heavy run in command position outside `ccrc test`. A heredoc body is text, not commands, when the classifier
+can read the whole line and every command on it is one that does not run the body, so a pull request body that mentions
+`npm run typecheck` is not a test run. A body fed to a shell or `ssh`, piped on to one, or written to a file a shell then
+runs is still read as commands, and so is every body on a line the classifier cannot read, or on which it finds a command
+it does not know; an unquoted heredoc's live `$(…)` or backquote is a command bash really runs (D-8052). The scope is good faith (D-7298): the sessions are
 cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
 already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
 spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`
