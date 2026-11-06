@@ -25,13 +25,7 @@ const isUrl = (s: string): boolean => /^https?:\/\//.test(s);
  *  other run, a status word included, stays text, because user text carries no labels. Without a context, today's output. */
 export function linkify(text: string, ctx: ChatRefContext | null = null): ReactNode[] {
   return text.split(URL_SPLIT).flatMap((part, i): ReactNode[] => {
-    if (isUrl(part)) {
-      return [
-        <a key={i} href={part} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, part)}>
-          {part}
-        </a>,
-      ];
-    }
+    if (isUrl(part)) return [<ChatLink key={i} target={{ href: part, external: true }}>{part}</ChatLink>];
     if (ctx === null) return [part];
     return markRuns(part).map((run, j) => {
       if (run.kind !== 'mark') return run.text;
