@@ -335,7 +335,17 @@ describe('a typed /compact sends no UserPromptSubmit (the measurement the tail i
   const versions = fs.readdirSync(DELEGATION).filter((d) => /^\d+\.\d+\.\d+$/.test(d)
     && fs.existsSync(path.join(DELEGATION, d, 'clear-compact-resume.json')));
   it('the corpus holds the scenario', () => { expect(versions.length).toBeGreaterThan(0); });
-  it.each(versions)('%s: Stop, PreCompact(manual), SubagentStop, PostCompact(manual); no /compact prompt', (v) => {
+  // How many SubagentStops the compaction fires, by version range, as the corpus measured it: one up to 2.1.299, and two
+  // from 2.1.311 (the recapture of 2026-11-06; whether a second compaction agent or a retry against the mock's reply,
+  // which is no summary, the fixtures do not say). A version outside every range, or with another count, reds here.
+  const COMPACT_STOPS: ReadonlyArray<{ from: string; to: string; stops: number }> = [
+    { from: '2.1.280', to: '2.1.299', stops: 1 },
+    { from: '2.1.311', to: '2.1.319', stops: 2 },
+  ];
+  const byVersion = (a: string, b: string): number => a.localeCompare(b, undefined, { numeric: true });
+  const stopsFor = (v: string): number | undefined =>
+    COMPACT_STOPS.find((r) => byVersion(v, r.from) >= 0 && byVersion(v, r.to) <= 0)?.stops;
+  it.each(versions)('%s: Stop, PreCompact(manual), the compaction\'s SubagentStops (count pinned by version), PostCompact(manual); no /compact prompt', (v) => {
     const cap = JSON.parse(fs.readFileSync(path.join(DELEGATION, v, 'clear-compact-resume.json'), 'utf8')) as
       { events: Array<{ event: string; payload: Record<string, unknown> }> };
     const ev = cap.events;
@@ -343,11 +353,84 @@ describe('a typed /compact sends no UserPromptSubmit (the measurement the tail i
     expect(prompts.filter((p) => p === '/compact' || p.startsWith('/compact '))).toEqual([]);
     const pre = ev.findIndex((e) => e.event === 'PreCompact');
     expect(pre).toBeGreaterThan(0);
-    expect(ev.slice(pre - 1, pre + 3).map((e) => e.event)).toEqual(['Stop', 'PreCompact', 'SubagentStop', 'PostCompact']);
+    expect(ev[pre - 1]!.event).toBe('Stop');
+    const post = ev.findIndex((e, i) => i > pre && e.event === 'PostCompact');
+    expect(post, 'a PostCompact follows').toBeGreaterThan(pre + 1);
+    const between = ev.slice(pre + 1, post);
+    expect(between.map((e) => e.event), 'only SubagentStops between them').toEqual(between.map(() => 'SubagentStop'));
+    // Each is the compaction's own agent: no type, and an id no SubagentStart of the capture named.
+    const started = new Set(ev.filter((e) => e.event === 'SubagentStart').map((e) => String(e.payload['agent_id'])));
+    for (const s of between) {
+      expect(s.payload['agent_type'], v).toBe('');
+      expect(started.has(String(s.payload['agent_id'])), v).toBe(false);
+    }
+    expect(between.length, `${v}: the count pinned for its version range`).toBe(stopsFor(v));
     expect(ev[pre]!.payload['trigger']).toBe('manual');
+    expect(ev[post]!.payload['trigger']).toBe('manual');
     // The fixtures above copy these key sets.
     expect(Object.keys(ev[pre]!.payload).sort()).toEqual(Object.keys(preCompact()).sort());
-    expect(Object.keys(ev[pre + 2]!.payload).sort()).toEqual(Object.keys(postCompact()).sort());
+    expect(Object.keys(ev[post]!.payload).sort()).toEqual(Object.keys(postCompact()).sort());
+  });
+});
+
+// From 2.1.311 a typed /compact fires two SubagentStops (above). The roster block (D-5232) handles each on its own: a Stop
+// removes only the roster entry with its id, a no-op for the compaction's agent, and the main state is re-read and kept.
+// This row runs the real hook over 2.1.319's own payloads, PreCompact through PostCompact, from an idle `done` and from a
+// mid-turn `working`, each with one unrelated roster entry, and holds that a second stop does what the first does.
+describe('two compaction SubagentStops keep the main state as one does (2.1.311 and later)', () => {
+  type Ev = { event: string; payload: Record<string, unknown> };
+  const events = (v: string, scenario: string): Ev[] =>
+    (JSON.parse(fs.readFileSync(path.join(DELEGATION, v, `${scenario}.json`), 'utf8')) as { events: Ev[] }).events;
+  /** The capture's compaction, PreCompact through PostCompact, and the main-thread payloads around it. */
+  const compaction = (v: string): { seq: Ev[]; stop: Ev; prompt: Ev } => {
+    const ev = events(v, 'clear-compact-resume');
+    const pre = ev.findIndex((e) => e.event === 'PreCompact');
+    const post = ev.findIndex((e, i) => i > pre && e.event === 'PostCompact');
+    const prompt = ev.slice(0, pre).reverse().find((e) => e.event === 'UserPromptSubmit')!;
+    return { seq: ev.slice(pre, post + 1), stop: ev[pre - 1]!, prompt };
+  };
+  /** An unrelated agent's SubagentStart, from the same version's agent-plain capture: it carries its own id. */
+  const unrelatedStart = (): Ev => events('2.1.319', 'agent-plain').find((e) => e.event === 'SubagentStart')!;
+  const KEPT = ['state', 'event', 'updatedAt', 'ask', 'interrupted', 'subagents'] as const;
+  const kept = (s: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(KEPT.map((k) => [k, s[k]]));
+
+  /** From `from`, with the unrelated roster entry, run `v`'s compaction; the kept fields after each SubagentStop, and the
+   *  file after PostCompact less `aliveAt` (the carry's one write, a clock reading). The setup's payloads are always
+   *  2.1.319's, so two versions' runs differ only in their compaction. */
+  const replay = (from: 'done' | 'working', v: string): { before: Record<string, unknown>; afterStops: Array<Record<string, unknown>>; end: Record<string, unknown> } => {
+    writeCaps([WORD, 'hook-main-state-v1']);
+    const setup = compaction('2.1.319');
+    const env = { CLAUDE_CODE_SESSION_ID: String(setup.stop.payload['session_id']) };
+    const go = (p: Record<string, unknown>): void => {
+      const r = spawnSync('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: { ...hookEnv(), ...env } });
+      expect(r.status, `${String(p['hook_event_name'])}: exit 0`).toBe(0);
+    };
+    go((from === 'done' ? setup.stop : setup.prompt).payload);
+    go(unrelatedStart().payload);
+    // The setup's clock readings fixed, so two runs compare: the stamp and the roster entry's start.
+    const s = readState();
+    const subs = (s['subagents'] as Array<Record<string, unknown>>).map((e) => ({ ...e, startedAt: T0 }));
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...s, updatedAt: T0, subagents: subs }) + '\n');
+    const before = kept(readState());
+    const afterStops: Array<Record<string, unknown>> = [];
+    for (const e of compaction(v).seq) {
+      go(e.payload);
+      if (e.event === 'SubagentStop') afterStops.push(kept(readState()));
+    }
+    const { aliveAt: _alive, ...end } = readState();
+    return { before, afterStops, end };
+  };
+
+  it.each(['done', 'working'] as const)('from %s: each of 2.1.319\'s two SubagentStops leaves the state, ask and roster as they stood, and the end equals 2.1.299\'s one-stop run', (from) => {
+    const two = replay(from, '2.1.319');
+    expect(two.before['state']).toBe(from);
+    expect((two.before['subagents'] as unknown[]).length, 'the unrelated roster entry').toBe(1);
+    expect(two.afterStops).toHaveLength(2);
+    for (const k of two.afterStops) expect(k).toEqual(two.before);
+    fs.rmSync(stateFile());
+    const one = replay(from, '2.1.299');
+    expect(one.afterStops).toHaveLength(1);
+    expect(two.end).toEqual(one.end);
   });
 });
 
