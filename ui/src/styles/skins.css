@@ -55,7 +55,7 @@
   --head-h:        44px;             /* the tap floor; 40 only under a fine pointer, below (D-5667) */
   --section-flow:  row;              /* the scope is a tag at the head's right (D-5666) */
   --measure-chat:  100%;             /* the log column: the whole pane (D-8059) */
-  --measure-chat-prose: 88ch;        /* its prose, from 900 */
+  --measure-chat-prose: 100ch;       /* its prose, from 900 */
 
   /* radius — lamps and pills keep --r-full */
   --r-sm: 3px;

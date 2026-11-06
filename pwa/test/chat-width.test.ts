@@ -74,10 +74,10 @@ function proseMeasureList(): string[] {
 }
 
 describe('the column and the chat prose measure, as tokens (D-8059)', () => {
-  it('the top-level :root declares --measure-chat 1200px and --measure-chat-prose 76ch', () => {
+  it('the top-level :root declares --measure-chat 1200px and --measure-chat-prose 90ch', () => {
     const root = rootBody(TOKENS);
     expect(declValue(root, '--measure-chat')).toBe('1200px');
-    expect(declValue(root, '--measure-chat-prose')).toBe('76ch');
+    expect(declValue(root, '--measure-chat-prose')).toBe('90ch');
     // The shared measure stays: the Docs reader and the phone read it.
     expect(declValue(root, '--measure-prose')).toBe('72ch');
   });
@@ -90,10 +90,10 @@ describe('the column and the chat prose measure, as tokens (D-8059)', () => {
     expect(redeclared).toEqual([]);
   });
 
-  it('Instrument declares --measure-chat 100% and --measure-chat-prose 88ch', () => {
+  it('Instrument declares --measure-chat 100% and --measure-chat-prose 100ch', () => {
     const body = ruleIn(SKINS, INSTRUMENT);
     expect(declValue(body, '--measure-chat')).toBe('100%');
-    expect(declValue(body, '--measure-chat-prose')).toBe('88ch');
+    expect(declValue(body, '--measure-chat-prose')).toBe('100ch');
   });
 
   it('SKIN_TOKENS.density names --measure-chat-prose', () => {
@@ -116,7 +116,7 @@ describe('the chat\'s rules at a desk (D-8059)', () => {
   });
 
   it('the chat measure is resolved once, on .msg-assist, as a registered length whose source is --measure-chat-prose', () => {
-    // Fix round 1, F3: `ch` resolves in each element's own font, so a heading capped at `76ch` ran past the paragraphs.
+    // Fix round 1, F3: `ch` resolves in each element's own font, so a heading capped at `90ch` ran past the paragraphs.
     // A registered <length> computes to px where it is set, on `.msg-assist`, and its children inherit that one length.
     const registered = rules(CHAT).filter((r) => r.prelude === `@property ${CAP}`);
     expect(registered, `one @property ${CAP}`).toHaveLength(1);
