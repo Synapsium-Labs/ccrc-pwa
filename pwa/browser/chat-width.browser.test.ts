@@ -7,7 +7,7 @@
 //   - "the column is the cap or the pane": `.chat-item` is Refined's 1200 px or the pane, whichever is narrower, and
 //     Instrument's whole pane;
 //   - "prose is held to the chat measure from the column's left edge": the paragraph is the skin's chat prose measure
-//     (Refined 76ch, Instrument 88ch, resolved in the paragraph's own font) or the column, and starts at its left edge;
+//     (Refined 90ch, Instrument 100ch, resolved in the paragraph's own font) or the column, and starts at its left edge;
 //   - "code, tables and the composer take the full column": the code block, the table and the inline ask are the
 //     column's content width and the composer is the column;
 //   - "the user bubble sits at the column's right edge, at most 70% wide and never wider than the prose" (fix round 1,
@@ -18,7 +18,7 @@
 //   - "390 is unchanged": on a phone the paragraph's max-width is the shared `--measure-prose`, the column is the pane
 //     and the user bubble is 85% of it (F8).
 // The expected figures come from the spec's values, not from the tokens, so the first four are red on a tree that
-// still has 780 and 72ch.
+// still has 780 and 72ch, and the prose-width cases are red on a tree whose measures are 76ch and 88ch.
 //
 // `CCRC_SHOTS=<a directory>` keeps one picture per view and writes every view's figures to `chat-width-figures.json`
 // there (the PR's before and after). Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary>
@@ -36,8 +36,8 @@ import { servedSocket } from '../test/wirePairing';
 
 /** The spec's values (§2.1): the column's cap in px (null: the pane), and the chat prose measure in ch. */
 const SPEC: Readonly<Record<string, { cap: number | null; proseCh: number }>> = {
-  [REFINED]: { cap: 1200, proseCh: 76 },
-  [INSTRUMENT]: { cap: null, proseCh: 88 },
+  [REFINED]: { cap: 1200, proseCh: 90 },
+  [INSTRUMENT]: { cap: null, proseCh: 100 },
 };
 
 interface View extends AppView { readonly rail: boolean }

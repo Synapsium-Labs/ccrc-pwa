@@ -1959,14 +1959,14 @@ button.metachip:active {
    max-width, never a fixed width: at 1600 with the inspector rail the pane is
    narrower than the measure, and the column yields to it.
    Inside the column the assistant's prose (the list prose.css's measure rule
-   names) keeps the chat's own measure, `--measure-chat-prose` (76ch Refined,
-   88ch Instrument), from the column's left edge; code, tables, tool cards and
+   names) keeps the chat's own measure, `--measure-chat-prose` (90ch Refined,
+   100ch Instrument), from the column's left edge; code, tables, tool cards and
    images take the full column. The user's bubble sits at the column's right
    edge, at most 70% of it and never wider than the prose beside it, and its
    attachments take the same cap. Below 900 none of this applies: the shared
    `--measure-prose` and the 85% bubble hold.
    The measure is resolved ONCE, on `.msg-assist`: `ch` resolves in each
-   element's own font, so a heading capped at `76ch` would run past the
+   element's own font, so a heading capped at `90ch` would run past the
    paragraphs. `--chat-prose-cap` is a registered length, so it computes to px
    where it is set and the children inherit that one length. */
 @property --chat-prose-cap {
