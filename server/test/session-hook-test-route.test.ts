@@ -313,9 +313,10 @@ describe('a heredoc body that nothing runs is text (D-8052)', () => {
   });
 });
 describe('a long heredoc body is skipped, not walked (D-8052)', () => {
-  // The arm bounds the classifier at 5 seconds and fails open past it, and a walk of this body takes over a minute.
-  it('a 180 KB body reads light well inside the bound', () => {
-    const body = Array.from({ length: 3000 }, (_, i) => `- [x] line ${i} with \`npm run typecheck\` and more words here`);
+  // The arm bounds the classifier at 5 seconds and fails open past it, and a walk of this body takes far longer. It stays
+  // under 128 KiB, the most Linux passes in one argument.
+  it('a 120 KB body reads light well inside the bound', () => {
+    const body = Array.from({ length: 2000 }, (_, i) => `- [x] line ${i} with \`npm run typecheck\` and more words here`);
     expect(classify(lines("gh pr create --body-file - <<'EOF'", ...body, 'EOF'))).toBe('light');
   });
 });
