@@ -125,7 +125,7 @@ outlive the session.
 `ccd/ccrc-doctor-checks`. Only a comment ties `_ci_addrs` to `_transcript_path`, and a keyword search found no test
 that does.
 
-**Spec:** K9 says why each of the four exists, and drops them from its Deleted list. A parity test was offered as
+**Spec:** K9 says why each of the four exists, and drops `_transcript_matches` from its Deleted list. A parity test was offered as
 optional, and is not part of this ruling.
 
 ### 8. Raw clock calls in ccd
