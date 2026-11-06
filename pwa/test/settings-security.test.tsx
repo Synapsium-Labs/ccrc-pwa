@@ -429,6 +429,20 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
     expect(authLost()).toEqual({ lost: true, verdict: 'no-session' });
   });
 
+  // Console speed C4, review 1556 R2: a deliberate sign-out forgets the Waiting list saved on this device. The fleet
+  // snapshot is not touched here (carried to the speed follow-up).
+  it('Sign out forgets the Waiting list saved on this device', async () => {
+    window.localStorage.setItem('ccrc.waiting-snapshot.v1', '{"savedAt":1,"view":{"items":[],"cleared":[],"goals":[]}}');
+    window.localStorage.setItem('ccrc.fleet-snapshot.v1', 'fleet-bytes');
+    await armed();
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('region', { name: 'This session' })).getByRole('button', { name: 'Sign out' }));
+    });
+    expect(window.localStorage.getItem('ccrc.waiting-snapshot.v1')).toBeNull();
+    expect(window.localStorage.getItem('ccrc.fleet-snapshot.v1')).toBe('fleet-bytes');
+    window.localStorage.removeItem('ccrc.fleet-snapshot.v1');
+  });
+
   it('an unreadable status shows no Your sign-in or This session, and never says on', async () => {
     for (const answer of [{ status: 404, body: { error: 'not-found' } }, 'network', { status: 200, body: { authed: true } }] as const) {
       const f = authStatus(answer);

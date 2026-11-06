@@ -15,6 +15,7 @@ import { Button, Section } from '@ccrc/ui';
 import { ResultLine, SETTINGS_CARDS, useResultLine } from '../../fleet/settingsText';
 import { api, apiErrorText } from '../../lib/api';
 import { raiseAuthLost } from '../../lib/auth';
+import { forgetWaitingSnapshot } from '../../lib/offline';
 
 /** This session's words (spec §5.5). */
 export const SESSION_TEXT = {
@@ -36,6 +37,8 @@ export function ThisSessionCard(): ReactNode {
     result.clear();
     try {
       await api.logout();
+      // The Waiting list saved on this device goes with the session (console speed C4, review 1556 R2).
+      forgetWaitingSnapshot();
       raiseAuthLost('no-session');
     } catch (err) {
       result.say(apiErrorText(err), 'refusal');

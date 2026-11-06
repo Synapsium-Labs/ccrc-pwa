@@ -13,10 +13,10 @@
 // /api and /ws are never cached (network-only) — these two copies are the only
 // offline data, by design.
 import { reviveFleetSessions, unmeasuredFields, type FleetSession, type RosterWire } from '../../../shared/api';
-import type { WaitingView } from '../../../shared/ledgers';
+import type { ItemView, WaitingView } from '../../../shared/ledgers';
 import { HUES } from '../../../shared/roster';
 import { isWaitingView } from '../ledgers/waitingView';
-import { readKey, writeKey, type StorageSource } from './storage';
+import { readKey, removeKey, writeKey, type StorageSource } from './storage';
 
 // Stays at v1 — deliberately. A snapshot written before `tasks`/`pr`/`archivedAt`
 // existed is still usable data, and the read normalizes it (reviveFleetSessions);
@@ -166,12 +166,41 @@ export interface WaitingSnapshot {
   readonly view: WaitingView;
 }
 
-/** Keep `view` as the device's copy of the list. Best effort, like the fleet snapshot: the answer is `writeKey`'s,
- *  `false` when the store is absent, full or throws, and nothing else changes then. The store calls it after each
- *  `waiting` write (`stores/fleet.ts`), so the copy is always a list the page has heard. */
+/** A secret item's answer carries its tail after this word (`secretAnswer`, `shared/ledgers.ts`: `set <ISO> ending <tail>`). */
+const SECRET_ANSWER_TAIL = / ending [\s\S]*$/;
+
+/** One item with no secret tail: the slot state's `tail` blanked, and a secret item's answer cut before ` ending `, which
+ *  is the shape `secretAnswer` writes with no tail. Any other item, and every other field, is as it came. */
+function itemWithoutTail(item: ItemView): ItemView {
+  if (item.kind !== 'secret') return item;
+  const set = item.secretSet;
+  return {
+    ...item,
+    answer: item.answer === null ? null : item.answer.replace(SECRET_ANSWER_TAIL, ''),
+    secretSet: set !== null && 'tail' in set ? { ...set, tail: '' } : set,
+  };
+}
+
+/** THE LIST AS THE DEVICE MAY KEEP IT (review 1556 R2): G15's no-hint rule (accounts-connect spec) extends to this copy,
+ *  so no fragment of a stored secret rests on the device. A secret's tail (the last characters the masker caught) is
+ *  blanked in both places it travels, its slot's state and its answer. Item text (why, how, note) stays, as the fleet
+ *  snapshot keeps session text. The ONE place the copy is made safe to keep; `saveWaitingSnapshot` writes nothing else. */
+export function waitingViewToKeep(view: WaitingView): WaitingView {
+  return { ...view, items: view.items.map(itemWithoutTail), cleared: view.cleared.map(itemWithoutTail) };
+}
+
+/** Keep `view` as the device's copy of the list, with no secret tail (`waitingViewToKeep`). Best effort, like the fleet
+ *  snapshot: the answer is `writeKey`'s, `false` when the store is absent, full or throws, and nothing else changes then.
+ *  The store calls it after each `waiting` write (`stores/fleet.ts`), so the copy is always a list the page has heard. */
 export function saveWaitingSnapshot(view: WaitingView, now: number = Date.now(), from?: StorageSource): boolean {
-  const snap: WaitingSnapshot = { savedAt: now, view };
+  const snap: WaitingSnapshot = { savedAt: now, view: waitingViewToKeep(view) };
   return writeKey(WAITING_SNAPSHOT_KEY, JSON.stringify(snap), from);
+}
+
+/** Forget the device's copy of the list: a deliberate sign-out calls it (`ThisSessionCard`), so the list does not wait on
+ *  the device for whoever opens it next. `removeKey`'s answer. The fleet snapshot is not touched here. */
+export function forgetWaitingSnapshot(from?: StorageSource): boolean {
+  return removeKey(WAITING_SNAPSHOT_KEY, from);
 }
 
 /** The device's copy of the list, or `null` when there is no copy to draw. ONE `null`, deliberately, for every such
