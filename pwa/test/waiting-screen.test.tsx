@@ -248,6 +248,18 @@ describe('the Waiting on you list', () => {
     expect(words).toEqual(['2 needed soon']);
   });
 
+  // REVIEW 1548 M3: the other filter. Filtered to the sessions in no programme, the pills count those sessions' questions alone:
+  // a programme's blocking item does not reach them.
+  it('filtered to the sessions in no programme, the summary counts their questions alone: a programme\'s blocking item does not reach it', () => {
+    const asking = fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question', bucketSince: NOW - 6 * MIN });
+    open({
+      sessions: [asking], programme: '',
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a', neededBy: 'blocking' }), itemView({ id: 2, program: 'prog-a', neededBy: 'soon' })] }),
+    });
+    const words = within(screen.getByRole('list', { name: 'Summary' })).getAllByRole('listitem').map((li) => li.textContent);
+    expect(words).toEqual(['1 question from a session']);
+  });
+
   it('the rail filters to the programme its prop names, keeps no copy of its own, and tells the route of a pick', () => {
     const view = waitingView({
       items: [itemView({ id: 1, program: 'prog-a', title: 'In A' }), itemView({ id: 2, program: 'prog-b', title: 'In B' })],

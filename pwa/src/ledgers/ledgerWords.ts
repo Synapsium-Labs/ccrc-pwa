@@ -266,8 +266,10 @@ export function listOfFromWord(word: string | null): ItemList {
 export const goalsBack = (list: ItemList): string | null => (list.back === 'goals' ? list.programme : null);
 
 /** THE ONE STALE-LIST RULE: a filter naming a programme no group holds (an old link, a programme with nothing waiting now, a
- *  well-formed slug nobody uses) is the combined list. The filter, the way back, the column beside an item and the steps all
- *  settle the list they were given through this, so none of them returns to a filter the side rail no longer offers. */
+ *  well-formed slug nobody uses) is the combined list. The filter, the way back to the list, the column beside an item and the
+ *  steps all settle the list they were given through this, so none of them returns to a filter the side rail no longer
+ *  offers. The way back to a Goals page is not settled (`goalsBack` reads the list the URL names): that page stands whether
+ *  or not its programme has anything on the list. */
 export function resolveList(list: ItemList, groups: readonly ProgrammeGroup[]): ItemList {
   return list.programme === null || groups.some((g) => g.program === list.programme) ? list : COMBINED_LIST;
 }
