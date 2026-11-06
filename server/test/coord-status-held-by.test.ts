@@ -1,4 +1,4 @@
-// Cleanup un-wedge R2: `CoordStatus.cleanupHeldBy` is always present, and `emitCoord` composes it through
+// Cleanup un-wedge R2: `CoordStatus.cleanupHeldBy` is omitted while no row holds, and `emitCoord` composes it through
 // `withCleanupHeldBy` exactly once.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';

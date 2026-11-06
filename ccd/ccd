@@ -32043,7 +32043,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local -A efans=() efbt=() efaidx=()
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
-    || { _WS_SHARED_WHY="could not list $REG"; return 2; }
+    || { _WS_SHARED_WHY="could not list $REG"; _WS_HELD_BY_OWN=1; return 2; }   # unlisted: never claim the child fault-free (R2)
   if _ws_reclaim_resolve "$wd"; then
     mine="$_WS_RESOLVED"; minebasis="$_WS_RESOLVE_BASIS"
     [[ "$mine" != //[!/]* ]] \

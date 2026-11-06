@@ -1,6 +1,7 @@
 /**
  * The registry rows that hold a cleanup (cleanup un-wedge R2, spec 2026-11-04 §4.3). Ring L1, context C4: pure, no
- * I/O, and it imports only L0 (`shared/api.ts`).
+ * I/O. It imports L0 (`shared/api.ts`) and one L1 predicate, `expiryReportStands` (`archivedExpiry.ts`, which imports
+ * `heldByRowsOf` from here: a cycle of function references only, neither module calls the other at load).
  *
  * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents. This file
  * reads that pair (`heldByOf`), composes one item per holding row with the sentence that says what to do about it
@@ -8,6 +9,7 @@
  * hold into the row's line (`withCleanupHeldBy`).
  */
 import { HELD_BY_WORDS } from '../../shared/api.js';
+import { expiryReportStands, type ExpiryReport } from './archivedExpiry.js';
 import type {
   ChildReclaimAttention, CleanupHeldByAct, CleanupHeldByItem, CoordStatus, ExpiryAttention, FleetSession, HeldByWord,
   LcRefusalToken,
@@ -65,7 +67,6 @@ export function heldByOf(doc: unknown): HeldByRead {
   return { kind: 'rows', rows: out, own: d['heldByOwn'] !== false };
 }
 
-/** True when the read names at least one row and says the child has no fault of its own. */
 /** What a lane parser spreads onto its read: `{ heldBy }` only when the document NAMES rows, else nothing. Every other
  *  answer (absent, not-reached, none, malformed) contributes no item and folds nothing, exactly as no read does, so a
  *  read without rows keeps the shape it had before R2. */
@@ -74,6 +75,8 @@ export function heldByRowsOf(doc: unknown): { readonly heldBy?: HeldByRead } {
   return read.kind === 'rows' ? { heldBy: read } : {};
 }
 
+/** True when the read names at least one row and says the child has no fault of its own: the one case whose item
+ *  folds into the rows' lines. */
 export function heldOnlyByListed(read: HeldByRead | undefined): boolean {
   return read !== undefined && read.kind === 'rows' && read.rows.length > 0 && read.own === false;
 }
@@ -97,34 +100,47 @@ interface SentenceParts { readonly found: string; readonly remedy: (act: Cleanup
 
 const RECHECK_TAIL = 'Then check again.';
 
+/** The real pace (review 1580 F1, ruling 1): a pass asks a held child only once its own backoff has run, which is
+ *  minutes for a new hold and, on the persistent tier, up to four hours. Nothing resets that backoff. */
+const HELD_PACE = 'within minutes for a new hold, and up to four hours for children that have been failing a long time';
+
+/** Where the fleet state stands on a row: listed (then its workspace decides), no longer listed (a row ccd has purged,
+ *  often one just forgotten), or no fleet frame read yet. Each gets its own words (review 1580 F2, ruling 2). */
+type FleetStanding = 'listed' | 'missing' | 'unframed';
+
+const STANDING_REMEDY: Record<Exclude<FleetStanding, 'listed'>, string> = {
+  missing: `This row is no longer registered. The line clears as each child it held is checked again, ${HELD_PACE}.`,
+  unframed: 'This row\'s state in the fleet has not been read yet, and nothing is offered for it until it is. ' + RECHECK_TAIL,
+};
+
 /** One entry per word; a missing word is a compile error. */
 const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
   'gone-unrecorded': {
-    found: 'This row\'s folder no longer exists, and nothing records where it went.',
+    found: 'Its folder is gone with no record, or a directory or link on its path cannot be searched.',
     remedy: (act) => act === 'forget'
-      ? 'Forgetting the row removes only its registry entry, and the cleanup it blocked goes ahead on the next pass of the lanes, wherever no other row still holds it.'
-      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it. Recreate its tree at its branch tip with `git worktree add`, or, once its session has ended, remove it by hand. Where git still records it, use the scoped `git -C <project> worktree remove <path>`, never a repo-wide prune. '
+      ? `Forgetting the row removes only its registry entry. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks the children this row holds: ${HELD_PACE}.`
+      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If a directory on its path only cannot be searched, make it searchable, or restore a link on its path to its original target. '
         + RECHECK_TAIL,
   },
   'not-plain': {
     found: 'This row\'s workdir is spelled in a way ccd will not trust.',
-    remedy: () => 'Restart its session so that `ccd start` stores a plain absolute workdir, or purge the row once its session has ended. ' + RECHECK_TAIL,
+    remedy: () => 'Restart its session so that `ccd start` stores a plain absolute workdir, restore a link whose target opens with // to its original target, or purge the row once its session has ended; never replace a link to clear this. ' + RECHECK_TAIL,
   },
   'under-proc': {
     found: 'This row\'s workdir is under /proc, so a running process may still use it.',
     remedy: () => 'ccrc never stops that process. Stop and start the session from a plain path. ' + RECHECK_TAIL,
   },
   'workdir-unreadable': {
-    found: 'This row\'s workdir cannot be read.',
-    remedy: () => 'Make the path readable and searchable, or purge the row once its session has ended. ' + RECHECK_TAIL,
+    found: 'This row\'s workdir record in the registry cannot be read (unreadable, or a link).',
+    remedy: () => 'Purge the row once its session has ended, or restore the record to a readable regular file. ' + RECHECK_TAIL,
   },
   'entry-pending': {
     found: 'This row\'s session began a spawn that never recorded where its pane entered.',
     remedy: () => 'Stop and start that session. ' + RECHECK_TAIL,
   },
   'entry-unmeasured': {
-    found: 'The record of where this row\'s session entered cannot be read.',
-    remedy: () => 'Stop and start that session. ' + RECHECK_TAIL,
+    found: 'The record of where this row\'s session entered is not a regular file or cannot be read.',
+    remedy: () => 'Remove what stands at that field, then stop and start that session. ' + RECHECK_TAIL,
   },
   'entry-moved': {
     found: 'This row\'s session entered a directory other than the one its workdir names now, and where it entered can no longer be placed.',
@@ -136,9 +152,10 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
 
 /** One item per holding row, sorted by row id. Only `rows` reads contribute. A row named with several words takes the
  *  first in table order and its sentence names the others. `forget` is offered only when every read naming the row says
- *  `absent` and `cleanupHeldByAct` agrees. */
+ *  `absent` and `cleanupHeldByAct` agrees. `fleetWorkspaceOf` answers a listed row's workspace (`null` for none) or
+ *  `undefined` for a row the fleet state no longer lists; it is itself `null` while no fleet frame has been read. */
 export function cleanupHeldBy(
-  inputs: readonly CleanupHeldByInput[], fleetWorkspaceOf: (rowId: string) => string | null | undefined,
+  inputs: readonly CleanupHeldByInput[], fleetWorkspaceOf: ((rowId: string) => string | null | undefined) | null,
 ): CleanupHeldByItem[] {
   const byRow = new Map<string, {
     words: Set<HeldByWord>; allAbsent: boolean; subjects: Record<CleanupHeldByLane, Set<string>>;
@@ -161,7 +178,9 @@ export function cleanupHeldBy(
     const e = byRow.get(rowId)!;
     const sorted = HELD_BY_WORDS.filter((w) => e.words.has(w));
     const word = sorted[0]!;
-    const act = cleanupHeldByAct(word, e.allAbsent ? 'absent' : null, fleetWorkspaceOf(rowId));
+    const fleetWs = fleetWorkspaceOf === null ? undefined : fleetWorkspaceOf(rowId);
+    const standing: FleetStanding = fleetWorkspaceOf === null ? 'unframed' : fleetWs === undefined ? 'missing' : 'listed';
+    const act = cleanupHeldByAct(word, e.allAbsent ? 'absent' : null, fleetWs);
     const holds = { reclaim: e.subjects.reclaim.size, expire: e.subjects.expire.size, collect: e.subjects.collect.size };
     const parts = HELD_BY_SENTENCE[word];
     const others = sorted.slice(1);
@@ -169,19 +188,22 @@ export function cleanupHeldBy(
     const counts = `It holds ${plural(holds.reclaim, 'child workspace', 'child workspaces')}, `
       + `${plural(holds.expire, 'archived workspace', 'archived workspaces')} and `
       + `${plural(holds.collect, 'temp root', 'temp roots')} from being cleaned up.`;
-    return { rowId, word, sentence: `${parts.found}${also} ${counts} ${parts.remedy(act)}`, holds, act };
+    const remedy = standing === 'listed' ? parts.remedy(act) : STANDING_REMEDY[standing];
+    return { rowId, word, sentence: `${parts.found}${also} ${counts} ${remedy}`, holds, act };
   });
 }
 
-/** The three lanes' latest reads, keyed by session id (or temp root). */
+/** The three lanes' latest reads, keyed by session id (or temp root). The expiry lane's entries carry their report too:
+ *  an item whose report stands is never folded (review 1580 F5). */
 export interface HeldByLanes {
   readonly reclaim: ReadonlyMap<string, { readonly heldBy?: HeldByRead }>;
-  readonly expire: ReadonlyMap<string, { readonly heldBy?: HeldByRead }>;
+  readonly expire: ReadonlyMap<string, { readonly heldBy?: HeldByRead; readonly report?: ExpiryReport | null }>;
   readonly collect: ReadonlyMap<string, { readonly heldBy?: HeldByRead }>;
 }
 
-/** Adds `cleanupHeldBy` (always present, `[]` when nothing holds) and folds the items it replaces: a reclaim `failing`
- *  or `stuck` item with token `probe-unmeasured`, and an expiry `failing` item, whose child is held only by listed rows.
+/** Adds `cleanupHeldBy` (omitted while no row holds) and folds the items it replaces: a reclaim `failing` or `stuck`
+ *  item with token `probe-unmeasured`, and an expiry `failing` item whose lane report does not stand (a standing `stuck`
+ *  or persistent-tier report is the record of a part-cleaned row, so it stays), whose child is held only by listed rows.
  *  Every other item stays, in order. */
 export function withCleanupHeldBy(
   status: CoordStatus, lanes: HeldByLanes, fleet: readonly Pick<FleetSession, 'id' | 'workspace'>[] | null,
@@ -191,14 +213,17 @@ export function withCleanupHeldBy(
     for (const [subject, entry] of lanes[lane]) if (entry.heldBy !== undefined) inputs.push({ lane, subject, read: entry.heldBy });
   }
   const ws = new Map<string, string | null>();
-  if (fleet) for (const s of fleet) ws.set(s.id, s.workspace);
-  const items = cleanupHeldBy(inputs, (id) => ws.get(id));
+  if (fleet !== null) for (const s of fleet) ws.set(s.id, s.workspace);
+  const items = cleanupHeldBy(inputs, fleet === null ? null : (id) => ws.get(id));
   const keepReclaim = (a: ChildReclaimAttention): boolean => {
     if ((a.kind !== 'failing' && a.kind !== 'stuck') || a.token !== PROBE_UNMEASURED) return true;
     return !heldOnlyByListed(lanes.reclaim.get(a.sessionId)?.heldBy);
   };
-  const keepExpiry = (a: ExpiryAttention): boolean =>
-    a.kind !== 'failing' || !heldOnlyByListed(lanes.expire.get(a.sessionId)?.heldBy);
+  const keepExpiry = (a: ExpiryAttention): boolean => {
+    if (a.kind !== 'failing') return true;
+    const entry = lanes.expire.get(a.sessionId);
+    return expiryReportStands(entry?.report ?? null) || !heldOnlyByListed(entry?.heldBy);
+  };
   return {
     ...status,
     childReclaimAttention: status.childReclaimAttention.filter(keepReclaim),

@@ -289,6 +289,15 @@ describe('ccd names the rows that hold the child, by id and word', () => {
     expect(measOf(failed[0]!)['heldBy']?.split(',').sort()).toEqual([ROW, 'demo-relative'].sort());
   }, 90_000);
 
+  it('a registry that cannot be listed answers rc 2 with heldByOwn true, never a clean false (review 1580 F11)', () => {
+    const c = makeChild(h);
+    otherRow(ROW, gonePath());
+    // `find` failing is the rung's one listing of the registry failing: the rung must not claim the child is fault-free.
+    const out = h.sh(`find() { return 1; }; _ws_reclaim_workdir_shared ${CHILD_ID} "${c.wt}" >/dev/null; rc=$?; unset -f find;`
+      + ` printf '[%s][%s][%s]' "$rc" "$_WS_SHARED_WHY" "$(_ws_held_by_doc)"`);
+    expect(out).toBe(`[2][could not list ${REG()}]["heldBy":[],"heldByOwn":true,]`);
+  }, 90_000);
+
   it('a second call does not carry the first call’s rows', () => {
     const c = makeChild(h);
     otherRow(ROW, gonePath());

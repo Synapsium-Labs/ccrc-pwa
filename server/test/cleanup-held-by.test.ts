@@ -6,6 +6,7 @@ import {
   HELD_BY_ABSENT, cleanupHeldBy, cleanupHeldByAct, heldByOf, heldOnlyByListed, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
 import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/cleanupHeldBy.js';
+import type { ExpiryReport } from '../src/archivedExpiry.js';
 
 const row = (id: string, word: HeldByWord = 'gone-unrecorded', workspace: HeldByWorkspace | null = 'absent'): HeldByRow =>
   ({ id, word, workspace });
@@ -148,6 +149,63 @@ describe('cleanupHeldBy', () => {
     expect(items[0]!.word).toBe('not-plain');
     expect(items[0]!.sentence).toContain('entry-moved');
   });
+  // Review 1580 F7 and rulings 1-4 and 8: what each sentence says, so a dropped scope, a prune or a pace is a red.
+  const sentenceOf = (w: HeldByWord, ws: HeldByWorkspace | null, fleet: string | null): string =>
+    cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w, ws)]) }], () => fleet)[0]!.sentence;
+  const PACE = 'within minutes for a new hold, and up to four hours for children that have been failing a long time';
+  it('a workspace gone-unrecorded row names the scoped remove and never a prune, and no recreate advice', () => {
+    const s = sentenceOf('gone-unrecorded', 'present', '/x/ws');
+    expect(s).toContain('`git -C <main> worktree remove <path>`');
+    expect(s).toContain('never a repo-wide prune');
+    expect(s).not.toContain('<project>');
+    expect(s).not.toContain('worktree add');
+    expect(s).not.toMatch(/recreate/i);
+  });
+  it('gone-unrecorded says its folder is gone with no record, or a directory or link on its path cannot be searched', () => {
+    for (const s of [sentenceOf('gone-unrecorded', 'present', '/x/ws'), sentenceOf('gone-unrecorded', 'absent', null)]) {
+      expect(s).toContain('Its folder is gone with no record, or a directory or link on its path cannot be searched.');
+    }
+  });
+  it('forget says when the cleanup goes ahead, at the held children\'s own pace', () => {
+    const s = sentenceOf('gone-unrecorded', 'absent', null);
+    expect(s).toContain(PACE);
+    expect(s).not.toContain('next pass');
+  });
+  it('under-proc says ccrc never stops that process', () => {
+    expect(sentenceOf('under-proc', 'present', '/x/ws')).toContain('ccrc never stops that process');
+  });
+  it('workdir-unreadable names the registry record, not the folder', () => {
+    const s = sentenceOf('workdir-unreadable', 'present', '/x/ws');
+    expect(s).toContain('This row\'s workdir record in the registry cannot be read (unreadable, or a link).');
+    expect(s).toContain('Purge the row once its session has ended, or restore the record to a readable regular file.');
+    expect(s).not.toContain('searchable');
+  });
+  it('not-plain says never replace a link to clear this', () => {
+    expect(sentenceOf('not-plain', 'present', '/x/ws')).toContain('never replace a link to clear this');
+  });
+  it('entry-unmeasured first says remove what stands at that field', () => {
+    expect(sentenceOf('entry-unmeasured', 'present', '/x/ws')).toContain('Remove what stands at that field, then stop and start that session.');
+  });
+  it('a row no longer in the fleet state gets its own sentence, never the workspace one', () => {
+    for (const w of HELD_BY_WORDS) {
+      const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], noFleet);
+      expect(item!.act).toBe('recheck');
+      expect(item!.sentence).toContain('This row is no longer registered. The line clears as each child it held is checked again');
+      expect(item!.sentence).toContain(PACE);
+      expect(item!.sentence).not.toContain('only a person removes it');
+      expect(item!.sentence).not.toContain('worktree');
+    }
+  });
+  it('with no fleet frame yet, the row\'s state has not been read and no advice is given', () => {
+    for (const w of HELD_BY_WORDS) {
+      const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], null);
+      expect(item!.act).toBe('recheck');
+      expect(item!.sentence).toContain('This row\'s state in the fleet has not been read yet, and nothing is offered for it until it is.');
+      expect(item!.sentence).not.toContain('only a person removes it');
+      expect(item!.sentence).not.toContain('worktree');
+      expect(item!.sentence).not.toContain('no longer registered');
+    }
+  });
   it('forget needs every read of the row to say absent', () => {
     const items = cleanupHeldBy([
       { lane: 'reclaim', subject: 'c1', read: rows([row('row-a', 'gone-unrecorded', 'absent')]) },
@@ -239,6 +297,27 @@ describe('withCleanupHeldBy', () => {
   });
   it('expiryAttention is not added when the status had none', () => {
     expect('expiryAttention' in withCleanupHeldBy(status([]), { reclaim: none, expire: none, collect: none }, null)).toBe(false);
+  });
+  it('a forgotten row (no longer in the fleet state) and a missing frame each get their own sentence', () => {
+    const lanes = { reclaim: lane({ c1: listed }), expire: none, collect: none };
+    const forgotten = withCleanupHeldBy(status([]), lanes, [{ id: 'row-b', workspace: null }]).cleanupHeldBy![0]!;
+    expect(forgotten).toMatchObject({ rowId: 'row-a', act: 'recheck' });
+    expect(forgotten.sentence).toContain('This row is no longer registered.');
+    const unframed = withCleanupHeldBy(status([]), lanes, null).cleanupHeldBy![0]!;
+    expect(unframed.sentence).toContain('has not been read yet');
+    expect(unframed.sentence).not.toContain('no longer registered');
+  });
+  it('an expiry item whose lane report stands keeps its item (a stuck one and a persistent-tier one)', () => {
+    const stuckReport: ExpiryReport = { kind: 'stuck', at: 1, detail: 'd', attempts: 2 };
+    const tierReport: ExpiryReport = { kind: 'failing', at: 1, detail: 'd', attempts: 4 };
+    const passing: ExpiryReport = { kind: 'failing', at: 1, detail: 'd' };
+    const exp = new Map<string, { heldBy?: HeldByRead; report?: ExpiryReport | null }>([
+      ['a1', { heldBy: listed, report: stuckReport }], ['a2', { heldBy: listed, report: tierReport }],
+      ['a3', { heldBy: listed, report: passing }],
+    ]);
+    const out = withCleanupHeldBy(status([], [expFailing('a1'), expFailing('a2'), expFailing('a3')]),
+      { reclaim: none, expire: exp, collect: none }, null);
+    expect(out.expiryAttention).toEqual([expFailing('a1'), expFailing('a2')]);
   });
   it('the fleet being unknown leaves forget off', () => {
     const out = withCleanupHeldBy(status([]), { reclaim: lane({ c1: listed }), expire: none, collect: none }, null);
