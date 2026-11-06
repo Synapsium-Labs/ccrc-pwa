@@ -132,3 +132,87 @@ same way (saved copy, sha256 checked on restore):
 | X7 | the `ok` rule moved out of `@layer components` | `prose.css` | `chat-colour` "the rules sit inside @layer components, after the T4a chip rule" |
 | N5a | the reader no longer blanks statement at-rules | `chat-colour.test.ts` | `chat-colour` "after @layer a, b; is an unscoped rule", "after @import is an unscoped rule" |
 | N5b | attribute names compared as written | `chat-colour.test.ts` | `chat-colour` "a space inside the bracket…", "upper case…", "an escaped hyphen is an unscoped rule" |
+
+## Fix round 2 (review 1592)
+
+Review 1592 read the tip 8e10ddd18 and raised seven minor findings, all in the negation rule or its pins. The
+coordinator ruled on each. This was the last fix round. Every change is in `chatMarks.ts`, `remarkChatMarks.ts` and
+`chat-marks-negation.test.ts`, and no other file was needed.
+
+- **F1.** The check is one pass. A `LabelScan` keeps the clause start, the last negator and the next sentence end as it
+  moves forward, and a status word is asked about only after the ones before it. Measured in the test,
+  "tests passed " repeated to 100k characters went from 2037 ms to about 11 ms, and "#1 merged " from 3101 ms to about
+  14 ms. Both are pinned under a 400 ms bound. Through the plugin, 100k characters of digest lines went from 814 ms to
+  10 ms.
+- **F2.** Behind a colon, only a count of zero withholds the label: `0`, `zero` or `none` (any case), followed by the
+  clause's end, "of N" or "/N". "build failed: no space left on device" and "tests passed: none skipped" keep their
+  labels. "tests passed: 0 of 12", "tests passed: 0/12", "tests passed: zero", "checks failed: none" and
+  "tests failed: 0" withhold them.
+- **F3.** A negator is matched as a whole word. A word joined to more word characters by `.`, `-` or `/` is one word,
+  using the review's measured pattern: `v0.0.1003`, `0.10`, `no-op`, `0.5`. The ruling's row "run 0 accepted" needs one
+  more step, which this note names. **A recognised name's own words are not negators**, so `run 0`, `#0` and
+  `docs/no.md` do not turn the label after them around. The joined-word pattern alone still reads the `0` of `run 0`.
+- **F4, departure `c-s3-block-scan`.** A negator, or a `?` ending the sentence, in a neighbouring text node of the same
+  block now counts. A block is a paragraph, a heading or a table cell. Its text is flattened as written, with inline
+  code and link text included and a hard break read as a line break. "**No** tests failed.", "`0` tests failed" and
+  "Has #651 merged into `main`?" therefore give no label, while "CI **green**." and "#651 merged in `main`." keep theirs.
+  - The ruling worded the mechanism as passing `markRuns` the block's text before and after the node, cut to the clause
+    and to the sentence end. Built that way, each text node copied and rescanned its clause. One clause split into many
+    text nodes ("CI green \`x\` " repeated to 100k characters) then took 2.8 s in the plugin alone: F1's cost again,
+    across nodes.
+  - So the plugin builds one `LabelScan` per block, over the block's flattened text. It hands `markRuns` that scan and
+    the node's offset, and asks about the block's text nodes in document order. The scan reads the same bounds: back to
+    the start of the clause, and forward to the end of the sentence.
+  - That case now takes about 0.15 s with the parse, under a 2 s bound. If a node is asked about out of order, the scan
+    restarts, so the answer never depends on the order, only the cost does.
+  - The context never makes or moves a name or a label. A text node that is not in a block (none in chat's tree today)
+    and a table's header row are read on their own, as before.
+- **F5.** Carried to the chat follow-up: a `?` glued to a closer (`(Has #651 merged?)`).
+- **F6.** Accepted as is: the checked item's lead-in draws the prose's bold ink, with no dim rule.
+- **F7.** Each boundary guard has one row: a clause ends at `:`, `;`, `!` and a line break, and a `.` with no space
+  after it ends no clause; a sentence ends at a line break and at `!`, and a `.` or a `?` with no space after it ends no
+  sentence; the count behind the colon is a whole word. The case at the old `:76` is renamed to what it pins: "a `?`
+  with a word straight after it ends no sentence".
+
+No markdown golden changed.
+
+### Mutants, fix round 2
+
+Each mutant below was run against `chat-marks-negation.test.ts` the same way, from a saved copy with its sha256 checked
+on restore. Each went red on the case named, and the tree was clean after each. N1 and N2 were re-run on the new code:
+N1 went red in 14 of 64 cases and N2 in 5. Every round-1 and base mutant was re-run too (below the table).
+
+| # | Mutant | File | Red case |
+|---|---|---|---|
+| R1a | the scan restarts for every label | `chatMarks.ts` | both 100k cases, and the plugin's one-clause case |
+| R1b | a new scan for every text node of a block | `remarkChatMarks.ts` | "through the plugin, one clause split into many text nodes is one pass too" |
+| R1c | no restart when asked out of order | `chatMarks.ts` | "a block's scan gives the same answers when asked out of order" |
+| R2 | the zero count's follow-set dropped (any `0`, `zero` or `none` withholds) | `chatMarks.ts` | "tests passed: none skipped", "tests passed: 0.5 of the time", "the count after the colon is a whole word" |
+| R3a | the `.`, `-`, `/` joiners dropped from the word pattern | `chatMarks.ts` | the four F3 rows "v0.0.1003…", "On Node 0.10…", "the no-op…", "0.5% of…" |
+| R3b | a name's own words read as negators | `chatMarks.ts` | "run 0 accepted", "#0 merged" |
+| R4 | the plugin's block scan dropped | `remarkChatMarks.ts` | the five F4 "no label" rows |
+| F7a | the clause end's lookahead dropped | `chatMarks.ts` | "a "." with no space after it ends no clause" |
+| F7b | the clause end's line break dropped | `chatMarks.ts` | "a clause ends at a line break" |
+| F7c | `:` dropped from the clause ends | `chatMarks.ts` | "a clause ends at ":"" |
+| F7d | `;` dropped from the clause ends | `chatMarks.ts` | "a clause ends at ";"" |
+| F7e | `!` dropped from the clause ends | `chatMarks.ts` | "a clause ends at "!"" |
+| F7f | the sentence end's line break dropped | `chatMarks.ts` | "a sentence ends at a line break" |
+| F7g | the sentence end's `.` without its lookahead | `chatMarks.ts` | "a "." with no space after it ends no sentence" |
+| F7h | the sentence end's `?` without its lookahead | `chatMarks.ts` | "a "?" with no space after it ends no sentence", "a `?` with a word straight after it ends no sentence" |
+| F7i | `!` dropped from the sentence ends | `chatMarks.ts` | "a sentence ends at "!"" |
+| F7j | the zero count may run on (`0x`) | `chatMarks.ts` | "the count after the colon is a whole word" |
+
+The round-1 and base mutants, re-run on this tree: 1 (scrape 11 of 19; browser "the Docs reader keeps ink", 16 of
+16), 2, 3 (scrape; browser amber and blue, 16 of 16), 4 (12 FAILURES of 9792), 5, base (16 of 16), N3 (scrape;
+browser, 16 of 16), X7, N5a and N5b. Each went red on its named case again.
+
+### Gates, fix round 2
+
+Run one at a time through `ccrc test`:
+
+- `chat-marks-negation`, `chat-marks`, `remark-chat-marks`, `markdown-golden`, `markdown-parse`, `render-hast`,
+  `chat-colour`, `prose`, `layer-order`: 9 files, 486 tests, green. No golden changed.
+- `node design/contrast-check.mjs`: ALL 9792 PASS. Also green: ui `npm test`, and the pwa type check.
+- The whole pwa unit suite, once: 469 files, 13 898 passed, 3 skipped.
+- `chat-colour.browser.test.ts`: 16 of 16. The whole browser suite, once: 2 406 passed, 1 expected fail, 52 skipped,
+  and 2 failed. Both failures are the session-header Instrument 900 pair, which is not counted.
