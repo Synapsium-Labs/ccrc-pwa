@@ -93,11 +93,13 @@ const D = 'the Docs reader keeps ink';
 const R = 'an opened recap keeps ink';
 const C = 'the control: in chat the attributes draw';
 
+let dist: string | undefined;
 let server: DistServer | undefined;
 let browser: Browser | undefined;
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  server = await serveDist(sharedDist());
+  dist = sharedDist();
+  server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
 afterAll(async () => { await browser?.close(); await server?.close(); });
