@@ -273,11 +273,12 @@ const t1dNamed = (v: T1dView): string => `${v.skin}, ${v.theme}, ${v.width}x${v.
  *  rule (chat.css, `@media (height < 700px)`) one line and none. */
 const SHORT_WINDOW = 700;
 const floors = (v: T1dView): { lines: number; transcript: number } => (v.height < SHORT_WINDOW ? { lines: 1, transcript: 0 } : { lines: 2, transcript: 48 });
-/** A question that wraps to two lines at the card's width in every view (the reading measure binds the card at 1280 and
- *  at 1920 alike); the cells that read it assert that premise. `.ask-inline-title` collapses a newline, so the second
+/** A question that wraps to two lines at the card's width in every view, from Refined's 1280 card (about 850px) to
+ *  Instrument's 1920 one, the whole pane since D-8059 (about 1420px); the cells that read it assert that premise. `.ask-inline-title` collapses a newline, so the second
  *  line is made by the wrap, never by a line break. */
 const SHORT_QUESTION = 'Should the nightly report keep its current layout, with the summary table first and the per-project '
-  + 'details after it, or move the details first and the summary to the end?';
+  + 'details after it, or move the details first and the summary to the end, after every project\'s own section, so that '
+  + 'a reader sees the changes before the totals?';
 
 /** Fixture 1 (the hook envelope, three questions) with `question` as its first. */
 const hookFrames = (question: string): object[] => {
@@ -540,17 +541,18 @@ describe('the inline ask keeps its options in view and reads its question at pro
 });
 
 // The question's cap. Fixture 1's surface keeps its question at the floor in every window above, so the cap is measured
-// where it binds: a tall window (1920x1440) with fixture 2's smaller surface (about 315px) and an eighty-line question,
+// where it binds: a tall window (1920x1440) with fixture 2's smaller surface (about 315px) and a 160-line question (eighty
+// until D-8059 widened the card: `.ask-inline-title` collapses a newline, so the lines wrap at the card's width),
 // which asks for more than 40% of the pane while the transcript has room to give. The question region is then exactly
 // 40% of the pane, and the transcript keeps the rest, more than its floor.
 describe('the question region is at most 40% of the pane (T1d)', () => {
-  const EIGHTY = `${LONG_QUESTION}\n${LONG_QUESTION}`;
+  const LONGEST = Array.from({ length: 4 }, () => LONG_QUESTION).join('\n');
   for (const view of [
     { skin: REFINED, theme: PHOSPHOR, width: 1920, height: 1440, every: false, scrolls: false },
     { skin: INSTRUMENT, theme: 'light', width: 1920, height: 1440, every: false, scrolls: false },
   ] satisfies T1dView[]) {
     it(`${t1dNamed(view)}: a long question takes 40% of the pane and the transcript the rest`, async () => {
-      const m = await openT1d(view, agedFrames(EIGHTY), '80lines-aged');
+      const m = await openT1d(view, agedFrames(LONGEST), '160lines-aged');
       expect(m.question!.scrollHeight, 'premise: the question asks for more than 40% of the pane').toBeGreaterThan(0.4 * m.chat + 2);
       expect(Math.abs(m.question!.clientHeight - 0.4 * m.chat), `the question region (${m.question!.clientHeight}px) is 40% of the pane (${m.chat}px)`).toBeLessThanOrEqual(2);
       expect(m.transcript, 'the transcript keeps more than its floor').toBeGreaterThan(48 + 1);

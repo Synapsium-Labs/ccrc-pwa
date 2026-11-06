@@ -34,6 +34,15 @@ Geist's `ch` at the prose size is **9.938 px** in both skins (0.6625 em at 15 px
 - **`w-two-browser-files-pinned-the-old-column`.** Two browser files outside the plan's file list pinned the old column:
   `inspector-hide.browser.test.ts` (820 in Refined at 1600 and 1920) and `instrument-desk.browser.test.ts` (860 in
   Instrument at 1600). They now read 1200 and the whole detail pane (1128). Claimed (3680) before the edit; nobody held them.
+- **`w-wider-card-broke-three-fixture-premises`.** The whole browser suite's first run on this change found three
+  fixtures whose premises held only in the old narrow column: `ask-inline.browser.test.ts`'s two-line question fitted on
+  one line in Instrument's 1920 card (now about 1390 px of text), and its eighty-line question no longer asked for 40% of
+  a 1440 pane; `wheel.ts`'s 150-word answer chip no longer passed `--well-max` at 1920. The question is now 259
+  characters (two lines from Refined's 1280 card to Instrument's 1920 one), the long question 160 lines, and the chip
+  400 words. The assertions are unchanged. Claimed (3685, 3686) before the edit.
+- **`w-session-header-900-red-on-main-here`.** `session-header.browser.test.ts`'s "Instrument's interim header … at 900
+  no taller than the accepted growth" is red on this box (200.8 px against 188, both palettes) with main's four source
+  files put back, so it is not this change; most likely this box's Chromium against CI's Chrome. Left alone, reported.
 - **`w-reading-column-case-walks-the-block`.** `refined-session.test.tsx`'s existing reading-column case matched a ≥900
   block holding exactly one rule; with the prose rule and the bubble beside the column rule it no longer matched. It now
   walks every rule of the block, with the same assertions.
