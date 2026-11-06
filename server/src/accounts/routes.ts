@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
-  ACCOUNT_CAPS, AT_PROVIDER_KINDS, AT_PROVIDER_PAGES, AT_PROVIDER_STATES, LANE_NOT_READY_REASONS, REGISTRY_ID_MAX_CHARS, isSessionIdShape,
+  ACCOUNT_CAPS, ACCOUNT_CODEX_AUTH_FATES, AT_PROVIDER_KINDS, AT_PROVIDER_PAGES, AT_PROVIDER_STATES, LANE_NOT_READY_REASONS, REGISTRY_ID_MAX_CHARS, isSessionIdShape,
   type AccountAddAnswer, type AccountCheckAnswer, type AccountCredentialAnswer, type AccountOutcome,
   type AccountRemoveAnswer, type AccountRemoveCheckAnswer, type AccountSub, type AccountSwitchAnswer, type AtProviderKind,
   type AtProviderRow, type LaneWire, type RosterWire,
@@ -501,7 +501,7 @@ function registerAccountWriteRoutes(app: FastifyInstance, deps: AccountRouteDeps
     const mode = b?.['mode'];
     const shapeOk = b !== null && (
       (mode === 'remove' && onlyKeys(b, ['mode', 'confirmId', 'codexAuth']) && typeof b['confirmId'] === 'string'
-        && (b['codexAuth'] === undefined || b['codexAuth'] === 'delete' || b['codexAuth'] === 'keep'))
+        && (b['codexAuth'] === undefined || oneOf(ACCOUNT_CODEX_AUTH_FATES, b['codexAuth'])))
       || ((mode === 'discard' || mode === 'check') && onlyKeys(b, ['mode'])));
     if (!shapeOk) return refuseRoute(reply, 'bad-request');
 

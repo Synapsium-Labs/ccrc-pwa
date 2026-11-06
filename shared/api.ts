@@ -13313,6 +13313,8 @@ export interface AccountSetBody { stated?: string; placement?: 'overflow' | 'ful
 
 /** What a remove does with a Codex lane's sign-in folder (spec §11 step 4; D-8051 (3)): the sheet's line, on by default. */
 export type AccountCodexAuthFate = 'delete' | 'keep';
+const ACCOUNT_CODEX_AUTH_FATE_MAP: Record<AccountCodexAuthFate, true> = { delete: true, keep: true };
+export const ACCOUNT_CODEX_AUTH_FATES: readonly AccountCodexAuthFate[] = Object.keys(ACCOUNT_CODEX_AUTH_FATE_MAP) as AccountCodexAuthFate[];
 
 /** `POST /api/accounts/:id/remove`'s body (spec §11): `remove` with the typed id, `discard` (no typed confirm), or
  *  `check`, the pre-check, which changes nothing. */
