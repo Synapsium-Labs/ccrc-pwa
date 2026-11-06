@@ -9,7 +9,7 @@
   "settleS": 10,
   "entries": [
     {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-limit-pause"},
-     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfl', description: 'dlg wf limit' }\nconst r = await agent('dlg-wf-l1', { label: 'l1', isolation: 'worktree' })\nreturn r\n"}}},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfl', description: 'dlg wf limit' }\nconst r = await agent('dlg-wf-l1', { label: 'l1', model: 'haiku', isolation: 'worktree' })\nreturn r\n"}}},
     {"label": "l1-limited", "match": {"kind": "tools", "lastUser": "dlg-wf-l1"}, "status": 429,
      "headers": {"anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-reset": "$NOW+60",
                  "anthropic-ratelimit-unified-representative-claim": "five_hour", "retry-after": "60"},

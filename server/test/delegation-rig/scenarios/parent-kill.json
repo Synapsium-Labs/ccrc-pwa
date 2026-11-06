@@ -7,7 +7,7 @@
   "settleS": 3,
   "entries": [
     {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg parent-kill"},
-     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg kill", "prompt": "dlg-sub-kill", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg kill", "prompt": "dlg-sub-kill", "subagent_type": "general-purpose", "model": "haiku", "run_in_background": false, "isolation": "worktree"}}},
     {"label": "sub-hang", "match": {"kind": "tools", "lastUser": "dlg-sub-kill"}, "hang_ms": 600000, "text": "never"}
   ],
   "default": {"text": "DLG-WAIT", "repeat": true}
