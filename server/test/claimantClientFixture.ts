@@ -143,7 +143,9 @@ export async function realServer(o: RealOptions = {}): Promise<Real> {
   const health = (await app.inject({ method: 'GET', url: '/health' })).json() as { caps: string[] };
   fs.writeFileSync(path.join(home, '.ccrc', SERVER_CAPS_FILE), renderServerCaps(health.caps, realNowS()));
   const doors: string[] = [];
-  app.server.on('request', (req: IncomingMessage) => { doors.push(`${req.method ?? ''} ${req.url ?? ''}`); });
+  // This server sits on an ephemeral port, so a ccrc lane probe from another test in the shard can land on it. It is not
+  // this client's request.
+  app.server.on('request', (req: IncomingMessage) => { if (req.url !== '/ccgpt/lane') doors.push(`${req.method ?? ''} ${req.url ?? ''}`); });
   return {
     f, home, ask, approval, doorIns: () => [...calls], mail0: mailBodiesTo(f, PARENT).length, doors: () => [...doors],
     client: (verb, args, body = null) => {
