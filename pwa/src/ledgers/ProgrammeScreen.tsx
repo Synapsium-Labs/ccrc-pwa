@@ -45,9 +45,9 @@ import { ROUTES, waitingPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel, SpecLink } from './GoalsPanel';
 import { homeProjectOf, specHref } from './ledgerLinks';
-import { EMPTY_WORD, NO_FRAME_WORD, ageWords, openRunsOf, programmeWaitingCount, type ItemList } from './ledgerWords';
+import { EMPTY_WORD, NO_FRAME_WORD, ageWords, itemPath, openRunsOf, programmeWaitingCount, type ItemList } from './ledgerWords';
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
-import { Back, itemPath, useHeard, useUnavailable } from './WaitingRoutes';
+import { Back, useHeard, useUnavailable } from './WaitingRoutes';
 import { isGoalsFor } from './waitingView';
 import './ledgers.css';
 

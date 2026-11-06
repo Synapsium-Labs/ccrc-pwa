@@ -37,8 +37,9 @@ import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { ItemView } from './ItemView';
 import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
 import {
-  BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
-  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, SAVED_ROWS_WORD, backLabel, fromWord, groupByProgramme, itemPlace, savedListWords,
+  BESIDE_LABEL, BETWEEN_ITEMS_LABEL, FROM_QUERY, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
+  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, SAVED_ROWS_WORD, backLabel, fromWord, groupByProgramme, itemPath, itemPlace,
+  savedListWords,
   goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
@@ -49,17 +50,7 @@ import './ledgers.css';
 
 /** The list's row of the route table, whose path and title this file reads: it spells neither of its own. */
 const WAITING_ROUTE = ROUTES.find((r) => r.id === 'waiting');
-const WAITING_PATH: string = WAITING_ROUTE?.path ?? '/';
 const WAITING_TITLE: string = WAITING_ROUTE?.title ?? '';
-
-/** The item path's query naming the list it was opened from (plan PL9): it rides the URL, so a reload or a shared link keeps it.
- *  The combined list's own query, its side rail's filter, is `PROGRAMME_FILTER_QUERY` (`lib/routes.ts`, beside `waitingPath`). */
-export const FROM_QUERY = 'from';
-
-/** The one builder of an item's path, `/waiting/<id>`, which the `item` row of the route table parses, with `?from=` naming the
- *  list it is opened from (plan PL9). The combined list, unfiltered, is the default and writes no query. */
-export const itemPath = (id: number, list: ItemList = COMBINED_LIST): string =>
-  `${WAITING_PATH}/${id}${list.programme === null ? '' : `?${new URLSearchParams({ [FROM_QUERY]: fromWord(list) })}`}`;
 
 /** A list's own path: the combined list, with its side rail's filter as its query (`waitingPath`, the one builder). One arm:
  *  there is one Waiting on you page (PL11, D-7986). */
