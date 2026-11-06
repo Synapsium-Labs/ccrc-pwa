@@ -12147,9 +12147,11 @@ export interface DelegationObservationHealth {
 
 /** Wave 5 (PR6): what the lane's carrier step counted in its last pass (`server/src/coord/delegation-carrier.ts#planCarrierSteps`).
  *  `marked`: carriers read back at their lease's generation. `pending`: marks the per-pass bound left for a later pass. `unsupported`: leases
- *  lacking an up-to-date carrier on a box that does not report `lease-mark-v1`. `mismatched`: a carrier ahead of its lease or naming another
+ *  lacking an up-to-date carrier, released ones included, on a box that does not report `lease-mark-v1`, and leases whose mark would hold
+ *  a tree on a box that does not report `lease-mark-lock-v1` (D-8037). `mismatched`: a carrier ahead of its lease or naming another
  *  sequence, state or identity, never overwritten. `unmeasured`: a carrier or listing that did not read. `unowned`: an unreleased carrier no
- *  journal lease owns. `refused`: leases whose last mark the box refused in a word that stands until their generation or tree changes. */
+ *  journal lease owns. `refused`: leases whose last mark the box refused in a word that stands until their generation or tree changes, or
+ *  until thirty passes have gone by (D-8039). */
 export interface DelegationCarrierHealth {
   marked: number; pending: number; unsupported: number; mismatched: number; unmeasured: number; unowned: number; refused: number;
 }

@@ -96,14 +96,13 @@ to this run.
   logged as `carrier <id> seen threw` and the mark stands, never `refused unmeasured`. **Recorded:** two leases on one tree key share
   one census row, built from whichever the checkpoint lists last. Policy refuses two unreleased leases on one key, so only a released
   one can share it.
-- Left as it is: the doc comment on `DelegationCarrierHealth` in `shared/api.ts` still describes `unsupported` and `refused` as before
-  D-8037 and D-8039. The leave for that file covered the reader and the member's comment only.
 
 ## The held files, under leave relayed by the coordinator
 
 - `shared/api.ts` (claim 3585): `DelegationCarrierHealth` and the optional `carriers` member of `DelegationObservationHealth`, additive
   only (mail 15724). In fix round 1 (mail 15773, F7): the reader `delegationCarrierHealthOf` beside `delegationUncensusedLeasesOf`, and
-  the member's comment reworded in D-8035's words.
+  the member's comment reworded in D-8035's words. Then (mail 15778) the doc comment of `DelegationCarrierHealth`, so its `unsupported`
+  and `refused` counts read as D-8037 and D-8039 made them: comment text only.
 - `server/test/delegation-wave3.integration.test.ts` (claim 3577, mails 15724 and 15740): the row W5-K15, and
   `server/src/coord/delegationCarrierMark.ts` added to the `W5_OPEN` row for `delegation/leases`. The effect census needed no line: the
   six policy effects are unchanged, and W5-K15 pins that only the `leaseActs` phase composes the mark.
