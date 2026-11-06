@@ -40,7 +40,7 @@ import { rowStanding } from '../sessionReading.js';
  *  that window falls back to its own row: the rider's store read by `sessionId` removes the bound. */
 export const DELEGATION_PROJECTION_CLOSED_RUNS = 200;
 
-export type DelegationProjectionSession = Pick<FleetSession, 'id'> & Partial<Pick<FleetSession, 'presence' | 'lifecycle'>>;
+export type DelegationProjectionSession = Pick<FleetSession, 'id'> & Partial<Pick<FleetSession, 'presence' | 'lifecycle' | 'unmeasured'>>;
 /** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration: the binding module's
  *  `StampedRun`, declared once there (R9's decider reads it). */
 export type DelegationProjectionRun = StampedRun;
@@ -147,9 +147,10 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   };
 }
 
-/** The parent's row reads as `claimProbe` reads a holder (D-6908, `rowStanding`), so the two never disagree on doubt: a
- *  refused or restarting parent, or one tmux did not answer for, is `unmeasured`, never `stale`. A sleeping parent has its
- *  own word: it is neither gone nor in doubt. */
+/** The parent's row reads as `claimProbe` reads a holder (D-6908, `rowStanding`), so every parent a claim holds as doubt
+ *  is `unmeasured` here: a refused or restarting one, one tmux did not answer for, or one with an identity field unmeasured.
+ *  The reverse does not follow: the helper's own unknowns below read `unmeasured` over a parent that is here. A sleeping
+ *  parent has its own word: it is neither gone nor in doubt. */
 function livenessOf(
   a: DelegationActivityRow,
   sessions: ReadonlyMap<string, DelegationProjectionSession>,

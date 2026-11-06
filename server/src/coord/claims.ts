@@ -155,8 +155,8 @@ export interface LivenessProbe {
   liveness(sessionId: string): LivenessVerdict;
 }
 
-/** A holder's verdict from its frame row (D-6908). Doubt is `unmeasurable`, so a holder restarting, or one tmux did not
- *  answer for, keeps its claim until the hard cap. A sleeper reads `gone`: it takes no claim and the `claim` hold keeps a
+/** A holder's verdict from its frame row (D-6908). Doubt is `unmeasurable`, so a holder `rowStanding` reads as doubt keeps
+ *  its claim until the hard cap. A sleeper reads `gone`: it takes no claim and the `claim` hold keeps a
  *  holder awake, so a claim on one is left over and lapses at its standing lease. */
 const CLAIM_VERDICT: Readonly<Record<RowStanding, LivenessVerdict>> = {
   here: 'running', doubt: 'unmeasurable', asleep: 'gone', gone: 'gone',

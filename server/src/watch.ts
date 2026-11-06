@@ -6356,8 +6356,8 @@ export class FleetWatcher {
    * would answer `gone` (slug `tick-lanes-hold-a-refused-id`). A holder with
    * no listed row at all still reads `gone`.
    *
-   * A listed row reads through `rowStanding` (D-6908): a holder restarting, or one tmux did not answer for, is doubt
-   * too; asleep and dead holders are `gone`.
+   * A listed row reads through `rowStanding` (D-6908), the delegation card's reader too: a holder with an identity
+   * field unmeasured, restarting, or one tmux did not answer for, is doubt; asleep and dead holders are `gone`.
    */
   private claimProbe(
     sessions: readonly ClaimProbeRow[],
@@ -6369,8 +6369,7 @@ export class FleetWatcher {
         if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
         const s = byId.get(id);
         if (s === undefined) return 'gone';                 // the fleet no longer lists it
-        if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
-        return claimVerdictOf(rowStanding(s));
+        return claimVerdictOf(rowStanding(s));              // doubt reads as HELD (D12)
       },
     };
   }
@@ -9870,7 +9869,7 @@ export interface DelegationLaneStall {
  *  reason: absent reads as no stop evidence (D-5433). */
 /** What the claim sweeps read of a frame row: `Pick` is deliberate, so a test need not fabricate a whole `FleetSession`. */
 type ClaimProbeRow = Pick<FleetSession, 'id' | 'unmeasured'> & Partial<Pick<FleetSession, 'presence' | 'lifecycle'>>;
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt' | 'presence' | 'lifecycle'>>;
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt' | 'presence' | 'lifecycle' | 'unmeasured'>>;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'> & Partial<Pick<SessionRecord, 'workdir'>>;   // PR6: workdirs key a standing refusal
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 

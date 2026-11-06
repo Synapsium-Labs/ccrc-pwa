@@ -124,6 +124,9 @@ describe('projectDelegation: activity rows and liveness', () => {
     ['a parent tmux did not answer for is doubt', { presence: 'unknown', lifecycle: 'orphan' }, 'unmeasured'],
     ['a restarting parent is doubt', { presence: 'alive', lifecycle: 'restarting' }, 'unmeasured'],
     ['a parent row with no presence said nothing, which is doubt', { presence: undefined, lifecycle: null }, 'unmeasured'],
+    ['a live parent with an identity field unmeasured is doubt, as a claim reads it', { unmeasured: ['workdir'] }, 'unmeasured'],
+    ['a dead parent with an identity field unmeasured is doubt too', { presence: 'dead', lifecycle: 'orphan', unmeasured: ['workdir'] }, 'unmeasured'],
+    ['a torn stamp over a gone pane stays stale: the ruling keeps two cases, not this one', { presence: 'unknown', lifecycle: 'unmeasurable' }, 'stale'],
   ] as const)('%s', (_name, row, word) => {
     const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', row)] }));
     expect(out.activities.map((a) => a.liveness)).toEqual([word]);

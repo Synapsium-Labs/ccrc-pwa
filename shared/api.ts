@@ -11913,8 +11913,8 @@ export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[numb
  *  confirmed. `stale`: its end is not recorded, and its parent is gone, dead or in another incarnation (its stop was
  *  not seen). `asleep`: its end is not recorded and its parent is hibernated (D-6908), so nothing is gone and nothing
  *  is measured. `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, its parent's
- *  incarnation was not measured, or its parent is in doubt (restarting, or tmux did not answer; D-6908). ADDITIVE: an
- *  older PWA reads a word it has never heard of as `unmeasured`. */
+ *  incarnation was not measured, or its parent is in doubt (restarting, tmux did not answer, or an identity field
+ *  unmeasured; D-6908). ADDITIVE: an older PWA reads a word it has never heard of as `unmeasured`. */
 export type DelegationLiveness = 'live' | 'stale' | 'asleep' | 'ended' | 'unmeasured';
 const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, asleep: true, ended: true, unmeasured: true };
 export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];

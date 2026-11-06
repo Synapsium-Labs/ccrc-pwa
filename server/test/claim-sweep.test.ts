@@ -193,6 +193,18 @@ describe('renewClaims / lapseClaims on the FleetWatcher tick', () => {
     expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject({ state: 'lapsed', endedBy: 'hard-cap' });
   });
 
+  it('a holder with a torn stop stamp over a gone pane stays gone (D-6908 keeps two cases, not this third)', () => {
+    const h = fixture();
+    const c = h.claim();
+    const torn = [{ id: 'demo-quiet-basin', presence: 'unknown' as const, lifecycle: 'unmeasurable' as const, unmeasured: [] }];
+    at(NOW + CLAIM_LEASE_MS - 1_000);
+    h.watcher.renewClaims(torn, NO_REFUSED);
+    expect(h.coord.activeClaims()[0]!.expiresAt).toBe(c.expiresAt);
+    at(NOW + CLAIM_LEASE_MS + 1);
+    h.watcher.lapseClaims(torn, NO_REFUSED);
+    expect(h.coord.claimsForProject('demo', true)[0]).toMatchObject({ state: 'lapsed', endedBy: 'session-gone' });
+  });
+
   it('a SLEEPING holder stays gone (D-6908): no renewal, and the claim lapses at its standing lease', () => {
     const h = fixture();
     const c = h.claim();

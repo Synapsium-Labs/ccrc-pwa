@@ -79,6 +79,7 @@ interface Row {
 
 const row = (name: string, pane: Pane, seed: Row['seed'], more: Partial<Row> = {}): Row => ({ name, pane, seed, ...more });
 const stamp = (extra: Record<string, string>): Row['seed'] => (h) => seedRow(h, ID, extra);
+const WORKDIR_UNREADABLE = degradedReadIO((p) => p.endsWith(`${ID}.workdir`));
 
 const ROWS: Row[] = [
   row('the registry directory will not list', 'gone', stamp({}), { io: { ...localIO, readdir: async () => null } }),
@@ -103,6 +104,10 @@ const ROWS: Row[] = [
   row('gone + a long-gone heartbeat, stale hibernated stamp', 'gone',
     stamp({ supervised: String(SEC - 3600), hibernated: `${SEC - 7200} 7` })),
   row('gone + a fresh supervisor heartbeat (restarting)', 'gone', stamp({ supervised: String(SEC) })),
+  row('gone + a torn stop stamp', 'gone', stamp({ stopped: 'not-a-stamp', supervised: String(SEC - 3600) })),
+  row('tmux did not answer + a torn stop stamp', 'unknown', stamp({ stopped: 'not-a-stamp' }), { live: 'idle' }),
+  row('gone + a long-gone heartbeat, .workdir unreadable', 'gone', stamp({ supervised: String(SEC - 3600) }), { io: WORKDIR_UNREADABLE }),
+  row('a live pane, .workdir unreadable', 'live', stamp({}), { live: 'idle', io: WORKDIR_UNREADABLE }),
 ];
 
 interface World {
@@ -203,6 +208,10 @@ const EXPECTED: Record<string, Observed> = {
   "gone + a stop stamp + hibernated": { frame: 'dead/stopped', liveRow: 'dead/stopped', presence: 'asleep/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
   "gone + a long-gone heartbeat, stale hibernated stamp": { frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'dead/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: true, crash: 'crashed' },
   "gone + a fresh supervisor heartbeat (restarting)": { frame: 'dead/restarting', liveRow: 'dead/restarting', presence: 'alive/null', resolve: 'ok:dead', claimProbe: 'unmeasurable', measuredDead: false, crash: 'alive' },
+  "gone + a torn stop stamp": { frame: 'dead/unmeasurable', liveRow: 'dead/unmeasurable', presence: 'unknown/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'alive' },
+  "tmux did not answer + a torn stop stamp": { frame: 'dead/unmeasurable', liveRow: 'dead/unmeasurable', presence: 'unknown/null', resolve: 'ok:dead', claimProbe: 'gone', measuredDead: false, crash: 'unmeasurable' },
+  "gone + a long-gone heartbeat, .workdir unreadable": { frame: 'dead/orphan', liveRow: 'dead/orphan', presence: 'dead/null', resolve: 'no:unmeasurable', claimProbe: 'unmeasurable', measuredDead: true, crash: 'crashed' },
+  "a live pane, .workdir unreadable": { frame: 'idle/unsupervised', liveRow: 'idle/unsupervised', presence: 'alive/null', resolve: 'no:unmeasurable', claimProbe: 'unmeasurable', measuredDead: false, crash: 'alive' },
 };
 
 describe('the other liveness ladders, on the same rows (today\'s answers, differences included)', () => {
@@ -215,7 +224,8 @@ describe('the other liveness ladders, on the same rows (today\'s answers, differ
 });
 
 describe('the fleet card and the chat header give one turn word (replaces the MIRRORED comment)', () => {
-  for (const r of ROWS.filter((x) => x.pane === 'live')) {
+  // Not the unreadable .workdir row: the header refuses it (`no:unmeasurable`), so it gives no turn word to compare.
+  for (const r of ROWS.filter((x) => x.pane === 'live' && x.io !== WORKDIR_UNREADABLE)) {
     it(r.name, async () => {
       const got = await observe(r);
       const card = got.frame.split('/')[0]!.replace('+unmeasured', '');
@@ -235,8 +245,31 @@ describe('claimProbe reads a refused id as doubt before it can read it gone', ()
   });
 });
 
-// D-6908, the ruled change this file's header asks for. BEFORE is the old expression, run on the same real frame row, so
-// it stays measured rather than remembered. Both readers go through `rowStanding`, so they cannot disagree on doubt.
+// D-6908, the ruled change this file's header asks for. BEFORE is the old expressions, run on the same real frame row, so
+// it stays measured rather than remembered. Both readers go through `rowStanding`, and the second block below holds them
+// together on every row the frame lists.
+const readersOn = async (r: Row) => {
+  const w = world(r);
+  const fleet = await assembleFleet(w.io, w.cfg, w.tmux, liveStateReaderOver(w.io));
+  const s = fleet.find((x) => x.id === w.id);
+  if (s === undefined) return null;
+  const watcher = new FleetWatcher(testDeps(w.home) as never, new Bus(), 10_000);
+  const probe = (watcher as unknown as { claimProbe(s: unknown, r: ReadonlySet<string>): { liveness(id: string): string } })
+    .claimProbe(fleet, new Set());
+  const at = '2026-11-06T10:00:00.000Z';
+  const out = projectDelegation({
+    checkpoint: { activities: [{ activityId: 'a1', parentId: w.id, parentIncarnation: 'inc-1', sourceKind: 'agent', upstreamId: 'up',
+      displayName: null, executionState: 'running', openedAt: at, lastEventAt: at, endedAt: null } as never], leases: [], attempts: [] },
+    census: { measuredAt: NOW, projects: new Map(), incarnations: new Map([[w.id, { kind: 'measured', incarnation: 'inc-1' }]]) },
+    absences: [], sessions: fleet, refused: new Set(), runs: [],
+  });
+  return {
+    claimBefore: s.unmeasured.length > 0 ? 'unmeasurable' : s.status === 'dead' ? 'gone' : 'running',
+    cardBefore: s.status === 'dead' ? 'stale' : 'live',
+    claim: probe.liveness(w.id), card: out.activities[0]!.liveness,
+  };
+};
+
 describe('claimProbe and the delegation card read the same rows, before and after D-6908', () => {
   const AFTER: readonly { name: string; claim: readonly [string, string]; card: readonly [string, string] }[] = [
     { name: 'tmux did not answer', claim: ['gone', 'unmeasurable'], card: ['stale', 'unmeasured'] },
@@ -245,26 +278,30 @@ describe('claimProbe and the delegation card read the same rows, before and afte
     { name: 'gone + a stop stamp', claim: ['gone', 'gone'], card: ['stale', 'stale'] },
     { name: 'gone + a long-gone heartbeat, stale hibernated stamp', claim: ['gone', 'gone'], card: ['stale', 'stale'] },
     { name: 'a live pane, live file idle', claim: ['running', 'running'], card: ['live', 'live'] },
+    // The ruling keeps two cases, so a torn stamp is not a third: nothing moves on either row.
+    { name: 'gone + a torn stop stamp', claim: ['gone', 'gone'], card: ['stale', 'stale'] },
+    { name: 'tmux did not answer + a torn stop stamp', claim: ['gone', 'gone'], card: ['stale', 'stale'] },
+    // D12 already held these as doubt. Only the card moves, to meet the claim.
+    { name: 'gone + a long-gone heartbeat, .workdir unreadable', claim: ['unmeasurable', 'unmeasurable'], card: ['stale', 'unmeasured'] },
+    { name: 'a live pane, .workdir unreadable', claim: ['unmeasurable', 'unmeasurable'], card: ['live', 'unmeasured'] },
   ];
   for (const { name, claim, card } of AFTER) {
     it(`${name}: claim ${claim.join(' -> ')}, card ${card.join(' -> ')}`, async () => {
-      const w = world(ROWS.find((x) => x.name === name)!);
-      const fleet = await assembleFleet(w.io, w.cfg, w.tmux, liveStateReaderOver(w.io));
-      const s = fleet.find((x) => x.id === w.id)!;
-      expect(s.status === 'dead' ? 'gone' : 'running').toBe(claim[0]);
-      expect(s.status === 'dead' ? 'stale' : 'live').toBe(card[0]);
-      const watcher = new FleetWatcher(testDeps(w.home) as never, new Bus(), 10_000);
-      const probe = (watcher as unknown as { claimProbe(s: unknown, r: ReadonlySet<string>): { liveness(id: string): string } })
-        .claimProbe(fleet, new Set());
-      expect(probe.liveness(w.id)).toBe(claim[1]);
-      const at = '2026-11-06T10:00:00.000Z';
-      const out = projectDelegation({
-        checkpoint: { activities: [{ activityId: 'a1', parentId: w.id, parentIncarnation: 'inc-1', sourceKind: 'agent', upstreamId: 'up',
-          displayName: null, executionState: 'running', openedAt: at, lastEventAt: at, endedAt: null } as never], leases: [], attempts: [] },
-        census: { measuredAt: NOW, projects: new Map(), incarnations: new Map([[w.id, { kind: 'measured', incarnation: 'inc-1' }]]) },
-        absences: [], sessions: fleet, refused: new Set(), runs: [],
-      });
-      expect(out.activities.map((a) => a.liveness)).toEqual([card[1]]);
+      const got = (await readersOn(ROWS.find((x) => x.name === name)!))!;
+      expect([got.claimBefore, got.claim]).toEqual(claim);
+      expect([got.cardBefore, got.card]).toEqual(card);
+    });
+  }
+});
+
+describe('on every row the frame lists, the card gives the claim\'s answer in its own word (D-6908)', () => {
+  const CARD_FOR_CLAIM: Readonly<Record<string, readonly string[]>> = {
+    running: ['live'], unmeasurable: ['unmeasured'], gone: ['stale', 'asleep'],
+  };
+  for (const r of ROWS) {
+    it(r.name, async () => {
+      const got = await readersOn(r);
+      if (got !== null) expect(CARD_FOR_CLAIM[got.claim]).toContain(got.card);
     });
   }
 });

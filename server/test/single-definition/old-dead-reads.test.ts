@@ -9,6 +9,10 @@
 // (a refactor moving a read to another file changes that row's `file`) or delete one (a read that left). Comments do not
 // count, and nor does any other edit to a listed file. `deadReadDrift`'s own rows below hold that.
 //
+// WHAT IT DOES NOT SEE. It compares a number per file, and `site` is prose no test checks against the code. So removing
+// one accepted read and adding a different one in the same file stays green: the count stops a file's reads growing, and
+// a reviewer stops a swap.
+//
 // The PWA is out of scope here: its one such compare is `paneGone`, held by `hibernate-census.test.ts`, which also
 // keeps a stance per file for everything this count names.
 import { describe, expect, it } from 'vitest';
@@ -81,11 +85,11 @@ describe('the old dead reads are counted, and each one is named (D-8090)', () =>
     expect(new Set(ACCEPTED.map((a) => `${a.file} ${a.site}`)).size).toBe(ACCEPTED.length);
   });
 
-  it('neither moved reader is among them: claimProbe and the delegation frame read `rowStanding` (D-6908)', () => {
-    const rel = new Map(censusFiles().map((f) => [f.rel, stripForCensus(f.text)]));
-    expect(rel.get('server/src/coord/delegation-projection.ts')).not.toMatch(OLD_DEAD_READ);
-    expect(rel.get('server/src/coord/delegation-projection.ts')).toMatch(/\browStanding\(parent\)/);
-    expect(rel.get('server/src/watch.ts')).toMatch(/claimVerdictOf\(rowStanding\(s\)\)/);
+  // Names only, so a rename of the code cannot red it. What the two readers answer is held on real frame rows, in
+  // `session-ladders-characterization.test.ts`.
+  it('neither moved reader is accepted: no row names claimProbe or the delegation frame (D-6908)', () => {
+    expect(scanOldDeadReads(censusFiles()).get('server/src/coord/delegation-projection.ts')).toBeUndefined();
+    expect(ACCEPTED.filter((a) => a.file.endsWith('delegation-projection.ts') || /claimProbe|livenessOf/.test(a.site))).toEqual([]);
   });
 });
 
