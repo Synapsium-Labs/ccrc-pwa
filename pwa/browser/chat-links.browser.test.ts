@@ -33,8 +33,9 @@ const run = (id: number, workspace: string): object => ({
     clearError: null, coordKickoffPendingSince: null },
   childReclaim: null, reviewCap: null,
 });
-/** Enough runs ahead of 1527 that its row starts below the fold at 390: the arrival has to scroll. */
-const RUNS = [...Array.from({ length: 24 }, (_, i) => run(1500 + i, `ws-${i}`)), run(1527, 'ws-target')];
+/** Enough runs ahead of 1527 that its row starts below the fold at 390: the arrival has to scroll. Run 12 is a small id the
+ *  console holds, so "run 12" links only through the held ids `SessionScreen` passes (review 1586 F5). */
+const RUNS = [...Array.from({ length: 24 }, (_, i) => run(1500 + i, `ws-${i}`)), run(1527, 'ws-target'), run(12, 'ws-small')];
 
 const ITEM = {
   id: 340, program: 'prog-a', runId: null, kind: 'do', title: 'Item 340 title', why: 'Why this is needed.',
@@ -42,7 +43,12 @@ const ITEM = {
   state: 'open', stale: false, raisedAt: NOW - 20 * MIN, tickedAt: null, closedAt: null, answer: null, note: null,
   secretSlot: null, secretSet: null, history: [{ at: NOW - 20 * MIN, act: 'raise', note: null }],
 };
-const WAITING = { items: [ITEM], cleared: [], goals: [] };
+/** A small id the console holds only in its cleared trail: "item 41" links only through it (review 1586 F5). */
+const CLEARED = {
+  ...ITEM, id: 41, title: 'Item 41 title', state: 'done', tickedAt: NOW - 10 * MIN, closedAt: NOW - 10 * MIN,
+  history: [{ at: NOW - 20 * MIN, act: 'raise', note: null }, { at: NOW - 10 * MIN, act: 'tick', note: null }],
+};
+const WAITING = { items: [ITEM], cleared: [CLEARED], goals: [] };
 
 const FIXTURE: AppFixture = {
   api: {
@@ -66,9 +72,12 @@ const FIXTURE: AppFixture = {
 
 const TS = new Date(NOW - 10 * MIN).toISOString();
 const TEXT = 'Waiting on run 1527 and item 340. The plan is docs/superpowers/specs/2026-11-06-x-design.md, merged in #651.';
+/** Held small ids, and names written as a link's text (review 1586 F1 and F5). */
+const HELD = 'Held: run 12 and item 41. See [`run 1526`](/runs) and [`#652`](https://example.com/x).';
 const EVENTS: object[] = [
   { kind: 'user', uuid: 'u1', ts: TS, text: 'Where are we?' },
   { kind: 'assistant', uuid: 'a1', ts: TS, text: TEXT },
+  { kind: 'assistant', uuid: 'a2', ts: TS, text: HELD },
 ];
 
 let dist: string | undefined;
@@ -98,6 +107,13 @@ async function openChat(width: number): Promise<OpenedApp> {
   });
   await opened.page.goto(`${server!.origin}/s/${SESSION.id}`);
   await opened.page.getByText('Waiting on', { exact: false }).first().waitFor({ timeout: 20_000 });
+  return opened;
+}
+
+/** The chat with its second message, the held ids and the names written as a link's text, drawn too. */
+async function openHeld(width: number): Promise<OpenedApp> {
+  const opened = await openChat(width);
+  await opened.page.getByText('Held:', { exact: false }).first().waitFor({ timeout: 20_000 });
   return opened;
 }
 
@@ -158,6 +174,46 @@ for (const width of [1280, 390]) {
         await a.click();
         await page.waitForFunction(() => location.pathname.startsWith('/docs/'), undefined, { timeout: 20_000 });
         expect(await here(page)).toBe('/docs/project-a/specs/2026-11-06-x-design.md?ref=ws/one');
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it('a held small run and a cleared item link through the ids the console holds', async () => {
+      const { ctx, page, errors } = await openHeld(width);
+      try {
+        expect(await link(page, 'run 12').getAttribute('href')).toBe('/runs?run=12');
+        const a = link(page, 'item 41');
+        expect(await a.getAttribute('href')).toBe('/waiting/41');
+        await a.scrollIntoViewIfNeeded();
+        await a.click();
+        await page.getByText('Item 41 title').first().waitFor({ timeout: 20_000 });
+        expect(await here(page)).toBe('/waiting/41');
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it('a name written as a link\'s text draws that link alone, and one click does the link\'s one thing', async () => {
+      const { ctx, page, errors } = await openHeld(width);
+      try {
+        const nested = await page.evaluate(() => document.querySelectorAll('.msg-assist a a').length);
+        expect(nested, 'no link inside a link').toBe(0);
+        const pr = link(page, '#652');
+        expect(await pr.count()).toBe(1);
+        expect(await pr.getAttribute('href')).toBe('https://example.com/x');
+        const board = link(page, 'run 1526');
+        expect(await board.count()).toBe(1);
+        expect(await board.getAttribute('href')).toBe('/runs');
+        let popups = 0;
+        page.on('popup', () => { popups += 1; });
+        await board.scrollIntoViewIfNeeded();
+        await board.click();
+        await page.waitForFunction(() => location.pathname === '/runs', undefined, { timeout: 20_000 });
+        expect(await here(page), 'the link\'s own address, never the name\'s').toBe('/runs');
+        expect(popups).toBe(0);
+        expect(errors).toEqual([]);
       } finally {
         await ctx.close();
       }
