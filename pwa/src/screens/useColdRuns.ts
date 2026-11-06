@@ -66,6 +66,10 @@ export interface ColdRuns {
    * It is the RE-READ's state: only `loadCold` sets and clears it. A failed older page is `loadOlder`'s own outcome.
    */
   readonly state: 'loading' | 'ok' | 'error';
+  /** Whether a re-read is on its way: from the mount, which always reads, until the newest re-read issued settles (chat reading
+   *  Task L, D-8062; review 1586 F4). `state` keeps the last answer meanwhile, so a held `ok` may be about to change. An older
+   *  page (`loadOlder`) is not a re-read. */
+  readonly reading: boolean;
   /** Re-read now. The two sheets that close a run call it on `onDone`: the
    *  finished half of the board has no source but this read. */
   readonly reload: () => Promise<void>;
@@ -110,6 +114,7 @@ export function useColdRuns(
   const heldPages = page === undefined ? null : store.getState().runPages;
   const [cold, setCold] = useState<RunSummary[] | null>(heldPages?.runs ?? null);
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>(heldPages === null ? 'loading' : 'ok');
+  const [reading, setReading] = useState(true);
   const hasOlder = store((s) => page !== undefined && s.runPages !== null && s.runPages.nextBefore !== null);
 
   // Held in a ref, not the effect's own dependency array — the same fix
@@ -158,6 +163,9 @@ export function useColdRuns(
   const applied = useRef(0);
   const loadCold = (): Promise<void> => {
     const seq = ++issued.current;
+    setReading(true);
+    // The newest re-read issued settling ends the reading, whatever it answered; an older one settling leaves it on its way.
+    const settled = (): void => { if (aliveRef.current && seq === issued.current) setReading(false); };
     const limit = pageRef.current;
     const reading = limit === undefined
       ? (loadRunsRef.current as ColdLoader)()
@@ -184,7 +192,8 @@ export function useColdRuns(
         setColdState('ok');
       })
       // A failed read changes only `state`: the rows, and the stored pages, stay (never a fold to empty).
-      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
+      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); })
+      .finally(settled);
   };
 
   // The older page in flight, if any: a second tap on "Show older" while one is on its way joins it rather than
@@ -304,5 +313,5 @@ export function useColdRuns(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordFrame, coordFrameSeen]);
 
-  return { cold, state: coldState, reload: loadCold, loadOlder, hasOlder };
+  return { cold, state: coldState, reading, reload: loadCold, loadOlder, hasOlder };
 }

@@ -43,11 +43,13 @@ const NO_SPEND = (): Promise<RunSpend> => new Promise(() => {});
 /** One archive read the test settles by hand. */
 interface Read { readonly before: number | undefined; resolve(a: RunsPageAnswer): Promise<void> }
 
-/** The board, mounted at `search`, with a live frame of `live` (none: no frame yet) and archive reads the test answers. */
-function board(search: string, live: RunSummary[] | null, strict = false) {
+/** The board, mounted at `search`, with a live frame of `live` (none: no frame yet) and archive reads the test answers. `held`:
+ *  archive pages the store already holds from an earlier mount. */
+function board(search: string, live: RunSummary[] | null, strict = false, held: RunSummary[] | null = null) {
   const store = makeStore();
   act(() => {
     store.setState({ runs: live ?? [], runsFrameSeen: live !== null, sessions: [], fleetFrameSeen: true });
+    if (held !== null) store.setState({ runPages: { runs: held, nextBefore: null, at: Date.now() } });
   });
   const reads: Read[] = [];
   const loadRuns = vi.fn((_limit: number, before?: number): Promise<RunsPageAnswer> => new Promise((res) => {
@@ -117,6 +119,53 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
     expect(notLoaded(1527)).toBeNull();
     await b.reads[0]!.resolve({ runs: [] });
     expect(notLoaded(1527)).not.toBeNull();
+  });
+
+  // Review 1586 F7: the archive has answered but no runs frame has been seen: the active half has not answered, so nothing is
+  // said yet.
+  it('with the archive answered and no frame seen, a run it lacks is not said missing', async () => {
+    const b = board(runsRunHref(1527), null);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [] });
+    expect(notLoaded(1527)).toBeNull();
+  });
+
+  // Review 1586 F4: the arrived run closes while its own page is open. The live frame drops it, the archive re-read goes out, and
+  // the row comes back in Finished: one scroll and one focus in all, the mark kept, and no line while the re-read is out.
+  it('a run that closes under its own page keeps its one arrival, and says no line while the re-read is out', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    const rowFocuses = (): number => focus.mock.contexts.filter((el) => (el as Element).classList.contains('run-row')).length;
+    const b = board(runsRunHref(1527), [run(1527)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [run(1527)] });
+    expect(b.scrolled()).toEqual([rowOf(1527)]);
+    expect(rowFocuses()).toBe(1);
+    act(() => { b.store.setState({ runs: [] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    expect(notLoaded(1527)).toBeNull();
+    await b.reads[1]!.resolve({ runs: [closed(1527, 1_000)] });
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
+    expect(b.scrolled()).toHaveLength(1);
+    expect(rowFocuses()).toBe(1);
+    expect(notLoaded(1527)).toBeNull();
+  });
+
+  // Review 1586 F4: a mount over archive pages the store already holds re-reads them; a run they lack is said missing only once
+  // this mount's own read has answered.
+  it('over pages the store holds, a run they lack is said missing only once this mount\'s read answers', async () => {
+    const b = board(runsRunHref(1527), [run(1526)], false, [closed(900, 60_000)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    expect(notLoaded(1527)).toBeNull();
+    await b.reads[0]!.resolve({ runs: [closed(900, 60_000)] });
+    expect(notLoaded(1527)).not.toBeNull();
+  });
+
+  // Review 1586 F6: the line answers a followed link with no focus move, so it is announced.
+  it('the not-loaded line is a polite status', async () => {
+    const b = board(runsRunHref(1527), [run(1526)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [] });
+    expect(notLoaded(1527)!.closest('[role="status"]')).not.toBeNull();
   });
 
   it('a second ?run= on the same mount arrives again', async () => {
