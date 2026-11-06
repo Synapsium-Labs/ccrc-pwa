@@ -11726,12 +11726,18 @@ _dr_session_bin_dir() {   # <PATH> -> a directory; rc 1 when it holds none
 # remedy leaves behind: asking only for the directory would warn for ever on a box that
 # took it. The remedy writes launchers, not links: `ccd`'s body and the shim both sit
 # behind paths they derive, and an exec reaches them exactly as a bare call would.
+#
+# THAT PASS IS ABOUT THE COMMANDS IT NAMES AND NO OTHERS. The directory also holds what
+# other tools installed there, and a session without it on PATH reaches none of that, so
+# the sentence lists what was asked and counts who runs without the directory. It asks
+# only that each name resolves, not that the answer is ccrc's own file.
 _dr_path_sessions() {   # <the directory>
-  local bin="$1" i sp c bad lacking=0 dir="" cmds=() miss=() list
+  local bin="$1" i sp c bad lacking=0 without=0 dir="" cmds=() miss=() list
   for c in "${CCRC_SESSION_COMMANDS[@]}"; do [ -x "$bin/$c" ] && cmds+=("$c"); done
   for i in "${!DR_SESSION_PATHS[@]}"; do
     sp="${DR_SESSION_PATHS[$i]}"
     case ":$sp:" in *":$bin:"*) continue ;; esac
+    without=$((without + DR_SESSION_COUNTS[i]))
     bad=0
     [ "${#cmds[@]}" -gt 0 ] || bad=1
     for c in "${cmds[@]}"; do
@@ -11744,7 +11750,12 @@ _dr_path_sessions() {   # <the directory>
     [ -n "$dir" ] || dir="$(_dr_session_bin_dir "$sp")" || dir="<a directory on that PATH>"
   done
   if [ "$lacking" -eq 0 ]; then
-    _dr_pass path "every session reaches what \$HOME/.local/bin holds ($DR_SESSION_FROM)"
+    if [ "$without" -eq 0 ]; then
+      _dr_pass path "every session has \$HOME/.local/bin on PATH ($DR_SESSION_FROM)"
+    else
+      list="$(_dr_join "${cmds[@]}")"; list="${list//; /, }"
+      _dr_pass path "every session resolves $list ($DR_SESSION_FROM); nothing else in \$HOME/.local/bin was checked, and $(_dr_session_who "$without") without it on PATH"
+    fi
     return 0
   fi
   if [ "${#miss[@]}" -eq 0 ]; then

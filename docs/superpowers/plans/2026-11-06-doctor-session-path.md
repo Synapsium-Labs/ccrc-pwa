@@ -9,8 +9,10 @@ PATH, and the remedies those checks printed (edit `~/.profile`, re-run `ccrc ins
 - `path` and `graphify-path` read every live session's environment, and with none running, the user manager's PATH. With
   neither, on a server box, or on Darwin with no readable proc tree, they measure `$PATH` as before, with the same lines.
 - Their session arms print a root step that clears the verdict, into a directory read from the measured PATH. A test runs
-  each printed step and re-runs the check.
-- `path` passes a session that reaches every installed command some other way, so the box that took the step goes green.
+  each printed root step, including the one that follows `ccrc install`, and re-runs the check.
+- `path` passes a session that resolves every installed `ccrc`, `ccd` and `ccrc-api` some other way, so the box that took
+  the step goes green. That line names those commands and counts the sessions without the directory, because the
+  directory holds other tools' files, which such a session still cannot reach.
 - New check `playwright`: launches each cached browser build offline, WARN at worst.
 - `README.md`, **After a box move**: a bare-command check under a session PATH.
 

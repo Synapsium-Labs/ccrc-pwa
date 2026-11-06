@@ -37,6 +37,23 @@ const systemBin = (): string => {
   return dir;
 };
 
+/**
+ * A PATH shaped like a stock manager's, whose first entry is an `sbin`, with one entry ahead of the usable directory for
+ * each reason `_dr_session_bin_dir` refuses it. The refused directories that exist do exist: a test of the choice proves
+ * nothing against a directory the `-d` test would have thrown out anyway.
+ */
+function awkwardPath(home: string): { sessionPath: string; sys: string; skipped: string[] } {
+  const sys = systemBin();
+  const root = join(sys, '..');
+  const sbin = join(root, 'sbin');
+  const underHome = join(home, 'tools', 'bin');
+  const absent = join(root, 'local', 'bin');
+  mkdirSync(sbin, { recursive: true });
+  mkdirSync(underHome, { recursive: true });
+  const skipped = [sbin, underHome, absent];
+  return { sessionPath: [...skipped, sys].join(':'), sys, skipped };
+}
+
 /** The three commands a session calls bare, installed where the deploy puts them. */
 function installCommands(home: string): void {
   for (const c of ['ccrc', 'ccd', 'ccrc-api']) {
@@ -115,6 +132,65 @@ describe('ccrc doctor: path measures the PATH a session gets', () => {
     expect(check(home, 'path').line).toMatch(/^PASS path: /);
   });
 
+  it('the PASS after the remedy names what was checked, and vouches for nothing else in the directory', () => {
+    const home = healthy('ccrc-doctor-spath-names-'); installCommands(home);
+    for (const c of ['uv', 'claude', 'git-lfs']) writeFileSync(join(localBin(home), c), '#!/bin/sh\n', { mode: 0o755 });
+    const sys = systemBin();
+    plantPanes(home, [['cc-lane-a', sys]]);
+    runRemedy(check(home, 'path').remedy);
+    expect(spawnSync(BASH, ['-c', 'type -P uv claude git-lfs'], { env: { PATH: sys }, encoding: 'utf8' }).stdout, 'the session reaches none of them').toBe('');
+    const { line, code } = check(home, 'path');
+    expect(line).toMatch(/^PASS path: every session resolves ccrc, ccd, ccrc-api /);
+    expect(line).toContain('nothing else in $HOME/.local/bin was checked, and 1 of 1 live sessions run without it on PATH');
+    expect(line, 'the session does not reach what the directory holds').not.toMatch(/reaches what|holds/);
+    expect(code).toBe(0);
+  });
+
+  it('a PASS names only the commands this box installed', () => {
+    const home = healthy('ccrc-doctor-spath-names-partial-'); installCommands(home);
+    rmSync(join(localBin(home), 'ccrc-api'));
+    const sys = systemBin();
+    for (const c of ['ccrc', 'ccd']) writeFileSync(join(sys, c), '#!/bin/sh\n', { mode: 0o755 });
+    plantPanes(home, [['cc-lane-a', sys]]);
+    const { line } = check(home, 'path');
+    expect(line).toMatch(/^PASS path: every session resolves ccrc, ccd /);
+    expect(line.split('(')[0]).not.toContain('ccrc-api');
+  });
+
+  it('a session with the directory itself on PATH is the whole claim: no command list stands in for it', () => {
+    const home = healthy('ccrc-doctor-spath-whole-'); installCommands(home);
+    plantPanes(home, [['cc-lane-a', `/usr/bin:${localBin(home)}`], ['cc-lane-b', localBin(home)]]);
+    expect(check(home, 'path').line).toMatch(/^PASS path: every session has \$HOME\/\.local\/bin on PATH \(read from 2 live sessions' environments\)$/);
+  });
+
+  it('one session on the directory and one on the launchers still says only what the second one proves', () => {
+    const home = healthy('ccrc-doctor-spath-both-'); installCommands(home);
+    const sys = systemBin();
+    for (const c of ['ccrc', 'ccd', 'ccrc-api']) writeFileSync(join(sys, c), '#!/bin/sh\n', { mode: 0o755 });
+    plantPanes(home, [['cc-lane-a', localBin(home)], ['cc-lane-b', sys], ['cc-lane-c', sys]]);
+    expect(check(home, 'path').line).toMatch(/^PASS path: every session resolves ccrc, ccd, ccrc-api .*nothing else in \$HOME\/\.local\/bin was checked, and 2 of 3 live sessions run without it on PATH$/);
+  });
+
+  it('the step goes into the first usable bin on the PATH, past an sbin, a directory under $HOME and one that does not exist', () => {
+    const home = healthy('ccrc-doctor-spath-dir-'); installCommands(home);
+    const { sessionPath, sys, skipped } = awkwardPath(home);
+    plantPanes(home, [['cc-lane-a', sessionPath]]);
+    const { remedy } = check(home, 'path');
+    expect(remedy).toContain(`> '${sys}'/"$c"`);
+    for (const d of skipped) expect(remedy).not.toContain(`> '${d}'/"$c"`);
+    runRemedy(remedy);
+    expect(check(home, 'path').line).toMatch(/^PASS path: /);
+  });
+
+  it('a PATH with no usable bin gets a placeholder, never a directory it could not vouch for', () => {
+    const home = healthy('ccrc-doctor-spath-nodir-'); installCommands(home);
+    const { skipped } = awkwardPath(home);
+    plantPanes(home, [['cc-lane-a', skipped.join(':')]]);
+    const { remedy } = check(home, 'path');
+    expect(remedy).toContain('<a directory on that PATH>');
+    for (const d of skipped) expect(remedy).not.toContain(`'${d}'`);
+  });
+
   it('names only the commands that are missing, and only those this box installed', () => {
     const home = healthy('ccrc-doctor-spath-partial-'); installCommands(home);
     rmSync(join(localBin(home), 'ccrc-api'));
@@ -133,6 +209,14 @@ describe('ccrc doctor: path measures the PATH a session gets', () => {
     const { line, remedy } = check(home, 'path');
     expect(line).toMatch(/^WARN path: 1 of 1 live sessions run without .*no ccrc command is installed there yet/);
     expect(remedy).toMatch(/^ {2}remedy: run: ccrc install/);
+  });
+
+  it('from the user manager the same PASS speaks of a session to come, not a count of live ones', () => {
+    const home = healthy('ccrc-doctor-spath-names-manager-'); installCommands(home);
+    const sys = systemBin();
+    for (const c of ['ccrc', 'ccd', 'ccrc-api']) writeFileSync(join(sys, c), '#!/bin/sh\n', { mode: 0o755 });
+    writeFileSync(join(home, 'fixture-manager-env'), `PATH=${sys}\n`);
+    expect(check(home, 'path').line).toMatch(/^PASS path: every session resolves ccrc, ccd, ccrc-api .*and a session started now would run without it on PATH$/);
   });
 
   it('with no live session, reads the user manager\'s PATH, which a supervised session inherits', () => {
@@ -195,6 +279,19 @@ describe('ccrc doctor: graphify-path measures the PATH a session gets', () => {
     const { line, remedy } = check(home, 'graphify-path');
     expect(line).toMatch(/^FAIL graphify-path: /);
     expect(remedy).toMatch(/^ {2}remedy: run: ccrc install .*then, as root: ln -s /);
+    plantEngine(home); // the first half of the step: what `ccrc install` builds and links
+    runRemedy(remedy);
+    expect(check(home, 'graphify-path').line).toMatch(/^PASS graphify-path: .*the PATH sessions get/);
+  });
+
+  it('the step goes into the first usable bin on the PATH, past an sbin, a directory under $HOME and one that does not exist', () => {
+    const home = healthy('ccrc-doctor-sgfx-dir-'); const engine = plantEngine(home);
+    const { sessionPath, sys } = awkwardPath(home);
+    plantPanes(home, [['cc-lane-a', sessionPath]]);
+    const { remedy } = check(home, 'graphify-path');
+    expect(remedy).toContain(`ln -s '${engine}' '${sys}/graphify'`);
+    runRemedy(remedy);
+    expect(check(home, 'graphify-path').line).toMatch(/^PASS graphify-path: /);
   });
 
   it('FAILs the wrong build on any one session\'s PATH, and the remedy repoints that file', () => {
@@ -207,6 +304,23 @@ describe('ccrc doctor: graphify-path measures the PATH a session gets', () => {
     expect(line).toContain(`${sys}/graphify`);
     expect(remedy).toContain(`ln -sfn '${engine}' '${sys}/graphify'`);
     expect(remedy, 'a session PATH cannot be reordered from here').not.toContain('ahead of it');
+    runRemedy(remedy);
+    expect(check(home, 'graphify-path').line).toMatch(/^PASS graphify-path: .*the PATH sessions get/);
+  });
+
+  it('FAILs the wrong build at $HOME/.local/bin, the one file the install writes, and sends the operator there', () => {
+    const home = healthy('ccrc-doctor-sgfx-shadow-own-'); const engine = plantEngine(home);
+    const link = join(localBin(home), 'graphify');
+    rmSync(link);
+    writeFileSync(link, '#!/bin/sh\necho shadow\n', { mode: 0o755 });
+    plantPanes(home, [['cc-lane-a', localBin(home)]]);
+    const { line, remedy } = check(home, 'graphify-path');
+    expect(line).toMatch(/^FAIL graphify-path: /);
+    expect(line).toContain(link);
+    expect(remedy).toMatch(/^ {2}remedy: run: ccrc install /);
+    expect(remedy, 'a root link over the file the install owns').not.toContain(`ln -sfn '${engine}'`);
+    plantEngine(home); // what that step does: the link back at the pinned venv
+    expect(check(home, 'graphify-path').line).toMatch(/^PASS graphify-path: .*the PATH sessions get/);
   });
 
   it('PASSes a session PATH that resolves the engine through a link in a system directory', () => {
@@ -248,13 +362,15 @@ describe('ccrc doctor: playwright', () => {
     plantBuild(root, 'chromium-1217', 'chrome-linux/chrome', `${recordArgv(log)}; exit 0`);
     plantBuild(root, 'chromium-1200', 'chrome-linux64/chrome', `${recordArgv(log)}; exit 0`);
     plantBuild(root, 'chromium_headless_shell-1217', 'chrome-linux/headless_shell', `${recordArgv(log)}; exit 0`);
+    // The layout newer revisions unpack to on Linux: another directory, and the launcher renamed.
+    plantBuild(root, 'chromium_headless_shell-1243', 'chrome-headless-shell-linux64/chrome-headless-shell', `${recordArgv(log)}; exit 0`);
     plantBuild(root, 'firefox-1500', 'firefox/firefox', `${recordArgv(log)}; exit 0`);
     plantBuild(root, 'webkit-2215', 'pw_run.sh', `${recordArgv(log)}; exit 0`);
     const { line, code } = check(home, 'playwright', browserEnv(home));
     expect(line).toMatch(/^PASS playwright: /);
-    for (const b of ['chromium-1200', 'chromium-1217', 'chromium_headless_shell-1217', 'firefox-1500', 'webkit-2215']) expect(line).toContain(b);
+    for (const b of ['chromium-1200', 'chromium-1217', 'chromium_headless_shell-1217', 'chromium_headless_shell-1243', 'firefox-1500', 'webkit-2215']) expect(line).toContain(b);
     expect(code).toBe(0);
-    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(5);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(6);
   });
 
   it('asks for no network: every browser opens about:blank, and the two that would call out point at a dead proxy', () => {
