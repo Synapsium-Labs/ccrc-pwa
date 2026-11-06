@@ -71,8 +71,9 @@ export function OtherPoolsDisclosure({ count, shown, onToggle }: {
   );
 }
 
-/** The graphify counter — reads this session, and the search calls the gate
- *  denied when a row has that second number.
+/** The graphify counter — reads this session that returned an answer (the hook
+ *  counts no other kind, D-8046), and the search calls the gate denied when a
+ *  row has that second number.
  *
  *  TWO SURFACES, ONE SENTENCE. `SessionMeta` and `RunRow` each spelled
  *  `${reads} graphify read(s) this session`, and `SessionMeta` added the gate

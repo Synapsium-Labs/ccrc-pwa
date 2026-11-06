@@ -5859,8 +5859,10 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   build's. A box with no usable `realpath` **SKIPs**: the two halves must agree that an unresolvable
   pair is unmeasured, or a box neither of them could measure gets two different verdicts (D-1350).
 - **The number (R4).** The hook increments `graphQueries` in the hookstate it already writes, on a
-  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`. Builds do not count — this
-  measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
+  `PostToolUse` whose `Bash` command runs `graphify query`/`path`/`explain`, by name or by path, and
+  whose output is a real answer (D-8046): a line that starts as graphify starts one. A failed call
+  that still exits 0 (`graphify query x | head` with no engine on `PATH`, `No matching nodes found.`)
+  counts for nothing and opens nothing. Builds do not count — this measures reads. It is carried the way `subagents` is, reset on any `SessionStart` that is not a
   `resume` (D-1248) and kept across `resume` and `compact`. `server/src/hookstate.ts` is its one reader
   on the server side and keeps **`null` (no field — an older hook) apart from `0` (measured none)**; it
   rides `FleetSession.graphQueries` additively (no `FLEET_PROTO` bump) and renders as a `graph N` chip
@@ -5903,9 +5905,10 @@ armed: a card promising a deny that never comes teaches the session to ignore th
 
 The deny is the one shape `PreToolUse` defines — a `permissionDecision` of `deny` with a reason —
 and the reason is the card's own vocabulary plus the act: this tree has a knowledge graph (node
-count and freshness word), this session has not queried it yet, search opens after one
-`graphify query` (`path` and `explain` spelled out beside it), and *Denial k of 3; after 3 the gate
-opens anyway.* **Everything else fails open, and so does the bound.** An unreadable hookstate, a
+count and freshness word), this session has no answer from it yet, search opens after one graph
+query that answers (`query`, `path` and `explain` each spelled out, each carrying
+`PATH="$HOME/.local/bin:$PATH"` so the line runs whatever `PATH` the session has; the source-read nudge
+says it the same way, D-8046), and *Denial k of 3; after 3 the gate opens anyway.* **Everything else fails open, and so does the bound.** An unreadable hookstate, a
 missing `jq`, an unresolvable tree, an unparseable stamp, a graph that is not there: no stdout, and
 the call proceeds. Three denials without a query and the fourth search passes — a session that
 cannot run `Bash` at all is never wedged by a hook it has no way to satisfy — and a denial is

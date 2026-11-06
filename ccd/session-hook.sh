@@ -495,7 +495,7 @@ _hook_graph_card() {
     if [ -e "$GRAPH_GATE_OFF" ]; then
       line="$line Search tools are not gated here: the search gate is off (operator file)."
     else
-      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated, and source-file reads are nudged, until this session's first graph query."
+      line="$line Search tools (Grep, Glob, shell grep/rg/find) are gated, and source-file reads are nudged, until this session's first answered graph query."
     fi
   fi
   CARD_GRAPH="$line"
@@ -2475,9 +2475,49 @@ REG="$HOME/.cc-sessions"
 # `query`, `path` and `explain` only. `graphify update` and every build are
 # WRITES, and the sweep owns the write side — counting them here would make
 # the number say the opposite of what it is for. The leading class is what
-# stops `mygraphify query` and prose mentioning the command from counting;
-# the trailing one stops `graphify querying-something-else`.
-GRAPH_QUERY_RE='(^|[;&|[:space:]])graphify[[:space:]]+(query|path|explain)([[:space:]]|$)'
+# stops `mygraphify query` from counting; the trailing one stops `graphify
+# querying-something-else`.
+#
+# THE LEADING CLASS TAKES A PATH AND A QUOTE (D-8046). A session whose PATH
+# carries no graphify calls it by path, as `$HOME/.local/bin/graphify query` or
+# `"$HOME/.local/bin/graphify" query`: measured, 283 real queries went uncounted
+# on the `/`, and a session's only way to reach the engine read as a session
+# that never queried. This hook sees the UNEXPANDED line, so the path itself is
+# never worth reading: the last segment is. Prose that now matches here, like
+# `echo "graphify query"`, is what `GRAPH_ANSWER_RE` below refuses.
+GRAPH_QUERY_RE=$'(^|[;&|(`"\'/[:space:]])graphify["\']?[[:space:]]+(query|path|explain)([[:space:]]|$)'
+
+# ── D-8046: what counts as an ANSWER ────────────────────────────────────
+# The failures that reached this event are the ones that exit 0: `graphify query
+# x | head`, an `|| true`, an `|| echo`, a `2>/dev/null`, and graphify's own
+# misses. Measured: 73 of 239 denied sessions opened the gate on one of those and
+# never got a real answer, and the board counted each as a read.
+#
+# SO A READ IS NAMED BY WHAT AN ANSWER LOOKS LIKE, not by a list of what a failure
+# looks like: the failure text belongs to whichever shell, wrapper or fallback
+# ran, and can not be listed. These are the lines graphify 0.9.9 starts an answer
+# with, each at the head of a line so a pipe through `tail` or `grep` still reads
+# as one, and a merged stderr note ahead of them changes nothing:
+#   query    `Traversal: ...`, then `NODE ...` and `EDGE ...`
+#   path     `Shortest path (N hops):`, or `No path found between ...`, which IS
+#            an answer: both nodes resolved, and the graph says they are apart
+#   explain  `Node: ...`
+# `No matching nodes found.` and `No node matching ...` are not: the session
+# learnt nothing, and the deny tells it to ask again.
+#
+# THE WRONG SIDE TO FAIL ON IS BOUNDED. A pin bump that rewords these lines stops
+# the count, so the board reads `graph 0` and a session spends its three denials;
+# nothing wedges, because `GRAPH_GATE_MAX_DENIALS` still opens the gate. Re-read
+# them at a pin bump, as `_HOOK_SOURCE_EXTS` below is.
+GRAPH_ANSWER_RE=$'(^|\n)(Traversal: |NODE |EDGE |Shortest path \\(|No path found between |Node: )'
+
+# ── D-8046: the command a denied session is told to run ─────────────────
+# ANY PATH, NO MACHINE. Sessions are not given `~/.local/bin`, and nothing a
+# session can edit gives it to them: Claude Code writes the process PATH as the
+# last line of its shell snapshot. So the sentence carries its own. `$HOME` stays
+# literal for the session's shell to expand, this text names no box, and a
+# graphify elsewhere on PATH still answers, which a bare absolute path would not.
+GRAPH_RUN='PATH="$HOME/.local/bin:$PATH" graphify'
 
 # ── R7: what counts as ACTING ON THE CARD ───────────────────────────────
 # ANCHORED ON THE VERB PAIR, NEVER ON THE CLIENT'S NAME. Both skills teach
@@ -3923,7 +3963,14 @@ if [[ "$event" == Stop && -z "$paid" && "$subs" != "[]" && "$bg" =~ ^[0-9]+$ ]];
     fi
   fi
 fi
-if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then gq=$((gq + 1)); fi
+# ONE MORE jq, ONLY FOR A LINE THE REGEX TOOK: the hot path's budget above is
+# unchanged, and a response that is missing, interrupted or not this shape reads
+# as no answer, which is the side that costs a count rather than inventing one.
+if [[ -n "$gcmd" && "$gcmd" =~ $GRAPH_QUERY_RE ]]; then
+  gout=$(jq -r '.tool_response | if type == "object" and .interrupted != true and (.stdout | type) == "string" then .stdout else "" end' \
+    <<<"$payload" 2>/dev/null) || gout=""
+  if [[ "$gout" =~ $GRAPH_ANSWER_RE ]]; then gq=$((gq + 1)); fi
+fi
 # THE PROXIMATE ACT and THE DISTAL ONE, counted apart. `peers list` is the act
 # the co-tenant card prescribes; `claims take` is what that answer's own rule 0
 # prescribes next, and it is the one with a durable server-side arbiter.
@@ -4022,8 +4069,8 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
     # shows the denials it spent getting there.
     greason="graphify gate: this tree has a knowledge graph ("
     [ -z "$GM_NODES" ] || greason+="$GM_NODES nodes, "
-    greason+="$GM_FRESH) and this session has not queried it yet."
-    greason+=' Search tools open after one graph query — run: `graphify query "<your question in plain words>"` (`graphify path "<A>" "<B>"` for a relationship, `graphify explain "<concept>"` for one concept).'
+    greason+="$GM_FRESH) and this session has no answer from it yet."
+    greason+=" Search tools open after one graph query that answers — run: \`$GRAPH_RUN query \"<your question in plain words>\"\` (\`$GRAPH_RUN path \"<A>\" \"<B>\"\` for a relationship, \`$GRAPH_RUN explain \"<concept>\"\` for one concept)."
     greason+=" Denial $((gd + 1)) of $GM_MAX_DENIALS; after $GM_MAX_DENIALS the gate opens anyway."
     # COUNTED ONLY IF IT CAN BE SAID, SAID ONLY ONCE IT IS COUNTED (D-1689).
     # A builder that could not make its JSON has denied nothing, and charging
@@ -4040,8 +4087,8 @@ if [[ "$event" == PreToolUse && "$hs_unreadable" -eq 0 && "$gq" -eq 0 ]] \
     # omitted when the count could not be measured, exactly as the deny's is.
     nreason="graphify: this tree has a knowledge graph ("
     [ -z "$GM_NODES" ] || nreason+="$GM_NODES nodes, "
-    nreason+="$GM_FRESH) and this session has not queried it yet."
-    nreason+=' Before reading files to orient, run: `graphify query "<your question in plain words>"` (`graphify explain "<concept>"` for one concept).'
+    nreason+="$GM_FRESH) and this session has no answer from it yet."
+    nreason+=" Before reading files to orient, run: \`$GRAPH_RUN query \"<your question in plain words>\"\` (\`$GRAPH_RUN explain \"<concept>\"\` for one concept)."
     nreason+=' Reading a named file to edit it needs no query.'
     pre_json=$(_hook_nudge_json "$nreason") || pre_json=""
   fi

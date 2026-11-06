@@ -143,7 +143,7 @@ const ADVICE = '. Answer codebase questions with `graphify query "<question>"` f
   + 'read `graphify-out/GRAPH_REPORT.md` only for broad architecture. '
   + 'Do not run `graphify update` or any build here — the ccrc sweep owns the write side.';
 const GATE_ARMED = ' Search tools (Grep, Glob, shell grep/rg/find) are gated, '
-  + "and source-file reads are nudged, until this session's first graph query.";
+  + "and source-file reads are nudged, until this session's first answered graph query.";
 /** Spec §6.3's sentence for a linked tree. */
 const linked = (sha: string, rest: string): string =>
   `graphify: this tree has a knowledge graph — graphify-out/ is the graph of this repository's main at ${sha.slice(0, 8)}, `
