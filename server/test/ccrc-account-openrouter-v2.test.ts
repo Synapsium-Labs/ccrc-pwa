@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import {
   ACCOUNT_OP, HAVE_FLOCK, answer, boxEnv, ccrcRun, laneBox, laneState, secretTemps, type Result,
 } from './laneStateFixture.js';
-import { KEY_HINT_RE, LANE_KEY_SOURCES, laneStateOf } from '../../shared/accounts.js';
+import { KEY_HINT_RE, LANE_KEY_SOURCES, laneStateOf, stateWordFor } from '../../shared/accounts.js';
 import { MODEL_ID_RE, type Catalogue } from '../../shared/models.js';
 import { suggestedClasses, suggestedModelMap } from '../../shared/model-suggest.mjs';
 
@@ -148,12 +148,29 @@ describe('the key is checked first (spec §8.3, D-5520)', () => {
     ['a 500', 500, { error: { code: 500 } }],
     ['a 200 with no `data`', 200, { label: 'x' }],
     ['a 200 whose flag is no boolean', 200, { data: { ...KEY_BODY, is_management_key: 'yes' } }],
+    ['a 200 of an empty `data`', 200, { data: {} }],
+    ['a 200 of facts and no flag', 200, { data: { label: 'x', limit: null, limit_remaining: null } }],
+    ['a 200 whose two flags are null', 200, { data: { ...KEY_BODY, is_management_key: null, is_provisioning_key: null } }],
+    ['a 200 with no `is_management_key`', 200, { data: { label: 'x', is_provisioning_key: false } }],
+    ['a 200 whose `is_management_key` is null', 200, { data: { ...KEY_BODY, is_management_key: null } }],
+    ['a 200 whose `is_provisioning_key` is null', 200, { data: { ...KEY_BODY, is_provisioning_key: null } }],
+    ['a 200 whose `is_provisioning_key` is no boolean', 200, { data: { ...KEY_BODY, is_provisioning_key: 'no' } }],
   ])('%s refuses `key-unverified`, with no save anyway', (_name, status, body) => {
     const home = laneBox('ccrc-or-unverified-');
     const env = plantCurl(home);
     scriptKey(home, status, body);
     refuses(ccrcRun(home, addArgs(), `${KEY}\n`, env), 1, 'key-unverified');
     expectNothingWritten(home);
+  });
+
+  it('a 200 that drops only the deprecated `is_provisioning_key` still proves the key', () => {
+    const home = laneBox('ccrc-or-deprecated-');
+    const env = plantCurl(home);
+    const { is_provisioning_key: _dropped, ...body } = KEY_BODY;
+    scriptKey(home, 200, { data: body });
+    const r = ccrcRun(home, addArgs(), `${KEY}\n`, env);
+    expect(r.code, r.stderr).toBe(0);
+    expect(laneState(home, LANE)).toMatchObject({ keySource: 'pasted', keyHint: 'sk-or-v1-…a26a' });
   });
 
   it('a network that does not answer refuses `key-unverified`', () => {
@@ -204,6 +221,22 @@ describe('a good key makes a lane (spec §3.4, §8.4, §8.6)', () => {
     scriptKey(home, 200, { data: { ...KEY_BODY, limit: null, limit_remaining: null, limit_reset: null } });
     expect(ccrcRun(home, addArgs(), `${KEY}\n`, env).code).toBe(0);
     expect(laneStateOf(laneState(home, LANE))!.credit).toEqual({ limit: null, remaining: null });
+  });
+
+  // What `add` writes is what the Accounts card speaks: the screen already draws the hint, the age and the credit words.
+  it.each([
+    ['credit low', 20, 1.5, 'expiring', 'credit low · $1.50 of $20 left'],
+    ['credit used up', 20, 0, 'rate-limited', 'credit used up · $0.00 of $20 left'],
+  ])('%s, as `add` writes it, is the state word the card shows', (_name, limit, remaining, word, source) => {
+    const home = laneBox('ccrc-or-words-');
+    const env = plantCurl(home);
+    scriptKey(home, 200, { data: { ...KEY_BODY, limit, limit_remaining: remaining } });
+    expect(ccrcRun(home, addArgs(), `${KEY}\n`, env).code).toBe(0);
+    const state = laneStateOf(laneState(home, LANE))!;
+    expect(stateWordFor({
+      disabled: false, authDead: false, five: null, seven: null, fiveResetAt: null, sevenResetAt: null,
+      provider: 'openrouter', kind: 'key', lane: { kind: 'read', state }, now: Date.now(),
+    })).toEqual({ word, source });
   });
 
   it('a fact off its grammar is left out, and the key stands', () => {
@@ -400,6 +433,7 @@ describe('Replace key validates first (`credential`, spec §9)', () => {
     ['key-rejected', 401, {}],
     ['key-unverified', 500, {}],
     ['wrong-key-kind', 200, { data: { ...KEY_BODY, is_provisioning_key: true } }],
+    ['key-unverified', 200, { data: { label: 'x', limit: null, limit_remaining: null } }],
   ])('%s keeps the old file and the old facts', (word, status, body) => {
     const { home, env, before } = box('ccrc-or-replace-no-');
     const state = laneState(home, LANE);
@@ -428,7 +462,7 @@ describe('Replace key validates first (`credential`, spec §9)', () => {
     scriptKey(home, 200, { data: { ...KEY_BODY, limit_remaining: 0 } });
     expect(ccrcRun(home, ['account', 'check', '--id', LANE], '', env).code).toBeLessThanOrEqual(1);
     expect(laneState(home, LANE)).toMatchObject({ credit: { limit: 20, limit_remaining: 0 }, keyLabel: 'ccrc lane-d' });
-    scriptKey(home, 200, { data: {} });
+    scriptKey(home, 200, { data: { is_management_key: false, is_provisioning_key: false } });
     const r = replace(home, env);
     expect(r.code, r.stderr).toBe(0);
     const state = laneState(home, LANE);
@@ -488,10 +522,13 @@ describe('`check` reads the credit again (D-5521, G8)', () => {
     expect(existsSync(join(home, 'sourced')), 'the launcher\'s file was sourced').toBe(false);
   });
 
-  it('a failed read keeps the last reading', () => {
+  it.each([
+    ['a dead network', (home: string): void => { spawnSync('rm', [join(home, 'or-key')]); }],
+    ['a 200 that proves no kind', (home: string): void => { scriptKey(home, 200, { data: { label: 'x', limit: 5, limit_remaining: 0 } }); }],
+  ])('a failed read keeps the last reading: %s', (_name, breakIt) => {
     const { home, env } = box('ccrc-or-check-down-');
     const before = laneState(home, LANE)!;
-    spawnSync('rm', [join(home, 'or-key')]);
+    breakIt(home);
     expect(check(home, env).code).toBe(0);
     const st = laneState(home, LANE)!;
     expect(st['credit']).toEqual(before['credit']);

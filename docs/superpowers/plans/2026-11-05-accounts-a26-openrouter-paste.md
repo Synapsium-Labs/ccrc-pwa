@@ -1,6 +1,6 @@
 # Accounts connect A26: OpenRouter by paste on the box
 
-**Goal:** plan Task A26 of `2026-10-18-accounts-connect.md` (spec §3.4, §8.3–§8.6; D-5520, D-5521, D-5556, N4; G7, G8, G28). An OpenRouter key is checked on the fleet box before anything is written, a management key can never become a lane's key, an OpenRouter lane carries its own telemetry and placement, and it starts on suggested models. No screen changes: A27 is the first that shows any of it.
+**Goal:** plan Task A26 of `2026-10-18-accounts-connect.md` (spec §3.4, §8.3–§8.6; D-5520, D-5521, D-5556, N4; G7, G8, G28). An OpenRouter key is checked on the fleet box before anything is written, a management key can never become a lane's key, an OpenRouter lane carries its own telemetry and placement, and it starts on suggested models. No pwa file changes, but the existing Accounts card draws what this task is the first to write: the key's hint, the validation's age and the credit's state words (D-8023 (13)). A27 is the first screen that adds an OpenRouter sheet, and the first that shows the lane's models.
 
 **Before this change:** `add --provider openrouter` wrote whatever it was handed, with `telemetry: "anthropic"`, `homeAble: true` and no models unless the operator typed them. Nothing read the key's credit. `--placement` was an unknown argument, although the agent's argv table has carried it since A8.
 
@@ -12,7 +12,7 @@
   - `_acct_or_read_key`: `GET https://openrouter.ai/api/v1/key` with `curl -sS -H @- --proto =https --max-redirs 0 --max-time 10`, stdin exactly one header line, stderr dropped. The answer goes to `or-key`.
   - `credential` on an OpenRouter lane validates first, so the old file and the old facts stand until the new key passes. `check` reads the credit again on a lane ccrc wrote, in a subshell the sourced key dies with; an external launcher's secrets file is never read.
   - `add --placement overflow|full`; `models <id> init openrouter --suggested`, which reads the catalogue itself, because `refresh` serves only a lane that has a registry.
-- `deploy/account-op.mjs`: `PROVIDER_TELEMETRY` (`openrouter`, and `none` for compatible lanes); `homeAble` from the plan's `placement`; `check-add` takes `--placement`, overflow by default on an OpenRouter lane, and refuses `placement-not-supported` elsewhere; `or-key` reads the status and the body into a verdict and facts; `lane-state` takes `--key-hint`, `--key-source`, `--key-facts` and `--validated-at`, and keeps `keyLabel`.
+- `deploy/account-op.mjs`: `PROVIDER_TELEMETRY` (`openrouter`, and `none` for compatible lanes); `homeAble` from the plan's `placement`; `check-add` takes `--placement`, overflow by default on an OpenRouter lane, and refuses `placement-not-supported` elsewhere; `or-key` reads the status and the body into a verdict and facts, and `ok` needs the answer to prove the key's kind (D-8023 (12)); `lane-state` takes `--key-hint`, `--key-source`, `--key-facts` and `--validated-at`, and keeps `keyLabel`.
 - `deploy/models-op.mjs`: `suggest --catalogue <path>` answers the roster's map, and `init --suggested true`, on the openrouter probe only, seeds the classes, the subagent class and the discovery list from the lane's catalogue. A bare `init openrouter` stays unseeded.
 - `shared/model-suggest.mjs` (new, pure): `suggestedClasses` and `suggestedModelMap`, the one rule both callers read.
 - `ccd/ccrc-models-probe`: `--max-redirs 0` on both OpenRouter calls.
@@ -21,6 +21,7 @@
 
 **Tests:**
 - New: `server/test/ccrc-account-openrouter-v2.test.ts`.
+- New: `pwa/browser/accounts-openrouter-card.browser.test.ts`, the card in sixteen cells (D-8023 (13)).
 - Extended: `server/test/account-canary.test.ts` (an OpenRouter paste-add, a refused key and a Replace key through the route and both arms, with a `curl` that echoes its stdin on stderr), `server/test/ccrc-account.test.ts`, `server/test/ccdCapTokens.ts`, `server/test/laneStateFixture.ts`.
 
 **Mutation table (run):**
@@ -42,12 +43,22 @@
 | the registry step's subshell removed | ccrc-account-openrouter-v2 | "a models lock it cannot open…" |
 | the scratch left on a refusal | ccrc-account-openrouter-v2 | "a refused key leaves no catalogue behind" |
 | the old facts kept through a new key | ccrc-account-openrouter-v2 | "a new key whose answer leaves a fact out…" |
+| the gate open on missing or null flags | ccrc-account-openrouter-v2 | "…refuses `key-unverified`" on the empty `data`, the flagless and the null answers, the Replace key case, and "a failed read keeps the last reading: a 200 that proves no kind" |
+| `is_management_key` may go missing while `is_provisioning_key` is false | ccrc-account-openrouter-v2 | "a 200 with no `is_management_key`…" |
+| `is_provisioning_key` required | ccrc-account-openrouter-v2 | "a 200 that drops only the deprecated `is_provisioning_key`…" |
+| the card's line drops the hint | accounts-openrouter-card | all sixteen cells |
 
-**Per width × skin × mode:** no UI in all sixteen cells. A27 is the first screen that shows an OpenRouter lane's key, credit or models.
+**Per width × skin × mode:** no pwa file changes, and the card changes on real data. A lane this task makes shows its key's hint, the validation's age and the credit's words on the existing Accounts card, and the Remove ledger names the key by the hint. `accounts-openrouter-card` reads all sixteen cells, four widths, both skins, dark and light, each drawn from lane-state records as the verb writes them. The result is the same in dark and light:
+
+| Width | Refined | Instrument |
+|---|---|---|
+| phone 360, 390 | Credit low, credit used up and no limit all draw, nothing scrolls sideways, and every target takes 44px. The key's line ellipsises: the hint stays on screen, the validation's age is cut, and `title` holds the whole line. The credential command wraps inside its field. | The same. |
+| laptop 1280 | All three draw, and the key's line is whole. The credential command wraps to two lines inside its field, in the 760 column. | All three draw, and the key's line is whole. The command takes one line. |
+| wide 1920 | As at 1280. | As at 1280. |
 
 ## Deviations found
 
-- **D-8023 (2026-11-05)** — Task A26 as built, eleven decisions its Files list and shape did not make.
+- **D-8023 (2026-11-05)** — Task A26 as built, thirteen decisions its Files list and shape did not make.
   1. **`init` runs after the roster entry, and the catalogue is what runs first.** The plan has `add` run `ccrc models <id> init openrouter` before it writes the key, but `init` refuses `no-such-account` until the roster names the lane, and it merges into the lane's `settings.json`. What the plan's order is for, that an unreadable catalogue writes nothing, holds: the catalogue is fetched and the map chosen before the key is even read, and `init` follows the converge on that same file, which is spec §8.3 step 4's order.
   2. **What "suggested" means.** OpenRouter's catalogue names no suggested model, and `init openrouter` seeds nothing, so nothing on `main` answered the spec's sentence. The rule is `suggestedClasses`: per class, the newest visible `anthropic/claude-<class>-<version>`, by `compareVersions`, `:batch` and other variants excluded. Measured against the public catalogue on 2026-11-05: 30 Anthropic ids, all in this grammar. A catalogue with no id for opus, sonnet or haiku refuses `catalogue-unreachable`, because the screen's sentence is true of it too. `fable` fills when the catalogue lists one, as the spec allows.
   3. **The seed does not ask the ownership question.** `discovery add` on an openrouter lane checks `~/.handoff/providers-whitelist.json` against the model's endpoints. The seed does not: spec §8.5 names the public catalogue and no key, and a box with no whitelist file would refuse every add. Each later `discovery add` still passes through it. This is the one place a registry's discovery list skips that check, so it is named here for the reviewers.
@@ -59,5 +70,8 @@
   9. **`keyLabel` is a new lane-state field,** and `credit` keeps `usage` and `is_free_tier` beside the two figures the reader takes. `laneStateOf` and `LaneWire` are unchanged: the label and the usage line reach the wire with the screen that shows them, A27.
   10. **`ccrc-models-probe` changes,** though the Files list does not name it, because Step 1's "every OpenRouter call" includes its catalogue fetch.
   11. **A new key's facts replace the old key's whole.** The lane state merges, and a 200 may leave a fact out ("a fact off its grammar is left out"), so a Replace key would have kept the old key's credit beside the new key's hint, and a fresh key could read `credit used up`. `--key-source` marks a new key, and `lane-state` drops the hint and the four facts before it writes what the answer said. `check` passes no source, so a reading that leaves a fact out keeps the last one.
+  12. **`ok` needs the key's kind proven.** The spec names what is refused, a flag that is true, and leaves "anything else" to `key-unverified`. So a 200 with missing or null flags is refused too: a key of no proven kind would be sourced into sessions. `ok` needs `is_management_key` to be `false`, and `is_provisioning_key` `false` or absent, because OpenRouter's schema marks that one deprecated and may drop it. This is stricter than "at least one flag false": `{is_provisioning_key: false}` alone is refused, because the old name says nothing once the new one is missing. A later `check` that meets such an answer keeps the last reading.
+  13. **The existing card is a surface of this task.** No pwa file changes, but `identityLine`, `stateWordFor`'s credit rows and `troubleCopy` were waiting for data, and this is their first writer. So an OpenRouter lane now shows `Key sk-or-v1-…a26a · validated 2h ago`, `credit low · $62.25 of $1250.50 left` with its trouble card, and `credit used up · $0.00 of $20 left` with its own, and a no-limit key names no figure. `accounts-openrouter-card` measures it. The Replace sheet is Anthropic's alone, so its words do not reach this lane.
 
-  Known limits: a lane removed and added again under its old id keeps the class registry `remove` left (`init` answers `created: false`), so the roster's fresh map and that registry can differ until `ccrc models <id> rm` has run first. A TERM between a Replace key's rename and its lane-state write leaves the old hint and credit beside the new key, with `check` already cleared. `--method pkce` with a pasted key, which `check-add` still admits, is validated like a paste and reads `pasted` until A28.
+
+  Known limits: on a phone the key's line ellipsises, as spec §4.4's two-line head has it, so the validation's age is cut in both skins and `title`, which a touch cannot reach, is the only place it shows. The hint stays. A credit-used-up card says "until then" with no date to go with it and offers only the switch, not the top-up its credit-low sibling names; an OpenRouter lane's 5h and 7d meters stay empty, with `last reported —` on a lane that has no telemetry row. Those words and meters are A27's to settle. A lane removed and added again under its old id keeps the class registry `remove` left (`init` answers `created: false`), so the roster's fresh map and that registry can differ until `ccrc models <id> rm` has run first. A TERM between a Replace key's rename and its lane-state write leaves the old hint and credit beside the new key, with `check` already cleared. `--method pkce` with a pasted key, which `check-add` still admits, is validated like a paste and reads `pasted` until A28.

@@ -106,7 +106,7 @@ function plantEchoingCurl(home: string): void {
     '  *)',
     '    line="$(cat)"; printf \'the header on my stdin is %s\\n\' "$line" >&2',
     '    case "$line" in',
-    '      *GOOD*) printf \'{"data":{"label":"ccrc lane-p","limit":20,"limit_remaining":18,"usage":2}}\\n200\' ;;',
+    '      *GOOD*) printf \'{"data":{"label":"ccrc lane-p","limit":20,"limit_remaining":18,"usage":2,"is_management_key":false,"is_provisioning_key":false}}\\n200\' ;;',
     '      *) printf \'{"error":{"code":401}}\\n401\' ;;',
     '    esac ;;',
     'esac',
@@ -417,7 +417,11 @@ describe('the canary: a pasted token is found only in its 0600 secret file (spec
     // The hint is the one piece of a key the lane state keeps, and the screen's read carries it.
     const read = await b.app.inject({ method: 'GET', url: '/api/accounts', headers: { cookie: b.cookie } });
     b.bodies.push(read.body);
-    expect((read.json() as { lanes: Record<string, { keyHint?: string }> }).lanes[LANE]?.keyHint).toBe(`sk-or-v1-…${second.slice(-4)}`);
+    const lane = (read.json() as { lanes: Record<string, { keyHint?: string; validatedAt?: number; credit?: unknown }> }).lanes[LANE];
+    expect(lane?.keyHint).toBe(`sk-or-v1-…${second.slice(-4)}`);
+    // So do the two other facts the existing card draws: the validation's age, and the credit its state word reads.
+    expect(lane?.validatedAt).toBeGreaterThan(0);
+    expect(lane?.credit).toEqual({ limit: 20, remaining: 18 });
     expectOnlyInTheSecretFile(b, second, 'secret-file', 'openrouter');
   }, 400_000);
 

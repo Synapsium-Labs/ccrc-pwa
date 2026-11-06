@@ -2117,18 +2117,22 @@ const amountOrNull = (v) => (v === null || (typeof v === 'number' && Number.isFi
 const printableLabel = (v) => typeof v === 'string' && v.length > 0 && v.length <= KEY_LABEL_MAX && !identityUnprintable(v);
 
 /** `(status, body) => {verdict, facts?}`: what `GET /api/v1/key` said about a key (spec §8.3; D-5520), bash handing the
- *  HTTP status and the body it captured. The verdict is `ok`, `wrong-key-kind`, `key-rejected` or `key-unverified`. A
- *  200 that is not the documented `{data: {…}}`, or whose flags are not booleans, proves nothing, so it is unverified.
- *  A fact off its grammar is left out and the key stands: the 200 is what validates it, and the facts are display. */
+ *  HTTP status and the body it captured. The verdict is `ok`, `wrong-key-kind`, `key-rejected` or `key-unverified`.
+ *  The key's kind has to be proven, because a key of no proven kind would be sourced into sessions: `ok` needs
+ *  `is_management_key` to be `false`, and `is_provisioning_key`, the deprecated name, `false` or absent. Either one
+ *  `true` is `wrong-key-kind`. Anything else, a 200 that is not the documented `{data: {…}}` included, proves nothing,
+ *  so it is unverified. A fact off its grammar is left out and the key stands: the flags are what validate it, and the
+ *  facts are display. */
 function orKeyAnswerOf(status, body) {
   if (status === 401) return { verdict: 'key-rejected' };
   if (status !== 200) return { verdict: 'key-unverified' };
   let d = null;
   try { d = JSON.parse(body)?.['data'] ?? null; } catch { d = null; }
   if (!isPlainObject(d)) return { verdict: 'key-unverified' };
-  const flags = [d['is_management_key'], d['is_provisioning_key']];
-  if (flags.includes(true)) return { verdict: 'wrong-key-kind' };
-  if (flags.some((f) => f !== undefined && f !== null && f !== false)) return { verdict: 'key-unverified' };
+  const management = d['is_management_key'];
+  const provisioning = d['is_provisioning_key'];
+  if (management === true || provisioning === true) return { verdict: 'wrong-key-kind' };
+  if (management !== false || (provisioning !== false && provisioning !== undefined)) return { verdict: 'key-unverified' };
   const facts = {};
   if (printableLabel(d['label'])) facts.keyLabel = d['label'];
   const limit = amountOrNull(d['limit']);

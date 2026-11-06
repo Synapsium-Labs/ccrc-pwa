@@ -8351,7 +8351,7 @@ describe('ccrc account credential', () => {
     // An OpenRouter key is validated first (accounts plan Task A26): a `curl` that answers the 200, ahead of the poison.
     const or = join(home, 'or-bin');
     mkdirSync(or, { recursive: true });
-    writeFileSync(join(or, 'curl'), `#!/bin/sh\n${MANAGER_STANDIN_MARK}\ncat >/dev/null\nprintf '{"data":{}}\\n200'\n`, { mode: 0o755 });
+    writeFileSync(join(or, 'curl'), `#!/bin/sh\n${MANAGER_STANDIN_MARK}\ncat >/dev/null\nprintf '{"data":{"is_management_key":false,"is_provisioning_key":false}}\\n200'\n`, { mode: 0o755 });
     const r = run(home, ['account', 'credential', '--id', 'orchard-api', '--credential', '-'],
       `${CANARY}\n`, { PATH: `${or}:${env(home)['PATH'] ?? ''}` });
     expect(r.code, r.stderr).toBe(0);
