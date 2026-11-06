@@ -50,9 +50,9 @@
   .chat-head .ref-chip-rail .chat-coord {
     flex-wrap: nowrap;
   }
-  /* The Goals door (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1): last on the coordination line at a desk, so the
-     clauses keep their places there; in this sideways rail, first on it, beside the status, so the phone shows it without a
-     swipe. The rail does not wrap, so its place costs no height either way. */
+  /* The Goals door (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1): on a phone it stands on the coordination line in
+     this sideways rail (`SessionChrome`), first on it, beside the status, so the phone shows it without a swipe. The rail does
+     not wrap, so its place costs no height. At a desk it is the rail's last item instead (review 1548 F1). */
   .chat-head .ref-chip-rail .chat-coord-goals {
     order: -1;
   }

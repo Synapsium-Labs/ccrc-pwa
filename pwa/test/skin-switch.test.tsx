@@ -577,9 +577,10 @@ describe("the session screen mounts the skin's chrome", () => {
 // GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1, ruled in fix round 1): a session in a
 // programme shows a Goals icon in its chrome, in both skins, and it opens that programme's Goals page. The session's programme is
 // read off its fleet row and the runs the store holds (`sessionProgramme`), never a field of its own. A session in no programme
-// shows none. ONE door is drawn, where it costs the header no height (goals-door-height.browser.test.ts measures that): in
-// Instrument below 900 on Back's row; from 900, and in Refined at every width, on the coordination line, or after the last chip
-// for a coordinator, which has no coordination line of its own. Its name names the programme (review 1537 A10).
+// shows none. ONE door is drawn, in the slot the view gives it (`goals.slot`; goals-door-height.browser.test.ts measures what
+// it costs): in Instrument below 900 on Back's row, and from 900 on the coordination line, or after the last chip for a
+// coordinator, which has no coordination line of its own; in Refined on a phone first on the coordination line in its rail,
+// and at a desk the rail's last item (review 1548 F1). Its name names the programme (review 1537 A10).
 describe('the Goals icon in a session\'s chrome', () => {
   const COORDINATOR = fleetSession({ id: 'lane-a-project-a', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workspace: null });
   const RUNS = [runRow({ id: 7, program: 'prog-a', sessionId: WS.id, claimedBy: COORDINATOR.id, homeProject: 'project-a' } as never)];
@@ -619,7 +620,9 @@ describe('the Goals icon in a session\'s chrome', () => {
         if (skin === 'Instrument') toInstrument();
         openIn(WS, RUNS);
         const { el, slot } = door(skin);
-        expect(slot, skin).toBe(skin === 'Instrument' && !desk ? "Back's row" : 'coordination line');
+        // Refined at a desk: the last item of its one rail, where it can add no more than its own line (review 1548 F1).
+        expect(slot, skin).toBe(skin === 'Instrument' ? (desk ? 'coordination line' : "Back's row") : desk ? 'chip row' : 'coordination line');
+        if (skin === 'Refined' && desk) expect(document.querySelector('.ref-chip-rail')!.lastElementChild, skin).toBe(el);
         expect(el.getAttribute('aria-label'), skin).toBe('Goals: prog-a');
         expect(el.getAttribute('title'), skin).toBe('Goals: prog-a');
         fireEvent.click(el);
@@ -636,7 +639,8 @@ describe('the Goals icon in a session\'s chrome', () => {
         if (skin === 'Instrument') toInstrument();
         openIn(COORDINATOR, RUNS);
         const { el, slot } = door(skin);
-        expect(slot, skin).toBe(skin === 'Instrument' ? (desk ? 'chip row' : "Back's row") : 'coordination line');
+        expect(slot, skin).toBe(skin === 'Instrument' ? (desk ? 'chip row' : "Back's row") : desk ? 'chip row' : 'coordination line');
+        if (skin === 'Refined' && desk) expect(document.querySelector('.ref-chip-rail')!.lastElementChild, skin).toBe(el);
         fireEvent.click(el);
         expect(location.pathname, skin).toBe('/programmes/prog-a');
         cleanup();

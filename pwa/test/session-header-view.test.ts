@@ -323,12 +323,24 @@ describe('the Goals door (PL11)', () => {
   it('a session in a programme has a door to that programme\'s Goals page, named by it; one in none has none', () => {
     // Its name begins with the word it shows and names the programme, as the chip's does (review 1537 A10).
     expect(sessionHeaderView({ ...base, programme: PROG_A }).goals)
-      .toEqual({ href: '/programmes/prog-a', label: 'Goals: Programme A' });
+      .toEqual({ href: '/programmes/prog-a', label: 'Goals: Programme A', slot: 'back-row' });
     expect(sessionHeaderView({ ...base, programme: null }).goals).toBeNull();
     expect(sessionHeaderView(base).goals).toBeNull();
   });
   it('a programme whose page would refuse its slug has no door, never a dead one', () => {
     expect(sessionHeaderView({ ...base, programme: { slug: 'old.name', title: 'Old' } }).goals).toBeNull();
+  });
+  // REVIEW 1548 M5: the door's slot is the view's, beside `finePointer`, and the header draws the slot it is given. Below 900
+  // Back's row; at a desk the coordination line, or after the last chip when that line has no clause of its own (a
+  // coordinator that holds no run: its runs bind its workers).
+  it("the view decides the door's slot: Back's row below 900; at a desk the coordination line, or the chip row when that line has no clause", () => {
+    const p = hostProps(allChips(), 'idle');
+    const slot = (desk: boolean, coordination: Coordination | null): string | undefined =>
+      sessionHeaderView({ ...p, coordination, now: NOW, finePointer: true, desk, programme: PROG_A }).goals?.slot;
+    expect(slot(false, COORDINATION)).toBe('back-row');
+    expect(slot(false, null)).toBe('back-row');
+    expect(slot(true, COORDINATION)).toBe('coordination-line');
+    expect(slot(true, null)).toBe('chip-row');
   });
   // ONE door, in the slot that costs the header no height (review 1537 F1, ruled in fix round 1): on Back's row below 900, on
   // the coordination line from 900. Nothing else in the header changes: its own children are the same, but for the key.

@@ -24,6 +24,7 @@ import { WorkLine } from '../fleet/WorkLine';
 import { cardFacts, contextFact, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
+import { coordinationClauses } from './sessionHeaderView';
 
 /** A plain detail — one fact in words, its tooltip when it has one. */
 function Detail({ children, title }: { children: ReactNode; title?: string }): ReactNode {
@@ -39,26 +40,8 @@ function CoordLink({ glyph, label, to, children }: { glyph: string; label: strin
   );
 }
 
-/** The coordination line's clauses, each `null` when it has none: whose code it works on, its programme's run (a coordinator's
- *  own hold, or a child's run), and who coordinates it. One derivation, which the line draws and `hasCoordinationClause` asks. */
-function coordinationClauses(facts: SessionFactSet, coordination: Coordination | null) {
-  const ctx = contextFact(facts);
-  const run = ctx?.key === 'programme' ? (facts.heldRun ?? facts.activeRun) : null;
-  const workingOn = facts.workingOn ?? coordination?.workingOn ?? null;
-  const coordinatorName = facts.coordinatorName ?? coordination?.coordinator ?? null;
-  const from = coordinatorName ?? (coordination !== null && coordination.workingOn !== null ? coordination.card : null);
-  return { workingOn, run, from };
-}
-
-/** Whether the coordination line has a clause of its own to draw, beside which the Goals door can stand (PL11, D-7986; review
- *  1537 F1). A coordinator that holds no run of its own has none: its runs bind its workers. */
-export function hasCoordinationClause(facts: SessionFactSet, coordination: Coordination | null): boolean {
-  const { workingOn, run, from } = coordinationClauses(facts, coordination);
-  return workingOn !== null || run !== null || from !== null;
-}
-
 /** THE GOALS DOOR (desktop-polish PL11, D-7986; spec §2, D30): the programme's own glyph, the one its box's kicker wears, and
- *  its word, which chat.css shows only where the line has room for it; its accessible name and `title` name the programme
+ *  its word, which chat.css shows from 1280; its accessible name and `title` name the programme
  *  (`sessionHeaderView`'s `goals.label`, review 1537 A10). It opens that programme's Goals page. */
 export function GoalsDoor({ goals }: { goals: { readonly href: string; readonly label: string } }): ReactNode {
   return (
@@ -77,9 +60,9 @@ export function GoalsDoor({ goals }: { goals: { readonly href: string; readonly 
  *  GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1, ruled in fix round 1): `goals` is
  *  the Goals door of the programme this session is in (`sessionHeaderView`'s `goals`), drawn LAST on this line, the line that
  *  already names the programme, so the door takes no width from the title beside the header's doors, and the clauses before
- *  it keep their places. On a phone Refined's rail scrolls this line sideways; at a desk the line has room for it from 1200,
- *  where its word shows (chat.css), and at 900 to 1199 it may take one more line (`HeaderGoalsKey` says where else it stands).
- *  The programme's own glyph, the one its box's kicker wears. `null`/absent: no door. */
+ *  it keep their places. On a phone Refined's rail scrolls this line sideways. At a desk, last on a line that wraps, it costs
+ *  the header at most its own row (review 1548, ruled in fix round 2); its word shows from 1280 (chat.css). `goals.slot` says
+ *  where else it stands (`GoalsSlot`). The programme's own glyph, the one its box's kicker wears. `null`/absent: no door. */
 export function SessionCoordination({ facts, coordination, goals = null }: {
   facts: SessionFactSet;
   coordination: Coordination | null;

@@ -25,13 +25,13 @@ import { PrKeycap } from './PrKeycap';
 import { useSessionFlows } from './SessionFlows';
 import './chat.css';
 import { chipTone, metaChipTone } from './chipTones';
-import { GoalsDoor, SessionCoordination, SessionDetails, hasCoordinationClause } from './SessionDetails';
+import { GoalsDoor, SessionCoordination, SessionDetails } from './SessionDetails';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
 // W2 Task S7a (D-5471): every word, chip and state below is the view's (`sessionHeaderView`), the one derivation both
 // skins' session chrome render from. This part holds the hooks (the clock, the pointer query, the flows' doors) and
 // the markup, nothing else.
-import { headerTickMs, sessionHeaderView, type HeaderChip, type SessionHeaderView } from './sessionHeaderView';
+import { headerTickMs, sessionHeaderView, type GoalsSlot, type HeaderChip, type SessionHeaderView } from './sessionHeaderView';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -89,7 +89,7 @@ export function useSessionChromeInputs(): SessionHeaderProps {
   return inputs;
 }
 
-/** The header's view with the part's hooks (the clock, the pointer query): what every session chrome renders from. */
+/** The header's view with the part's hooks (the clock, the pointer and desk queries): what every session chrome renders from. */
 export function useSessionHeaderView({
   session, status, statusUpdatedAt, fallback, roster = [], queuedField = null, repo = null, coordination = null,
   facts = null, programme = null,
@@ -101,8 +101,10 @@ export function useSessionHeaderView({
   // is the session screen's `useEscapeInterrupt` (W2 Task S2d), which reads the
   // same query, so the cap hides exactly where the key takes over.
   const finePointer = useMediaQuery('(pointer: fine)');
+  // Where the Goals door stands (`goals.slot`) turns at 900.
+  const desk = useDesk();
   return sessionHeaderView({
-    session, status, statusUpdatedAt, queuedField, fallback, roster, repo, coordination, facts, now, finePointer, programme,
+    session, status, statusUpdatedAt, queuedField, fallback, roster, repo, coordination, facts, now, finePointer, desk, programme,
   });
 }
 
@@ -155,26 +157,29 @@ export function HeaderTitle({ view }: { view: SessionHeaderView }): ReactNode {
   );
 }
 
-/** D-5527: who this session works for. `goals`: the Goals door this line draws, the view's by default; `null` where the
- *  chrome draws it elsewhere (the shared header below 900, `HeaderGoalsKey`). */
-export function HeaderCoordination({ view, goals = view.goals }: {
+/** D-5527: who this session works for. `goals`: the Goals door this line draws, or `null` where the chrome draws it in
+ *  another slot (`GoalsSlot`). */
+export function HeaderCoordination({ view, goals = null }: {
   view: SessionHeaderView; goals?: SessionHeaderView['goals'];
 }): ReactNode {
   const coord = chipOf(view, 'coordination');
   return coord === undefined ? null : <SessionCoordination facts={coord.facts} coordination={coord.coordination} goals={goals} />;
 }
 
-/** GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1, ruled in fix round 1): where the
- *  Goals door stands, so that it costs the header no height. It is the programme's own glyph, the one its box's kicker wears,
- *  and it opens that programme's Goals page. One door is drawn, in one of two slots:
- *    - the shared header (Instrument) below 900: here, a glyph-only key first of the doors on Back's row, which has room;
- *    - everywhere else, Refined at every width included: last on the coordination line (`SessionCoordination`), the line that
- *      already names the programme, so the door takes no width from the title. A session whose line has no clause of its own
- *      (a coordinator, whose runs bind its workers: `hasCoordinationClause`) has the door after its last chip instead, in the
- *      shared header, and as the rail's item after the status in Refined's, where the line stands. Its word shows where the
- *      line has room for it (chat.css). At 900 to 1199 that line can be full, and the door may then take one more
- *      coordination line (at most 14 px, measured; the ruling's allowance). Everywhere else the header is the height it is out
- *      of a programme (`goals-door-height.browser.test.ts`). */
+/** GOALS FROM INSIDE A SESSION (desktop-polish PL11, D-7986; spec §2, D30; review 1537 F1 and review 1548 F1 to F3, ruled in
+ *  fix rounds 1 and 2): the Goals door's `back-row` slot (`GoalsSlot`, the view's). It is the programme's own glyph, the one
+ *  its box's kicker wears, and it opens that programme's Goals page. One door is drawn, in the slot the view gives it:
+ *    - `back-row`, the shared header (Instrument) below 900: here, a glyph-only key first of the doors on Back's row, which has
+ *      room for it, so a phone's header is the height it is out of a programme;
+ *    - `coordination-line`, at a desk: last on the coordination line (`SessionCoordination`), the line that already names the
+ *      programme, so the door takes no width from the title;
+ *    - `chip-row`, at a desk, for a session whose line has no clause of its own (a coordinator, whose runs bind its workers):
+ *      after its last chip.
+ *  Refined has no Back's-row keys and one rail: it draws the door first on the coordination line in its rail on a phone, and
+ *  as the rail's last item at a desk. Its word shows from 1280 (chat.css). At a desk the door stands last on a line that
+ *  wraps, so where that line is full it takes a line of its own: the header is then taller by at most the door's own row (its
+ *  height and its row's gap), and no other row of the header changes height; where the line has room it is the height it is
+ *  out of a programme (`goals-door-height.browser.test.ts`). */
 export function HeaderGoalsKey({ view }: { view: SessionHeaderView }): ReactNode {
   const goals = view.goals;
   return goals === null ? null : (
@@ -186,9 +191,9 @@ export function HeaderGoalsKey({ view }: { view: SessionHeaderView }): ReactNode
 
 /** The meta chips, status first, in the view's order. `afterStatus` is a skin's slot beside the status (Refined's rail
  *  places the coordination line there); `beforeDetails` one after the last chip, before the details (the shared header's
- *  Goals door when it has no coordination line to stand on, `HeaderGoalsKey`). */
-export function HeaderChips({ view, afterStatus = null, beforeDetails = null }: {
-  view: SessionHeaderView; afterStatus?: ReactNode; beforeDetails?: ReactNode;
+ *  Goals door in its `chip-row` slot, `HeaderGoalsKey`); `afterDetails` the last (Refined's Goals door at a desk). */
+export function HeaderChips({ view, afterStatus = null, beforeDetails = null, afterDetails = null }: {
+  view: SessionHeaderView; afterStatus?: ReactNode; beforeDetails?: ReactNode; afterDetails?: ReactNode;
 }): ReactNode {
   const statusChip = chipOf(view, 'status');
   const lane = chipOf(view, 'lane');
@@ -267,6 +272,7 @@ export function HeaderChips({ view, afterStatus = null, beforeDetails = null }: 
       {beforeDetails}
       {/* D-5545: every other fact, in full — a details row from 900px, behind one door on a phone. */}
       {details !== undefined && <SessionDetails facts={details.facts} coordination={details.coordination} />}
+      {afterDetails}
     </>
   );
 }
@@ -301,11 +307,10 @@ export function HeaderDoors({ view, openMenu }: { view: SessionHeaderView; openM
 export function SessionHeader(props: SessionHeaderProps): ReactNode {
   const { openMenu } = useSessionFlows();
   const view = useSessionHeaderView(props);
-  // The Goals door's slot (`HeaderGoalsKey`): on Back's row below 900; from 900 on the coordination line, or after the last chip
-  // when that line has no clause to stand beside.
-  const desk = useDesk();
-  const coord = chipOf(view, 'coordination');
-  const lined = coord !== undefined && hasCoordinationClause(coord.facts, coord.coordination);
+  // The Goals door stands in the slot the view gives it (`GoalsSlot`, `HeaderGoalsKey`).
+  const goals = view.goals;
+  const at = (slot: GoalsSlot): typeof goals => (goals !== null && goals.slot === slot ? goals : null);
+  const chipRow = at('chip-row');
   return (
     <header className="chat-head">
       <HeaderBack onBack={props.onBack} />
@@ -313,12 +318,12 @@ export function SessionHeader(props: SessionHeaderProps): ReactNode {
         <HeaderTitle view={view} />
         {/* D-5527: under the name, because it says what this session IS for —
             whose code, whose programme — before the meta row says how it is. */}
-        <HeaderCoordination view={view} goals={desk && lined ? view.goals : null} />
+        <HeaderCoordination view={view} goals={at('coordination-line')} />
         <div className="chat-meta">
-          <HeaderChips view={view} beforeDetails={desk && !lined && view.goals !== null ? <GoalsDoor goals={view.goals} /> : null} />
+          <HeaderChips view={view} beforeDetails={chipRow === null ? null : <GoalsDoor goals={chipRow} />} />
         </div>
       </div>
-      {!desk && <HeaderGoalsKey view={view} />}
+      {at('back-row') !== null && <HeaderGoalsKey view={view} />}
       <HeaderDoors view={view} openMenu={openMenu} />
       {view.stop.shown && (
         <Keycap className="keycap--esc" aria-label="Stop" disabled={!view.stop.enabled} onClick={() => props.onInterrupt('keycap')}>
