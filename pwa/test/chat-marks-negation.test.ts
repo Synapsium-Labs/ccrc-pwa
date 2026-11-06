@@ -18,10 +18,12 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { remarkAlerts } from '../src/lib/remarkAlerts';
 import { remarkChatMarks } from '../src/lib/remarkChatMarks';
-import { MARK_ATTR, STATUS_NEGATORS, markRuns, type Mark } from '../src/lib/chatMarks';
+import { LabelScan, MARK_ATTR, STATUS_NEGATORS, markRuns, type Mark, type MarkRun } from '../src/lib/chatMarks';
 
 const statusesOf = (text: string): { text: string; tone: string }[] =>
   markRuns(text).flatMap((r) => (r.kind === 'status' ? [{ text: r.text, tone: r.tone }] : []));
+const statusRuns = (runs: readonly MarkRun[]): { text: string; tone: string }[] =>
+  runs.flatMap((r) => (r.kind === 'status' ? [{ text: r.text, tone: r.tone }] : []));
 const marksOf = (text: string): Mark[] => markRuns(text).flatMap((r) => (r.kind === 'mark' ? [r.mark] : []));
 
 interface MdNode {
@@ -189,6 +191,23 @@ describe('the check is linear in the text (review 1592 F1)', () => {
     const ms = performance.now() - t0;
     expect(statuses.length).toBe(Math.ceil(length / unit.length));
     expect(ms).toBeLessThan(BOUND_MS);
+  });
+
+  it('through the plugin, one clause split into many text nodes is one pass too', () => {
+    const src = repeat('CI green `x` ', 100_000);
+    const t0 = performance.now();
+    const statuses = pluginStatuses(src);
+    const ms = performance.now() - t0;
+    expect(statuses.length).toBe(Math.ceil(100_000 / 'CI green `x` '.length));
+    // The parse is inside this bound too (about 0.15 s in all on the author's box), so it is wider. A scan per text
+    // node over its whole clause took about 2.8 s for the plugin alone.
+    expect(ms).toBeLessThan(BOUND_MS * 5);
+  });
+
+  it('a block\'s scan gives the same answers when asked out of order', () => {
+    const scan = new LabelScan('No tests failed. CI green.');
+    expect(statusRuns(markRuns('CI green.', { scan, offset: 17 }))).toEqual([{ text: 'green', tone: 'ok' }]);
+    expect(statusRuns(markRuns('No tests failed.', { scan, offset: 0 }))).toEqual([]);
   });
 });
 
