@@ -478,14 +478,17 @@ describe('a heredoc body that can run, or that cannot be read, is still read as 
     expect(bash(cmd)).toMatch(/never under a systemd-run of your own/);
   });
 });
-platformContrast('a heavy run a heredoc does not hide', {
-  darwin: ['is allowed: no slice to send it to', () => {
-    for (const cmd of BODY_RUNS_OR_UNREAD) expect(bash(cmd), cmd).toBeNull();
-  }],
-  linux: ['is denied, with a reason that names ccrc test', () => {
-    for (const cmd of BODY_RUNS_OR_UNREAD) expect(bash(cmd), cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
-  }],
-});
+// One test per row: every row runs the real hook, so one loop over all of them outgrew the 20 s limit on a loaded runner.
+for (const cmd of BODY_RUNS_OR_UNREAD) {
+  platformContrast(`a heavy run a heredoc does not hide: ${JSON.stringify(cmd)}`, {
+    darwin: ['is allowed: no slice to send it to', () => {
+      expect(bash(cmd), cmd).toBeNull();
+    }],
+    linux: ['is denied, with a reason that names ccrc test', () => {
+      expect(bash(cmd), cmd).toMatch(/starts a heavy test or typecheck outside `ccrc test`/);
+    }],
+  });
+}
 
 describe('the test-route arm fails open (D-7298)', () => {
   it('with no ccrc on PATH there is no ccrc test to send a run to, so nothing is denied', () => {
