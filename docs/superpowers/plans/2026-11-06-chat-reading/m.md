@@ -74,3 +74,50 @@ Run one at a time through `ccrc test`. The pwa type check (`tsc --noEmit`, which
 pwa suite, on its first full run after the implementation was complete: 466 files, 13 739 tests passed, 3 skipped.
 `server/test/single-definition/`: 23 files, 1 084 tests passed. The tree-scanning guards (topology-clean, source-bytes,
 deviation-refs, anchors, citations, dtbd, growth-check, ownership, rings): 19 files passed.
+
+## Fix round 1 (review 1574)
+
+The coordinator's rulings, applied red first inside this task's claims:
+
+| Ruling | What changed | Pinned by |
+|---|---|---|
+| 1, F-A | A word character is read by whole code point (`wordBefore`, `wordAfter`), so a letter outside the BMP bounds a name, as `word-character-in-any-script` claims | rows `𠀀#1` and `#1𝐀` |
+| 2, F-B | S2 marks a `strong` only when every child is a text node: a bold holding inline code or a link is not marked | "S2 does not mark a bold holding inline code or a link" |
+| 3, F-C | none: the after-lead flag already ended at any block. A row and a mutant now hold it | "a list after an action lead-in with a heading / a fence / another list between is not marked" |
+| 3, F-D | none: a commit already could not follow `.`, `/` or `-`. Rows and a mutant now hold it | rows `feat-4c677d328`, `v1.2.4c677d328`, `a/4c677d328` |
+| 3, F-E | none: a document path already could not run on into `/` or `-`. Rows and a mutant now hold it | rows `docs/a.md/x`, `docs/a.md-bak` |
+| 4, G2 | A commit is not followed by `-`, nor by `.` and a word character; a document path is not followed by `.` and a word character. A sentence-ending `.` still ends a name | rows for two UUIDs, `abc1234.ts` and `docs/plan.md.bak`; positives `at abc1234.` and `read docs/a.md.` |
+| 4, G3 | A commit is never digits, one `e`, digits (`EXPONENT = /^\d*e\d+$/`): the smallest rule that refuses both `1e10000` and `e1234567`. A rule like "no digit-e-digit" alone would let `e1234567` through | rows `1e10000`, `10e1000`, `e1234567` |
+| 4, colours | none needed: a PR takes digits only, and a commit is at least seven characters, so `#a3f`, `#1a2b3c` and `#ff00aa` were already text. Rows hold it; digits-only `#333` and `#000000` stay PR marks | three negative rows, two positive rows |
+| 5, P4 | S1 reads body rows only; the header row keeps plain text | "S1 does not label a header cell" |
+
+Left as observed, not ruled: an 8-digit colour such as `#ff00aa80` is still `#` followed by a commit mark, because the
+ruling names 3 and 6 digits. Task L's repository rule decides whether it links.
+
+### Mutants, fix round 1
+
+All 12 earlier mutants were re-run with their anchors moved to the new code (mutant 1 is now the `wordBefore` skip
+letting a `#` through, and mutant 2 drops the digit-and-letter test). Twelve new mutants were added. All 24 went red on
+the named case, each restored from its saved copy with its sha256 checked.
+
+| # | Mutant | Red case |
+|---|---|---|
+| 13a | `wordBefore` reads one UTF-16 unit | "an astral letter before (𠀀#1)" |
+| 13b | `wordAfter` reads one UTF-16 unit | "an astral letter after (#1𝐀)" |
+| 14 | S2's plain-text test dropped | "S2 does not mark a bold holding inline code or a link" |
+| 15 | the after-lead flag not reset after a non-paragraph block | "… with a heading / a fence / another list between is not marked" |
+| 16 | a commit allowed after `.`, `/`, `-` | `feat-4c677d328`, `v1.2.4c677d328`, `a/4c677d328` |
+| 17 | a document path allowed to run on into `/` or `-` | `docs/a.md/x`, `docs/a.md-bak` |
+| 18 | a commit allowed before `-` | "a UUID's head (4c677d32-…)" |
+| 19 | a commit allowed before `.` and a word character | `abc1234.ts` |
+| 20 | the exponent rule dropped | `1e10000`, `10e1000`, `e1234567` |
+| 21 | a document path allowed before `.` and a word character | `docs/plan.md.bak` |
+| 22 | S1 applied to the header row | "S1 does not label a header cell" |
+| 23 | any `.` after a name refuses it | "at abc1234. (sentence end) is still a name", "docs/conventions/x.md. (trailing full stop outside)" |
+
+Gates, one at a time through `ccrc test`, all green:
+- chat-marks, remark-chat-marks, markdown-parse, render-hast and markdown-purity: 255 tests;
+- markdown-golden under `CI=1`: 173 of 173, every stored file byte-identical;
+- the pwa type check: clean;
+- the whole pwa suite: 466 files, 13 765 passed, 3 skipped;
+- `server/test/single-definition/`: 23 files, 1 084 passed.
