@@ -400,6 +400,14 @@ describe('parseJournalLine: the three families never merge', () => {
     expect(parseJournalLine(line({ verb: 'ws-shed-deps', meas: { mode: 'coordinator' } })).meas?.childRun).toBeNull();
   });
 
+  it('carries `meas.witness` (cleanup un-wedge R4), and a collect line from a ccd that does not write it reads null (the skew row)', () => {
+    // New ccd, this server: a collection of a leaf released after a box move says so on its done line.
+    expect(parseJournalLine(line({ act: 'collect', outcome: 'done', verb: 'ws-collect', meas: { leaf: 'removed', witness: 'moved-host' } })).meas)
+      .toMatchObject({ leaf: 'removed', witness: 'moved-host' });
+    // Skew: an ordinary collection, or a ccd older than the key: absent reads null, never a guess.
+    expect(parseJournalLine(line({ act: 'collect', outcome: 'done', verb: 'ws-collect', meas: { leaf: 'removed' } })).meas?.witness).toBeNull();
+  });
+
   it('carries `meas.startpoint` (D-7827), and a create line from a ccd that does not write it reads null (the skew row)', () => {
     const tip = 'e'.repeat(40);
     // New ccd, this server: a `ws-add --base` create row keeps its start point beside the origin ref it records as base.

@@ -453,3 +453,68 @@ describe('$REG/tmpquarantine is invisible to every registry walker (spec §5.10,
     }
   });
 });
+
+describe('the leaf a box move released (cleanup un-wedge, Task R4): an optional trailing `leaf=`', () => {
+  // A leaf `_ws_collect_moved_host` released is not the directory its witness names, so the record a released
+  // collection writes ends ` leaf=<dev>:<ino>:<btime>`. The reader exposes the PHYSICAL identity every proof after the
+  // move reads (`_WS_QREC_P*`): the leaf's when present, the witness's otherwise. `_WS_QREC_DEV`, `_INO` and `_BTIME`
+  // stay the witness's, for its compare-and-drop. Any other spelling of the field is malformed: kept, the operator's.
+  const PHYS = '"$_WS_QREC_LEAF|$_WS_QREC_PDEV|$_WS_QREC_PINO|$_WS_QREC_PBTIME|$_WS_QREC_DEV|$_WS_QREC_INO|$_WS_QREC_BTIME"';
+  const readPhys = (file: string): string => {
+    qOf();
+    return h.sh(`_ws_collect_record_read '${file}'; printf '[rc=%s] %s' "$?" ${PHYS}`);
+  };
+
+  it('a record written today reads unchanged: no leaf, and its physical identity is the witness’s', () => {
+    plant(GOOD());
+    expect(read(recPath())).toBe(`[rc=0] ${ID}|${slotOf()}|2064|35|1791468463|7|1791470480213|${TOKEN}|`);
+    expect(readPhys(recPath())).toBe('[rc=0] |2064|35|1791468463|2064|35|1791468463');
+  });
+
+  it('a released record’s physical identity is the leaf’s, and the witness fields are kept beside it', () => {
+    plant(GOOD().replace(/\n$/, ' leaf=99:4242:1791468999\n'));
+    expect(read(recPath())).toBe(`[rc=0] ${ID}|${slotOf()}|2064|35|1791468463|7|1791470480213|${TOKEN}|`);
+    expect(readPhys(recPath())).toBe('[rc=0] 99:4242:1791468999|99|4242|1791468999|2064|35|1791468463');
+  });
+
+  it('a later read of a record with no leaf clears the leaf an earlier read set', () => {
+    plant(GOOD().replace(/\n$/, ' leaf=99:4242:1791468999\n'), recPath(ID, '1', '1'));
+    plant(GOOD());
+    qOf();
+    expect(h.sh(`_ws_collect_record_read '${recPath(ID, '1', '1')}'; _ws_collect_record_read '${recPath()}'; printf '%s' ${PHYS}`))
+      .toBe('|2064|35|1791468463|2064|35|1791468463');
+  });
+
+  it.each([
+    ['a leaf with no birth time', ' leaf=99:4242:-'],
+    ['a leaf of a birth time 0', ' leaf=99:4242:0'],
+    ['a leaf of two fields', ' leaf=99:4242'],
+    ['an empty leaf', ' leaf='],
+    ['a second leaf', ' leaf=99:4242:1 leaf=99:4242:1'],
+    ['an unknown trailing field', ' extra=1'],
+  ])('rc 2 for %s', (_label, tail) => {
+    plant(GOOD().replace(/\n$/, `${tail}\n`));
+    expect(read(recPath())).toBe(`[rc=2] ${EMPTY}`);
+  });
+
+  it('rc 2 for a leaf before the checkouts', () => {
+    plant(GOOD().replace(' checkouts=', ' leaf=99:4242:1 checkouts='));
+    expect(read(recPath())).toBe(`[rc=2] ${EMPTY}`);
+  });
+
+  it('the writer adds ` leaf=` only when it is given one, and reads it back whole', () => {
+    const [rc = '', why = ''] = h.sh(`${WITNESS()} _ws_collect_record_write '${ID}' '${slotOf()}' '${TOKEN}' '99:4242:1791468999';`
+      + ' rc=$?; printf \'%s\\x1f%s\' "$rc" "$_WS_QREC_WHY"').split('\x1f');
+    expect(rc, why).toBe('0');
+    expect(fs.readFileSync(recPath(), 'utf8')).toMatch(/ checkouts= leaf=99:4242:1791468999\n$/);
+    expect(readPhys(recPath())).toMatch(/^\[rc=0\] 99:4242:1791468999\|99\|4242\|1791468999\|/);
+  });
+
+  it.each([['-'], ['99:4242'], ['99:4242:0'], ['a:b:c']])('the writer refuses a leaf identity %s: rc 1, nothing written', (bad) => {
+    const [rc = '', why = ''] = h.sh(`${WITNESS()} _ws_collect_record_write '${ID}' '${slotOf()}' '${TOKEN}' '${bad}';`
+      + ' rc=$?; printf \'%s\\x1f%s\' "$rc" "$_WS_QREC_WHY"').split('\x1f');
+    expect(rc, why).toBe('1');
+    expect(why).toContain('not one ccd measures');
+    expect(fs.existsSync(qrecDir()) ? fs.readdirSync(qrecDir()) : []).toEqual([]);
+  });
+});
