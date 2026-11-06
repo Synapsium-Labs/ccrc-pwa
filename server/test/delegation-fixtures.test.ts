@@ -20,20 +20,29 @@ import path from 'node:path';
 const FIX = path.resolve(__dirname, 'fixtures/delegation');
 const SCEN = path.resolve(__dirname, 'delegation-rig/scenarios');
 
-/** The Claude Code versions the fleet's live sessions ran, by process executable, when Task 6 measured them
- *  (2026-10-14): 2.1.291 (1 session), 2.1.296 (40), 2.1.299 (15). `rig.sh versions` listed five installed
- *  (2.1.291, 2.1.294, 2.1.295, 2.1.296, 2.1.299); the corpus held 2.1.280 to 2.1.292 before that recapture. */
-const CURRENT_LANES = ['2.1.291', '2.1.296', '2.1.299'] as const;
+/** The Claude Code versions the fleet's lanes run, re-read on 2026-11-06 for the corpus run (delegation broker wave 5,
+ *  Task 0) as the `version_to` of each lane's last update (`.last-update-result.json` in each lane's config directory,
+ *  that field alone): 2.1.311 (1 lane), 2.1.314 (1), 2.1.316 (2), 2.1.318 (2) and 2.1.319 (9). The recapture of that day
+ *  measured exactly these five; the corpus held 2.1.280 to 2.1.299 before it. Task 6 measured the list first (2026-10-14,
+ *  by process executable: 2.1.291, 2.1.296 and 2.1.299). */
+const CURRENT_LANES = ['2.1.311', '2.1.314', '2.1.316', '2.1.318', '2.1.319'] as const;
 
 /** Every unmeasured cell of the matrix, with the reason `build-matrix.mjs` recorded, and what was ruled (Task 6, R15):
  *  `interrupt-exit` (spec question 6: exit with a background agent) was captured on 2.1.294 and never reached its third
  *  mock label on 2.1.295, 2.1.296 and 2.1.299 (the parent's turn ended instead of hanging), so those three cells are
  *  UNMEASURED, never absence, and no parser or correlation may rely on that scenario's shape for 2.1.295 and later. The
- *  scenario or mock fix is a follow-up outside this file; when it lands, this list shrinks in the same commit. */
+ *  same defect holds from 2.1.295 through 2.1.319: the recapture of 2026-11-06 measured it, with the same reason, on
+ *  2.1.311, 2.1.314, 2.1.316, 2.1.318 and 2.1.319. The scenario or mock fix is a follow-up outside this file; when it
+ *  lands, this list shrinks in the same commit. */
 const UNMEASURED: ReadonlyArray<{ cell: string; reason: string }> = [
   { cell: '2.1.295/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
   { cell: '2.1.296/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
   { cell: '2.1.299/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
+  { cell: '2.1.311/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
+  { cell: '2.1.314/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
+  { cell: '2.1.316/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
+  { cell: '2.1.318/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
+  { cell: '2.1.319/interrupt-exit', reason: 'waitLabels ["sub-hang","main-hang"]: timeout' },
 ];
 
 type Cell = { status: string; reason?: string };
