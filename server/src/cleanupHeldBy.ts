@@ -7,11 +7,11 @@
  * (`cleanupHeldBy`), decides the row's one control (`cleanupHeldByAct`), and folds the children that only those rows
  * hold into the row's line (`withCleanupHeldBy`).
  */
-import { HELD_BY_WORDS } from '../../../shared/api.js';
+import { HELD_BY_WORDS } from '../../shared/api.js';
 import type {
   ChildReclaimAttention, CleanupHeldByAct, CleanupHeldByItem, CoordStatus, ExpiryAttention, FleetSession, HeldByWord,
   LcRefusalToken,
-} from '../../../shared/api.js';
+} from '../../shared/api.js';
 
 /** ccd's measurement of a holding row's `workspace` registry field: no field, a workspace, or unreadable (or a link). */
 export type HeldByWorkspace = 'absent' | 'present' | 'unreadable';
@@ -195,6 +195,9 @@ export function withCleanupHeldBy(
     ...status,
     childReclaimAttention: status.childReclaimAttention.filter(keepReclaim),
     ...(status.expiryAttention ? { expiryAttention: status.expiryAttention.filter(keepExpiry) } : {}),
-    cleanupHeldBy: items,
+    // OMITTED while no row holds, never `[]`: a frame with nothing held is byte-identical to the frame before R2, so the
+    // byte-equality guard emits nothing new and every reader of today's frame sees today's frame. The PWA's one reader
+    // reads absence as no items (the `childReclaimDoneAt` precedent).
+    ...(items.length === 0 ? {} : { cleanupHeldBy: items }),
   };
 }

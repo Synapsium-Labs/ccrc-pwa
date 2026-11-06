@@ -32,7 +32,7 @@ import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './liv
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
-import { withCleanupHeldBy } from './coord/cleanupHeldBy.js';
+import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';

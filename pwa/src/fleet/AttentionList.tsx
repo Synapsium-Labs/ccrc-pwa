@@ -3,7 +3,7 @@
 // A REPORT, never a tap: no button, no link, no remedy. The doors that act
 // already exist (revive, reclaim, abandon) and the server's sentence names
 // them. Each line is who, and what the server says about them. The one
-// exception is the held-rows list (`CleanupHeldBy`), whose line carries a
+// exception is the held-rows list (`HeldByRows`), whose line carries a
 // single optional `control`, itself a tap that only opens a confirm.
 //
 // WHY IT EXISTS. `ExpiryAttention` and `DeadCoordinatorAttention` were

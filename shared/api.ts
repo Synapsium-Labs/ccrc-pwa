@@ -4433,8 +4433,8 @@ export interface CoordStatus {
    *  absence as a server that does not offer the switch. */
   paneScopeStop?: MarkerState;
   /** Cleanup un-wedge R2: the registry rows that hold the cleanup, one item per row (`cleanupHeldBy`, L1). OPTIONAL
-   *  on the wire: an older server omits it, and the PWA's one reader (`cleanupHeldByOf`,
-   *  `pwa/src/fleet/cleanupHeldByWords.ts`) reads absence as no items. */
+   *  on the wire: an older server omits it, and the PWA's one reader (`heldByRowsOf`,
+   *  `pwa/src/fleet/heldByRowsWords.ts`) reads absence as no items. */
   cleanupHeldBy?: readonly CleanupHeldByItem[];
 }
 

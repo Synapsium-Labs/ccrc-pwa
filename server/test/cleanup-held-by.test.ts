@@ -4,8 +4,8 @@ import { HELD_BY_WORDS } from '../../shared/api.js';
 import type { ChildReclaimAttention, CoordStatus, ExpiryAttention, HeldByWord } from '../../shared/api.js';
 import {
   HELD_BY_ABSENT, cleanupHeldBy, cleanupHeldByAct, heldByOf, heldOnlyByListed, withCleanupHeldBy,
-} from '../src/coord/cleanupHeldBy.js';
-import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/coord/cleanupHeldBy.js';
+} from '../src/cleanupHeldBy.js';
+import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/cleanupHeldBy.js';
 
 const row = (id: string, word: HeldByWord = 'gone-unrecorded', workspace: HeldByWorkspace | null = 'absent'): HeldByRow =>
   ({ id, word, workspace });

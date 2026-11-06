@@ -38,7 +38,7 @@ import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
 import { readChildSiblings } from './siblingRead.js';
-import { heldByOf, type HeldByRead } from './cleanupHeldBy.js';
+import { heldByOf, type HeldByRead } from '../cleanupHeldBy.js';
 import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';

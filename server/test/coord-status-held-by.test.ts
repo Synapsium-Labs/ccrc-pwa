@@ -3,8 +3,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ChildReclaimAttention, CoordStatus } from '../../shared/api.js';
-import { withCleanupHeldBy } from '../src/coord/cleanupHeldBy.js';
-import type { HeldByRead } from '../src/coord/cleanupHeldBy.js';
+import { withCleanupHeldBy } from '../src/cleanupHeldBy.js';
+import type { HeldByRead } from '../src/cleanupHeldBy.js';
 
 const listed: HeldByRead = { kind: 'rows', own: false, rows: [{ id: 'row-a', word: 'gone-unrecorded', workspace: 'absent' }] };
 const lane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead }> =>
@@ -20,11 +20,14 @@ describe('CoordStatus.cleanupHeldBy', () => {
     expect(out.cleanupHeldBy).toHaveLength(1);
     expect(out.cleanupHeldBy![0]!.act).toBe('recheck');
   });
-  it('the field is [] when nothing holds', () => {
-    expect(withCleanupHeldBy(status([failing('c1')]), { reclaim: lane({ c1: { kind: 'none' } }), expire: none, collect: none }, null).cleanupHeldBy).toEqual([]);
+  it('the field is omitted when nothing holds, so the frame is today\'s byte for byte', () => {
+    const before = status([failing('c1')]);
+    const after = withCleanupHeldBy(before, { reclaim: lane({ c1: { kind: 'none' } }), expire: none, collect: none }, null);
+    expect(Object.prototype.hasOwnProperty.call(after, 'cleanupHeldBy')).toBe(false);
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
   });
-  it('an older lane state (no reads yet) gives []', () => {
-    expect(withCleanupHeldBy(status([]), { reclaim: none, expire: none, collect: none }, []).cleanupHeldBy).toEqual([]);
+  it('an older lane state (no reads yet) omits the field', () => {
+    expect(withCleanupHeldBy(status([]), { reclaim: none, expire: none, collect: none }, []).cleanupHeldBy).toBeUndefined();
   });
   it('the status line composes through withCleanupHeldBy', () => {
     const src = readFileSync(new URL('../src/watch.ts', import.meta.url), 'utf8');

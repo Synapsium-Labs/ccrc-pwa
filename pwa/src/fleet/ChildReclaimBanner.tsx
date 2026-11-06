@@ -30,7 +30,7 @@ import {
 import { useMarkerToggle } from './useMarkerToggle';
 import { programmeWave, type ChildRunContext } from './runWords';
 import { AttentionList } from './AttentionList';
-import { CleanupHeldBy } from './CleanupHeldBy';
+import { HeldByRows } from './HeldByRows';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api } from '../lib/api';
@@ -105,7 +105,7 @@ export function ChildReclaimBanner({
           }))}
       />
       {/* Cleanup un-wedge R2: the registry rows holding the cleanup, above the expiry lane's list, each line with its one confirmed control. */}
-      <CleanupHeldBy coord={coord} />
+      <HeldByRows coord={coord} />
       {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
           lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
       <ExpiryAttention coord={coord} />

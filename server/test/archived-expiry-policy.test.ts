@@ -1172,6 +1172,6 @@ describe('L1', () => {
     // ARCH-41 (#776): the expiry words are typed and narrowed from L0's `WORKSPACE_TRANSITIONS`.
     // Cleanup un-wedge R2 (D-8000): `heldByOf`, the ONE reader of an audit document's `heldBy`, is L1 importing L0 alone.
     expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js',
-      '../../shared/workspaceTransitions.js', './coord/cleanupHeldBy.js', '../../shared/switches.js']);
+      '../../shared/workspaceTransitions.js', './cleanupHeldBy.js', '../../shared/switches.js']);
   });
 });

@@ -21,8 +21,8 @@ import type { ArchivedExpiryEntry, ExpireAuditRead } from '../src/archivedExpiry
 import { collectAfterAudit, collectFirstSighting, parseCollectAudit } from '../src/collectLane.js';
 import {
   cleanupHeldBy, cleanupHeldByAct, heldByOf, withCleanupHeldBy,
-} from '../src/coord/cleanupHeldBy.js';
-import type { HeldByRead, HeldByRow } from '../src/coord/cleanupHeldBy.js';
+} from '../src/cleanupHeldBy.js';
+import type { HeldByRead, HeldByRow } from '../src/cleanupHeldBy.js';
 import { step, verdict } from './collectAnswers.js';
 
 const NOW = 1_790_000_000_000;
