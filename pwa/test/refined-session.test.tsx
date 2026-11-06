@@ -156,8 +156,19 @@ describe('the reading column', () => {
    *  more than the column's rule (D-8059 adds the chat prose measure and the user bubble beside it). */
   const deskBlocks = (): { selectors: string[]; body: string }[][] => {
     const css = readFileSync(path.join(SRC, 'session', 'chat.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    const block = /@media \(min-width: 900px\) \{((?:\s*[^{}]*\{[^}]*\})*)\s*\}/g;
-    return [...css.matchAll(block)].map((m) => [...(m[1] ?? '').matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    const opener = '@media (min-width: 900px) {';
+    const bodies: string[] = [];
+    // A brace walk, not a regex over the block: a nested quantifier there backtracks exponentially (CodeQL js/redos).
+    for (let at = css.indexOf(opener); at >= 0; at = css.indexOf(opener, at + 1)) {
+      let depth = 1;
+      let i = at + opener.length;
+      for (; i < css.length && depth > 0; i += 1) {
+        if (css[i] === '{') depth += 1;
+        else if (css[i] === '}') depth -= 1;
+      }
+      if (depth === 0) bodies.push(css.slice(at + opener.length, i - 1));
+    }
+    return bodies.map((body) => [...body.matchAll(/([^{}]+)\{([^}]*)\}/g)]
       .map((r) => ({ selectors: (r[1] ?? '').split(/,(?![^(]*\))/).map((s) => s.trim().replace(/\s+/g, ' ')), body: r[2] ?? '' })));
   };
   const columnBlock = () => deskBlocks().find((rules) => rules.some((r) => r.selectors.includes('.chat-item')));
