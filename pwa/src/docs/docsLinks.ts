@@ -5,12 +5,14 @@
 // one builder of a page location a Docs view links to (refinement (q)). Pure: no React state or hook (`imagePinFor`
 // asks the visit's pure `pinFor` for the page's own pin), no DOM, no module state, and no input is ever written.
 // `sessionDocsHref` is the one builder of a session's link into Docs, for the actions sheet's row and the session
-// menu's item alike (spec 4.8; W5 part 1 Task 11).
+// menu's item alike (spec 4.8; W5 part 1 Task 11). `docHref` is the one builder of the Docs reader address of a repository
+// document path, which the ledgers and chat both ask (moved here from `ledgers/ledgerLinks.ts`, chat reading Task L, D-8062).
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import { urlAttributes } from 'html-url-attributes';
 import type { FleetSession } from '../../../shared/api';
 import {
-  admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject, resolveDocRef,
+  DOC_SECTIONS, DOC_SECTION_SLUGS, admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject,
+  isDocsRelPath, resolveDocRef,
   type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
@@ -248,4 +250,21 @@ export function sessionDocsHref(s: FleetSession): SessionDocsLink | null {
   if (branch === null) return { href: docsPageUrl(home), label: 'Docs, default branch', branch: null };
   const at = docsLocation(home, { kind: 'same-page', project, ref: { kind: 'bare', name: branch } });
   return { href: docsPageUrl(at), label: 'Docs on ' + branch, branch };
+}
+
+/** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, or null: no home
+ *  project, a home the Docs grammar refuses, or a path outside the four sections or outside their path grammar. */
+export function docHref(repoPath: string, homeProject: string | null): string | null {
+  if (homeProject === null || !isDocsProject(homeProject)) return null;
+  for (const section of DOC_SECTION_SLUGS) {
+    const dir = `${DOC_SECTIONS[section]}/`;
+    if (!repoPath.startsWith(dir)) continue;
+    const path = repoPath.slice(dir.length);
+    if (!isDocsRelPath(path)) return null;
+    return docsPageUrl(docsLocation(
+      { kind: 'project', project: homeProject, ref: null },
+      { kind: 'path', section, path, dirSlash: false },
+    ));
+  }
+  return null;
 }

@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { RunSummary } from '../../shared/api';
 import type { GoalsView } from '../../shared/ledgers';
-import { docHref, homeProjectOf, linkRuns, programmeSpecHref, specHref, type LinkRun } from '../src/ledgers/ledgerLinks';
+import { docHref } from '../src/docs/docsLinks';
+import { homeProjectOf, linkRuns, programmeSpecHref, specHref, type LinkRun } from '../src/ledgers/ledgerLinks';
 
 const HOME = 'project-a';
 const links = (runs: readonly LinkRun[]) => runs.filter((r) => r.kind === 'link');

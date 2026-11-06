@@ -1,11 +1,10 @@
 // The ledgers' links (desktop-polish PL10, D-7952; spec 2026-10-31 §2, D26 to D28; ring L1: pure, no store, no DOM).
 //
-// ONE OWNER of every address the ledger screens draw into Docs: `docHref`, the Docs reader address of a repository document in
-// a home project; `specHref`, the same for a programme's pinned spec (moved here from `GoalsPanel`, which drew it alone until
-// PL10); `homeProjectOf`, the repository whose Docs hold a programme's spec (moved here from `ProgrammeScreen`); and
+// ONE OWNER of every address the ledger screens draw into Docs: `specHref`, the Docs reader address of a programme's pinned
+// spec (moved here from `GoalsPanel`, which drew it alone until PL10); `homeProjectOf`, the repository whose Docs hold a programme's spec (moved here from `ProgrammeScreen`); and
 // `programmeSpecHref`, the three put together for one programme, which the item band, each programme group of the combined
-// list, the programme view's head and Goals all ask. A document address is built only through `docsPageUrl(docsLocation(…))`,
-// as every Docs link is (refinement (q)).
+// list, the programme view's head and Goals all ask. A document address is built only by `docHref`, which moved to the Docs
+// context's link owner, `docs/docsLinks.ts`, when chat came to ask it too (chat reading Task L, D-8062).
 //
 // `linkRuns` splits an item's text into text and link runs. Only three things are links (D27): an `https` address, a path the
 // console routes (`matchRoute`, asked of the path as the browser resolves it, dot-segments and `%2e` ones too: review 1466 F8),
@@ -19,9 +18,8 @@
 // text, and its link set is an allow-list with a rewrite of its own, so it is a different decision, not a second copy of that
 // one (`pl10-linkruns-not-chat-markdown`).
 import type { RunSummary } from '../../../shared/api';
-import { DOC_SECTIONS, DOC_SECTION_SLUGS, docsPageUrl, isDocsProject, isDocsRelPath } from '../../../shared/docs';
 import { isSpecPath, linkCandidates, linksDocumentOutside, type GoalsView } from '../../../shared/ledgers';
-import { docsLocation } from '../docs/docsLinks';
+import { docHref } from '../docs/docsLinks';
 import { runHomeProject } from '../fleet/runWords';
 import { matchRoute } from '../lib/routes';
 import { isGoalsFor } from './waitingView';
@@ -31,23 +29,6 @@ import { isGoalsFor } from './waitingView';
 export type LinkRun =
   | { readonly kind: 'text'; readonly text: string }
   | { readonly kind: 'link'; readonly text: string; readonly href: string; readonly external: boolean };
-
-/** The Docs reader address of a repository document path (`docs/superpowers/specs/x.md`) in `homeProject`, or null: no home
- *  project, a home the Docs grammar refuses, or a path outside the four sections or outside their path grammar. */
-export function docHref(repoPath: string, homeProject: string | null): string | null {
-  if (homeProject === null || !isDocsProject(homeProject)) return null;
-  for (const section of DOC_SECTION_SLUGS) {
-    const dir = `${DOC_SECTIONS[section]}/`;
-    if (!repoPath.startsWith(dir)) continue;
-    const path = repoPath.slice(dir.length);
-    if (!isDocsRelPath(path)) return null;
-    return docsPageUrl(docsLocation(
-      { kind: 'project', project: homeProject, ref: null },
-      { kind: 'path', section, path, dirSlash: false },
-    ));
-  }
-  return null;
-}
 
 /** The Docs page of a pinned spec in the programme's home project, or null: no pin, a path that is not a spec path
  *  (`isSpecPath`: under the specs directory, Markdown, no `..`), or no usable home project. Null has those three meanings and
