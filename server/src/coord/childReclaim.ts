@@ -37,7 +37,7 @@ import { notify } from '../notice.js';
 import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
-import { readChildSiblings } from './siblingRead.js';
+import { childSiblingsAtAct, readChildSiblings, readChildSiblingsPlaced, type ChildSiblingsPlaced } from './siblingRead.js';
 import { heldByRowsOf, type HeldByRead } from '../cleanupHeldBy.js';
 import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
 import { notRanSentence } from '../unmeasured.js';
@@ -2194,7 +2194,7 @@ export type ChildSpentRecordFact =
  */
 export interface ChildSpentFacts {
   readonly [RETIRE_STEPS.record]?: ChildSpentRecordFact;
-  readonly [RETIRE_STEPS.store]?: Awaited<ReturnType<typeof readChildSiblings>>;
+  readonly [RETIRE_STEPS.store]?: ChildSiblingsPlaced;
   /** `childReclaimHasCoordinated`, or its throw (step 2a's try). */
   readonly [RETIRE_STEPS.coordinated]?: boolean | RetireRejected;
   /** `childReclaimPauseRead`'s `MarkerState`, or its rejection (step 2b's try). */
@@ -2212,6 +2212,14 @@ export interface ChildSpentFacts {
   readonly [RETIRE_STEPS.auditGeneration]?: RetireNoRead;
   /** `childSpentActSwitches`: both markers off the act's one listing. */
   readonly [RETIRE_STEPS.offSwitchLast]?: ChildSpentActSwitches;
+  /** The store's two reads again nearest the argv, or the throw of either. */
+  readonly [RETIRE_STEPS.storeLast]?: ChildSpentStoreLast | RetireRejected;
+}
+
+/** Step 6a's fact: `childSiblingsAtAct`, then the coordination fence, both synchronous. */
+export interface ChildSpentStoreLast {
+  readonly siblings: ReturnType<typeof childSiblingsAtAct>;
+  readonly coordinated: boolean;
 }
 
 const childSpentDeferredOf = (req: ChildReclaimRequest, why: ChildReclaimDeferWhy, detail: string): ChildReclaimOutcome =>
@@ -2274,6 +2282,16 @@ function childSpentSwitchesJudge(pause: MarkerState | RetireRejected, req: Child
   return null;
 }
 
+/** Steps 2 and 6a: the sibling read's answer. `when` is ' at the act' for step 6a. */
+function childSpentSiblingsJudge(sib: ReturnType<typeof childSiblingsAtAct>, req: ChildReclaimRequest, when: string): ChildReclaimOutcome | null {
+  if (!sib.ok) return childSpentDeferredOf(req, 'siblings-unreadable', sib.detail);
+  if (sib.open > 0) {
+    return childSpentDeferredOf(req, 'siblings-open',
+      `open run(s) ${(sib.blocking ?? []).map((s) => `#${s.id}`).join(', ')} still name this workspace${when}`);
+  }
+  return null;
+}
+
 /** Steps 2b' and 6: `childReclaimDisabledDetailOf`'s answer. */
 const childSpentOffSwitchJudge = (detail: string | null, req: ChildReclaimRequest): ChildReclaimOutcome | null =>
   (detail !== null ? childSpentDeferredOf(req, 'paused-at-server', detail) : null);
@@ -2299,20 +2317,16 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
     { step: RETIRE_STEPS.markerMatch, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.auditGeneration, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.offSwitchLast, sync: false, onReject: 'propagate' },
+    // Past the row's last await: nothing stands between this read and the argv (D-8091). A throw is judged,
+    // as the coordination fence's is: the store could not say, so the verb is not composed.
+    { step: RETIRE_STEPS.storeLast, sync: true, onReject: 'judged' },
   ],
   listing: RETIRE_LISTING_MODES.plainPerMarker,
   viewer: RETIRE_VIEWER_RULES.untilCeiling,
   notice: RETIRE_NOTICE_HOMES.executor,
   judge: {
     [RETIRE_STEPS.record]: (record, _f, req) => childSpentRecordJudge(record, req),
-    [RETIRE_STEPS.store]: (sib, _f, req) => {
-      if (!sib.ok) return childSpentDeferredOf(req, 'siblings-unreadable', sib.detail);
-      if (sib.open > 0) {
-        return childSpentDeferredOf(req, 'siblings-open',
-          `open run(s) ${(sib.blocking ?? []).map((s) => `#${s.id}`).join(', ')} still name this workspace`);
-      }
-      return null;
-    },
+    [RETIRE_STEPS.store]: (sib, _f, req) => childSpentSiblingsJudge(sib, req, ''),
     [RETIRE_STEPS.coordinated]: (coordinated, _f, req) => {
       if (coordinated instanceof RetireRejected) {
         return childSpentDeferredOf(req, 'siblings-unreadable', `whether ${req.sessionId} has coordinated a run could not be read `
@@ -2387,6 +2401,16 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
     [RETIRE_STEPS.offSwitchLast]: (read, _f, req) => (read.pause === 'set'
       ? childSpentDeferredOf(req, 'paused-at-server', `${CHILD_SPENT_PAUSE_RAISED} at the act`)
       : childSpentOffSwitchJudge(childReclaimDisabledDetailOf(read.disabled, ' at the act'), req)),
+    // Step 6a (D-8091): what was bound during the audit and the last listing. ccd cannot see the store, so this
+    // is the last that anything reads it.
+    [RETIRE_STEPS.storeLast]: (last, _f, req) => {
+      if (last instanceof RetireRejected) {
+        return childSpentDeferredOf(req, 'siblings-unreadable', `the run store could not be read at the act (${childSpentRejected(last)}), `
+          + `so whether a run names ${req.sessionId} cannot be said`);
+      }
+      return childSpentSiblingsJudge(last.siblings, req, ' at the act')
+        ?? (last.coordinated ? childSpentDeferredOf(req, 'siblings-open', `${req.sessionId} has coordinated run(s) at the act`) : null);
+    },
   },
   evidence: [childReclaimSweepVerdict, childReclaimDecision],
 };
@@ -2399,8 +2423,11 @@ export const CHILD_SPENT_RETIRE: RetireReason<ChildReclaimRequest, ChildSpentFac
  * - `record`: the box's authority, re-read. An `absent` (or `unmeasurable`) row is re-listed ONCE
  *   (`childReclaimRowListing`), the way wave 2's `childBindGate` reads it, and only then; a non-registry id was never
  *   listed for at all (path identity, spec §2.3: unmeasured, never gone).
- * - `store` and `coordinated`: the sibling re-read (`readChildSiblings`), then COORDINATING, ANY STATE (spec §1 rule 4),
- *   each at the clock's own read, as before.
+ * - `store` and `coordinated`: the sibling re-read (`readChildSiblingsPlaced`), then COORDINATING, ANY STATE (spec §1
+ *   rule 4), each at the clock's own read, as before.
+ * - `store-last`: both again, past the last await (D-8091), so the argv is composed in their synchronous
+ *   segment. The sibling half is `childSiblingsAtAct`, over the claimants `store` placed: `readChildSiblings` itself
+ *   waits on the registry per claimant, and a wait here would put one between this read and the argv.
  * - `switches`: `childReclaimPauseRead`, not edited (D-7224), so a rejecting `readdir` lands on step 2b's own sentence
  *   (its mode is `judged`). `off-switch`: `childReclaimDisabledDetail`, a plain listing of its own (ARCH-77).
  *   `off-switch-last`: `childSpentActSwitches`, the act's one measured listing read for both markers (D-7172); a
@@ -2427,7 +2454,7 @@ export function childReclaimRetirePort(
         return read.kind === 'absent' || read.kind === 'unmeasurable'
           ? { read, again: await childReclaimRowListing(deps, sessionId) } : { read };
       },
-      [RETIRE_STEPS.store]: () => readChildSiblings(deps, sessionId, (deps.now ?? Date.now)()),
+      [RETIRE_STEPS.store]: () => readChildSiblingsPlaced(deps, sessionId, (deps.now ?? Date.now)()),
       [RETIRE_STEPS.coordinated]: (facts) => {
         const read = facts[RETIRE_STEPS.record]?.read;
         if (read?.kind !== 'found') throw new Error('child-spent: coordination was read without a found record');
@@ -2445,6 +2472,14 @@ export function childReclaimRetirePort(
       [RETIRE_STEPS.markerMatch]: () => true,
       [RETIRE_STEPS.auditGeneration]: () => true,
       [RETIRE_STEPS.offSwitchLast]: () => childSpentActSwitches(deps),
+      [RETIRE_STEPS.storeLast]: (facts) => {
+        const placed = facts[RETIRE_STEPS.store];
+        const read = facts[RETIRE_STEPS.record]?.read;
+        if (placed?.ok !== true || read?.kind !== 'found') throw new Error('child-spent: the store was read at the act without a clean store and a found record');
+        const now = (deps.now ?? Date.now)();
+        return { siblings: childSiblingsAtAct(deps.coord, sessionId, now, placed.claimants),
+          coordinated: childReclaimHasCoordinated(deps.coord, sessionId, now, childReclaimRowUuid(read.record)) };
+      },
     },
     // ccd re-proves the token inside the reap lock.
     act: async (facts) => {
