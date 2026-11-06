@@ -4286,3 +4286,27 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
     expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.');
   });
 });
+
+describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R17)', () => {
+  const ref = (): string => refs('delegated-worktrees.md');
+
+  it('exists, says worktree, and names the ccrc-api op', () => {
+    expect(REFERENCE_NAMES, 'the reference file is missing').toContain('delegated-worktrees.md');
+    expect(ref()).toContain('worktree');
+    expect(ref()).toContain('ccrc-api leases retain');
+  });
+
+  it('names no ccd lease verb, no `ws-add --base`, and describes nothing as repair', () => {
+    const t = ref();
+    expect(t).not.toMatch(/ws-lease/);
+    expect(t).not.toMatch(/ws-add\s+--base/);
+    expect(t).not.toMatch(/repair/i);
+  });
+
+  it('disambiguates "adopted" from `spawn-adopted` in one sentence', () => {
+    const sentences = ref().split(/(?<=\.)\s+/).filter((x) => x.includes('spawn-adopted'));
+    expect(sentences, 'exactly one sentence names spawn-adopted').toHaveLength(1);
+    expect(sentences[0]).toMatch(/wave-lifecycle\.md/);
+    expect(sentences[0]).toMatch(/not/);
+  });
+});
