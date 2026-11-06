@@ -6819,8 +6819,10 @@ session), a heavy run in command position outside `ccrc test`. A heredoc body is
 can read the whole line and every command on it is one that does not run the body, so a pull request body that mentions
 `npm run typecheck` is not a test run. A body fed to a shell or `ssh`, piped on to one, or written to a file a shell then
 runs is still read as commands, and so is every body on a line the classifier cannot read, or on which it finds a command
-it does not know; `npx bash` is a shell, so a test program stands beside a body only by name, and with no `$` on its
-line; an unquoted heredoc's live `$(…)` or backquote is a command bash really runs (D-8052). The scope is good faith (D-7298): the sessions are
+it does not know; an assignment before a command hides nothing, whatever the assignment holds; `npx bash` is a shell, so a
+test program stands beside a body only by name, and with no `$` or script shell on its line; an unquoted heredoc's live
+`$(…)` or backquote is a command bash really runs. The name is trusted, not what it resolves to, and a reader on the list
+can still run code by its own means, such as `awk`'s `system()` or `node -e` (D-8052). The scope is good faith (D-7298): the sessions are
 cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
 already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
 spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`

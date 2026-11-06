@@ -190,7 +190,7 @@ const BODY_IS_TEXT = [
   lines('cat <<EOF', '\\\\\\$(npm test)', 'EOF'),
   // A quoted body is not expanded at all.
   lines("cat <<'EOF'", '$(npm test)', '`npm test`', 'EOF'),
-  // A shell string is read the same way: `sh -c` here runs `cat`.
+  // A shell string is read on its first line only, so a nested heredoc is `cat <<EOF` with no body: a known limit.
   "sh -c 'cat <<EOF\nnpm test\nEOF'",
   // The real line is read as it was: these are light, so the line is.
   lines("npx vitest run --maxWorkers=2 test/foo.test.ts && gh pr create --body-file - <<'EOF'", TICKED, 'EOF'),
@@ -212,6 +212,20 @@ const BODY_IS_TEXT = [
   lines("yarn run build && git commit -F - <<'EOF'", 'npm test', 'EOF'),
   lines("pnpm lint && git commit -F - <<'EOF'", 'npm test', 'EOF'),
   lines("ccrc test --heavy -- npx vitest run && git commit -F - <<'EOF'", 'npm test', 'EOF'),
+  // A substitution in an argument, or before the real command, leaves that command the one that is read.
+  lines("gh pr create --title \"$(git log -1 --format=%s)\" --body-file - <<'EOF'", TICKED, 'EOF'),
+  lines('gh pr create --body "$(cat <<\'EOF\'', TICKED, 'EOF', ')" --base "$(git rev-parse --abbrev-ref HEAD)"'),
+  lines('gh pr edit 1 --body "$(cat <<\'EOF\'', TICKED, 'EOF', ')"'),
+  lines('REV="$(git rev-parse HEAD)"', "gh pr edit 1 --body-file - <<'EOF'", TICKED, 'EOF'),
+  lines("X=\"$(true)\" git commit -F - <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(date)\" cat <<'EOF'", 'npm test', 'EOF'),
+  // A plain `>&2` or `2>&1` beside a reader changes nothing.
+  lines(">&2 cat <<'EOF'", 'npm test', 'EOF'),
+  lines("git commit -F - <<'EOF' 2>&1", 'npm test', 'EOF'),
+  // A word that holds a newline is one word, and what follows it is the command.
+  lines("X='a", "b' cat <<'EOF'", 'npm test', 'EOF'),
+  lines("git commit -m 'one", "two' && cat <<'EOF'", 'npm test', 'EOF'),
+  lines("echo $'it\\'s' && cat <<'EOF'", 'npm test', 'EOF'),
 ];
 const BODY_RUNS_OR_UNREAD = [
   // Fed to a shell.
@@ -373,6 +387,68 @@ const BODY_RUNS_OR_UNREAD = [
   lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', "npx -c 'bash r.sh'"),
   lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'ccrc test -- bash r.sh'),
   lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'ccrc other vitest'),
+  // An assignment before the command hides nothing: a substitution in it, or a newline in it, leaves the command the
+  // next word, whatever is left of the assignment around it.
+  lines("X=\"$(true)\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("REV=\"$(git rev-parse HEAD)\" bash -s <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(date)\" sh <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" sudo bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" ssh box bash -s <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" npx bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" npm exec -- bash <<'EOF'", 'npm test', 'EOF'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'X="$(true)" bash r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'chmod +x r.sh; X="$(true)" ./r.sh'),
+  lines("cat <<'EOF' | X=\"$(true)\" bash", 'npm test', 'EOF'),
+  lines('X="$(true)" eval "$(cat <<\'EOF\'', 'npm test', 'EOF', ')"'),
+  lines('X="$(true)" bash -c "$(cat <<\'EOF\'', 'npm test', 'EOF', ')"'),
+  lines("if X=\"$(true)\" bash <<'EOF'", 'npm test', 'EOF', 'then :; fi'),
+  lines("X='a", "' bash <<'EOF'", 'npm test', 'EOF'),
+  lines('X="a', "\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X='a", "' npx bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X='a", "cat' sh <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\"cat bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=$(true)cat bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"a$(true)b\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)$(true)\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true \"a\")\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" Y=\"$(true)\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("env X=\"$(true)\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("nohup env X=\"$(true)\" bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" command bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=$'a", "cat' sh <<'EOF'", 'npm test', 'EOF'),
+  // What the check cleared is what is classified, so a heavy command behind such a prefix is not lost with the body.
+  lines("X=\"$(true)\" node node_modules/vitest/vitest.mjs run <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"$(true)\" npm test && cat <<'EOF'", 'npm test', 'EOF'),
+  lines("X=\"a$(true)\" npm test && cat <<'EOF'", 'npm test', 'EOF'),
+  lines("X='a", "cat' npm test && cat <<'EOF'", 'npm test', 'EOF'),
+  // A body assigned to a variable can reach a test program through its environment, whatever is around it in the word.
+  lines('NODE_OPTIONS="$(cat <<\'EOF\'', 'npm test', 'EOF', ')"', 'export NODE_OPTIONS', 'npx vitest run a.test.ts'),
+  lines('export NODE_OPTIONS=" $(cat <<\'EOF\'', 'npm test', 'EOF', ')"', 'npx vitest run a.test.ts'),
+  // `$'…'` closes where bash closes it, so what comes after it is seen. The `#` makes the body one that really runs.
+  lines("echo $'\\'' ; bash <<\"EOF\"", "#'", 'npm test', 'EOF'),
+  lines("echo $'\\'' ; npm test; cat <<'EOF'", 'hi', 'EOF'),
+  // A prefix with a path is the file at that path, and `env -S` runs a string.
+  lines("cat > time <<'EOF'", 'npm test', 'EOF', 'chmod +x time; ./time cat'),
+  lines("cat > env <<'EOF'", 'npm test', 'EOF', 'chmod +x env; X=1 ./env cat'),
+  lines("env -S'bash -s' cat <<'EOF'", 'npm test', 'EOF'),
+  lines("env -iS'bash -s' cat <<'EOF'", 'npm test', 'EOF'),
+  lines("env '--split-string=bash -s' cat <<'EOF'", 'npm test', 'EOF'),
+  lines("env --split='bash -s' cat <<'EOF'", 'npm test', 'EOF'),
+  // A `>&` target that goes on after its digits is a file, and the next word is the command.
+  lines(">&1cat bash <<'EOF'", 'npm test', 'EOF'),
+  lines("X=1 >&1cat bash <<'EOF'", 'npm test', 'EOF'),
+  lines("{ >&1cat bash; } <<'EOF'", 'npm test', 'EOF'),
+  lines('>&1"cat" bash <<\'EOF\'', 'npm test', 'EOF'),
+  // A script shell makes any package script a run of the file it names.
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npm run build --script-shell ./r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npm run build --script-shell=./r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npm run build --script-sh=./r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'pnpm build --script-shell=./r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'ccrc test -- npm run build --script-shell=./r.sh'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'npm_config_script_shell=./r.sh npm run build'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'NPM_CONFIG_SCRIPT_SHELL=./r.sh npm run build'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'export npm_config_script_shell=./r.sh; npm run build'),
+  lines("cat > r.sh <<'EOF'", 'npm test', 'EOF', 'env npm_config_script_shell=./r.sh npm run build'),
 ];
 describe('a heredoc body that nothing runs is text (D-8052)', () => {
   it.each(BODY_IS_TEXT)('%j reads light and is allowed', (cmd) => {
