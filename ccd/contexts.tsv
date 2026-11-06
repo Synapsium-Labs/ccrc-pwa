@@ -540,6 +540,8 @@ _ws_reclaim_ignored_fail	C4
 _ws_reclaim_stash_shas	C4
 _ws_reclaim_record	C4
 _ws_workdirid_read	C4
+_ws_held_by_put	C4
+_ws_held_by_doc	C4
 _ws_reclaim_workdir_shared	C4
 _ws_reclaim_recorded	C4
 _ws_reclaim_recorded_git	C4

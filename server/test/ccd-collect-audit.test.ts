@@ -31,7 +31,8 @@ describe.skipIf(!LINUX)('ws-audit --collect: the document and the token', () => 
     const { leaf } = makeOrphan(h);
     const a = collectAudit(h, { pre: AGED });
     expect(a.code, a.stderr).toBe(0);
-    expect(Object.keys(a.doc!)).toEqual(['session', 'mode', 'exists', 'collect', 'verdict', 'detail', 'token']);
+    // Cleanup un-wedge R2 (D-8000): the rows rung's holding rows after `collect` (`null` when the rung was not reached).
+    expect(Object.keys(a.doc!)).toEqual(['session', 'mode', 'exists', 'collect', 'heldBy', 'heldByOwn', 'verdict', 'detail', 'token']);
     expect(a.doc).toMatchObject({ session: COL_ID, mode: 'collect', exists: true, verdict: 'collectable', detail: '' });
     const c = collectOf(a);
     expect(Object.keys(c)).toEqual(['leaf', 'witness', 'records', 'newestCtimeNs', 'entries', 'floorS', 'idleAt', 'unmeasured']);

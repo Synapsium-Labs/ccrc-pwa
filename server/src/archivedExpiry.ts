@@ -21,6 +21,7 @@ import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../sh
 import {
   isWorkspacePostActWord, isWorkspaceRefusal, type WorkspacePostActWord, type WorkspaceRefusal,
 } from '../../shared/workspaceTransitions.js';
+import { heldByRowsOf, type HeldByRead } from './cleanupHeldBy.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes
@@ -154,7 +155,9 @@ export function expireAuditExpiresAt(doc: Record<string, unknown>): ExpiresAtRea
 /** `ccd ws-audit --session <id> --expire`'s answer. `unreadable` is its own arm: a document this build cannot read is
  *  never a refusal and never a token. */
 export type ExpireAuditRead =
-  | { readonly kind: 'unreadable'; readonly detail: string }
+  | { readonly kind: 'unreadable'; readonly detail: string;
+      /** Cleanup un-wedge R2: the rows that hold the row, on an exit-1 document of this mode (`heldByOf`). */
+      readonly heldBy?: HeldByRead }
   | { readonly kind: 'document'; readonly archivedAt: number | null; readonly expiresAt: ExpiresAtRead;
       readonly sensitive: number; readonly inUse: readonly ExpireInUse[];
       /** How many nested repositories the audit says the rescue arm would rescue (D-6633); absent when none. */
@@ -175,7 +178,8 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
   }
   if (v.mode !== 'expire') return { kind: 'unreadable', detail: 'ws-audit answered without "mode":"expire"' };
   if (!ok) {
-    return { kind: 'unreadable', detail: `ws-audit --expire measured nothing: ${typeof v.detail === 'string' ? v.detail : ''}` };
+    return { kind: 'unreadable', detail: `ws-audit --expire measured nothing: ${typeof v.detail === 'string' ? v.detail : ''}`,
+      ...heldByRowsOf(v) };
   }
   const sensitive = Array.isArray(v.sensitive) ? v.sensitive.length : 0;
   const inUse = Array.isArray(v.inUse) ? v.inUse.flatMap((u): ExpireInUse[] => (isRecord(u)
@@ -552,6 +556,9 @@ export interface ArchivedExpiryEntry {
   readonly verbFailingSince: number | null;
   /** What the attention list says about this row, or null. */
   readonly report: ExpiryReport | null;
+  /** Cleanup un-wedge R2: the rows its latest audit said hold it — set only by an audit that answered unmeasured with
+   *  them (`archivedExpiryLearned`, and the act's own `audit-failed`), cleared by every other step. Absent: no read yet. */
+  readonly heldBy?: HeldByRead;
 }
 
 /** One attention entry's facts before it is worded. */
@@ -601,6 +608,11 @@ export const archivedExpiryEntryFor = (prev: ArchivedExpiryEntry | undefined, ar
  *  breadcrumb's carries `null`), even when it names no archive — an older ccd prints `archivedAt` only past its seven-day
  *  age check — so it is no evidence, never a failure: only an upgrade of the box fixes it. */
 export function archivedExpiryLearned(entry: ArchivedExpiryEntry, read: ExpireAuditRead, nowMs: number, passMs: number): ArchivedExpiryEntry {
+  // R2: whatever was learned, the entry keeps the LATEST audit's holding rows, and only an unmeasured one carries any.
+  return { ...archivedExpiryLearnedFrom(entry, read, nowMs, passMs), heldBy: read.kind === 'unreadable' ? read.heldBy : undefined };
+}
+
+function archivedExpiryLearnedFrom(entry: ArchivedExpiryEntry, read: ExpireAuditRead, nowMs: number, passMs: number): ArchivedExpiryEntry {
   if (read.kind === 'document' && read.archivedAt === null && read.verdict.kind === 'refused'
     && EXPIRE_TOKEN_KIND[read.verdict.token] === 'gone') return { ...entry, nextAskAt: nowMs + passMs };
   if (read.kind === 'document' && read.expiresAt.kind === 'absent') {
@@ -717,7 +729,7 @@ export type ArchivedExpiryOutcome =
   /** The act's OWN AUDIT (`ws-audit --expire`) could not be read, so no verb ran (final review I1): retried on the failure
    *  backoff and reported past its ceiling, as before wave 5, and NEVER a `failed` — only the verb's failure can have
    *  stopped part-way, so only it may move a row onto the persistent tier. Two conditions, two values at this seam. */
-  | { readonly kind: 'audit-failed'; readonly detail: string }
+  | { readonly kind: 'audit-failed'; readonly detail: string; readonly heldBy?: HeldByRead }
   /** ccd stopped before this attempt started anything (`ExpireVerbRead.restart`): the lane forgets what it learned of
    *  the row and audits it afresh (wave 5; since wave 6 any failed document with `crumb: false`). */
   | { readonly kind: 'restart'; readonly detail: string }
@@ -761,6 +773,14 @@ export const archivedExpiryBackoffMs = (failures: number, passMs: number): numbe
  * every minute), and both are reported.
  */
 export function archivedExpiryNextEntry(
+  entry: ArchivedExpiryEntry, o: ArchivedExpiryOutcome, nowMs: number, passMs: number,
+): ArchivedExpiryEntry | null {
+  // R2: the act's own audit carries the holding rows it found; every other answer clears them.
+  const next = archivedExpiryNextFrom(entry, o, nowMs, passMs);
+  return next === null ? null : { ...next, heldBy: o.kind === 'audit-failed' ? o.heldBy : undefined };
+}
+
+function archivedExpiryNextFrom(
   entry: ArchivedExpiryEntry, o: ArchivedExpiryOutcome, nowMs: number, passMs: number,
 ): ArchivedExpiryEntry | null {
   const base = { ...entry, lastOutcome: archivedExpiryOutcomeKey(o) };

@@ -32,6 +32,7 @@ import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './liv
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
+import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
@@ -3039,7 +3040,7 @@ export class FleetWatcher {
     // the PWA's reader gives it, whether the server restarted or predates the
     // field. Still no I/O and no `node:sqlite`: it is an in-memory field.
     const doneAt = this.currentChildReclaimDoneAt();
-    const status: CoordStatus = doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt };
+    const status: CoordStatus = withCleanupHeldBy(doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt }, { reclaim: this.childReclaimSweepState, expire: this.archivedExpiryState, collect: this.collectState }, this.lastFleet);
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;

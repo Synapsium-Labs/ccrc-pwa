@@ -61,7 +61,8 @@ describe('ws-audit --reclaim', () => {
   it('prints mode, childOf and the SAME token the ladder mints', () => {
     makeChild(h);
     const a = audit('--reclaim');
-    expect(Object.keys(a)).toEqual([...PLAIN_KEYS.slice(0, -2), 'mode', 'childOf', 'generation', 'legacyRows', 'pendingRows', 'verdict', 'detail', 'token']);
+    // Cleanup un-wedge R2 (D-8000): the rows rung's holding rows, `heldBy` (and `heldByOwn` beside an array), after the counts.
+    expect(Object.keys(a)).toEqual([...PLAIN_KEYS.slice(0, -2), 'mode', 'childOf', 'generation', 'legacyRows', 'pendingRows', 'heldBy', 'heldByOwn', 'verdict', 'detail', 'token']);
     expect(a['mode']).toBe('reclaim');
     expect(a['childOf']).toBe(CHILD_RUN);
     expect(a['verdict']).toBe('reclaimable');
