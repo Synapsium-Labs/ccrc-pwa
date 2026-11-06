@@ -680,8 +680,19 @@ export const READ_IT_AGAIN = 'Read again';
 export const READING_LANE = (id: string): string => `Reading ${id} on the fleet host…`;
 /** The typed-id confirm (spec §11.5): it must equal the id exactly. */
 export const typedConfirmLabel = (id: string): string => `Type ${id} to confirm`;
-export const removeConsequence = (id: string): string =>
-  `Removing ${id} deletes its credential on the fleet host and everything that runs it. Its config folder and transcripts stay.`;
+/** What Remove deletes. A managed Codex lane's credential is its sign-in folder, so its sentence follows that lane's line
+ *  and never says the credential goes: turned off, the verb keeps the folder. Turned on, the verb still keeps one that is
+ *  outside ccrc's home, that another lane reaches, or whose fate it can't read, so the sentence says "if". */
+export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep'): string => {
+  if (codexFolder === 'keep') {
+    return `Removing ${id} deletes everything that runs it on the fleet host. Its ChatGPT sign-in folder, config folder and transcripts stay.`;
+  }
+  if (codexFolder === 'delete') {
+    return `Removing ${id} deletes everything that runs it on the fleet host, and its ChatGPT sign-in folder if that's safe to delete. `
+      + 'Its config folder and transcripts stay.';
+  }
+  return `Removing ${id} deletes its credential on the fleet host and everything that runs it. Its config folder and transcripts stay.`;
+};
 /** Discard (spec §11.5): one tap with step-up, for a never-enabled lane with no sessions. */
 export const DISCARD_LANE = 'Discard this lane';
 export const discardLine = (id: string): string =>
@@ -911,7 +922,7 @@ export const OPEN_TO_SIGN_IN = 'Open claude.ai to sign in';
 export const OPEN_CHATGPT = 'Open the ChatGPT sign-in page';
 export const CHATGPT_MODELS = 'Models: luna, terra and sol from your ChatGPT plan.';
 export const DEVICE_CODE_LABEL = 'The sign-in code';
-export const DEVICE_CODE_NOTE = "Type this code on the page. It's not a secret; it's shown so you can type it.";
+export const DEVICE_CODE_NOTE = "Type this code on the page. Don't share it.";
 export const COPY_CODE = 'Copy';
 /** A Codex lane's result line (spec §3.4): ccrc reads no identity from its sign-in, so none is shown unless one is stated. */
 export const CHATGPT_SIGNED_IN = 'Signed in with ChatGPT';

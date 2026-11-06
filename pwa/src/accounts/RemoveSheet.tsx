@@ -211,6 +211,8 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
   /** The Codex line (spec §11 step 4): on by default. */
   const [deleteFolder, setDeleteFolder] = useState(true);
   const codexLane = managedCodex(readRoster().find((r) => r.id === id));
+  // One answer for what the sheet says and what it sends, so neither can drift from the line.
+  const codexAuth = codexLane ? (deleteFolder ? 'delete' as const : 'keep' as const) : undefined;
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [ledger, setLedger] = useState<AccountRemoveAnswer | null>(null);
@@ -298,7 +300,7 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
     try {
       outcome = await stepUp.runAct(async () => {
         got.answer = await client.accountRemove(id, mode === 'discard' ? { mode: 'discard' } : {
-          mode: 'remove', confirmId: typed, ...(codexLane ? { codexAuth: deleteFolder ? 'delete' as const : 'keep' as const } : {}),
+          mode: 'remove', confirmId: typed, ...(codexAuth !== undefined ? { codexAuth } : {}),
         });
       });
     } catch (e) {
@@ -425,7 +427,7 @@ export function RemoveSheet(props: RemoveSheetProps): ReactNode {
             </>
           ) : (
             <>
-              <p className="acct-field-note">{removeConsequence(id)}</p>
+              <p className="acct-field-note">{removeConsequence(id, codexAuth)}</p>
               {codexLane && (
                 <div className="acct-revoke" data-codex-folder="true">
                   <OptionRow

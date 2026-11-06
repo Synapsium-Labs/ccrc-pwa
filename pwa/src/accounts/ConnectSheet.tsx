@@ -475,7 +475,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
           onBack={() => { setFrame('provider'); setNotice(null); status(FRAME_SAID.provider); }}
           onContinue={() => { setNotice(null); setFrame('method'); status(provider === 'openai' ? FRAME_SAID.chatgpt : FRAME_SAID.method); }}
           onPickAnother={() => { setFound(null); setAdopt(false); setId(''); status(PICK_ANOTHER_NAME); }}
-          onUseThere={() => { setFound(null); setAdopt(true); setFrame('method'); status(FRAME_SAID.adopt); }}
+          onUseThere={() => { setFound(null); setAdopt(true); setFrame('method'); status(provider === 'openai' ? FRAME_SAID.chatgpt : FRAME_SAID.adopt); }}
         />
       );
       break;

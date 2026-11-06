@@ -19,8 +19,8 @@ import { RemoveSheet, type RemoveClient } from '../src/accounts/RemoveSheet';
 import { heldAttemptOf, managedCodex, resumableAttempt, resumeSheetFor, waitsOnOperator } from '../src/accounts/connectFlow';
 import {
   CANCEL_SIGN_IN, CHATGPT_MODELS, CHATGPT_SIGNED_IN, CODE_FIELD_LABEL, CODEX_FOLDER_KEPT, CODEX_FOLDER_LINE, COMPROMISE_TITLE, COME_BACK,
-  COME_BACK_APPROVED, COPIED, COPY_CODE, COPY_LINK, DEVICE_CODE_LABEL, DEVICE_CODE_NOTE, LEDGER, OPEN_CHATGPT, OPEN_LINK, SIGN_IN_AGAIN, SIGN_OUT_RESTART,
-  START_AGAIN, chatgptEnd, chatgptSignedInLine, clockHM, credentialUntouched, reauthEnd, reauthIntro, reauthRestartLead, resumeBannerText, signInLedger, signInStartRefusal, typedConfirmLabel,
+  COME_BACK_APPROVED, COPIED, COPY_CODE, COPY_LINK, DEVICE_CODE_LABEL, DEVICE_CODE_NOTE, FRAME_SAID, LEDGER, OPEN_CHATGPT, OPEN_LINK, SIGN_IN_AGAIN, SIGN_OUT_RESTART,
+  START_AGAIN, chatgptEnd, chatgptSignedInLine, clockHM, credentialUntouched, reauthEnd, reauthIntro, reauthRestartLead, removeConsequence, resumeBannerText, signInLedger, signInStartRefusal, typedConfirmLabel,
 } from '../src/fleet/accountWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
@@ -84,7 +84,8 @@ function fakeBox(): {
   box.status = { ok: true, state: 'starting', updatedAt: Date.now(), expiresAt: box.expiresAt };
   const client = {
     // The route's own step: the body goes through the real builder, which refuses what the verb's list doesn't name.
-    accountAdd: vi.fn<ConnectClient['accountAdd']>(async ({ id, credential, ...fields }) => {
+    accountAdd: vi.fn<ConnectClient['accountAdd']>(async ({ id, credential, adopt, ...rest }) => {
+      const fields = { ...rest, ...(adopt === true ? { adopt: 'true' } : {}) };
       if (!buildAccountArgv('add', id, fields, credential !== undefined).ok) throw new ApiError(400, { error: 'bad-request' });
       return { ok: true as const, roster: ROSTER, lane: LANE_NEW, fleetIdentity: null };
     }),
@@ -197,7 +198,48 @@ describe('OpenAI has no method step (spec §7.2 steps 1–4)', () => {
   });
 });
 
+describe("a folder an earlier lane left (spec §5, G20): Use what's there on a ChatGPT lane", () => {
+  const found = async (b: Box): Promise<void> => {
+    const real = b.client.accountAdd.getMockImplementation()!;
+    b.client.accountAdd.mockImplementationOnce(async () => { throw new ApiError(409, { error: 'config-dir-exists', signedIn: false }); });
+    b.client.accountAdd.mockImplementation(real);
+    sheet(b);
+    toFrame();
+    fireEvent.click(screen.getByRole('button', { name: 'Add lane and sign in' }));
+    await settle();
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: "Use what's there" }));
+    await settle();
+  };
+
+  it('says what this flow does: a ChatGPT lane has no token field, so nothing tells the operator to paste one', async () => {
+    const b = fakeBox();
+    await found(b);
+    const said = screen.getByTestId('connect-status').textContent ?? '';
+    expect(said).toBe(FRAME_SAID.chatgpt);
+    expect(said).not.toMatch(/token|paste/i);
+    expect(screen.queryByRole('textbox', { name: /token/i })).toBeNull();
+    expect(screen.getByText(CHATGPT_MODELS)).toBeInTheDocument();
+  });
+
+  it('and the add takes the folder over through the real builder, then starts the ChatGPT sign-in', async () => {
+    const b = fakeBox();
+    await found(b);
+    fireEvent.click(screen.getByRole('button', { name: 'Add lane and sign in' }));
+    await settle();
+    await settle();
+    expect(b.client.accountAdd).toHaveBeenCalledTimes(2);
+    expect(b.client.accountAdd.mock.calls[1]![0]).toMatchObject({ provider: 'openai', adopt: true });
+    expect(b.sc.accountAuthStart).toHaveBeenCalledWith('lane-g', { method: 'openai-login' });
+  });
+});
+
 describe('the device-code card (spec §7.2 step 5)', () => {
+  it('tells the operator not to share the code: the library running this flow warns the same, and spec §3.8 names the threat', () => {
+    expect(DEVICE_CODE_NOTE).toBe("Type this code on the page. Don't share it.");
+    expect(DEVICE_CODE_NOTE).not.toMatch(/not a secret/i);
+  });
+
   it('shows the link, the host the server parsed and the user code, with no code field and nothing to send', async () => {
     stubWidth(1280);
     const b = fakeBox();
@@ -642,6 +684,32 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
     expect(screen.getByText(CODEX_FOLDER_KEPT)).toBeInTheDocument();
     await remove('lane-g');
     expect(c.accountRemove).toHaveBeenCalledWith('lane-g', { mode: 'remove', confirmId: 'lane-g', codexAuth: 'keep' });
+  });
+
+  it('the sentence above the line follows it: turned off, nothing on the frame says the credential is deleted', async () => {
+    await open('lane-g');
+    const on = removeConsequence('lane-g', 'delete');
+    const off = removeConsequence('lane-g', 'keep');
+    expect(screen.getByText(on)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: CODEX_FOLDER_LINE }));
+    expect(screen.getByText(off)).toBeInTheDocument();
+    expect(screen.queryByText(on)).toBeNull();
+    expect(document.querySelector('[data-frame="remove"]')?.textContent).not.toMatch(/deletes[^.]*(credential|sign-in)/i);
+    expect(off).toBe('Removing lane-g deletes everything that runs it on the fleet host. Its ChatGPT sign-in folder, config folder and transcripts stay.');
+    fireEvent.click(screen.getByRole('checkbox', { name: CODEX_FOLDER_LINE }));
+    expect(screen.getByText(on)).toBeInTheDocument();
+  });
+
+  it('turned on, it claims no more than the verb: a folder that is not safe to delete stays, so it says "if"', async () => {
+    await open('lane-g');
+    const on = removeConsequence('lane-g', 'delete');
+    expect(on).toContain("its ChatGPT sign-in folder if that's safe to delete");
+    expect(on).not.toMatch(/credential/i);
+  });
+
+  it('a lane with no such line keeps its own sentence', async () => {
+    await open('lane-x');
+    expect(screen.getByText(removeConsequence('lane-x'))).toBeInTheDocument();
   });
 
   it("turned off, it promises only what the box does: on a Signed-out lane too, it never says the sign-in works", async () => {
