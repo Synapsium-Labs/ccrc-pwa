@@ -1825,7 +1825,8 @@ export const PROVISIONED_BOX_TOKEN =
  *  box (no lane secret) and PASSes on the provisioned one, whose `fleetFiles` state `none`.
  *  Wave 24 added `box-settings` (D-6599): PASS at every stage, re-measured from both box-token cases' own failing diff
  *  (a fresh box's ccrc.env sets none of ccrc's settings). Landing order wave 3b added `land-probe`: SKIP at every stage
- *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. */
+ *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. D-8047 added
+ *  `playwright`: SKIP at every stage (a fresh box caches no browser build), re-measured the same way. */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1873,6 +1874,7 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "oom-policy": "PASS",
   "pane-scope-stop": "PASS",
   "path": "PASS",
+  "playwright": "SKIP",
   "pool-sync": "WARN",
   "pools": "PASS",
   "provenance": "PASS",

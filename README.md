@@ -602,7 +602,7 @@ under "Attention, notifications and answering" below.
 `SKIP` when there is nothing to measure — every WARN and FAIL followed by its `remedy:`, then one
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
-`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
+`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), `playwright`,
 `timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
@@ -623,7 +623,8 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
-| `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
+| `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` resolving to that engine on the `PATH` sessions get (read from each live session's environment, else the user manager's; `path` asks the same of `ccrc`, `ccd` and `ccrc-api`) |
+| `playwright` | every cached Playwright browser build, really launched offline with a throwaway profile: a build the loader refuses or one left incomplete is a WARN naming it, never a FAIL. SKIP with nothing cached or on a server box |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
 | `test-slice`, `testbox` | the test slice's live memory, limits and heavy-run queue; the test box as the server decided it: its state and its switch, named separately, the box's queue depth and the tool versions that differ ("The test box", below) |
@@ -4686,6 +4687,19 @@ which has no table. The refusal's detail names those rows and its remedy: stop e
 writes a fresh field, or purge the row once its session has ended. The next reclaim pass then places it. One hold
 weakens until then: a gone row's recorded identity still names the old host's device, so the check that holds a child
 when a checkout inside it is that row's moved tree matches no checkout; git's record of the tree still holds it.
+
+A session's PATH is not yours, so check the bare commands under it after a move. A box's own `~/.local/bin` is usually
+not on it: a pane gets the PATH of whatever ran `tmux new-session`, for a supervised session the service manager's, and a
+root-owned link in a system directory on the old box can hide that until the box changes. On the fleet box, take the PATH
+of one live session (its pane's pid from `tmux list-panes -a -F '#{session_name} #{pane_pid}'`) and try each command:
+
+```sh
+sp=$(tr '\0' '\n' < /proc/<pane-pid>/environ | sed -n 's/^PATH=//p')
+for c in ccrc ccd ccrc-api graphify; do PATH="$sp" command -v "$c" || echo "MISSING: $c"; done
+```
+
+`ccrc doctor` asks the same question of every live session (`path`, `graphify-path`) and prints the root step that fixes
+what is missing. `ccrc update`'s own PATH holds `~/.local/bin`, so a green update alone never proved this before D-8047.
 
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's

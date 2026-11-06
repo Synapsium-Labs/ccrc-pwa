@@ -519,6 +519,10 @@ describe('the killed-flip state: C27 admits the one rollback a killed update nee
   });
 });
 
+/** The exact tmux calls one doctor pass makes, all of them reads: `tmux_skew`'s two, and the session PATH read `path` and
+ *  `graphify-path` each make (each check runs in its own subshell, so each asks for itself). */
+const DOCTOR_TMUX_ARGV = '-V\ndisplay-message -p #{version}\nlist-panes -a -F #{session_name} #{pane_pid}\nlist-panes -a -F #{session_name} #{pane_pid}\n';
+
 describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed run, never its own (wave 8 item B)', () => {
   // Describe-local kill list, copied as a pattern from the lock describe's
   // `holders`/`lingerers` (never referenced — that describe's array is its
@@ -739,9 +743,10 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     // absence. Recorders were cleared right after setup's own real updates
     // (above), so what remains is only this run's. Measured (healthyBox's
     // doctor-stub tmux/gh, contained): `tmux -V` and `tmux display-message
-    // -p '#{version}'`; `gh auth status --hostname github.com`.
+    // -p '#{version}'`, then one read-only `list-panes` each for `path` and
+    // `graphify-path` (D-8047); `gh auth status --hostname github.com`.
     expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
-    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe('-V\ndisplay-message -p #{version}\n');
+    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe(DOCTOR_TMUX_ARGV);
     expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
   }, 60_000);
 
@@ -829,7 +834,7 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     // (`plantOldBox` places files, it does not run `ccrc update`), so the
     // recorders hold only this run's own calls with no clearing needed.
     expect(existsSync(join(home, 'systemd-run-argv')), 'systemd-run was touched — no case here drives --detach').toBe(false);
-    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe('-V\ndisplay-message -p #{version}\n');
+    expect(readFileSync(join(home, 'tmux-argv'), 'utf8')).toBe(DOCTOR_TMUX_ARGV);
     expect(readFileSync(join(home, 'gh-calls'), 'utf8')).toBe('auth status --hostname github.com\n');
   }, 60_000);
 
