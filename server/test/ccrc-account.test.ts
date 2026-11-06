@@ -46,6 +46,7 @@ import {
   killLaneProcesses, MANAGER_STANDIN_MARK, plantCodexUsage, plantForeignUsage, plantSystemd, portAccepts, psArgs, spawnFakeLitellm,
   systemctlCalls, systemdRunCalls,
 } from './codexLaneFixture.js';
+import { shadowAccountOp } from './laneStateFixture.js';
 import { pythonOrSkip } from './ccgptHarness.js';
 import { CLOSED_AUTH_BASE, plantBackendCredential } from './codexAuthFixture.js';
 
@@ -2559,28 +2560,7 @@ describe('ccrc account add: the ordered write', () => {
  *  importing it RUNS it, argv and all. */
 function staleAtBox(prefix: string, missingOp: string): string {
   const home = box(prefix);
-  rmSync(join(home, 'ccrc', 'deploy'));   // the symlink into the real tree
-  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
-  // AND THE REST OF `deploy/` IS STILL THERE. A box with one stale file is what
-  // this fixture stands in for; a box MISSING `gen-accounts.mjs` is a different
-  // one, and it refuses at `accounts-sh` long before the op under test — which
-  // is what the third case below measured the first time it ran. The two cases
-  // above never reach `_acct_converge`, so this changes nothing for them.
-  for (const f of readdirSync(join(REPO, 'deploy'))) {
-    if (f === 'account-op.mjs') continue;
-    symlinkSync(join(REPO, 'deploy', f), join(home, 'ccrc', 'deploy', f));
-  }
-  const real = JSON.stringify(join(REPO, 'deploy', 'account-op.mjs'));
-  writeFileSync(join(home, 'ccrc', 'deploy', 'account-op.mjs'), [
-    `if (process.argv[2] === ${JSON.stringify(missingOp)}) {`,
-    '  process.stderr.write("usage: node deploy/account-op.mjs <refuse|providers|roster'
-      + '|candidates|check-add> [--<key> <value>]\\u2026\\n");',
-    '  process.exitCode = 2;',
-    '} else {',
-    `  await import(${real});`,
-    '}',
-    '',
-  ].join('\n'));
+  shadowAccountOp(home, missingOp);
   return home;
 }
 

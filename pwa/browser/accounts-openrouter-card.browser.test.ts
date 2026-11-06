@@ -287,7 +287,7 @@ describe('an OpenRouter lane card at every width and skin (D-8023 (13))', () => 
         await page.locator('.sheet-panel').getByRole('button', { name: 'Remove lane' }).click();
         const provider = page.locator('.acct-at-provider');
         await provider.waitFor({ timeout: 10_000 });
-        expect(await provider.textContent()).toContain(`(it's the key named after this lane, ${HINT}).`);
+        expect(await provider.textContent()).toContain("(it's the key ending in …a26a).");
         const sheet = await page.evaluate(() => {
           const el = document.querySelector<HTMLElement>('.sheet-panel')!;
           const b = el.getBoundingClientRect();

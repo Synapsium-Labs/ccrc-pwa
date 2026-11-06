@@ -10726,18 +10726,26 @@ _acct_token_probe() {   # <id> <what-still-stands> [<config dir holding a sign-i
 # ── OPENROUTER BY PASTE: the key checked first, and its suggested models (accounts plan Task A26; spec §8.3, §8.5) ───
 # THE KEY RIDES curl's STDIN AS ONE HEADER LINE (D-5520): `-H @-` reads a header file, so a directive in the key has no
 # grammar to land in, and the key is on no argv. `printf` is a builtin, so it forks nothing that carries the key. curl's
-# stderr is dropped, and only its body and status go further: a refusal is built from the verdict, never from an answer.
+# stderr is dropped, and only its body and status go further: a refusal is built from the verdict and the HTTP status,
+# never from the body.
+#
+# THREE WAYS NOT TO HAVE A VERDICT, KEPT APART BECAUSE THEY HAVE THREE CURES (D-8023 (15)): `no-answer` is curl's own
+# failure, so OpenRouter said nothing and trying again is the advice; `key-unverified` is an answer that proved nothing,
+# a 403 and a flagless 200 among them, which trying again need not change; and a verdict left empty is this box failing
+# to read the answer, the half-updated box D-2051 keeps apart from a refusal, so ACCT_KEY_EXIT holds what the op exited.
 ACCT_OR_KEY_URL='https://openrouter.ai/api/v1/key'
-ACCT_KEY_VERDICT=""; ACCT_KEY_FACTS=""
-_acct_or_read_key() {   # ACCT_CREDENTIAL -> ACCT_KEY_VERDICT and ACCT_KEY_FACTS; anything but an answer is `key-unverified`
+ACCT_KEY_VERDICT=""; ACCT_KEY_FACTS=""; ACCT_KEY_STATUS=""; ACCT_KEY_EXIT=0
+_acct_or_read_key() {   # ACCT_CREDENTIAL -> ACCT_KEY_VERDICT, ACCT_KEY_FACTS, ACCT_KEY_STATUS and ACCT_KEY_EXIT
   local -; set +x +a
   local got="" rc=0 row=""
-  ACCT_KEY_VERDICT="key-unverified"; ACCT_KEY_FACTS=""
+  ACCT_KEY_VERDICT="no-answer"; ACCT_KEY_FACTS=""; ACCT_KEY_STATUS=""; ACCT_KEY_EXIT=0
   got="$(printf 'Authorization: Bearer %s\n' "$ACCT_CREDENTIAL" \
     | curl -sS -H @- --proto '=https' --max-redirs 0 --max-time 10 -w '\n%{http_code}' "$ACCT_OR_KEY_URL" 2>/dev/null)" || rc=$?
   [ "$rc" -eq 0 ] || return 0
-  row="$(printf '%s' "${got%$'\n'*}" | _acct_node or-key --status "${got##*$'\n'}" 2>/dev/null)" || return 0
-  ACCT_KEY_VERDICT="$(jq -r '.verdict // "key-unverified"' <<<"$row" 2>/dev/null)" || ACCT_KEY_VERDICT="key-unverified"
+  ACCT_KEY_VERDICT=""; ACCT_KEY_STATUS="${got##*$'\n'}"
+  row="$(printf '%s' "${got%$'\n'*}" | _acct_node or-key --status "$ACCT_KEY_STATUS" 2>/dev/null)" || ACCT_KEY_EXIT=$?
+  [ "$ACCT_KEY_EXIT" -eq 0 ] || return 0
+  ACCT_KEY_VERDICT="$(jq -r '.verdict // empty' <<<"$row" 2>/dev/null)" || ACCT_KEY_VERDICT=""
   ACCT_KEY_FACTS="$(jq -c '.facts // empty' <<<"$row" 2>/dev/null)" || ACCT_KEY_FACTS=""
 }
 
@@ -10751,7 +10759,9 @@ _acct_or_validate() {   # <what-still-stands> -> ACCT_KEY_ARGS, or refuses
     ok) ;;
     wrong-key-kind) ACCT_CREDENTIAL=""; _acct_refuse 1 wrong-key-kind "That's a management key, which can't run models and must never sit in a session's environment. Add it as the management key instead. $stands" ;;
     key-rejected) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That key was refused by OpenRouter (HTTP 401). $stands" ;;
-    *) ACCT_CREDENTIAL=""; _acct_refuse 1 key-unverified "OpenRouter didn't answer, so the key could not be checked: $stands Try again." ;;
+    key-unverified) ACCT_CREDENTIAL=""; _acct_refuse 1 key-unverified "OpenRouter's answer (HTTP $ACCT_KEY_STATUS) didn't prove what kind of key this is, so it could not be checked: $stands" ;;
+    no-answer) ACCT_CREDENTIAL=""; _acct_refuse 1 key-unverified "OpenRouter didn't answer, so the key could not be checked: $stands Try again." ;;
+    *) ACCT_CREDENTIAL=""; _acct_no_answer "$ACCT_KEY_EXIT" or-key "$stands" ;;
   esac
   ACCT_KEY_ARGS=(--key-source pasted --validated-at now)
   [ -z "$ACCT_KEY_FACTS" ] || ACCT_KEY_ARGS+=(--key-facts "$ACCT_KEY_FACTS")

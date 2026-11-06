@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
-  ACCOUNT_OP, HAVE_FLOCK, answer, boxEnv, ccrcRun, laneBox, laneState, secretTemps, type Result,
+  ACCOUNT_OP, HAVE_FLOCK, answer, boxEnv, ccrcRun, laneBox, laneState, secretTemps, shadowAccountOp, type Result,
 } from './laneStateFixture.js';
 import { KEY_HINT_RE, LANE_KEY_SOURCES, laneStateOf, stateWordFor } from '../../shared/accounts.js';
 import { MODEL_ID_RE, type Catalogue } from '../../shared/models.js';
@@ -146,6 +146,8 @@ describe('the key is checked first (spec §8.3, D-5520)', () => {
 
   it.each([
     ['a 500', 500, { error: { code: 500 } }],
+    ['a 429', 429, { error: { code: 429 } }],
+    ['a 403', 403, { error: { code: 403 } }],
     ['a 200 with no `data`', 200, { label: 'x' }],
     ['a 200 whose flag is no boolean', 200, { data: { ...KEY_BODY, is_management_key: 'yes' } }],
     ['a 200 of an empty `data`', 200, { data: {} }],
@@ -159,7 +161,10 @@ describe('the key is checked first (spec §8.3, D-5520)', () => {
     const home = laneBox('ccrc-or-unverified-');
     const env = plantCurl(home);
     scriptKey(home, status, body);
-    refuses(ccrcRun(home, addArgs(), `${KEY}\n`, env), 1, 'key-unverified');
+    const r = ccrcRun(home, addArgs(), `${KEY}\n`, env);
+    refuses(r, 1, 'key-unverified');
+    // OpenRouter answered, so nothing here may say it did not, and trying again need not change a 403 or a flagless 200.
+    expect(answer(r)['detail']).toBe(`OpenRouter's answer (HTTP ${status}) didn't prove what kind of key this is, so it could not be checked: Nothing was written.`);
     expectNothingWritten(home);
   });
 
@@ -177,7 +182,24 @@ describe('the key is checked first (spec §8.3, D-5520)', () => {
     const home = laneBox('ccrc-or-down-');
     const env = plantCurl(home);
     spawnSync('rm', [join(home, 'or-key')]);
-    refuses(ccrcRun(home, addArgs(), `${KEY}\n`, env), 1, 'key-unverified');
+    const r = ccrcRun(home, addArgs(), `${KEY}\n`, env);
+    refuses(r, 1, 'key-unverified');
+    expect(answer(r)['detail']).toBe("OpenRouter didn't answer, so the key could not be checked: Nothing was written. Try again.");
+    expectNothingWritten(home);
+  });
+
+  it('a box that cannot read the answer says so, and blames neither OpenRouter nor the key (D-2051)', () => {
+    const home = laneBox('ccrc-or-stale-');
+    const env = plantCurl(home);
+    shadowAccountOp(home, 'or-key');
+    const r = ccrcRun(home, addArgs(), `${KEY}\n`, env);
+    refuses(r, 1, 'no-answer');
+    const detail = String(answer(r)['detail']);
+    expect(detail).toContain("answer to 'or-key'");
+    expect(detail).toContain('half-updated box');
+    expect(detail).toMatch(/Nothing was written\.$/);
+    expect(detail).not.toContain('OpenRouter');
+    expect(r.stdout + r.stderr).not.toContain(KEY);
     expectNothingWritten(home);
   });
 
@@ -445,6 +467,17 @@ describe('Replace key validates first (`credential`, spec §9)', () => {
     expect(laneState(home, LANE)).toEqual(state);
   });
 
+  it('a box that cannot read the answer keeps the old file and the old facts, and says it is the box', () => {
+    const { home, env, before } = box('ccrc-or-replace-stale-');
+    const state = laneState(home, LANE);
+    shadowAccountOp(home, 'or-key');
+    const r = replace(home, env);
+    refuses(r, 1, 'no-answer');
+    expect(String(answer(r)['detail'])).toMatch(/half-updated box.*Nothing was written: the old credential file stands\.$/);
+    expect(readFileSync(join(home, '.cc-secrets', KEY_FILE), 'utf8')).toBe(before);
+    expect(laneState(home, LANE)).toEqual(state);
+  });
+
   it('a good key replaces the file, and the hint and the credit with it', () => {
     const { home, env } = box('ccrc-or-replace-ok-');
     scriptKey(home, 200, { data: { ...KEY_BODY, limit_remaining: 5, label: 'ccrc lane-d 2' } });
@@ -525,6 +558,7 @@ describe('`check` reads the credit again (D-5521, G8)', () => {
   it.each([
     ['a dead network', (home: string): void => { spawnSync('rm', [join(home, 'or-key')]); }],
     ['a 200 that proves no kind', (home: string): void => { scriptKey(home, 200, { data: { label: 'x', limit: 5, limit_remaining: 0 } }); }],
+    ['a box that cannot read the answer', (home: string): void => { shadowAccountOp(home, 'or-key'); }],
   ])('a failed read keeps the last reading: %s', (_name, breakIt) => {
     const { home, env } = box('ccrc-or-check-down-');
     const before = laneState(home, LANE)!;

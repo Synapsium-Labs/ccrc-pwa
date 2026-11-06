@@ -1951,11 +1951,13 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   check, then `GET https://openrouter.ai/api/v1/key` with `curl -H @-`, the bearer header on stdin as one line. A 401
   refuses `key-rejected`, a key whose `is_management_key` or `is_provisioning_key` is true `wrong-key-kind`, and anything
   else `key-unverified`, so the answer has to prove the key's kind: `is_management_key` false, and `is_provisioning_key`,
-  the deprecated name, false or absent. There is no "save anyway". The lane state keeps the key hint, how the key came, its label,
+  the deprecated name, false or absent. The refusal says which it was: an answer that proved nothing names its HTTP
+  status, and only no answer at all says to try again. A box that cannot read the answer refuses `no-answer`. There is no "save anyway". The lane state keeps the key hint, how the key came, its label,
   limit, reset and credit, a new key's facts replacing the old key's whole, and `check` reads the credit again. The
   Accounts card draws the hint, the validation's age and the credit's state words. `--placement overflow` (the default) writes `homeAble:
-  false`, so the lane takes a session only when one is sent to it, and `full` writes `homeAble: true`; no other provider
-  takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
+  false`: placement never picks the lane and it is no session's default home, but once enabled it is in the auto-swap
+  rotation as an overflow lane, the last resort above, so a limited session can land on it with no operator act and bill
+  the key. `ccrc account disable` keeps it out. `full` writes `homeAble: true`; no other provider takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
   `anthropic/claude-<class>-<version>` of each class, refusing `catalogue-unreachable` with nothing written when the
   catalogue cannot be read or names none for opus, sonnet or haiku; after the converge it writes the class registry from
   the same catalogue (`ccrc models <id> init openrouter --suggested`). `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
