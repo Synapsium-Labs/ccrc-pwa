@@ -8,7 +8,8 @@ import { ApiError, sendErrorText } from '../src/lib/api';
 import { applySessionMsg, createSessionStore, getSessionStore, type SessionSnapshot } from '../src/stores/session';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { setUpdater } from '../src/lib/swupdate';
-import { saveFleetSnapshot } from '../src/lib/offline';
+import { WAITING_SNAPSHOT_KEY, saveFleetSnapshot, saveWaitingSnapshot } from '../src/lib/offline';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { TEST_ROSTER } from './rosterFixture';
 import { frame as delegationFrame, lease as delegationLease, unowned as delegationUnowned } from './delegationFixture';
 
@@ -1658,6 +1659,87 @@ describe('fleet store', () => {
       expect(store.getState().projected).toBe(landed);
       await store.getState().refreshAccounts();
       expect(store.getState().projected).toBe(landed);
+    });
+  });
+
+  // Console speed, Task C4 (spec §2.6, D16): the device's copy of the Waiting list is its own field, hydrated once and
+  // never written into `waiting`, so every reader that asks whether this page has heard the list answers as before.
+  describe('the saved Waiting list (waitingSaved)', () => {
+    const list = { items: [], cleared: [], goals: [] };
+    const saved = (): unknown => JSON.parse(window.localStorage.getItem(WAITING_SNAPSHOT_KEY) ?? 'null');
+
+    it('a cold store hydrates waitingSaved and leaves waiting null', () => {
+      expect(saveWaitingSnapshot(list, 1234)).toBe(true);
+      const store = createFleetStore({ makeSocket });
+      expect(store.getState().waitingSaved).toEqual({ savedAt: 1234, view: list });
+      expect(store.getState().waiting).toBeNull();
+    });
+
+    it('a store with nothing saved starts with waitingSaved null', () => {
+      expect(createFleetStore({ makeSocket }).getState().waitingSaved).toBeNull();
+    });
+
+    it('a waiting frame saves the list on the device', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      const view = { ...list, cleared: [] };
+      lastSocket().message(JSON.stringify({ type: 'waiting', waiting: view }));
+      expect(store.getState().waiting).toEqual(view);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view });
+      // The field is the copy this page STARTED with: a frame never rewrites it.
+      expect(store.getState().waitingSaved).toBeNull();
+      store.getState().disconnect();
+    });
+
+    it('a waiting read (setWaiting) saves it too', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().setWaiting(list);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view: list });
+    });
+
+    it('a frame the envelope check drops saves nothing', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      lastSocket().message(JSON.stringify({ type: 'waiting', waiting: { items: 'not-a-list', cleared: [], goals: [] } }));
+      expect(store.getState().waiting).toBeNull();
+      expect(window.localStorage.getItem(WAITING_SNAPSHOT_KEY)).toBeNull();
+      store.getState().disconnect();
+    });
+
+    // Review 1561 F1: the socket outlives a sign-out, so a frame (or a read already on the wire) after it must not write the
+    // copy back. The page still takes the list; only the device's copy is refused.
+    it('after a sign-out, a waiting frame and a read on the open store save nothing', () => {
+      const store = createFleetStore({ makeSocket });
+      store.getState().connect();
+      lastSocket().open();
+      raiseAuthLost('no-session');
+      try {
+        lastSocket().message(JSON.stringify({ type: 'waiting', waiting: list }));
+        store.getState().setWaiting(list);
+        expect(store.getState().waiting).toEqual(list);
+        expect(window.localStorage.getItem(WAITING_SNAPSHOT_KEY)).toBeNull();
+      } finally {
+        clearAuthLost();
+        store.getState().disconnect();
+      }
+      // Signed in again, the next list is saved as before.
+      store.getState().setWaiting(list);
+      expect(saved()).toEqual({ savedAt: expect.any(Number), view: list });
+    });
+
+    it('a store whose storage throws still starts, with waitingSaved null', () => {
+      saveWaitingSnapshot(list, 1234);
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage refused'); });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+      const store = createFleetStore({ makeSocket });
+      expect(store.getState().waitingSaved).toBeNull();
+      expect(store.getState().waiting).toBeNull();
+      // A write the store refuses changes nothing the page draws.
+      store.getState().setWaiting(list);
+      expect(store.getState().waiting).toEqual(list);
+      vi.restoreAllMocks();
     });
   });
 

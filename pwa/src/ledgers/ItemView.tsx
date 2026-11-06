@@ -49,7 +49,7 @@ import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
-import { ageWords, itemPills, KIND_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
+import { ageWords, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
@@ -78,6 +78,11 @@ export interface ItemViewProps {
   /** What the box says of its sign-in (`readAuthStatus`, `lib/auth.ts`): a secret panel on a box whose sign-in is off starts
    *  disabled, so no value is ever sent to it (spec §5, review 1389 A9). A test passes its own. */
   readonly authStatus?: () => Promise<Partial<AuthStatus>>;
+  /** Whether the item is drawn from live data (console speed, Task C4; spec §2.6, D16). `false` when it is the device's
+   *  saved copy: Mark done, Dismiss, the secret's Save and the stored secret's Remove are disabled and refuse, and the reason
+   *  is drawn once beside them; the fields stay enabled and keep their text, so an answer typed now is sent once live data
+   *  lands. Default `true`, so every other caller is unchanged. */
+  readonly current?: boolean;
 }
 
 /** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
@@ -168,8 +173,8 @@ function SecretState({ set }: { set: { tail: string; masked: boolean; why?: Secr
 }
 
 /** The Give a secret panel. Shown only while the item is open and its programme has a coordinator to tell. */
-function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
-  item: ItemWire; saveSecret: SaveSecret; stepUpDeps: StepUpDeps; authStatus: () => Promise<Partial<AuthStatus>>;
+function SecretPanel({ item, saveSecret, stepUpDeps, authStatus, current }: {
+  item: ItemWire; saveSecret: SaveSecret; stepUpDeps: StepUpDeps; authStatus: () => Promise<Partial<AuthStatus>>; current: boolean;
 }): ReactNode {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
@@ -199,7 +204,8 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
   const trimmed = value.trim();
   // The bound counts the TRIMMED value, the one that is sent: spaces around a paste never cut it short.
   const tooLong = trimmed !== '' && !isSecretValue(trimmed);
-  const ready = posture === 'open' && !busy && trimmed !== '' && !tooLong;
+  // A saved copy sends nothing: the field keeps its text, and Save opens once live data lands.
+  const ready = current && posture === 'open' && !busy && trimmed !== '' && !tooLong;
   const fieldId = useId();
   const hintId = useId();
   const tooLongId = useId();
@@ -255,8 +261,10 @@ function SecretPanel({ item, saveSecret, stepUpDeps, authStatus }: {
  * and a `step-up-required` answer shows "Confirm it's you" and waits for the operator to press Remove again, as the save does.
  * A removal refused `secret-not-stored` is a removal already made: `onRemoved` runs either way. Nothing here sees a value.
  */
-export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS }: {
+export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, current = true }: {
   program: string; slot: string; onRemoved?: () => void; removeSecret?: RemoveSecret; stepUpDeps?: StepUpDeps;
+  /** `false` on an item drawn from the device's saved copy: Remove is disabled and refuses (`ItemViewProps.current`). */
+  current?: boolean;
 }): ReactNode {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -266,6 +274,7 @@ export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = re
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const remove = async (): Promise<void> => {
+    if (!current) return;
     setBusy(true);
     setRefusal(null);
     try {
@@ -285,7 +294,8 @@ export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = re
   if (done) return <span className="wi-status" role="status" data-secret="removed">{STORED_TEXT.removed}</span>;
   return (
     <div className="wi-stored-remove" data-secret="remove">
-      <Button variant="ghost" size="fit" disabled={busy} aria-label={STORED_TEXT.removeLabel(slot)} onClick={() => setAsking(true)}>
+      <Button variant="ghost" size="fit" disabled={busy || !current} aria-label={STORED_TEXT.removeLabel(slot)}
+              onClick={() => { if (current) setAsking(true); }}>
         {STORED_TEXT.remove}
       </Button>
       <ConfirmItsYou stepUp={stepUp} subject={STORED_TEXT.stepUpSubject} />
@@ -364,8 +374,8 @@ function Field({ label, value, onChange, maxLength, hint }: {
   );
 }
 
-function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn }:
-  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus'>): ReactNode {
+function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true }:
+  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current'>): ReactNode {
   const [pick, setPick] = useState<string | null>(null);
   const [own, setOwn] = useState('');
   const [note, setNote] = useState('');
@@ -397,6 +407,8 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   const ready = !needsAnswer || (choice !== null && choice !== '' && !tooLong);
 
   const run = async (act: () => Promise<void>): Promise<void> => {
+    // A saved copy sends nothing, whatever reached this (the buttons are disabled too).
+    if (!current) return;
     setBusy(true);
     setRefusal(null);
     try { await act(); } catch (err) { setRefusal(refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err)); } finally { setBusy(false); }
@@ -407,6 +419,10 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   // A programme with no open run has no coordinator waiting for a tick: nothing is asked, and only Dismiss is offered.
   const ended = (open || checking) && !programmeLive;
   const mayTick = open && programmeLive && item.kind !== 'secret';
+  const secretOpen = open && programmeLive && item.kind === 'secret' && !unreadable;
+  const removable = item.kind === 'secret' && stored !== null && item.secretSlot !== null;
+  // Why the acts are off on a saved copy, said once, and only where there is an act to be off.
+  const notCurrent = !current && (mayTick || ended || secretOpen || removable);
   return (
     <section className="wi-card wi-act" aria-label="Your move">
       {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
@@ -442,13 +458,13 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       {mayTick && item.kind === 'do' && (
         <p className="wi-hint">Nothing to fill in. The coordinator checks it itself and either closes the item or sends it back with what it found.</p>
       )}
-      {open && programmeLive && item.kind === 'secret' && !unreadable && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} />}
+      {secretOpen && <SecretPanel item={item} saveSecret={saveSecret} stepUpDeps={stepUpDeps} authStatus={authStatus} current={current} />}
       {checking && item.kind === 'secret' && saved !== null && <SecretState set={saved} />}
-      {item.kind === 'secret' && stored !== null && item.secretSlot !== null && (
+      {removable && item.secretSlot !== null && stored !== null && (
         <div className="wi-stored" data-secret="stored">
           <span className="wi-status">{STORED_TEXT.stored}</span>
           <StoredSecretRemove key={`${item.secretSlot}:${stored.at ?? 'unrecorded'}`} program={item.program} slot={item.secretSlot}
-                              removeSecret={removeSecret} stepUpDeps={stepUpDeps} />
+                              removeSecret={removeSecret} stepUpDeps={stepUpDeps} current={current} />
         </div>
       )}
       {item.kind === 'secret' && unreadable && (
@@ -462,20 +478,21 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
         </p>
       )}
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
+      {notCurrent && <p className="wi-hint" data-current="false">{NOT_CURRENT_ACTS_WORD}</p>}
       <div className="wi-actions">
         {mayTick && (
-          <Button variant="primary" size="fit" disabled={busy || !ready}
+          <Button variant="primary" size="fit" disabled={busy || !ready || !current}
                   onClick={() => void run(() => (answer === null || !needsAnswer ? onTick() : onTick(answer)))}>Mark done</Button>
         )}
         {ended && (
-          <Button variant="ghost" size="fit" disabled={busy} onClick={() => void run(onDismiss)}>Dismiss</Button>
+          <Button variant="ghost" size="fit" disabled={busy || !current} onClick={() => void run(onDismiss)}>Dismiss</Button>
         )}
       </div>
     </section>
   );
 }
 
-export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus }: ItemViewProps): ReactNode {
+export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true }: ItemViewProps): ReactNode {
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   const href = programme?.href ?? null;
@@ -508,7 +525,7 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
             <History item={item} now={now} homeProject={home} />
           </section>
         </div>
-        <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss}
+        <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current}
                {...(saveSecret === undefined ? {} : { saveSecret })} {...(removeSecret === undefined ? {} : { removeSecret })}
                {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
                {...(authStatus === undefined ? {} : { authStatus })} />

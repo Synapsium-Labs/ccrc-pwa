@@ -9,13 +9,16 @@ import { ROUTES, matchRoute } from '../src/lib/routes';
 import { ItemListColumn, ItemRoute, ItemRouteAt, WaitingRoute, itemPath } from '../src/ledgers/WaitingRoutes';
 import { navigate, useLocation } from '../src/lib/router';
 import { refetchWaiting } from '../src/ledgers/waitingStore';
+import { SAVED_ROWS_WORD } from '../src/ledgers/ledgerWords';
 import { fleetSession } from './fleetFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
 
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
 const mk = () => createFleetStore({ makeSocket });
 
-beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); })); });
+// Every case starts with nothing saved on the device: a read now saves the list (console speed C4), and a copy left by one
+// case would be the next store's cold-start copy.
+beforeEach(() => { window.localStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); })); });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); history.replaceState(null, '', '/'); });
 
 describe('ItemRoute', () => {
@@ -146,11 +149,13 @@ describe('WaitingRoute', () => {
     // The order of a cold start: the waiting frame first, the fleet frame after.
     act(() => store.setState({ waiting: waitingView(), sessions: [fleetSession({ id: 'project-a-ask', bucket: 'attention', title: 'A question' })] }));
     const view = render(<WaitingRoute store={store} />);
-    expect(screen.queryByText('A question')).toBeNull(); // the snapshot's rows are not a fact yet
+    // The snapshot's rows are not a fact yet: since console speed C4 (spec §2.6, D16) they are drawn, marked as the device's
+    // and not current, never as the live rows (so never "Nothing needs you" on their say-so).
+    expect(screen.getAllByRole('status').map((s) => s.textContent)).toContain(SAVED_ROWS_WORD);
     expect(screen.queryByText('Nothing needs you.')).toBeNull();
-    expect(screen.getByRole('status').textContent).toMatch(/first update/i);
     act(() => store.setState({ fleetFrameSeen: true }));
     expect(screen.getByRole('button', { name: /A question/ })).toBeTruthy();
+    expect(screen.queryByText(SAVED_ROWS_WORD)).toBeNull();
     view.unmount();
   });
 

@@ -22,13 +22,20 @@ import './ledgers.css';
 export interface WaitingScreenProps {
   /** `null` until the first `waiting` frame or `GET /api/waiting` answer: "not heard yet" is not "nothing waits". */
   readonly view: WaitingView | null;
-  /** The fleet's sessions, or `null` before the first fleet frame: the offline snapshot's rows are not a fact, and a list
-   *  without its sessions' questions is not "nothing needs you", so the screen says it is waiting (review 1359 F3). */
+  /** The fleet's sessions, or `null` before the first fleet frame and with no saved rows to draw: a list without its
+   *  sessions' questions is not "nothing needs you", so the screen then says it is waiting (review 1359 F3). Before the
+   *  fleet frame, the route may pass the rows the fleet snapshot saved on this device, never as a fact: always with
+   *  `notCurrent` saying they are the device's (console speed C4, spec D16), and never when nothing was saved (review
+   *  1556 R1). */
   readonly sessions: readonly FleetSession[] | null;
   /** The runs, or `null` before the runs frame: a programme is not called ended on runs this page has not heard. */
   readonly runs: readonly RunSummary[] | null;
   /** Why no list will come (this box has no coordination database), in words; shown in place of the waiting line. */
   readonly unavailable?: string | null;
+  /** Present when the list or the rows given are the device's saved copy, not live (console speed, Task C4; spec §2.6,
+   *  D16): the line saying so, in words. The screen draws what it is given with this line above it, where the waiting line
+   *  stands with nothing to draw. Absent, the list is live. */
+  readonly notCurrent?: string;
   /** The page clock, epoch ms: every age is read against it, so the screen reads no clock of its own. */
   readonly now: number;
   /** The side rail's filter as the URL names it (plan PL9): a programme's slug, `NO_PROGRAMME_FILTER` for the sessions in no
@@ -160,6 +167,12 @@ export function ClearedTrail({ items, where, now }: {
   );
 }
 
+/** The line over a list or an item drawn from the device's saved copy, saying it is not current (console speed, Task C4;
+ *  spec §2.6, D16): ONE leaf, drawn by this screen and by the item's route, in the place the waiting line stands. */
+export function NotCurrentLine({ words }: { words: string }): ReactNode {
+  return <p className="wl-note" role="status" data-current="false">{words}</p>;
+}
+
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
   const pick = (programme: string | null): void => props.onFilter?.(programme);
@@ -192,8 +205,11 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   return (
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
+      {props.notCurrent !== undefined && <NotCurrentLine words={props.notCurrent} />}
+      {/* A saved source never says "Nothing needs you." (review 1561 F4): an empty list from the device's copy, or a
+          list drawn with the device's rows, is not a fact, so it says it is waiting, under the not-current line. */}
       {empty
-        ? <p className="wl-note">{EMPTY_WORD}</p>
+        ? <p className="wl-note">{props.notCurrent === undefined ? EMPTY_WORD : NO_FRAME_WORD}</p>
         : (
           <>
             {words.length > 0 && (

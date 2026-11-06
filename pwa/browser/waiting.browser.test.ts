@@ -206,3 +206,89 @@ describe.each(SKINS)('Waiting on you in %s', (skin) => {
     }
   }
 });
+
+// A cold start draws the device's saved copy (console speed, Task C4; spec §2.6, D16): the live list never lands here (no
+// `waiting` frame, and the read answers no list), so the page draws the copy seeded into storage before the app boots, with
+// its not-current line where the waiting line stands, and the item from it with its acts off. Measured at 390 and 1280: the
+// line clears 4.5:1 on its ground in every palette, and nothing scrolls sideways.
+const SAVED_FIXTURE: AppFixture = {
+  api: { ...FIXTURE.api, '/api/waiting': {} },
+  fleetFrames: FIXTURE.fleetFrames.filter((f) => (f as { type?: string }).type !== 'waiting'),
+};
+
+async function openSaved(skin: string, theme: string, width: number, path: string, ready: string) {
+  const opened = await openApp(browser!, { skin, theme, width }, SAVED_FIXTURE);
+  await opened.ctx.addInitScript((copy) => {
+    try { localStorage.setItem('ccrc.waiting-snapshot.v1', copy); } catch { /* no storage: the page draws today's line */ }
+  }, JSON.stringify({ savedAt: NOW - 4 * MIN, view: WAITING }));
+  await opened.page.goto(server!.origin + path);
+  await opened.page.waitForSelector(ready, { timeout: 20_000 });
+  await opened.page.evaluate(async () => { await document.fonts.ready; });
+  await opened.page.waitForTimeout(250);
+  return opened;
+}
+
+/** The not-current line's text and its contrast on the ground it is drawn on. Runs in the page. */
+const notCurrentLine = (): { text: string; ratio: number } | null => {
+  const rgb = (s: string): number[] => {
+    const v = (s.match(/[\d.]+/g) ?? []).map(Number);
+    return s.startsWith('color(') ? v.map((n) => n * 255) : v;
+  };
+  const lum = ([r, g, b]: number[]): number => {
+    const ch = (v: number): number => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * ch(r!) + 0.7152 * ch(g!) + 0.0722 * ch(b!);
+  };
+  const el = document.querySelector('.wl-note[data-current="false"]');
+  if (el === null) return null;
+  const k = getComputedStyle(el);
+  let bg = k.backgroundColor;
+  for (let n: Element | null = el; n !== null && /rgba\(.*,\s*0\)$|transparent/.test(bg); n = n.parentElement) bg = getComputedStyle(n).backgroundColor;
+  const [a, b] = [lum(rgb(k.color)), lum(rgb(bg))].sort((x, y) => y - x);
+  return { text: el.textContent ?? '', ratio: (a! + 0.05) / (b! + 0.05) };
+};
+
+describe.each(SKINS)('a cold start with a saved list in %s', (skin) => {
+  for (const width of [390, 1280] as const) {
+    for (const theme of PALETTES) {
+      it(`the saved list at ${width} (${theme}): drawn at once, marked not current at 4.5:1, no sideways scroll`, async () => {
+        const { ctx, page, errors } = await openSaved(skin, theme, width, '/waiting', '.wl-group');
+        try {
+          expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 'sideways scroll').toBe(0);
+          const line = await page.evaluate(notCurrentLine);
+          expect(line, 'the not-current line is drawn').not.toBeNull();
+          // `NOW` is the file's load time, so the age reads at least 4 minutes by the time a case runs.
+          expect(line!.text).toMatch(/^Saved on this device \d+m ago, not current\./);
+          expect(line!.ratio, 'the not-current line on its ground').toBeGreaterThanOrEqual(4.5);
+          expect(await page.locator('.wl-item').count()).toBeGreaterThan(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
+
+    it(`an item from the saved copy at ${width}: drawn, marked, its acts off, no sideways scroll`, async () => {
+      const { ctx, page, errors } = await openSaved(skin, PALETTES[0]!, width, '/waiting/2', '.wi');
+      try {
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 'sideways scroll').toBe(0);
+        expect((await page.evaluate(notCurrentLine))?.text).toMatch(/not current/);
+        expect(await page.locator('button', { hasText: 'Mark done' }).isDisabled()).toBe(true);
+        expect(await page.textContent('.wi-act')).toContain('You can act on this item once live data arrives.');
+        // Review 1556 R3: the item page's line is the list page's line, in size and ink.
+        const look = (): { size: string; ink: string } | null => {
+          const el = document.querySelector('.wl-note[data-current="false"]');
+          if (el === null) return null;
+          const k = getComputedStyle(el);
+          return { size: k.fontSize, ink: k.color };
+        };
+        const onItem = await page.evaluate(look);
+        await page.goto(server!.origin + '/waiting');
+        await page.waitForSelector('.wl-group', { timeout: 20_000 });
+        expect(onItem, 'the item page draws the line as the list page does').toEqual(await page.evaluate(look));
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
