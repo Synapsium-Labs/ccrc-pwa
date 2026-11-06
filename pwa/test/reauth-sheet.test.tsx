@@ -18,7 +18,7 @@ import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
-import { FAILED_CHECKS } from './failedChecks';
+import { FAILED_CHECKS, SEED_UNVERIFIED, SEED_UNVERIFIED_LINE } from './failedChecks';
 import { fleetSession } from './fleetFixture';
 
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -228,6 +228,15 @@ describe('every re-auth ends the same way (spec §9)', () => {
     await walk(b, MINT_NEW_TOKEN, 'C'.repeat(40));
     await waitFor(() => expect(b.client.accountCheck).toHaveBeenCalledWith('lane-b'));
     expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.queryByText(LEDGER.checked)).toBeNull();
+  });
+
+  it('a probe that passed over a seed that refused says Not ready, never first-run setup verified (D-8051 (18))', async () => {
+    const b = fakeBox();
+    b.client.accountCheck.mockResolvedValue({ ok: true, lane: SEED_UNVERIFIED });
+    sheet(b, { onPaste: vi.fn(), lane: { ...CHECKED_B, identity: 'someone@example.invalid', identitySource: 'stated' } });
+    await walk(b, MINT_NEW_TOKEN, 'C'.repeat(40));
+    expect(await screen.findByText(SEED_UNVERIFIED_LINE)).toBeInTheDocument();
     expect(screen.queryByText(LEDGER.checked)).toBeNull();
   });
 

@@ -13,7 +13,7 @@ import {
 } from '../src/fleet/accountWords';
 import { ApiError } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { FAILED_CHECKS } from './failedChecks';
+import { FAILED_CHECKS, SEED_UNVERIFIED, SEED_UNVERIFIED_LINE } from './failedChecks';
 import { fleetSession } from './fleetFixture';
 
 const fakeSocket = () => ({ close: () => {}, send: () => {} }) as never;
@@ -89,13 +89,13 @@ describe('what the paste sheet says of the old token follows the rule (D-7872 (1
     expect(replaceIntro('lane-c', 'unsure')).toBe(`The new token is checked with Anthropic before anything is saved. ${noCheckedCredential('lane-c', 'token')}`);
     expect(replaceIntro('lane-c', 'signed-out')).toBe(`The new token is checked with Anthropic before anything is saved. ${laneSignedOut('lane-c')}`);
 
-    expect(replaceRefusal('lane-c', 'key-rejected', 'kept')).toBe('That token was refused (HTTP 401). lane-c keeps its old token.');
+    expect(replaceRefusal('lane-c', 'key-rejected', 'kept')).toBe('That token was refused. lane-c keeps its old token.');
     expect(replaceRefusal('lane-c', 'token-unverified', 'kept')).toBe("Anthropic didn't answer, so nothing was saved. lane-c keeps its old token. Try again.");
     expect(replaceRefusal('lane-c', 'unavailable', 'kept')).toBe("The fleet host couldn't run it. lane-c keeps its old token.");
     expect(replaceRefusal('lane-c', 'odd-word', 'kept')).toBe('The fleet host refused (odd-word). lane-c keeps its old token.');
     expect(replaceRefusal('lane-c', 'Not a word', 'kept')).toBe('The fleet host refused. lane-c keeps its old token.');
 
-    expect(replaceRefusal('lane-c', 'key-rejected', 'unsure')).toBe('That token was refused (HTTP 401). Nothing was installed.');
+    expect(replaceRefusal('lane-c', 'key-rejected', 'unsure')).toBe('That token was refused. Nothing was installed.');
     expect(replaceRefusal('lane-c', 'token-unverified', 'unsure')).toBe("Anthropic didn't answer, so nothing was saved. lane-c is as it was. Try again.");
     expect(replaceRefusal('lane-c', 'unavailable', 'unsure')).toBe("The fleet host couldn't run it. Nothing was installed.");
     expect(replaceRefusal('lane-c', 'odd-word', 'unsure')).toBe('The fleet host refused (odd-word). Nothing was installed.');
@@ -121,7 +121,7 @@ describe('what the paste sheet says of the old token follows the rule (D-7872 (1
     sheet(client);
     expect(screen.getByText(replaceIntro('lane-c', 'kept'))).toBeInTheDocument();
     pasteAndSave();
-    expect(await screen.findByText('That token was refused (HTTP 401). lane-c keeps its old token.')).toBeInTheDocument();
+    expect(await screen.findByText('That token was refused. lane-c keeps its old token.')).toBeInTheDocument();
     cleanup();
     const ok = fakeClient();
     sheet(ok);
@@ -219,7 +219,7 @@ describe('Replace token by paste (spec §9)', () => {
     const client = fakeClient({ accountCredential: async () => { throw new ApiError(400, { ok: false, error: 'key-rejected' }); } });
     sheet(client);
     pasteAndSave();
-    expect(await screen.findByText('That token was refused (HTTP 401). lane-c keeps its old token.')).toBeInTheDocument();
+    expect(await screen.findByText('That token was refused. lane-c keeps its old token.')).toBeInTheDocument();
     expect(client.accountCredential).toHaveBeenCalledWith('lane-c', { credential: TOKEN });
     // As it was: no check, no restart list, no revoke item; the field is back, and empty.
     expect(client.accountCheck).not.toHaveBeenCalled();
@@ -235,6 +235,14 @@ describe('Replace token by paste (spec §9)', () => {
     pasteAndSave();
     await waitFor(() => expect(client.accountCheck).toHaveBeenCalledWith('lane-c'));
     expect(await screen.findByText(line)).toBeInTheDocument();
+    expect(screen.queryByText(LEDGER.checked)).toBeNull();
+  });
+
+  it('a probe that passed over a seed that refused says Not ready, never first-run setup verified (D-8051 (18))', async () => {
+    const client = fakeClient({ accountCheck: async () => ({ ok: true as const, lane: SEED_UNVERIFIED }) });
+    sheet(client);
+    pasteAndSave();
+    expect(await screen.findByText(SEED_UNVERIFIED_LINE)).toBeInTheDocument();
     expect(screen.queryByText(LEDGER.checked)).toBeNull();
   });
 

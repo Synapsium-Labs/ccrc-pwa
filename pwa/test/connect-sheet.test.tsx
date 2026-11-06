@@ -18,7 +18,7 @@ import {
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { createFleetStore, useFleetStore } from '../src/stores/fleet';
-import { FAILED_CHECKS } from './failedChecks';
+import { FAILED_CHECKS, SEED_UNVERIFIED, SEED_UNVERIFIED_LINE } from './failedChecks';
 
 const lane = (id: string, hue: RosterWire['hue']): RosterWire => ({
   id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'token',
@@ -532,6 +532,18 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     await waitFor(() => expect(screen.getByTestId('connect-alert')).toHaveTextContent(line));
   });
 
+  it('a probe that passed over a seed that refused says first-run setup is not verified, and the alert says it (D-8051 (18))', async () => {
+    const client = fakeClient({ accountCheck: async () => ({ ok: true as const, lane: SEED_UNVERIFIED }) });
+    sheet({ client });
+    toMethod();
+    paste();
+    addLane();
+    expect(await screen.findByRole('button', { name: 'Turn it on' })).toBeDisabled();
+    expect(document.querySelector('.acct-ledger')).toHaveTextContent(SEED_UNVERIFIED_LINE);
+    expect(document.querySelector('.acct-ledger')).not.toHaveTextContent('first-run setup verified');
+    await waitFor(() => expect(screen.getByTestId('connect-alert')).toHaveTextContent(SEED_UNVERIFIED_LINE));
+  });
+
   it('a check that never answers holds Turn it on the same way, and says so', async () => {
     const client = fakeClient({ accountCheck: async () => { throw new TypeError('network'); } });
     sheet({ client });
@@ -552,7 +564,7 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     toMethod();
     paste();
     addLane();
-    await shown('That token was refused (HTTP 401). Nothing was saved.');
+    await shown('That token was refused. Nothing was saved.');
     expect(document.body.textContent).not.toContain('PLANTED-TEXT');
     expect(screen.getByTestId('connect-alert')).toHaveTextContent('That token was refused');
   });
@@ -560,21 +572,20 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
 
 describe('checkedLine: the one reader of an answered check (D-8051 (12))', () => {
   const at = Date.now();
-  const verdict = (v: string): Pick<LaneWire, 'check'> => ({ check: { verdict: v, at } });
+  const verdict = (v: string): Pick<LaneWire, 'check' | 'ready'> => ({ check: { verdict: v, at }, ready: v === 'ok' });
 
   it("says Checked only for a verdict of `ok`", () => {
     expect(checkedLine(verdict('ok'))).toBe(LEDGER.checked);
   });
 
-  it.each(FAILED_CHECKS)('%s reads as what it found', (_name, failed, line) => {
-    expect(checkedLine(failed)).toBe(line);
+  it('says first-run setup is verified only of a lane that is ready (D-8051 (18))', () => {
+    expect(checkedLine(SEED_UNVERIFIED)).toBe(SEED_UNVERIFIED_LINE);
+    expect(checkedLine({ ...SEED_UNVERIFIED, notReadyReason: 'no-credential' }))
+      .toBe('✓ Checked: one test reply. Not ready: no credential is recorded for it. Give it one on the fleet host, then check it.');
   });
 
-  it("names the classifier's other two findings, and says nothing it did not learn", () => {
-    expect(checkedLine(verdict('timeout')))
-      .toBe("The check did not pass: the lane didn't answer in time. Nothing was learned about the credential; it may be fine.");
-    expect(checkedLine(verdict('unknown')))
-      .toBe('The check did not pass: it got no clear answer. Nothing was learned about the credential; it may be fine.');
+  it.each(FAILED_CHECKS)('%s reads as what it found', (_name, failed, line) => {
+    expect(checkedLine(failed)).toBe(line);
   });
 
   it("a word it doesn't know is not a pass, and an inherited name is not a word", () => {

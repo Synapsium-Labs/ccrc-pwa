@@ -983,7 +983,9 @@ function classifyProbe(row, j, exit) {
   if (j.is_error === true && j.terminal_reason === 'api_error') {
     const status = j.api_error_status ?? null;
     const text = typeof j.result === 'string' ? j.result : '';
-    if (status === 401) return row('auth-dead', text || 'the endpoint refused the credential (401)');
+    // 403 TOO (D-8051 (16)): "OAuth token has been revoked" answers it, and a provider that turned the credential down
+    // is the one thing `unknown`'s "ccrc can't read it" would be false about.
+    if (status === 401 || status === 403) return row('auth-dead', text || `the endpoint refused the credential (${status})`);
     if (status === null && /^API Error: (Connection refused|getaddrinfo|.*\b5\d\d\b)/.test(text)) {
       return row('unreachable', text);
     }

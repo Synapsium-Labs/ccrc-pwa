@@ -21,7 +21,7 @@ import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
-import { FAILED_CHECKS } from './failedChecks';
+import { FAILED_CHECKS, SEED_UNVERIFIED, SEED_UNVERIFIED_LINE } from './failedChecks';
 import { fleetSession } from './fleetFixture';
 
 const ATTEMPT = 'd'.repeat(32);
@@ -233,6 +233,16 @@ describe('Switch to a long-lived token (spec §9, N5)', () => {
     await waitFor(() => expect(document.querySelector('.acct-ledger')).toHaveTextContent(line));
     expect(document.querySelector('.acct-ledger')).not.toHaveTextContent(LEDGER.checked);
     await waitFor(() => expect(screen.getByTestId('switch-alert')).toHaveTextContent(line));
+  });
+
+  it('a probe that passed over a seed that refused says Not ready, and the alert says it (D-8051 (18))', async () => {
+    const b = fakeBox();
+    b.client.accountCheck.mockResolvedValue({ ok: true, lane: SEED_UNVERIFIED });
+    sheet(b);
+    await runToDone(b, 'setup-token');
+    await waitFor(() => expect(document.querySelector('.acct-ledger')).toHaveTextContent(SEED_UNVERIFIED_LINE));
+    expect(document.querySelector('.acct-ledger')).not.toHaveTextContent(LEDGER.checked);
+    await waitFor(() => expect(screen.getByTestId('switch-alert')).toHaveTextContent(SEED_UNVERIFIED_LINE));
   });
 
   it('with no session on the lane, the sign-out is a plain button from the start', async () => {

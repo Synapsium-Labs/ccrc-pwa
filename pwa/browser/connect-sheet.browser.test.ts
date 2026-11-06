@@ -271,7 +271,7 @@ describe('the Add account door and the connect sheet at every width and skin (D-
           notice: document.querySelector('[data-frame="method"] .acct-notice')?.textContent ?? '',
           field: document.querySelector<HTMLInputElement>('.acct-secret input')?.value ?? null,
         }));
-        expect(refused.notice).toBe('That token was refused (HTTP 401). Nothing was saved.');
+        expect(refused.notice).toBe('That token was refused. Nothing was saved.');
         expect(refused.field, 'a refused paste re-presents an empty field').toBe('');
         await step(page, 'refused paste');
 
@@ -289,7 +289,7 @@ describe('the Add account door and the connect sheet at every width and skin (D-
           const b = line.getBoundingClientRect();
           return { text: line.textContent, inside: b.left >= panel.left && b.right <= panel.right, sheet: document.querySelector('.sheet-panel')!.textContent ?? '' };
         });
-        expect(failed.text).toBe("The check did not pass: it couldn't reach the provider. Nothing was learned about the credential; it may be fine.");
+        expect(failed.text).toBe("The check did not pass: it couldn't reach the provider, or got a server error back. Nothing was learned about the credential; it may be fine.");
         expect(failed.inside, 'the sentence stays inside the sheet').toBe(true);
         expect(failed.sheet).not.toContain('Checked');
         await step(page, 'a check that did not pass');

@@ -190,6 +190,24 @@ export function routeOutcomeOf(r: AccountOpResult): RouteOutcome {
   }
 }
 
+/** What one `check` run measured, off the verb's own answer (`health`), or null for an answer that doesn't say. Pure. */
+export function checkRunOf(r: AccountOpResult): { verdict: string; at: number } | null {
+  if (r.kind !== 'exited') return null;
+  const health = answerOf(r.stdout)?.['health'];
+  if (typeof health !== 'object' || health === null) return null;
+  const { verdict, measuredAt } = health as Record<string, unknown>;
+  const at = typeof measuredAt === 'string' ? Date.parse(measuredAt) : Number.NaN;
+  return typeof verdict === 'string' && Number.isFinite(at) ? { verdict, at } : null;
+}
+
+/** Whether the lane-state file holds a run: its measurement, or a later one. The verb's write is best-effort, so a full
+ *  disk leaves exit 0 over a file that still says the last check, and that check must not read as this one (D-8051 (17)).
+ *  Pure. */
+export function checkOnRecord(run: { verdict: string; at: number } | null, check: LaneWire['check']): boolean {
+  if (run === null || check === undefined) return false;
+  return check.at > run.at || (check.at === run.at && check.verdict === run.verdict);
+}
+
 export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDeps): void {
   const act = (sub: LaneRouteSub) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     // The gate first: before the id is read, before the fleet is asked. It sets `no-store` on every answer.
@@ -199,7 +217,8 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     if (typeof id !== 'string' || !ACCOUNT_ID_RE.test(id)) return refuseRoute(reply, 'bad-account-id');
     const lane = deps.laneOf(id);
     if (lane === null) return refuseRoute(reply, 'not-found');
-    const outcome = routeOutcomeOf(await deps.ops.run(sub, id, {}));
+    const ran = await deps.ops.run(sub, id, {});
+    const outcome = routeOutcomeOf(ran);
     deps.audit?.write({
       act: sub, laneId: id, provider: lane.provider,
       ...(outcome.kind === 'ok' ? { outcome: 'ok' } : { outcome: outcome.audit, code: outcome.word }),
@@ -209,7 +228,10 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     const v = await deps.view(id);
     // The roster lost the lane between the act and the read (a removal raced it): say so rather than answer a lane.
     if (v.lane === null) return refuseRoute(reply, 'not-found');
-    if (sub === 'check') return { ok: true, lane: v.lane } satisfies AccountCheckAnswer;
+    if (sub === 'check') {
+      if (!checkOnRecord(checkRunOf(ran), v.lane.check)) return refuseRoute(reply, 'check-unrecorded');
+      return { ok: true, lane: v.lane } satisfies AccountCheckAnswer;
+    }
     return { ok: true, roster: v.roster, lane: v.lane } satisfies AccountSwitchAnswer;
   };
   app.post('/api/accounts/:id/check', act('check'));
