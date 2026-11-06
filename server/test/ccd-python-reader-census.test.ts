@@ -23,6 +23,11 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
  * already write files of their own, so the same check could not tell a new transcript writer among them; their rows say
  * in words what they do.
  *
+ * The interpreter match is textual as well. It does not see a relative script (`python3 lib/x.py`), a quoted "python3",
+ * a redirect before the script (`python3 2>/dev/null <<PY`), or an interpreter held in a variable or run by a helper
+ * such as `_pr_py`. `ccd/lib/ccrc-settings.sh` is not one of `CCD_LIBS`, so `ccdSource` leaves its functions out. Code
+ * outside a function is not a site of its own: it counts toward the function above it, or is dropped before the first.
+ *
  * WHEN THIS GOES RED ON A NEW READER, there are two ways out:
  *   1. Read through `ccd/lib/transcript.jq` instead, which needs no row.
  *   2. The escape: add a row below whose `d` is a D-number defined in `docs/superpowers/plans/`, with a `why` a reader
@@ -67,7 +72,8 @@ const ROWS: readonly Row[] = [
 ];
 
 const FUNCTION_HEAD = /^([A-Za-z_][\w-]*)\(\) *\{/;
-const PYTHON_RUN = /(?:^|[\s|(&;=])(?:[^\s'"]*\/)?python[\d.]*\s+(?:-|\/|"|'|\$)/m;
+/** The interpreter word, then what starts a run: a flag, a path, a quote, a variable, a heredoc or other stdin, or a line continuation. */
+const PYTHON_RUN = /(?:^|[\s|(&;=`])(?:[^\s'"]*\/)?python[\d.]*(?:\s*<|\s+(?:-|\/|"|'|\$|~|\\\n))/m;
 const TRANSCRIPT_GRAMMAR = /\.jsonl|transcript|isApiErrorMessage|<command-|["'](?:assistant|user|message)["']|\b(?:stop_reason|sessionId|parentUuid|tool_use|tool_result)\b/i;
 const PROGRAM_NAMES_TRANSCRIPT = /\.jsonl|transcript|isApiErrorMessage|parentUuid/i;
 const WRITES_FILE = /os\.(?:replace|rename)\(|shutil\.move\(|\.write_(?:text|bytes)\(|open\([^\n]*,\s*["'](?:[wa]|r\+|rb\+)/;
@@ -202,6 +208,30 @@ describe('the Python transcript readers in ccd (D-8070)', () => {
     expect(judgeText(tree, ROWS, wordsOnly).problems.join('\n')).toMatch(/^lib\/new-reader\.py reads/);
   });
 
+  it.each([
+    ['a quoted heredoc', `python3 <<'PY'\nprint(json.loads(l)["message"])\nPY`],
+    ['a bare heredoc', 'python3 <<PY\nprint(1)\nPY'],
+    ['a heredoc with no space', `python3<<'PY'\nprint(1)\nPY`],
+    ['a here-string', 'python3 <<< "$code"'],
+    ['a process substitution', 'python3 <(printf "%s" "$code")'],
+    ['a script under home', 'python3 ~/x.py'],
+    ['a line continuation', `python3 \\\n    -c 'print(1)'`],
+    ['backticks', "x=`python3 -c 'print(1)'`"],
+  ])('reds on a new reader run through %s', (_form, run) => {
+    const fn = `${tree}\n_limit_rows_new() {\n  F="$(_transcript_path "$1")" ${run}\n}\n`;
+    expect(judgeText(fn).problems.join('\n')).toMatch(/^_limit_rows_new reads/);
+  });
+
+  it.each([
+    ['a relative script', 'python3 lib/x.py'],
+    ['a quoted interpreter', `"python3" -c 'print(1)'`],
+    ['a redirect before the script', `python3 2>/dev/null <<'PY'\nprint(1)\nPY`],
+    ['an interpreter in a variable', `"$py" -c 'print(1)'`],
+  ])('does not see %s, which the pull request lists as a limit', (_form, run) => {
+    const fn = `${tree}\n_limit_rows_new() {\n  F="$(_transcript_path "$1")" ${run}\n}\n`;
+    expect(judgeText(fn).problems).toEqual([]);
+  });
+
   it('reads a function to its next head, past a column-0 brace in a heredoc', () => {
     const fn = `${tree}\n_new_reader() {\n  python3 - <<'PY'\nd = {\n}\nprint(d["message"])\nPY\n}\n`;
     expect(judgeText(fn).problems.join('\n')).toMatch(/^_new_reader reads/);
@@ -220,6 +250,12 @@ describe('the Python transcript readers in ccd (D-8070)', () => {
     expect(judgeFixture(fixtureCcd())).toEqual(dropped);
     expect(judgeFixture(fixtureCcd(fixtureFn('_fixture_renamed', JQ_BODY)))).toEqual(dropped);
     expect(judgeFixture(ported, FIXTURE_ROWS.filter((r) => r.name !== LEAVING))).toEqual(dropped);
+  });
+
+  it('holds the banner row as the leaving one for as long as that reader stands', () => {
+    const banner = '_transcript_limit_banner';
+    if (!measure(tree, programs).some((s) => s.name === banner)) return;
+    expect(ROWS.filter((r) => r.leaving).map((r) => r.name)).toEqual([banner]);
   });
 
   it('counts a port that moves the Python under another name as a new reader', () => {
