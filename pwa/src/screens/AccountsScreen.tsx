@@ -71,6 +71,7 @@ import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, ros
 import { api, apiErrorText } from '../lib/api';
 import { navigate, useLocation } from '../lib/router';
 import { laneParam, resumeParam, sessionPath } from '../lib/routes';
+import { useArrival } from '../lib/useArrival';
 import { backToFleet } from '../command/door';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
@@ -245,31 +246,14 @@ export function AccountsScreen(): ReactNode {
   const order = troubleFirst(rowOrder(roster, accounts ?? []), (w) => answerOf(w).word);
 
   // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
-  // lane's row into view, focuses it and marks it with one accent edge. A PASSIVE effect, never a layout one: the
-  // shell's pane reset to the top (app.tsx) is a layout effect that runs on every path or search change, and layout
-  // effects run child before parent, so an arrival made in a layout effect would be undone by it. It is keyed on the
-  // lane AND on whether the lane's row exists, because the rows are drawn only once the poll lands (`order` is empty
-  // until then): an arrival at mount finds no row, and the same effect finishes the job when the poll brings it.
-  // `arrivedAt` holds the last lane arrived at, so each value scrolls once and a re-render never moves focus again;
-  // a second `?lane=` on the same mount is a new value and arrives once. An unknown lane arrives nowhere.
+  // lane's row into view, focuses it and marks it with one accent edge, through `useArrival` (the mechanism the runs board's
+  // `?run=` shares, chat reading Task L, D-8062). The rows are drawn only once the poll lands (`order` is empty until then),
+  // so the lane's row exists only from then. An unknown lane arrives nowhere.
   const search = useLocation().search;
   const lane = laneParam(search);
   const laneRowExists = lane !== null && accounts != null && order.includes(lane);
   const rowRefs = useRef(new Map<string, HTMLElement>());
-  const arrivedAt = useRef<string | null>(null);
-  const [arrived, setArrived] = useState<string | null>(null);
-  useEffect(() => {
-    // The record follows the param: no lane, or a lane with no row, clears the edge and the ref, so a later return to
-    // the lane that was arrived at arrives again (the shell's reset will have put the pane back at the top).
-    if (!laneRowExists || lane === null) { arrivedAt.current = null; setArrived(null); return; }
-    if (arrivedAt.current === lane) return;
-    const row = rowRefs.current.get(lane);
-    if (row === undefined) return;
-    arrivedAt.current = lane;
-    row.scrollIntoView({ block: 'start' });
-    row.focus({ preventScroll: true });
-    setArrived(lane);
-  }, [lane, laneRowExists]);
+  const arrived = useArrival(lane, laneRowExists, rowRefs.current);
 
   // The account-pool editor — one sheet, retargeted per tap, on the exact
   // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
