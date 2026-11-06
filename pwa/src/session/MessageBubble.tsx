@@ -2,14 +2,17 @@
 // right-aligned raised bubbles with a mono receipt. Assistant turns are
 // output: full-width flush prose with rendered markdown (code blocks in dark
 // wells that scroll inside the bubble). System events are centered dividers.
-import { memo, useState, type ReactNode } from 'react';
+import { memo, useContext, useState, type ReactNode } from 'react';
 import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
 import { isImageClip, splitClipPaths } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
 import { resetClock } from '../lib/clock';
 import { timeOf } from '../lib/format';
-import { ChatMarkdown, openExternal } from '../lib/markdown';
+import { markRuns } from '../lib/chatMarks';
+import { refHref, type ChatRefContext } from '../lib/chatRefs';
+import { ChatLink, ChatMarkdown, openExternal } from '../lib/markdown';
+import { ChatRefsContext } from './chatRefsContext';
 import './chat.css';
 
 export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'system' }>;
@@ -17,17 +20,25 @@ export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'sy
 const URL_SPLIT = /(https?:\/\/[^\s]+)/g;
 const isUrl = (s: string): boolean => /^https?:\/\//.test(s);
 
-/** Make bare URLs in plain user text tappable (they open externally). */
-export function linkify(text: string): ReactNode[] {
-  return text.split(URL_SPLIT).map((part, i) =>
-    isUrl(part) ? (
-      <a key={i} href={part} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, part)}>
-        {part}
-      </a>
-    ) : (
-      part
-    ),
-  );
+/** Make bare URLs in plain user text tappable (they open externally). With a context (chat reading Task L, D-8062; spec
+ *  R9), the text between them is read by `markRuns`, and each name `refHref` resolves becomes a link through `ChatLink`; every
+ *  other run, a status word included, stays text, because user text carries no labels. Without a context, today's output. */
+export function linkify(text: string, ctx: ChatRefContext | null = null): ReactNode[] {
+  return text.split(URL_SPLIT).flatMap((part, i): ReactNode[] => {
+    if (isUrl(part)) {
+      return [
+        <a key={i} href={part} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, part)}>
+          {part}
+        </a>,
+      ];
+    }
+    if (ctx === null) return [part];
+    return markRuns(part).map((run, j) => {
+      if (run.kind !== 'mark') return run.text;
+      const target = refHref(run.mark, ctx);
+      return target === null ? run.mark.text : <ChatLink key={`${i}.${j}`} target={target}>{run.mark.text}</ChatLink>;
+    });
+  });
 }
 
 // A /compact turn injects a long "This session is being continued …/Summary:"
@@ -171,6 +182,8 @@ export const MessageBubble = memo(function MessageBubble({
    *  absorbs. */
   day?: string;
 }): ReactNode {
+  // The session's name context (Task L): read here, above every branch, so the hook order never changes.
+  const refs = useContext(ChatRefsContext);
   if (event.kind === 'system') {
     // D-2228: the harness's resume pair. The prompt line is neutral (whether it
     // was submitted is what the NEXT row says); the padding line IS the stall —
@@ -259,7 +272,7 @@ export const MessageBubble = memo(function MessageBubble({
     return (
       <>
         {paths.length > 0 && <ClipThumbs id={id} paths={paths} />}
-        {rest !== '' && <div className="msg-user">{linkify(rest)}</div>}
+        {rest !== '' && <div className="msg-user">{linkify(rest, refs)}</div>}
         <p className="msg-receipt msg-receipt--ok">
           {time} <b aria-label="delivered">✓</b>
         </p>

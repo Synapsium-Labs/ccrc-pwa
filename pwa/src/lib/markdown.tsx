@@ -12,6 +12,9 @@
 // where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11). W5h-b
 // retired r10's word bound and the main-thread highlight bounds beside it: highlight.js runs only in the worker.
 // Desktop polish Task C7: chat's remark plugins are one module constant; `ChatMarkdown` is memoised on its props.
+// Chat reading Task L (D-8062): a mark resolves to a link here, at render time, through `ChatRef` (`refHref` with the context
+// `ChatRefsContext` carries); `ChatLink` is chat's one anchor, external (a new tab, no opener) or in-app (`inAppClick`); a
+// Markdown link the console routes (`routedHref`) moves within the app; an inline code span whose whole text is one name links.
 // W5h-a Task 6 (base spec 2026-10-01 section 4.10 "Highlighting"): this file no longer imports highlight.js. The grammar registration moved to `highlightGrammars.ts` (the highlight worker's closure), `LANG_LABEL` and `codeLanguage` to `highlightNames.ts`, the cache into the worker. `CodeBlock` reads a highlight store (`PreHighlightContext`) with `useSyncExternalStore`, requests in an effect, renders plain first, and draws through `HighlightedCode`, the one `dangerouslySetInnerHTML` in `pwa/src`, which inserts only a value `isCheckedHighlightHtml` accepts. `ChatMarkdown` holds one store per message on `chatHighlighter`.
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,7 +25,11 @@ import React, {
 } from 'react';
 import { remarkAlerts } from './remarkAlerts';
 import { remarkChatMarks } from './remarkChatMarks';
-import { MARK_ATTR } from './chatMarks';
+import { MARK_ATTR, isMarkKind, wholeMark, type Mark } from './chatMarks';
+import { refHref, type RefTarget } from './chatRefs';
+import { routedHref } from './routes';
+import { inAppClick } from '../fleet/settingsText';
+import { ChatRefsContext } from '../session/chatRefsContext';
 import { LANG_LABEL, codeLanguage } from './highlightNames';
 import { HighlighterContext, useChatHighlightStore } from './highlighterContext';
 import {
@@ -241,6 +248,31 @@ function SharedPre({ children, node }: { children?: ReactNode; node?: HastElemen
  *  `markdown-task-label.test.tsx` holds both renderers and the Prose story's mirror to these words. */
 export const TASK_CHECKBOX_NAME = { checked: 'done', unchecked: 'to do' } as const;
 
+/** Whether a `code` element is block code (a fenced block's, left to `CodeBlock`), not an inline span. */
+const isBlockCode = (className: string | undefined, text: string): boolean => /language-/.test(className ?? '') || text.includes('\n');
+
+/** Code: block code as itself (`CodeBlock` draws it), an inline keystroke as kbd chips, any other inline span as `md-code`. */
+function SharedCode({ className, children }: { className?: string; children?: ReactNode }): ReactNode {
+  const text = String(children ?? '');
+  if (isBlockCode(className, text)) {
+    return <code className={className}>{children}</code>; // block code → left to CodeBlock
+  }
+  const keys = keystrokeParts(text);
+  if (keys) {
+    return (
+      <span className="kbd-combo">
+        {keys.map((k, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="kbd-plus">+</span>}
+            <kbd>{k}</kbd>
+          </React.Fragment>
+        ))}
+      </span>
+    );
+  }
+  return <code className="md-code">{children}</code>;
+}
+
 /** The components chat and the Docs screen share: inline code (kbd chips), fenced code (on the highlight store `PreHighlightContext` carries),
  *  tables, and task-list checkboxes named by their state (the markup is otherwise
  *  remark-gfm's: still disabled, still the item's or its first paragraph's first child, which prose.css relies on). */
@@ -249,29 +281,31 @@ export const SHARED_COMPONENTS: Components = {
     if (props.type !== 'checkbox') return <input {...props} />;
     return <input {...props} aria-label={props.checked ? TASK_CHECKBOX_NAME.checked : TASK_CHECKBOX_NAME.unchecked} />;
   },
-  code({ className, children }) {
-    const text = String(children ?? '');
-    if (/language-/.test(className ?? '') || text.includes('\n')) {
-      return <code className={className}>{children}</code>; // block code → left to CodeBlock
-    }
-    const keys = keystrokeParts(text);
-    if (keys) {
-      return (
-        <span className="kbd-combo">
-          {keys.map((k, i) => (
-            <React.Fragment key={i}>
-              {i > 0 && <span className="kbd-plus">+</span>}
-              <kbd>{k}</kbd>
-            </React.Fragment>
-          ))}
-        </span>
-      );
-    }
-    return <code className="md-code">{children}</code>;
-  },
+  code: SharedCode,
   pre: SharedPre,
   table: ({ children }) => <TableWrap>{children}</TableWrap>,
 };
+
+/** Chat's one anchor (chat reading Task L, D-8062). External: a new tab with no opener, through `openExternal` (a bare `<a>` in a
+ *  standalone PWA would navigate the app itself). In-app: a path inside the console, which a plain click opens within the app and
+ *  a modified one leaves to the browser (`inAppClick`). */
+export function ChatLink({ target, children }: { target: RefTarget; children?: ReactNode }): ReactNode {
+  const { href, external } = target;
+  if (!external) return <a href={href} onClick={inAppClick(href)}>{children}</a>;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
+      {children}
+    </a>
+  );
+}
+
+/** A recognised name: a link where `refHref` resolves it with the session's context (`ChatRefsContext`), else its text only. No
+ *  context (a chat with no session around it) or no address keeps the name plain text, never a link that goes nowhere. */
+export function ChatRef({ mark, children }: { mark: Mark; children?: ReactNode }): ReactNode {
+  const ctx = useContext(ChatRefsContext);
+  const target = ctx === null ? null : refHref(mark, ctx);
+  return target === null ? <>{children}</> : <ChatLink target={target}>{children}</ChatLink>;
+}
 
 /** An image, as a link that opens it full-size outside the app.
  *
@@ -297,10 +331,11 @@ function ImageLink({ href, alt }: { href: string | undefined; alt: string }): Re
 }
 
 /** Open in the external browser (a bare `<a>` in a standalone PWA would try to
- *  navigate the app itself), and render image URLs inline as tap-to-open images,
+ *  navigate the app itself), except a path the console routes, which moves within
+ *  the app; and render image URLs inline as tap-to-open images,
  *  except a source `isRefusedChatImageSrc` refuses, which stays a plain link, or,
  *  when the url transform left it empty, the image's alt text. A mark's span
- *  draws its text only. */
+ *  draws its name as a link when the session's context resolves it, else its text. */
 export const CHAT_COMPONENTS: Components = {
   ...SHARED_COMPONENTS,
   a({ href, children }) {
@@ -308,11 +343,10 @@ export const CHAT_COMPONENTS: Components = {
       const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
       return <ImageLink href={href} alt={name} />;
     }
-    return (
-      <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
-        {children}
-      </a>
-    );
+    // A path the console routes moves within the app (Task L); anything else, an unrouted or protocol-relative path included,
+    // keeps the external arm.
+    const inApp = href === undefined ? null : routedHref(href);
+    return <ChatLink target={inApp === null ? { href: href ?? '', external: true } : { href: inApp, external: false }}>{children}</ChatLink>;
   },
   img({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;
@@ -322,19 +356,29 @@ export const CHAT_COMPONENTS: Components = {
       // empty link and never the source as written (review 408, F6). A blank destination (`![x](< >)`) never
       // arrives blank: the parse percent-encodes it (`%20`), a path-relative URL that renders as the ordinary link.
       if (!href) return alt ? <>{alt}</> : null;
-      return (
-        <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
-          {href}
-        </a>
-      );
+      return <ChatLink target={{ href, external: true }}>{href}</ChatLink>;
     }
     return <ImageLink href={href} alt={alt ?? ''} />;
   },
+  // An inline code span whose whole text is one recognised name links as that name and keeps its code look (R13, Task L);
+  // block code, a keystroke and any other span draw as the shared arm draws them.
+  code(props) {
+    const drawn = <SharedCode className={props.className}>{props.children}</SharedCode>;
+    const text = String(props.children ?? '');
+    const mark = isBlockCode(props.className, text) ? null : wholeMark(text);
+    return mark === null ? drawn : <ChatRef mark={mark}>{drawn}</ChatRef>;
+  },
   // Chat's marks (chat reading Task M, D-8060): a span `remarkChatMarks` drew for a name carries its kind and id and no
-  // URL, and renders its text only, so an unresolved name is plain text. Task L resolves it here. Any other span (a
-  // status label) renders as itself.
+  // URL. Task L resolves it here through `ChatRef`, so an unresolved name is plain text. Any other span (a status label)
+  // renders as itself.
   span({ node: _node, ...props }) {
-    if (Object.hasOwn(props, MARK_ATTR.kind)) return <>{props.children}</>;
+    if (Object.hasOwn(props, MARK_ATTR.kind)) {
+      const attrs = props as Record<string, unknown>;
+      const kind = attrs[MARK_ATTR.kind];
+      const id = attrs[MARK_ATTR.id];
+      if (typeof kind !== 'string' || !isMarkKind(kind) || typeof id !== 'string') return <>{props.children}</>;
+      return <ChatRef mark={{ kind, id, text: nodeText(props.children) }}>{props.children}</ChatRef>;
+    }
     return <span {...props} />;
   },
 };
