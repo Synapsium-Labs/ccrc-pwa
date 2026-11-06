@@ -29,6 +29,10 @@ export interface WaitingScreenProps {
   readonly runs: readonly RunSummary[] | null;
   /** Why no list will come (this box has no coordination database), in words; shown in place of the waiting line. */
   readonly unavailable?: string | null;
+  /** Present when the list or the rows given are the device's saved copy, not live (console speed, Task C4; spec §2.6,
+   *  D16): the line saying so, in words. The screen draws what it is given with this line above it, where the waiting line
+   *  stands with nothing to draw. Absent, the list is live. */
+  readonly notCurrent?: string;
   /** The page clock, epoch ms: every age is read against it, so the screen reads no clock of its own. */
   readonly now: number;
   /** The side rail's filter as the URL names it (plan PL9): a programme's slug, `NO_PROGRAMME_FILTER` for the sessions in no
@@ -192,6 +196,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   return (
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
+      {props.notCurrent !== undefined && <p className="wl-note" role="status" data-current="false">{props.notCurrent}</p>}
       {empty
         ? <p className="wl-note">{EMPTY_WORD}</p>
         : (

@@ -15,6 +15,12 @@
 // The fleet's rows and runs count only once their frames have landed: before that they are the offline snapshot's, which
 // is not a fact this page has heard, so the screens are handed `null` and say they are waiting (the Waiting on you badge
 // reads them the same way).
+//
+// A COLD START DRAWS THE DEVICE'S COPY (console speed, Task C4; spec §2.6, Figure 8, D16). Where the page would draw only
+// the waiting line, it draws the list last saved on this device (`waitingSaved`) and the rows the fleet snapshot hydrated,
+// with a line saying they are not current; an item drawn from the copy has its acts disabled. `savedCopy.ts` decides which
+// to draw; a box with no coordination database says so first, as before. The copy never reaches `waiting`, so the item's
+// step strip and the column beside it (`useGroups`) read the live list only: on a copy the strip has the way back alone.
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode, Ref } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
@@ -32,11 +38,12 @@ import { ItemView } from './ItemView';
 import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
 import {
   BESIDE_LABEL, BETWEEN_ITEMS_LABEL, COMBINED_LIST, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
-  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, backLabel, fromWord, groupByProgramme, itemPlace,
+  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, SAVED_ROWS_WORD, backLabel, fromWord, groupByProgramme, itemPlace, savedListWords,
   goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
 import { ListGroup, WaitingScreen } from './WaitingScreen';
+import { actsOpen, itemSource, listSource } from './savedCopy';
 import { refetchWaiting } from './waitingStore';
 import './ledgers.css';
 
@@ -97,12 +104,20 @@ export function useUnavailable(store: FleetStore, listed: boolean): string | nul
  *  opened under the filter lands on the filtered list (plan PL9). The URL is the filter's one home: the screen keeps no copy. */
 export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }): ReactNode {
   const view = store((s) => s.waiting);
+  const saved = store((s) => s.waitingSaved);
+  const deviceRows = store((s) => s.sessions);
   const { sessions, runs } = useHeard(store);
   const unavailable = useUnavailable(store, view !== null);
   const { search } = useLocation();
   const programme = new URLSearchParams(search).get(PROGRAMME_FILTER_QUERY);
+  const now = Date.now();
+  // Figure 8: live as today; else a box with no coordination database says so; else the copy, marked; else the waiting line.
+  const source = unavailable === null ? listSource({ view, sessions }, saved, deviceRows) : null;
+  const drawn = source !== null && source.kind !== 'none' && source.kind !== 'live' ? source : null;
+  const notCurrent = drawn === null ? {} : { notCurrent: drawn.kind === 'saved-list' ? savedListWords(drawn.savedAt, now) : SAVED_ROWS_WORD };
   return (
-    <WaitingScreen view={view} sessions={sessions} runs={runs} now={Date.now()} unavailable={unavailable} programme={programme}
+    <WaitingScreen view={drawn?.view ?? view} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
+                   programme={programme} {...notCurrent}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
                    onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
   );
@@ -301,6 +316,7 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
  *  every way back is the same one (fix round 1, F7). */
 export function ItemRoute({ id, store = useFleetStore }: { id: number | null; store?: FleetStore }): ReactNode {
   const view = store((s) => s.waiting);
+  const saved = store((s) => s.waitingSaved);
   const { runs } = useHeard(store);
   const groups = useGroups(store);
   const unavailable = useUnavailable(store, view !== null);
@@ -308,7 +324,11 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   const list = useSettledList(named, groups);
   const live = id === null || groups === null ? null : itemPlace(id, named, groups);
   const place = useKeptPlace(id, named, live);
-  const item = id === null || view === null ? null : view.items.find((i) => i.id === id) ?? view.cleared.find((i) => i.id === id) ?? null;
+  // The list the item is read from: the live one, else the device's copy unless this box has said it has no list (Figure 8).
+  const source = unavailable === null ? itemSource(view, saved) : itemSource(view, null);
+  const drawnList = source.kind === 'none' ? null : source.view;
+  const item = id === null || drawnList === null ? null : drawnList.items.find((i) => i.id === id) ?? drawnList.cleared.find((i) => i.id === id) ?? null;
+  const now = Date.now();
   const back = place?.list ?? list;
   const way = backWay(named, back, runs);
   // The list the strip names, for the column beside the item (`useShownList`), once a list has been heard.
@@ -320,7 +340,8 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
     return () => publishShownList(null);
   }, [visit, backWord]);
   let body: ReactNode;
-  if (id !== null && view === null) {
+  // An item the copy does not hold is not called gone: only the live list can say that, so the page keeps waiting.
+  if (id !== null && view === null && (source.kind === 'none' || item === null)) {
     body = unavailable !== null
       ? <p className="wl-note" role="alert">{unavailable}</p>
       : <p className="wl-note" role="status">{NO_FRAME_WORD}</p>;
@@ -328,7 +349,7 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
     body = <p className="wl-note">{GONE_WORD}</p>;
   } else {
     body = (
-      <ItemView key={item.id} item={item} now={Date.now()} programmeLive={programmeIsLive(item.program, runs)}
+      <ItemView key={item.id} item={item} now={now} programmeLive={programmeIsLive(item.program, runs)} current={actsOpen(source)}
                 programme={{
                   name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,
                   // The band's doors (desktop-polish PL10, D-7952; D26): the programme's Goals page, and its pinned spec in the Docs reader.
@@ -350,6 +371,9 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   return (
     <div className="wl-route">
       <ItemNav id={id} back={way} place={place} left={place !== null && live === null} title={item?.title ?? ''} />
+      {source.kind === 'saved' && item !== null && (
+        <p className="wl-note" role="status" data-current="false">{savedListWords(source.savedAt, now)}</p>
+      )}
       {item === null ? <div className="wl">{body}</div> : body}
     </div>
   );

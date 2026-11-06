@@ -200,6 +200,16 @@ export function ageWords(at: number, now: number): string {
   return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
 
+/** The line over a list drawn from the device's copy (console speed, Task C4; spec §2.6, D16): when it was saved, and that
+ *  it is not current. It stands where the waiting line stands with no copy. */
+export function savedListWords(savedAt: number, now: number): string {
+  return `Saved on this device ${ageWords(savedAt, now)}, not current. Waiting for live data…`;
+}
+/** The line over the live list drawn with the device's rows, before the fleet's live rows have landed. */
+export const SAVED_ROWS_WORD = 'Sessions as last saved on this device, not current. Waiting for live data…';
+/** Beside an item's acts while it is drawn from the device's copy: why they are off. */
+export const NOT_CURRENT_ACTS_WORD = 'You can act on this item once live data arrives.';
+
 // ── moving between items (plan PL9; spec §2 "Moving between items", D23) ───────────────────────────────────────────
 //
 // An opened item steps to the previous and next item OF THE LIST IT WAS OPENED FROM, in that list's own order and filter. There
