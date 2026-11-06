@@ -7836,7 +7836,7 @@ every changed path vitest cannot follow (a ccd script, Python, a JSON or SQL fix
 whole tree or the diff (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings,
 ccd-contexts, dtbd, the tests-inclusive typecheck, the oss metadata, the pin suites, and every test that runs
 `git ls-files`, `git diff` or `git merge-base` itself), and the session-hook suites when `ccd/ccd`,
-`ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
+a `ccd/lib/*.sh`, `ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
 (`.github/ci/reach.mjs`). The browser suite, `node-floor`, the perf legs and the macOS legs do not run on it. The four
 required checks report on what ran. A head branch under `train/`, the `full-ci` label, or a change to shared
 infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a
