@@ -1043,13 +1043,13 @@ export const INHERITED_GROUNDS = {
   // The lead-ins and the action list's markers set an ink and paint no ground.
   // The four status labels need no entry: each paints a solid tint of its own,
   // so the self-grounded route measures it.
-  ".msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='action']": {
+  ".msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='action']:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *)": {
     under: ['var(--bg-page)'],
-    why: "an action lead-in (\"What to do:\") in --status-attention-text. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it. remarkChatMarks marks a lead-in at the top level only, a root paragraph or the first paragraph of an item of a root list, never inside a callout or a quote, whose tinted or surface ground this entry would not describe. The scope keeps the Docs reader and an opened recap out",
+    why: "an action lead-in (\"What to do:\") in --status-attention-text. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it. remarkChatMarks marks a lead-in at the top level only, a root paragraph or the first paragraph of an item of a root list, never inside a callout or a quote, whose tinted or surface ground this entry would not describe. The scope keeps the Docs reader and an opened recap out, and the :not() a checked task item's lead-in, which keeps the prose's bold ink",
   },
-  ".msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='info']": {
+  ".msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='info']:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *)": {
     under: ['var(--bg-page)'],
-    why: "any other lead-in (\"Why I can't do it.\") in --acct-blue, the NOTE callout's hue. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it. remarkChatMarks marks a lead-in at the top level only, never inside a callout or a quote. The scope keeps the Docs reader and an opened recap out",
+    why: "any other lead-in (\"Why I can't do it.\") in --acct-blue, the NOTE callout's hue. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it. remarkChatMarks marks a lead-in at the top level only, never inside a callout or a quote. The scope keeps the Docs reader and an opened recap out, and the :not() a checked task item's lead-in, which keeps the prose's bold ink",
   },
   ".msg-assist:not(.doc-body):not(.compaction-body) :is(ul, ol)[data-after-lead='action'] > li::marker": {
     under: ['var(--bg-page)'],

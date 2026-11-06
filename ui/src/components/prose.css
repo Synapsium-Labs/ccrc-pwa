@@ -244,8 +244,12 @@
      marker rules paint on the message column's --bg-page (audit.mjs's
      INHERITED_GROUNDS). Amber is "on you", as everywhere in the console; blue
      is the NOTE callout's hue. Names (the fourth place) are `.msg-assist a`. */
-  .msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='action'] { color: var(--status-attention-text); }
-  .msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='info'] { color: var(--acct-blue); }
+  /* A checked task item's lead-in takes no lead colour (fix round 1, review
+     1584 F2): amber is "on you", and a done item is not. DONE as the rule above
+     reads it, the item's own box; a lead-in is only ever marked in the first
+     paragraph of a root list's item, so a descendant of that item is its own. */
+  .msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='action']:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *) { color: var(--status-attention-text); }
+  .msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='info']:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *) { color: var(--acct-blue); }
   .msg-assist:not(.doc-body):not(.compaction-body) :is(ul, ol)[data-after-lead='action'] > li::marker { color: var(--status-attention-text); }
   /* STATUS LABELS — a status word in a label position, text on a solid tint:
      each pair is one the callouts already use. */
