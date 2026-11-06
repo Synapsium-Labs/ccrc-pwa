@@ -615,3 +615,18 @@ describe('the dead-coordinator lane’s list (workspace lifecycle wave 4)', () =
     expect(screen.queryByRole('list', { name: 'coordinators the cleanup is reporting' })).toBeNull();
   });
 });
+
+describe('the held-rows list in the banner', () => {
+  it('the held list renders above the expiry list', () => {
+    const store = makeStore();
+    seen(store, {
+      ...coord(),
+      cleanupHeldBy: [{ rowId: 'row-a', word: 'not-plain', sentence: 's', holds: { reclaim: 1, expire: 0, collect: 0 }, act: 'recheck' }],
+      expiryAttention: [{ sessionId: 'project-a-child-1', kind: 'held', sentence: 'e' }],
+    });
+    render(<ChildReclaimBanner store={store} />);
+    const heldList = screen.getByLabelText('rows holding the cleanup');
+    const expiryList = screen.getByLabelText('archived workspaces the cleanup is reporting');
+    expect(heldList.compareDocumentPosition(expiryList) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

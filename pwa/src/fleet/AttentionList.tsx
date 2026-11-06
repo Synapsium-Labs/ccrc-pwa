@@ -2,7 +2,9 @@
 //
 // A REPORT, never a tap: no button, no link, no remedy. The doors that act
 // already exist (revive, reclaim, abandon) and the server's sentence names
-// them. Each line is who, and what the server says about them.
+// them. Each line is who, and what the server says about them. The one
+// exception is the held-rows list (`CleanupHeldBy`), whose line carries a
+// single optional `control`, itself a tap that only opens a confirm.
 //
 // WHY IT EXISTS. `ExpiryAttention` and `DeadCoordinatorAttention` were
 // twenty-two-line files that differed in three expressions — the words
@@ -29,6 +31,8 @@ export interface AttentionLine {
    *  under it; every other line names who first. Both orders were already
    *  rendered — this is the difference, not a new option. */
   sentenceFirst?: boolean;
+  /** The held-rows list's one confirmed control; every other lane leaves it out. */
+  control?: ReactNode;
 }
 
 export function AttentionList(
@@ -44,6 +48,7 @@ export function AttentionList(
           {l.sentenceFirst === true && sentence(l)}
           {l.who.map((w) => <span key={w} className="child-reclaim-who">{w}</span>)}
           {l.sentenceFirst !== true && sentence(l)}
+          {l.control}
         </li>
       ))}
     </ul>
