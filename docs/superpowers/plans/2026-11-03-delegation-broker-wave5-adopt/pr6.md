@@ -1,16 +1,17 @@
 # PR6 (S2, a carrier for every linked lease): departures and measurements
 
 Run 1540, delegation broker wave 5, Tasks 5.6.1 and 5.6.2, with the coordinator's rulings 1 (review 1475 F11) and 2 (review 1498 F4),
-and fix round 1 on review 1546. Six departures are defined in the plan's "Deviations found": D-8034 to D-8039, the whole block issued
+and fix rounds 1 and 2 on reviews 1546 and 1547. Six departures are defined in the plan's "Deviations found": D-8034 to D-8039, the whole block issued
 to this run.
 
 - **D-8034, the carrier reads are bounded (rewritten in fix round 1, F1).** Each pass the lane reads every lease behind its generation,
   and re-reads up to `DELEGATION_CARRIER_REVERIFY_PER_PASS = 8` up-to-date unreleased leases, least recently read first by the pass
   ordinal at which each was last read (a counter in the lane's memory, never a clock). Rules 3 to 5 apply to every read-back, so a
-  carrier changed out of band counts `mismatched`, and one lost is composed a mark. The re-reads spend no mark budget. `marked` means
-  "read back equal when last read". One listing of the leases directory a pass decides absence; an unowned carrier read `released` is
-  not read again while it stays listed; the by-tree entries are read only while a released lease with no carrier has not yet been
-  measured against them. PR7 does not consume these read-backs: its adoption step reads each candidate's carrier itself, at decision
+  carrier changed out of band counts `mismatched`, and one lost is composed a mark. The re-reads spend no mark budget. For a lease not
+  re-read this pass, `marked` means "the journalled `seen` equals its generation, and no read this pass contradicted it" (review 1547
+  F1). One listing of the leases directory a pass decides absence; an unowned carrier read `released` is not read again while it stays
+  listed; the by-tree entries are read only while a released lease with no carrier has not yet been measured against them, and a lease
+  whose last mark did not run is kept measured against them for thirty passes from that answer (review 1547 F2). PR7 does not consume these read-backs: its adoption step reads each candidate's carrier itself, at decision
   time, through `readDelegationCarrier` (the coordinator carries this to PR7's brief).
   - The ruling's row reads "ten up-to-date leases are read eight in one pass and two in the next". With a bound of eight and the
     least-recently-read order, the second pass reads the two left over FIRST and then six of the first eight, so it reads eight too.
@@ -34,8 +35,10 @@ to this run.
   even when it reaches the tree through a link (a hand-written or older-git link spelling prints as written). It can therefore differ
   from the physical path. The mark locks each distinct spelling, the recorded `DL_TREE_REC` and the physical `DL_TREE`, in one fixed
   order (a bytewise sort), each with `-n`.
-- **At least one lock (F11).** The list of spellings is measured: if `sort` fails or answers nothing, the mark answers `unmeasured` and
-  writes nothing, and after the loop it refuses `unmeasured` unless at least one orphan lock is held. A blank line is never a spelling.
+- **One lock per spelling (review 1546 F11, 1547 F4).** The list of spellings is measured: if `sort` fails or answers nothing, the mark
+  answers `unmeasured` and writes nothing. After the loop, the number of orphan locks taken must equal the number of distinct spellings,
+  counted without `sort` (1 when the recorded and the physical spelling are equal, 2 otherwise), or the mark answers `unmeasured` and
+  writes nothing. A blank line is never a spelling.
 - **The caps word (F2).** `ccd caps` reports `lease-mark-lock-v1` beside `lease-mark-v1`, appended to the existing caps line, so
   `ccd/ccd` stays at +0 lines. `server/src/ccdargv.ts` declares it as `LEASE_MARK_LOCK_CAP`. `markLeaseCarrier` composes no mark of a
   state that holds a tree (every state but `ephemeral` and `released`) unless the box reports the word: it answers `unsupported` and
@@ -68,7 +71,8 @@ to this run.
   census-row keys stay as they were. The census row holds only the census record and the registry workdirs at or inside the tree,
   compared as written. A workdir that contains the tree, one written through a link, and another lease's carrier (`tree-held`) are not
   in it, and the bound covers them. Within the budget, a lease whose last mark answered `unmeasured` goes after every lease whose last
-  mark did not, oldest first within each group. `busy` and `unmeasured` are still never standing.
+  mark did not. That group goes least recently attempted first, oldest first among equals, and a lease leaves it once it is up to date
+  (review 1547 F3). `busy` and `unmeasured` are still never standing.
 - **F5.** A lane row where the verb answers `written` but the carrier it leaves is ahead: no `lease-carrier-seen`, and the next pass
   counts it `mismatched`. A composer row covers behind, ahead, another sequence, another parent and another lease. W5-K4's second pass
   now runs through PR5b's real `noteCarrierSeen` door (the lane rig's applier), so W5-KM12 reds it.
@@ -87,22 +91,52 @@ to this run.
   released, and a released lease with no carrier and no entry gets no step, so its mark never runs. The effect it asks for is kept
   instead: a lease whose last mark did not run is never added to `notIndexed` (a set `notRan`, cleared by any answer that ran), so a
   late write of its by-tree entry is healed on a later pass. The row: a mark times out, the lease is released, no entry yet means no
-  heal, then the entry is written late and the next pass heals it.
+  heal, then the entry is written late and the next pass heals it. Since review 1547 (F2), a lease stays in `notRan` for thirty passes
+  from that answer and then joins the ordinary `notIndexed` flow, and the unreachable `notIndexed` clear in that arm is deleted (F4).
 - **F12, recorded.** W5-K15's census reads the callee's text through the parse, so an alias (`const { leaseMark } = CCD_ARGV`, a
   computed member, an optional call, an import rename, `.call`, passing the function as a value) evades it. It pins one composer per
   file, so a second call in another function of `delegationCarrierMark.ts` passes. It is an accident guard, not a wall.
-- **F13.** Rule 1 counts `unsupported` for every lease not up to date, released leases included.
-  `DELEGATION_CARRIER_RETRIED_REFUSALS` has its `single-definition/vocabularies` row. A `noteCarrierSeen` throw after a landed mark is
+- **F13.** Rule 1's count is now review 1547 F5's, below. `DELEGATION_CARRIER_RETRIED_REFUSALS` has its `single-definition/vocabularies` row. A `noteCarrierSeen` throw after a landed mark is
   logged as `carrier <id> seen threw` and the mark stands, never `refused unmeasured`. **Recorded:** two leases on one tree key share
   one census row, built from whichever the checkpoint lists last. Policy refuses two unreleased leases on one key, so only a released
   one can share it.
+
+## Fix round 2 (review 1547): what changed
+
+- **F1 and F7: wording.** `marked` for a lease not re-read this pass is "the journalled `seen` equals its generation, and no read this
+  pass contradicted it". This wording is in D-8034, in the comments before `planCarrierSteps` and `planCarrierPass`, and in
+  `DelegationCarrierHealth`'s comment. The `planCarrierSteps` comment also says the re-verify reads are optional: an unreadable leases
+  listing reads nothing, and only the leases that needed a read count `unmeasured`.
+- **F2.** A lease leaves `notRan` thirty passes after its mark did not run, on the same pass counter, and then joins the ordinary
+  `notIndexed` flow. The row: inside the bound the by-tree listing is read every pass; at the bound it is read once more, and past it
+  never.
+- **F3.** The `unmeasured` group goes least recently attempted first (`unmeasured` now maps a lease to the pass of its last
+  `unmeasured` answer). A lease leaves the group once it is up to date. The row: eight older leases always answer `unmeasured`, and a
+  newer one answers `unmeasured` once; it is composed again two passes later.
+- **F4.**
+  - (a) A lane row in which a lease moves between the plan and its step: a door retains it while the older lease's mark runs.
+  - (b) A row in which an unowned carrier's body names another lease: it reads `malformed`, counts `unmeasured`, is read again, and is
+    never remembered as released.
+  - (c) The unreachable `notIndexed` clear is deleted; F2's change does not make it reachable.
+  - (d) The lock check, above, with a row whose stub `sort` prints only one of two distinct spellings.
+- **F5.** Rule 1 counts `unsupported` only for a lease that would get a step on a supported box: a generation-0 unreleased lease, an
+  unreleased lease behind its generation, or a released lease whose carrier read back. A released lease that never had a carrier gets
+  no step under rule 3, so it counts nothing.
+- **F6, placement notes.**
+  - W5-KM2 reads the read-back's generation (`rb.body.generation + 1`), so it bites only where a carrier was read back.
+  - W5-KM12 works in the `lease-carrier-seen` arm of the applier's `foldLeaseKind` (`delegation-checkpoint.ts`).
+  - W5-K4 lives in the lane suite, through the real door; the planner suite's K4 is pure, its first pass only.
+  - The lane's D-8039 F3 row pins the thirty-pass bound. The planner's census-row row pins that a containing workdir leaves the row
+    unchanged.
 
 ## The held files, under leave relayed by the coordinator
 
 - `shared/api.ts` (claim 3585): `DelegationCarrierHealth` and the optional `carriers` member of `DelegationObservationHealth`, additive
   only (mail 15724). In fix round 1 (mail 15773, F7): the reader `delegationCarrierHealthOf` beside `delegationUncensusedLeasesOf`, and
   the member's comment reworded in D-8035's words. Then (mail 15778) the doc comment of `DelegationCarrierHealth`, so its `unsupported`
-  and `refused` counts read as D-8037 and D-8039 made them: comment text only.
+  and `refused` counts read as D-8037 and D-8039 made them: comment text only. In fix round 2 (mail 15786, which also grants further
+  comment-only edits to that type's comments): `marked` in the F1 wording, and `unsupported` in F5's (a released lease that never had
+  a carrier gets no step). The comment is reflowed, still comment text only.
 - `server/test/delegation-wave3.integration.test.ts` (claim 3577, mails 15724 and 15740): the row W5-K15, and
   `server/src/coord/delegationCarrierMark.ts` added to the `W5_OPEN` row for `delegation/leases`. The effect census needed no line: the
   six policy effects are unchanged, and W5-K15 pins that only the `leaseActs` phase composes the mark.
@@ -143,13 +177,13 @@ dropping the gate reds), and it narrows on `ran === false`.
 
 Each mutant applied alone to a saved copy, each listed suite run alone (bounded by `timeout -k` and a process cap of the live thread
 count plus 1500), restored, and its sha and `git status` checked. The rows marked "round 0" were measured at `422824331`. Every other
-row was measured at fix round 1's code (`e1a89b0d6`). Where a result depends on where the edit sits, the placement column says so.
+row was measured at fix round 1's code (`e1a89b0d6`), and the R2 rows, and the F11 row again, at fix round 2's. Where a result depends on where the edit sits, the placement column says so.
 "Planner" is `delegation-carrier.test.ts`; "lane" is `delegation-carrier-lane.test.ts`.
 
 | Mutant | Placement | Edit | Went red |
 |---|---|---|---|
 | W5-KM1 | `planCarrierSteps`, rule 1 (L1) | ignore `supported` | planner W5-K2; lane W5-K12 |
-| W5-KM2 | `planCarrierSteps`'s mark step (L1) | mark at the carrier's generation + 1 | planner W5-K3b; lane W5-K11c (F9's planned-args check) |
+| W5-KM2 | `planCarrierSteps`'s mark step (L1), reading the read-back's generation | mark at the carrier's generation + 1 | planner W5-K3b; lane W5-K11c (F9's planned-args check) |
 | W5-KM3 | `planCarrierSteps`, rule 5 (L1), round 0 | treat `unreadable` as `absent` | W5-K6 |
 | W5-KM4 | `planCarrierSteps`, rule 5 (L1), round 0 | overwrite a carrier ahead of the journal | W5-K5 |
 | W5-KM5 | `planCarrierSteps`'s budget loop (L1) | drop the per-pass bound | planner W5-K7, W5-K7c, D-8039 (F4) |
@@ -159,7 +193,7 @@ row was measured at fix round 1's code (`e1a89b0d6`). Where a result depends on 
 | W5-KM9 | `planCarrierSteps`, rule 3 (L1) | mark a released lease with no carrier, ignoring `indexed` | planner W5-K7b, W5-K8, W5-K8b; lane W5-K13b, F10, the read-set row |
 | W5-KM10 | `DELEGATION_CARRIER_RETRIED_REFUSALS` (L1) | treat `busy` as standing | lane W5-K13 |
 | W5-KM11 | `planCarrierSteps`, rule 3 (L1) | skip the heal | planner W5-K8b; lane W5-K8b, F10 |
-| W5-KM12 | the applier's `lease-carrier-seen` fold (`delegation-checkpoint.ts`) | the seen sets `currentJournalSequence` | lane W5-K4, W5-K11, W5-K11c, W5-K13b, and three fix-round rows (F1, F3, F4); round 0: W5-J9b, W5-J10, W5-J13, W5-J14 |
+| W5-KM12 | the `lease-carrier-seen` arm of the applier's `foldLeaseKind` (`delegation-checkpoint.ts`) | the seen sets `currentJournalSequence` | lane W5-K4, W5-K11, W5-K11c, W5-K13b, and three fix-round rows (F1, F3, F4); round 0: W5-J9b, W5-J10, W5-J13, W5-J14 |
 | W5-K12b gate | `markLeaseCarrier` (L4) | drop the composer's `ccdCan` | lane W5-K12b |
 | W5-K15 (a) | `watch.ts`, round 0 | a second `CCD_ARGV.leaseMark(` | W5-K15 |
 | W5-K15 (b) | `watch.ts`'s `compact`, round 0 | `markLeaseCarrier(` called outside `leaseActs` | W5-K15 |
@@ -180,8 +214,13 @@ row was measured at fix round 1's code (`e1a89b0d6`). Where a result depends on 
 | F9 | `markLeaseCarrier` (L4) | drop the moved check | lane F9 |
 | F10 indexed | `planCarrierSteps`, rule 3 (L1) | an unmeasured index counts nothing | planner W5-K8b |
 | F10 not ran | `planCarrierPass` (L4) | a lease whose mark did not run joins `notIndexed` | lane F10 |
-| F11 | `_dl_mark_locked` (the lease library) | drop the spellings check and the one-lock check | `ccd-lease-mark-orphan-lock` F11 |
-| F13 released | `planCarrierSteps`, rule 1 (L1) | count only unreleased leases unsupported | planner W5-K2 |
+| F11 | `_dl_mark_locked` (the lease library) | drop the spellings check (re-measured in round 2) | `ccd-lease-mark-orphan-lock` F11 |
+| R2 F2 | `planCarrierPass`'s memory prune (L4) | drop `notRan`'s thirty-pass bound | lane D-8034 (review 1547 F2) |
+| R2 F3 | `planCarrierSteps`'s budget (L1) | order the `unmeasured` group oldest first again | planner and lane D-8039 (review 1547 F3) |
+| R2 F4a | `watch.ts`'s mark step | drop `step.args` at the composer's call | lane F9 (review 1547 F4a) |
+| R2 F4b | `readDelegationCarrier` (L4) | drop the file's lease id from the parse | the F4b reads row |
+| R2 F4d | `_dl_mark_locked` | drop the locks-equal-spellings check | `ccd-lease-mark-orphan-lock` review 1547 F4 |
+| R2 F5 | `planCarrierSteps`, rule 1 (L1) | count every lease not up to date, a released one with no carrier included | planner W5-K2 |
 | F13 seen throw | `markLeaseCarrier` (L4) | a seen throw answers `refused unmeasured` | lane F13 |
 | ruling 1 (a), round 0 | `_dl_mark_locked` | drop the orphan lock | the busy row and the two-spelling row |
 | ruling 1 (b), round 0 | `_dl_mark_locked` | take it for a release too | the released row |
