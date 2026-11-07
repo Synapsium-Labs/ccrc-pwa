@@ -765,7 +765,8 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(leaseOf(durable, lease.leaseId)).toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(8)) });
   }, ROW_MS);
 
-  // Review 1622 F1: three sequences, each with the evidence that ends the kept death measured on a pass that does not run the step.
+  // Review 1622 F1: three sequences, each with the evidence that ends the kept death measured on a pass that does not run the step, and
+  // review 1627 F2's: a restarting row (presence alive, status dead) on that pass is alive evidence.
   const keptDeath = async () => {
     const r = await leased({ ended: false });
     touch(r.w, 'delegation-adopt');
@@ -782,6 +783,8 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     ['alive at the lease\'s incarnation, then measured absent', (w: World) => { w.sessions = [{ id: OWNER, incarnation: INC }]; },
       (w: World) => { w.sessions = []; }],
     ['a retraction, then measured absent', (w: World) => { dead(w, { stoppedAt: at(3) }); }, (w: World) => { w.sessions = []; }],
+    ['presence alive while its status is dead (restarting), then dead (review 1627 F2)', (w: World) => { dead(w, { presence: 'alive' }); },
+      (w: World) => { dead(w); }],
   ] as const)('review 1622 F1: %s — never adopts on the old count, only after the new evidence\'s own settle and passes', async (_name, quiet, next) => {
     const { w, durable, lease } = await keptDeath();
     quiet(w);
@@ -790,7 +793,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(laneOf(w).adoptMemory.pass, 'CONTROL: the quiet pass did not run the step').toBe(steps);
     next(w);
     for (let n = 7; n < 12; n += 1) await pass(w, at(n));
-    expect(disposition(durable, lease.leaseId), 'CONTROL: not settled from the new evidence yet').toBe('ephemeral');
+    expect(disposition(durable, lease.leaseId), 'not adopted on the old count, nor yet settled from the new evidence (review 1627 F5: the decisive assertion)').toBe('ephemeral');
     await passesUntilKept(w, durable, lease.leaseId, 12, 6);
     expect(leaseOf(durable, lease.leaseId), 'the settle starts at the step\'s first read of the new evidence').toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(7)) });
   }, ROW_MS);
@@ -811,7 +814,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(laneOf(w).retractedDeaths.has(OWNER), 'the living pass keeps the retraction the step has not read').toBe(true);
     w.sessions = [{ id: OWNER, incarnation: NEW_INC, status: 'dead' }];
     for (let n = 8; n < 13; n += 1) await pass(w, at(n));
-    expect(disposition(durable, lease.leaseId), 'CONTROL: not settled from the new evidence yet').toBe('ephemeral');
+    expect(disposition(durable, lease.leaseId), 'not adopted on the old count, nor yet settled from the new evidence (review 1627 F5: the decisive assertion)').toBe('ephemeral');
     await passesUntilKept(w, durable, lease.leaseId, 13, 6);
     expect(leaseOf(durable, lease.leaseId), 'the new evidence\'s own settle').toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(8)) });
   }, ROW_MS);
@@ -843,6 +846,31 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     const before = audits(w).length;
     await pass(w, at(31), trees);
     expect(audits(w).slice(before).map((a) => a[2]).sort(), 'the next pass asks all four').toEqual([...ids].sort());
+  }, ROW_MS);
+
+  it('review 1627 F3: a non-definite answer keeps its ask through one cut only: cut again, the ask is dropped, and the next pass reaches the decider without asking it', async () => {
+    const { w, durable, lease } = await leased();
+    w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
+    const { trees, ids } = await more(durable, lease, 3);
+    for (let n = 0; n < 20 && laneOf(w).adoptMemory.asked.length < 4; n += 1) await pass(w, at(n), trees);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: all four asked in one pass').toEqual([...ids].sort());
+    const rest = laneOf(w).adoptMemory.asked.map((a) => a.leaseId).slice(2);       // the third ask is cut inside its audit, the fourth never asked
+    const cutAtThird = async (ms: number): Promise<void> => {
+      let calls = 0, late: Promise<unknown>[] = [];
+      w.onAudit = () => { calls += 1; if (calls === 3) late = cutNow(w); };
+      await pass(w, ms, trees);
+      await Promise.allSettled(late);
+      w.onAudit = undefined;
+    };
+    await cutAtThird(at(30));
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: the first cut keeps every ask (review 1622 F4 (a))').toEqual([...ids].sort());
+    await cutAtThird(at(31));
+    expect(laneOf(w).adoptMemory.audits.size, 'CONTROL: nothing held').toBe(0);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'cut again, the two answered twice are dropped').toEqual([...rest].sort());
+    const steps = laneOf(w).adoptMemory.pass, before = audits(w).length;
+    await pass(w, at(32), trees);
+    expect(audits(w).slice(before).map((a) => a[2]).sort(), 'the next pass asks only the two the cuts never answered').toEqual([...rest].sort());
+    expect(laneOf(w).adoptMemory.pass, 'and reaches the decider').toBe(steps + 1);
   }, ROW_MS);
 
   it('F6 (a): a census record that reads unreadable holds the entry, counted waiting; read again, it adopts on the first pass', async () => {

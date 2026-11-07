@@ -29,7 +29,7 @@ const ACCEPTED: readonly Accepted[] = [
   { file: 'server/src/watch.ts', site: 'noteSessions, `alive`',
     why: 'the delegation breaker\'s memory of running panes; its comment counts a restart and doubt as dead on purpose. It also lets adoption forget a retraction the step has read; adoption\'s own liveness and last-alive memory read `adoptionAlive` (`presence`), D-8092' },
   { file: 'server/src/watch.ts', site: 'noteSessions, the death loop',
-    why: 'the same memory; it consults `hibernatedAt` itself, so a sleep never feeds the breaker' },
+    why: 'the same memory; it consults `hibernatedAt` itself, so a sleep never feeds the breaker. A death it counts calls `forgetAdoptEvidence`, which forgets a retraction only once the step has read it (D-8092)' },
   { file: 'server/src/watch.ts', site: 'ownersOf',
     why: 'the owner census skips a row with no running pane; accepted by the ruling as it stands, not re-traced here' },
   { file: 'server/src/coord/hibernate.ts', site: 'hibernateSleepInput, `paneDead`',

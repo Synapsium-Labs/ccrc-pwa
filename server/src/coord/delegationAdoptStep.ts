@@ -4,7 +4,7 @@
 // Each pass, in order: one listing of the registry (the `delegation-adopt` marker and `mail-disabled`, absent, present and
 // unmeasured kept apart), the audits the previous pass asked for (`ws-lease-audit`, behind `lease-audit-v1`, read-only; each answer
 // back on an uncut pass that `adoptionAudits` holds is held at once and its ask dropped, review 1609 F3, while one it does not hold keeps
-// its ask until the pass ends uncut, review 1622 F4; the cut is read after every awaited read, 1609 F4), the parents'
+// its ask through one cut pass, never two, review 1622 F4 and 1627 F3; the cut is read after every awaited read, 1609 F4), the parents'
 // facts and the audits fed and held (both classified in L1, review 1587 A7 and F3), the carriers of the leases past rules 4 to 6 read
 // HERE at decision time, at most `DELEGATION_ADOPT_CARRIER_READS_PER_PASS` (never PR6's read-backs, D-8034; review 1587 F7), the decider, then the
 // effects: `adopt` through PR5b's `transitionLease` (a feed row on `applied`; the carrier is marked by PR6's step later in the same
@@ -43,8 +43,8 @@ export interface AdoptLaneMemory {
   watch: Map<string, AdoptWatch>;
   /** The attention keys still standing whose notice ran (review 1587 F4: a key is recorded only after its notice). */
   raised: Set<string>;
-  /** The audits the last pass asked for, run at the start of this one. */
-  asked: { leaseId: string; generation: number }[];
+  /** The audits the last pass asked for, run at the start of this one; `keptOnce` marks an ask a cut pass kept (review 1627 F3). */
+  asked: { leaseId: string; generation: number; keptOnce?: true }[];
   /** The definite audit answers held (`adoptionAudits`: a candidate's generation, at most `DELEGATION_AUDIT_HOLD_MS`). */
   audits: Map<string, HeldLeaseAudit>;
   /** leaseId -> the generation whose shadow line was logged, and apart from it the generation whose refusal was (review 1587 A1): one
@@ -130,8 +130,9 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     fresh.set(ask.leaseId, answer);      // fed on an uncut pass, whatever it says (rule 7, as PR7 ruled)
     memory.audits = adoptionAudits({ now, checkpoint: d.durable.state().checkpoint as DelegationCheckpointV1, auditable, held: memory.audits,
       fresh: new Map([[ask.leaseId, answer]]) }).held;
-    if (memory.audits.get(ask.leaseId) !== answer) continue;   // review 1622 F4: not held (not definite): its ask stays for a cut pass's successor
-    const at = memory.asked.indexOf(ask);                      // review 1609 F3: held at once and its ask dropped, so a later cut keeps it.
+    if (memory.audits.get(ask.leaseId) !== answer && ask.keptOnce !== true) { ask.keptOnce = true; continue; }  // review 1622 F4, 1627 F3: not held
+    // (not definite): its ask stays for a cut pass's successor once; asked again and cut again, it is dropped, so no cut keeps it for good
+    const at = memory.asked.indexOf(ask);                      // review 1609 F3: a held answer's ask is dropped at once (a later cut keeps the answer), and so is one kept once.
     if (at !== -1) memory.asked.splice(at, 1);                 // Never -1 today (the loop walks a copy, and a stale pass returns at its cut)
   }
   const cp = d.durable.state().checkpoint as DelegationCheckpointV1;
