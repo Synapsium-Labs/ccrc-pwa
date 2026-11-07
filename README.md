@@ -4958,7 +4958,10 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    `WORKER_KICKOFF_PREFIX + brief` — the sentence naming the `ccrc-worker`
    skill, then the coordinator's prose — and the byte cap is measured on that
    composed body, so the ceiling a brief actually has is
-   `MAIL_BODY_MAX_BYTES` less the prefix's own length.
+   `MAIL_BODY_MAX_BYTES` less the prefix's own length. The body may name
+   landing intents (`intents`, at most 8 keys, each `#<n>` or `D-<n>`), and a
+   key another programme's open run in the project holds answers **409**
+   `intent-held` with the key and that run (`holder`), before any fleet act.
 3. The coordinator watches mail and `pr-state` the way an operator would —
    `GET /api/runs` and the `runs` frame on `/ws/fleet` carry state and
    work-item tallies, nothing new to poll — and marks the run `working` once

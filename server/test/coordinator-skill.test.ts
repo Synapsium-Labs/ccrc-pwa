@@ -3929,7 +3929,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
     'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
     'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
-    'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.',
+    'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`, still `merging` after a refusal, and unknown after an uncertain answer, which you then read with `runs list`.',
     'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
     'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
   ].join(' ');
@@ -4285,12 +4285,12 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
       'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
       'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
       'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
-      'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.',
+      'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`, still `merging` after a refusal, and unknown after an uncertain answer, which you then read with `runs list`.',
       'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
       'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
     ].join(' '));
     // The fail-closed sentence directly follows the new equality sentence, so deleting it reds here on its own.
-    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.');
+    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`, still `merging` after a refusal, and unknown after an uncertain answer, which you then read with `runs list`.');
   });
 });
 
