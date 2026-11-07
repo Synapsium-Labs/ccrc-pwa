@@ -232,22 +232,26 @@
 //
 // Desk-nav Task A (D-8100): the rail's doors move into the top bar, the breadcrumb goes. The rail and top bar cases above
 // whose names say "rail" are history: the rail is gone, and the cases are "the desk top bar (desk-nav Task A)" below.
-// MUTATION TABLE (plan Task A Step 5; RUN, each mutant on the working tree from a saved copy, restored and sha-checked,
-// the named case alone; the browser rows under vitest.browser.config.ts):
+// MUTATION TABLE (plan Task A Step 5, and fix round 1's 12 to 14 from review 1638; RUN, each mutant on the working tree from a
+// saved copy, restored and sha-checked, the named case alone; the browser rows under vitest.browser.config.ts):
 //   1 Archive inserted before Accounts ................. phone-bar "they are the desk places with Archive after Accounts"
-//   2 the wordmark door without commandDoor('go-fleet') "the wordmark door runs go-fleet, …"; phone-bar "the desk bar shows no fleet place, …"
+//   2 the wordmark door without commandDoor('go-fleet') "the wordmark door runs go-fleet, …"; phone-bar "the desk bar shows no fleet place, …";
+//                                                         browser phone-bar "no bar at a desk" (900, 1280)
 //   3 DOOR_WORDS_QUERY at 1440px ....................... "at 1280 and 1920 each door shows its word and no tip; …"; browser "the doors show words from 1280" 1280px
-//   4 the space before the badge removed ............... "label in name at 1280" ("Waiting on you2")
-//   5 the tip mounted at the words width too ........... "label in name at 1280"; browser "the doors show words from 1280" 1280px, 1920px
+//   4 the space before the badge removed ............... "label in name at 1280, and in the icon form at 900 and 1279" ("Waiting on you2")
+//   5 the tip mounted at the words width too ........... the same case; browser "the doors show words from 1280" 1280px, 1920px
 //   6 the frame's rail branch kept, an empty Primary nav "exactly one nav[aria-label="Primary"] …" (instrument 900: 2)
 //   7 `.ins-command`'s min-width raised to 280px ....... "the command field takes the rest, with its floor at the tap square and --sp-10";
-//                                                         SURVIVED by the browser's "the bar fits on one line with every badge at 99+" (12 of 12 green):
+//                                                         SURVIVED by the browser's "the bar fits on one line with every badge at 99+" (24 of 24 green):
 //                                                         the field is 329 px at 900, so a 280 px floor never binds there and the bar keeps 49 px
 //   8 the `.ins-bar-doors > .bell` rule deleted ........ "the bell in the bar is at the tap floor"; control-census "every twin exemption …";
-//                                                         browser "a touch screen keeps the floor" ("Notifications off: 28 x 28")
+//                                                         browser "a touch screen keeps the floor" at 900 and 1280 ("Notifications off: 28 x 28")
 //   9 the 52px track put back .......................... "the grid has two tracks …"; browser instrument-desk "the tracks follow the width …"
-//  10 the tip's :focus-visible rule deleted ............ browser "the tip is drawn below the icon, by hover and by Tab" (8 of 8, "Tab: opacity")
-//  11 the current door from matchRoute, not topRouteOf . "which door is current" (/settings/updates); "the wordmark door … is current on / and on a session"
+//  10 the tip's :focus-visible rule deleted ............ "a door's tip shows on hover and on focus-visible, …"; browser "… by hover and by Tab" (8 of 8, "Tab: opacity")
+//  11 the current door from matchRoute(path)?.route.id . "which door is current" (/settings/updates); "the wordmark door … is current on / and on a session"
+//  12 the tip's z-index line deleted ................... browser "… by hover and by Tab" and "the widest tips, by hover" (16 of 16, "drawn on top"); "the tip has an edge, …"
+//  13 the tip's hairline border dropped ................ "the tip has an edge: a hairline border and the popover elevation, on its own ground"
+//  14 the tip's popover elevation dropped .............. the same case
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
