@@ -110,6 +110,68 @@ describe('dispatchRun runs its gates in a fixed order (ARCH-22)', () => {
     expect((out as { detail?: string }).detail).toMatch(/^slug: must match /);
   });
 
+  it('slug, then the intents grammar: a bad slug with bad intents answers the slug detail', async () => {
+    const f = fixture();
+    const out = await dispatchRun(f.deps, f.open(), 'go', undefined, undefined, 'Bad Slug!', '#1');
+    expect((out as { detail?: string }).detail).toMatch(/^slug: must match /);
+  });
+
+  it('the intents grammar, then the review-run check: a review run whose intents is not an array answers the grammar', async () => {
+    const f = fixture();
+    const id = f.open();
+    f.coord.db.prepare("UPDATE runs SET kind = 'review' WHERE id = ?").run(id);
+    expect(await dispatchRun(f.deps, id, 'go', undefined, undefined, undefined, '#1'))
+      .toEqual({ ok: false, kind: 'bad-request', detail: 'intents: not an array' });
+  });
+
+  it('the intents grammar, then hold: bad intents on a run with an invalid hold answer the grammar', async () => {
+    const f = fixture();
+    const id = badHoldRun(f);
+    f.coord.db.prepare('UPDATE runs SET sessionId = NULL WHERE id = ?').run(id);
+    expect(await dispatchRun(f.deps, id, 'go', undefined, undefined, undefined, '#1'))
+      .toEqual({ ok: false, kind: 'bad-request', detail: 'intents: not an array' });
+  });
+
+  it('the review-run check, then hold: a review run with a key on an invalid hold answers bad-request', async () => {
+    const f = fixture();
+    const id = badHoldRun(f);
+    f.coord.db.prepare("UPDATE runs SET sessionId = NULL, kind = 'review' WHERE id = ?").run(id);
+    expect(await dispatchRun(f.deps, id, 'go', undefined, undefined, undefined, ['#1']))
+      .toMatchObject({ ok: false, kind: 'bad-request', detail: 'intents: a review run names no landing intents' });
+  });
+
+  /** Another programme's run in the same project holds `#123`. */
+  const holder = (f: ReturnType<typeof fixture>): void => {
+    const o = f.coord.openRun({ program: 'prog-b', title: 't', project: PROJECT, wave: 1, waveOf: 2, claimedBy: 'cb' });
+    if (!('id' in o)) throw new Error('fixture openRun refused');
+    expect(f.coord.dispatchRun({ runId: o.id, sessionId: 'demo-held', workspace: null, branch: null, resumed: false,
+      clearedAt: null, items: [], intents: ['#123'] }).ok).toBe(true);
+  };
+
+  it('the grammar, then the held check: a repeated key another programme holds answers bad-request, not intent-held', async () => {
+    const f = fixture();
+    holder(f);
+    expect(await dispatchRun(f.deps, f.open(), 'go', undefined, undefined, undefined, ['#123', '#123']))
+      .toEqual({ ok: false, kind: 'bad-request', detail: 'intents: repeated key #123' });
+  });
+
+  it('session, then intent-held: a bad stored session whose key is held answers bad-session', async () => {
+    const f = fixture();
+    holder(f);
+    const id = f.open();
+    f.coord.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run(BAD_SESSION, id);
+    expect(await dispatchRun(f.deps, id, 'go', undefined, undefined, undefined, ['#123'])).toEqual({ ok: false, kind: 'bad-session' });
+  });
+
+  it('intent-held, then pause: a held key with the pause marker answers intent-held, with no ccd call', async () => {
+    const f = fixture();
+    holder(f);
+    f.mark(COORDINATOR_PAUSE_MARKER);
+    expect(await dispatchRun(f.deps, f.open(), 'go', undefined, undefined, undefined, ['#123']))
+      .toEqual({ ok: false, kind: 'refused', code: 'intent-held', key: '#123', holder: { runId: expect.any(Number), program: 'prog-b' } });
+    expect(f.calls).toEqual([]);
+  });
+
   it('hold, then session: a run with an invalid hold and a bad stored session answers hold-invalid', async () => {
     const f = fixture();
     const id = badHoldRun(f);

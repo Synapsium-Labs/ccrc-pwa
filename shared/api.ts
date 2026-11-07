@@ -6471,7 +6471,8 @@ export type RunRefuseCode =
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
   | 'cap-review-rounds'   // D-6795: a fourth review run for one work run
-  | 'ejection-not-merging';   // D-7619: an ejection body on a run not at merging
+  | 'ejection-not-merging'   // D-7619: an ejection body on a run not at merging
+  | 'intent-held';   // D-8085: another programme's run holds a landing intent this dispatch names
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6482,7 +6483,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
-  'cap-review-rounds': true, 'ejection-not-merging': true,
+  'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
