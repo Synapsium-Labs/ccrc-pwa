@@ -184,6 +184,9 @@ export const SECTION_2_2: readonly Row[] = [
       { file: `${SD}update-stall.test.ts`, describe: 'the feed archive\'s writer set (D-5859; ARCH-54 #789)' },
       { file: THIS, describe: TABLES_PIN },
     ],
+    gap: 'Partly held: both pins count `feed_events` writers only. No census counts writers to the `NotifyLog` ring '
+      + '(`record`) or callers of `PushService.notify`; `notice.ts` is the only one of each today, so a second ring or '
+      + 'push writer elsewhere in `server/src` would not red.',
   },
   {
     context: 'C6', fact: 'operator questions (the `asks` and `approvals` tables)',
