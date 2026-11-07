@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 /**
@@ -12,6 +13,10 @@ import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
  * line that parses to something other than an object, a BOM, a lone surrogate escape, bytes that are not UTF-8), the
  * types each field must have, and the timestamp shapes the `since` gate reads. `DIVERGES` holds the few inputs where
  * the two readers differ, none of which Claude Code writes, with the jq answer.
+ *
+ * The table also runs on every jq found, as `continued-in-parity.test.ts` does (D-4940). The macOS build of jq 1.6
+ * reads `mktime` in the local zone, so a stamp there fails its round trip and every dated row prints `-`: run that
+ * one with TZ=UTC. The Linux builds use `timegm`.
  */
 
 let h: CcdHarness;
@@ -143,8 +148,21 @@ const CASES: readonly Case[] = [
   ['dated: a space before Z', [at('2026-09-10T10:12:21 Z')], D, '1', '0', '1789430400\tseven_day\t1789035141'],
 ];
 
+/** Where the jq reader parts from the Python one, on inputs Claude Code does not write: its answer, and Python's. */
+const DIVERGES: readonly Case[] = [
+  // Python: '' — a JSON float is not an int, however whole.
+  ['resetsAt spelled 1e3', [B.replace('1789430400', '1e3')], '', '', '0', '1000\tseven_day'],
+  ['resetsAt spelled with .0', [B.replace('1789430400', '1789430400.0')], '', '', '0', '1789430400\tseven_day'],
+  // Python 3.12 dated these (a date alone at local midnight, no seconds); jq reads them as unreadable.
+  ['dated: a date alone', [at('2026-09-10')], D, '1', '0', '1789430400\tseven_day\t-'],
+  ['dated: no seconds', [at('2026-09-10T10:12Z')], D, '1', '0', '1789430400\tseven_day\t-'],
+  ['stuck: a 401 whose stamp is a date alone', [j(auth({ timestamp: '2026-09-10' }))], S, '1', '1', ''],
+  // Python read a stamp with no zone in the box's local zone; jq reads UTC.
+  ['dated: no zone', [at('2026-09-10T10:12:21')], D, '1', '0', '1789430400\tseven_day\t1789035141'],
+];
+
 /** Every case in one shell: a record per case, fields and records split by control bytes no answer holds. */
-function run(cases: readonly Case[]): Map<string, [string, string]> {
+function run(cases: readonly Case[], jq = ''): Map<string, [string, string]> {
   const dir = path.join(h.home, 'corpus');
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir);
@@ -154,7 +172,8 @@ function run(cases: readonly Case[]): Map<string, [string, string]> {
     return [String(i), file, mode, since, name].join('\t');
   });
   fs.writeFileSync(path.join(dir, 'manifest'), manifest.join('\n') + '\n');
-  const raw = h.sh(`while IFS=$'\\t' read -r i f mode since _; do
+  const shadow = jq ? `jq() { ${JSON.stringify(jq)} "$@"; }; ` : '';
+  const raw = h.sh(`${shadow}while IFS=$'\\t' read -r i f mode since _; do
       out=$(_transcript_limit_banner "$f" "$mode" "$since"); rc=$?
       printf '%s\\x1f%s\\x1f%s\\x1e' "$i" "$rc" "$out"
     done < ${JSON.stringify(path.join(dir, 'manifest'))}; printf 'end'`);
@@ -162,6 +181,19 @@ function run(cases: readonly Case[]): Map<string, [string, string]> {
   for (const rec of raw.split('\x1e').slice(0, -1)) {
     const [i, rc, text] = rec.split('\x1f');
     out.set(cases[Number(i)]![0], [rc!, text!]);
+  }
+  return out;
+}
+
+/** Every jq at the usual places, plus each one CCRC_TEST_JQ lists: `continued-in-parity.test.ts`'s rule (D-4940). */
+function jqBinaries(): string[] {
+  const listed = (process.env['CCRC_TEST_JQ'] ?? '').split(':').filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of ['/usr/bin/jq', '/usr/local/bin/jq', '/opt/homebrew/bin/jq', ...listed]) {
+    if (!fs.existsSync(c) || seen.has(fs.realpathSync(c))) continue;
+    seen.add(fs.realpathSync(c));
+    out.push(c);
   }
   return out;
 }
@@ -176,4 +208,17 @@ describe('_transcript_limit_banner over the corpus (#2367)', () => {
     const want = new Map(CASES.map(([name, , , , rc, out]) => [name, [rc, out]]));
     expect(Object.fromEntries(got)).toEqual(Object.fromEntries(want));
   });
+
+  it('answers the inputs where it parts from Python as the comments say', () => {
+    const want = new Map(DIVERGES.map(([name, , , , rc, out]) => [name, [rc, out]]));
+    expect(Object.fromEntries(run(DIVERGES))).toEqual(Object.fromEntries(want));
+  });
+
+  for (const jq of jqBinaries()) {
+    const version = spawnSync(jq, ['--version'], { encoding: 'utf8' }).stdout.trim() || 'unknown';
+    it(`answers the same on ${version} (${jq})`, () => {
+      const want = new Map(CASES.map(([name, , , , rc, out]) => [name, [rc, out]]));
+      expect(Object.fromEntries(run(CASES, jq))).toEqual(Object.fromEntries(want));
+    });
+  }
 });

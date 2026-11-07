@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv, ccdSource } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, BOUNDED, ghContainedEnv, ccdSource, CCD } from './ccdWsHelpers.js';
 import { RATE_LIMIT_ERROR } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -214,11 +214,12 @@ BEGIN {
       }
     }
   });
-  it("the detector's error literal is shared's RATE_LIMIT_ERROR — one bash copy, one TS copy, pinned", () => {
-    const src = ccdSource();
-    const line = src.split('\n').find((l) => l.includes('row.get("error") =='));
-    if (!line) throw new Error('_transcript_limit_banner detector line not found in ccd/ccd');
-    const m = /row\.get\("error"\) == "([a-z_]+)"/.exec(line);
+  it("the detector's error literal is shared's RATE_LIMIT_ERROR — one jq copy, one TS copy, pinned", () => {
+    // The reading is `limit_banner` in ccd/lib/transcript.jq (#2367); its first `$row.error ==` is the rate-limit one.
+    const src = fs.readFileSync(path.join(path.dirname(CCD), 'lib', 'transcript.jq'), 'utf8');
+    const line = src.split('\n').find((l) => l.includes('$row.error =='));
+    if (!line) throw new Error('limit_banner detector line not found in ccd/lib/transcript.jq');
+    const m = /\$row\.error == "([a-z_]+)"/.exec(line);
     if (!m) throw new Error('no parsed error literal on the detector line');
     expect(m[1]).toBe(RATE_LIMIT_ERROR);
   });

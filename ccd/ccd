@@ -25700,83 +25700,19 @@ _transcript_limit_banner() {   # transcript-path [stuck|dated since-epoch] -> 0 
   # EARLIER than `since`; then it answers rc 3 with the row's epoch, a banner
   # this process did not write. Never folded into rc 1: the caller keeps the block when no
   # swap came after the row, or this process never came up. The default mode is unchanged.
-  local f="$1" mode="${2:-}" since="${3:-}" rows rc
+  # The reading is `limit_banner` in `ccd/lib/transcript.jq` (#2367; it was an
+  # inline python program, and `ccd-limit-banner-corpus.test.ts` holds the two to
+  # one table). It answers one string: the rc, then what this prints.
+  local f="$1" mode="${2:-}" since="${3:-}" rows out
   [[ -f "$f" && -r "$f" ]] || return 2
   rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
-  command -v python3 >/dev/null 2>&1 || return 2
-  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
-import json, sys
-from datetime import datetime
-
-stuck = sys.argv[1:2] in (["stuck"], ["dated"])
-since = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
-
-
-def stamp(row):
-    ts = row.get("timestamp")
-    if since is None or not isinstance(ts, str):
-        return None
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def born(row):
-    at = stamp(row)
-    return at is not None and at >= since
-
-
-def predates(row):
-    at = stamp(row)
-    return at is not None and at < since
-
-
-found = None
-for raw in sys.stdin:
-    try:
-        row = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        found = None
-        continue
-    if not isinstance(row, dict):
-        found = None
-        continue
-    if row.get("type") not in ("user", "assistant"):
-        continue
-    message = row.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "rate_limit":
-        found = row
-        continue
-    if stuck and row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "authentication_failed" \
-            and row.get("apiErrorStatus") == 401 and born(row):
-        found = row
-        continue
-    chatter = row.get("type") == "user" and isinstance(content, str) and content.startswith(
-        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
-    )
-    if chatter:
-        continue
-    found = None
-
-if found is None:
-    raise SystemExit(1)
-if stuck and found.get("error") != "authentication_failed" and predates(found):
-    print(int(stamp(found)))
-    raise SystemExit(3)
-if found.get("error") == "authentication_failed":
-    print("\t\tauthentication_failed")
-    raise SystemExit(0)
-quota = found.get("quotaLimits")
-quota = quota if isinstance(quota, dict) else {}
-reset = quota.get("resetsAt")
-kind = quota.get("rateLimitType")
-reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
-print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)) + (f"\t{int(stamp(found)) if stamp(found) is not None else chr(45)}" if sys.argv[1:2] == ["dated"] else ""))
-' "$mode" "$since" 2>/dev/null
-  rc=$?
-  [[ "$rc" -le 1 || "$rc" -eq 3 ]] && return "$rc"
+  command -v jq >/dev/null 2>&1 || return 2
+  out=$(printf '%s\n' "$rows" | jq -L "$TRANSCRIPT_JQ_LIB" -jRs --arg mode "$mode" --arg since "$since" \
+          'include "transcript"; limit_banner($mode; $since)' 2>/dev/null) || return 2
+  case "$out" in
+    1) return 1 ;;
+    [03]$'\n'*) printf '%s\n' "${out#?$'\n'}"; return "${out:0:1}" ;;
+  esac
   return 2
 }
 
