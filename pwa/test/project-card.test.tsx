@@ -1921,7 +1921,232 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     expect(alert.isConnected).toBe(true);
     await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
     rerender(cardElement(world('retained')));
-    expect(within(rowOf(container)).getByRole('alert'), 'the same element: the sentence is not drawn again as new').toBe(alert);
+    // Review 1624 F5 (ruled): the refusal answered the act the row offered before; once its controls are back it is cleared.
+    expect(within(rowOf(container)).getByRole('alert'), 'the same element, still mounted').toBe(alert);
+    expect(alert.textContent, 'the old refusal is no longer said').toBe('');
+  });
+
+  it('F5 (review 1624): a refusal is cleared when the row\'s state moves under the same controls; a repeat of the act says it again', async () => {
+    const r = recorder(() => okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409));
+    const world = (disposition: 'retained' | 'adopted') => worldWithLease({ disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    // CONTROL: a frame that changes nothing the row offers keeps the sentence.
+    rerender(cardElement(world('retained')));
+    expect(alert.textContent).toBe("This worktree's state does not allow that now.");
+    rerender(cardElement(world('adopted')));
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent), 'the same two controls').toEqual(
+      ['Keep worktree', 'Not delegated']);
+    expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted').toBe(alert);
+    expect(alert.textContent, 'its text emptied').toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+  });
+
+  it('F2 (review 1624): an unknown word at a status no door sends, and a 409 body with no ok, say the app\'s words', async () => {
+    for (const [status, body, what] of [
+      [500, { ok: false, error: 'future-word' }, 'an unknown word away from a door status'],
+      [409, { error: 'x' }, 'a body without ok: false'],
+    ] as const) {
+      const r = recorder(() => okJson(body, status));
+      const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      const alert = within(rowOf(container)).getByRole('alert');
+      await vi.waitFor(() => expect(alert.textContent, what).toMatch(/^Couldn't keep the worktree — /));
+      expect(alert.textContent, what).not.toBe('The server refused this.');
+      expect(r.calls, what).toHaveLength(1);
+      cleanup();
+    }
+  });
+
+  it('F1 (review 1624): a hand-off clears the box\'s hold, so a later change moves no focus; every focus the row moves skips the scroll', async () => {
+    const r = recorder();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      const world = (disposition: 'retained' | 'promoted' | 'transferring') =>
+        worldWithLease({ sourceKind: 'raw', disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+      const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+      const toggle = container.querySelector<HTMLElement>('.proj-card-toggle')!;
+      // The row's own script focuses: the box after Keep, after a confirmed Not delegated, and the hand-off below.
+      const ours = (): unknown[] => focus.mock.calls.filter((_, i) => {
+        const el = focus.mock.contexts[i] as HTMLElement;
+        return el === toggle || el.classList.contains('proj-work-controls');
+      }).map((c) => c[0]);
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      await screen.findByText('Worktree kept until 24 Nov');
+      await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+      await screen.findByText('Worktree marked not delegated');
+      // The focus on a button the row then removes, with no blur (as a removal fires none): the box still holds it.
+      act(() => { screen.getByRole('button', { name: 'Attach to… (agent-a1)' }).focus(); });
+      rerender(cardElement(world('promoted')));
+      expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Not delegated']);
+      expect(document.activeElement).toBe(document.body);
+      rerender(cardElement(world('transferring')));
+      expect(document.activeElement, 'the hand-off, as F3 (b) rules it').toBe(toggle);
+      // The operator moves on; the box is no longer theirs. The row comes back and goes again: nothing moves.
+      act(() => { toggle.blur(); });
+      rerender(cardElement(world('promoted')));
+      rerender(cardElement(world('transferring')));
+      expect(document.activeElement, 'no focus moved at an unrelated moment').toBe(document.body);
+      expect(ours().length, 'the box twice for Not delegated, once for Keep, and one hand-off').toBe(4);
+      for (const o of ours()) expect(o, 'every focus the row moves skips the scroll').toEqual({ preventScroll: true });
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  it('F3 (review 1624): an ask its row stops offering, closed while the sheet gives the focus back to nothing, places it in the box', async () => {
+    const r = recorder();
+    const world = worldWithLease({ sourceKind: 'raw' });
+    const { container, rerender } = renderCard(world, { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    // The worktree's session leaves the list: Attach, the opener, goes with it, so the sheet has nothing to give back to.
+    rerender(cardElement({ ...world, sessions: [] }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(container.querySelector('.proj-work-controls')));
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F4 (b) (review 1624): an unowned row that loses its controls while its box holds the focus hands it to its group\'s toggle', async () => {
+    const r = recorder();
+    const { container, rerender } = renderCard(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    await screen.findByText('Worktree marked not delegated');
+    expect(document.activeElement).toBe(container.querySelector('.proj-work-controls'));
+    // The next frame's row hides no record any more: its controls go, the row stays.
+    rerender(cardElement(worldWithUnowned({ verdict: 'conflicting' })));
+    expect(container.querySelector('.proj-work-controls')).toBeNull();
+    expect(container.querySelector('.proj-work')).not.toBeNull();
+    const group = [...container.querySelectorAll('.proj-group-toggle')].find((t) => t.textContent?.includes(GROUP_WORDS.unowned.label));
+    expect(group).toBeDefined();
+    expect(document.activeElement, 'the group\'s toggle, never the card\'s').toBe(group);
+  });
+
+  it('F11 (a) (review 1624): an open Not delegated drops its ask when the record on its worktree is replaced, and posts to neither', async () => {
+    const r = recorder();
+    const { rerender } = renderCard(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    // CONTROL: the same record in a new frame keeps the ask open.
+    rerender(cardElement(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID })));
+    expect(screen.queryByRole('dialog')).not.toBeNull();
+    rerender(cardElement(worldWithUnowned({ verdict: 'conflicting', leaseId: '7d1e2f30-4a5b-4c6d-8e9f-a0b1c2d3e4f5' })));
+    expect(screen.queryByRole('dialog'), 'the ask was about the replaced record').toBeNull();
+    expect(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }), 'the control stays, for the new record').toBeTruthy();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F1 (review 1626): a row left with no controls while its confirm is open hands the focus to its heading, the box being the opener', async () => {
+    const r = recorder();
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ sourceKind: 'raw', disposition });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    // The box holds the focus when the confirm opens (a tap that does not focus its button), so the sheet's opener is the box.
+    const box = container.querySelector<HTMLElement>('.proj-work-controls')!;
+    act(() => { box.focus(); });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    rerender(cardElement(world('transferring')));
+    expect(container.querySelector('.proj-work-controls'), 'the box stays, with no controls').not.toBeNull();
+    await vi.waitFor(() => expect(document.activeElement, 'the heading, never the empty box').toBe(container.querySelector('.proj-card-toggle')));
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F3 (b) (review 1626): Cancel on a confirm with no opener to give back to leaves no hold, so a later change moves nothing', async () => {
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ sourceKind: 'raw', disposition });
+    const { container, rerender } = renderCard(world('retained'));
+    // The page holds the focus when the confirm opens (a tap that focuses nothing), so the sheet has no opener.
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(document.body);
+    rerender(cardElement(world('transferring')));
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    expect(document.activeElement, 'nothing moved').toBe(document.body);
+  });
+
+  it('F4 (review 1626): an unowned row whose hidden record is replaced clears its refusal, and a late answer for the old one draws nothing', async () => {
+    const REPLACED = '7d1e2f30-4a5b-4c6d-8e9f-a0b1c2d3e4f5';
+    const refused = () => okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409);
+    const at = (leaseId: string) => worldWithUnowned({ verdict: 'conflicting', leaseId });
+    const notDelegated = async (): Promise<void> => {
+      await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    };
+    const first = renderCard(at(LEASE_ID), { fetch: recorder(refused).fetch });
+    const alert = first.container.querySelector<HTMLElement>('.proj-work [role="alert"]')!;
+    await notDelegated();
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    // CONTROL: the same record in a new frame keeps the sentence.
+    first.rerender(cardElement(at(LEASE_ID)));
+    expect(alert.textContent).toBe("This worktree's state does not allow that now.");
+    first.rerender(cardElement(at(REPLACED)));
+    expect(first.container.querySelector('.proj-work [role="alert"]'), 'the region stays mounted').toBe(alert);
+    expect(alert.textContent, 'the old record\'s refusal is no longer said').toBe('');
+    first.unmount();
+    // An answer for the old record that lands after the swap draws nothing.
+    let release: (r: Response) => void = () => {};
+    const late = recorder(() => new Promise<Response>((res) => { release = res; }));
+    const second = renderCard(at(LEASE_ID), { fetch: late.fetch });
+    const region = second.container.querySelector<HTMLElement>('.proj-work [role="alert"]')!;
+    await notDelegated();
+    expect(late.calls).toHaveLength(1);
+    second.rerender(cardElement(at(REPLACED)));
+    await act(async () => { release(refused()); });
+    await act(async () => { await Promise.resolve(); });
+    expect(region.textContent, 'the late answer is about a record the row no longer offers').toBe('');
+    expect(screen.queryByText(/^Worktree marked/)).toBeNull();
+    second.unmount();
+    // And a late failure that is no door's answer: the app's words are about the old record too.
+    let fail: (r: Response) => void = () => {};
+    const broken = recorder(() => new Promise<Response>((res) => { fail = res; }));
+    const third = renderCard(at(LEASE_ID), { fetch: broken.fetch });
+    const failRegion = third.container.querySelector<HTMLElement>('.proj-work [role="alert"]')!;
+    await notDelegated();
+    third.rerender(cardElement(at(REPLACED)));
+    await act(async () => { fail(okJson({ error: 'internal' }, 500)); });
+    await act(async () => { await Promise.resolve(); });
+    expect(failRegion.textContent, 'the late failure draws nothing').toBe('');
+    third.unmount();
+    // Review 1628 F2: a late success toasts nothing, and a late answer that cannot be read says nothing in the status.
+    for (const [arm, answer] of [
+      ['a late success', () => accepted()],
+      ['a late unreadable answer', () => new Response('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } })],
+    ] as const) {
+      let land: (r: Response) => void = () => {};
+      const held = recorder(() => new Promise<Response>((res) => { land = res; }));
+      const view = renderCard(at(LEASE_ID), { fetch: held.fetch });
+      const status = view.container.querySelector<HTMLElement>('.proj-work [role="status"]')!;
+      await notDelegated();
+      view.rerender(cardElement(at(REPLACED)));
+      await act(async () => { land(answer()); });
+      await act(async () => { await new Promise((res) => setTimeout(res, 50)); });
+      expect(screen.queryByText(/^Worktree marked/), `${arm}: no toast`).toBeNull();
+      expect(status.textContent, `${arm}: no status`).toBe('');
+      view.unmount();
+    }
+  });
+
+  it('F5 (review 1626): a refusal is cleared when Attach goes because its session left the list, the state unchanged', async () => {
+    const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+    const r = recorder(() => okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409));
+    const world = (sessions: readonly FleetSession[]) => worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a',
+      disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }, sessions);
+    const { container, rerender } = renderCard(world([COORD_A, worker]), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    rerender(cardElement(world([COORD_A])));
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent), 'Attach went; the state did not move').toEqual(
+      ['Keep worktree', 'Not delegated']);
+    expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted').toBe(alert);
+    expect(alert.textContent, 'its text emptied').toBe('');
   });
 
   it('W5-U10: an older server\'s rows (no disposition, no hidden lease) render byte for byte as on the base', () => {

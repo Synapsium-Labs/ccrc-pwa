@@ -103,3 +103,30 @@ describe('an ask its row stops offering (review 1623 F4)', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('an act in flight (review 1624 F4 (a))', () => {
+  // Two acts started inside ONE `act`, so no render runs between them and no control is disabled yet: only the in-flight
+  // checks can stop the second. A confirm tapped twice there is stopped by the confirm's own ref (F1) before it reaches
+  // them, so the shapes that pin them are a confirm and a Keep, in either order.
+  it('a confirm and a Keep started together post once, in either order; a confirm tapped twice posts once', async () => {
+    for (const shape of ['confirm, then Keep', 'Keep, then confirm', 'confirm twice'] as const) {
+      let release: (r: Response) => void = () => {};
+      const fetch = vi.fn(() => new Promise<Response>((res) => { release = res; }));
+      renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+      const asked = last();
+      expect(asked.open, shape).toBe(true);
+      const keep = screen.getByRole('button', { name: 'Keep worktree (agent-a1)' });
+      act(() => {
+        if (shape === 'Keep, then confirm') keep.click();
+        asked.onConfirm();
+        if (shape === 'confirm, then Keep') keep.click();
+        if (shape === 'confirm twice') asked.onConfirm();
+      });
+      expect(fetch, shape).toHaveBeenCalledTimes(1);
+      await act(async () => { release(accepted()); });
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+});

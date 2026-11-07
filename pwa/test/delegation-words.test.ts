@@ -1,7 +1,7 @@
 // Delegation broker wave 4, PR2 Task 2.2, and delegation visibility Task 1: the delegation rows' words
 // (`fleet/delegationWords.ts`). D-6999's inferred chip, member tolerance, words that never say running (spec §4),
 // and a chip that counts every attached entry (D-7781).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LEASE_SOURCE_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS,
   DELEGATION_WORKSPACE_STATES, type DelegationActivityWire, type DelegationLeaseWire,
@@ -14,6 +14,14 @@ import {
 } from '../src/fleet/delegationWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 import { DELEGATION_CARRIER_STATES, LEASE_DOOR_REFUSALS } from '../../shared/api';
+
+// Review 1624 F7: the wire's `expiresAt` reader, wrapped so a row can see who reads the field. It answers exactly as the
+// real one unless a row says otherwise for one call, so every other row in this file reads the wire as before. The test
+// setup has loaded the client already (through the fleet store), so the F7 row loads a fresh `wireReaders` over it.
+vi.mock('../../shared/api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../shared/api')>();
+  return { ...real, delegationLeaseExpiresAtOf: vi.fn(real.delegationLeaseExpiresAtOf) };
+});
 
 describe('delegationWords (delegation broker wave 4, PR2)', () => {
   it('W4-U6: the inferred chip holds exactly for a raw or marked worktree, in every group, workspace and via', () => {
@@ -385,5 +393,29 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     expect(words.attachConfirm('coord-a').consequence).not.toMatch(/until|date|\d/);
     expect(words.confirmFor({ act: 'keep' })).toBeNull();
     expect(words.confirmFor({ act: 'foreign' })).toBe(words.notDelegatedConfirm);
+  });
+});
+
+describe('a door\'s accepted answer (review 1624 F7)', () => {
+  const AT = Date.parse('2026-11-07T09:00:00.000Z');
+  it('is handed on as it came, and read once, in the words module, by the wire\'s own reader', async () => {
+    vi.resetModules();
+    const { readDoorAnswer } = await import('../src/lib/wireReaders');
+    const fresh = await import('../src/fleet/delegationWords');
+    const reader = vi.mocked((await import('../../shared/api')).delegationLeaseExpiresAtOf);
+    // The client reads `ok` and passes `expiresAt` on untouched, whatever it holds: it applies no rule of its own.
+    for (const v of ['2026-11-24T12:00:00.000Z', null, 42, { at: 1 }]) {
+      expect(readDoorAnswer({ ok: true, expiresAt: v }), String(v)).toEqual({ ok: true, expiresAt: v });
+    }
+    // The note's date is whatever the wire's reader answers: a copy of the rule beside it would answer for itself.
+    reader.mockReturnValueOnce('2026-12-02T00:00:00.000Z');
+    expect(fresh.actDoneWord({ act: 'keep' }, '2026-11-24T12:00:00.000Z', AT)).toBe('Worktree kept until 2 Dec');
+    expect(reader).toHaveBeenLastCalledWith({ expiresAt: '2026-11-24T12:00:00.000Z' });
+    // CONTROL: through the real rule, absence, null and a value that is no string are no date known; a string is one.
+    for (const v of [undefined, null, 42]) expect(fresh.actDoneWord({ act: 'keep' }, v, AT), String(v)).toBe('Worktree kept');
+    // A 2xx with no `expiresAt`, through the client and then the words (review 1623 F8 (a)): no date known.
+    const absent = readDoorAnswer({ ok: true });
+    expect(absent !== 'unreadable' && absent.ok ? fresh.actDoneWord({ act: 'keep' }, absent.expiresAt, AT) : absent).toBe('Worktree kept');
+    expect(fresh.actDoneWord({ act: 'keep' }, '2026-11-24T12:00:00.000Z', AT)).toBe('Worktree kept until 24 Nov');
   });
 });
