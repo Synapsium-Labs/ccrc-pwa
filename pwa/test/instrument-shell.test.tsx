@@ -336,6 +336,57 @@ afterEach(() => {
   localStorage.clear();
 });
 
+// Desk-nav Task A Step 0 (D-8100): the desk doors' names, counts and current door, pinned on main against the rail
+// before the move, so the move commit changes only where `deskDoors()` finds them.
+describe('the desk doors, characterized', () => {
+  /** The desk's place doors, in order. */
+  const deskDoors = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('nav.shell-rail [data-command]')];
+  const PATHS = ['/', '/runs', '/settings/updates', '/docs/project-a/specs/a.md', `/s/${S.id}`, '/waiting/1'] as const;
+
+  /** `S` and two more sessions waiting on the operator, the two bound to open runs, and one open item, so Waiting on you,
+   *  Inbox and Runs all count. */
+  function countedFleet(): FleetSession[] {
+    const runs = [
+      { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
+      { id: 2, state: 'working', closedAt: null, sessionId: 'ask-1', claimedBy: null },
+    ] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true, fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
+    return withRunBinding([
+      S,
+      ...[0, 1].map((i) => fleetSession({ id: `ask-${i}`, project: 'proj', bucket: 'attention' })),
+    ], runs);
+  }
+
+  afterEach(() => {
+    act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+  });
+
+  it("each door's name, in order", () => {
+    stubAt(1280);
+    for (const at of PATHS) {
+      mount(at, countedFleet());
+      expect(deskDoors().map((d) => d.getAttribute('aria-label')), at).toEqual([
+        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs', 'Settings',
+      ]);
+      cleanup();
+    }
+  });
+
+  it('which door is current', () => {
+    stubAt(1280);
+    const want: Record<(typeof PATHS)[number], string | null> = {
+      '/': null, '/runs': 'go-runs', '/settings/updates': 'go-settings', '/docs/project-a/specs/a.md': 'go-docs',
+      [`/s/${S.id}`]: null, '/waiting/1': 'go-waiting',
+    };
+    for (const at of PATHS) {
+      mount(at, countedFleet());
+      const current = deskDoors().filter((d) => d.getAttribute('aria-current') === 'page').map((d) => d.getAttribute('data-command'));
+      expect(current, at).toEqual(want[at] === null ? [] : [want[at]]);
+      cleanup();
+    }
+  });
+});
+
 describe('the rail', () => {
   it('the rail renders RAIL_ITEMS in order, Activity not rendered, each with its word as its name and at least --tap-min tall', () => {
     mount('/');
