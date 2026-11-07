@@ -900,8 +900,8 @@ Decided on the draft of §5.7, 2026-10-21 (each as the draft recommended):
 Decided on wave 5g's plan, 2026-11-07 (each as the plan proposed; D-8080, D-8081):
 
 16. **An intent's key** is the repository's issue or PR number, `#<n>`, or a deviation number, `D-<n>` (§5.5).
-    Coordinators already share those two numbers, so two coordinators naming the same change name the same key.
-    Free text would rarely match.
+    Coordinators already share those two numbers, so two coordinators naming the same change are likely to name
+    the same key, while free text would rarely match.
 17. **Intents are not journalled.** They live in `coord.db` with the runs that hold them, and `landing.log` carries
     no intent record (§5.5, §7). A hold ends with its run, and the journal's parser refuses a record kind it does not
     know, so an intent record would stop an older build that reads `landing.log` from starting.
