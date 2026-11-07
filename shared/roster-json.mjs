@@ -379,11 +379,11 @@ function checkAccount(raw, index) {
   }
 
   // `baseUrl` and `models` — validated here, returned by nothing. The emitter
-  // (`generateAccountsSh`, `shared/generate.mjs:242-364`) reads neither, nor
+  // (`generateAccountsSh` in `shared/generate.mjs`) reads neither, nor
   // does the wrapper writer, so returning them would be dead code in the one
   // file in this tree no typechecker checks (`server/tsconfig.json` sets no
   // `checkJs`). `provider` is validated AND returned since D-8098: the emitter
-  // reads it for `CCRC_PAY_PER_USE` (`shared/generate.mjs:268`). All three are
+  // reads it for `CCRC_PAY_PER_USE`. All three are
   // validated because the SERVER refuses to boot on them, and that is this
   // file's whole job.
   //

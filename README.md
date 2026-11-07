@@ -1620,7 +1620,7 @@ without it neither half of ccrc runs:
 `accounts.sh` is a pure projection of `accounts.json` — `deploy/gen-accounts.mjs`
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
-`CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
+`CCRC_UPSTREAM`, `CCRC_PAY_PER_USE`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
 `_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
