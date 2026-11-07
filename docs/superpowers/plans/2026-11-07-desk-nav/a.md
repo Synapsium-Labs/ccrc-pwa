@@ -138,12 +138,26 @@ tree (`TopBar.tsx` 02662e84028b, `frame.tsx` a7084380395b, `instrument.css` 34a6
 
 ## Gates
 
-One at a time, through `ccrc test`, on this branch:
+One at a time, through `ccrc test`, on this branch.
 
-- `pwa` type check (`tsc --noEmit`): green.
-- `node design/contrast-check.mjs`: all 9804 pass.
-- The whole `pwa` suite (`--heavy`), first full run: 475 files, 14135 tests, green.
-- The whole browser suite (`--heavy`), first full run: 70 of 71 files, 2514 tests green, 2 red: `phone-bar.browser`'s "no
-  bar at a desk" in Instrument at 900 and 1280 (`phone-bar-browser-allows-the-home-door`). That file alone after the fix:
-  34 of 34. The session-header Instrument 900 pair, red on `main` on this box, did not fail in this run.
-- This box has no `/usr/bin/google-chrome`: the browser runs set `CCRC_CHROME` to Playwright's own Chromium.
+At the first tip (`c3e8279d6`):
+
+- `pwa` type check: green. `node design/contrast-check.mjs`: all 9804 pass.
+- The whole `pwa` suite (`--heavy`), first full run: 475 files and 14135 tests, all green.
+- The whole browser suite (`--heavy`), first full run: 70 of 71 files green (2514 tests), 2 tests red. Both were
+  `phone-bar.browser`'s "no bar at a desk" in Instrument, at 900 and 1280 (`phone-bar-browser-allows-the-home-door`).
+  That file alone after the fix: 34 of 34. The session-header Instrument 900 pair did not fail in this run.
+
+At fix round 1's tree:
+
+- instrument-shell, phone-bar, header, control-census, tap-targets, refined-shell, contrast, label-in-name and
+  skin-boundary: 662 of 662. The `pwa` type check is green, and contrast-check passes all 9804.
+- The browser `instrument-bar` and `instrument-desk` files: 85 of 85.
+- The whole `pwa` suite: 475 files and 14136 tests, all green.
+- The whole browser suite: 70 of 71 files green (2537 tests), 1 red: `connect-sheet.browser` "instrument, light, 360px"
+  ("below 900 the sheet is a bottom sheet"). Nothing in this task renders below 900, and that file alone is 20 of 20
+  green, so it was a one-off under load. The session-header Instrument 900 pair did not fail.
+- The server guard suites (deviation-refs, dtbd, citations, anchors, topology-clean, private-names, ownership, rings, the
+  census suites and single-definition): 48 files, green.
+
+This box has no `/usr/bin/google-chrome`, so the browser runs set `CCRC_CHROME` to Playwright's own Chromium.
