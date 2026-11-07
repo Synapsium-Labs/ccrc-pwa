@@ -43,6 +43,7 @@ import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
 import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
 import { isDelegationLeaseStateKebab } from '../src/coord/delegation-lease-state.js';
+import { isDelegationAdoptionKebab } from '../src/coord/delegation-adoption.js';
 import { isDelegationLeaseActsKebab } from '../src/coord/delegation-lease-acts.js';
 import { isCollectLaneKebab } from '../src/collectLane.js';
 import { isNoticeMode } from '../src/notice.js';
@@ -994,6 +995,11 @@ describe('the rejection table is total, in both directions', () => {
         // and the `operator-retain` reason. The doors' refusals ARE route refusals, sent through `refuseRoute` at the one status that
         // table gives each word. Admitted through the exported guard, never NOT_CODES.
         || isDelegationLeaseActsKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR7): the adoption decider's and the lane step's words, beside the lease doors' and never merged
+        // into them. `coord/delegation-adoption.ts` spells its decision kinds (`would-adopt`), the shadow's whys, the breaker's attention
+        // key and an audit not yet asked. None is a mail rejection or a run refusal: they ride the lane's memory, log lines and health.
+        // Admitted through the exported guard, derived from the module's tables, never NOT_CODES.
+        || isDelegationAdoptionKebab(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code

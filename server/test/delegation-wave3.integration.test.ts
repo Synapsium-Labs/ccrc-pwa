@@ -55,7 +55,7 @@ import { makeCcdHarness } from './ccdWsHelpers.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { callsIn, parsedFile, symbolOf } from './scan/symbols.js';
+import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const HOOK = path.join(REPO_ROOT, 'ccd/session-hook.sh');
@@ -955,10 +955,11 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
     'agent/src/whitelist.ts', 'server/src/ccdargv.ts', 'server/src/coord/approvalguard.ts', 'shared/api.ts']],
   ['ws-lease-audit', /\bws-lease-audit\b|\bcmd_ws_lease_audit\b|\blease-audit-v1\b/, [
     'ccd/ccd', 'ccd/lib/delegation-lease.sh', 'ccd/ccd-entry.py', 'agent/src/whitelist.ts', 'server/src/ccdargv.ts',
-    'server/src/remote/runner.ts', 'shared/api.ts']],
+    'server/src/remote/runner.ts', 'shared/api.ts',
+    'server/src/coord/delegation-adoption.ts', 'server/src/coord/delegationAdoptStep.ts']],   // PR7: the adoption step composes the audit
   ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, ['ccd/ccd', 'server/src/ccdargv.ts']],
   ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh', 'server/src/coord/delegationCarrierMark.ts']],
-  ['delegation-adopt', /delegation-adopt/, []],
+  ['delegation-adopt', /delegation-adopt/, ['shared/switches.ts', 'server/src/coord/delegation-adoption.ts', 'server/src/coord/delegationAdoptStep.ts']],   // PR7
   ['promotesLease', /\bpromotesLease\b/, []],
 ];
 const STILL_CLOSED = /\bws-lease-clean\b|\bcmd_ws_lease_clean\b|\blease-clean(?:-v1|-live)?\b|cleanup-queue/i;
@@ -1468,7 +1469,16 @@ describe('8. the closed scope census', () => {
     // the observation lane and the policy name no dispatch, hold, mail, claim or pause door
     const watch = read('server/src/watch.ts');
     const lane = watch.slice(watch.indexOf('class DelegationLane {'));
-    expect(code(lane)).not.toMatch(/dispatchRun|\bcoord\.(createRun|advanceRun|closeRun|abandonRun|takeClaim)|sendMail|\bsetHold\b|coordinator-paused|mail-disabled|ws-reap|ws-rm\b|ws-archive|ws-reclaim|ws-collect|ws-expire/);
+    const FORBIDDEN = /dispatchRun|\bcoord\.(createRun|advanceRun|closeRun|abandonRun|takeClaim)|sendMail|\bsetHold\b|coordinator-paused|mail-disabled|ws-reap|ws-rm\b|ws-archive|ws-reclaim|ws-collect|ws-expire/;
+    expect(code(lane)).not.toMatch(FORBIDDEN);
+    // PR7: the lane's adoption step (its own module) mails only through `queueRunlessNotice`, from its notices function alone
+    const step = read('server/src/coord/delegationAdoptStep.ts');
+    expect(code(step)).not.toMatch(FORBIDDEN);
+    expect(code(lane)).not.toMatch(/queueRunlessNotice|queueSystemMail|insertSystemMailTx|queueStallNotice/);
+    expect(code(step)).not.toMatch(/queueSystemMail|insertSystemMailTx|queueStallNotice/);
+    const calls = code(step).split('\n').filter((l) => /queueRunlessNotice\(/.test(l));
+    expect(calls, 'one call of queueRunlessNotice, in the step\'s notices').toHaveLength(1);
+    expect(code(sourceOfSymbol(path.join(REPO_ROOT, 'server/src/coord/delegationAdoptStep.ts'), 'queueOwedNotices'))).toContain('queueRunlessNotice(');
     for (const f of ['delegation-policy.ts', 'delegation-correlation.ts', 'delegation-ingest.ts', 'delegation-model.ts']) {
       expect(code(read(`server/src/coord/${f}`)), f).not.toMatch(/dispatchRun|runCcd|\bspawn\w*\(|\bexecFile\w*\(|child_process|\bwriteFile\w*\(/);
     }
@@ -1794,6 +1804,9 @@ describe('8. the closed scope census', () => {
       'deleteEventsBetween: (a, b, n) => coord.deleteDelegationEventsBetween(a, b, n),',
       // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
       'if (this.deps.coord === undefined) return false;',
+      // wave 5 (PR7 Task 5.7.3): the adoption step's notice sinks, the feed archive and the lease notices' mail (`queueRunlessNotice`)
+      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };',
+      'notice: (title, body, mode) => { notify(sink, { kind: \'coord\', sessionId: \'\', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);
     expect(lane).toMatch(/pathsByProject = new Map/);

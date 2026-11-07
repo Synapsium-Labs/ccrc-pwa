@@ -162,6 +162,43 @@ describe('leaseCoordinatorOf', () => {
   }, 60_000);
 });
 
+// Review 1564 F1 (carried into PR7): the 501 closed runs ARE in the parent's own series (bound to it, claimed by another coordinator), so a
+// series read capped at 500 rows drops one end of it. The claimant's run is put at each end in turn: past 500 rows in id order (the
+// highest id), and before them (the lowest id) with the others after it, so `ORDER BY id LIMIT 500` and `ORDER BY id DESC LIMIT 500`
+// each red one case. The others are newer than the lease: their intervals start after its first observation.
+describe('1564 F1: the claimant read is unbounded over the parent\'s own series', () => {
+  it.each(['last', 'first'] as const)('the claimant\'s run %s of 502 in the parent\'s series is still named', (where) => {
+    const store = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-lease-acts-'), 'coord.db')));
+    store.db.exec('PRAGMA synchronous = OFF');
+    let n = 0;
+    const open = (claimedBy: string): number => {
+      const r = store.openRun({ program: `program-${n++}`, title: 'run-a', project: 'project-a', wave: 1, waveOf: 1, claimedBy });
+      if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+      return r.id;
+    };
+    const claimant = (): number => {
+      const id = open('coord-a-demo');
+      store.bindSession(id, 'lane-a-demo');
+      expect(store.advance(id, 'failed', 'test-close').ok).toBe(true);
+      store.db.prepare('UPDATE runs SET openedAt = ?, closedAt = ? WHERE id = ?').run(atMin(10), atMin(40), id);
+      return id;
+    };
+    const mine = where === 'first' ? claimant() : -1;
+    for (let i = 0; i < 501; i++) {
+      const id = open('coord-b-demo');
+      expect(store.advance(id, 'failed', 'test-close').ok).toBe(true);
+      store.db.prepare('UPDATE runs SET sessionId = ?, openedAt = ?, closedAt = ? WHERE id = ?').run('lane-a-demo', atMin(60 + i), atMin(61 + i), id);
+    }
+    const target = where === 'last' ? claimant() : mine;
+    const naming = runStampsOfSeries(store, 'lane-a-demo');
+    if (!naming.ok) throw new Error(naming.detail);
+    expect(naming.runs.length, 'every run of the parent\'s series').toBe(502);
+    expect(naming.runs.some((r) => r.id === target)).toBe(true);
+    const lease = leaseRow({ parentId: 'lane-a-demo', firstObservedAt: formatDelegationInstant(atMin(30)) });
+    expect(leaseCoordinatorOf(lease, naming.runs)).toBe('coord-a-demo');
+  }, 60_000);
+});
+
 // ── decideResolve ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const ATTEMPT_AT = '2026-11-02T00:00:00.000Z';

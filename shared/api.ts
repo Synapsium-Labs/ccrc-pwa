@@ -12012,6 +12012,22 @@ export interface DelegationLeaseWire {
   /** Non-null exactly when `sourceKind` is `raw` (D-6999). */
   inferred: DelegationInferredWire | null;
   firstObservedAt: string;
+  /** Delegation wave 5 PR7: the lease's carrier state (`ephemeral`, `adopted`, `retained`, `transferring`, `promoted`). Absent from an older
+   *  server. Read it through `delegationLeaseDispositionOf`. */
+  disposition?: Exclude<DelegationCarrierState, 'released'>;
+  /** Delegation wave 5 PR7: until when an adopted or retained tree is held back from the orphan lane (its `cleanupDueAt`), else null.
+   *  Absent from an older server. Read it through `delegationLeaseExpiresAtOf`. */
+  expiresAt?: string | null;
+}
+
+/** `disposition`'s one reader (PR7): absence permits and reads as null, unknown (an older server's row). */
+export function delegationLeaseDispositionOf(row: Pick<DelegationLeaseWire, 'disposition'>): Exclude<DelegationCarrierState, 'released'> | null {
+  const d: unknown = row.disposition;
+  return isDelegationCarrierState(d) && d !== 'released' ? d : null;
+}
+/** `expiresAt`'s one reader (PR7): absence and null both read as null (no hold known); only a string is an expiry. */
+export function delegationLeaseExpiresAtOf(row: { readonly expiresAt?: string | null }): string | null {
+  return typeof row.expiresAt === 'string' ? row.expiresAt : null;
 }
 
 export interface DelegationUnownedWire {
@@ -12252,18 +12268,41 @@ export interface DelegationObservationHealth {
    * every carrier is marked. Read it through `delegationCarrierHealthOf`.
    */
   carriers?: DelegationCarrierHealth;
+  /**
+   * Wave 5 (PR7): the lane's adoption step, as of its last pass. Absent whenever every count is zero (D-8035's rule), and from an older
+   * server: absence says nothing was counted, never that nothing waits. Read it through `delegationAdoptionHealthOf`.
+   */
+  adoption?: DelegationAdoptionHealth;
 }
 
 /** Wave 5 (PR6): what the lane's carrier step counted in its last pass (`server/src/coord/delegation-carrier.ts#planCarrierSteps`).
  *  `marked`: leases whose journalled `seen` equals their generation, where no read this pass contradicted it (a lease not re-read this
  *  pass is counted from the journal). `pending`: marks the per-pass bound left for a later pass. `unsupported`: leases that would get a
- *  step on a box that reports `lease-mark-v1` (a released lease that never had a carrier gets none) on a box that does not, and leases
+ *  step on a box that reports `lease-mark-v1` on a box that does not, a released lease counted from the journal (its carrier was read
+ *  back at some generation; one whose carrier never was counts nothing, review 1549 F1), and leases
  *  whose mark would hold a tree on a box that does not report `lease-mark-lock-v1` (D-8037). `mismatched`: a carrier ahead of its lease
  *  or naming another sequence, state or identity, never overwritten. `unmeasured`: a carrier or listing that did not read. `unowned`: an
  *  unreleased carrier no journal lease owns. `refused`: leases whose last mark the box refused in a word that stands until their
  *  generation or tree changes, or until thirty passes have gone by (D-8039). */
 export interface DelegationCarrierHealth {
   marked: number; pending: number; unsupported: number; mismatched: number; unmeasured: number; unowned: number; refused: number;
+}
+
+/** Wave 5 (PR7): what the lane's adoption step decided in its last pass (the server's L1 decider, `decideAdoption`).
+ *  `mode`: `live` adopts, `shadow` (the operator's adoption marker absent) only records what it would adopt, `suspended` waits on the
+ *  breaker, `unmeasured` when the marker or the breaker did not read. `adopted`: adoptions decided this pass. `wouldAdopt`: the ones
+ *  shadow only recorded. `waiting`: leases waiting on their carrier's read-back, the settle or the breaker. `unchanged`: an audit proved the tree
+ *  unchanged, so it stays `ephemeral`. `unaudited`: audits past the per-pass bound. `conflicting`: leases waiting for the operator's
+ *  resolve. `unsupported`: leases a box that cannot hold a tree leaves waiting. `uncensused`: leases whose project the census did not
+ *  reach. `owed`: notices derived from durable state and not queued this pass (mail held, or the recipient unmeasured). */
+export interface DelegationAdoptionHealth {
+  mode: 'live' | 'shadow' | 'suspended' | 'unmeasured'; adopted: number; wouldAdopt: number; waiting: number; unchanged: number;
+  unaudited: number; conflicting: number; unsupported: number; uncensused: number; owed: number;
+}
+
+/** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block). */
+export function delegationAdoptionHealthOf(health: Pick<DelegationObservationHealth, 'adoption'>): DelegationAdoptionHealth | null {
+  return typeof health.adoption === 'object' && health.adoption !== null ? health.adoption : null;
 }
 
 /** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every

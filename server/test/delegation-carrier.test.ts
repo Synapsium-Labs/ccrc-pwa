@@ -53,11 +53,14 @@ describe('planCarrierSteps', () => {
     const b = plan(behind, { supported: false, readBack: new Map([[behind.leases[0]!.leaseId, { kind: 'absent' }]]) });
     expect(b.steps).toEqual([]);
     expect(b.health).toMatchObject({ unsupported: 1, marked: 0, pending: 0 });
-    // review 1547 F5: only a lease the planner would give a step on a supported box counts; a released lease that never had a carrier
-    // (rule 3 gives it none) counts nothing, while a released lease whose carrier reads behind does
+    // review 1547 F5, as review 1549 F1 rules it (PR7): only a lease the planner would give a step on a supported box counts. An unsupported
+    // box reads nothing (`planCarrierPass` reads only behind `supported`), so a released lease counts from the journal: one whose carrier
+    // was read back at some generation (`carrierGenerationSeen` above 0) counts, one whose carrier never was counts nothing
     const gone = checkpointWithLease({ generation: 2, carrierGenerationSeen: 1, releasedAt: '2026-11-10T00:00:00.000Z' });
+    expect(plan(gone, { supported: false }).health.unsupported, 'a released lease whose carrier the journal saw, with no read-back').toBe(1);
+    const never = checkpointWithLease({ generation: 1, carrierGenerationSeen: null, releasedAt: '2026-11-10T00:00:00.000Z' });
+    expect(plan(never, { supported: false }).health.unsupported, 'a released lease whose carrier was never read back').toBe(0);
     const goneId = gone.leases[0]!.leaseId;
-    expect(plan(gone, { supported: false, readBack: new Map([[goneId, { kind: 'absent' }]]) }).health.unsupported).toBe(0);
     expect(plan(gone, { supported: false, readBack: new Map([[goneId, carrier(bodyOf(gone.leases[0]!, { generation: 1 }))]]) }).health.unsupported).toBe(1);
   });
 

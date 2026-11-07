@@ -451,6 +451,10 @@ const wrapped = (w: World, over: Partial<Pick<DelegationDurability, 'transitionL
   };
 };
 const stale = { kind: 'refused' as const, refusal: 'stale-generation' as const, detail: 'the lease moved' };
+/** The real applier's three members, for a row that replaces only its `state`. */
+const wrappedOf = (real: DelegationDurability) => ({ state: () => real.state(),
+  transitionLease: (req: Parameters<DelegationDurability['transitionLease']>[0]) => real.transitionLease(req),
+  releaseLease: (req: Parameters<DelegationDurability['releaseLease']>[0]) => real.releaseLease(req) });
 
 describe('F2: the door\'s rare paths', () => {
   it('(1) resolve-attach reads the parent\'s registry row: a parent whose generation file is absent answers 409 not-live-parent, journals nothing', async () => {
@@ -504,6 +508,35 @@ describe('F2: the door\'s rare paths', () => {
     for (const res of [await retain(w, w.x), await operatorRetain(w, w.x), await resolve(w, w.r, { action: 'foreign' })]) {
       expect([res.statusCode, res.json().error]).toEqual([503, 'not-ready']);
       expect(res.json().detail).toMatch(/not confirmed durable/);
+    }
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+  });
+
+  // Review 1564 F5 (PR7, TAKE): one try around the whole decision step; a throw there answers 503 not-ready and journals nothing.
+  it('1564 F5: a throwing claimant read, or a lease instant that does not parse, answers 503 not-ready and journals nothing', async () => {
+    const w = await world();
+    const n = journal(w.home).length;
+    const spy = vi.spyOn(w.coord, 'bindingRunsOf').mockImplementation(() => { throw new Error('a fixture database fault'); });
+    const thrown = await retain(w, w.x);
+    expect([thrown.statusCode, thrown.json().error]).toEqual([503, 'not-ready']);
+    expect(thrown.json().detail).toMatch(/could not be decided \(a fixture database fault\)/);
+    spy.mockRestore();
+    const real = w.durable;
+    w.route.applier = { ...wrappedOf(real), state: () => {
+      const st = real.state();
+      return { ...st, checkpoint: { ...st.checkpoint, leases: st.checkpoint.leases.map((l) => (l.leaseId === w.x ? { ...l, firstObservedAt: '2026-11-01 00:01' } : l)) } };
+    } };
+    const bad = await retain(w, w.x);
+    expect([bad.statusCode, bad.json().error]).toEqual([503, 'not-ready']);
+    expect(journal(w.home).length, 'nothing journalled').toBe(n);
+  });
+
+  // Review 1564 F8's residual (PR7, rows only): unmeasured capabilities fail shut at the doors.
+  it('1564 F8: with capabilities unmeasured (ccdVerbs null) retain, operator-retain and attach of an ephemeral lease answer box-unsupported and journal nothing', async () => {
+    const w = await world({ caps: null });
+    const n = journal(w.home).length;
+    for (const res of [await retain(w, w.x), await operatorRetain(w, w.x), await resolve(w, w.r, { action: 'attach', parent: PARENT.id })]) {
+      expect([res.statusCode, res.json().error]).toEqual([503, 'box-unsupported']);
     }
     expect(journal(w.home).length, 'nothing journalled').toBe(n);
   });

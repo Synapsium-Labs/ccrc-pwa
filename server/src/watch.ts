@@ -98,6 +98,7 @@ import { DelegationDurability, type DelegationDurableBatch } from './coord/deleg
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
 import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
 import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
+import { adoptionHealthShown, emptyAdoptLaneMemory, runAdoptStep } from './coord/delegationAdoptStep.js';
 import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
 import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import { nodeDelegationFilePort } from './coord/delegation-file-port.js';
@@ -1974,7 +1975,7 @@ export class FleetWatcher {
    *  field initialiser runs, so it cannot be built beside the other fields. */
   private delegationLaneMemo: DelegationLane | null = null;
   private delegationLane(): DelegationLane {
-    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes);
+    this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
   }
 
@@ -10262,6 +10263,8 @@ class DelegationLane {
   private absentListings = { counts: new Map<string, number>(), heads: new Map<string, string>(), uncensused: 0 };
   /** PR6: the carrier step's memory (standing refusals, logged refusals, known-released unowned carriers) and its last counts. */
   private readonly carrierMemory = emptyCarrierLaneMemory();
+  /** PR7: the adoption step's memory (the decider's watch, the standing attention keys, the audits asked and held, the logged lines). */
+  private readonly adoptMemory = emptyAdoptLaneMemory();
   private verdicts: DelegationVerdictCounts = { unresolved: 0, conflicting: 0, unmeasured: 0 };
   private reconciled = false;
   /** When (the pass's clock) the last reconcile completed: the breaker vouches for the counts only while it is recent (M-1). */
@@ -10270,6 +10273,7 @@ class DelegationLane {
   private lastAlive = new Set<string>();
   private aliveSeen = false;
   private readonly firstDead = new Map<string, number>();
+  private readonly retractedDeaths = new Set<string>();   // PR7 (review 1604 F7): a counted death a stop or archive stamp retracted
   /** Rung 2's positive meta reads (a point lookup in the parent's own transcript tree), kept for the process: a meta is read evidence,
    *  not journal evidence, so it is never durable and is read again after a restart. */
   private readonly pointMetas = new Map<string, LanePointMeta>();
@@ -10428,7 +10432,8 @@ class DelegationLane {
     } catch { /* diagnostics only: a line that cannot be built is not written, and `run` settles as it would have */ }
   }
 
-  constructor(private readonly deps: WatcherDeps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner) {}
+  constructor(private readonly deps: WatcherDeps, private readonly census: () => DelegationCensusPass | null, private readonly lanes: LaneRunner,
+    private readonly listedIds: () => ReadonlySet<string> | null = () => null) {}   // PR7 (review 1587 F1): every id the registry's listing named
 
   /** R103 (review F3): an unlistable registry stops `tick()` before the census and before this lane's pass (its fail-shut return), so
    *  nothing is listed while it lasts: it is "no census", and marks the lane NOT READY. The first pass after it sets the ready instant. */
@@ -10733,8 +10738,9 @@ class DelegationLane {
     const unlisted = this.durable !== null && this.durable.tailQuarantineUnmeasured();
     // PR5b (D-7852): unreleased leases whose project the last census did not reach; absent while none, so an older reader sees no change.
     const uncensused = this.absentListings.uncensused, carriers = delegationCarrierHealthShown(this.carrierMemory.health);   // PR6
+    const adoption = adoptionHealthShown(this.adoptMemory);                                                                    // PR7
     return { ...health, ...(healed === null ? {} : { lastTailHeal: healed }), ...(unlisted ? { tailQuarantineUnmeasured: true as const } : {}),
-      ...(uncensused > 0 ? { uncensusedLeases: uncensused } : {}), ...(carriers === null ? {} : { carriers }) };
+      ...(uncensused > 0 ? { uncensusedLeases: uncensused } : {}), ...(carriers === null ? {} : { carriers }), ...(adoption === null ? {} : { adoption }) };
   }
 
   /** Wave 4: the projection as of the last pass, decided in L1 (`projectDelegation`); null while there is nothing measured to
@@ -10943,6 +10949,14 @@ class DelegationLane {
             if (out instanceof Error || out.kind === 'refused') console.warn(`ccrc-server: delegation lease ${r.leaseId} native-removed release ${out instanceof Error ? `threw: ${out.message}` : `refused: ${out.refusal}: ${out.detail}`}`);
             else { this.absentListings.counts.delete(r.leaseId); this.absentListings.heads.delete(r.leaseId); }
           }
+          // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
+          if (durable.state().phase === 'ready' && !pass.signal.aborted) {
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
+            await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
+              notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
+            }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, listedIds: this.listedIds(), registryListed: this.registryListed,
+              sessions: pass.sessions, retracted: this.retractedDeaths, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
+          }
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();
           if (cs.phase === 'ready' && !pass.signal.aborted) {
@@ -11048,17 +11062,18 @@ class DelegationLane {
         const stopAt = stoppedBy !== null ? stoppedBy.at : archivedAt !== null ? archivedAt * 1000 : null;
         const recorded = this.firstDead.get(s.id);
         if (stopAt !== null && recorded !== undefined) {
-          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); continue; }
+          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); this.retractedDeaths.add(s.id); continue; }
         } else if (stopAt !== null) {
           if (stopAt <= pass.now + DELEGATION_CLOCK_SKEW_MS) continue;
         }
         // D-5242: a HIBERNATED row went down on purpose (`ccd hibernate`, journalled as deliberate) — it is asleep, not a
         // death, so it never feeds the delegation breaker, which suspends at two fresh parent deaths in its window and
         // would otherwise trip on every burst of sleeps (the sweeps put up to six down in one window).
-        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) { this.firstDead.set(s.id, pass.now); this.retractedDeaths.delete(s.id); }
       }
     }
-    for (const id of alive) this.firstDead.delete(id);
+    for (const id of alive) { this.firstDead.delete(id); this.retractedDeaths.delete(id); }
+    for (const id of this.retractedDeaths) if (!pass.records.some((r) => r.id === id)) this.retractedDeaths.delete(id);   // left the registry
     for (const [id, at] of this.firstDead) if (pass.now - at > DELEGATION_DEAD_MEMORY_MS) this.firstDead.delete(id);
     this.lastAlive = alive;
     this.aliveSeen = true;

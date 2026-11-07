@@ -90,7 +90,9 @@ async function readIndexed(d: CarrierReadDeps): Promise<ReadonlySet<string> | 'u
  * (a proven absent directory is every carrier absent; an unreadable one reads nothing, and every lease that needed a read counts
  * `unmeasured`), one read per listed carrier `carrierReadsOf` names (every lease behind its generation, and up to eight up-to-date
  * unreleased ones, least recently read first, D-8034), one per unowned carrier not already known `released`, and the by-tree entries
- * only while a released lease with no carrier has not yet been measured against them (a lease whose mark did not run, for thirty passes).
+ * only while a released lease with no carrier has not yet been measured against them (a lease whose mark did not run, for thirty passes;
+ * an entry that later names a lease already measured without one makes it measured again, review 1549 F4). The re-verify reads are
+ * optional: an unreadable listing reads nothing, and only the leases that needed a read count `unmeasured` (review 1549 F5).
  * A lease not re-read this pass is `marked` when its journalled `seen` equals its generation and no read this pass contradicted it. The
  * census row of each lease's tree is the pass's census record and the registry workdirs at or inside it.
  */
@@ -134,7 +136,11 @@ export async function planCarrierPass(d: CarrierReadDeps, cp: DelegationCheckpoi
     }
     if (heal.length > 0) {
       indexed = await readIndexed(d);
-      if (indexed !== 'unmeasured') for (const id of heal) if (!indexed.has(id) && !memory.notRan.has(id)) memory.notIndexed.add(id);
+      if (indexed !== 'unmeasured') {
+        for (const id of heal) if (!indexed.has(id) && !memory.notRan.has(id)) memory.notIndexed.add(id);
+        // review 1549 F4: an entry written late names a lease already `notIndexed`; it is measured again, so its heal is asked
+        for (const id of memory.notIndexed) if (indexed.has(id)) memory.notIndexed.delete(id);
+      }
     }
   }
   const plan = planCarrierSteps({ checkpoint: cp, readBack, supported, lockSupported: capSupported(input.fleetState, LEASE_MARK_LOCK_CAP),
