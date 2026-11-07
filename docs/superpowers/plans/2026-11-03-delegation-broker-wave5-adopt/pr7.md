@@ -26,8 +26,8 @@ captured before that arm landed.
 So the worker stopped before Task 5.7.2, and the coordinator ruled that Task 0 leaves PR7. The capture was discarded:
 `matrix.json` is HEAD's, the five version directories were removed and the raw root deleted, and the rig README's leftover
 check printed nothing. The corpus for those versions, with the rig's fan-outs naming their model, is its own change. It
-lands before the operator arms adoption. PR7 lands on the 14-version corpus, which W5-D12 reads at PR7's tip, and the six
-corpus suites are green on it, each run alone.
+lands before the operator arms adoption. PR7 landed on the 21-version corpus (that change, #2397, merged during fix round 2),
+which W5-D12 reads at PR7's tip, and the six corpus suites are green on it, each run alone (corrected by PR7b, review 1609 F10).
 
 ## The floor rule, as built
 
@@ -169,11 +169,13 @@ commit merges it and keeps both sides. The rest are the coordinator's rulings, e
   The lane keeps the last-read map and prunes it with the lease.
 - **F3 (the restart row can red).** It reads the new lane's applier, asserts `adopted` 0, and gains a control. REVIEW-X-deadalone
   (a decider that takes a dead parent's row alone as evidence) reds it.
-- **F4 (a cut pass writes nothing).** After every awaited audit or read, a cut pass returns before it writes lane memory or
-  queues a notice. The asked audits stay asked.
+- **F4 (a cut pass writes nothing).** As built here, that held only for a cut inside the audits: `asked` was cleared and `pass`
+  counted before the carrier reads, and a cut in the effects loop came after the lane memory was written (review 1609 F4). PR7b
+  (`pr7b.md`) moved both below the last awaited read and says exactly what a cut writes at each point.
 - **F5 and F7 (what drops a kept death).** Alive again at the lease's incarnation drops it at every rule that keeps the entry, and
   so does the lane's retraction of the death it counted. The lane remembers a retraction until the parent is alive again, dies
-  again or leaves the registry.
+  again or is measured absent from the registry's listing; a row the listing names that the registry could not assemble keeps it
+  (corrected by PR7b, review 1609 F2: as built here, an unbuilt row erased it).
 - **F6 (two later rules keep the entry).** A census record that reads `unreadable` holds it; a definite `changed: false` keeps it.
 - **F8.** A held audit answer is young only at an age from 0 to the hour, so a clock step back holds none past it.
 - **F9 and F10.** D-8058 records the interfaces PR9 and PR10 consume; the text corrections are in this note, D-7812 and the
@@ -196,7 +198,7 @@ commit merges it and keeps both sides. The rest are the coordinator's rulings, e
 
 | Item | What changed | Row (red under its mutant) | Mutant |
 |---|---|---|---|
-| A, Task 0 | none: Task 0 left PR7 (D-8053) | W5-D12 over the 14-version matrix | none |
+| A, Task 0 | none: Task 0 left PR7 (D-8053) | W5-D12 over the 21-version matrix | none |
 | B, D-7973 | none: the fold is PR5a's | W5-Q2 | W5-DM15 |
 | B, the clamp | the adopt door writes `max(terminalAt, firstObservedAt)` | W5-Q2 (`terminalEvidenceAt`), the D-7968 row | none |
 | B, the adopt generation | D-8056 | the owed-notice row | none |
@@ -241,7 +243,7 @@ was narrowed by fix round 1 (review 1587 A3): round 1's table said "each shape",
 | W5-DM11b | `delegationAdoptStep.ts` | the claimant from open runs only | W5-Q5 (the three closed shapes; the open shape cannot red under an open-runs read) |
 | W5-DM11c | `delegation-adoption.ts` | the parent receives at any incarnation | W5-D20; W5-Q6b |
 | W5-DM11d | `delegationAdoptStep.ts` | the bounded `delegationRunStamps()` read | W5-Q5 (first of 502) |
-| W5-DM12 | `delegation-adoption.ts` | the decider reads the clock | W5-D17, deterministically. While the wall clock is before the fixture's T0 (2026-11-10 12:00 UTC) it also reds W5-D1, D2, D5, D6, D8, D10, D11, D13, D14, D14b, D15, D16, D16b, the carrier-read row and the F1, F2, F3 and F7 rows (19 rows with W5-D17, measured 2026-11-06). After T0 most stop being killers; W5-D16 and D16b (their `due` is T0 + 30 days) stay red until about 2026-12-09 |
+| W5-DM12 | `delegation-adoption.ts` | the decider reads the clock | W5-D17, deterministically. While the wall clock is before the fixture's T0 (2026-11-10 12:00 UTC) it also reds W5-D1, D2, D5, D6, D8, D10, D11, D13, D14, D14b, D15, D16, D16b, the carrier-read row and the F1, F2, F3 and F7 rows (19 rows with W5-D17, measured 2026-11-06; 24 of the 40 rows at PR7's merged tip, measured by PR7b on 2026-11-07, review 1609 F10). After T0 most stop being killers; W5-D16 and D16b (their `due` is T0 + 30 days) stay red until about 2026-12-09 |
 | W5-DM13 | `delegation-adoption.ts` | a conflicting tree does not wait | W5-D18, the carrier-read row |
 | W5-DM14 | `delegation-adoption.ts` | `boxHolds` ignored | W5-D19; the two `boxHolds` rows and the 1564 F8 row (lane) |
 | W5-DM15 | `delegation-checkpoint.ts` | the `retained-lineage` fold removed | W5-Q2 |
@@ -298,7 +300,7 @@ show that PR7's rows guard code PR7 relies on.
 `watch.ts` grows by 15 lines against the merge base (21 added, 6 removed). Two of the added lines are comments, so it grows by
 13 net code lines, against the plan's aim of at most +40. Review 1587 A6 corrected the first figure. Fix round 1 added the
 listing's ids and liveness to the call; fix round 2 added the lane's memory of a retracted death (review 1604 F7) and passes the
-sessions. `store.ts` is unchanged. The two new coord files are `delegation-adoption.ts` (428 lines) and `delegationAdoptStep.ts`
+sessions. `store.ts` is unchanged. The two new coord files are `delegation-adoption.ts` (429 lines) and `delegationAdoptStep.ts`
 (216).
 
 ## Suites at the tip
