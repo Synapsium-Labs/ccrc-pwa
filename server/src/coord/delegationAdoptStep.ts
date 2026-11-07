@@ -35,6 +35,8 @@ import {
   type LeaseDigestItem, type LeaseRecipient, type ParentFact,
 } from './delegation-adoption.js';
 import type { IdentityField, Presence } from '../../../shared/api.js';
+/** The lane's last-alive memory records a pass by the decider's own liveness answer (review 1622 F1). */
+export { adoptionAlive } from './delegation-adoption.js';
 
 export interface AdoptLaneMemory {
   /** The decider's watch, carried pass to pass. */

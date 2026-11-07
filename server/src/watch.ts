@@ -98,8 +98,7 @@ import { DelegationDurability, type DelegationDurableBatch } from './coord/deleg
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
 import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
 import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
-import { adoptionHealthShown, emptyAdoptLaneMemory, runAdoptStep } from './coord/delegationAdoptStep.js';
-import { adoptionAlive } from './coord/delegation-adoption.js';
+import { adoptionAlive, adoptionHealthShown, emptyAdoptLaneMemory, runAdoptStep } from './coord/delegationAdoptStep.js';
 import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
 import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import { nodeDelegationFilePort } from './coord/delegation-file-port.js';
@@ -10955,7 +10954,8 @@ class DelegationLane {
           }
           // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
           if (durable.state().phase === 'ready' && !pass.signal.aborted) {
-            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push }, before = this.adoptMemory.watch;
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
+            const before = this.adoptMemory.watch;                       // review 1622 F1: replaced only when the decider ran
             try {                                                         // PR7b: a throw here never skips PR6's carrier step
               await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
                 notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
