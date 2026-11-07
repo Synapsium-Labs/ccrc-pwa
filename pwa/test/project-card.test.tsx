@@ -1,6 +1,6 @@
 // A card is always a project; a line is always a session. No bare path.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { DelegationProjectionWire, FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
 import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
@@ -21,6 +21,7 @@ import { fleetTree } from '../src/fleet/fleetTree';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 import { NO_ROLLUP_PREFS, rollupCard, toggleChildren, type RollupPrefs } from '../src/fleet/rollup';
 import { WARN_GLYPH } from '@ccrc/ui';
+import { COORD_A, LEASE_ID, okJson, renderCard, worldWithLease, worldWithUnowned } from './leaseCardFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -1580,5 +1581,138 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     const nested = render(<ProjectCard group={cardFor(frame({ activities: [activity({ parentId: 'coord-a' })] }))}
       onOpen={() => {}} onActions={() => {}} />);
     expect(parts(nested.container)).toEqual([['agent', 'explore the tree', 'not confirmed']]);
+  });
+});
+
+// Delegation broker wave 5, PR10 (Task 5.10.2): the worktree controls on a card's rows. The words module decides which control a
+// row offers and spells every word; the card draws them, asks first where the words say so, calls the door, and shows a
+// refusal's detail on the row. O5-8 (c) (D-7847) and D-8095: an unowned row offers Not delegated only, and only through the
+// lease the projection hid on its tree.
+describe('worktree controls on a project card (delegation broker wave 5, PR10)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  type Call = { url: string; body: unknown };
+  const recorder = (answer: (url: string) => Response = () => okJson({ ok: true, lease: LEASE_ID, generation: 2,
+    disposition: 'retained', expiresAt: '2026-11-24T12:00:00.000Z', carrier: 'pending' })) => {
+    const calls: Call[] = [];
+    return { calls, fetch: (url: string, init?: RequestInit) => {
+      calls.push({ url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
+      return answer(url);
+    } };
+  };
+  const RESOLVE = new RegExp(`/api/leases/${LEASE_ID}/resolve$`);
+
+  it('W5-U4: an adopted worktree row shows its kept-until date and a Keep worktree control that calls operator-retain', async () => {
+    const calls: string[] = [];
+    const { getByRole, getByText } = renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }),
+      { fetch: (url: string) => { calls.push(url); return okJson({ ok: true, disposition: 'retained', expiresAt: '2026-11-24T12:00:00.000Z' }); } });
+    expect(getByText('kept until 17 Nov')).toBeTruthy();
+    expect(getByText('worktree kept')).toBeTruthy();
+    await userEvent.click(getByRole('button', { name: 'Keep worktree' }));
+    expect(calls).toEqual([expect.stringMatching(/\/api\/leases\/[0-9a-f-]{36}\/operator-retain$/)]);
+  });
+
+  it('W5-U5: an inferred row\'s Attach offers only its own parent and posts {action:\'attach\', parent} to resolve', async () => {
+    const r = recorder();
+    renderCard(worldWithLease({ sourceKind: 'raw' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to…' }));
+    expect(r.calls).toEqual([]);
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain('Attach this worktree to coord-a?');
+    // The one choice is the worktree's own session: no picker, no list of sessions.
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.queryByRole('combobox')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to coord-a' }));
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'attach', parent: 'coord-a' } }]);
+  });
+
+  it('W5-U5 (R9): a programme worker\'s inferred worktree attaches to the worker, never to the coordinator it is drawn under', async () => {
+    const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+    const r = recorder();
+    renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a' }, [COORD_A, worker]), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to…' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Attach to worker-a' }));
+    expect(screen.queryByRole('button', { name: 'Attach to coord-a' })).toBeNull();
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'attach', parent: 'worker-a' } }]);
+  });
+
+  it('W5-U6: an unowned row with a hidden lease offers Not delegated only, posting to that lease; with none it offers nothing', async () => {
+    const r = recorder();
+    const { container, unmount } = renderCard(worldWithUnowned({ verdict: 'conflicting', leaseId: LEASE_ID }), { fetch: r.fetch });
+    const row = container.querySelector<HTMLElement>('.proj-work')!;
+    expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Not delegated']);
+    // D-8095: the wire carries no parent for the hidden lease, so no attach can be posted from this row.
+    expect(screen.queryByRole('button', { name: 'Attach to…' })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'foreign' } }]);
+    unmount();
+    const none = renderCard(worldWithUnowned({ verdict: 'conflicting' }));
+    expect(none.container.querySelector('.proj-work')).not.toBeNull();
+    expect(none.container.querySelector('.proj-work button')).toBeNull();
+  });
+
+  it('W5-U7: Not delegated asks for confirmation, says what it means, and posts {action:\'foreign\'} only after it', async () => {
+    const r = recorder();
+    renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toContain(
+      'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.');
+    expect(r.calls).toEqual([]);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(r.calls).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'foreign' } }]);
+  });
+
+  it('W5-U8: a transferring row says "moving to a run" and offers no control; a promoted one offers only Not delegated', () => {
+    const { container, unmount } = renderCard(worldWithLease({ disposition: 'transferring', expiresAt: '2026-11-17T12:00:00.000Z' }));
+    expect(screen.getByText('moving to a run')).toBeTruthy();
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    expect(container.textContent).not.toContain('kept until');
+    unmount();
+    const promoted = renderCard(worldWithLease({ disposition: 'promoted' }));
+    expect(screen.getByText('moved to a run')).toBeTruthy();
+    expect([...promoted.container.querySelectorAll('.proj-work button')].map((b) => b.textContent)).toEqual(['Not delegated']);
+  });
+
+  it('W5-U9: a refusal\'s detail shows on the row, and nothing is retried by itself', async () => {
+    const detail = 'the box has not read this worktree back at its newest change yet';
+    const r = recorder(() => okJson({ ok: false, error: 'carrier-behind', detail }, 409));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree' }));
+    const row = container.querySelector<HTMLElement>('.proj-work')!;
+    expect(await within(row).findByText(detail)).toBeTruthy();
+    expect(r.calls).toHaveLength(1);
+    // A failure that is no door's answer says so on the row too, in the app's words.
+    const broken = recorder(() => okJson({ error: 'internal' }, 500));
+    cleanup();
+    renderCard(worldWithLease({ disposition: 'retained' }), { fetch: broken.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree' }));
+    expect(await screen.findByText(/^Couldn't keep the worktree/)).toBeTruthy();
+    expect(broken.calls).toHaveLength(1);
+  });
+
+  it('W5-U10: an older server\'s rows (no disposition, no hidden lease) render byte for byte as on the base', () => {
+    // Measured on the base (67121c031) with this fixture, before PR10's card change.
+    const BASE = [
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-a1; Execution not confirmed: its session is live in the run that started it, but nothing shows the helper itself is still working\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">agent worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-a1</span></span><span class=\"proj-work-part\">not confirmed</span></span></div>",
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-r1; Execution not confirmed: its session is live in the run that started it, but nothing shows the helper itself is still working\"><span class=\"proj-work-parts\"><span class=\"proj-work-part\">worktree</span><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-r1</span></span><span class=\"proj-work-part\">not confirmed</span></span><span class=\"proj-work-chip\" title=\"linked by the worktree listing taken before and after Bash call toolu_test_0001, with no other session's listing overlapping it; no upstream id confirms it, and nothing acts on it automatically\">inferred</span><span class=\"proj-work-chip\" title=\"the Bash call that created this worktree: toolu_test_0001\">Bash call …est_0001</span></div>",
+    "<div class=\"proj-work\" title=\"/work/project-a/.claude/worktrees/agent-u1: no-correlating-evidence\"><span class=\"proj-work-parts\"><span class=\"proj-work-part proj-work-name\"><span class=\"proj-work-name-text\">agent-u1</span></span><span class=\"proj-work-part\">two owners claimed it</span></span></div>",
+    ];
+    const { container } = renderCard({ frame: frame({ leases: [lease({ leaseId: LEASE_ID }), lease({ leaseId: 'l-raw', sourceKind: 'raw',
+      adminRecord: 'agent-r1', canonicalPath: '/work/project-a/.claude/worktrees/agent-r1' })],
+      unowned: [unowned({ verdict: 'conflicting' })] }), sessions: [COORD_A] });
+    expect([...container.querySelectorAll('.proj-work')].map((r) => r.outerHTML)).toEqual(BASE);
+  });
+
+  it('W5-U11: the three controls are buttons named by their words, drawn by the design system\'s Button', () => {
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }));
+    const row = container.querySelector<HTMLElement>('.proj-work')!;
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
+    // `Button` (@ccrc/ui) carries its own tap floor, which is why control-census registers no `<Button>` call site.
+    for (const b of within(row).getAllByRole('button')) expect(b.className).toMatch(/\bmin-h-tap\b/);
+    expect(row.textContent).not.toMatch(/lease|adopt|retain|clean|spool|running/i);
   });
 });

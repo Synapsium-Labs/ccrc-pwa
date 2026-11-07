@@ -338,7 +338,7 @@ export function keptWord(expiresAt: string | null, now: number): string {
 
 /** The words a worktree row adds after its own: its disposition and, while it is held, the date it is kept until. An older
  *  server's row (no `disposition`) adds none, and so renders as before. */
-export function dispositionParts(l: DelegationLeaseWire, now: number): readonly string[] {
+export function worktreeStateParts(l: DelegationLeaseWire, now: number): readonly string[] {
   const d = dispositionOf(l);
   if (d === null) return [];
   const exp = expiryOf(l);
@@ -375,8 +375,15 @@ export const notDelegatedConfirm: ConfirmWords = {
   consequence: 'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.',
   confirmLabel: NOT_DELEGATED_WORD,
 };
-/** A request that did not come back with an answer: nothing was confirmed either way. */
-export function controlFailedWord(message: string): string {
-  return `No answer came back (${message}); check the row again before you retry`;
+/** Each control's label. */
+export const ACT_WORD: Readonly<Record<WorktreeAct, string>> = { keep: KEEP_WORD, attach: ATTACH_WORD, foreign: NOT_DELEGATED_WORD };
+/** Each act as a verb, for the app's "Couldn't <verb> — <why>" when a request gets no door's answer (`failedTo`). */
+export const ACT_VERB: Readonly<Record<WorktreeAct, string>> = {
+  keep: 'keep the worktree', attach: 'attach the worktree', foreign: 'mark the worktree not delegated',
+};
+/** The note after a door accepted the act. The row itself changes when the next frame carries it. */
+export function actDoneWord(act: WorktreeAct, expiresAt: string | null, parentLabel: string | null, now: number): string {
+  if (act === 'keep') return keptWord(expiresAt, now);
+  return act === 'attach' ? `Worktree attached to ${parentLabel ?? 'its session'}` : 'Worktree marked not delegated';
 }
 

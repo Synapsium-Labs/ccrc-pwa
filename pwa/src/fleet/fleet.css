@@ -2272,6 +2272,20 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 
+/* A worktree row's controls (delegation broker wave 5, PR10): Keep, Attach and Not delegated, and a refused act's detail. They
+   follow the words and chips and wrap as the row does, so on a phone they drop under the words rather than squeezing them;
+   each button carries its own tap floor (`Button`). A refusal's detail is a sentence, so it breaks anywhere it must. */
+.proj-work-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
    never a --glow — it explains a row, it is not a row — and it takes
    `--ink-tertiary` on `.proj-card-body`'s own ground, the register

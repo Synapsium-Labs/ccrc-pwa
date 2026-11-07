@@ -278,7 +278,9 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     const now = Date.parse('2026-11-07T09:00:00.000Z');
     const exported = Object.fromEntries(Object.entries(words).filter(([, v]) => typeof v !== 'function'));
     const all = strings([exported, words.keptUntilWord('2026-11-17T12:00:00.000Z', now), words.keptUntilWord('x', now),
-      words.attachConfirm('coord-a'), words.notDelegatedConfirm, words.keptWord('2026-11-24T12:00:00.000Z', now)]);
+      words.attachConfirm('coord-a'), words.notDelegatedConfirm, words.keptWord('2026-11-24T12:00:00.000Z', now),
+      words.keptWord(null, now), ...(['keep', 'attach', 'foreign'] as const).flatMap((a) =>
+        [words.actDoneWord(a, '2026-11-24T12:00:00.000Z', 'coord-a', now), words.actDoneWord(a, null, null, now)])]);
     expect(all).toContain('Keep worktree');
     expect(all).toContain('Attach to…');
     expect(all).toContain('Not delegated');
@@ -291,6 +293,8 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     expect(words.DISPOSITION_WORD).toEqual({
       ephemeral: null, adopted: 'worktree kept', retained: 'worktree kept', transferring: 'moving to a run', promoted: 'moved to a run',
     });
+    expect(Object.keys(words.ACT_WORD)).toEqual(['keep', 'attach', 'foreign']);
+    expect(Object.keys(words.ACT_VERB)).toEqual(['keep', 'attach', 'foreign']);
     expect(words.notDelegatedConfirm.consequence).toBe(
       'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.');
   });
@@ -315,14 +319,14 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
 
   it('the disposition words join a worktree line only on a newer server\'s row, and the kept date only with a hold', () => {
     const now = Date.parse('2026-11-07T09:00:00.000Z');
-    expect(words.dispositionParts(lease(), now)).toEqual([]);
-    expect(words.dispositionParts(lease({ disposition: 'ephemeral', expiresAt: null }), now)).toEqual([]);
-    expect(words.dispositionParts(lease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), now))
+    expect(words.worktreeStateParts(lease(), now)).toEqual([]);
+    expect(words.worktreeStateParts(lease({ disposition: 'ephemeral', expiresAt: null }), now)).toEqual([]);
+    expect(words.worktreeStateParts(lease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), now))
       .toEqual(['worktree kept', 'kept until 17 Nov']);
-    expect(words.dispositionParts(lease({ disposition: 'retained', expiresAt: null }), now)).toEqual(['worktree kept']);
-    expect(words.dispositionParts(lease({ disposition: 'transferring', expiresAt: '2026-11-17T12:00:00.000Z' }), now))
+    expect(words.worktreeStateParts(lease({ disposition: 'retained', expiresAt: null }), now)).toEqual(['worktree kept']);
+    expect(words.worktreeStateParts(lease({ disposition: 'transferring', expiresAt: '2026-11-17T12:00:00.000Z' }), now))
       .toEqual(['moving to a run']);
-    expect(words.dispositionParts(lease({ disposition: 'promoted' }), now)).toEqual(['moved to a run']);
+    expect(words.worktreeStateParts(lease({ disposition: 'promoted' }), now)).toEqual(['moved to a run']);
   });
 });
 

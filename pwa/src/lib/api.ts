@@ -6,6 +6,7 @@ import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { RunsPageAnswer } from '../../../shared/api';
+import { isLeaseDoorRefusal, type LeaseDoorAnswer } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
@@ -14,6 +15,7 @@ import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
+import { isRecord } from './wire';
 import { ApiError } from './apiError';
 import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
 import { questionAnswerRequest } from '../session/answerLifecycle';
@@ -154,6 +156,19 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
+
+  /** A worktree door's POST (delegation broker wave 5, PR10): its refusal is an ANSWER, `{ok: false, error, detail}` at the word's
+   *  one status, so a failed request whose body is one resolves to it, and the row shows its detail. Everything else (a 401,
+   *  which the funnel has already raised, a 501 `not-configured`, a body that is no door word) rejects with its `ApiError`. */
+  const doorPost = async (path: string, body: object): Promise<LeaseDoorAnswer> => {
+    try {
+      return await postJson<LeaseDoorAnswer>(path, body);
+    } catch (err) {
+      const b: unknown = err instanceof ApiError ? err.body : null;
+      if (!isRecord(b) || b.ok !== false || !isLeaseDoorRefusal(b.error)) throw err;
+      return { ok: false, error: b.error, detail: typeof b.detail === 'string' && b.detail !== '' ? b.detail : b.error };
+    }
+  };
 
   return {
     /**
@@ -1005,6 +1020,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * `readerLab/wire.ts` checks; `probe` is the console's own request to the probe, with its session, the cookie
      * check's control.
      */
+    /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a
+     *  worktree for another 7 days. Session-gated when armed; no box token. Body `{}`. */
+    operatorRetainLease: (leaseId: string): Promise<LeaseDoorAnswer> =>
+      doorPost(`/api/leases/${encodeURIComponent(leaseId)}/operator-retain`, {}),
+    /** `POST /api/leases/:lease/resolve` (PR8; PR10's "Attach to…" and "Not delegated"): attach to the worktree's OWN parent, or
+     *  say it is not delegated work. Session-gated when armed; no box token. Under O5-8 (c) `target` is a lease id. */
+    resolveLease: (target: string, body: { action: 'attach'; parent: string } | { action: 'foreign' }): Promise<LeaseDoorAnswer> =>
+      doorPost(`/api/leases/${encodeURIComponent(target)}/resolve`, body),
     readerLab: {
       open: (): Promise<unknown> => postJson<unknown>(READER_LAB_RUNS_PATH),
       read: (nonce: string): Promise<unknown> => getJson<unknown>(readerLabRunPath(nonce)),

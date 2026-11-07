@@ -9,6 +9,11 @@
 // creating Bash call) nest under it; both heads' folds are opened. Both groups are opened too: a worktree whose parent
 // is gone and one unowned tree. One activity's session is in no fleet list, so the fleet foot's region draws it, with a long name and a long raw session id; the region is opened too.
 // Instrument is put in its project mode (`GROUP_MODE_KEY`), where it draws the same project cards as Refined.
+// Delegation broker wave 5, PR10: the frame is a newer server's, so the worktree rows carry their controls. The lone session's
+// raw worktree offers all three (Keep worktree, Attach to…, Not delegated) on the longest row; the worker's worktree is kept,
+// with its two words (`worktree kept`, `kept until <date>`) and two controls; the unowned tree's hidden lease offers Not
+// delegated. The offline group's worktree is an older server's row and offers none. Every control must sit inside its row
+// and card, and on a phone reach the tap floor.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/delegation-rows.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -63,12 +68,14 @@ const DELEGATION = frame({
   ],
   leases: [
     lease({ leaseId: 'l-lone', parentId: 'lone-tidy-pass', sourceKind: 'raw', project: 'project-b', adminRecord: 'agent-l1',
-      canonicalPath: LONG_PATH }),
-    lease({ leaseId: 'l-via', parentId: 'port-w1', adminRecord: 'agent-v1', canonicalPath: '/w/project-a/.claude/worktrees/agent-v1' }),
+      canonicalPath: LONG_PATH, disposition: 'ephemeral', expiresAt: null }),
+    lease({ leaseId: 'l-via', parentId: 'port-w1', adminRecord: 'agent-v1', canonicalPath: '/w/project-a/.claude/worktrees/agent-v1',
+      disposition: 'adopted', expiresAt: new Date(NOW + 7 * 86_400_000).toISOString() }),
     lease({ leaseId: 'l-off', parentId: 'coord-gone', group: 'offline-coordinator', sourceKind: 'raw', adminRecord: 'agent-o1',
       canonicalPath: '/w/project-a/.claude/worktrees/agent-o1' }),
   ],
-  unowned: [unowned({ adminRecord: 'agent-u1', canonicalPath: '/w/project-a/.claude/worktrees/agent-u1' })],
+  unowned: [unowned({ adminRecord: 'agent-u1', canonicalPath: '/w/project-a/.claude/worktrees/agent-u1', verdict: 'conflicting',
+    leaseId: '0b0c3f8e-5d55-4c1e-9a77-2f1d8c3e4a10' })],
 });
 
 const FIXTURE: AppFixture = {
@@ -148,6 +155,25 @@ const measureRows = (): RowFit[] => [...document.querySelectorAll<HTMLElement>('
     }),
   };
 });
+
+/** PR10: every worktree control on a card: its label, whether it sits inside its row and its card, its height, and the
+ *  tap floor the token resolves to here (a coarse pointer at 390, so the floor is measured where a thumb uses it). */
+const measureControls = (): { floor: number; coarse: boolean; controls: { text: string; inRow: boolean; inCard: boolean; height: number }[] } => {
+  const probe = document.createElement('div');
+  probe.style.height = 'var(--tap-min)';
+  document.body.append(probe);
+  const floor = probe.getBoundingClientRect().height;
+  probe.remove();
+  const within = (a: DOMRect, b: DOMRect): boolean => a.left >= b.left - 0.5 && a.right <= b.right + 0.5;
+  return {
+    floor, coarse: matchMedia('(pointer: coarse)').matches,
+    controls: [...document.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls button')].map((b) => {
+      const r = b.getBoundingClientRect();
+      return { text: b.textContent ?? '', inRow: within(r, b.closest('.proj-work')!.getBoundingClientRect()),
+        inCard: within(r, b.closest('.proj-card')!.getBoundingClientRect()), height: r.height };
+    }),
+  };
+};
 
 /** The fleet foot's region and each of its rows: inside the fleet list's box, and nothing overflowing its own box. A
  *  region without its `min-width: 0` widens the list's one grid track past the list, which this sees at every width,
@@ -322,6 +348,16 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           // R9: the worker's live activity is a chip on its row, never a row.
           const r9 = await page.evaluate(() => [...document.querySelectorAll('.sess-meta-chip')].map((e) => e.textContent));
           expect(r9).toContain('1 delegated');
+          // PR10: the six controls of the three newer-server rows, each inside its row and card; a phone's reach the tap floor.
+          const shown = await page.evaluate(measureControls);
+          expect(shown.controls.map((c) => c.text).sort(), 'the worktree controls').toEqual(
+            ['Attach to…', 'Keep worktree', 'Keep worktree', 'Not delegated', 'Not delegated', 'Not delegated']);
+          for (const c of shown.controls) {
+            expect(c.inRow, `${c.text}: inside its row`).toBe(true);
+            expect(c.inCard, `${c.text}: inside its card`).toBe(true);
+            if (width === 390) expect(c.height, `${c.text}: reaches the tap floor`).toBeGreaterThanOrEqual(shown.floor - 0.5);
+          }
+          expect(rows.some((r) => r.text.includes('worktree kept') && r.text.includes('kept until')), 'the kept words').toBe(true);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

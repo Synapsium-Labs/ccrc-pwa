@@ -973,6 +973,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the inferred chip and the creating Bash call's chip on a raw worktree's line (D-6999), words in a currentColor frame like .sess-workson, on the same card ground; it paints no background of its own",
   },
+  '.proj-work-controls': {
+    under: ['var(--bg-surface)'],
+    why: "a worktree line's controls and a refused act's detail (delegation broker wave 5, PR10), inside the same .proj-work line on the same card ground; it paints no background of its own, and its buttons are the design system's, which carry their own pairs. The selector names no ancestor, so no route could ground it",
+  },
   '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle, .proj-group-toggle': {
     under: ['var(--bg-surface)'],
     why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. Rekeyed again when the delegation broker's two group headers (wave 4) joined it: the same disclosure, on the same ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
