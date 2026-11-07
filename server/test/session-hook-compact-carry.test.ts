@@ -327,27 +327,159 @@ describe('the full real /compact sequence (D-5232 lands the SubagentStop half)',
   });
 });
 
-// Measured first (plan Task 10): a typed `/compact` fires PreCompact, a SubagentStop (the compaction's own agent)
-// and PostCompact, and NO UserPromptSubmit. On every build in the committed corpus (2.1.280 to 2.1.292); a workstation
-// rig run on 2.1.300 measured the same sequence (recorded in the PR). So the hook has no `/compact` prompt arm, and
-// this pin holds the corpus to that: a build that starts sending one fails here and needs the arm.
+// How many SubagentStops a typed `/compact` fires between PreCompact and PostCompact, by version range, as the committed
+// corpus measures it: one up to 2.1.299, two from 2.1.311 (the recapture of 2026-11-06; whether that is a second compaction
+// agent or a retry against the rig's mock, whose reply is no summary, the fixtures do not say). Each range ends at a
+// captured version: a later version comes with its recapture and a hand edit here, and until then it reds below.
+const COMPACT_STOPS: ReadonlyArray<{ from: string; to: string; stops: number }> = [
+  { from: '2.1.280', to: '2.1.299', stops: 1 },
+  { from: '2.1.311', to: '2.1.319', stops: 2 },
+];
+const byVersion = (a: string, b: string): number => a.localeCompare(b, undefined, { numeric: true });
+const stopsFor = (v: string): number | undefined =>
+  COMPACT_STOPS.find((r) => byVersion(v, r.from) >= 0 && byVersion(v, r.to) <= 0)?.stops;
+type CapEv = { event: string; payload: Record<string, unknown> };
+const capture = (v: string, scenario: string): CapEv[] =>
+  (JSON.parse(fs.readFileSync(path.join(DELEGATION, v, `${scenario}.json`), 'utf8')) as { events: CapEv[] }).events;
+const corpusVersions = fs.readdirSync(DELEGATION).filter((d) => /^\d+\.\d+\.\d+$/.test(d)
+  && fs.existsSync(path.join(DELEGATION, d, 'clear-compact-resume.json'))).sort(byVersion);
+/** What is wrong with a capture's compaction, as words; [] when it holds: the Stop, PreCompact(manual), only SubagentStops,
+ *  each the compaction's own agent (no type, an id no SubagentStart of the capture named), PostCompact(manual), the count
+ *  pinned for the version, and no `/compact` prompt. */
+const compactionProblems = (v: string, ev: CapEv[]): string[] => {
+  const out: string[] = [];
+  const prompts = ev.filter((e) => e.event === 'UserPromptSubmit').map((e) => String(e.payload['prompt']));
+  if (prompts.some((p) => p === '/compact' || p.startsWith('/compact '))) out.push('a /compact prompt');
+  const pre = ev.findIndex((e) => e.event === 'PreCompact');
+  const post = ev.findIndex((e, i) => i > pre && e.event === 'PostCompact');
+  if (pre < 1 || post < 0) return [...out, 'no PreCompact after an event, or no PostCompact after it'];
+  if (ev[pre - 1]!.event !== 'Stop') out.push('no Stop before the PreCompact');
+  const between = ev.slice(pre + 1, post);
+  if (between.some((e) => e.event !== 'SubagentStop')) out.push('an event other than SubagentStop between them');
+  const started = new Set(ev.filter((e) => e.event === 'SubagentStart').map((e) => String(e.payload['agent_id'])));
+  for (const s of between) {
+    if (s.payload['agent_type'] !== '') out.push(`a stop with agent type ${JSON.stringify(s.payload['agent_type'])}`);
+    if (started.has(String(s.payload['agent_id']))) out.push('a stop whose id a SubagentStart named');
+  }
+  if (between.length !== stopsFor(v)) out.push(`${between.length} stops, where ${String(stopsFor(v))} is pinned for ${v}`);
+  if (ev[pre]!.payload['trigger'] !== 'manual' || ev[post]!.payload['trigger'] !== 'manual') out.push('a trigger other than manual');
+  return out;
+};
+
+// Measured first (plan Task 10), and on every recapture since: a typed `/compact` fires PreCompact, the compaction's own
+// SubagentStops (as many as COMPACT_STOPS pins for the version) and PostCompact, and NO UserPromptSubmit. So the hook has
+// no `/compact` prompt arm, and this pin holds the corpus to that: a build that starts sending one fails here and needs
+// the arm.
 describe('a typed /compact sends no UserPromptSubmit (the measurement the tail is written to)', () => {
-  const versions = fs.readdirSync(DELEGATION).filter((d) => /^\d+\.\d+\.\d+$/.test(d)
-    && fs.existsSync(path.join(DELEGATION, d, 'clear-compact-resume.json')));
-  it('the corpus holds the scenario', () => { expect(versions.length).toBeGreaterThan(0); });
-  it.each(versions)('%s: Stop, PreCompact(manual), SubagentStop, PostCompact(manual); no /compact prompt', (v) => {
-    const cap = JSON.parse(fs.readFileSync(path.join(DELEGATION, v, 'clear-compact-resume.json'), 'utf8')) as
-      { events: Array<{ event: string; payload: Record<string, unknown> }> };
-    const ev = cap.events;
-    const prompts = ev.filter((e) => e.event === 'UserPromptSubmit').map((e) => String(e.payload['prompt']));
-    expect(prompts.filter((p) => p === '/compact' || p.startsWith('/compact '))).toEqual([]);
+  it('the corpus holds the scenario', () => { expect(corpusVersions.length).toBeGreaterThan(0); });
+  it.each(corpusVersions)('%s: Stop, PreCompact(manual), the compaction\'s SubagentStops (count pinned by version), PostCompact(manual); no /compact prompt', (v) => {
+    const ev = capture(v, 'clear-compact-resume');
+    expect(compactionProblems(v, ev)).toEqual([]);
     const pre = ev.findIndex((e) => e.event === 'PreCompact');
-    expect(pre).toBeGreaterThan(0);
-    expect(ev.slice(pre - 1, pre + 3).map((e) => e.event)).toEqual(['Stop', 'PreCompact', 'SubagentStop', 'PostCompact']);
-    expect(ev[pre]!.payload['trigger']).toBe('manual');
+    const post = ev.findIndex((e, i) => i > pre && e.event === 'PostCompact');
     // The fixtures above copy these key sets.
     expect(Object.keys(ev[pre]!.payload).sort()).toEqual(Object.keys(preCompact()).sort());
-    expect(Object.keys(ev[pre + 2]!.payload).sort()).toEqual(Object.keys(postCompact()).sort());
+    expect(Object.keys(ev[post]!.payload).sort()).toEqual(Object.keys(postCompact()).sort());
+  });
+  it('the check can fail: a SubagentStart naming a compaction stop\'s id, or a count off the pin, is a problem', () => {
+    const v = corpusVersions[corpusVersions.length - 1]!;
+    const ev = capture(v, 'clear-compact-resume');
+    const pre = ev.findIndex((e) => e.event === 'PreCompact');
+    const named: CapEv = { event: 'SubagentStart', payload: { agent_id: ev[pre + 1]!.payload['agent_id'], agent_type: '' } };
+    expect(compactionProblems(v, [...ev.slice(0, pre - 1), named, ...ev.slice(pre - 1)])).toContain('a stop whose id a SubagentStart named');
+    expect(compactionProblems(v, [...ev.slice(0, pre + 1), ...ev.slice(pre + 2)]).join(' ')).toMatch(/stops, where \d is pinned/);
   });
 });
 
+// The roster block (D-5232) handles each SubagentStop on its own: it removes only the roster entry with the stop's id, a
+// no-op for the compaction's agent, and re-reads and keeps the main state the file holds. So from 2.1.311, where a
+// compaction fires two stops, the second does what the first does. This row replays each such version's own compaction
+// payloads, PreCompact through PostCompact, through the real hook, from three setups taken from 2.1.319's captures (an
+// idle `done`, a mid-turn `working`, and `agent-iso-bg`'s first Stop, whose `background_tasks` holds the running agent,
+// so the delegated pair is live: at least 1, `subagent`), each with one unrelated roster entry, with `hook-main-state-v1`
+// advertised and without it, and holds the state, the roster and the pair kept after each stop and after PostCompact.
+// The corpus holds no live ask, no subagent's own wait (no AskUserQuestion or PermissionRequest in any capture) and
+// nothing that sets `interrupted`, so those keys are held only at their setup values.
+describe('every compaction SubagentStop keeps the main state, two from 2.1.311 as one before', () => {
+  const twoStop = corpusVersions.filter((v) => stopsFor(v) === 2);
+  const SETUPS: Record<'done' | 'working' | 'done, delegated', () => CapEv> = {
+    done: () => { const ev = capture('2.1.319', 'clear-compact-resume'); return ev[ev.findIndex((e) => e.event === 'PreCompact') - 1]!; },
+    working: () => {
+      const ev = capture('2.1.319', 'clear-compact-resume');
+      return ev.slice(0, ev.findIndex((e) => e.event === 'PreCompact')).reverse().find((e) => e.event === 'UserPromptSubmit')!;
+    },
+    'done, delegated': () => capture('2.1.319', 'agent-iso-bg').find((e) => e.event === 'Stop')!,
+  };
+  /** An unrelated agent's SubagentStart, from 2.1.319's agent-plain capture: it carries its own id. */
+  const unrelatedStart = (): CapEv => capture('2.1.319', 'agent-plain').find((e) => e.event === 'SubagentStart')!;
+  /** Kept through every stop, on both branches. */
+  const KEPT = ['state', 'ask', 'interrupted', 'subagents', 'waitBy', 'waitPrev', 'bgDelegated', 'bgDelegatedKinds'] as const;
+  const pick = (s: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> => Object.fromEntries(keys.map((k) => [k, s[k]]));
+  const CAPS = { 'hook-main-state-v1 advertised': [WORD, 'hook-main-state-v1'], 'hook-main-state-v1 not advertised': [WORD] } as const;
+
+  const replay = (caps: readonly string[], setup: CapEv, v: string): { before: Record<string, unknown>; stops: Array<Record<string, unknown>>; end: Record<string, unknown>; t0: number } => {
+    writeCaps(caps);
+    const env = { CLAUDE_CODE_SESSION_ID: String(setup.payload['session_id']) };
+    const go = (p: Record<string, unknown>): void => {
+      const r = spawnSync('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: { ...hookEnv(), ...env } });
+      expect(r.status, `${String(p['hook_event_name'])}: exit 0`).toBe(0);
+    };
+    go(setup.payload);
+    go(unrelatedStart().payload);
+    // The setup's clock readings fixed, so two runs compare: the stamp and the roster entry's start.
+    const s = readState();
+    const subs = (s['subagents'] as Array<Record<string, unknown>>).map((e) => ({ ...e, startedAt: T0 }));
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...s, updatedAt: T0, subagents: subs }) + '\n');
+    const before = readState();
+    const t0 = Date.now();
+    const stops: Array<Record<string, unknown>> = [];
+    const ev = capture(v, 'clear-compact-resume');
+    const pre = ev.findIndex((e) => e.event === 'PreCompact');
+    const post = ev.findIndex((e, i) => i > pre && e.event === 'PostCompact');
+    for (const e of ev.slice(pre, post + 1)) {
+      go(e.payload);
+      if (e.event === 'SubagentStop') stops.push(readState());
+    }
+    const end = readState();
+    fs.rmSync(stateFile());
+    return { before, stops, end, t0 };
+  };
+  const rows = twoStop.flatMap((v) => Object.keys(CAPS).flatMap((c) => Object.keys(SETUPS).map((s) => [v, c, s] as const)));
+
+  it('the corpus has two-stop versions to replay', () => { expect(twoStop.length).toBeGreaterThan(0); });
+  it.each(rows)('%s, %s, from %s: each SubagentStop keeps the main state, and the end equals 2.1.299\'s one-stop run', (v, c, from) => {
+    const hms = c === 'hook-main-state-v1 advertised';
+    const caps = CAPS[c as keyof typeof CAPS];
+    const setup = SETUPS[from as keyof typeof SETUPS]();
+    const two = replay(caps, setup, v);
+    expect(two.before['state']).toBe(from === 'working' ? 'working' : 'done');
+    expect((two.before['subagents'] as unknown[]).length, 'the unrelated roster entry').toBe(1);
+    if (from === 'done, delegated') {
+      expect(two.before['bgDelegated'] as number, 'the delegated pair is live').toBeGreaterThanOrEqual(1);
+      expect(two.before['bgDelegatedKinds'], 'the delegated pair is live').toBe('subagent');
+    }
+    expect(two.stops).toHaveLength(2);
+    for (const k of two.stops) {
+      expect(pick(k, KEPT)).toEqual(pick(two.before, KEPT));
+      if (hms) {
+        // The stamp stands, and the carry's one write is `aliveAt`: the hook wrote at this stop.
+        expect(pick(k, ['event', 'updatedAt'])).toEqual(pick(two.before, ['event', 'updatedAt']));
+        expect(k['aliveAt'] as number).toBeGreaterThanOrEqual(two.t0);
+      } else {
+        // Today's branch (`_hook_keep_stamp`): the stop writes a fresh stamp over a state it keeps.
+        expect(k['event']).toBe('SubagentStop');
+        expect(k['updatedAt'] as number).toBeGreaterThanOrEqual(two.t0);
+      }
+    }
+    // PostCompact writes nothing under the word (D-5239), so the end still holds what the stops kept.
+    expect(pick(two.end, KEPT), 'kept after PostCompact').toEqual(pick(two.before, KEPT));
+    const one = replay(caps, setup, '2.1.299');
+    expect(one.stops).toHaveLength(1);
+    // `aliveAt` is a fresh reading on both branches; `updatedAt` only without the word (with it the stamp stands at T0).
+    const timeless = (s: Record<string, unknown>): Record<string, unknown> => {
+      const { aliveAt: _a, updatedAt: u, ...rest } = s;
+      return hms ? { ...rest, updatedAt: u } : rest;
+    };
+    expect(timeless(two.end)).toEqual(timeless(one.end));
+  });
+});

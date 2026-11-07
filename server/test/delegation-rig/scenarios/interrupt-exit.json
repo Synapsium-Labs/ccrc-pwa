@@ -8,7 +8,7 @@
   "settleS": 3,
   "entries": [
     {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg interrupt-exit"},
-     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg interrupt", "prompt": "dlg-sub-int", "subagent_type": "general-purpose", "run_in_background": false, "isolation": "worktree"}}},
+     "tool_use": {"nameAny": ["Agent", "Task"], "input": {"description": "dlg interrupt", "prompt": "dlg-sub-int", "subagent_type": "general-purpose", "model": "haiku", "run_in_background": false, "isolation": "worktree"}}},
     {"label": "sub-hang", "match": {"kind": "tools", "lastUser": "dlg-sub-int"}, "hang_ms": 600000, "text": "never"},
     {"label": "main-hang", "match": {"kind": "main", "hasToolResult": true}, "hang_ms": 600000, "text": "never"}
   ],

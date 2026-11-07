@@ -8983,11 +8983,12 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
 // The turn marker treated ANY non-empty `agent_id` as a subagent's event. The captured real-lane payloads
 // (`fixtures/delegation/<version>/*.json`) say what an id means: every tool event that carries one comes after a
 // SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
-// SessionEnd, UserPromptSubmit) carries one in any of the 196 captured scenarios (14 versions, 2.1.280 to 2.1.299; 193
-// measured, and the 3 `interrupt-exit` cells of 2.1.295, 2.1.296 and 2.1.299 unmeasured), and the only SubagentStop with no
-// Start is the unpaired kind: empty agent_type, an agent id no SubagentStart ever named. It is the one around /compact in
-// every version's `clear-compact-resume` (14 measured cells); the three unmeasured `interrupt-exit` cells above also carry one
-// (empty agent_type, a foreign id), which nothing here relies on. The marker therefore trusts an id only once a
+// SessionEnd, UserPromptSubmit) carries one in any captured scenario of the corpus (every version in it; the
+// `interrupt-exit` cells from 2.1.295 on are unmeasured), and the only SubagentStop with no Start is the unpaired kind:
+// empty agent_type, an agent id no SubagentStart ever named. It is the compaction's around /compact in every version's
+// `clear-compact-resume` (one stop up to 2.1.299, two from 2.1.311, as `session-hook-compact-carry.test.ts` pins); the
+// unmeasured `interrupt-exit` cells of 2.1.295 to 2.1.299 also carry one at `/exit` (empty agent_type, a foreign id), and
+// those from 2.1.311 none, which nothing here relies on. The marker therefore trusts an id only once a
 // SubagentStart has named it in THIS owner's join file (`<id>.joined`); the same payloads with their SubagentStarts
 // taken out are the measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there
 // the parent's own tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no

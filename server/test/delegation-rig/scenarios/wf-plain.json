@@ -8,7 +8,7 @@
   "settleS": 15,
   "entries": [
     {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-plain"},
-     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfp', description: 'dlg wf plain' }\nconst r = await Promise.all([agent('dlg-wf-p1', { label: 'p1' }), agent('dlg-wf-p2', { label: 'p2' })])\nreturn r\n"}}},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfp', description: 'dlg wf plain' }\nconst r = await Promise.all([agent('dlg-wf-p1', { label: 'p1', model: 'haiku' }), agent('dlg-wf-p2', { label: 'p2', model: 'haiku' })])\nreturn r\n"}}},
     {"label": "wf-p1", "match": {"kind": "tools", "lastUser": "dlg-wf-p1"}, "text": "DLG-WF-P1"},
     {"label": "wf-p2", "match": {"kind": "tools", "lastUser": "dlg-wf-p2"}, "text": "DLG-WF-P2"}
   ],
