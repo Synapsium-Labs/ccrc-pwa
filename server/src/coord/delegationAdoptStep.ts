@@ -3,8 +3,10 @@
 //
 // Each pass, in order: one listing of the registry (the `delegation-adopt` marker and `mail-disabled`, absent, present and
 // unmeasured kept apart), the audits the previous pass asked for (`ws-lease-audit`, behind `lease-audit-v1`, read-only; each answer
-// back on an uncut pass that `adoptionAudits` holds is held at once and its ask dropped, review 1609 F3, while one it does not hold keeps
-// its ask through one cut pass, never two, review 1622 F4 and 1627 F3; the cut is read after every awaited read, 1609 F4), the parents'
+// back on an uncut pass that `adoptionAudits` holds is held at once and its ask dropped, review 1609 F3; an ask answered non-definite on
+// two passes is dropped, review 1622 F4 and 1627 F3, and so is one cut inside its own await twice with no answer between, an answer
+// clearing the mark, review 1630 F1 and 1634 F3; each audit's await is raced against the pass's signal, so that cut is seen when it
+// happens, 1634 F1; the cut is read after every awaited read, 1609 F4), the parents'
 // facts and the audits fed and held (both classified in L1, review 1587 A7 and F3), the carriers of the leases past rules 4 to 6 read
 // HERE at decision time, at most `DELEGATION_ADOPT_CARRIER_READS_PER_PASS` (never PR6's read-backs, D-8034; review 1587 F7), the decider, then the
 // effects: `adopt` through PR5b's `transitionLease` (a feed row on `applied`; the carrier is marked by PR6's step later in the same
@@ -43,8 +45,9 @@ export interface AdoptLaneMemory {
   watch: Map<string, AdoptWatch>;
   /** The attention keys still standing whose notice ran (review 1587 F4: a key is recorded only after its notice). */
   raised: Set<string>;
-  /** The audits the last pass asked for, run at the start of this one; `keptOnce` marks an ask a cut pass kept (review 1627 F3). */
-  asked: { leaseId: string; generation: number; keptOnce?: true }[];
+  /** The audits the last pass asked for, run at the start of this one; `keptOnce` marks an ask a cut pass kept after a non-definite
+   *  answer (review 1627 F3), and `cutInside` one whose own await a cut pass cut (review 1630 F1). */
+  asked: { leaseId: string; generation: number; keptOnce?: true; cutInside?: true }[];
   /** The definite audit answers held (`adoptionAudits`: a candidate's generation, at most `DELEGATION_AUDIT_HOLD_MS`). */
   audits: Map<string, HeldLeaseAudit>;
   /** leaseId -> the generation whose shadow line was logged, and apart from it the generation whose refusal was (review 1587 A1): one
@@ -112,6 +115,23 @@ export async function runLeaseAudit(d: Pick<AdoptStepDeps, 'runCcd' | 'fleetStat
   }
 }
 
+/** Review 1634 F1: one audit's await, raced against the pass's signal, so the step sees a cut when it happens and not when a late
+ *  audit returns (the audit call takes no signal; `RunCcd` and the audit's bound stay as they are). After a cut the late answer, or a
+ *  late rejection, is consumed by the handlers below and ignored: nothing is written from it, and nothing goes unhandled. The
+ *  rejection arm fires only on a synchronous throw before `runCcd` runs, since `runLeaseAudit` turns every `runCcd` throw into an
+ *  `unmeasured` answer; no row measures it (review 1640 F4). */
+function auditOrCut(d: Pick<AdoptStepDeps, 'runCcd' | 'fleetState' | 'signal'>, leaseId: string, generation: number): Promise<LeaseAuditAnswer | 'cut'> {
+  const audit = runLeaseAudit(d, leaseId, generation);
+  const signal = d.signal;
+  if (signal === undefined) return audit;
+  return new Promise((resolve, reject) => {
+    const onCut = (): void => resolve('cut');
+    if (signal.aborted) onCut();
+    else signal.addEventListener('abort', onCut, { once: true });
+    audit.then((a) => { signal.removeEventListener('abort', onCut); resolve(a); }, (err: unknown) => { signal.removeEventListener('abort', onCut); reject(err); });
+  });
+}
+
 /** The lane's adoption step for one pass (the caller holds a ready applier and runs it between native-removed and the carriers). */
 export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f: AdoptPassFacts): Promise<void> {
   const now = formatDelegationInstant(f.nowMs);
@@ -123,17 +143,32 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
   const mailHeld = switches[MAIL_DISABLED_MARKER] !== 'clear';
   const auditable = ccdCan(d.fleetState, 'leaseAudit');
   const fresh = new Map<string, HeldLeaseAudit>();
+  // Never -1 today (review 1634 F2, reasons corrected by 1640 F2): the lane runs single-flight (`flight: 'skip'`), so a second pass
+  // cannot start until `pass()` returns, and `pass()` aborts its signal in its `finally`; this step's continuation after a raced abort
+  // runs in the same microtask drain, before anything a later pass can do. Only the audit's await is raced: a pass cut in the listing,
+  // a carrier read or `transitionLease` returns when that await settles, and none of those resume paths writes `asked`. The guard
+  // stays: a -1 splice would drop the last ask, another lease's.
+  const drop = (ask: AdoptLaneMemory['asked'][number]): void => {
+    const at = memory.asked.indexOf(ask);
+    if (at !== -1) memory.asked.splice(at, 1);
+  };
   for (const ask of [...memory.asked]) {
     if (cut()) return;
-    const answer: HeldLeaseAudit = { generation: ask.generation, answer: await runLeaseAudit(d, ask.leaseId, ask.generation), at: now };
-    if (cut()) return;                   // review 1604 F4: an answer back on a cut pass is not written
+    const cutBefore = ask.cutInside === true;
+    ask.cutInside = true;                // review 1630 F1: marked before its await, so a cut inside the await is counted
+    const got = await auditOrCut(d, ask.leaseId, ask.generation);
+    if (got === 'cut' || cut()) {        // review 1604 F4: nothing from a cut pass's audit is written; cut inside this await twice with
+      if (cutBefore) drop(ask);          // no answer between, the ask is dropped at the cut (1630 F1, 1634 F1): it can only be asked again
+      return;
+    }
+    const answer: HeldLeaseAudit = { generation: ask.generation, answer: got, at: now };
+    delete ask.cutInside;                // answered on an uncut pass: the mark is cleared, and the cuts are counted afresh (1634 F3)
     fresh.set(ask.leaseId, answer);      // fed on an uncut pass, whatever it says (rule 7, as PR7 ruled)
     memory.audits = adoptionAudits({ now, checkpoint: d.durable.state().checkpoint as DelegationCheckpointV1, auditable, held: memory.audits,
       fresh: new Map([[ask.leaseId, answer]]) }).held;
     if (memory.audits.get(ask.leaseId) !== answer && ask.keptOnce !== true) { ask.keptOnce = true; continue; }  // review 1622 F4, 1627 F3: not held
-    // (not definite): its ask stays for a cut pass's successor once; asked again and cut again, it is dropped, so no cut keeps it for good
-    const at = memory.asked.indexOf(ask);                      // review 1609 F3: a held answer's ask is dropped at once (a later cut keeps the answer), and so is one kept once.
-    if (at !== -1) memory.asked.splice(at, 1);                 // Never -1 today (the loop walks a copy, and a stale pass returns at its cut)
+    // (not definite): its ask stays for the next pass; answered non-definite on a second pass, it is dropped
+    drop(ask);                           // review 1609 F3: a held answer's ask is dropped at once (a later cut keeps the answer), and so is one kept once
   }
   const cp = d.durable.state().checkpoint as DelegationCheckpointV1;
   const conflicting = conflictingTreeKeys(cp);
@@ -149,7 +184,9 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     if (cut()) return;                   // review 1609 F4: after every awaited read, carriers included
     carriers.set(id, rb);
   }
-  memory.asked.length = 0;               // below the last awaited read (review 1609 F4): a cut pass has written only the audits it held
+  // Below the last awaited read (review 1609 F4). A cut pass has written only lane memory of its audit loop (review 1640 F3): the audits
+  // it held and their asks' drops, `keptOnce` on a non-definite answer, its asks' marks set or cleared, and the drop of an ask cut twice.
+  memory.asked.length = 0;
   const pass = (memory.pass += 1);
   memory.audits = held;
   for (const id of carriers.keys()) memory.lastRead.set(id, pass);

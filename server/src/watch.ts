@@ -10273,7 +10273,7 @@ class DelegationLane {
   private lastAlive = new Set<string>();
   private aliveSeen = false;
   private readonly firstDead = new Map<string, number>();
-  /** Adoption's evidence (D-8092): a death a stamp retracted (1604 F7), and each parent's last alive pass per incarnation (1609 F5, 1622 F1). Its bound (1627 F4): an id recorded on one pass is prunable on the next decider pass; while the step never decides nothing is pruned, and it is bounded by the session ids seen alive in this process; a restart empties it, which only delays. */
+  /** Adoption's evidence (D-8092): a death a stamp retracted (1604 F7), and each parent's last alive pass per incarnation (1609 F5, 1622 F1). Its bound (1630 F3): the session ids times the incarnations seen alive or retracted in this process; a slot is pruned only by a measured absence the step has read, and a restart empties it, which only delays. */
   private readonly retractedDeaths = new Map<string, number>();
   private readonly lastAliveAt = new Map<string, Map<string | null, number>>();
   private adoptDecidedAt = -Infinity;

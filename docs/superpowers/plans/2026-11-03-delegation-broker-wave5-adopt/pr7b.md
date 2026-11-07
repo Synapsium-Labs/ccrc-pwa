@@ -33,13 +33,17 @@ lane step (`delegationAdoptStep.ts`) and `watch.ts` gather and act.
   at `AdoptionParentReads.retracted` and pr7.md's F5/F7 bullet are corrected; D-8058 never carried the phrase "leaves the
   registry" (measured by search), so it needs no edit.
 - **F3, answers held at once.** Inside the audit loop, each answer that comes back on an uncut pass and that `adoptionAudits`
-  holds (a definite one) is held at once and its ask dropped from `asked`. One it does not hold keeps its ask through one cut
-  pass, never two (fix round 1, F4 (a); fix round 2, F3). After a cut nothing more is written.
+  holds (a definite one) is held at once and its ask dropped from `asked`. One it does not hold keeps its ask once: an ask
+  answered non-definite on two passes is dropped (fix round 1, F4 (a); fix round 2, F3), and since PR7c so is one cut inside
+  its own await on two passes with no answer between (review 1630 F1, `pr7c.md`). That mark is written before the await, and a
+  second cut inside the same await removes the ask (PR7c); nothing else is written after a cut.
 - **F4, the cut after every awaited read.** The step reads the cut after the registry listing, after each audit and after each
   carrier read. `asked` is cleared and `pass` counted only below the last awaited read. What a cut writes, at each point:
-  - inside the listing, or before the first audit answers: nothing;
+  - inside the listing: nothing; inside the first audit's own await: that ask's mark, or, at a second such cut with no answer
+    between, its drop (PR7c, review 1630 F1; review 1640 F3);
   - inside the audits: only the definite answers that came back before the cut, each held and its ask dropped (F3); a
-    non-definite one is not held and keeps its ask, through one cut only (fix round 1, F4 (a); fix round 2, F3);
+    non-definite one is not held and keeps its ask, dropped when it is answered non-definite on a second pass (fix round 1,
+    F4 (a); fix round 2, F3); the ask in whose own await the cut came is marked, and dropped at a second such cut (PR7c, review 1630 F1);
   - inside the carrier reads: nothing more than that (no `asked`, `pass`, `lastRead`, `watch`, `raised` or `health`);
   - inside the effects loop: the decider's memory was written before the effects (`audits`, `lastRead`, `pass`, `watch`, the
     filtered `raised`, the pruned log memories), because the decisions it holds are the ones whose effects run; an effect that
@@ -134,7 +138,7 @@ checked (every one "sha ok"). Every mutant is killed.
 | PR7-FR2-F5 | L1 "F5: alive again at its incarnation while waiting at rule 2" |
 | PR7-FR2-F7 | L1 "A7, F1: adoptionParentFacts"; lane "F7: a death the lane kept, then retracted", "F2: a late stop stamp" |
 | REVIEW-X-deadalone | L1 "F2: a death the lane saw is kept", "F5: alive again at its incarnation while waiting at rule 2", "F7: a kept death that the lane retracts"; lane "F2: a restart (a new lane, fresh memory)", "F7: a death the lane kept, then retracted", "F2: a late stop stamp", "F5: alive on a pass where the step does not run" |
-| W5-DM10 | lane "W5-Q4", "F5: an adoption made while mail-disabled stood", "F6, A2" |
+| W5-DM10 | lane "W5-Q4: mail-disabled standing …", "F5: an adoption made while mail-disabled stood", "F6, A2" |
 | W5-DM12 | the decider reads the clock. 2026-11-07, before the fixture's T0: 24 of 40 rows on PR7's merged tip (W5-D17 among them), 28 of 45 at this tip |
 
 Rows are named by the opening words of their titles, quoted (L1: `delegation-adoption.test.ts`; lane:
@@ -167,8 +171,11 @@ same runs' logs.
   its watch at the next pass that does. A hold placed late, never early.
 - **The read gate is wall clock (fix round 2, F1, accepted).** `adoptDecidedAt`, the instants the lane stamps on a retraction and a
   last-alive pass, and the decider's `after` test all compare the pass's wall clock (`pass.now`), as the census gate does
-  (`measuredAt > reconciledAt`). A backward step larger than the gap between a watch entry's `terminalAt` and the evidence stamps
-  that evidence at or before `adoptDecidedAt`, so it reads as already read. In the four F1 sequences: (1) alive at the lease's
+  (`measuredAt > reconciledAt`). A backward step can stamp evidence at or before what it is compared with, so it reads as already
+  read. How large a step that takes differs by sequence (review 1630 F4): in sequence (1) the slot is compared with the watch
+  entry's `terminalAt`, so the threshold is the gap to `terminalAt`; in sequences (2) to (4) the read gate compares the stamp with
+  `adoptDecidedAt`, the last decider pass (at or after `terminalAt`), so a step of about one decider-pass interval is enough.
+  In the four F1 sequences: (1) alive at the lease's
   incarnation, then a new one: the slot is kept (no absence prunes it), but one stamped at or before `terminalAt` no longer
   disproves the entry, which adopts on the old count; (2) alive, then measured absent: the absence forgets the slot unread, and the
   entry adopts on the old count; (3) a retraction, then measured absent, and (4) a retraction, then alive at a new incarnation,
@@ -177,11 +184,16 @@ same runs' logs.
   ahead of the clock, with the same effect until the clock passes it. The census gate skips the step for about the size of a
   backward step, which widens the window. Each is an early 7-day hold on stale evidence, never a removal, and adoption stays
   shadow. Keying the read gate and the retraction by the pass ordinal (`pass.seq`) is carried to the Rider.
-- **What bounds the evidence memory (fix round 2, F4).** `lastAliveAt` holds a slot for every session a pass reads alive, one per
-  incarnation, and `retractedDeaths` one per retraction. In the ordinary state an id recorded on one pass is prunable on the next
-  pass whose step reaches the decider (shadow runs the decider too). While the step never decides (no applier, a failing recovery,
-  every pass cut before the decider, a standing throw), nothing is pruned, and the memory is bounded by the session ids seen alive
-  in this process. A restart empties it, which only delays.
+- **What bounds the evidence memory (fix round 2, F4; corrected by review 1630 F3).** `lastAliveAt` holds a slot for every
+  session a pass reads alive, one per incarnation, and `retractedDeaths` one per retraction. A `lastAliveAt` slot is pruned only
+  by a measured absence the step has read (`forgetAdoptEvidence`'s `absent`); a living pass or a later death forgets only a
+  retraction, once read, and a stopped session that stays listed keeps its retraction. So a session that stays listed keeps one
+  slot per incarnation seen alive for the life of the process, decider or not, and the true bound is the session ids times the
+  incarnations seen alive or retracted in this process. A restart empties it, which only delays.
+- **What the keep-once rule counts (review 1630 F2).** It counts passes, not cuts: an ask answered non-definite on two passes,
+  or cut inside its own await on two passes (PR7c, review 1630 F1), is dropped. A kept-once ask that a later cut reaches first
+  (a cut in the listing, or in an earlier ask's await) is not answered on that pass, so it survives that cut and is dropped on the
+  next pass that answers it non-definite again: a delay, never a permission.
 - **The F6 (b) row's controls.** Fix round 1 (review 1622 F5) replaced "nothing counted before the reading pass", which the loop's
   own condition made true, with "no carrier is read before the reading pass" (`lastRead` empty until then), which reds if any lease
   passes rule 4 early; "every carrier read within the two passes" (`lastRead` holds ten) differs under the rotation mutant.
@@ -214,7 +226,7 @@ number.
 - **F3, text.** The `ParentFact` and `adoptionParentFacts` comments and D-8092 say what `deadSince` is.
 - **F4.** (a) In the audit loop an answer drops its ask only when `adoptionAudits` holds it; one that is not definite keeps its ask
   on a cut pass, so the next pass asks it again within the budget, and on an uncut pass it is fed as PR7 ruled. Since fix round 2
-  (review 1627 F3) it keeps its ask through one cut only: asked again and cut again, the ask is dropped (`asked`'s `keptOnce`), as
+  (review 1627 F3) an ask answered non-definite on two passes is dropped (`asked`'s `keptOnce`), as
   the first round did, so a slow audit that answers non-definite can no longer cut every pass ahead of the carrier read. (b) The splice is
   guarded against `-1`, with the reason it cannot miss today. (c) The four PR7 mutants the review re-ran are re-measured here.
 - **F5.** The audit's words are matched to the notice in L1: `AdoptLaneMemory.adopted` holds the answer rule 7 was fed
@@ -285,7 +297,7 @@ opening words.
 | PR7b-F10 | the comparator reversed | L1 "F2: ten candidates", "F10: PR6's re-reads and adoption's reads share one comparator"; lane "F2, F6 (b)"; `delegation-carrier` "D-8034"; `delegation-carrier-lane` "one listing, every carrier behind …" |
 | PR7b-try | the step's `catch` rethrows | lane "the one-try advisory" |
 | REVIEW-X-deadalone | a present parent not alive is evidence on its own | L1 "F2: a death the lane saw is kept …", "F5: alive again at its incarnation while waiting at rule 2", "F7: a kept death that the lane retracts"; lane "F2: a restart …", "F7: a death the lane kept, then retracted", "F2: a late stop stamp …", "F5: alive on a pass where the step does not run", "review 1622 F1: alive … then alive at a new one", "… then measured absent", "… a retraction, then measured absent", "review 1622 F2" (run before the fourth F1 row existed) |
-| PR7-W5-DM9b | owed notices from this pass's decisions | lane "W5-Q3b", "W5-Q4", "F6, A2", "F4: a pass cut inside the effects loop" |
+| PR7-W5-DM9b | owed notices from this pass's decisions | lane "W5-Q3b", "W5-Q4: mail-disabled standing …", "F6, A2", "F4: a pass cut inside the effects loop" |
 | PR7-FR1-F3-age | the hour dropped | L1 "F3, A8"; lane "F3: a held audit answer older than an hour", "A8", "F6 (d)" |
 | PR7-FR1-F6 | a held notice counted without asking for mail | lane "F6: a digest already sent is not owed while mail-disabled stands" |
 | PR7-FR1-F7-past46 | every lease past rules 1 to 3 read | L1 "F7: adoptionCarrierReads reads no lease without terminal evidence"; lane "F2, F6 (b)" |
@@ -302,9 +314,11 @@ findings, every one in the safe direction. Departures: D-8092 amended in place a
   `alive` while its `status` is `dead` (`restarting`), then a pass that runs the step reads it dead; the kept death is dropped
   and the new death starts its own settle (`terminalEvidenceAt` at the step's first read). Mutant REVIEW-F1a-status (record by
   `status !== 'dead'` again) reds it.
-- **F3, one cut only.** A non-definite answer keeps its ask through one cut pass (`keptOnce`); the next pass that asks it again
-  and is cut too drops it, as the first round did. Row: two consecutive cut passes with the same non-definite answers, then a pass
-  that asks only the two asks the cuts never answered and reaches the decider. Mutant FR2-F3-everycut (keep through every cut).
+- **F3, kept once.** A non-definite answer keeps its ask once (`keptOnce`); the next pass that answers it non-definite again
+  drops it, as the first round did (the rule counts answered passes, not cut ones: review 1630 F2, under "Measured, not
+  departures"). Row: two consecutive cut passes with the same non-definite answers, then a pass that, since PR7c, asks one ask
+  (the fourth, which the cuts never reached; the third, cut inside its own audit twice, is dropped too, review 1630 F1), is still
+  armed to cut at a third audit, and reaches the decider. Mutant FR2-F3-everycut (keep through every cut).
 - **F4, the memory's bound (text).** The comment above `watch.ts`'s evidence memory and "Measured, not departures" say what
   bounds it.
 - **F5, text and labels.** Fix round 1's F1 (a) and (c) and the settle's start sit under "Measured, not departures" beside (b);
@@ -319,7 +333,7 @@ Run on this round's base (`b15b99837`'s `delegationAdoptStep.ts`) with this roun
 
 | Ruling | Row (`delegation-adoption-lane.test.ts` unless named) | On the base |
 |---|---|---|
-| F3 | "review 1627 F3: a non-definite answer keeps its ask through one cut only" | red: after the second cut all four asks are kept |
+| F3 | "review 1627 F3: a non-definite answer keeps its ask once" | red: after the second cut all four asks are kept |
 | F2 | "review 1622 F1: presence alive while its status is dead (restarting), then dead (review 1627 F2)" | green: the code was already as ruled, and the row is its missing guard; red under REVIEW-F1a-status |
 | F5 | L1 "owedLeaseNotices: every adopted lease at its generation", on fix round 1's base (`258f036a0`'s `delegation-adoption.ts`) | red, measured this round: `expected undefined to be 'changed'` |
 
@@ -332,13 +346,13 @@ answered ask dropped). Rows are named by quoted title (lane unless named; "R1F1:
 | Mutant | The mutation | Red rows |
 |---|---|---|
 | REVIEW-F1a-status | record a last-alive pass by `status !== 'dead'` again | "R1F1: presence alive while its status is dead (restarting), then dead" |
-| FR2-F3-everycut | a non-definite answer keeps its ask through every cut | "review 1627 F3: a non-definite answer keeps its ask through one cut only" |
+| FR2-F3-everycut | a non-definite answer keeps its ask through every cut | "review 1627 F3: a non-definite answer keeps its ask once" |
 | FR2-F5-death | a later death erases the retraction, read or not | "R1F1: a retraction, then alive at a new incarnation on a pass whose step never decides, then dead" |
 | FR1-F1-slot | one last-alive slot per parent again | "R1F1: alive at the lease's incarnation, then alive at a new one" |
 | FR1-F1-read | forget whether or not the step read it | "R1F1: alive at the lease's incarnation, then measured absent", "R1F1: a retraction, then measured absent", "R1F1: a retraction, then alive at a new incarnation …" |
 | FR1-F1-alive | a living pass erases the retraction | "R1F1: a retraction, then alive at a new incarnation …" |
 | FR1-F2 | `adoptionAlive` ignores `unmeasured` | L1 "F1: liveness is the row's presence"; "review 1622 F2: a row with an unmeasured identity field" |
-| FR1-F4a | every answered ask dropped | "review 1622 F4 (a): a cut after answers that are not definite", "review 1627 F3: a non-definite answer keeps its ask through one cut only" |
+| FR1-F4a | every answered ask dropped | "review 1622 F4 (a): a cut after answers that are not definite", "review 1627 F3: a non-definite answer keeps its ask once" |
 | FR1-F5-adopted | a cut in the effects loop forgets the adopted audit | "F4: a pass cut inside the effects loop" |
 | FR1-F5-match | the audit word at any generation | L1 "owedLeaseNotices: every adopted lease at its generation" |
 | PR7b-F4-read (X-cut132) | no cut check after a carrier read | "F4: a pass cut inside its carrier read" |
