@@ -10,7 +10,8 @@ the whole block issued to this run, each amended in place in the fix round.
 - **D-8064, `interrupt-exit` is unmeasured through 2.1.319.** The new cells join the ruled list (Task 6, R15) with the
   reason the 2.1.295 to 2.1.299 cells carry.
 - **D-8065, the current lanes are what the fleet runs.** `CURRENT_LANES` is the union of two measurements, every version
-  in it is captured, and the compaction rows hold for the two-stop compaction those versions fire.
+  in it is captured, and the compaction rows hold for the two-stop compaction those versions fire, the delegated pair
+  live in one setup.
 
 ## What was measured
 
@@ -32,13 +33,19 @@ the whole block issued to this run, each amended in place in the fix round.
   2.1.280 to 2.1.299 fire one. `session-hook-compact-carry.test.ts`'s row admits the compaction's own stops and pins the
   count by a closed version range, and a row replays every two-stop version's own payloads through the real hook, with
   `hook-main-state-v1` advertised and without it, and holds that the second stop keeps the main state as the first does.
-  Its setups are an idle `done`, a mid-turn `working`, and a `done` whose Stop left a background agent (the delegated
-  pair set), each from 2.1.319's own captures. The corpus holds no live ask and no subagent's own wait (no capture has an
-  AskUserQuestion or a PermissionRequest), so neither is a setup there.
+  Its setups are an idle `done`, a mid-turn `working`, and `agent-iso-bg`'s first Stop, whose `background_tasks` holds
+  the running agent, so the delegated pair is live (`bgDelegated` at least 1, `bgDelegatedKinds` `subagent`), each from
+  2.1.319's own captures. The state, the roster and the pair are held kept after each stop and after PostCompact. With
+  the word the stamp stands (`event` and `updatedAt`, which the end check against 2.1.299 compares too); without it each
+  stop writes a fresh one. The corpus holds no live ask, no subagent's own wait (no capture has an AskUserQuestion or a
+  PermissionRequest) and no payload that sets `interrupted`, so none of these is a setup there, and the row holds `ask`,
+  `interrupted`, `waitBy` and `waitPrev` only at their setup values.
 
 ## Measured, not departures
 
-None of these is a field the correlation, the spool or the watch reads.
+None of these is a field the correlation, the spool or the watch reads. Two are changes in an event count, which those
+readers do see: the compaction's second SubagentStop and `interrupt-exit`'s lost one, both ruled already (D-8065, D-8064).
+Every reader is green over all 21 versions.
 
 - **The hook's compaction comment is stale.** In `ccd/session-hook.sh`, the comment that opens at
   `compactions-write-no-hookstate` (D-5239), above the `dispatch-live-gate-v1` line, says in its "Measured" sentence that a
@@ -60,6 +67,10 @@ None of these is a field the correlation, the spool or the watch reads.
 - **New interleavings, one capture each.** Each cell is one capture, so a race and a version change look the same. The
   count of each event kind matches 2.1.299 in every scenario except `interrupt-exit` and the compaction above. Orderings
   that no older version shows: `wf-iso` on 2.1.311, 2.1.316 and 2.1.318 (a SubagentStart before the main Stop),
-  `wf-iso-resume` on 2.1.311, 2.1.316, 2.1.318 and 2.1.319, and `wf-limit-pause` on 2.1.316. The second capture's two
-  versions are not in that review count. Orderings of the main Stop against a SubagentStart or a PostToolUse already
-  differ between the older versions, so none of these says more than "the race can go this way".
+  `wf-iso-resume` on 2.1.311, 2.1.316, 2.1.317, 2.1.318 and 2.1.319, and `wf-limit-pause` on 2.1.312 and 2.1.316; in
+  2.1.317's `wf-iso-resume` and 2.1.312's `wf-limit-pause` too, the SubagentStart comes before the main Stop. Orderings of
+  the main Stop against a SubagentStart or a PostToolUse already differ between the older versions, so none of these says
+  more than "the race can go this way".
+- **`pickedEffortModel` first appears on 2.1.317.** The subagent meta carries it on 2.1.317, 2.1.318 and 2.1.319 and not
+  on 2.1.311, 2.1.312, 2.1.314 or 2.1.316. Every one of those versions names the model, so it is not confounded with the
+  model naming. No server reader reads it.
