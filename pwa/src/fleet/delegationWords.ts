@@ -19,7 +19,8 @@
 // Imports only `shared/api` and `lib/wire` (never `./fleetTree` or `./nestFleet`, which import from here: a cycle).
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, delegationLeaseDispositionOf,
-  delegationLeaseExpiresAtOf, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
+  delegationLeaseExpiresAtOf, isArchivedRow, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal,
+  type SessionBucket, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
   type DelegationProjectionWire, type DelegationUnownedWire,
 } from '../../../shared/api';
 import { isRecord } from '../lib/wire';
@@ -321,10 +322,11 @@ export function hiddenLeaseOf(u: DelegationUnownedWire): string | null {
 export function leaseParentOf(l: DelegationLeaseWire): string {
   return l.via ?? l.parentId;
 }
-/** F4: a session the PWA lists as live: present in the fleet list and not archived. A session the list does not carry
- *  is not live here, so no attach to it is offered (the door would refuse `not-live-parent`). */
-export function listedLive(s: { readonly archivedAt: number | null } | null | undefined): boolean {
-  return s !== null && s !== undefined && s.archivedAt === null;
+/** F4: a session the PWA lists as live: present in the fleet list and not an archived row (`isArchivedRow`, the one
+ *  reader of "archived", C7j). A session the list does not carry is not live here, so no attach to it is offered (the
+ *  door would refuse `not-live-parent`). */
+export function listedLive(s: { readonly bucket: SessionBucket } | null | undefined): boolean {
+  return s !== null && s !== undefined && !isArchivedRow(s);
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;

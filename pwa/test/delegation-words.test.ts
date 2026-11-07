@@ -337,8 +337,9 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     expect(words.leaseParentOf(lease({ parentId: 'coord-a', via: null }))).toBe('coord-a');
     expect(words.listedLive(null)).toBe(false);
     expect(words.listedLive(undefined)).toBe(false);
-    expect(words.listedLive({ archivedAt: 1_800_000_000_000 })).toBe(false);
-    expect(words.listedLive({ archivedAt: null })).toBe(true);
+    expect(words.listedLive({ bucket: 'archived' })).toBe(false);
+    expect(words.listedLive({ bucket: 'cleanup' })).toBe(false);
+    expect(words.listedLive({ bucket: 'working' })).toBe(true);
   });
 
   it('F9 (g): a kept row says its state once, with its date; the other states say their word; an older row says nothing', () => {
