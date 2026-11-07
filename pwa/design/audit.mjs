@@ -975,7 +975,7 @@ export const INHERITED_GROUNDS = {
   },
   '.proj-work-controls': {
     under: ['var(--bg-surface)'],
-    why: "a worktree line's controls and a refused act's detail (delegation broker wave 5, PR10), inside the same .proj-work line on the same card ground; it paints no background of its own, and its buttons are the design system's, which carry their own pairs. The selector names no ancestor, so no route could ground it",
+    why: "a worktree line's controls and the sentence a refused or unread act leaves (delegation broker wave 5, PR10), inside the same .proj-work line on the same card ground; it paints no background of its own, and its buttons are the design system's, which carry their own pairs. The selector names no ancestor, so no route could ground it",
   },
   '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle, .proj-group-toggle': {
     under: ['var(--bg-surface)'],

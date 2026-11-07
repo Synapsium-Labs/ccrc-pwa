@@ -242,14 +242,15 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     for (const v of vs) collect(v);
     return out;
   };
-  const acts = (cs: readonly words.WorktreeControl[]): string[] => cs.map((c) => c.act);
+  const acts = (cs: readonly words.WorktreeControl[] | null): string[] | null => (cs === null ? null : cs.map((c) => c.act));
 
   it('W5-U1: every reader returns null for a wire without its field (an older server), and reads the field when present', () => {
     expect(words.dispositionOf(lease())).toBeNull();
     expect(words.expiryOf(lease())).toBeNull();
     expect(words.hiddenLeaseOf(unowned())).toBeNull();
-    expect(words.worktreeControls(lease(), 'coord-a')).toEqual([]);
-    expect(words.worktreeControls(lease({ sourceKind: 'raw' }), 'coord-a')).toEqual([]);
+    // Null, not none-for-now: an older server's row has no controls at all, so the card mounts nothing for it (F3).
+    expect(words.worktreeControls(lease(), 'coord-a')).toBeNull();
+    expect(words.worktreeControls(lease({ sourceKind: 'raw' }), 'coord-a')).toBeNull();
     expect(words.unownedControls(unowned())).toBeNull();
     expect(words.dispositionOf(lease({ disposition: 'adopted' }))).toBe('adopted');
     expect(words.dispositionOf(lease({ disposition: 'future-word' as never }))).toBeNull();
@@ -329,7 +330,7 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     // F4: with no live own session, no Attach.
     expect(of({ disposition: 'ephemeral', sourceKind: 'raw' }, null)).toEqual(['keep', 'foreign']);
     // The attach carries its one choice: the worktree's own session (`via` under R9), with the label it was given.
-    expect(words.worktreeControls(lease({ disposition: 'ephemeral', sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a' }), 'worker one')[1])
+    expect(words.worktreeControls(lease({ disposition: 'ephemeral', sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a' }), 'worker one')?.[1])
       .toEqual({ act: 'attach', parent: 'worker-a', parentLabel: 'worker one' });
     expect(words.unownedControls(unowned({ leaseId: 'lease-h' }))).toEqual({ leaseId: 'lease-h', controls: [{ act: 'foreign' }] });
     expect(words.unownedControls(unowned({ verdict: 'conflicting' }))).toBeNull();
@@ -340,6 +341,23 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     expect(words.listedLive({ bucket: 'archived' })).toBe(false);
     expect(words.listedLive({ bucket: 'cleanup' })).toBe(false);
     expect(words.listedLive({ bucket: 'working' })).toBe(true);
+    // F5 (review 1623): live is listed and not archived; a dead session is still a parent the door accepts.
+    expect(words.listedLive({ bucket: 'dead' })).toBe(true);
+  });
+
+  it('F4 (review 1623): an ask is still offered only for the same act and, for an attach, the same session', () => {
+    const attachA: words.WorktreeControl = { act: 'attach', parent: 'worker-a', parentLabel: 'worker one' };
+    const attachB: words.WorktreeControl = { act: 'attach', parent: 'worker-b', parentLabel: 'worker two' };
+    const row: readonly words.WorktreeControl[] = [{ act: 'keep' }, attachA, { act: 'foreign' }];
+    expect(words.offersControl(row, { act: 'keep' })).toBe(true);
+    expect(words.offersControl(row, { act: 'foreign' })).toBe(true);
+    expect(words.offersControl(row, attachA)).toBe(true);
+    expect(words.offersControl(row, { ...attachA, parentLabel: 'renamed' })).toBe(true);
+    expect(words.offersControl(row, attachB)).toBe(false);
+    expect(words.offersControl([{ act: 'keep' }, { act: 'foreign' }], attachA)).toBe(false);
+    expect(words.offersControl([attachA], { act: 'foreign' })).toBe(false);
+    expect(words.offersControl([], { act: 'keep' })).toBe(false);
+    expect(words.controlsName('agent-a1')).toBe('Worktree agent-a1');
   });
 
   it('F9 (g): a kept row says its state once, with its date; the other states say their word; an older row says nothing', () => {

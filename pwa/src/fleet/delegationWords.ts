@@ -324,7 +324,10 @@ export function leaseParentOf(l: DelegationLeaseWire): string {
 }
 /** F4: a session the PWA lists as live: present in the fleet list and not an archived row (`isArchivedRow`, the one
  *  reader of "archived", C7j). A session the list does not carry is not live here, so no attach to it is offered (the
- *  door would refuse `not-live-parent`). */
+ *  door would refuse `not-live-parent`). Legitimately different from `presenceOf` (presence.ts), which a door that acts
+ *  on the live pane follows: Attach acts on a lease record, not on a pane, and the door refuses `not-live-parent` only
+ *  when the session's registry row is absent, so a listed session that is dead or asleep is still a valid parent, and
+ *  hiding Attach for it would hide an act the door accepts (review 1623 F5). */
 export function listedLive(s: { readonly bucket: SessionBucket } | null | undefined): boolean {
   return s !== null && s !== undefined && !isArchivedRow(s);
 }
@@ -363,11 +366,14 @@ export function worktreeStateParts(l: DelegationLeaseWire, now: number): readonl
 
 /** The controls a worktree row offers (PR10's rules): Keep while `ephemeral`, `adopted` or `retained`; Attach on an
  *  inferred (raw) worktree in those states, only while its own session is listed live (`liveParentLabel` non-null, F4);
- *  Not delegated on every state but `transferring`. Nothing without a disposition. Keep stays on a raw worktree whose tree
- *  is in conflict and on a box without the hold: the wire says neither, so the door's refusal says it (F1, D-8097). */
-export function worktreeControls(l: DelegationLeaseWire, liveParentLabel: string | null): readonly WorktreeControl[] {
+ *  Not delegated on every state but `transferring`, which offers none for now (`[]`). Null without a disposition (an
+ *  older server's row, or a word this build cannot name): that row has no controls at all, so it draws exactly as
+ *  before. Keep stays on a raw worktree whose tree is in conflict and on a box without the hold: the wire says neither,
+ *  so the door's refusal says it (F1, D-8097). */
+export function worktreeControls(l: DelegationLeaseWire, liveParentLabel: string | null): readonly WorktreeControl[] | null {
   const d = dispositionOf(l);
-  if (d === null || d === 'transferring') return [];
+  if (d === null) return null;
+  if (d === 'transferring') return [];
   const held = d === 'ephemeral' || d === 'adopted' || d === 'retained';
   const attach: readonly WorktreeControl[] = held && l.sourceKind === 'raw' && liveParentLabel !== null
     ? [{ act: 'attach', parent: leaseParentOf(l), parentLabel: liveParentLabel }] : [];
@@ -380,11 +386,21 @@ export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: s
   return leaseId === null ? null : { leaseId, controls: [{ act: 'foreign' }] };
 }
 
+/** Whether `controls` still offers the asked control: the same act and, for an attach, the same session (F4 of review
+ *  1623), so an ask whose act or parent the row no longer offers never posts. */
+export function offersControl(controls: readonly WorktreeControl[], asked: WorktreeControl): boolean {
+  return controls.some((c) => c.act === asked.act && (c.act !== 'attach' || (asked.act === 'attach' && c.parent === asked.parent)));
+}
+
 /** Each control's label. */
 export const ACT_WORD: Readonly<Record<WorktreeAct, string>> = { keep: KEEP_WORD, attach: ATTACH_WORD, foreign: NOT_DELEGATED_WORD };
 /** A control's accessible name: its label and the row's worktree, so two rows' controls never share a name (F9 (f)). */
 export function controlName(act: WorktreeAct, worktree: string): string {
   return `${ACT_WORD[act]} (${worktree})`;
+}
+/** The name of a row's group of controls: the row's worktree (F8 (d)). */
+export function controlsName(worktree: string): string {
+  return `Worktree ${worktree}`;
 }
 /** Each act as a verb, for the app's "Couldn't <verb> — <why>" when a request gets no door's answer (`failedTo`). */
 export const ACT_VERB: Readonly<Record<WorktreeAct, string>> = {
@@ -415,7 +431,7 @@ export const REFUSAL_WORD: Readonly<Record<LeaseDoorRefusal, string>> = {
   'not-live-parent': "This worktree's session is not live, so it cannot be attached to it.",
   'tree-not-unowned': 'This worktree is not unowned work.',
   'bad-request': 'The server could not read this request.',
-  'lease-conflicting': 'Two sessions claimed this worktree, so it cannot be kept until that is settled: attach it to its session, or mark it not delegated.',
+  'lease-conflicting': 'Two sessions claimed this worktree, so it cannot be kept until that is settled.',
   'carrier-behind': 'The fleet box has not caught up with this worktree yet. Try again shortly.',
   'box-unsupported': 'The fleet box cannot hold this worktree back from the disk sweep until its ccrc is updated.',
   'tree-unleased': 'No delegated work is recorded on this worktree.',

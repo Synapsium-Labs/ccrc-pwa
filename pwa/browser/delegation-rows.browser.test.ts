@@ -183,6 +183,49 @@ const measureControls = (): { floor: number; controls: { text: string; name: str
   };
 };
 
+/** PR10 fix round 2 (review 1623 F6): every scroller scrolled to its end (the page, and on the desk the fleet column, which
+ *  scrolls on its own), so the page's last row of controls sits where it rests. */
+const scrollToEnd = (): void => {
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  for (const el of document.querySelectorAll<HTMLElement>('body *')) {
+    const y = getComputedStyle(el).overflowY;
+    if ((y === 'auto' || y === 'scroll') && el.scrollHeight > el.clientHeight + 1) el.scrollTop = el.scrollHeight;
+  }
+};
+/** At that resting place, every button of the fleet list drawn whole in view: a tap at its centre reaches it, and its box
+ *  meets no floating button (Refined's `+ New`, Instrument's round `+`). The page's last row of controls must be among
+ *  them; the list's own last rows (the fleet foot, Add project) follow it, and the list's end padding is what keeps the
+ *  last of them clear, so a list that stops reserving the button's band is seen here. */
+const measureResting = (): { lastShown: boolean; buttons: { name: string; control: boolean; reached: boolean; underFab: string | null }[] } => {
+  const list = document.querySelector<HTMLElement>('.fleet-list')!;
+  let view = { top: 0, bottom: window.innerHeight };
+  for (let el = list.parentElement; el !== null; el = el.parentElement) {
+    const y = getComputedStyle(el).overflowY;
+    if ((y === 'auto' || y === 'scroll') && el.scrollHeight > el.clientHeight + 1) {
+      const r = el.getBoundingClientRect();
+      view = { top: Math.max(0, r.top), bottom: Math.min(window.innerHeight, r.bottom) };
+      break;
+    }
+  }
+  const last = [...list.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls')].filter((c) => c.querySelector('button') !== null).at(-1);
+  const fabs = [...document.querySelectorAll<HTMLElement>('.ref-fab, .fab')].map((f) => f.getBoundingClientRect())
+    .filter((f) => f.width > 0 && f.height > 0);
+  const shown = [...list.querySelectorAll<HTMLElement>('button')].filter((b) => {
+    const r = b.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.top >= view.top - 0.5 && r.bottom <= view.bottom + 0.5;
+  });
+  return {
+    lastShown: last !== undefined && [...last.querySelectorAll<HTMLElement>('button')].every((b) => shown.includes(b)),
+    buttons: shown.map((b) => {
+      const r = b.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const fab = fabs.find((f) => r.left < f.right && r.right > f.left && r.top < f.bottom && r.bottom > f.top);
+      return { name: b.getAttribute('aria-label') ?? (b.textContent ?? '').trim(), control: last?.contains(b) ?? false,
+        reached: hit !== null && b.contains(hit), underFab: fab === undefined ? null : `${Math.round(r.bottom)} > ${Math.round(fab.top)}` };
+    }),
+  };
+};
+
 /** PR10 fix round 1, F9 (h): on every delegation work line drawn with a visible bracket, the bracket sits on the words' first line
  *  (its vertical centre inside the first word's box), even when the line wraps its controls under the words. */
 const measureBrackets = (): { text: string; onWords: boolean; wrapped: boolean }[] =>
@@ -386,10 +429,55 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
             if (width === 390) expect(c.height, `${c.name}: reaches the tap floor`).toBeGreaterThanOrEqual(shown.floor - 0.5);
           }
           expect(rows.some((r) => r.text.includes('worktree kept until')), 'the kept words, said once').toBe(true);
+          // Fix round 2 (review 1623 F6): the page's last row of controls, where it rests at the end of the list.
+          await page.evaluate(scrollToEnd);
+          await page.waitForTimeout(150);
+          const resting = await page.evaluate(measureResting);
+          expect(resting.lastShown, 'the last row of controls is drawn whole at the end of the list').toBe(true);
+          expect(resting.buttons.some((c) => c.control), 'the last row of controls is measured').toBe(true);
+          for (const c of resting.buttons) {
+            expect(c.underFab, `${c.name}: clear of the floating button at the end of the list`).toBeNull();
+            expect(c.reached, `${c.name}: a tap at its centre reaches it at the end of the list`).toBe(true);
+          }
+          // F8 (d): the box a script focuses after an act draws no ring, even after a keyboard action.
+          await page.keyboard.press('Shift');
+          const ring = await page.evaluate(() => {
+            const box = document.querySelector<HTMLElement>('.proj-card .proj-work-controls')!;
+            box.focus();
+            return { visible: box.matches(':focus-visible'), outline: getComputedStyle(box).outlineStyle };
+          });
+          expect(ring, 'the script-focused box: focus-visible, and no ring').toEqual({ visible: true, outline: 'none' });
           const brackets = await page.evaluate(measureBrackets);
           expect(brackets.length, 'the bracketed work lines').toBeGreaterThan(0);
           for (const b of brackets) expect(b.onWords, `${b.text}: its bracket sits on the words' first line`).toBe(true);
           if (width === 390) expect(brackets.some((b) => b.wrapped), 'a line that wraps is measured').toBe(true);
+          if (shots !== undefined && shots !== '') {
+            // Fix round 2 (review 1623 F6): the evidence views. On the desk, the offline-coordinator row and the unowned row
+            // scrolled into view; at every width, an open confirm and a refusal.
+            if (width !== 390) {
+              for (const [name, text] of [['offline', 'Offline coordinator'], ['unowned', 'Unowned work']] as const) {
+                await page.locator('.proj-card .proj-group-toggle', { hasText: text }).evaluate((t) =>
+                  (t.parentElement?.querySelector('.proj-work') ?? t).scrollIntoView({ block: 'start' }));
+                await page.waitForTimeout(150);
+                await page.screenshot({ path: `${shots}/delegation-${skin}-${theme}-${width}-${name}.png` });
+              }
+            }
+            const notDelegated = page.locator('.proj-card .proj-work-controls button', { hasText: 'Not delegated' }).first();
+            await notDelegated.scrollIntoViewIfNeeded();
+            await notDelegated.click();
+            await page.waitForSelector('[role="dialog"]');
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: `${shots}/delegation-${skin}-${theme}-${width}-confirm.png` });
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(400);
+            await page.route('**/api/leases/**', (route) => route.fulfill({ status: 409, contentType: 'application/json',
+              body: JSON.stringify({ ok: false, error: 'carrier-behind', detail: '' }) }));
+            const keep = page.locator('.proj-card .proj-work-controls button', { hasText: 'Keep worktree' }).first();
+            await keep.scrollIntoViewIfNeeded();
+            await keep.click();
+            await page.locator('.proj-card [role="alert"]', { hasText: 'has not caught up' }).first().waitFor();
+            await page.screenshot({ path: `${shots}/delegation-${skin}-${theme}-${width}-refusal.png` });
+          }
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

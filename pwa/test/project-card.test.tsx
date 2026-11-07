@@ -22,6 +22,8 @@ import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixtur
 import { NO_ROLLUP_PREFS, rollupCard, toggleChildren, type RollupPrefs } from '../src/fleet/rollup';
 import { WARN_GLYPH } from '@ccrc/ui';
 import { COORD_A, LEASE_ID, cardElement, okJson, renderCard, worldWithLease, worldWithUnowned } from './leaseCardFixture';
+import { clearAuthLost } from '../src/lib/auth';
+import { GROUP_WORDS } from '../src/fleet/delegationWords';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -1588,9 +1590,11 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
 // row offers and spells every word; the card draws them, asks first where the words say so, calls the door, and says a
 // refusal in worktree words (D-8097). O5-8 (c) (D-7847) and D-8095: an unowned row offers Not delegated only, and only
 // through the lease the projection hid on its tree. Fix round 1 (review 1615): focus after an act (F2), the refusal's
-// region (F3), Attach only with a live own session (F4), tone, focus, toast and busy pinned (F6), and F9's details.
+// region (F3), Attach only with a live own session (F4), tone, focus, toast and busy pinned (F6), and F9's details. Fix round 2
+// (review 1623): a door refusal only at a door's status (F2), focus and the regions while a row offers none (F3), an ask
+// closed by its row (F4), a dead session's Attach (F5), and F8's details. F1's one-post rows are `worktree-confirm-close`'s.
 describe('worktree controls on a project card (delegation broker wave 5, PR10)', () => {
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); clearAuthLost(); });
   type Call = { url: string; body: unknown };
   const accepted = (expiresAt: string | null = '2026-11-24T12:00:00.000Z') => okJson({ ok: true, lease: LEASE_ID, generation: 2,
     disposition: 'retained', expiresAt, carrier: 'pending' });
@@ -1757,7 +1761,7 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
 
   it('F1 (measured, not a departure): a raw row on a conflicting tree, and a box without the hold, each say their refusal', async () => {
     for (const [error, sentence] of [
-      ['lease-conflicting', 'Two sessions claimed this worktree, so it cannot be kept until that is settled: attach it to its session, or mark it not delegated.'],
+      ['lease-conflicting', 'Two sessions claimed this worktree, so it cannot be kept until that is settled.'],
       ['box-unsupported', 'The fleet box cannot hold this worktree back from the disk sweep until its ccrc is updated.'],
     ] as const) {
       const r = recorder(() => okJson({ ok: false, error, detail: 'lease refused' }, error === 'box-unsupported' ? 503 : 409));
@@ -1798,9 +1802,126 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
   it('F9 (c): a 2xx whose body is not JSON says the act was accepted and its answer unread, with no thrown parse', async () => {
     const r = recorder(() => new Response('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
     const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+    const row = rowOf(container);
+    const status = within(row).getByRole('status');
+    expect(status.textContent, 'the status region is mounted empty').toBe('');
     await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
-    expect(await within(rowOf(container)).findByText(
-      'The server accepted this, but its answer could not be read; the row updates with its next change.')).toBeTruthy();
+    // F8 (b) (review 1623): an accepted act is no error, so it is said politely, never in the alert.
+    expect(await within(row).findByText(
+      'The server accepted this, but its answer could not be read; the row updates with its next change.')).toBe(status);
+    expect(within(row).getByRole('alert').textContent).toBe('');
+  });
+
+  it('F8 (a) (review 1623): a 2xx that says ok with no expiresAt reads it as no date known, as the wire\'s own reader does', async () => {
+    const r = recorder(() => okJson({ ok: true }));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await screen.findByText('Worktree kept')).toBeTruthy();
+    expect(rowOf(container).textContent).not.toContain('could not be read');
+  });
+
+  it('F2 (review 1623): a refusal that is no door\'s answer (the server\'s real 401, 403, 429 and 501 bodies, a door word at another status) says the app\'s words', async () => {
+    for (const [status, body] of [
+      [401, { ok: false, error: 'unauthenticated', verdict: 'no-session' }],
+      [501, { ok: false, error: 'not-configured' }],
+      [403, { ok: false, error: 'foreign-origin' }],
+      [429, { ok: false, error: 'rate-limited' }],
+      [409, { ok: false, error: 'not-ready', detail: 'a door word at a status it is never sent with' }],
+    ] as const) {
+      const r = recorder(() => okJson(body, status));
+      const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      const alert = within(rowOf(container)).getByRole('alert');
+      await vi.waitFor(() => expect(alert.textContent, `${status} ${body.error}`).toMatch(/^Couldn't keep the worktree — /));
+      expect(alert.textContent, `${status} ${body.error}`).not.toBe('The server refused this.');
+      cleanup();
+      clearAuthLost();
+    }
+  });
+
+  it('F5 (review 1623): a session in the dead bucket is still listed, so its inferred worktree offers Attach to it', () => {
+    const dead = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a', bucket: 'dead' });
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw' }, [dead]));
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
+  });
+
+  it('F4 (review 1623): Attach removed by its session leaving the list while its confirm is open closes it; Keep and Not delegated stay; nothing posts', async () => {
+    const r = recorder();
+    const world = worldWithLease({ sourceKind: 'raw' });
+    const { container, rerender } = renderCard(world, { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    rerender(cardElement({ ...world, sessions: [] }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(rowOf(container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Not delegated']);
+    rerender(cardElement(world));
+    expect(screen.queryByRole('dialog'), 'the ask does not come back with the control').toBeNull();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F4 (review 1623): an open Attach closes when the worktree\'s own session changes, and never posts the old one', async () => {
+    const worker = (id: string) => fleetSession({ id, project: 'project-a', workspace: id, workdir: `/work/project-a/.ws/${id}`, role: 'child' });
+    const sessions = [COORD_A, worker('worker-a'), worker('worker-b')];
+    const r = recorder();
+    const at = (via: string) => worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via }, sessions);
+    const { rerender } = renderCard(at('worker-a'), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
+    expect((await screen.findByRole('dialog')).textContent).toContain('Attach this worktree to worker-a?');
+    rerender(cardElement(at('worker-b')));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F3 (a) (review 1623): a row that goes transferring while its box holds the focus hands it to the card\'s toggle, its regions kept', async () => {
+    const r = recorder();
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await screen.findByText('Worktree kept until 24 Nov');
+    expect(document.activeElement).toBe(container.querySelector('.proj-work-controls'));
+    rerender(cardElement(world('transferring')));
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector('.proj-card-toggle'));
+    expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted while the row offers none').toBe(alert);
+  });
+
+  it('F3 (a) (review 1623): in a delegation group, the focus goes to the group\'s toggle, the nearest heading still drawn', async () => {
+    const r = recorder();
+    const world = (disposition: 'retained' | 'transferring') =>
+      worldWithLease({ disposition, parentId: 'coord-gone', group: 'offline-coordinator' });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    await screen.findByText(/^Worktree kept/);
+    rerender(cardElement(world('transferring')));
+    const toggles = [...container.querySelectorAll('.proj-group-toggle')];
+    expect(toggles.length).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(toggles.find((t) => t.textContent?.includes(GROUP_WORDS['offline-coordinator'].label)));
+  });
+
+  it('F3 (b) (review 1623): a row first drawn with none that later offers a control and loses it, focused, hands the focus over', () => {
+    const world = (disposition: 'transferring' | 'promoted') => worldWithLease({ disposition });
+    const { container, rerender } = renderCard(world('transferring'));
+    expect(container.querySelector('.proj-work button')).toBeNull();
+    rerender(cardElement(world('promoted')));
+    act(() => { screen.getByRole('button', { name: 'Not delegated (agent-a1)' }).focus(); });
+    rerender(cardElement(world('transferring')));
+    expect(document.activeElement).toBe(container.querySelector('.proj-card-toggle'));
+  });
+
+  it('F3 (c) (review 1623): a refusal that settles while the row offers none is said then, in the same region, which never remounts', async () => {
+    let release: (r: Response) => void = () => {};
+    const r = recorder(() => new Promise<Response>((res) => { release = res; }));
+    const world = (disposition: 'retained' | 'transferring') => worldWithLease({ disposition });
+    const { container, rerender } = renderCard(world('retained'), { fetch: r.fetch });
+    const alert = within(rowOf(container)).getByRole('alert');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    rerender(cardElement(world('transferring')));
+    await act(async () => { release(okJson({ ok: false, error: 'wrong-disposition', detail: 'x' }, 409)); });
+    expect(alert.isConnected).toBe(true);
+    await vi.waitFor(() => expect(alert.textContent).toBe("This worktree's state does not allow that now."));
+    rerender(cardElement(world('retained')));
+    expect(within(rowOf(container)).getByRole('alert'), 'the same element: the sentence is not drawn again as new').toBe(alert);
   });
 
   it('W5-U10: an older server\'s rows (no disposition, no hidden lease) render byte for byte as on the base', () => {
@@ -1825,5 +1946,9 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     // `Button` (@ccrc/ui) carries its own tap floor, which is why control-census registers no `<Button>` call site.
     for (const b of within(row).getAllByRole('button')) expect(b.className).toMatch(/\bmin-h-tap\b/);
     expect(row.textContent).not.toMatch(/lease|adopt|retain|clean|spool|running/i);
+    // F8 (c), (d) (review 1623): the controls carry no tooltip of the row's (an empty title ends its reach), and sit in a
+    // group named by the row's worktree.
+    for (const b of within(row).getAllByRole('button')) expect(b.closest('[title]')?.getAttribute('title')).toBe('');
+    expect(within(row).getByRole('group', { name: 'Worktree agent-a1' })).toBe(row.querySelector('.proj-work-controls'));
   });
 });

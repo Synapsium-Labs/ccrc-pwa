@@ -20,7 +20,7 @@
 //
 // WORKTREE CONTROLS (delegation broker wave 5, PR10): a worktree row's Keep, Attach and Not delegated are `WorktreeControls`,
 // below. The words module decides which a row offers and spells every word; the leaf asks first where the words say so,
-// calls the door, and shows a refusal's detail on the row. Nothing is retried by itself, and no control writes storage.
+// calls the door, and says a refusal on the row in one sentence of its own. Nothing is retried, and no control writes storage.
 //
 // PROGRAMME BOXES (Task G2): a coordinator's open work is one box (`ProgrammeBox`), drawn first, most urgent first;
 // the workers of programmes elsewhere and the rows in no programme follow under their sub-headings. The decision is
@@ -51,70 +51,109 @@ import { OPEN_RUNS } from './openers';
 import { sessionLabel } from './sessionLabel';
 import { WorkLine } from './WorkLine';
 import {
-  ACT_VERB, ACT_WORD, ANSWER_UNREAD_WORD, GROUP_WORDS, actDoneWord, activityLine, confirmFor, controlName, creatorChip, inferredChip,
-  leaseParentOf, listedLive, refusalWord, unownedControls, unownedLine, worktreeControls, worktreeLine, worktreeStateParts,
+  ACT_VERB, ACT_WORD, ANSWER_UNREAD_WORD, GROUP_WORDS, actDoneWord, activityLine, confirmFor, controlName, controlsName, creatorChip,
+  inferredChip, leaseParentOf, listedLive, offersControl, refusalWord, unownedControls, unownedLine, worktreeControls, worktreeLine,
+  worktreeStateParts,
   type WorktreeControl, type WorkWords,
 } from './delegationWords';
 import { actionDoor } from '../command/door';
 import { api, failedTo } from '../lib/api';
 import './fleet.css';
 
-/** A worktree row's controls (delegation broker wave 5, PR10). `controls` is the words module's answer for the row, and
- *  `leaseId` the worktree the doors act on; an attach carries its one choice, the worktree's own session. Keep acts at
- *  once; Attach and Not delegated ask first. A refusal is said in worktree words in a region mounted empty (D-1230,
- *  D-8097) and stays until the next tap; nothing is retried. F2: an act takes the focus to this row's box, which can hold
- *  it while the buttons are disabled, and a row that leaves holding the focus hands it to its card's toggle. */
-function WorktreeControls({ leaseId, worktree, controls, nowMs }: {
-  leaseId: string; worktree: string; controls: readonly WorktreeControl[]; nowMs: number;
+/** A worktree row's controls (delegation broker wave 5, PR10). `controls` is the words module's answer for the row (none
+ *  for now while it moves to a run), and `leaseId` the worktree the doors act on; an attach carries its one choice, the
+ *  worktree's own session. Keep acts at once; Attach and Not delegated ask first, and one confirm posts once (review
+ *  1623 F1). A refusal is said in worktree words in an alert region, an accepted act whose answer could not be read in a
+ *  status region, both mounted empty for as long as the row has controls at all, so neither is lost while the row
+ *  offers none (D-1230, D-8097, F3). Nothing is retried. Focus: an act takes it to this row's box, which can hold it
+ *  while the buttons are disabled; when the row's controls fall to none, or the row leaves, while the box holds it, it
+ *  goes to the nearest heading still drawn: for a row in a delegation group (`grouped`), its group's toggle, the nearest
+ *  one before the row (a group's members follow it); else the card's toggle. */
+function WorktreeControls({ leaseId, worktree, controls, nowMs, grouped = false }: {
+  leaseId: string; worktree: string; controls: readonly WorktreeControl[]; nowMs: number; grouped?: boolean;
 }): ReactNode {
-  // The confirm asked, kept after it closes so its words and tone hold while it animates out (F9 (a)).
+  // The confirm asked, kept after it closes so its words and tone hold while it animates out (F9 (a), F4).
   const [asking, setAsking] = useState<{ control: WorktreeControl; open: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState<{ text: string; polite: boolean }>({ text: '', polite: false });
   const box = useRef<HTMLSpanElement>(null);
-  const committed = useRef(false);
-  // F9 (b): an ask whose act the row no longer offers is dropped, so it never reopens or posts by itself.
-  const offered = asking !== null && controls.some((c) => c.act === asking.control.act);
-  useEffect(() => { if (asking !== null && !offered) setAsking(null); }, [asking, offered]);
+  // After a confirmed or closed-by-the-row ask: place the focus once the sheet has given it back.
+  const settle = useRef<'act' | 'dropped' | null>(null);
+  // F1: what the open confirm may post, set at commit, and whether an act is in flight; never read from a render's closure.
+  const confirmable = useRef<WorktreeControl | null>(null);
+  const inFlight = useRef(false);
+  // F3: whether the focus was in the box when it last moved, for a focused button the row has just removed.
+  const focusIn = useRef(false);
+  const offered = asking !== null && offersControl(controls, asking.control);
+  const open = asking !== null && asking.open && offered;
+  useLayoutEffect(() => { confirmable.current = open && asking !== null ? asking.control : null; });
+  // F4: an ask whose act or session the row no longer offers closes with its words kept, and never reopens by itself.
+  useEffect(() => {
+    if (asking === null || !asking.open || offered) return;
+    settle.current = 'dropped';
+    setAsking({ ...asking, open: false });
+  }, [asking, offered]);
+  const handOff = (): void => {
+    const el = box.current;
+    const card = el?.closest('.proj-card') ?? null;
+    if (el === null || card === null) return;
+    const before = [...card.querySelectorAll<HTMLElement>('.proj-group-toggle')]
+      .filter((t) => (t.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+    ((grouped ? before.at(-1) : undefined) ?? card.querySelector<HTMLElement>('.proj-card-toggle'))?.focus();
+  };
+  const holdsFocus = (): boolean => {
+    const el = box.current;
+    const active = document.activeElement;
+    return el !== null && (el.contains(active) || (focusIn.current && (active === null || active === document.body)));
+  };
   // F2: after a confirmed act the sheet gives the focus back to its opener, which the act has disabled; this runs after.
   useEffect(() => {
-    if (asking === null || asking.open || !committed.current) return;
-    committed.current = false;
-    box.current?.focus();
+    const why = settle.current;
+    if (asking === null || asking.open || why === null) return;
+    settle.current = null;
+    const active = document.activeElement;
+    if (why === 'dropped' && active !== null && active !== document.body) return;
+    if (controls.length === 0) handOff();
+    else box.current?.focus();
   }, [asking]);
-  useLayoutEffect(() => {
-    const el = box.current;
-    return () => {
-      if (el !== null && el.contains(document.activeElement)) {
-        el.closest('.proj-card')?.querySelector<HTMLElement>('.proj-card-toggle')?.focus();
-      }
-    };
-  }, []);
-  if (controls.length === 0) return null;
+  // F3: the row's controls fall to none while the box holds the focus.
+  const none = controls.length === 0;
+  useLayoutEffect(() => { if (none && holdsFocus()) handOff(); }, [none]);
+  // F2: the row leaves holding the focus. The box is read now, as React removes it, not once at mount.
+  useLayoutEffect(() => () => { if (holdsFocus()) handOff(); }, []);
   const send = (c: WorktreeControl): void => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     box.current?.focus();
     setBusy(true);
-    setNote('');
+    setNote({ text: '', polite: false });
     const call = c.act === 'keep' ? api.operatorRetainLease(leaseId)
       : api.resolveLease(leaseId, c.act === 'attach' ? { action: 'attach', parent: c.parent } : { action: 'foreign' });
     void call
       .then((a) => {
-        if (a === 'unreadable') setNote(ANSWER_UNREAD_WORD);
+        if (a === 'unreadable') setNote({ text: ANSWER_UNREAD_WORD, polite: true });
         else if (a.ok) toast(actDoneWord(c, a.expiresAt, nowMs));
-        else setNote(refusalWord(a.error));
-      }, (err: unknown) => setNote(failedTo(ACT_VERB[c.act], err)))
-      .finally(() => setBusy(false));
+        else setNote({ text: refusalWord(a.error), polite: false });
+      }, (err: unknown) => setNote({ text: failedTo(ACT_VERB[c.act], err), polite: false }))
+      .finally(() => { inFlight.current = false; setBusy(false); });
   };
   const words = asking === null ? null : confirmFor(asking.control);
+  // F8: `title=""` keeps the row's tooltip off the controls; the box is a named group, focused by script only.
   return (
-    <span className="proj-work-controls" ref={box} tabIndex={-1}>
+    <span className="proj-work-controls" ref={box} tabIndex={-1} role="group" aria-label={controlsName(worktree)} title=""
+      onFocus={() => { focusIn.current = true; }}
+      onBlur={(e) => {
+        const to = e.relatedTarget;
+        if ((to instanceof Node && !e.currentTarget.contains(to)) || (to === null && e.target.isConnected)) focusIn.current = false;
+      }}>
       {controls.map((c) => (
         <Button key={c.act} variant="quiet" size="fit" disabled={busy} aria-label={controlName(c.act, worktree)}
           onClick={() => (c.act === 'keep' ? send(c) : setAsking({ control: c, open: true }))}>{ACT_WORD[c.act]}</Button>
       ))}
-      <span role="alert">{note}</span>
+      <span role="alert">{note.polite ? '' : note.text}</span>
+      <span role="status">{note.polite ? note.text : ''}</span>
       <QuickConfirm
-        open={asking !== null && asking.open && offered}
+        open={open}
         onClose={() => setAsking((a) => (a === null ? null : { ...a, open: false }))}
         title={words?.title ?? ''}
         consequence={words?.consequence ?? ''}
@@ -122,9 +161,11 @@ function WorktreeControls({ leaseId, worktree, controls, nowMs }: {
         tone={asking?.control.act === 'foreign' ? 'danger' : 'commit'}
         defaultFocus={asking?.control.act === 'foreign' ? 'cancel' : 'confirm'}
         onConfirm={() => {
-          if (asking === null || !offered) return;
-          committed.current = true;
-          send(asking.control);
+          const c = confirmable.current;
+          if (c === null || inFlight.current) return;
+          confirmable.current = null;
+          settle.current = 'act';
+          send(c);
         }}
       />
     </span>
@@ -421,13 +462,14 @@ function ProjectCardView({
   };
   // A session by its display name, or its raw id when the fleet does not carry it: a worktree's `via` worker, and the
   // session an offline-group row came from (delegation visibility, spec §5). Display only, never a join key.
-  /** A session by id: this card's live rows first, then the fleet-wide lookup (F4's liveness reads it). */
-  const sessionOf = (id: string): FleetSession | null => group.sessions.find((s) => s.id === id) ?? coordOf(id);
   const labelOf = (id: string | null): string | null => {
     if (id === null) return null;
     const s = coordOf(id);
     return s === null ? id : sessionLabel(s);
   };
+  /** A session by id: this card's live rows first, then the fleet-wide lookup (F4's liveness reads it). */
+  const sessionOf = (id: string): FleetSession | null => group.sessions.find((s) => s.id === id) ?? coordOf(id);
+
   /** The `from` label of a row in the offline group. A row under its own session names none. */
   const fromOf = (rowGroup: DelegationGroupKind | null, parentId: string): string | null =>
     rowGroup === 'offline-coordinator' ? labelOf(parentId) : null;
@@ -516,7 +558,7 @@ function ProjectCardView({
       return workLine({ ...w, parts: [...w.parts, ...worktreeStateParts(l, now)] }, <>
         {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
         {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
-        <WorktreeControls leaseId={l.leaseId} worktree={l.adminRecord} controls={controls} nowMs={now} />
+        {controls !== null && <WorktreeControls leaseId={l.leaseId} worktree={l.adminRecord} controls={controls} nowMs={now} grouped={row.group !== null} />}
       </>);
     }
     if (row.kind === 'unowned') {
@@ -524,7 +566,8 @@ function ProjectCardView({
       // O5-8 (c), D-8095: only through the lease the projection hid on the tree; no attach, the wire names no parent for it.
       const c = unownedControls(row.item);
       return workLine(u, c === null ? null
-        : <WorktreeControls leaseId={c.leaseId} worktree={row.item.adminRecord} controls={c.controls} nowMs={nowMs ?? Date.now()} />);
+        : <WorktreeControls leaseId={c.leaseId} worktree={row.item.adminRecord} controls={c.controls} nowMs={nowMs ?? Date.now()}
+          grouped />);
     }
     if (row.kind === 'delegation-group') {
       const open = groupOpen[row.group];

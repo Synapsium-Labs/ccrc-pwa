@@ -156,14 +156,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
 
   /** A worktree door's POST (delegation broker wave 5, PR10). A 2xx is read by `readDoorAnswer` (`postJsonOr`: a body that
-   *  is not JSON reads `unreadable`, never a thrown parse); a refusal (`{ok: false, error, detail}` at the word's one status)
-   *  is an ANSWER, read by `readDoorRefusal`. Everything else (a 401, which the funnel has already raised, a 501
-   *  `not-configured`, a body that is no door word) rejects with its `ApiError`. */
+   *  is not JSON reads `unreadable`, never a thrown parse). A failed request is a door's ANSWER (`readDoorRefusal`, review
+   *  1623 F2) in four parts: (1) a door word only at its own status; (2) a word the route vocabulary names that is no door
+   *  word never (a 401 `unauthenticated`, which the funnel has already raised, a 403, a 429, a 501 `not-configured`);
+   *  (3) a word in neither, which only a newer server sends, only at a door's status, said as a plain refusal; (4) a body
+   *  without `ok: false` and a string `error` never. Every other failure rejects with its `ApiError`. */
   const doorPost = async (path: string, body: object): Promise<DoorAnswer> => {
     try {
       return readDoorAnswer(await postJsonOr<unknown>(path, 'unreadable', body));
     } catch (err) {
-      const refusal = err instanceof ApiError ? readDoorRefusal(err.body) : null;
+      const refusal = err instanceof ApiError ? readDoorRefusal(err.status, err.body) : null;
       if (refusal === null) throw err;
       return refusal;
     }
