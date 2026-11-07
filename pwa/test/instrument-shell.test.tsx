@@ -1,5 +1,5 @@
-// Instrument's shell at laptop and wide (W2 Task S9, D-5472): the rail, the top bar, the list column and the status
-// bar, placed by the shared frame. Each case mounts the whole `App` under Instrument with a desk width stubbed
+// Instrument's shell at laptop and wide (W2 Task S9, D-5472): the top bar and its doors (the rail's until desk-nav Task A,
+// D-8100), the list column and the status bar, placed by the shared frame. Each case mounts the whole `App` under Instrument with a desk width stubbed
 // (`(min-width: 900px)` true), or reads `instrument.css` where the claim is the stylesheet's (jsdom applies no media
 // query and lays nothing out, so a width or a pointer branch is asserted on the rule, and the real-browser renders in
 // the PR measure the pixels).
@@ -229,6 +229,25 @@
 //   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
 //   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
 //   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
+//
+// Desk-nav Task A (D-8100): the rail's doors move into the top bar, the breadcrumb goes. The rail and top bar cases above
+// whose names say "rail" are history: the rail is gone, and the cases are "the desk top bar (desk-nav Task A)" below.
+// MUTATION TABLE (plan Task A Step 5; RUN, each mutant on the working tree from a saved copy, restored and sha-checked,
+// the named case alone; the browser rows under vitest.browser.config.ts):
+//   1 Archive inserted before Accounts ................. phone-bar "they are the desk places with Archive after Accounts"
+//   2 the wordmark door without commandDoor('go-fleet') "the wordmark door runs go-fleet, …"; phone-bar "the desk bar shows no fleet place, …"
+//   3 DOOR_WORDS_QUERY at 1440px ....................... "at 1280 and 1920 each door shows its word and no tip; …"; browser "the doors show words from 1280" 1280px
+//   4 the space before the badge removed ............... "label in name at 1280" ("Waiting on you2")
+//   5 the tip mounted at the words width too ........... "label in name at 1280"; browser "the doors show words from 1280" 1280px, 1920px
+//   6 the frame's rail branch kept, an empty Primary nav "exactly one nav[aria-label="Primary"] …" (instrument 900: 2)
+//   7 `.ins-command`'s min-width raised to 280px ....... "the command field takes the rest, with its floor at the tap square and --sp-10";
+//                                                         SURVIVED by the browser's "the bar fits on one line with every badge at 99+" (12 of 12 green):
+//                                                         the field is 329 px at 900, so a 280 px floor never binds there and the bar keeps 49 px
+//   8 the `.ins-bar-doors > .bell` rule deleted ........ "the bell in the bar is at the tap floor"; control-census "every twin exemption …";
+//                                                         browser "a touch screen keeps the floor" ("Notifications off: 28 x 28")
+//   9 the 52px track put back .......................... "the grid has two tracks …"; browser instrument-desk "the tracks follow the width …"
+//  10 the tip's :focus-visible rule deleted ............ browser "the tip is drawn below the icon, by hover and by Tab" (8 of 8, "Tab: opacity")
+//  11 the current door from matchRoute, not topRouteOf . "which door is current" (/settings/updates); "the wordmark door … is current on / and on a session"
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -643,6 +662,15 @@ describe('the desk top bar (desk-nav Task A)', () => {
     mount('/');
     fireEvent.click(placeDoors().find((b) => b.getAttribute('data-command') === 'go-runs')!);
     expect(window.location.pathname).toBe('/runs');
+  });
+
+  // The command field takes the room the doors leave, and gives it up first: its basis is zero, it shrinks a hundred times
+  // faster than anything beside it, and its floor is the search glyph and ⌘K (the Interfaces' "today's min-width"). The
+  // browser's fit case cannot see a raised floor at the widths it measures (the field is 329 px at 900), so this pins it.
+  it('the command field takes the rest, with its floor at the tap square and --sp-10', () => {
+    const rule = declsOf('.ins-command');
+    expect(rule).toMatch(/flex:\s*1 100 0\s*(;|$)/);
+    expect(rule).toMatch(/min-width:\s*calc\(var\(--tap-min\) \+ var\(--sp-10\)\)/);
   });
 
   it("a door's tip shows on hover and on focus-visible, below it, and the bar is no clip box", () => {
