@@ -1,6 +1,6 @@
 # Desk navigation in the top bar, and a shorter Docs head
 
-**Spec** · 2026-11-06 · Status: Draft, for the operator's approval · Owner: the desktop-polish coordinator · Linear: none · Related: `docs/superpowers/plans/2026-10-22-desktop-polish.md`, `docs/superpowers/specs/2026-11-06-chat-reading-design.md`, mockup `docs/superpowers/specs/2026-11-06-desk-nav-mockup.html`, #2346, #2350
+**Spec** · 2026-11-06 · Status: Approved by the operator, 2026-11-07 · Owner: the desktop-polish coordinator · Linear: none · Related: `docs/superpowers/plans/2026-10-22-desktop-polish.md`, `docs/superpowers/specs/2026-11-06-chat-reading-design.md`, mockup `docs/superpowers/specs/2026-11-06-desk-nav-mockup.html`, #2346, #2350
 
 ## In short
 
@@ -286,12 +286,13 @@ The coordinator recommends each row; the operator rules on A1, B1 and B3 (the "W
 
 - The scope: Part A is Instrument at 900 px and wider; Part B is the Docs head at 600 px and wider in both skins. Refined's bar and every phone layout stay as they are. (The operator's request, 2026-11-06; the scope is the coordinator's reading of it.)
 - Part A goes first; Part B waits for #2346's take-up wave.
+- **Part A as drawn** (item 62; A1, A2): icon and label from 1280 px, icons only from 900 to 1279 px. The operator, 2026-11-07, as recommended.
+- **Part B's target and the dense truth line** (item 63; B1, B2): one row plus a thin details line, the title at about y = 200 at 1280 × 800. The operator, 2026-11-07, as recommended.
+- **Who builds Part B, and when** (item 64; B3): this programme builds Part B, after #2346's take-up wave lands. The operator, 2026-11-07, as recommended.
 
 ### Waiting on you
 
-1. **Approve Part A as drawn?** Recommended: yes, with icon and label from 1280 px and icons only from 900 to 1279 px (A1, A2; the mockup's first three panels).
-2. **Approve Part B's target and the dense truth line?** Recommended: yes, title at about y = 200 at 1280 × 800, with the truth line as one dense line rather than a "Page details" disclosure (B1, B2).
-3. **Who builds Part B, and when?** Recommended: this programme, after #2346's take-up wave lands (B3). The other option is to fold it into that wave.
+Nothing. The three questions are answered under Agreed (items 62, 63 and 64).
 
 ### Later
 
