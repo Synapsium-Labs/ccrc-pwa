@@ -766,10 +766,10 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     for (let n = 0; n < 12 && (laneOf(w).adoptMemory.health?.wouldAdopt ?? 0) === 0; n += 1) await pass(w, at(n));
     expect(laneOf(w).adoptMemory.health?.wouldAdopt, 'CONTROL: settled and audited in shadow').toBe(1);
     const unread: DelegationCensusRecord = { ...WTX, headSha: null, claudeBase: null, baseAgreesFirstLog: null, state: 'unreadable', diagnostic: 'fixture: the record did not read' };
-    for (let n = 20; n < 23; n += 1) await pass(w, at(n), [unread]);
+    await pass(w, at(20), [unread]);                                 // one pass: a dropped entry would count nothing and restart its passes
     expect(laneOf(w).adoptMemory.health).toMatchObject({ waiting: 1, wouldAdopt: 0 });
     touch(w, 'delegation-adopt');
-    await pass(w, at(23));
+    await pass(w, at(21));
     expect(disposition(durable, lease.leaseId)).toBe('adopted');
   }, ROW_MS);
 
@@ -821,8 +821,8 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(leaseOf(durable, lease.leaseId).generation, 'the carrier step minted the carrier on the same pass').toBe(1);
   }, ROW_MS);
 
-  it.each([['changed: true', { changed: true }, 'changed'], ['changed: unmeasured', { changed: 'unmeasured' }, 'unchecked'],
-    ['no lease-audit-v1', null, 'unchecked']] as const)('F9: an audit that answered %s — the feed row and the digest say %s', async (_name, audit, word) => {
+  it.each([['changed: true', 'changed', { changed: true }], ['changed: unmeasured', 'unchecked', { changed: 'unmeasured' }],
+    ['no lease-audit-v1', 'unchecked', null]] as const)('F9: an audit that answered %s — the feed row and the digest read %s', async (_name, word, audit) => {
     const { w, durable, lease } = await leased(audit === null ? { caps: FULL.filter((c) => c !== LEASE_AUDIT_CAP) } : {});
     if (audit !== null) w.audit = { ...w.audit, ...audit };
     touch(w, 'delegation-adopt');
