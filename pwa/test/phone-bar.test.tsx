@@ -25,7 +25,7 @@ const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { DESK_PLACES, PLACES, phoneBarShown } = await import('../src/lib/places');
 const { ROUTES, topRouteOf } = await import('../src/lib/routes');
-const { RAIL_ITEMS } = await import('../src/skins/instrument/Rail');
+const { DESK_DOORS: RAIL_ITEMS } = await import('../src/skins/instrument/TopBar');
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 

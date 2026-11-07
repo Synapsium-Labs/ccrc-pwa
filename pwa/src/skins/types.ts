@@ -21,8 +21,6 @@ export interface SkinSet {
   /** The fleet's banner stack under the bar on a desk, spanning the frame (W2 Task S4b). Null leaves the banners in
    *  the fleet column at every width. A set that fills it hands its `Nav` the column without them at a desk. */
   readonly Banners: Part;
-  /** Instrument's icon rail, its own keyed grid item beside the list column, inside a `<nav>`. */
-  readonly Rail: Part;
   /** The fleet column: the list beside the detail on a desk, the whole page on a phone's fleet route. */
   readonly Nav: Part;
   /** The fleet list a `Nav` places (S6, S10). */

@@ -42,7 +42,6 @@ export const REFINED_SET: SkinSet = {
   // W2 Task S4b (D-5471): the app bar, the banners under it, and the sidebar.
   Bar: AppBar,
   Banners: RefinedBanners,
-  Rail: null,
   Nav: Sidebar,
   FleetList: null,
   // W2 Task S5 (D-5471): the phone's header, its readout and gauges, and the extended `+ New`.

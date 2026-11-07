@@ -3,14 +3,14 @@
    tokens, dense only under `@media (pointer: fine)`. Colour comes from the identity core's tokens and nothing here
    defines one (D-5094); every colour-bearing rule is a `contrast.test.ts` identity.
 
-   W2 Task S9 (D-5472): the shell at laptop and wide. The frame's keyed children keep their DOM order (bar, rail,
-   nav, detail, inspector, status), which is the focus order; the grid only places them. The top bar spans every
-   column of row 1, the rail's included, so the wordmark is the frame's top-left chrome. Width-gated parts mount
-   through `useMediaQuery` (`ShellFrame`); nothing here hides one by width. */
+   W2 Task S9 (D-5472): the shell at laptop and wide. The frame's keyed children keep their DOM order (bar, nav,
+   detail, inspector, status), which is the focus order; the grid only places them. The top bar spans every column of
+   row 1, so the wordmark is the frame's top-left chrome, and it holds the desk's doors (desk-nav Task A, D-8100): no
+   rail column. Width-gated parts mount through `useMediaQuery` (`ShellFrame`); nothing here hides one by width. */
 
 @media (min-width: 900px) {
   .ins-frame {
-    grid-template-columns: 52px 340px minmax(0, 1fr);
+    grid-template-columns: 340px minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   /* The fourth column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
@@ -26,25 +26,13 @@
   .ins-frame .ins-topbar {
     margin-block-end: var(--sp-2);
   }
-  /* No `overflow` here: any value but visible makes the rail a clip box in both axes, which cuts away the tooltip
-     drawn beside it and lets the hidden tips scroll the rail sideways. Stacked above the list column, so the tip
-     draws over the list. */
-  .ins-frame .shell-rail {
-    grid-column: 1;
-    grid-row: 2;
-    min-height: 0;
-    position: relative;
-    z-index: 2;
-    border-right: 1px solid var(--edge-subtle);
-    background: var(--bg-surface);
-  }
   .ins-frame .shell-nav {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
     background: var(--bg-page);
   }
   .ins-frame .shell-detail {
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 2;
   }
   .ins-frame .shell-status {
@@ -60,10 +48,10 @@
    track comes with it. */
 @media (min-width: 1600px) {
   .ins-frame {
-    grid-template-columns: 52px 420px minmax(0, 1fr);
+    grid-template-columns: 420px minmax(0, 1fr);
   }
   .ins-frame[data-inspector='placed'] {
-    grid-template-columns: 52px 420px minmax(0, 1fr) 320px;
+    grid-template-columns: 420px minmax(0, 1fr) 320px;
   }
 }
 
@@ -138,38 +126,32 @@
   min-width: var(--tap-min);
 }
 
-/* ---- The rail ------------------------------------------------------------ */
+/* ---- The desk doors ----------------------------------------------------- */
 
-.ins-rail {
+/* The bar's doors (desk-nav Task A, D-8100), moved from the rail: one line of icon doors after the wordmark. */
+.ins-doors {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  min-height: 100%;
-}
-.ins-rail-foot {
-  display: flex;
-  flex-direction: column;
+  flex: none;
   align-items: center;
-  margin-top: auto;
+  gap: var(--sp-1);
 }
-.ins-rail-item {
+.ins-door {
   position: relative;
   justify-content: center;
-  /* The track's width: the rail's border leaves 51px of it, and a 52px item would cut its own ring. */
-  width: 100%;
+  min-width: var(--tap-min);
   min-height: var(--tap-min);
 }
-/* The Inbox door's count of sessions waiting on the operator (T2e fix round 1, D-6335; since T2d, D-6330, it counts no
-   unread mail): the pill is `<CountBadge>`'s (its colours are the primitive's);
-   here it only sits on the door's top-right corner, over the icon's box, and takes no clicks of its own. */
-.ins-rail-count {
+/* A door's count (T2e fix round 1, D-6335; since T2d, D-6330, the Inbox counts no unread mail): the pill is
+   `<CountBadge>`'s (its colours are the primitive's); here it only sits on the door's top-right corner, over the icon's
+   box, and takes no clicks of its own. */
+.ins-door-count {
   position: absolute;
   top: var(--sp-1);
   right: var(--sp-1);
   pointer-events: none;
 }
-/* The active item: a 2px accent rail on its leading edge, beside `aria-current="page"`. */
-.ins-rail-item[aria-current='page']::before {
+/* The active door: a 2px accent mark, beside `aria-current="page"`. */
+.ins-door[aria-current='page']::before {
   content: '';
   position: absolute;
   top: var(--sp-2);
@@ -178,12 +160,12 @@
   width: 2px;
   background: var(--accent);
 }
-/* The tooltip: the item's word, shown on hover AND on keyboard focus, so a keyboard reader sees what a pointer
-   reader sees. Self-grounded: it paints its own ground. */
-.ins-rail-tip {
+/* The tooltip: the door's name, below it, shown on hover AND on keyboard focus, so a keyboard reader sees what a
+   pointer reader sees. Self-grounded: it paints its own ground. */
+.ins-door-tip {
   position: absolute;
-  top: 50%;
-  left: calc(100% + var(--sp-1));
+  top: calc(100% + var(--sp-1));
+  left: 50%;
   z-index: var(--z-header);
   padding: var(--sp-1) var(--sp-2);
   border-radius: var(--r-sm);
@@ -192,16 +174,22 @@
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-50%);
+  transform: translateX(-50%);
   transition: opacity var(--dur-fast) var(--curve-swift);
 }
 @media (hover: hover) {
-  .ins-rail-item:hover .ins-rail-tip {
+  .ins-door:hover .ins-door-tip {
     opacity: 1;
   }
 }
-.ins-rail-item:focus-visible .ins-rail-tip {
+.ins-door:focus-visible .ins-door-tip {
   opacity: 1;
+}
+.ins-bar-doors {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
 }
 
 /* ---- The status bar ------------------------------------------------------ */

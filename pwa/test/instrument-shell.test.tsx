@@ -254,7 +254,7 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES } = await import('../src/lib/routes');
-const { RAIL_ITEMS } = await import('../src/skins/instrument/Rail');
+const { DESK_DOORS: RAIL_ITEMS } = await import('../src/skins/instrument/TopBar');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
 const { ShellFrame } = await import('../src/skins/frame');
@@ -340,7 +340,7 @@ afterEach(() => {
 // before the move, so the move commit changes only where `deskDoors()` finds them.
 describe('the desk doors, characterized', () => {
   /** The desk's place doors, in order. */
-  const deskDoors = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('nav.shell-rail [data-command]')];
+  const deskDoors = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('header.shell-accounts .ins-door:not(.ins-home)')];
   const PATHS = ['/', '/runs', '/settings/updates', '/docs/project-a/specs/a.md', `/s/${S.id}`, '/waiting/1'] as const;
 
   /** `S` and two more sessions waiting on the operator, the two bound to open runs, and one open item, so Waiting on you,
@@ -688,7 +688,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
   it("the fourth-track attribute follows the set's Inspector part, whatever its id", () => {
     function Stub(): ReactNode { return <p>an inspector</p>; }
     // The frame is driven directly: the sets' own parts read providers this case does not mount.
-    const bare = { Bar: null, Banners: null, Rail: null, Nav: null, StatusBar: null } as const;
+    const bare = { Bar: null, Banners: null, Nav: null, StatusBar: null } as const;
     const attr = (set: Parameters<typeof ShellFrame>[0]['set']): string | null => {
       const view = render(<ShellFrame set={set} view="fleet" detailRef={{ current: null }}><p>ladder</p></ShellFrame>);
       const value = view.container.querySelector('.app-shell')!.getAttribute('data-inspector');

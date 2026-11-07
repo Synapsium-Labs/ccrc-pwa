@@ -9,9 +9,11 @@
 // `<main>` holding the ladder, never changes type or key: the ladder stays mounted across a switch.
 //
 // THE LANDMARKS ARE THE FRAME'S, so a skin part cannot forget one: the skip link first, the bar in a `<header>`, the
-// rail and the phone navigation each in a `<nav aria-label=…>`, the detail as the one `<main id="content">`, the
+// phone navigation in a `<nav aria-label="Navigation">`, the detail as the one `<main id="content">`, the
 // inspector in an `<aside aria-label="Inspector">`, the status bar in a `<footer>`. The fleet column is its own
-// `<section aria-label="Fleet">` (`FleetScreen`). DOM order is focus order; grid placement never reorders them.
+// `<section aria-label="Fleet">` (`FleetScreen`). DOM order is focus order; grid placement never reorders them. The one
+// exception is the desk's `<nav aria-label="Primary">`, which is the bar part's in both skins (Refined's `AppBar`, Instrument's
+// `TopBar`, desk-nav Task A, D-8100): a desk's places sit in the bar, so the bar draws the landmark around them.
 //
 // `SkinSetProvider` hands the set to shared screens (`useSkinSet()`), so `SessionScreen` and `ChatList` reach their
 // skin's parts without branching on the skin (D-5469).
@@ -106,14 +108,14 @@ export interface ShellFrameProps {
 
 export function ShellFrame({ set, view, detailRef, children, nav }: ShellFrameProps): ReactNode {
   // The bar is a desk part in both of today's sets (D-5678): on a phone the accounts strip lives in the fleet screen
-  // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden. The rail and
-  // the status bar are desk parts too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
+  // (`FleetColumn`'s `showAccounts`), so one instance is mounted at any width. Mounted, never CSS-hidden. The status bar
+  // is a desk part too (W2 Task S9, D-5472): a phone's navigation is `PhoneNav`'s.
   const desk = useMediaQuery(DESK_QUERY);
   // The phone's bottom bar (desktop-polish PL10, D-7952; D25): below 900 only, and on every page but an open session, where the
   // composer owns the bottom of the screen. Mounted, never CSS-hidden, like the desk parts.
   const { path } = useLocation();
   const phoneNav = !desk && phoneBarShown(path);
-  const { Bar, Banners, Rail, Nav, Inspector, StatusBar, PhoneNav } = set;
+  const { Bar, Banners, Nav, Inspector, StatusBar, PhoneNav } = set;
   // The inspector is placed when the set has the part AND it is shown (width and the device's choice, T3e, D-6385).
   const inspectorShown = useInspectorShown();
   // A SWITCH NEVER DROPS FOCUS TO <body> (spec §5.4, D-5679). What had focus in the
@@ -153,11 +155,6 @@ export function ShellFrame({ set, view, detailRef, children, nav }: ShellFramePr
           <div key="banners" className="shell-banners">
             <Banners />
           </div>
-        )}
-        {Rail !== null && desk && (
-          <nav key="rail" className="shell-rail" aria-label="Primary">
-            <Rail />
-          </nav>
         )}
         {Nav !== null && (
           // The fleet column: the desk sidebar, unless the route draws something else beside its detail (`nav`); hidden on a
