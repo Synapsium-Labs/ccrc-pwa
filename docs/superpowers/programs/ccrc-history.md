@@ -44,7 +44,8 @@ The programme is complete when all six hold:
 1. **W1 is accepted.** Every W1 acceptance row (spec §10.7, W1-a to W1-l) is met as measured, or the operator has ruled
    on its miss. Open on 2026-11-07:
    - W1-e, re-measured over a week;
-   - W1-b and W1-f, re-measured since CP-39d's fix;
+   - W1-d's affordability note, which the ledger does not record as updated;
+   - W1-b and W1-f, re-measured by CP-37's protocol once CP-39d's fix is live on the node;
    - W1-h, never measured;
    - W1-i's swap-log check;
    - W1-k, missed as worded on 2026-10-01 with no text lost, which waits on the operator's ruling (CP-37);
@@ -53,20 +54,24 @@ The programme is complete when all six hold:
    of spec §7.5 has run. Steering is then either armed by the operator or left off by the operator's explicit choice.
    The per-backend compliance bars and the arming stay the operator's.
 3. **W4 has shipped.** The operator has approved its addendum. Its plan is then accepted, built, independently
-   reviewed and merged, B4 is live on every session-hosting node before subagent capture, and its staging and rollout
+   reviewed, merged and released. B4 is live on every session-hosting node before subagent capture, parent-link
+   coverage (spec §10.7's W4 row) and the resource-bound checks are measured and recorded, and its staging and rollout
    policy is recorded.
-4. **The held W2 runs are closed.** Runs 1233 and 1236 (the seven-day drafts, #1969 and #1975) are closed as superseded
-   by the skip ruling, by an authorised act. Run 1022's continuity role ends with the final run.
+4. **The held runs are disposed of.** Runs 1233 and 1236 (the seven-day drafts, #1969 and #1975) are closed as
+   superseded by the skip ruling. Run 1190's drafts (#1876) are either accepted as W3's plan and W4's addendum or
+   superseded by them, and never sidestepped by a fresh run that evades their review cap. Each of these needs an
+   authorised act. Run 1022's continuity role ends with the final run, which closes only when no other run is open.
 5. **Recall use is reported, not gated.** One read-only report shows how sessions use recall, from the existing
    `recall_calls` rows (one row per read-verb call: verb, exit code and duration, never the query text), over a
    stated window: calls per family, the share answered "not found" (exit 3), and expands per grep. It sets no
    threshold and no gate. It does not reinstate the W2 study or its thresholds, and it uses no writing form of
    `ccrc history`.
 6. **The ledger is final and the follow-ups are filed.** This ledger records the close, and the enhancement candidates
-   below are filed as tickets.
+   below are filed as tickets once the operator lifts the filing postponement of 2026-11-01. Candidate 6 is filed with
+   its condition.
 
 **Not part of done:** a W2 PASS, or any measured benefit, uptake, fabrication, compliance, cost or live-safety result
-beyond what items 2 and 5 produce.
+beyond what items 2, 3 and 5 produce.
 
 **Enhancement candidates** (not in scope; filing postponed by the operator):
 
@@ -76,8 +81,8 @@ beyond what items 2 and 5 produce.
 4. Exact, partial and source recovery, with summary lineage.
 5. Bounded, additive recall before any rewriting of the active context.
 6. A deterministic identifier timeline over history (runs, PRs, items, commits and files) that always resolves to
-   verbatim text, considered only if item 5's report shows sessions acting on superseded statements or reassembling
-   scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
+   verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
+   or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
 ## Current checkpoint — 2026-11-02
 
