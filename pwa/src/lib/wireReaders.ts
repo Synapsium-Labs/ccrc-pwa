@@ -2,7 +2,7 @@
 // never a field it did not check. Pure (L1) apart from `ApiError`'s class, a leaf. `lib/api.ts` re-exports all of it
 // (ARCH-13b, #557).
 import type { AutoMode, ArchiveAnswer, ArchiveBody, ArchiveRefusal, Dialog, DialogAnswered, NotifyMode, RouteFields, UpdateChannel } from '../../../shared/api';
-import { isArchiveRefusal, isLeaseDoorRefusal, LEASE_DOOR_REFUSALS } from '../../../shared/api';
+import { delegationLeaseExpiresAtOf, isArchiveRefusal, isLeaseDoorRefusal, LEASE_DOOR_REFUSALS } from '../../../shared/api';
 import {
   LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, LINEAR_TEAMS_MAX, isLinearStoredName, isLinearTeamKey, isLinearUrlKey, isLinearUuid,
   type LinearCheckOutcome, type LinearConnectionView, type LinearLegacyRow, type LinearTeamShown, type LinearWorkspaceView,
@@ -360,11 +360,12 @@ export type DoorAnswer =
   | { readonly ok: false; readonly error: string }
   | 'unreadable';
 /** A door's 2xx body: accepted only when it says `ok: true`; anything else is `unreadable` (the act was accepted, what it
- *  did is unknown), never a thrown parse. `expiresAt` follows the wire's one absence rule (`delegationLeaseExpiresAtOf`):
- *  only a string is a date, and absence or null is no date known (review 1623 F8 (a)). */
+ *  did is unknown), never a thrown parse. `expiresAt` is read by the wire's own reader (`delegationLeaseExpiresAtOf`), so
+ *  the field has one absence rule: only a string is a date, and absence or null is no date known (review 1623 F8 (a),
+ *  review 1624 F7). That reader checks the type itself, so an unknown value is safe to hand it. */
 export function readDoorAnswer(body: unknown): DoorAnswer {
   if (!isRecord(body) || body.ok !== true) return 'unreadable';
-  return { ok: true, expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : null };
+  return { ok: true, expiresAt: delegationLeaseExpiresAtOf(body as { readonly expiresAt?: string | null }) };
 }
 /** The statuses the doors refuse with: each door word's one status (`LEASE_DOOR_REFUSALS`). */
 const DOOR_STATUSES: ReadonlySet<number> = new Set(Object.values(LEASE_DOOR_REFUSALS));

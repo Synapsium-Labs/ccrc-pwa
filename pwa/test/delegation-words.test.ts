@@ -1,7 +1,7 @@
 // Delegation broker wave 4, PR2 Task 2.2, and delegation visibility Task 1: the delegation rows' words
 // (`fleet/delegationWords.ts`). D-6999's inferred chip, member tolerance, words that never say running (spec §4),
 // and a chip that counts every attached entry (D-7781).
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LEASE_SOURCE_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS,
   DELEGATION_WORKSPACE_STATES, type DelegationActivityWire, type DelegationLeaseWire,
@@ -14,6 +14,14 @@ import {
 } from '../src/fleet/delegationWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 import { DELEGATION_CARRIER_STATES, LEASE_DOOR_REFUSALS } from '../../shared/api';
+
+// Review 1624 F7: the wire's `expiresAt` reader, wrapped so a row can see who reads the field. It answers exactly as the
+// real one unless a row says otherwise for one call, so every other row in this file reads the wire as before. The test
+// setup has loaded the client already (through the fleet store), so the F7 row loads a fresh `wireReaders` over it.
+vi.mock('../../shared/api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../shared/api')>();
+  return { ...real, delegationLeaseExpiresAtOf: vi.fn(real.delegationLeaseExpiresAtOf) };
+});
 
 describe('delegationWords (delegation broker wave 4, PR2)', () => {
   it('W4-U6: the inferred chip holds exactly for a raw or marked worktree, in every group, workspace and via', () => {
@@ -385,5 +393,22 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     expect(words.attachConfirm('coord-a').consequence).not.toMatch(/until|date|\d/);
     expect(words.confirmFor({ act: 'keep' })).toBeNull();
     expect(words.confirmFor({ act: 'foreign' })).toBe(words.notDelegatedConfirm);
+  });
+});
+
+describe('a door\'s accepted answer (review 1624 F7)', () => {
+  it('reads expiresAt by the wire\'s own reader, so the field has one absence rule', async () => {
+    vi.resetModules();
+    const { readDoorAnswer } = await import('../src/lib/wireReaders');
+    const reader = vi.mocked((await import('../../shared/api')).delegationLeaseExpiresAtOf);
+    const body = { ok: true, expiresAt: '2026-11-24T12:00:00.000Z' };
+    // Whatever the wire's reader answers is the answer's date: a copy of the rule beside it would answer for itself.
+    reader.mockReturnValueOnce('2027-01-02T00:00:00.000Z');
+    expect(readDoorAnswer(body)).toEqual({ ok: true, expiresAt: '2027-01-02T00:00:00.000Z' });
+    expect(reader).toHaveBeenLastCalledWith(body);
+    // CONTROL: the real rule, through the reader: absence and null are no date known; only a string is one.
+    expect(readDoorAnswer({ ok: true })).toEqual({ ok: true, expiresAt: null });
+    expect(readDoorAnswer({ ok: true, expiresAt: null })).toEqual({ ok: true, expiresAt: null });
+    expect(readDoorAnswer(body)).toEqual({ ok: true, expiresAt: '2026-11-24T12:00:00.000Z' });
   });
 });

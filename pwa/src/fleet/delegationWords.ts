@@ -391,6 +391,12 @@ export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: s
 export function offersControl(controls: readonly WorktreeControl[], asked: WorktreeControl): boolean {
   return controls.some((c) => c.act === asked.act && (c.act !== 'attach' || (asked.act === 'attach' && c.parent === asked.parent)));
 }
+/** What a row offers, as one value to compare: the worktree's state on the wire (none for an unowned row) and each control,
+ *  an attach with its session. A refusal is about the act it answered, so the row clears its sentence when this changes
+ *  (review 1624 F5): a row whose controls go and come back, or whose state moves, no longer says the old refusal. */
+export function offerOf(controls: readonly WorktreeControl[], l: DelegationLeaseWire | null = null): string {
+  return [l === null ? '' : dispositionOf(l) ?? '', ...controls.map((c) => (c.act === 'attach' ? `attach ${c.parent}` : c.act))].join(' ');
+}
 
 /** Each control's label. */
 export const ACT_WORD: Readonly<Record<WorktreeAct, string>> = { keep: KEEP_WORD, attach: ATTACH_WORD, foreign: NOT_DELEGATED_WORD };
