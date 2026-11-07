@@ -20,7 +20,7 @@
 >
 > - The operator's rulings R-B1 to R-B4 stand as ruled. R-B2's span (acts 6 to 28) is a W2 window, and none is scheduled under the current route. If W2 is expressly resumed, no W4 release is installed inside that span.
 > - Nothing here claims that W1's acceptance or its migration integrity is complete. W1-k's miss of 2026-10-01 still waits on the operator's ruling, and W1-b, W1-e and W1-f are still to be re-measured (CP-37).
-> - **W4's acceptance is blocked.** The canonical bar stands at 95% (A9), but which population it is measured over, and what a workflow link must prove, are open decisions (P11, P12).
+> - **W4's acceptance is blocked.** The canonical bar stands at 95% (A9), but four things it rests on are open decisions: which population it is measured over (P11), what a workflow link must prove (P12), which link a transcript carries when its copies' meta files disagree (P17), and what counts as one transcript when a swap leaves copies in several homes (P18).
 > - **When subagent ingest may first reach a node is open** (P15). Every shipping merge may cut a prerelease, and this addendum authorises no promotion or rollout.
 
 ## In short
@@ -29,13 +29,14 @@
   - the transcripts of subagents and workflow agents join the lossless store, each linked to its parent;
   - a read-only `ccrc history touched <path|symbol>` verb that names the history nodes whose refs name a file.
 - **What this addendum does.** It turns spec §10.4's five bullets into decisions a plan can be built from: the link and how it is resolved, the census and its populations, the scan rules for subagent boundaries, `touched`'s matching, output and ranking, what growth does to the cap, file ownership, a pin table, a failure table and a PR split.
-- **Approved and proposed are kept apart.** Section 2 lists what the operator has already approved, with its source. Section 4's decision table lists every open choice, P1 to P16, as a **proposal**. Each row gives its options, its recommendation, its PR and its first blocked consumer. Nothing in a proposal is approved by this draft.
+- **Approved and proposed are kept apart.** Section 2 lists what the operator has already approved, with its source. Section 4's decision table lists every open choice, P1 to P18, as a **proposal**. Each row gives its options, its recommendation, its PR and its first blocked consumer. Nothing in a proposal is approved by this draft.
 - **What the operator checks first:**
   - P5, subagent capture pausing before main capture does;
   - P6, no automatic backfill of past subagent text;
   - P7, subagent rows opt-in in the read verbs;
   - P8, what `touched` means, how it matches and how it ranks, which is not the compaction card's `touched` tag;
   - P11 and P12, the census denominator and the workflow link, without which W4 cannot be accepted. The census itself never turns an unknown count into a zero. It withholds every share while a directory it could not enter stands, at any level from the projects root down;
+  - P17 and P18, also needed for acceptance. A swap leaves one subagent transcript in several homes, as hardlinks or as copies. That is ordinary, so the census keeps holdings, transcripts and conflicting content apart (section 3.1). P18 is what it counts as one transcript, and P17 is which parent link it reads when the copies' meta files disagree;
   - P15, when subagent ingest may first reach a node, since every shipping merge may cut a prerelease.
 
 ## 1. Context
@@ -47,6 +48,8 @@ This section says what W4 builds on: spec §10.4's approved text, and what `main
 | The `transcripts` columns `agent_id`, `parent_tool_use_id`, `workflow_run_id` and `agent_type`, in schema v1, empty on every row today; `UNIQUE (cc_session_uuid, agent_id)` | `store.mjs`, the `transcripts` DDL | Sourced |
 | The export carries those columns for a due row | spec §9.15, "A due row is exported whole"; `sweep.mjs`'s replay `transcriptUpsert` | Sourced |
 | Discovery reads main transcripts only: `<home>/projects/<slug>/<uuid>.jsonl` | `sweep.mjs` `walkTranscripts`, `discoverTranscripts` | Sourced |
+| A swap carries a session's whole `<uuid>/` directory, `subagents/` included, into the destination home: a hardlink tree when link(2) succeeds, directly or through the link route, and otherwise a copy. A return visit merges, and nothing removes the source | `ccd/ccd` `_swap_carry_sidecars`, `_swap_carry_merge_walk` | Sourced |
+| One `transcripts` row per `(cc_session_uuid, agent_id)`. One `ingest_files` row per inode (`UNIQUE (dev, ino, source_key)`), each path an alias in `file_paths`. `bindFile` retires an inode whose transcript, birth time or first-line sha differs (`inode_recycled`). Entries are unique by message uuid, and a second body for one uuid is an `entry_variants` row | `store.mjs`, the DDL; `sweep.mjs` `bindFile` and its ingest statements | Sourced |
 | `node_refs` keeps **one origin per `(node_id, kind, value)`** | `store.mjs`: `PRIMARY KEY (node_id, kind, value)`, `origin IN ('model','tool_use','meta')` | Sourced |
 | A leaf's refs are `capRefs([...modelRefs, ...minedRefs])`. The first of each `(kind, value)` wins, so a file both named by the session and touched by a tool is stored as `model`. At most 40 are kept (`REFS_MAX`), and refs past 40 are dropped | `derive.mjs` `leafFields`; `lib.mjs` `capRefs` | Sourced |
 | **No writer in `ccd/history` produces origin `meta`** today; only the check constraint allows it | `grep "'meta'" ccd/history/*.mjs` | Measured in source |
@@ -112,6 +115,10 @@ flowchart TD
   - A run directory must match `RUN_ID_RE`. A real directory whose name does not is listed, and each file in it is refused, counted `agent_file_refused:run-id`, with none read.
   - **At any level, a directory that is a link, is not a directory, or cannot be listed is never entered.** It is counted `agent_dir_refused:<level>:<reason>`, and what lies below it is unknown (section 3.3). Main discovery (`walkTranscripts`) differs here: it lists a linked project directory, and it skips an unlistable one silently. This walk does neither. So when a session's project directory is a link, the session keeps its main transcript, and its subagent files are unknown.
   - Any other file is refused and counted `agent_file_refused:<reason>`.
+- **One walker.** This walk is discovery's own, not a second one. W4-1 extends `walkTranscripts` in `sweep.mjs`, after a characterization case pins today's main output. One traversal of each projects root then yields today's main transcripts, unchanged, and below each session directory every subagent entry with its verdict: an admissible file, a refused file and its reason, or an unentered directory with its level and reason.
+  - Ingest takes the admissible files. The census's op arm (section 3.3) runs the same function and hands its whole answer to the census, so the two never disagree about what the tree holds.
+  - Nothing else lists the subagent tree, so no second walker needs a "legitimately different" reason.
+  - The levels above a session directory are walked once. Main's rules decide what main reads there. This section's stricter rules decide whether the subagent arm goes below each level, and count the directory in `K` where it does not.
 - **The meta file** is read bounded (64 KiB, *chosen*), as JSON.
   - `toolUseId` is the only field the spec measured.
   - `agent_type` is filled only from a field the W4 plan measures on the installed version. Otherwise it is NULL, never guessed.
@@ -119,6 +126,33 @@ flowchart TD
   - Nothing has measured that agent ids are unique across one session's runs, and the row key is per session.
   - A `/` cannot occur in an Agent-tool id, so the two forms never meet.
 - **No new table or column.** Every W4 field already exists in schema v1.
+
+**Several holdings of one transcript (P17, P18).** One subagent transcript is often held by more than one home. A swap carries the session's whole `<uuid>/` directory, `subagents/` included, into the destination home (section 1). It is a hardlink tree when link(2) succeeds, and a copy when it fails, as it does across the per-home mounts unless the link route finds a common mount. Nothing removes the source. So after a swap, the homes the session ran under can each list the same agent file, and the census walks every rostered home. That is ordinary, not a collision. Three things are kept apart:
+- **a holding:** one listed path;
+- **a physical file:** the inode a holding resolves to. `bindFile` already checks it by `(dev, ino)`, then by the transcript, the birth time and the first line's sha, so a recycled inode is retired (`inode_recycled`). Inode identity alone is not enough: a copy is a new inode holding the same transcript, and a recycled inode can hold another one;
+- **a logical transcript:** the row key `(cc_session_uuid, agent_id)`, the `UNIQUE` pair of `transcripts`. Every holding whose path names one session uuid and one agent id holds that one transcript, whatever its home or project directory.
+
+**Ingest of several holdings (proposed).** Goal 1 of the approved spec asks for one copy per Claude Code uuid however many homes hold it, and for no message dropped on a content conflict. W4 applies main capture's existing rules to subagent rows, with no new table or column:
+- each holding binds through `bindFile`'s rule. Hardlinked paths share one `ingest_files` row, each path an alias in `file_paths`, and a copy is an `ingest_files` row of its own;
+- every holding of one key binds to that key's one `transcripts` row;
+- rows are entries keyed by message uuid, and each holding keeps its own positions in `memberships`. A second body for one uuid is an `entry_variants` row (the spec's failure table: on a content conflict, keep both). Nothing is overwritten or dropped;
+- a subagent leaf's span comes from the copy that holds its boundary (§6.1). So a holding that lacks rows another one has loses none of them: `rows_unspanned` and `transcript_forked` count it, as on main;
+- `workflow_run_id` comes from the path, so every holding of a key gives the same one. `parent_tool_use_id` comes from a meta file, and each holding carries its own. When they disagree, which one counts is P17.
+
+**The content shapes**, each a planned case (section 5):
+
+| Shape | What the holdings show | Ingest | Census |
+|---|---|---|---|
+| hardlinks | two paths, one inode | one `ingest_files` row with two `file_paths` aliases (SA24) | one transcript |
+| identical copies | two inodes, the same rows and bytes | two `ingest_files` rows; one entry per row, with a membership in each (SA25) | one transcript |
+| growing copies | one holding's rows are a prefix of the other's: an in-place append after a copy, or a shorter log the carry's merge has not yet replaced | the entries' union, and no variant (SA26) | one transcript |
+| forked copies | a shared prefix, then rows only one holding has | every row stored; leaves from the copy that holds each boundary; `transcript_forked` (SA27) | one transcript |
+| a true conflict | one message uuid with two different bodies | one entry and one `entry_variants` row, nothing dropped (SA27) | one transcript |
+| disagreeing metas | metas naming different `toolUseId`s, or one naming none, or one unreadable | as P17 rules (SA28) | as P17 rules, and never `L` while it is open |
+| disjoint holdings | two holdings with at least one row each and no row in common | every row stored, under the one key | `identity_collision`. The key may name more than one transcript (P1's uniqueness is unmeasured), so the count is unknown, and every share is withheld while one stands (SA29) |
+| unbound holdings | a holding not yet read; one that cannot be opened or read (ingest's retry columns record why); or one changed since its read other than by growth: another inode at the path, a changed first line, or a shrink, which `bindFile` retires or rescans | the existing retry, retire and rescan rules | `holding_unbound`, by cause. It may hold another transcript, so under P18 (a) it widens the share's range and never narrows it (section 3.3, SA30) |
+
+A holding that only grew since its read stays bound: its cursor resumes, and its stored rows are a prefix of the file. The census compares holdings from the store's memberships, so it reads no transcript file to tell copies from collisions.
 
 ### 3.2 The parent link and how it is resolved
 
@@ -149,45 +183,53 @@ The cost is at most 64 decodes per workflow run, beside the Agent-tool decode's 
 
 Until P12 is ruled, the census prints the workflow kind under each option it can measure, side by side, and shows (b) as `unavailable` until it is measured. No workflow file counts toward the canonical share, as linked or as not linked. A9's population includes workflow transcripts (section 3.3), so no canonical share is computed until then.
 
-### 3.3 The census (P11, P12, P16)
+### 3.3 The census (P11, P12, P16 to P18)
 
-The census is how A9 is measured. It is a read-only Node pass that lists the tree itself and joins what it lists with the store. It reports every population apart, says which figures partition and which overlap, and never turns an unknown into a zero.
+The census is how A9 is measured. It is a read-only Node pass over discovery's own walk (section 3.1), joined with the store. It reports every population apart, says which figures partition and which overlap, and never turns an unknown into a zero.
 
-**One unit.** Every population counts listed files, except `K`, which counts directories. A link verdict is decided per row, and an admitted file takes the verdict of the row its identity names. P1 makes that one row per file: an Agent-tool id holds no `/`, and a workflow agent's id carries its run directory's name. Two listed files can still name one row (one session uuid under two project directories, say). They are counted `identity_collision`, and every share is withheld while one stands, as for a failed sum.
+**The unit (P18).** A link verdict belongs to a `transcripts` row, so the census counts logical transcripts: one unit per key, however many holdings carry it (section 3.1). That is P18's recommendation, and nothing here approves it. `K` alone counts directories.
+- Holdings and physical files are counted beside the units, never instead of them. With one holding per key, P18's three options agree.
+- A refused holding whose name yields no key (a name outside the grammar) is a unit of its own, since nothing can show that it copies another.
+- Several holdings of one key are one unit, not a collision. Only disjoint holdings are `identity_collision` (section 3.1), and every share is withheld while one stands, as for a failed sum.
 
 **What it cannot enumerate.** At every level of the walk (section 3.1), from the projects root down to a run directory, a directory that is a link, is not a directory, or cannot be listed is never entered. The census counts it in `K` by level and reason. The files below it are **unknown**, never 0. No share and no 95% certification is drawn from a tree that holds one.
 
 | Population | Definition | Where it sits |
 |---|---|---|
 | unentered directories `K` | the directories above, by level (projects root, project, session, `subagents/`, `workflows/`, run) and by reason (`link`, `not-dir`, `unlistable`) | a count of directories. Their files are **unknown**, never 0 |
-| listed `D` | every `*.jsonl` name the census listed in an entered directory, `journal.jsonl` excepted | the files the census knows of |
-| refused `R` | listed files the walk refuses: a name outside the grammar, a link, not a regular file, or a file in a run directory whose name is outside `RUN_ID_RE`. Such a directory is a real one, so it is listed, and no file in it is read | part of `D` |
-| pre-install, not admitted `P` | listed, admissible files whose `mtime` is before W4's install record (P6), with no `transcripts` row | part of `D` |
-| pending `Q` | listed, admissible, post-install files with no `transcripts` row yet: discovery rotates within a budget | part of `D` |
-| admitted `Ad` | listed files with a `transcripts` row, whatever their `mtime` | part of `D` |
-| linked `L`, unresolved `U`, unmeasured `M`, unnamed `X` | admitted files by their row's link verdict (section 3.2). `X` has no link column set, which only an Agent-tool row can have | a partition of `Ad` |
-| imported `I` | admitted files whose `mtime` is before the install record: what P6's operator import brought in | a subset of `Ad` |
-| gone `G` | stored subagent rows whose file the census did not list (deleted or moved) | outside `D`, reported apart |
+| listed `D` | every unit with a holding the census listed in an entered directory, `journal.jsonl` excepted | the units the census knows of |
+| refused `R` | units with no `transcripts` row whose every holding the walk refuses: a name outside the grammar, a link, not a regular file, or a file in a run directory whose name is outside `RUN_ID_RE`. Such a directory is a real one, so it is listed, and no file in it is read | part of `D` |
+| pre-install, not admitted `P` | units with no `transcripts` row, an admissible holding, and every admissible holding's `mtime` before W4's install record (P6) | part of `D` |
+| pending `Q` | units with no `transcripts` row yet and an admissible post-install holding: discovery rotates within a budget | part of `D` |
+| admitted `Ad` | units with a `transcripts` row, whatever their holdings' `mtime` and whatever the walk says of them now | part of `D` |
+| linked `L`, unresolved `U`, unmeasured `M`, unnamed `X` | admitted units by their row's link verdict (section 3.2, with P17 for disagreeing metas). `X` has no link column set, which only an Agent-tool row can have | a partition of `Ad` |
+| imported `I` | admitted units whose every holding's `mtime` is before the install record: what P6's operator import brought in | a subset of `Ad` |
+| gone `G` | stored subagent rows none of whose holdings the census listed (deleted or moved) | outside `D`, reported apart |
+| beside the units | holdings listed; physical files; `holding_unbound` by cause; `refused_since_stored`, refused holdings of admitted units; each key's content shape (section 3.1) | reported apart, never added to a part |
 
-- **The partitions.** `D = R + P + Q + Ad`, by admission state, and `Ad = L + U + M + X`, by verdict. Every listed file is in exactly one part of the first, and every admitted file in exactly one part of the second. An import moves a file out of `P` and into `Ad` and `I`. The census checks both sums on every run, and prints no share when either fails.
-- **The overlapping subsets,** labelled as subsets and never added to a partition: imported `I`; every pre-install admissible file, `T = P + I`; eligible `E = Q + Ad`; named `N = L + U + M`.
-- **By kind.** Every figure is also split into Agent-tool and workflow files, a partition by place. An Agent-tool file takes the decode's verdict (section 3.2). A workflow file takes the verdict of P12's predicate, and the census prints it under each option it can measure.
+- **Precedence, so that nothing counts twice.** A unit takes the first part that holds, in this order: `Ad` (it has a row), then `P` or `Q` (it has an admissible holding), then `R`. So a stored row whose holding was later replaced by a link stays in `Ad` once, with its verdict, and the refusal is counted `refused_since_stored` beside it, never as a second unit. Under P18 (b) and (c), the walk's verdict comes first instead: a refused holding is `R` even with a stored row, and that row's verdict is reported apart. Each option's precedence is part of P18.
+- **The partitions.** `D = R + P + Q + Ad`, by admission state, and `Ad = L + U + M + X`, by verdict. Every unit is in exactly one part of the first, and every admitted unit in exactly one part of the second. An import moves a unit out of `P` and into `Ad` and `I`. The census checks both sums on every run, and prints no share when either fails.
+- **The overlapping subsets,** labelled as subsets and never added to a partition: imported `I`; every pre-install admissible unit, `T = P + I`; eligible `E = Q + Ad`; named `N = L + U + M`.
+- **By kind.** Every figure is also split into Agent-tool and workflow units, a partition by place. An Agent-tool unit takes the decode's verdict (section 3.2). A workflow unit takes the verdict of P12's predicate, and the census prints it under each option it can measure.
 - **Every verdict has a part.**
   - A meta that is absent or unreadable, or that carries no `toolUseId`, leaves the link column unset, so its row is `X`.
   - A parent session with no stored main transcript is `M` (`parent-not-stored`), for an Agent-tool row and under P12 (b).
   - `M` also covers no timed row, a candidate that cannot be decoded, a body over the decode cap, and the 64-decode bound reached.
   - A window decoded whole with no match is `U`.
+  - A key whose holdings' metas disagree takes P17's answer. Under its recommendation that is `M` (`meta-conflict`), never `L`.
 
   No census verdict is called `unlinked`, and that word names no part.
 
 **Uncertainty is shown, never folded:**
 - while `K > 0` or `identity_collision > 0`, the census prints `share withheld:` with the counts by level and reason, and no share;
 - `M` is uncertain in the numerator, so every share is printed as a range, `L / den` to `(L + M) / den`;
-- `Q` counts as not linked, and `G` is outside every denominator.
+- under P18 (a), an unbound holding may hold another transcript. At the lower end, a key with `u` unbound holdings counts `u` extra units, not linked, when it also has a bound holding, and `u − 1` when it has none. The upper end counts none, so the range widens and never narrows;
+- `Q` counts as not linked, and `G` is outside every denominator;
+- no copy, fork or conflict is ever left out of a denominator, so none can raise a share.
 
 **Membership by option** (the detail of P11 and P12):
 - The denominator is P11's. It covers both kinds, since A9 counts subagent and workflow transcripts.
-- The numerator is the denominator's linked files. An Agent-tool file is linked by the decode, and a workflow file by the predicate P12 rules.
+- The numerator is the denominator's linked units. An Agent-tool unit is linked by the decode, and a workflow unit by the predicate P12 rules.
 - The census prints every column, and only the ruled one is ever called canonical.
 
 | Part | `D − T` (recommended) | `D` | `E` | `Ad` |
@@ -198,14 +240,17 @@ The census is how A9 is measured. It is a read-only Node pass that lists the tre
 | `Ad − I`, admitted post-install | in | in | in | in |
 | `I`, imported pre-install | out | in | in | in |
 
-- **Recommended, not approved: `D − T`.** It is the set the earlier draft wrote as `D − P`, when `P` still held every pre-install file: every listed file but the pre-install admissible ones, with refused and pending files included. A refusal or a pending file can never raise the share, and pre-install files are W4's only by import under P6. They are reported apart, so a ruling the other way, on P6 or P11, counts them back in.
-- **Which way imported and refused pre-install files count is part of P11.** The table shows each option's answer, and none is chosen here.
-- Acceptance is **withheld** until P11 and P12 are ruled. Under every option it is also withheld while `K > 0` or `identity_collision > 0`, and while the lower end of the range is below 95%.
+- **Recommended, not approved: `D − T`.** It is the set the earlier draft wrote as `D − P`, when `P` still held every pre-install file: every listed unit but the pre-install admissible ones, with refused and pending units included. A refusal or a pending unit can never raise the share, and pre-install units are W4's only by import under P6. They are reported apart, so a ruling the other way, on P6 or P11, counts them back in.
+- **Which way imported and refused pre-install units count is part of P11.** The table shows each option's answer, and none is chosen here.
+- Acceptance is **withheld** until P11, P12, P17 and P18 are ruled. Under every option it is also withheld while `K > 0` or `identity_collision > 0`, and while the lower end of the range is below 95%.
 - P6's predicate, proposed with P6: a file whose `mtime` is at or after the install record is post-install, and is ingested whole. The install record is a `meta` row the first W4 tick writes (`agents_since_ms`), which needs no schema change.
 
 **The census's contract (proposed, P16).**
 - **Owner:** W4-1.
-- **Home:** a new `ccd/history/census.mjs` holds the read-only pass: the tree listing, the store join, the Agent-tool decode and P12 (b)'s lookup. `lib.mjs` holds the pure deciders: the parts, the two sums, the verdicts and the share's range. `deploy/measure-history.py` counts the parts Python can count without decoding.
+- **Home:** a new `ccd/history/census.mjs` holds the read-only pass: the store join, the holdings' comparison from stored memberships, the Agent-tool decode and P12 (b)'s lookup.
+  - It lists no tree. The op arm in `sweep.mjs` runs discovery's walk (section 3.1, "One walker") and hands its whole answer to it.
+  - `lib.mjs` holds the pure deciders: the parts and their precedence, the two sums, the verdicts and the share's range.
+  - `deploy/measure-history.py` lists no subagent tree. Python cannot import the walk, and a second grammar there would be a second spelling with nothing legitimately different about it.
 - **Verb (a CLI expansion, proposed):** `ccrc history census [--json]`, an operator verb in `cli.mjs`'s `OP_OF_VERB`. So it runs through the shim, which hands it the rostered homes and is the one lock taker.
   - It is not a writing form. It opens the store read-only and writes nothing.
   - It prints counts and shares only, never text.
@@ -218,7 +263,7 @@ The census is how A9 is measured. It is a read-only Node pass that lists the tre
   - 6: not indexed;
   - 9: no store on this box;
   - 1: internal.
-- **Files W4-1 claims for it:** `census.mjs` (new), `lib.mjs`, `lib.d.mts`, `cli.mjs` (the verb's row and usage line), `sweep.mjs` (its op arm), `ccd/ccrc` (the help line, so W4-1 runs growth-check armed), `deploy/measure-history.py`, and their tests. Sections 7 and 8 name the same files.
+- **Files W4-1 claims for it:** `census.mjs` (new), `lib.mjs`, `lib.d.mts`, `cli.mjs` (the verb's row and usage line), `sweep.mjs` (its op arm and the walk), `ccd/ccrc` (the help line, so W4-1 runs growth-check armed), and their tests. Sections 7 and 8 name the same files.
 - **The alternative, with no CLI change:** an arm of `deploy/history-counters.mjs`, `census --db <store> --home <home>…`, which the operator runs like W3's spike report. Its cost is a home list typed by hand, and a missing home is an unknown that reads as nothing.
 
 ### 3.4 Subagent boundaries (the scan rules)
@@ -360,6 +405,8 @@ This is the addendum's one decision table. Each row blocks its first consumer un
 | P14 | The graph's provenance in `touched`'s header | none (`graph` or `no graph`); `loadGraph`'s `builtAt` | none: no reader is added, and the session card already measures the graph's freshness | W4-4 | TC21's alternative, held |
 | P15 | When subagent ingest may first reach a node (a NEW operator choice) | (a) staged rollout: no W4 build is promoted or rolled onto a session-hosting node until W4-4 has merged and A8 holds; (b) an ingest arming marker with no writer in the tree, a new switch the operator would have to approve; (c) the read side first: W4-2's leaf guards and W4-3's filter land before W4-1's ingest | (b): with no switch, every release after W4-1's merge carries its ingest, so (a) holds every later rollout of `main` | W4-1 | W4-1's ingest step, the walk's first write of a subagent row; SA22 held |
 | P16 | The census's home and verb (a CLI expansion) | (a) `ccrc history census`, an operator verb on the shim's op lane; (b) an arm of `deploy/history-counters.mjs` | (a): the shim hands it the rostered homes, so no home is left out by hand | W4-1 | W4-1's census arm; SA23 held |
+| P17 | A key whose holdings' metas disagree (the operator: it decides what counts as linked) | (a) the newest holding's meta, by `mtime_ns` and then the larger `file_id`: §6.2's rule for structure, extended to a transcript column; (b) the first meta stored stands, and a later one that differs is counted `agent_meta_conflict` and never written; (c) as (b), and the census reads every holding's meta (64 KiB each), so a key whose metas disagree, or are partly absent or unreadable, is `M` (`meta-conflict`) | (c): no stored link moves, and the disagreement shows in the range. (a) silently replaces a stored link when a newer copy appears, and (b) hides the disagreement from the census | W4-1 | the meta read on a key's second holding, and the census verdict of a key with several holdings; SA28 held |
+| P18 | The census's unit, and the precedence of its parts (the operator: it defines what A9 counts) | (a) logical transcripts, one unit per `(cc_session_uuid, agent_id)` key, a stored row first in precedence; (b) holdings, one unit per listed path, the walk's refusal first; (c) physical files, one unit per bound inode, the walk's refusal first | (a): a swap cannot move the share, as Goal 1's "one copy per Claude Code uuid" asks. Its cost: it compares holdings through the stored memberships, and its unbound holdings widen the range. Under (b), a hardlink tree counts twice and a session swapped through three homes counts three times, so the share weights sessions by their swaps. Under (c), hardlinks collapse, but a copy (the carry's fallback when link(2) fails across mounts) counts once per home, so the share follows the mount layout | W4-1 (the census) | CP-73's acceptance; SA21's units, SA30's range rule and SA31's part held |
 
 Unapproved departures from the approved spec, listed for the coordinator to number once approved and never numbered here:
 - **P5**: §9.3's "the cap and the floor govern" gains an order;
@@ -386,7 +433,7 @@ New pin ids are `SA` (subagents) and `TC` (`touched`). Each pin ships with a tes
 | SA10 | read cadence | a non-scan tick with an inactive parent → no subagent stat; an active parent → stat'ed inside `ACTIVE_STAT_MAX` |
 | SA11 | pause order (P5) | at 90% of a fixture cap → main rows ingested, subagent rows held with cursors unmoved, counted; at 100% → both paused |
 | SA12 | no backfill (P6) | a subagent file older than the install record → not ingested by a tick; `import --agents` (dry run) prints its size and writes nothing |
-| SA13 | census partitions | a fixture holding one file of each of `R`, `P`, `Q`, `L`, `U`, `M` and `X`, one imported pre-install file, one row of `G`, and no unentered directory → every count equals the hand count, both partition sums hold, the imported file is in `Ad` and `I` and never in `P`, and the share prints as a range. A meta with no `toolUseId` is `X`, and a parent with no stored main transcript is `M`. CONTROL: a mutant that leaves `P` out of `D` breaks the sum, and the census prints no share; a mutant that keeps an imported file in `P` breaks it too |
+| SA13 | census partitions | a fixture holding one unit of each of `R`, `P`, `Q`, `L`, `U`, `M` and `X`, each in a single holding (so P18's options agree), one imported pre-install unit, one row of `G`, and no unentered directory → every count equals the hand count, both partition sums hold, the imported unit is in `Ad` and `I` and never in `P`, and the share prints as a range. A meta with no `toolUseId` is `X`, and a parent with no stored main transcript is `M`. CONTROL: a mutant that leaves `P` out of `D` breaks the sum, and the census prints no share; a mutant that keeps an imported unit in `P` breaks it too |
 | SA14 | workflow predicate (P12) | (a), (b) and (c) each over a fixture where only that predicate holds → only that row counts it. For (b): a `tool_result` naming the run id in a parent user row inside the window → `linked`; the same row outside it → `unresolved`; 65 candidates with the match last → `unmeasured`; a body over the decode cap → `unmeasured`; two agents of one run → one lookup. CONTROL: a mutant treating placement as `linked` under (b). The (b) rows stay `.todo` until (b) is measured and ruled |
 | SA15 | parent not stored | a session directory whose uuid has no main transcript in the store → the subagent row kept; census `M`, reason `parent-not-stored`, never `U` |
 | SA16 | `agent_type` | a meta without the measured field → NULL; with it → its value |
@@ -394,9 +441,17 @@ New pin ids are `SA` (subagents) and `TC` (`touched`). Each pin ships with a tes
 | SA18 | pre-install (P6) | a regular, admissible file whose `mtime` is before the install record → counted `P`, never ingested by a tick, never refused, and outside `D − T`. Touched after the record → `Q`, then admitted. Imported by the operator's import in the fixture HOME → `Ad` and `I`, out of `P`, still outside `D − T` |
 | SA19 | unentered directories, every level | `subagents` as a link, a `workflows/<run>` that is a regular file, a `subagents/` that cannot be listed (mode 000, skipped as root), a projects root that is a link, a project directory that cannot be listed, a session directory that is a link, and a session-id entry that is a regular file → none entered, each counted in `K` by level and reason with no file count, and the share withheld with `K` named. CONTROL: a mutant counting an unentered directory's files as 0 prints a share and goes red, at the upper levels as at the inner ones |
 | SA20 | a name-refused run directory | a real directory `wf_bad` holding two agent files → listed, both counted `R` (`run-id`), neither read |
-| SA21 | one unit | two listed files that name one row (one session uuid under two project directories) → `identity_collision`, and no share. CONTROL: a mutant that ignores the collision, giving both files the row's verdict, prints a share |
+| SA21 | the census's unit (P18, held until ruled) | one subagent file held by two homes as a hardlink, and another held by two homes as a copy → under P18 (a), one unit each, with its row's verdict, and holdings 2 and physical files 1 and 2 reported beside; under (b), two units each; under (c), one and two. `.todo` until P18 is ruled. CONTROL: under (a), a mutant counting each listed path as a unit doubles both |
 | SA22 | ingest arming (P15 (b), held until ruled) | no marker → a tick reads no subagent file and writes no subagent row; the marker present → the walk runs. `.todo` until P15 is ruled, and dropped if (b) is not |
 | SA23 | the census verb (P16 (a), held until ruled) | `ccrc history census` writes nothing (the store's bytes, mtime and `user_version` unchanged, and no file under the history directory), is not a writing form, and answers only lib's `EXIT` codes. `.todo` until P16 is ruled |
+| SA24 | hardlinked holdings | one `agent-X.jsonl` and a hardlink to it in a second home's tree → one `ingest_files` row with two `file_paths` aliases, one `transcripts` row, and each message one entry with one membership. CONTROL: a mutant binding by path makes two file rows and doubles the memberships |
+| SA25 | identical copies | the same file copied into a second home → two `ingest_files` rows bound to one `transcripts` row; each message one entry, with a membership in each; no variant. CONTROL: a mutant keying the transcript by path makes two rows |
+| SA26 | growing copies | a copy, then three rows appended in place to the source → the three stored once, the entries the union of both holdings, no variant, and the key's shape `prefix`. CONTROL: a mutant reading the shorter holding as conflicting writes variants |
+| SA27 | forked copies and a true conflict | two holdings that share a prefix and then hold different rows → every row stored, `transcript_forked` counted, and the leaves from the copy that holds each boundary. One message uuid with two bodies → one entry and one `entry_variants` row, nothing dropped. CONTROL: a mutant keeping only the newest copy's body drops the variant |
+| SA28 | disagreeing metas (P17, held until ruled) | two holdings whose metas name different `toolUseId`s → under the recommendation, the row keeps the first link, and the census verdict is `M` (`meta-conflict`), never `L`. `.todo` until P17 is ruled |
+| SA29 | disjoint holdings | two holdings of one key, each with at least one row and none in common → `identity_collision`, and no share prints. CONTROL: a mutant reading them as copies prints a share |
+| SA30 | unbound holdings | three keys, each with one bound holding and a second that is unbound: not yet read, unreadable (mode 000, skipped as root), or replaced by another inode → each counted in `holding_unbound` by its cause, which runs now. A holding that only grew since its read stays bound. Under P18 (a), the lower end's denominator grows by three and the upper end's by none, `.todo` until P18 is ruled. CONTROL: a mutant that skips an unbound holding narrows the range |
+| SA31 | precedence: nothing counted twice (P18) | a stored row whose only holding is then replaced by a link → counted exactly once, and both sums hold, which runs now. Its part (`Ad` with `refused_since_stored` 1 under (a); `R` under (b) and (c)) is `.todo` until P18 is ruled. CONTROL: a mutant that places it by both rules counts it twice and fails the sum |
 | TC1 | path, no graph | no `graph.json` → `touched ccd/x.mjs` answers from refs; `touched someSymbol` answers from `path:symbol` refs only, through the bounded symbol select |
 | TC2 | symbol with a graph | two files whose nodes carry label `foo` → two groups |
 | TC3 | ranking | three nodes of different `latest_ms` → newest first; a tie → `node_id` |
@@ -434,7 +489,11 @@ This section gives, for each input W4 reads, what happens when it cannot decide,
 | `subagents/` | absent | nothing read, no count: the common case |
 | the projects root | absent | nothing to walk on that home: no session there, and no count |
 | any directory of the walk: the projects root, a project or session directory, `subagents/`, `workflows/` or a run directory | a link, not a directory, or cannot be listed | never entered; counted in `K` by level and reason; its files unknown, never 0; every share withheld while one stands |
-| two listed files | they name one row | `identity_collision`; every share withheld while one stands |
+| several holdings of one key | hardlinks, identical copies, growth, a fork or a true conflict | one transcript: every row stored and every variant kept; counted once under P18 (a) |
+| holdings of one key | at least one row each, and none in common | `identity_collision`; every share withheld while one stands |
+| holdings of one key | their metas disagree, or some are absent or unreadable | P17; never `L` while it is open |
+| a holding | not yet read, unreadable, or changed since its read other than by growth | `holding_unbound`, by cause; under P18 (a) it widens the range and never narrows it |
+| a listed holding of a stored row | now refused (replaced by a link, say) | counted once, by P18's precedence, with `refused_since_stored` beside it |
 | run directory | a real directory whose name is outside `RUN_ID_RE` | listed; each file in it refused (`R`, `run-id`), none read |
 | agent file | a link, not regular, a name outside the grammar | refused and counted; in `D`, never in `L` |
 | agent file | `mtime` before the install record | `P` while it has no row: not ingested by a tick, not refused, outside `D − T` (P6). Once imported, `Ad` and `I` |
@@ -463,15 +522,14 @@ This section names every file W4 changes, what it changes, and the ring and cont
 | File | W4 change | Ring and context |
 |---|---|---|
 | `ccd/history/lib.mjs`, `lib.d.mts` | pure deciders: the file and directory grammar at every level, the identity (P1), the link verdict over decoded blocks, the census parts, their sum checks and the share's range (P11), the workflow predicate (P12), the pause order (P5), the pre-install predicate (P6), `touched`'s split, normalisation, match and ranking (P8, P13) | pure policy, ccrc history |
-| `ccd/history/sweep.mjs` | the walk, from the projects root down, the meta read, the cadence (P3), the pause (P5), the install record (P6), the census's op arm (P16) | adapter and tick |
-| `ccd/history/census.mjs` (new, W4-1) | the census pass (P16): the tree listing, the store join, the Agent-tool decode and the user-row lookup of P12 (b), all read-only | adapter |
+| `ccd/history/sweep.mjs` | the walk, from the projects root down, as `walkTranscripts` extended: one walker, which ingest and the census's op arm both call. Also the meta read, the cadence (P3), the pause (P5), the install record (P6), the census's op arm (P16) | adapter and tick |
+| `ccd/history/census.mjs` (new, W4-1) | the census pass (P16): the store join, the holdings' comparison from stored memberships, the Agent-tool decode and the user-row lookup of P12 (b), all read-only. It lists no tree | adapter |
 | `ccd/history/derive.mjs` | subagent leaves on their own chain, no receipt lookup | adapter |
 | `ccd/history/cli.mjs` | the verbs' rows: `census` in `OP_OF_VERB` (W4-1, P16), `--agents` (W4-3), `touched` (W4-4) | delivery |
 | `ccd/history/recall.mjs` | `--agents` on the read verbs (W4-3); `touched` (W4-4) | adapter |
 | `ccd/compact-card.mjs` | unchanged under P14's recommendation, imported for `loadGraph`, `loadLabels`, `resolveToken`. Under P14's alternative, `loadGraph`'s answer gains `builtAt` (W4-4, TC21) | none, or delivery under the alternative |
 | `ccd/ccrc` | the help paragraph gains `census` (W4-1), `--agents` (W4-3) and `touched` (W4-4) | delivery |
 | `ccd/history-skill/SKILL.md` | one line on `touched` | skill text |
-| `deploy/measure-history.py` | the census rows Python can count without decoding (`K`, `D`, `R`, `P`, `Q`, `Ad`, `N`, `X` and `G`, with the `D` sum check); `L`, `U` and `M`, and so the `Ad` sum check, come from the Node census pass | deploy |
 | `shared/*.mjs` (P10, if measured shippable) | the run-id grammar, imported by `server/src/workflows/model.ts` and `ccd/history` | L0 kernel |
 | `README.md` | the history section's verb list: `touched` and `--agents` | docs |
 
@@ -480,7 +538,7 @@ No lifecycle row is added, since every file W4 writes is inside the store. No wi
 **Carried constraints W4 owns.** W3 and W4 are independent, so whichever first edits a file takes that file's carries, and the other's first step checks they are done:
 - `ccd/history/lib.mjs`: review 1088 F2's `MARK_CHECK_GLOSS.budget` gloss, its block comment and its runtime pin in `history-lib.test.ts`;
 - `ccd/history/sweep.mjs`: review 1065's F4 (`activeFiles` marks a file before its lstat) and F10 (`activeRows` with an empty uuid list), each with its own regression and mutant. The W3 plan's Tasks 1A and 1B spell all three; W4-1 runs them if it lands first;
-- `ccd/history/recall.mjs` (W4-3, its first editor in W4): review 1065 F2 and review 1088 F4. The comments that say the global match runs once, or that a grep costs only what its scope holds, are reworded. The match is evaluated once per arm that reads it: 3 scans for recency, 4 with `rk`. These are comments only, with no runtime pin. And if W3-1 has landed lib's `nodeRangeText` (the W3 plan's `history-steer-range-text`), `recall.mjs`'s private `isoOf` is replaced by it here, with `tree`'s output pinned unchanged.
+- `ccd/history/recall.mjs` (W4-3, its first editor in W4): review 1065 F2 and review 1088 F4. The comments that say the global match runs once, or that a grep costs only what its scope holds, are reworded. The match is evaluated once per arm that reads it: 3 scans for recency, 4 with `rk`. These are comments only, with no runtime pin. And if W3-1 has landed lib's `nodeRangeText` (the W3 plan's `history-steer-range-text`), the `tree` line's range calls it here, with `tree`'s output pinned unchanged. `recall.mjs`'s private `isoOf` stays: it also formats single instants (the `family … first-seen=` and `epoch … started=` lines), which a range function cannot replace. Moving the instant format into lib is that slug's proposal, never assumed here.
 
 **README.** The claim is whole-path. The edit is the history section's verb list only. The claim is measured at the wave's start, and a held README is mailed to its holder and not edited until released or handed over.
 
@@ -497,14 +555,14 @@ flowchart LR
   S{{"P15 ruled: when ingest may first reach a node"}} --> R["promotion and rollout,<br/>the operator's acts (CP-73)"]
   P["B4 live on every node,<br/>measured again"] --> R
   W4 --> R
-  D["P11 and P12 ruled"] --> AC["acceptance"]
+  D["P11, P12, P17 and P18 ruled"] --> AC["acceptance"]
   R --> AC
 ```
-*Figure 3. The order. W4-1 carries the pause order, so no build ingests subagent text without it. A build that ingests exists as soon as W4-1 merges, so when ingest may first reach a node is P15's, and promotion and rollout stay the operator's acts. W4-3 and W4-4 both edit `cli.mjs` and `recall.mjs`, so they run one after the other. Acceptance needs the release and the operator's rulings on P11 and P12.*
+*Figure 3. The order. W4-1 carries the pause order, so no build ingests subagent text without it. A build that ingests exists as soon as W4-1 merges, so when ingest may first reach a node is P15's, and promotion and rollout stay the operator's acts. W4-3 and W4-4 both edit `cli.mjs` and `recall.mjs`, so they run one after the other. Acceptance needs the release and the operator's rulings on P11, P12, P17 and P18.*
 
 | PR | Claims | Pins | Blocked on |
 |---|---|---|---|
-| W4-1 | `lib.mjs`, `lib.d.mts`, `sweep.mjs`, `census.mjs` (new), `cli.mjs` (the census verb's row), `ccd/ccrc` (the census help line), `deploy/measure-history.py`, `shared/*.mjs` and `server/src/workflows/model.ts` (P10 only), and their tests | SA1 to SA6, SA10 to SA23 | P1, P3 to P6, P10, P11 (the census's share), P12, P15 (its ingest step), P16 (the census verb) |
+| W4-1 | `lib.mjs`, `lib.d.mts`, `sweep.mjs`, `census.mjs` (new), `cli.mjs` (the census verb's row), `ccd/ccrc` (the census help line), `shared/*.mjs` and `server/src/workflows/model.ts` (P10 only), and their tests | SA1 to SA6, SA10 to SA31 | P1, P3 to P6, P10, P11 (the census's share), P12, P15 (its ingest step), P16 (the census verb), P17 (a key's second meta), P18 (the census's unit) |
 | W4-2 | `derive.mjs`, `lib.mjs`, their tests | SA7 to SA9 | P2 |
 | W4-3 | `recall.mjs`, `cli.mjs`, `lib.mjs` (the read verbs' table), `ccd/ccrc`, their tests | AG1, AG2, and the `recall.mjs` carry | P7 |
 | W4-4 | `recall.mjs`, `cli.mjs`, `lib.mjs`, `ccd/ccrc`, `ccd/history-skill/SKILL.md`, `README.md`, `ccd/compact-card.mjs` (P14's alternative only), their tests | TC1 to TC23 | P8, P9, P13, P14 |
@@ -517,10 +575,11 @@ Each PR is its own run, opened before the previous run closes, with a held-out r
 
 This section says how W4 would be shown to work, and what stays unproven until the operator rules.
 - Every pin in section 5 is red first, then green, with its mutant measured, on fixture HOMEs only, through `ccrc test --`.
-- **Acceptance (A9)** is **blocked** until P11 and P12 are ruled. After the release, the census reports every population of section 3.3 per node and per kind. Only the ruled share is called canonical, against 95%, and no share is called anything while `K > 0` or `identity_collision > 0`.
+- **Acceptance (A9)** is **blocked** until P11, P12, P17 and P18 are ruled. After the release, the census reports every population of section 3.3 per node and per kind. Only the ruled share is called canonical, against 95%, and no share is called anything while `K > 0` or `identity_collision > 0`. No share is measured by this draft.
 - G14's 276 of 1,454 counts metas carrying `toolUseId`, workflow ones included. It is a risk to the bar, which the census's per-kind split names.
 - `touched` is accepted when TC1 to TC23 pass (the held rows once ruled) and its p95, on a fixture of the measured `node_refs` size, is under 2 s.
-- The census proves its own arithmetic. SA13's sums, SA18's pre-install and imported files, SA19's unentered directories at every level, and SA21's single unit each have a mutant that prints a share it should withhold.
+- The census proves its own arithmetic. SA13's sums, SA18's pre-install and imported units, SA19's unentered directories at every level, SA29's collision and SA31's precedence each have a mutant that prints a share it should withhold. SA21's unit and SA30's unbound holdings each have one that moves or narrows the range.
+- Several holdings of one transcript are pinned shape by shape (SA24 to SA30): hardlinks, identical copies, growing copies, forks, true conflicts, disagreeing metas, disjoint holdings, and holdings that are unbound or changed. None is left out of a denominator to raise a share.
 - Every pin here is planned, not run: this drafting wave ran no test, fixture or mutant.
 
 ## Where things stand
@@ -533,7 +592,7 @@ This section says how W4 would be shown to work, and what stays unproven until t
 
 - Approval of this addendum (A11, CP-70), once its review findings are disposed of. W2 PASS is no longer its prerequisite (the 2026-11-02 ruling).
 - P5, P6, P7, P8 and P15: new product decisions, each with a recommendation.
-- P11 and P12: W4's acceptance cannot be called until they are ruled. P12's option (b) also waits on a measurement of the installed version.
+- P11, P12, P17 and P18: W4's acceptance cannot be called until they are ruled. P12's option (b) also waits on a measurement of the installed version.
 - P1 to P4, P9, P10, P13, P14 and P16: their recommendations. Each stays proposed, and blocks its first consumer, until you rule it.
 
 ### Later

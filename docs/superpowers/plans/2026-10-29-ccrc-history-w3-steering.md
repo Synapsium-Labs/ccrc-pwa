@@ -13,7 +13,7 @@
 >
 > What still gates W3 under that route:
 > - **acceptance of this plan**, through independent review, before any implementation;
-> - **the focused spike of spec §7.5** (Task 1). It measures output headroom, compliance, compaction duration and echo overhead. It gates relying on steering and arming it (CP-62, CP-63), not the start of any seven-day study;
+> - **the focused spike of spec §7.5** (Task 1). It measures output headroom, compliance, compaction duration and echo overhead. It gates relying on steering and arming it (CP-62, CP-63), not the start of any seven-day study. Its headroom half is the spec's gate, not a bar: on each backend, no truncated summary **and** `summary_unclosed` not raised, both measured from stored leaves (Task 1D). An unmeasured figure never meets it;
 > - **the operator's per-backend compliance bars and arming.** An unarmed session keeps its native leaf, which stays the fallback;
 > - **CP-60's precompute re-measurement on the installed version, which has not been performed.** It reads the installed build and the stored boundaries, read-only. This drafting assignment forbids that read. The re-measurement needs no model spend and no live compaction. The plan may not merge until an authorised read-only act has measured it (Task 1E, act 1, moved ahead of the merge), and a live path then holds every arming (O3);
 > - **CP-51's W2 close acts, which are not waived.** Before a W3 release or arming, the operator measures on the node any W2 live state those acts name: a recall-off generation, a headless-on marker, an update freeze or an `--out` file. None is assumed absent, and closing one is the operator's act.
@@ -72,10 +72,14 @@ Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63)
   | Parent add-on | when `FAN_IN.leaf` (8) leaves wait, at most 4,000 chars; the whole file, add-on and previous-leaf lines included, at most 8,192 bytes after escaping (Task 4) |
   | Breaker | 5 consecutive `absent` or `invalid` leaves with a receipt open it, for 24 h, then half-open for one full attempt; keyed `session:<id>:<backend>`, counted under the span's producer. Which clock measures the 24 h is O8, blocked |
   | Caps | gist 1,200 (`GIST_MAX`), 16 topics (`TOPICS_MAX`) of 80 chars (`TOPIC_CHARS`), 40 refs (`REFS_MAX`), each set `capped=1` with no marker |
-  | W3 acceptance | per backend: compliance (`ok` + `degraded`) at the operator's bar, truncation 0, added p50 compaction time at most +10% (*chosen* in the spec) |
+  | W3 acceptance | per backend: compliance (`ok` + `degraded`) at the operator's bar; output headroom (§7.5): no truncated summary and `summary_unclosed` not raised, each measured; added p50 compaction time at most +10% (*chosen* in the spec) |
   | Kill rule | remove `history-steer-live.<backend>` after 48 h under its bar; set `history-steer-off` on any truncated summary |
 
-- **Compliance bars are the operator's** (CP-62). No task, test or default sets one, and no code compares compliance with a bar. A bar never reopens the two fixed gates: truncation 0 and added p50 at most +10% (§10.7) hold whatever bar the operator sets.
+- **Compliance bars are the operator's** (CP-62). No task, test or default sets one, and no code compares compliance with a bar. A bar never reopens the fixed gates, which hold whatever bar the operator sets:
+  - §7.5's output headroom: no truncated summary, and `summary_unclosed` not raised (§10.7's "truncation 0" is its first half);
+  - §10.7's added p50 compaction time at most +10%.
+
+  `analysis_only` is reported beside compliance. It is neither a bar nor a headroom signal.
 - **No live probe** runs in any task's tests: fixture transcripts, fixture HOMEs (`makeCcdHarness`, `tmpHelpers.ts`), and fixture accounts `lane-a` and `lane-b`.
 - **Every test, typecheck and mutant** runs through `ccrc test -- …`, in the foreground, with a timeout of at least 600,000 ms and `--maxWorkers=2`, at build time. This drafting wave runs none of them.
 - **Blocked decisions.** Anything that encodes an open decision's answer is marked **BLOCKED on O*n*** (the decision table): a step, a test assertion, an expected value or a mutant. A blocked step does not run. A blocked test is written now and kept `.todo`, and a blocked mutant is held. Each takes the ruling's expectation once O*n* is ruled. A recommendation is shown, and it is never a runnable expectation.
@@ -110,7 +114,7 @@ These are the five failure modes the spec implies but does not pin, most likely 
 | The card's lifecycle | `card.mjs` `oneCard`: a write is due only at end-of-file of the registered session's live copy this tick, with budget left (`atEof`, `mayWrite`). `decideCardFile` deletes a consumed, skipped or unreadable file off end-of-file. A consumed file whose replacement fails is unlinked (D-5059), and so is a prediction whose generation record cannot be acted on (R-recalloff-keep). `withdrawCards` unlinks every prediction on a pass with no card step: `holdPass` with no DB, the `ids === null` hold, the migrate, recover and hold arms, and, in the tick, a cap or floor pause, a floor stop, an unreadable roster or a spent budget (`decideCardWithdraw`, `CARD_WITHDRAW_REASONS`). `withdrawSkippedCards` unlinks one session's on a skipped copy (D-5061). `history-off` and a pass no timer starts withdraw nothing (D-5062) | Task 1B applies every one of these arms to the steer file, through the same deciders |
 | The receipt's grammar | `lib.mjs` `SPOOL_KEYS.steer` (`v`, `ev`, `id`, `sid`, `leaf`; optional `gen`, `ts`), `SPOOL_VALUE.leaf` (`''` or `^L[0-9a-f]{20}$`); `sweep.mjs` `applyEventLine`'s `steer` arm writes `steer_receipts` | no drain change |
 | Receipt association | `lib.mjs` `pickReceipt(receipts, { id, afterMs, uptoMs })`: an exact `leafId` match with no window, else a generic `''` receipt with `afterMs < ts ≤ uptoMs`; `derive.mjs` `leafFields` parses blocks only with one | a stale print is `not-requested` (Review Focus 3) |
-| The parser and status (W1-B2) | `derive.mjs` `leafFields` parses `parseBlocks(redactField(text, pairIdx))`. `parseBlocks` splits `refs:` with `/[\s,]+/`. `blockFields` keeps only the tokens `classifyRef` names, origin `model`, and no kind admits `;`. `blockStatus` counts the raw tokens. `capRefs` unions them with the mined refs, first origin wins, at most 40 | the template's `a; b; c` refs are dropped while the leaf reads `ok`. Task 1F repairs the split in `blockFields`; Task 4 adds the `<ccrc-node>` read |
+| The parser and status (W1-B2) | `derive.mjs` `leafFields` parses `parseBlocks(redactField(text, pairIdx))`. `parseBlocks` splits `refs:` with `/[\s,]+/`. `blockFields` keeps only the tokens `classifyRef` names, origin `model`. Only the `url` kind admits `;`: its arm is `/^https?:\/\/\S+$/`, and `\S` takes `;`. Every other kind's pattern excludes it. `blockStatus` counts the raw tokens. `capRefs` unions them with the mined refs, first origin wins, at most 40 | the template's `a; b; c` refs are dropped while the leaf reads `ok`, except a URL, which is kept with any `;` it carries. Task 1F repairs the split in `blockFields`; Task 4 adds the `<ccrc-node>` read |
 | The pending emitter | `switches-history.test.ts`: `PENDING_EMITTERS = { steer: 'W3 (the steering hook)' }`, which reds once an emitter exists | Task 1C removes the entry |
 | The breaker table, with no writer | `store.mjs` `CREATE TABLE breaker (key TEXT PRIMARY KEY, consecutive_fail INTEGER NOT NULL, open_until_ms INTEGER)`; `cli.mjs` `STATUS_SQL.breaker` reads it | Task 2 creates `decideBreaker` and is its one writer |
 | No template, lane map or `.wrapper` read | `grep -c 'ccrc history archive entry' ccd/history/*.mjs` is 0; no `.lanes` anywhere; `grep -c '\.wrapper' ccd/session-hook.sh` is 0. The shim passes homes and secrets, not accounts or backends | Tasks 1A and 3 add them |
@@ -139,7 +143,7 @@ flowchart LR
 ```
 *Figure 1. Spike first, with no W2 PASS before it (the 2026-11-02 ruling), and any W2 live state measured before a release. The spike PR carries only what the cohort needs: the steer-on-only print with no breaker, and the refs repair. The cohort runs on one immutable release, and no later W3 PR is rolled onto a cohort node until its markers are removed. Arming waits for the breaker, the lanes and the operator's bar. W3-4's add-on reaches an armed node only after it is measured there, under the same fixed gates.*
 
-**What CP-63's evidence covers (A2).** The spike measures the composer with `children: []`, so CP-63's arming covers the leaf template and the previous-leaf lines only. W3-4's add-on adds up to 4,000 chars to one compaction in eight, which nothing has measured. So W3-4 is released onto a node with an armed backend only after an add-on re-measure there (Task 4 Step 6, an operator act, O15). That re-measure uses the spec's fixed gates unchanged: truncation 0, and added p50 compaction time at most +10%. Neither gate moves, and a compliance bar does not reopen them.
+**What CP-63's evidence covers (A2).** The spike measures the composer with `children: []`, so CP-63's arming covers the leaf template and the previous-leaf lines only. W3-4's add-on adds up to 4,000 chars to one compaction in eight, which nothing has measured. So W3-4 is released onto a node with an armed backend only after an add-on re-measure there (Task 4 Step 6, an operator act, O15). That re-measure uses the spec's fixed gates unchanged: headroom (no truncated summary, and `summary_unclosed` not raised), and added p50 compaction time at most +10%. Neither gate moves, and a compliance bar does not reopen them.
 
 **How CP-61's list maps here (O10, a proposed ordering departure, not approved).** CP-61 expects "the spike PR, then the hook, receipt, breaker and parser PRs". A §7.5 spike arms `steer-on/<id>` sessions, and those can only steer if a print and a receipt exist. This plan proposes, as the departure `history-steer-spike-pr-scope`:
 - the steer-on-only print and the receipt land **inside** the spike PR;
@@ -163,7 +167,7 @@ The proposal is recommended and not approved. O10 is the coordinator's to rule, 
 
 | PR | Tasks | Claims (whole paths, measured at the wave's start) | Consumes | Produces |
 |---|---|---|---|---|
-| W3-1 | 1A-1D, 1F | `ccd/history/lib.mjs`, `lib.d.mts`, `steer.mjs` (new), `card.mjs`, `sweep.mjs` (the two carries only), `ccd/session-hook.sh`, `deploy/history-counters.mjs`, `shared/lifecycle.ts`, `README.md`, and the tests `history-steer.test.ts` (new), `history-counters.test.ts` (new), `history-card.test.ts`, `history-parser.test.ts`, `history-derive.test.ts`, `history-lib.test.ts`, `history-sweep.test.ts`, `session-hook-steer.test.ts` (new), `session-hook.test.ts`, `session-hook-compact-carry.test.ts`, `single-definition/switches-history.test.ts`, `lifecycle.test.ts` | W1-B2's parser and receipt drain; W1-B3's card prediction and its lifecycle | `steer/<id>/<uuid>.txt` on the card's lifecycle; the `;` refs repair; `_hook_history_pre`; receipts; `history-counters.mjs spike` |
+| W3-1 | 1A-1D, 1F | `ccd/history/lib.mjs`, `lib.d.mts`, `steer.mjs` (new), `card.mjs`, `sweep.mjs` (the carries only), `ccd/session-hook.sh`, `deploy/history-counters.mjs`, `shared/lifecycle.ts`, `README.md`, and the tests `history-steer.test.ts` (new), `history-counters.test.ts` (new), `history-card.test.ts`, `history-parser.test.ts`, `history-derive.test.ts`, `history-lib.test.ts`, `history-sweep.test.ts`, `session-hook-steer.test.ts` (new), `session-hook.test.ts`, `session-hook-compact-carry.test.ts`, `single-definition/switches-history.test.ts`, `lifecycle.test.ts` | W1-B2's parser and receipt drain; W1-B3's card prediction and its lifecycle | `steer/<id>/<uuid>.txt` on the card's lifecycle; the `;` refs repair; `_hook_history_pre`; receipts; `history-counters.mjs spike` |
 | W3-2 | 2 | `lib.mjs`, `lib.d.mts`, `derive.mjs`, `card.mjs`, `steer.mjs`, `session-hook.sh`, `history-steer.test.ts`, `history-card.test.ts`, `session-hook-steer.test.ts` | W3-1's receipts and print | `decideBreaker`; `steer/<id>/breaker.<backend>` |
 | W3-3 | 3 | `ccd/ccd-history-sweep`, `sweep.mjs`, `card.mjs`, `steer.mjs`, `session-hook.sh`, `shared/lifecycle.ts`, `history-steer.test.ts`, `session-hook-steer.test.ts`, `lifecycle.test.ts`, `switches-history.test.ts` | W3-2's breaker files | `steer/.lanes/<account>`; per-backend arming |
 | W3-4 | 4 | `lib.mjs`, `lib.d.mts`, `card.mjs`, `steer.mjs`, `derive.mjs`, `deploy/history-counters.mjs`, `history-steer.test.ts`, `history-card.test.ts`, `history-derive.test.ts`, `history-counters.test.ts` | W3-1's composer and the card's prediction; W3-2's breaker gate in the hook | the parent add-on, steered `<ccrc-node>` gists, the report's `addOn` figures |
@@ -198,11 +202,13 @@ This is the plan's one decision table, and none of its rows is approved here. Ea
 | O9 | The recall-off gate in the tail (the coordinator; the operator for (b)) | (a) a tail copy held equal to the card's gate by a parity matrix; (b) one function above the anchor, a second sanctioned exception that amends §10.6 | (a) | Task 1C | Step 3; Step 1's verdict matrix, its placement row and mutant (g) held |
 | O10 | CP-61's PR order (the coordinator; the operator if ruled a change to CP-61) | (a) the print, the receipt and Task 1F in the spike PR (`history-steer-spike-pr-scope`); (b) CP-61 literally; (c) Task 1F as its own PR before the cohort | (a) | Tasks 1C, 1F | W3-1's dispatch |
 | O11 | The cohort's immutable version and restart rule (the operator) | as "Order"; no rule | as "Order" | Task 1E | act 3 |
-| O12 | The `refs:` residue Task 1F leaves (the coordinator; the operator if `ok` changes) | (a) keep today's behaviour, measured by Task 1D's `modelRefs`; (b) a wider identifier grammar; (c) a status rule for refs that never classify | (a) | none in W3 | a parser task, only if (b) or (c) is ruled in |
+| O12 | The `refs:` residue Task 1F leaves, a URL's trailing `;` included (the coordinator; the operator if `ok` changes) | (a) keep today's behaviour, measured by Task 1D's `modelRefs`; (b) a wider identifier grammar; (c) a status rule for refs that never classify | (a) | none in W3 | a parser task, only if (b) or (c) is ruled in; Task 1F's URL characterization then takes the ruled expectation |
 | O13 | Stale-print attribution (the operator) | (a) accept it; (b) withdraw steer files on a `history-off` pass; (c) an exact receipt counts only inside its span's window (O7's family); (d) the breaker skips a leaf whose exact receipt is later than its boundary, counted | (d), with (c) offered beside O7 | Task 2 | Step 3's counting rule; its case and mutant (g) held |
 | O14 | The parent add-on's text and budget (the coordinator; the operator for the cap) | the instruction text; the current slot's spelling; one cap `C` for every child gist, or one per child; the node block's status rule | Task 4's proposal: its text, `[{LEAF_ID} this span]`, one `C` from 40 to 300 by binary search, a node judged on id and gist | Task 4 | Step 3; the `C`-value, floor, slot and node-status cases and mutant (g) held |
 | O15 | Add-on evidence before W3-4 reaches an armed backend (the operator) | a re-measure on each armed backend under the fixed gates; none | the re-measure | Task 4 Step 6 | W3-4's release onto a node with an armed backend |
 | O16 | The breaker on a rebuilt store (the operator; §7.3 does not choose) | (a) replay and count: a rebuild applies `decideBreaker` to each receipted leaf, in derivation order; (b) start closed: a rebuild writes no breaker transition | none: this plan selects neither | Task 2 | the rebuild arm of Step 3's insert path; its case and mutant (h) held |
+| O17 | How the spike detects a truncated summary (the operator: it is the input of §7.5's headroom gate) | (a) structural, over each cohort span's stored summary in range, receipted or not: a `<summary>` never closed, a `<ccrc-leaf` or `<ccrc-node` opening with no close after it, or an `<analysis>` never closed with no `<summary>`; (b) `summary_unclosed` alone; (c) a captured stop reason for the compaction call, which no stored field holds: new instrumentation, not approved | (a), with act 4's watch kept as the kill rule's consumer | Task 1D | Step 3's `truncated` arm, its case and mutant (k) held; so CP-63's headroom reading |
+| O18 | Reasons in the spike report (the coordinator) | (a) a reason only where the stored status fixes it, else `reason-not-stored`; (b) re-derive `blockStatus` per leaf from stored inputs, a second evaluation of derive's verdict that can drift from what derive stored; (c) store each leaf's reason, a schema change, not approved | (a): the bars and the gates read status, never reason | Task 1D | Step 3's reason arm; its case held |
 
 **O13 in detail.** A compaction printed nothing (history-off, unarmed, a switch, or a lane with no live marker), and a print followed before the next tick. Today's `pickReceipt` gives the earlier, unprinted span the exact receipt, so that span reads `absent` though it was never asked. Option (b) covers only the longest such window. Option (d) leaves status and association unchanged and counts `breaker_late_receipt`. Task 1B pins today's behaviour as a characterization, and Task 1D counts late receipts apart: neither needs the ruling.
 
@@ -211,6 +217,15 @@ This is the plan's one decision table, and none of its rows is approved here. Ea
 - Under (b), the rebuild's derive call must say that it is a rebuild. The W3-2 worker finds where that call is and claims that file if (b) is ruled.
 
 The case is written now and kept `.todo`, and its mutant is held.
+
+**O17 in detail: what stored data can and cannot establish.** No stored field records why a compaction's output ended. The boundary row's `compactMetadata` gives `trigger`, `preTokens`, `postTokens` and `durationMs` only (lib's `boundaryOf`), so a truncated summary shows only in its stored text.
+- **What the text can establish:** a cut that left a tag open.
+  - `summaryParts` finds a `<summary>` with no `</summary>` after it: `summary_unclosed`.
+  - A cut steering block is a `<ccrc-leaf` with no `</ccrc-leaf>` after it. `parseBlocks` never matches it (`BLOCK_RE_SOURCE` needs the close), so today the leaf reads `absent`, indistinguishable from a block never written.
+  - A cut inside the analysis leaves `<analysis>` open, which `analysisRanges` runs to the text's end.
+- **What it cannot:** a cut that left every tag closed; a text with none of these tags (`shape-untestable` under (a), so unmeasured); and the call's stop reason.
+- So under (a) the report shows cuts that left a tag open, and cannot rule out one that did not. Headroom is met only when no span is unmeasured and both counts are 0, and act 4's watch stays beside it.
+- The per-leaf reading itself is proposed by this plan, not approved: it replaces the counter deltas the table cannot supply.
 
 **The unapproved alternative for O7** (`history-steer-stale-receipt-window`, not to be built unless ruled in):
 - **The change:** `pickReceipt` also returns a non-generic receipt whose `ts` lies in the span's window (`afterMs < ts ≤ uptoMs`) when no exact one exists, and marks it `stale`. The span is then requested, its block parses, and PX5's wrong-id rule gives `degraded`/`id-mismatch`.
@@ -222,11 +237,15 @@ The case is written now and kept `.todo`, and its mutant is held.
 **Build questions and proposed departures, by slug.** These are unnumbered and unapproved. They are the coordinator's, and each is numbered only if approved:
 - `history-steer-module`, a departure from §7.6's file list. The steer file's IO, the breaker publisher and the lane publisher live in a new `ccd/history/steer.mjs`, called from `card.mjs`'s card step, not from `sweep.mjs` as §7.6 says. The decisions stay in lib;
 - `history-steer-on-the-card-lifecycle`. The steer file shares the card's lifecycle: `decideCardFile` gains an `artifact` argument rather than a second decider, and each withdrawal arm unlinks both artifacts;
-- `history-steer-range-text`. A slot's range is the `tree` verb's text, `isoOf(earliest)..isoOf(latest)` (`recall.mjs`), at most 36 ASCII chars. lib gains `nodeRangeText` with that spelling. `recall.mjs`'s private `isoOf` folds into it when `recall.mjs` is next edited (its first editor's carry);
+- `history-steer-range-text`. A slot's range is the `tree` verb's text, `isoOf(earliest)..isoOf(latest)` (`recall.mjs`), at most 36 ASCII chars. lib gains `nodeRangeText` with that spelling, each end formatted as `isoOf` formats an instant (`YYYY-MM-DDTHH:MMZ`, or `unknown`).
+  - `isoOf` also formats single instants, on the `family … first-seen=` and `epoch … started=` lines, so a range function cannot replace it. Only the `tree` line's range is a range.
+  - Until the instant format has one home, it has two spellings, and Task 1A's range case holds them equal through `tree`'s output.
+  - A proposal for `recall.mjs`'s next editor (its first editor's carry): lib holds the instant format once, and `isoOf`'s three uses and `nodeRangeText` all call it, with every verb's output pinned unchanged. This plan refactors no source.
 - `history-steer-hook-copies`, a recorded second spelling. The hook carries the template's first line, the generic variant and the lane words as constants, each parity-pinned against lib. They are legitimately different, because they live in another process: bash cannot import `lib.mjs`;
 - `history-steer-recall-off-tail-copy`, O9's recommendation and blocked with it: a second spelling of the recall-off gate, forced by the tail rule and held equal by a parity matrix;
 - `history-steer-breaker-first-derivation`. A breaker transition is applied only at a leaf's first derivation, so a re-derivation in place never moves it. What a rebuilt store holds is O16's (`history-steer-breaker-on-rebuild`);
 - `history-steer-spike-report`: O5;
+- `history-steer-spike-per-leaf-figures`. The spike's headroom and `analysis_only` figures are evaluated per leaf from stored summaries, with lib's own rules, instead of the node-wide counters, which carry no session or time (Task 1D). How a truncated summary is detected is O17, and the reasons are O18;
 - `history-steer-spike-pr-scope`, a proposed ordering departure from CP-61 (O10): the print, the receipt and Task 1F's parser change land in the spike PR;
 - `history-steer-stale-receipt-window`: O7's alternative, above, built only if it is ruled in.
 
@@ -244,6 +263,8 @@ The programme assigns these to "the next wave that edits" each file, and W3 and 
 | `ccd/history/sweep.mjs` | review 1065 F4: `activeFiles` marks a file taken before it lstats the file's first path. Add the file only after a non-skip verdict | Task 1B Step 5 |
 | `ccd/history/sweep.mjs` | review 1065 F10: `activeRows` runs on every non-scan tick even with no registered uuid. Return early on an empty list | Task 1B Step 5 |
 | `deploy/history-counters.mjs` | review 966: (1) name `excluded.unmeasured.count` and the dropped lists among the node-report fields `combine` does not check, or check them; (2) reword "which the strata key on", because `stratify` keys on `unrealised` only; (3) add a case for an unknown `ab_state` word with `unrealised: true` | Task 1D Step 4 |
+| `ccd/session-hook.sh` | from W2-1's plan (rulings R1 and R3): correct the comment saying the CLI reads 4,096 bytes of `recall-off/<id>`. Since W2-D29 it reads up to `CONTROL_FILE_MAX`, and the hook still fails closed. The ledger gives it to the next PR that holds the hook, which is W3-1. But the comment sits in `_hook_history_card`'s header, above `# @anchor compact-arm-emit-call`, where the tail rule forbids every W3 edit | **Not taken by W3, a disclosed scope conflict.** W3-1's PR body records the carry as deferred to the next PR that holds the hook and may edit above the anchor. This plan asks for no exception to the tail rule |
+| `ccd/history/sweep.mjs`, `card.mjs` | from W2-1's reviews: `recallOffKind` (`sweep.mjs`) is a second lstat-kind predicate beside `card.mjs`'s private `lstatKind`, and a PR that holds `card.mjs` or `store.mjs` merges them. The two differ only in their word for a FIFO, a socket or a device (`special` against `other`) | W3-1 holds `card.mjs`, so the carry falls to it: Task 1B Step 5. This widens W3-1's `sweep.mjs` scope from two carries to three, a disclosed scope change. If the coordinator keeps that scope at two, the merge is deferred to the next PR that holds `card.mjs` or `store.mjs`, and W3-1's PR body says so |
 
 ---
 
@@ -296,6 +317,11 @@ it('the cap falls before the escape, never inside an entity (Review Focus 4)', (
   expect(quoteGist('x'.repeat(298) + '&&&&', EMPTY_IDX))
     .toBe(`<ccrc-archive-quote trust="untrusted">${'x'.repeat(298)}&amp;&amp;</ccrc-archive-quote>`);
 });
+it('nodeRangeText spells a range as the tree verb does (history-steer-range-text)', () => {
+  expect(nodeRangeText(Date.UTC(2026, 9, 29, 7, 5), Date.UTC(2026, 9, 29, 9, 40))).toBe('2026-10-29T07:05Z..2026-10-29T09:40Z');
+  expect(nodeRangeText(null, Date.UTC(2026, 9, 29, 9, 40))).toBe('unknown..2026-10-29T09:40Z');
+  // parity: a fixture node's line in recall.mjs's runTree output (its private isoOf) carries this same range text
+});
 it('the generic variant has no id attribute and no previous-leaf lines', () => {
   expect(STEER_GENERIC_TEXT).toContain('<ccrc-leaf v="1">');
   expect(STEER_GENERIC_TEXT).not.toMatch(/id="|Previous leaf/);
@@ -346,7 +372,7 @@ The generic variant is the same text with `<ccrc-leaf v="1">` in place of the id
 
 - [ ] **Step 2: Run the file: it fails** (`composeSteerFile` is not defined).
   Run: `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-steer.test.ts`
-- [ ] **Step 3: Implement** the constants, `escapeArchive`, `quoteGist` and `composeSteerFile`, and add their types to `lib.d.mts`.
+- [ ] **Step 3: Implement** the constants, `escapeArchive`, `quoteGist`, `nodeRangeText` and `composeSteerFile`, and add their types to `lib.d.mts`.
   - The order is fixed: redact the whole gist (`redactField`), test `directiveFlag` on the redacted text, cap it to `PREV_GIST_MAX` with `capText`, then escape.
   - A quotable previous leaf is `kind === 'steered_leaf' && status === 'ok' && flag === false`, so any other status, `'unreadable'` included, quotes nothing.
 - [ ] **Step 4: Run the file: it passes.** Then run mutants with `mutation-run.py`. Each is killed by the case named:
@@ -354,7 +380,8 @@ The generic variant is the same text with `<ccrc-leaf v="1">` in place of the id
   - (b) `native_leaf` admitted (PX23);
   - (c) `&` not escaped (PX24, single quote);
   - (d) a previous leaf quoted unless its status is `degraded` (PX23's unreadable-status rows);
-  - (e) `bytes` counted in chars (the 2,806-byte case, with a three-byte gist variant in the same case).
+  - (e) `bytes` counted in chars (the 2,806-byte case, with a three-byte gist variant in the same case);
+  - (f) an instant spelled with seconds (the range case).
 
   The once-per-group sentence mutant needs several quotes, so it is Task 4's.
 - [ ] **Step 5: Take the `lib.mjs` carry** (the "Carried constraints" table). Reword `MARK_CHECK_GLOSS.budget` and its block comment to CP-39c's own-slice rule. Change the pinned string in `history-lib.test.ts` in the same commit, and run `history-lib.test.ts`: it passes.
@@ -405,6 +432,14 @@ it('no spaces, and a trailing separator', () => {
   expect(parse.blockFields(b).refs.map((r) => r.kind)).toEqual(['path', 'd-number', 'sha']);
 });
 it('a refs field wrapped onto a second line keeps both lines\' refs', () => { /* 'x/a.mjs;\ny/b.mjs' → two paths */ });
+it('a URL then "; " keeps the ; in its stored value (a characterization; O12 open)', () => {
+  // the raw token 'https://example.org/a;' classifies whole as url, so rule 1 keeps it with its trailing ;
+  const [b] = parse.parseBlocks(steeredBlock({ id: L_NEW, gist: GIST, expand: 'x', refs: 'https://example.org/a; ccd/x.mjs' }));
+  expect(parse.blockFields(b).refs).toEqual([
+    { kind: 'url', value: 'https://example.org/a;', origin: 'model' },
+    { kind: 'path', value: 'ccd/x.mjs', origin: 'model' },
+  ]);
+});
 it('input that classifies today is unchanged: comma and space lists, and a URL holding ;', () => {
   // the existing 'refs: ccd/history/sweep.mjs, a0860d1f #286' case stays as pinned
   const [b] = parse.parseBlocks(steeredBlock({ id: L_NEW, gist: GIST, expand: 'x', refs: 'https://example.org/a;b' }));
@@ -427,7 +462,11 @@ it('input that classifies today is unchanged: comma and space lists, and a URL h
   - (d) the block parsed from unredacted text, each ref redacted after the split (the redaction-order case's gist assertion; its refs half alone cannot kill it).
 - [ ] **Step 5: Commit** `fix(history): read the steer template's semicolon refs (spec §7.1, §7.4 item 7)`.
 
-O12 lists what this task leaves on purpose: a URL followed by `;` and another ref with no space keeps today's one-URL reading; an item with spaces inside it is split into words, as today; and a block whose refs all fail to classify still reads `ok`.
+O12 lists what this task leaves on purpose. It is disclosed here, and no option of O12 is chosen:
+- a URL followed by `;` and another ref with no space keeps today's one-URL reading;
+- a URL followed by `;` and a space keeps the trailing `;` in its stored value, as today. The whole-token rule keeps a token that classifies, and the url arm's `\S+` admits `;`. The case above pins what the rule does as a characterization. A ruling of O12 (b) or (c) replaces its expectation in the commit that implements the ruling, and this task changes no grammar;
+- an item with spaces inside it is split into words, as today;
+- a block whose refs all fail to classify still reads `ok`.
 
 #### Task 1B: The steer file, on the card's lifecycle
 
@@ -449,7 +488,7 @@ The card's per-session step already measures, decides and acts for the next comp
   - `decideCardFile({ current, prediction, atEof, artifact = 'card' })`. `artifact: 'steer'` reads the file's leaf with `steerLeafOf` instead of `cardLeafOf`. The default keeps every existing call, and every existing pin, unchanged;
   - `steerLeafOf(text): string | null`: the `id` of the `<ccrc-leaf` line, only when the first line equals `STEER_FIRST_LINE`;
   - `STEER_DIR`, `steerDirOf(home, id)` and `steerFileOf(home, id, uuid)`, checked like `cardFileOf` (id by `idOk`, uuid by `UUID_RE`, before any path is formed).
-- Modify `ccd/history/sweep.mjs`: the two carries only (Step 5). The tick gains no call, because the card step already runs, and already withdraws, at every point the steer file must.
+- Modify `ccd/history/sweep.mjs`: the carries only (Step 5): review 1065's two, and the `recallOffKind` merge. The tick gains no call, because the card step already runs, and already withdraws, at every point the steer file must.
 - Modify `shared/lifecycle.ts` (the `history-steer-files` row) and `server/test/lifecycle.test.ts` (`'W3'` joins `HISTORY_LANDED`).
 - Test: `history-card.test.ts` (the lifecycle), `history-steer.test.ts`, `history-sweep.test.ts` (the carries).
 
@@ -507,9 +546,10 @@ The card's per-session step already measures, decides and acts for the next comp
   - (d) one withdrawal arm that skips the steer file (that reason's own row in the withdrawal table: each row kills its arm's mutant);
   - (e) steer files not enumerated from disk (the unregistered case);
   - (f) the D-5059 arm leaving the steer file (the failed-replacement case).
-- [ ] **Step 5: Take the two `sweep.mjs` carries,** each red-first with its own regression and mutant:
+- [ ] **Step 5: Take the three `sweep.mjs` carries,** each red-first with its own regression and mutant:
   - `activeFiles adds a file only after a non-skip verdict`: a file whose first path vanished while a second path lives is taken in this tick. Mutant: mark before the lstat;
-  - `activeRows is not run when no uuid is registered`: an empty registry runs no `activeRows` statement, counted by a statement spy. Mutant: no early return.
+  - `activeRows is not run when no uuid is registered`: an empty registry runs no `activeRows` statement, counted by a statement spy. Mutant: no early return;
+  - the `recallOffKind` merge (the ledger's carry; deferred instead if the coordinator keeps W3-1's `sweep.mjs` scope at two). Characterization first: `one lstat-kind predicate answers both callers`, one case per kind (a directory, a file, a link, a FIFO, an absent path and an unmeasurable one), green on both predicates before the merge. Then one definition, which the other caller imports, with each caller keeping its own words for the kinds. Mutant: the merged predicate following a link, killed by the link case.
 - [ ] **Step 6: Commit** `feat(history): the steer file on the card's lifecycle, and the history-steer-files row (spec §7.1, §9.4)`.
 
 #### Task 1C: The print and the receipt, armed by `steer-on/<id>` only
@@ -635,35 +675,82 @@ The card's per-session step already measures, decides and acts for the next comp
 - Test: `server/test/history-counters.test.ts` (new). The W2-6 cases stay in `history-replay.test.ts`'s `w6c` block. A new file keeps the spike's cases out of that hot file.
 
 **Interfaces:**
-- Consumes (existing, in `history-counters.mjs`): `openCounterStore(dbPath)`, `complianceAt(ctx)`, `foldCompliance(values)`, and the flag parser it already imports from the driver.
-- Produces (new): `spikeReport({ db, sessions: string[], sinceMs, untilMs }): { perBackend: Record<'anthropic'|'other'|'unknown', SpikeFigures> }` and its CLI arm:
+- Consumes (existing): in `history-counters.mjs`, `openCounterStore(dbPath)`, `boundaryLeafOf(rs, boundaryUuid)`, `foldCompliance(values)`, the `measured` and `unmeasured` answers with their `COUNTER_UNMEASURED` words, and the flag parser it already imports from the driver; `store.mjs`'s `blobPlainTextMeasured`; `derive.mjs`'s `holdingCopyOf`; `recall.mjs`'s `expandEntryBody`; lib's `summaryParts`, `redactField`, `parseBlocks`, `selectBlock`, `summaryRowFor` and `producerOfCopy`. Every one is read-only, and none changes.
+- Produces (new): `spikeReport({ db, sessions: string[], sinceMs, untilMs }): { perBackend: Record<'anthropic'|'other'|'unknown', SpikeFigures>, baseline: Record<'anthropic'|'other'|'unknown', SpikeFigures> }` and its CLI arm:
 
 ```
 history-counters.mjs spike --db <history.db> --session <id> [--session <id>] --since <ms> --until <ms> --out <file>
 ```
 
-`SpikeFigures` holds:
-- `compliance`, by status and reason;
-- `receipted`, the receipted main spans;
-- `multiReceipt`, the spans with two or more exact receipts: a stale print's footprint, under today's association;
-- `lateReceipts`, the spans whose exact receipt is timed after the span's own boundary: O13's shape. Compliance is reported both with and without them;
-- `modelRefs`, per steered leaf, the number of stored refs of origin `model`: its p50, and how many `ok` leaves store none. This is O12's measure of what the parser keeps;
-- `truncated`, and the counter deltas `summary_unclosed:<backend>` and `analysis_only:<backend>`, set against the same sessions' counts before `--since`;
-- `durationMs`: p50 and p95 for the receipted spans against the same producer's unarmed main spans on the node over the range;
-- `echoChars`: the `<local-command-stdout>` length after a manual boundary, armed against unarmed.
-
 It prints counts and aggregates only, never text. It opens the store read-only.
 
-- [ ] **Step 1: Write the failing tests** on fixture stores:
+**Where each figure comes from (proposed).** Every figure is read per leaf from stored rows. The node-wide `counters` table is never read: it keeps one cumulative count per name, with no session and no time column (`store.mjs`: `counters (name, n)`), so it cannot give one session's count over a range. `history-counters.mjs` already refuses that table for the same reason (W2-D87). The earlier draft took `summary_unclosed` and `analysis_only` as counter deltas "set against the same sessions' counts before `--since`". The table cannot supply them, so that claim is withdrawn. In their place, the report evaluates per leaf the same lib rules derive applies when it bumps those counters. §10.7 names the W3 row's data source "counters". This plan reads that as this script's report-only measures, as for W2's counters, and never as the table.
+
+**The population and the range:**
+- **Cohort spans:** the main spans of the sessions `--session` names. Each `--session` is a `ccrc_id`: every `sessions` row with that id counts, with merged rows followed. A span is in range when its boundary entry's `ts_ms` lies in `[--since, --until)`, the armed range that acts 3 and 6 record. Main means the transcript's `agent_id` is `''`.
+- **A span's leaf** is the one depth-0 node naming its boundary (`boundaryLeafOf`). With none it is `leaf-absent`, and with two `leaf-ambiguous`.
+- **A span's backend** is its boundary's producer, by §6.2's rule as derive applies it: lib's `summaryRowFor` and `producerOfCopy` over the rows of the copy that holds the boundary (`holdingCopyOf`). A swap mid-cohort moves later spans to the other backend and never earlier ones. `unknown` is reported apart and arms nothing.
+- **The baseline:** main spans of the same backend, on the node, in the same range, of sessions not named that hold no steer receipt in the range. A session with one was printed to, whoever owns it, so none of its spans joins the baseline.
+- **An untimed boundary**, one whose `ts_ms` is NULL, cannot be placed in or out of the range. It is counted `boundary-untimed`, and while one stands, no headroom figure is measured.
+
+| Figure | Source, per leaf (stored) | Computation | Unmeasured when (never 0) |
+|---|---|---|---|
+| `compliance` | `nodes.status` of each receipted cohort leaf, as stored, as `complianceAt` reads it | `foldCompliance` per backend: the status distribution and `ok` + `degraded` over the receipted spans, with and without `lateReceipts` | `leaf-absent`, `leaf-ambiguous`. A word outside `PARSE_STATUS` is counted apart, as today |
+| reasons | **none stored.** `nodes` keeps the status. The reason, which lib's `blockStatus` computes inside derive, reaches only the node-wide `leaf_reason:*` counters | **BLOCKED on O18.** Recommended: the reason only where the stored status fixes it (`not-requested` is `no-receipt`, `absent` is `no-block`, `ok` has none) | `reason-not-stored` for `invalid` and `degraded` under the recommendation |
+| `receipted` | `nodes.status`: a leaf whose status is not `not-requested` had a receipt. A raw leaf never looks one up, so it reads `not-requested` either way, and `kind = 'raw_leaf'` is counted apart; so is `parse-failed` | a count per backend | as `compliance` |
+| `multiReceipt` | `steer_receipts` rows whose `leaf_id` equals the leaf's `node_id` (exact receipts; no window is needed) | the leaves with two or more: a stale print's footprint under today's association | none |
+| `lateReceipts` | the same rows, against the boundary entry's `ts_ms` | the leaves whose exact receipt is timed after their own boundary: O13's shape | `boundary-untimed` |
+| `modelRefs` | `node_refs` rows of origin `model` of each `steered_leaf` | the nearest-rank p50 per backend, and how many `ok` leaves store none: O12's measure | none: a leaf with no row counts 0 because it has none |
+| `summaryUnclosed` | each leaf's stored summary: the blob `nodes.summary_blob_id` names, read with `blobPlainTextMeasured`, the reader `describe` uses | lib's `summaryParts(text).unclosed`, the rule derive bumps `summary_unclosed:<backend>` with. Counted over **every** cohort span in range, receipted or not, and over the baseline beside it | `summary-missing` (a raw leaf: no summary blob), `summary-absent`, `summary-oversize`, `summary-undecodable` (`blobPlainTextMeasured`'s states) |
+| `truncated` | the same stored text | **BLOCKED on O17**, its detection rule. Over every cohort span in range, as above | the summary words above, and under O17 (a) `shape-untestable`, a text holding none of the tags it tests |
+| `analysisOnly` | the same stored text, for a receipted leaf whose stored status is `absent` | lib's `parseBlocks` and `selectBlock` over the text `redactField` redacted, as derive reads them: no block selected, and one inside `<analysis>`. Reported beside compliance. It is not a headroom signal | the summary words above |
+| `durationMs` | `boundaries.duration_ms`, from Claude Code's `compactMetadata.durationMs` (NULL when absent or not a count, lib's `boundaryOf`), with `trigger` and `pre_tokens` | per backend: the nearest-rank p50 and p95 of the receipted cohort spans and of the baseline, all triggers together (the figure §10.7's gate reads) and per trigger beside it; the added p50 is p50(cohort) ÷ p50(baseline) − 1. `pre_tokens`' p50 is printed beside each set, and nothing adjusts for it | `duration-absent`: a NULL value is left out of the percentiles and counted. A set with no value is `unmeasured`, never 0 |
+| `echoChars` | after each **manual** cohort boundary, in its holding copy and before the next boundary: the first user row of provenance `harness` whose text starts `<local-command-stdout>` (G16; the test lib's `provenanceOf` applies), read with `expandEntryBody` | its length in characters; per backend, the nearest-rank p50 of the cohort and of the baseline, and the added p50 as their difference | `echo-absent` (a manual boundary with no such row), and `expandEntryBody`'s `body-tombstone`, `body-over-cap`, `body-undecodable` and `body-unparseable`. An auto boundary leaves no echo (G16), so it is not counted |
+
+The new unmeasured words join `COUNTER_UNMEASURED` in place, as its header asks. Nearest rank is the percentile rule `history-gate.mjs` already declares (`percentile: 'nearest-rank'`): the value at rank ⌈p·n⌉ of the sorted list.
+
+**Contamination is reported, never repaired:**
+- a cohort node whose release tag or Claude Code version changed mid-range: figures are split at the change (O11);
+- stale prints and late receipts: `multiReceipt`, `lateReceipts`, and compliance with and without them (O13);
+- a leaf derived under another `nodes.parser_version`: counted apart;
+- a span not yet derived when the report runs: `leaf-absent`. The operator runs the report once the sweep has caught up, and the report prints whether the newest `ticks` row had `files_behind = 0`.
+
+- [ ] **Step 1: Write the failing tests** on fixture stores (`history-counters.test.ts`):
   - `spike reports compliance by producer`;
   - `spike excludes unreceipted spans from compliance`;
-  - `spike counts a stale print as multiReceipt`;
+  - `spike counts a stale print as multiReceipt`, and a generic receipt beside the two exact ones is not counted;
   - `spike counts a late exact receipt, and reports compliance with and without its span`;
-  - `spike reports the stored model refs per steered leaf, and the ok leaves with none`;
+  - `spike reports the stored model refs per steered leaf, and the ok leaves with none`, and a `tool_use` ref on the same leaf is not counted;
+  - `spike reads no node-wide counter`: the fixture's `counters` table holds `summary_unclosed:anthropic` = 5 and `analysis_only:anthropic` = 3, while no cohort leaf is unclosed or analysis-only. Both figures are measured 0;
+  - `spike measures summary_unclosed per leaf, over every cohort span`: one receipted cohort span with an unclosed `<summary>`, one unreceipted cohort span with one, one closed cohort span, and one baseline span with an unclosed summary. The cohort counts 2 and the baseline 1;
+  - `spike never reads an unreadable summary as closed`: cohort leaves whose summary blob is tombstoned, recorded past the decode bound, and missing altogether (a raw leaf). Each is counted under its word, and `summaryUnclosed`'s unmeasured count is 3;
+  - `spike places a span by its boundary's time`: a boundary at `--since` is in range, one at `--until` is out, and one with a NULL `ts_ms` is `boundary-untimed`;
+  - `spike attributes a span to its producer, not its session`: one cohort session whose first span's first reply is Anthropic's and whose second is the gateway's gives one span to each backend;
+  - `spike keeps printed-to spans out of the baseline`: an unnamed session with a receipt in range is not in the baseline;
+  - `spike reports analysis_only apart from compliance and headroom`: a receipted `absent` leaf whose only block sits inside `<analysis>` gives `analysisOnly` 1 and compliance's `absent` 1, and leaves the headroom figures unchanged. An `ok` leaf whose summary also holds a block inside `<analysis>` gives none;
+  - `durationMs, the cohort against the baseline`: on one backend, cohort durations of 100, 200, 300 and 400 ms and baseline durations of 100, 150 and 200 ms give p50s of 200 and 150, p95s of 400 and 200, and an added p50 of one third. Two more cohort boundaries with a NULL duration add `duration-absent` 2 and move no percentile. Two baseline spans of the other backend, at 1,000 ms each, leave this backend's baseline p50 at 150. Manual and auto are also printed apart;
+  - `echoChars per manual compaction`: a manual cohort boundary followed by a 1,600-char `<local-command-stdout>` row, and a baseline manual one followed by a 100-char one, give p50s of 1,600 and 100 and an added 1,500. A cohort auto boundary is not counted, and a manual boundary with no such row is `echo-absent`;
+  - `truncated, under O17's rule` (`.todo` until O17 is ruled): under (a), a summary with `<summary>` and no `</summary>`, one with a `<ccrc-leaf` and no close after it, and one with `<analysis>` open and no `<summary>` count 3. A text with none of those tags is `shape-untestable`;
+  - `reasons, under O18's rule` (`.todo` until O18 is ruled);
   - `spike prints no text` (a seeded gist never appears in the output);
   - `spike opens the store read-only` (bytes, mtime and `user_version` unchanged).
 - [ ] **Step 2: Run them: they fail.**
-- [ ] **Step 3: Implement** `spikeReport` and the `spike` arm (O5's recommended home; **BLOCKED on O5** until the coordinator confirms it).
+- [ ] **Step 3: Implement** `spikeReport` and the `spike` arm (O5's recommended home; **BLOCKED on O5** until the coordinator confirms it). Its `truncated` arm is **BLOCKED on O17** and its reason arm on **O18**. Mutants, planned and measured only when built, each killed by the case named:
+  - (a) the delta read from the `counters` table (`reads no node-wide counter`);
+  - (b) `summaryUnclosed` over receipted spans only (`over every cohort span`: it counts 1);
+  - (c) an unreadable summary read as `''`, so closed (`never reads an unreadable summary as closed`: unmeasured 0);
+  - (d) an inclusive `--until` (`places a span by its boundary's time`);
+  - (e) the backend taken from the session's first span (`attributes a span to its producer`);
+  - (f) an interpolated p50, which gives 250 against 150 (`durationMs`);
+  - (g) a NULL duration read as 0 (`durationMs`: the cohort p50 falls to 100);
+  - (h) the baseline drawn from every backend (`durationMs`: the baseline p50 rises to 200);
+  - (i) an auto boundary counted with 0 echo chars, and (j) the summary row read as the echo (`echoChars`);
+  - (k) held with O17: a rule that skips the unclosed-block arm;
+  - (l) compliance over every cohort span, receipted or not (`excludes unreceipted spans from compliance`);
+  - (m) `multiReceipt` counting generic receipts too (`counts a stale print as multiReceipt`);
+  - (n) a late-receipt span dropped from both compliance figures (`counts a late exact receipt`);
+  - (o) `modelRefs` counting every origin (`reports the stored model refs`: the `tool_use` ref counts);
+  - (p) any block inside `<analysis>` counted, whatever was selected (`reports analysis_only apart`: the `ok` leaf counts).
 - [ ] **Step 4: Take review 966's three carries,** each red-first:
   - `combine names every node-report field it does not check`: the field list covers `excluded.unmeasured.count` and the dropped lists, or `combine` checks them, with a mutant that drops one;
   - the "which the strata key on" comment reworded to `unrealised` only (a comment change, no test);
@@ -689,19 +776,23 @@ It prints counts and aggregates only, never text. It opens the store read-only.
 | 5 | At the sample bound (**BLOCKED on O2**), run `history-counters.mjs spike` per session over its armed range; post shas and aggregates only | the report's sha256 and figures |
 | 6 | Remove both `steer-on/<id>` markers (§9.4's ruling: "`steer-on/<id>` when the spike ends") | the time |
 
-The evidence per backend:
-- compliance by status and reason, with and without late-receipt spans;
+The evidence per backend, each figure with its unmeasured count:
+- compliance by status, with and without late-receipt spans, and the reasons O18 allows;
 - receipted, multi-receipt and late-receipt spans;
 - the stored `model` refs per steered leaf;
-- truncation, and the `summary_unclosed` and `analysis_only` deltas;
-- `durationMs` p50, armed against unarmed;
-- the echo chars per manual compaction;
+- headroom: `summaryUnclosed` and `truncated` (O17's rule) over every cohort span in range, with the baseline's beside them;
+- `analysisOnly`, beside compliance;
+- `durationMs` p50 and p95, the cohort against the baseline, with `duration-absent`;
+- the echo chars per manual compaction, the cohort against the baseline;
 - act 1's precompute count;
 - the tag and the versions.
 
-**These are measurements, not bars.** The spike report states figures and never a pass or fail. Two kinds of threshold apply to them, and they are not the same:
+**These are measurements, not bars.** The spike report states figures and never a pass or fail. Three kinds of threshold apply to them, and they are not the same:
 - the operator sets each backend's **compliance** bar from them (CP-62, O4);
-- truncation 0 and added p50 compaction time at most +10% are the spec's **fixed gates** (§10.7). They are not the operator's to set, a compliance bar does not reopen them, and CP-63 arms a backend only when both hold on that backend's figures.
+- **output headroom** is §7.5's gate: on a backend, every cohort span in range measured, no truncated summary, and `summary_unclosed` not raised. It is the spec's, not a bar, and not the operator's to set. One unmeasured span leaves it unmet, and `analysisOnly` does not enter it;
+- **added p50 compaction time at most +10%** is §10.7's fixed gate.
+
+A compliance bar does not reopen either fixed gate, and CP-63 arms a backend only when both hold on that backend's figures. Act 4's watch stays the kill rule's consumer: the report's `truncated` figure counts after the fact and replaces no watch.
 
 ### Task 2: The breaker (W3-2)
 
@@ -900,11 +991,11 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 - [ ] **Step 6: The add-on re-measure (O15; operator acts, none authorised here).** Before W3-4 is released onto a node with an armed backend:
   - `spikeReport` gains `addOn: SpikeFigures`, over the receipted spans whose leaf is the last child of its depth-1 parent, read-only from `node_children`. Its test is `spike reports add-on spans apart`;
   - on each node, the operator removes `history-steer-live.<backend>`, installs W3-4's release, and arms one session per backend through `steer-on/<id>`;
-  - at the sample bound, counted over add-on spans only (O15's recommendation: O2's bound), the operator posts `addOn`'s figures. Truncation 0 and added p50 at most +10%, the fixed gates, must hold on a backend before its live marker is touched again. A backend that misses stays unarmed while the other steers.
+  - at the sample bound, counted over add-on spans only (O15's recommendation: O2's bound), the operator posts `addOn`'s figures. The fixed gates must hold on a backend before its live marker is touched again: headroom (no truncated summary, and `summary_unclosed` not raised, each measured over the add-on spans) and added p50 at most +10%. A backend that misses stays unarmed while the other steers.
 
 ### Arming and the kill rule (CP-63; operator acts, after CP-62)
 
-- **Arm a backend:** the operator touches `~/.ccrc/history-steer-live.<backend>` on each node, only for a backend that met the bar the operator set (O4) and the two fixed gates. This arming covers W3-1 to W3-3's file, with no add-on. W3-4 reaches an armed node only after O15's re-measure (Task 4 Step 6).
+- **Arm a backend:** the operator touches `~/.ccrc/history-steer-live.<backend>` on each node, only for a backend that met the bar the operator set (O4) and the two fixed gates (§7.5's headroom, measured; §10.7's added p50). This arming covers W3-1 to W3-3's file, with no add-on. W3-4 reaches an armed node only after O15's re-measure (Task 4 Step 6).
 - **Watch for 48 h** with the `spike` report per node over every armed session.
 - **Kill rule:**
   - compliance under the bar for 48 h → the operator removes that backend's marker, and the other backend keeps steering;
@@ -932,11 +1023,13 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 | §7.3 breaker: 5, 24 h, half-open, per backend by producer, in SQLite, file per backend, unreadable is open | Task 2 (PX15, PX21, PX26, the readable-open case) |
 | §7.4 parser and receipt gate | W1-B2, merged; Task 1F repairs the refs split; Task 1B pins PX5 end to end, the stale print and O13's shape; Task 4 adds the node read |
 | §7.5 spike, task 1, one session per backend, bars per backend | Task 1 (1A-1F), CP-62 |
+| §7.5 output headroom, both halves: no truncated summary, and `summary_unclosed` not raised | Task 1D's per-leaf `truncated` (O17) and `summaryUnclosed`, with their unmeasured words; Task 1E's gate reading; Global Constraints |
+| §7.5 compaction duration with versus without, and the G16 echo's added context | Task 1D's `durationMs` and `echoChars`, each with its cases and mutants |
 | §7.7 failure table | the table below |
 | §9.4 `history-steer-files`, `history-switches` | Tasks 1B, 3 |
 | §10.6 item 5, tail only, for W3's own hook edits | Global Constraints; Task 1C's durable placement case over W3's names, and the PR-time check in W3-1, W3-2 and W3-3's gates, a gate command rather than a committed test |
 | §10.7 W3 row, W3 kill rule; the fixed gates kept apart from the bar | Task 1E, Task 4 Step 6 (O15), "Arming and the kill rule" |
-| Carried constraints for `lib.mjs`, `sweep.mjs`, `history-counters.mjs` | Tasks 1A, 1B, 1D |
+| Carried constraints for `lib.mjs`, `sweep.mjs` (the `recallOffKind` merge included), `history-counters.mjs`; the hook's recall-off comment deferred | Tasks 1A, 1B, 1D; the "Carried constraints" table |
 | R-B1 to R-B4 preserved; W2 recorded as evaluation not run, never as a pass (the 2026-11-02 ruling); CP-60's precompute condition kept, unperformed | the gate box; Global Constraints; Task 1E act 1 |
 
 Spec §7.7's failure table, row by row:
