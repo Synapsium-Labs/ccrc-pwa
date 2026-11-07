@@ -3,10 +3,12 @@
 // (test/instrument-shell.test.tsx) pins the rules and the markup that produce this geometry; this file holds the geometry.
 //
 // The plan's Step 4: with Waiting on you, Inbox and Runs each printing "99+" and seventeen lanes under the line, the bar
-// stays one line at 900, 930 and 1280, by mouse and by touch, nothing in it is cut, and neither it nor the page scrolls
+// stays one line at 900, 930, 1100, 1279, 1280 and 1920 (review 1638 A4), by mouse and by touch, nothing in it is cut, and neither it nor the page scrolls
 // sideways (each case prints a DESK-NAV-FIGURE line); the doors show their words from 1280 and their tips below that; a
-// door's tip is drawn below its icon, centred, opaque and clipped by nothing, by hover and by Tab; the current door's
-// underline is 2px of the accent on its bottom edge; and under a coarse pointer every control in the bar keeps 44 px.
+// door's tip is drawn below its icon, centred, opaque, clipped by nothing and on top of the lanes row it lies over, by hover
+// and by Tab, the widest (Waiting on you at a count of 1200) and the last (Settings) inside the window (review 1638 F1, A1,
+// A4); the current door's underline is 2px of the accent on its bottom edge; and under a coarse pointer every control in the
+// bar keeps 44 px, at 900 and 1280.
 // Phosphor and light, Instrument.
 //
 // Chrome comes from `resolveChrome()` in `beforeAll`, which THROWS when neither `CCRC_CHROME` nor
@@ -30,26 +32,31 @@ const item = (id: number): object => ({
 });
 /** Every badge at its widest print, "99+": a hundred open items, a hundred sessions asking, and a hundred runs whose
  *  coordinator is one of them (refined-bar.browser.test.ts's shape, at three digits). */
-const WAITING = { items: Array.from({ length: 100 }, (_, i) => item(i + 1)), cleared: [], goals: [] };
 const LANES = seventeenLanes(nowSec);
-const FIXTURE: AppFixture = {
-  api: {
-    '/api/waiting': { ok: true, waiting: WAITING },
-    '/api/accounts': { accounts: LANES.accounts, projected: null, roster: LANES.roster },
-    '/api/claims': [],
-  },
-  fleetFrames: [
-    { type: 'waiting', waiting: WAITING },
-    { type: 'fleet', sessions: Array.from({ length: 100 }, (_, i) => fleetSession({ id: `s${i}`, project: `proj-${i % 3}`, bucket: 'attention' })) },
-    {
-      type: 'runs',
-      runs: Array.from({ length: 100 }, (_, i) => ({
-        id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
-        sessionId: 's0', claimedBy: 's0',
-      })),
+/** The fixture with `items` open items: 100 makes Waiting on you print "99+" with the hundred asking sessions (200 in its
+ *  name); 1100 makes its count 1200, the widest name the clamp case reads (review 1638 A1). */
+function fixtureWith(items: number): AppFixture {
+  const waiting = { items: Array.from({ length: items }, (_, i) => item(i + 1)), cleared: [], goals: [] };
+  return {
+    api: {
+      '/api/waiting': { ok: true, waiting },
+      '/api/accounts': { accounts: LANES.accounts, projected: null, roster: LANES.roster },
+      '/api/claims': [],
     },
-  ],
-};
+    fleetFrames: [
+      { type: 'waiting', waiting },
+      { type: 'fleet', sessions: Array.from({ length: 100 }, (_, i) => fleetSession({ id: `s${i}`, project: `proj-${i % 3}`, bucket: 'attention' })) },
+      {
+        type: 'runs',
+        runs: Array.from({ length: 100 }, (_, i) => ({
+          id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
+          sessionId: 's0', claimedBy: 's0',
+        })),
+      },
+    ],
+  };
+}
+const FIXTURE = fixtureWith(100);
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -68,8 +75,8 @@ afterAll(async () => {
 });
 
 /** Open Instrument at `view` on `route`, with every lane's card under the line, once the three badges print "99+". */
-async function open(view: AppView, route: string): Promise<Awaited<ReturnType<typeof openApp>>> {
-  const opened = await openApp(browser!, view, FIXTURE);
+async function open(view: AppView, route: string, fixture: AppFixture = FIXTURE): Promise<Awaited<ReturnType<typeof openApp>>> {
+  const opened = await openApp(browser!, view, fixture);
   await seedStripExpanded(opened.ctx);
   await opened.page.goto(server!.origin + route);
   await opened.page.waitForFunction(() => document.querySelectorAll('header.shell-accounts .account-gauge').length === 17
@@ -82,7 +89,7 @@ async function open(view: AppView, route: string): Promise<Awaited<ReturnType<ty
 describe('the bar fits on one line with every badge at 99+', () => {
   for (const touch of [false, true]) {
     for (const theme of THEMES) {
-      for (const width of [900, 930, 1280]) {
+      for (const width of [900, 930, 1100, 1279, 1280, 1920]) {
         const view: AppView = { skin: INSTRUMENT, theme, width, touch };
         it(viewName(view), async () => {
           const { ctx, page, errors } = await open(view, '/');
@@ -155,6 +162,11 @@ describe('the doors show words from 1280', () => {
 
 interface TipFit {
   readonly opacity: number;
+  /** What is drawn at the tip's centre: `tip` when the tip (or a child) is on top, else the element that covers it. The
+   *  tip takes no pointer events, so the probe turns them on for the one read (review 1638 F1). */
+  readonly onTop: string;
+  /** Whether a lane card lies under that point: the tip is drawn over the lanes row, not beside it. */
+  readonly overLanes: boolean;
   /** Clipping ancestors (any overflow but visible) whose box does not hold the whole tip. */
   readonly clippedBy: string[];
   readonly inViewport: boolean;
@@ -171,6 +183,14 @@ async function measureTip(page: Page, name: string): Promise<TipFit> {
     const tip = door.querySelector<HTMLElement>('.ins-door-tip')!;
     const t = tip.getBoundingClientRect();
     const d = door.getBoundingClientRect();
+    const cx = t.left + t.width / 2;
+    const cy = t.top + t.height / 2;
+    tip.style.pointerEvents = 'auto';
+    const hit = document.elementFromPoint(cx, cy);
+    const under = document.elementsFromPoint(cx, cy);
+    tip.style.pointerEvents = '';
+    const onTop = hit !== null && (hit === tip || tip.contains(hit))
+      ? 'tip' : `${hit?.tagName.toLowerCase()}.${[...(hit?.classList ?? [])].join('.')}`;
     const clippedBy: string[] = [];
     for (let el = tip.parentElement; el !== null && el !== document.documentElement; el = el.parentElement) {
       const cs = getComputedStyle(el);
@@ -182,6 +202,8 @@ async function measureTip(page: Page, name: string): Promise<TipFit> {
     }
     return {
       opacity: parseFloat(getComputedStyle(tip).opacity),
+      onTop,
+      overLanes: under.some((el) => el.closest('.accounts-strip') !== null),
       clippedBy,
       inViewport: t.left >= 0 && t.top >= 0 && t.right <= window.innerWidth && t.bottom <= window.innerHeight && t.width > 0,
       below: t.top - d.bottom,
@@ -202,6 +224,8 @@ describe('the tip is drawn below the icon, by hover and by Tab', () => {
             const hovered = await measureTip(page, 'Runs');
             expect(hovered.opacity, 'hover: opacity').toBe(1);
             expect(hovered.clippedBy, 'hover: clipped by').toEqual([]);
+            expect(hovered.onTop, 'hover: the tip is drawn on top').toBe('tip');
+            expect(hovered.overLanes, 'hover: over the lanes row').toBe(true);
             expect(hovered.inViewport, 'hover: in the viewport').toBe(true);
             expect(hovered.below, 'hover: below the door').toBeGreaterThanOrEqual(0);
             expect(Math.abs(hovered.offCentre), 'hover: centred on the door').toBeLessThanOrEqual(2);
@@ -219,10 +243,40 @@ describe('the tip is drawn below the icon, by hover and by Tab', () => {
             const tabbed = await measureTip(page, 'Accounts');
             expect(tabbed.opacity, 'Tab: opacity').toBe(1);
             expect(tabbed.clippedBy, 'Tab: clipped by').toEqual([]);
+            expect(tabbed.onTop, 'Tab: the tip is drawn on top').toBe('tip');
+            expect(tabbed.overLanes, 'Tab: over the lanes row').toBe(true);
             expect(tabbed.inViewport, 'Tab: in the viewport').toBe(true);
             expect(tabbed.below, 'Tab: below the door').toBeGreaterThanOrEqual(0);
             expect(Math.abs(tabbed.offCentre), 'Tab: centred on the door').toBeLessThanOrEqual(2);
             expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+            expect(errors).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        }, 60_000);
+      }
+    }
+  }
+});
+
+describe('the widest tips, by hover: Waiting on you and Settings (review 1638 A1, A4)', () => {
+  for (const theme of THEMES) {
+    for (const width of [900, 1279]) {
+      for (const [door, items] of [['Waiting on you', 1100], ['Settings', 100]] as const) {
+        it(`${theme}, ${width}px, ${door}${door === 'Waiting on you' ? ', its count at 1200' : ''}`, async () => {
+          const { ctx, page, errors } = await open({ skin: INSTRUMENT, theme, width }, '/', fixtureWith(items));
+          try {
+            if (door === 'Waiting on you') {
+              await page.waitForSelector('nav.ins-doors .ins-door[aria-label="Waiting on you, 1200 waiting on you"]', { timeout: 20_000 });
+            }
+            await page.hover(`header.shell-accounts .ins-door[aria-label^="${door}"]`);
+            const fit = await measureTip(page, door);
+            expect(fit.opacity, 'opacity').toBe(1);
+            expect(fit.inViewport, 'inside the window').toBe(true);
+            expect(fit.clippedBy, 'clipped by').toEqual([]);
+            expect(fit.onTop, 'drawn on top').toBe('tip');
+            expect(fit.below, 'below the door').toBeGreaterThanOrEqual(0);
+            expect(Math.abs(fit.offCentre), 'centred on the door').toBeLessThanOrEqual(2);
             expect(errors).toEqual([]);
           } finally {
             await ctx.close();
@@ -269,9 +323,9 @@ describe("the current door's underline", () => {
 });
 
 describe('a touch screen keeps the floor', () => {
-  for (const theme of THEMES) {
-    it(`at 1280 under a coarse pointer every bar control is at least 44 x 44 (${theme})`, async () => {
-      const { ctx, page } = await open({ skin: INSTRUMENT, theme, width: 1280, touch: true }, '/');
+  for (const [theme, width] of THEMES.flatMap((t) => [900, 1280].map((w) => [t, w] as const))) {
+    it(`at ${width} under a coarse pointer every bar control is at least 44 x 44 (${theme})`, async () => {
+      const { ctx, page } = await open({ skin: INSTRUMENT, theme, width, touch: true }, '/');
       try {
         const m = await page.evaluate(() => {
           const controls = [...document.querySelectorAll<HTMLElement>('.ins-topbar button')];

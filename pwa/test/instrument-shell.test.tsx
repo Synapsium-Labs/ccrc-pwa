@@ -498,7 +498,9 @@ describe('the desk top bar (desk-nav Task A)', () => {
     }
   });
 
-  it('at 1280 and 1920 each door shows its word and no tip; at 900 and 1279 its icon and a tip reading its name', () => {
+  // The tip reads the door's word, not its whole name (`tip-reads-the-word`, ruled 2026-11-07 in fix round 1): the pill beside
+  // it prints the count, so the icon form shows what the word form shows, and label in name holds at every desk width.
+  it('at 1280 and 1920 each door shows its word and no tip; at 900 and 1279 its icon and a tip reading its word', () => {
     const doors = (): HTMLElement[] => [...placeDoors(), doorNamed('Settings')];
     for (const width of [1280, 1920]) {
       stubAt(width);
@@ -519,7 +521,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
       mount('/');
       for (const d of doors()) {
         const name = d.getAttribute('aria-label')!;
-        expect(d.querySelector('.ins-door-tip')?.textContent, `${width} ${name}`).toBe(name);
+        expect(d.querySelector('.ins-door-tip')?.textContent, `${width} ${name}`).toBe(name.split(',')[0]);
         expect(d.querySelector('.ins-door-word'), `${width} ${name}: no word`).toBeNull();
         expect(d.querySelector('svg'), `${width} ${name}: its icon`).not.toBeNull();
       }
@@ -528,7 +530,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     expect(DOOR_WORDS_QUERY).toBe('(min-width: 1280px)');
   });
 
-  it('label in name at 1280', () => {
+  it('label in name at 1280, and in the icon form at 900 and 1279', () => {
     stubAt(1280);
     const runs = [
       { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
@@ -545,6 +547,18 @@ describe('the desk top bar (desk-nav Task A)', () => {
       // The visible words start the name: the wordmark's caret is no word, and "ccrc" starts "ccrc, Fleet".
       expect(labelWords(shownText(homeDoor()))).toEqual(['ccrc']);
       expect(shownText(doorNamed('Inbox, 1 waiting for you'))).toBe('Inbox 1');
+      // The icon form shows the same words: the tip's word, a space, the pill (review 1638 A2).
+      for (const width of [900, 1279]) {
+        cleanup();
+        stubAt(width);
+        mount('/', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
+        expect(placeDoors().filter((d) => d.querySelector('.ins-door-count') !== null), `${width}: counted`).toHaveLength(3);
+        for (const d of [homeDoor(), ...placeDoors(), doorNamed('Settings')]) {
+          const name = d.getAttribute('aria-label')!;
+          expect(labelInName(shownText(d), name), `${width}: ${JSON.stringify(shownText(d))} in ${JSON.stringify(name)}`).toBe(true);
+        }
+        expect(shownText(doorNamed('Inbox, 1 waiting for you')), `${width}`).toBe('Inbox 1');
+      }
     } finally {
       act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
     }
@@ -554,7 +568,9 @@ describe('the desk top bar (desk-nav Task A)', () => {
     const rule = declsOf(".ins-door[aria-current='page']::after");
     expect(rule).toMatch(/content:\s*''/);
     expect(rule).toMatch(/position:\s*absolute/);
-    expect(rule).toMatch(/bottom:\s*0/);
+    // The bottom edge, full width: `inset: auto 0 0` (top auto, right 0, bottom 0, left 0).
+    expect(rule).toMatch(/inset:\s*auto 0 0\s*(;|$)/);
+    expect(rule).not.toMatch(/(^|;)\s*(top|bottom):/);
     expect(rule).toMatch(/height:\s*2px/);
     expect(rule).toMatch(/background:\s*var\(--accent\)/);
     expect(declsOf(".ins-door[aria-current='page']::before")).toBe('');
@@ -671,6 +687,17 @@ describe('the desk top bar (desk-nav Task A)', () => {
     const rule = declsOf('.ins-command');
     expect(rule).toMatch(/flex:\s*1 100 0\s*(;|$)/);
     expect(rule).toMatch(/min-width:\s*calc\(var\(--tap-min\) \+ var\(--sp-10\)\)/);
+  });
+
+  // Review 1638 F2: the tip lies over the first row of lane cards, which are painted in its own `--bg-raised`, so it takes
+  // the desk's popover elevation and a hairline edge from the palette, and stays self-grounded.
+  it('the tip has an edge: a hairline border and the popover elevation, on its own ground', () => {
+    const rule = declsOf('.ins-door-tip');
+    expect(rule).toMatch(/border:\s*1px solid var\(--edge-subtle\)/);
+    expect(rule).toMatch(/box-shadow:\s*var\(--elev-pop\)/);
+    expect(rule).toMatch(/background:\s*var\(--bg-raised\)/);
+    expect(rule).toMatch(/color:\s*var\(--ink-primary\)/);
+    expect(rule).toMatch(/z-index:\s*var\(--z-header\)/);
   });
 
   it("a door's tip shows on hover and on focus-visible, below it, and the bar is no clip box", () => {
@@ -923,9 +950,8 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
       // The tooltip says the same as the name, or the word starts it, and the pill prints the number.
       const words = width >= 1280;
-      expect(door.querySelector(words ? '.ins-door-word' : '.ins-door-tip')?.textContent, `${width}px`)
-        .toBe(words ? 'Inbox' : 'Inbox, 2 waiting for you');
-      expect(door.textContent, `${width}px: the word or the tip, then the count`).toBe(words ? 'Inbox 2' : 'Inbox, 2 waiting for you2');
+      expect(door.querySelector(words ? '.ins-door-word' : '.ins-door-tip')?.textContent, `${width}px`).toBe('Inbox');
+      expect(door.textContent, `${width}px: the word or the tip, then the count`).toBe('Inbox 2');
       expect(door.querySelectorAll('.ins-door-count'), `${width}px: one pill`).toHaveLength(1);
       expect(door.querySelector('.ins-door-count'), `${width}px`).toHaveAttribute('aria-hidden', 'true');
       // Nothing else in the frame names or draws the count: the list head's Mail door is gone at a desk.
@@ -949,7 +975,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     cleanup();
     stubAt(900);
     mount('/', waitingFleet(120));
-    expect(within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' }).textContent).toBe('Inbox, 120 waiting for you99+');
+    expect(within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' }).textContent).toBe('Inbox 99+');
   });
 
   // Desktop-polish PL5a (D-7712): the bar's Waiting on you door counts the open items plus the sessions' questions.
@@ -986,7 +1012,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       stubAt(1279);
       mount('/', sessions);
       const tipped = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
-      expect(tipped.querySelector('.ins-door-tip')?.textContent).toBe('Runs, 1 needs you');
+      expect(tipped.querySelector('.ins-door-tip')?.textContent).toBe('Runs');
       expect(tipped.querySelector('.ins-door-count')?.textContent).toBe('1');
       cleanup();
       stubAt(1280);
