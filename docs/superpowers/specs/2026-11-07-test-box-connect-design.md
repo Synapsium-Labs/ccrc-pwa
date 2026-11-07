@@ -355,6 +355,28 @@ These follow from the ruling and from the code. Section 5 holds the choices only
 | C13 | Box settings edits during runs | (a) only when no run is in progress, with "Apply when idle"; (b) at once, cancelling runs that fall back locally | **(a)**: no session loses a run to a settings change |
 | C14 | Step-up | (a) for Connect, Replace, Disconnect and key acts only; (b) for every test box write | **(a)**: the account gate's split; plain value edits need a signed-in session only |
 | C15 | Who supplies the repository row | (a) the operator fills it on the card, with name and fetch URL offered from the fleet's own repositories; (b) a row file in each repository; (c) by hand on the box | **(a)**: ccrc names no repository, and the card can prefill what the fleet already knows |
+| C16 | What **Run parity** runs | (a) each repository row's pull-request legs, with its checkout path and test command prefilled from the fleet's own repositories, plus the test box spec §6 fixtures (git state, socket, workers) as required legs; (b) the pull-request legs only | **(a)**: §6 counts the fixtures as part of parity, and dropping them would arm a box on less proof than the hand path asked for. A run needs `gh` signed in on the fleet host; without it, parity refuses with a code |
+
+### 5.1 Calls the author made
+
+These settle questions a builder raised. None changes what the operator sees, and each can be overturned.
+
+- **The `from=` address.** The access line shown at step 2 uses the fleet host's source address for the box's resolved
+  address (the route lookup). Step 3 compares it with the box's `SSH_CONNECTION`. If they differ, the card says to
+  re-add the line, with the corrected address.
+- **Pairing keys already set by hand.** Under C12 (a), Connect refuses with a code that names the keys to remove from
+  `ccrc.env`. It does not adopt them.
+- **Apply release after tool sync.** If tool sync does not update the installed tree and its tag marker
+  (`deploy/testbox/bin/tools-sync`), "Apply release" re-runs the installer from the tool-synced tree with its tag, as an
+  extension of the same-tag path. Repair re-pushes the tag recorded on the box.
+- **The card's reads in the remote arm.** A read-only `status` sub of `testbox-admin` answers the phase file and the
+  box-settings snapshot. If the `testbox` op's answer grows instead, `TESTBOX_PROTO` is bumped.
+- **"Apply when idle".** It waits in a detached unit under the same lock, with a 6-hour deadline and a Cancel control.
+  It ends with a ledger row whichever way it ends.
+- **The box's settings reader.** The verb runs `ccrc test --testbox-knobs box` from the installed tree's path, so root
+  on the box never depends on a PATH.
+- **Auth off.** The card says sign-in is required instead of showing a button that cannot work (the account gate needs
+  auth on, a secure origin and a step-up).
 
 ## 6. Acceptance
 
