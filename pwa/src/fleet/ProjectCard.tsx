@@ -71,7 +71,8 @@ import './fleet.css';
  *  one before the row (a group's members follow it); else the card's toggle. Every focus the row moves passes
  *  `preventScroll`, as the sheet's do (D-5610, review 1624 F1). `offer` is what the row offers (`offerOf`): when it
  *  changes, a refusal sentence is cleared, its region kept (review 1624 F5), and that includes a replaced record (review
- *  1626 F4), whose late answer draws nothing. */
+ *  1626 F4): on an unowned row, whose key outlives the record, a late answer for the old one draws nothing (a lease row
+ *  remounts with its record). */
 function WorktreeControls({ leaseId, worktree, controls, offer, nowMs, grouped = false }: {
   leaseId: string; worktree: string; controls: readonly WorktreeControl[]; offer: string; nowMs: number; grouped?: boolean;
 }): ReactNode {
@@ -81,7 +82,7 @@ function WorktreeControls({ leaseId, worktree, controls, offer, nowMs, grouped =
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; polite: boolean }>({ text: '', polite: false });
   const box = useRef<HTMLSpanElement>(null);
-  // After a confirmed or closed-by-the-row ask: place the focus once the sheet has given it back.
+  // After a confirmed or closed-by-the-row ask: place the focus in the commit that closes the ask.
   const settle = useRef<'act' | 'dropped' | null>(null);
   // F1: what the open confirm may post, set at commit, and whether an act is in flight; never read from a render's closure.
   const confirmable = useRef<WorktreeControl | null>(null);
@@ -99,25 +100,28 @@ function WorktreeControls({ leaseId, worktree, controls, offer, nowMs, grouped =
     settle.current = 'dropped';
     setAsking({ ...asking, open: false });
   }, [asking, offered]);
+  const headingOf = (): HTMLElement | null => {
+    const el = box.current;
+    const card = el?.closest('.proj-card') ?? null;
+    if (el === null || card === null) return null;
+    const before = [...card.querySelectorAll<HTMLElement>('.proj-group-toggle')]
+      .filter((t) => (t.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+    return (grouped ? before.at(-1) : undefined) ?? card.querySelector<HTMLElement>('.proj-card-toggle');
+  };
   const handOff = (): void => {
     // Review 1624 F1: the box no longer holds the focus, whether or not a blur said so (a removed element fires none).
     focusIn.current = false;
-    const el = box.current;
-    const card = el?.closest('.proj-card') ?? null;
-    if (el === null || card === null) return;
-    const before = [...card.querySelectorAll<HTMLElement>('.proj-group-toggle')]
-      .filter((t) => (t.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
-    ((grouped ? before.at(-1) : undefined) ?? card.querySelector<HTMLElement>('.proj-card-toggle'))?.focus({ preventScroll: true });
+    headingOf()?.focus({ preventScroll: true });
   };
   const holdsFocus = (): boolean => {
     const el = box.current;
     const active = document.activeElement;
     return el !== null && (el.contains(active) || (focusIn.current && (active === null || active === document.body)));
   };
-  // F2: after a confirmed act the sheet gives the focus back to its opener, which the act has disabled; this runs after,
-  // in the commit that closes the ask, while the closing panel may still hold the focus. A row left with no controls hands
-  // it to its heading (review 1626 F1). Otherwise a dropped ask leaves the focus where the sheet gave it back only when that
-  // is in the box: when its opener has left, the closing panel still holds it (review 1624 F3, measured in the browser).
+  // F2: the focus is placed in the commit that closes the ask, while the closing panel still holds it (review 1626 F10):
+  // after a confirmed act the sheet has given it back to its opener, which the act has disabled. A row left with no
+  // controls hands it to its heading (review 1626 F1). Otherwise a dropped ask leaves the focus where the sheet gave it
+  // back only when that is in the box: when its opener has left, the panel holds it (review 1624 F3, measured in the browser).
   useEffect(() => {
     const why = settle.current;
     if (asking === null || asking.open || why === null) return;
@@ -129,8 +133,19 @@ function WorktreeControls({ leaseId, worktree, controls, offer, nowMs, grouped =
   const none = controls.length === 0;
   useLayoutEffect(() => { if (none && holdsFocus()) handOff(); }, [none]);
   // F2: the row leaves holding the focus. The box is read now, as React removes it, not once at mount. The focus inside
-  // this row's own open confirm (a modal: while it is open the focus is in it) counts as the box holding it (review 1626 F2).
-  useLayoutEffect(() => () => { if (holdsFocus() || (confirmable.current !== null && focusIn.current)) handOff(); }, []);
+  // this row's own open confirm (a modal: while it is open the focus is in it) counts as the box holding it (review 1626 F2),
+  // and goes to the heading found now once the confirm's focus trap has gone, which would pull it back into the leaving
+  // panel; only if that heading is still drawn and the focus is then on the page or in that panel (review 1628 F1).
+  useLayoutEffect(() => () => {
+    if (holdsFocus()) { handOff(); return; }
+    if (confirmable.current === null || !focusIn.current) return;
+    const to = headingOf();
+    const panel = document.activeElement?.closest('[role="dialog"]') ?? null;
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (to?.isConnected === true && (a === null || a === document.body || panel?.contains(a) === true)) to.focus({ preventScroll: true });
+    }, 0);
+  }, []);
   // Review 1624 F5: a refusal answers the act it was given; once the row offers something else, it is no longer true.
   useEffect(() => { setNote((n) => (n.polite || n.text === '' ? n : { text: '', polite: false })); }, [offer]);
   const send = (c: WorktreeControl): void => {

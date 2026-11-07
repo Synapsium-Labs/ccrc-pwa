@@ -10,7 +10,8 @@ drawn string stays in the operator's words (worktree, session, run, kept). The c
 
 No new number. D-8096 (2) is amended in place for F7 (below): a 2xx's `expiresAt` is handed on as it came and read once,
 in the words module, by the wire's own reader. D-8095 and D-8097 are unchanged: D-8097's region is still "mounted empty"
-(F5 empties its text; the region stays). `pr10.md` is corrected in place where these rulings say so (F3, F5, F11 (e)).
+(F5 empties its text; the region stays). `pr10.md` is corrected in place where the rulings say so: review 1624 F3, F5
+and F11 (e); in fix round 1, review 1626 F7, F10 and F12; in fix round 2, review 1628 F3.
 The head commit's `Ledger-Edit` trailer names both.
 
 ## What changed
@@ -30,8 +31,8 @@ The head commit's `Ledger-Edit` trailer names both.
   confirm then a Keep, a Keep then a confirm, and a confirm twice. Each posts once.
 - **F4 (b)**: an unowned row whose controls go (its hidden record is gone) while its box holds the focus hands it to its
   group's toggle, never the card's.
-- **F5 (ruled: clear it)**: the words module's `offerOf` spells what a row offers: the worktree's state on the wire and
-  each control, an attach with its session. When it changes, the refusal sentence is cleared; the region stays mounted.
+- **F5 (ruled: clear it)**: the words module's `offerOf` spells what a row offers: the record's id first (since fix
+  round 1, review 1626 F4), then the worktree's state on the wire, then each control, an attach with its session. When it changes, the refusal sentence is cleared; the region stays mounted.
   `pr10.md`'s F3 (c) text is corrected.
 - **F7** (the coordinator's ruling on a conflict, below): `readDoorAnswer` reads `ok` and hands `expiresAt` on as it came;
   `actDoneWord`, in the words module, reads it once through `delegationLeaseExpiresAtOf`, the wire's own reader, so the
@@ -42,8 +43,8 @@ The head commit's `Ledger-Edit` trailer names both.
 - **F11 (a)**: an open ask remembers the record it was asked about, and `offered` compares that too. A record replaced on
   the same worktree while the confirm is open drops the ask, which posts to neither record.
 - **F11 (e)**: `pr10.md`'s "Goes red" column now matches round 2's log in the five rows that understated it (W5-UM2,
-  W5-UM3, W5-UM4, W5-UM5, W5-UM7). The wave-done report carries a copy of that log with each mutant's edit text beside
-  its run line.
+  W5-UM3, W5-UM4, W5-UM5, W5-UM7). Which of PR10's mutants have their edit text recorded, and which keep that table's
+  text as their record, is listed under fix round 1 (F7) below.
 
 ## Rows
 
@@ -144,7 +145,7 @@ Every item is the coordinator's ruling; nothing beyond them changes.
 | F1 | The settle effect tests "no controls" first, so a row left with none hands the focus to its heading even when the sheet gave it back to the box; the dropped-ask early return applies only to the arm that focuses the box | project-card "F1 (review 1626)": the box is the opener (focused, then the confirm opened with a click that moves no focus), Attach open, the row goes `transferring` | FR1-F1-order (the old order) RED 1 ("the heading, never the empty box") |
 | F2 | A row that unmounts while its own confirm is open hands the focus to its heading: in the cleanup, the focus inside this row's own open sheet (its confirm is open, and the flag says the focus came in through it) counts as the box holding it | browser "a row that leaves while its confirm is open …", both variants (the record dropped; a state this build cannot read), both skins, both themes, 390, 1280 and 1920 | FR1-F2-sheet RED 12 of 12 ("its record dropped: expected 'body' to be 'card: project-a'") |
 | F3 (a) | pr10b.md says why the F1 row follows review 1623 F3 (b) (above) | — | — |
-| F3 (b) | Cancel clears the focus flag; an opener the sheet gives the focus back to sets it again | project-card "F3 (b) (review 1626)": jsdom reaches a null opener (the confirm opened with a click while the page holds the focus), then Cancel, then `transferring`: nothing moves | FR1-F3b-cancel RED 1 ("nothing moved") |
+| F3 (b) | Every close of the confirm clears the focus flag: Cancel, Escape, the scrim, and the close after a confirm (the clear is in the confirm's `onClose`, review 1628 F5); an opener the sheet gives the focus back to sets it again | project-card "F3 (b) (review 1626)": jsdom reaches a null opener (the confirm opened with a click while the page holds the focus), then Cancel, then `transferring`: nothing moves | FR1-F3b-cancel RED 1 ("nothing moved") |
 | F4 (ruled) | `offerOf` starts with the record's id, so a replaced record clears the refusal; an answer, or a failure, for the old record that lands after the swap draws nothing | project-card "F4 (review 1626)": a refusal, the same record (CONTROL: kept), a replaced record (emptied); then a late refusal and a late failure for the old record (nothing drawn) | FR1-F4-offer RED 1; FR1-F4-late RED 1; FR1-F4-late-failure RED 1 |
 | F5 | — (a row for the controls half of the offer) | project-card "F5 (review 1626)": a refusal, then Attach goes because its session left the list, the state unchanged: the alert empties | FR1-F5-controls (the offer without its controls) RED 1 |
 | F6 | The resting check's comment says it measures the screen's own reservation, not the list's end padding | — | — |
@@ -159,3 +160,19 @@ Every item is the coordinator's ruling; nothing beyond them changes.
 Re-measured on this round's code: F1-flag RED 1, F5-clear RED 4 (F3 (c), F5 (review 1624), F4 (review 1626) and F5
 (review 1626)), F11a-lease RED 1, F3-dropped (above), FOCUS-mut RED 1 and TONE-mut RED 1 (both W5-U7).
 
+## Fix round 2 (review 1628 at `cb66d3bf7`)
+
+Every item is the coordinator's ruling; nothing beyond them changes.
+
+| Item | What changed | Row | Mutant, measured |
+|---|---|---|---|
+| F1 | A row that leaves while its confirm is open finds its heading as it unmounts and focuses it once the confirm's focus trap has gone (`setTimeout(0)`, its handle a local of the cleanup), and only if that heading is still drawn and the focus is then on the page or in the departed panel, so it never takes the focus from where the user moved it. The immediate hand-off lost to the trap once the keyboard focus had moved inside the confirm: the trap pulled it back into the leaving panel, and it fell to the page. A row that leaves while its box holds the focus hands it on at once, as before | browser "a row that leaves while its confirm is open …" gains two variants that press `Tab` inside the confirm before the frame (the record dropped; a state this build cannot read), both skins, both themes, 390, 1280 and 1920 | FR2-F1-immediate (the immediate hand-off again) RED 12 of 12 ("its record dropped, after a Tab inside the confirm: expected 'body' to be 'card: project-a'") |
+| F2 | — (rows for the other two arms of the late-answer guard) | project-card "F4 (review 1626)": a late success for the old record toasts nothing; a late answer that cannot be read says nothing in the status | FR2-F2-success RED 1 ("a late success: no toast"); FR2-F2-unreadable RED 1 ("a late unreadable answer: no status") |
+| F3 | `ProjectCard.tsx`'s comments say once that the dropped ask's focus is placed in the commit that closes the ask, while the closing panel still holds it, and that a late answer draws nothing on an unowned row, whose key outlives the record (a lease row remounts with its record). This note and `pr10.md` cite nothing outside the repository; this note lists every `pr10.md` correction and describes `offerOf` as it is | — | — |
+| F4 | The mutation log's four RED lines that had no first failure (PR10-F8a-absent, PR10-F8a-absent-r, F7r-words-respell-changed and F7r-caller-changed, first round) carry one beside them, the line the same mutant printed when re-run in fix round 1, marked as such. Every RED line of the log now has one | — | — |
+| F5 | The F3 (b) row of the fix round 1 table says the flag clears on every close of the confirm | — | — |
+| F6 (b) | — (a measurement) | — | FR1-F2-sheet with the browser row cut to the unreadable-state variant alone: RED 12 of 12 ("its state one this build cannot read: expected 'body' to be 'card: project-a'") |
+
+Re-measured on this round's code: FR1-F2-sheet (the confirm's arm of the cleanup returning at once) RED 12 of 12 ("its
+record dropped"), FR1-F4-late RED 1, FR1-F4-late-failure RED 1, F3-dropped RED 2 in jsdom and RED 12 of 12 in the
+browser, FOCUS-mut RED 1 and TONE-mut RED 1 (both W5-U7).

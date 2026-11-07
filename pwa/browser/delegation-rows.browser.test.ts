@@ -507,7 +507,8 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
 // and an ask the row stops offering while it is open (the row moves to `promoted`, so Attach, its opener, goes) places it
 // on the box in the commit that closes the ask, while the closing panel still holds it (review 1626 F10). A row that
 // leaves while its confirm is open (its record dropped, or its state one this build cannot read) hands the focus to its
-// card's heading (review 1626 F2).
+// card's heading (review 1626 F2), also after a `Tab` has moved the focus inside the confirm, which arms the confirm's
+// focus trap: the hand-off waits until the trap has gone (review 1628 F1).
 const FOCUS_ROW = 'agent-l1';
 /** What holds the focus, named the way the row would name it. */
 const focusAt = (): string => {
@@ -577,14 +578,20 @@ describe.each(SKINS)('the focus around a worktree control\'s real sheet in %s (r
       const { ctx, page, errors, send } = await open(skin, theme, width);
       try {
         const attach = page.getByRole('button', { name: `Attach to… (${FOCUS_ROW})`, exact: true });
-        for (const [variant, frame] of [
-          ['its record dropped', withLone(null)],
-          ['its state one this build cannot read', withLone({ disposition: 'future-word' })],
+        for (const [variant, frame, key] of [
+          ['its record dropped', withLone(null), null],
+          ['its state one this build cannot read', withLone({ disposition: 'future-word' }), null],
+          ['its record dropped, after a Tab inside the confirm', withLone(null), 'Tab'],
+          ['its state one this build cannot read, after a Tab inside the confirm', withLone({ disposition: 'future-word' }), 'Tab'],
         ] as const) {
           send('/ws/fleet', withLone({}));
           await attach.scrollIntoViewIfNeeded();
           await attach.click();
           await page.waitForSelector('[role="dialog"]');
+          if (key !== null) {
+            await page.keyboard.press(key);
+            expect(await page.evaluate(focusAt), `${variant}: the focus moved inside the confirm`).toMatch(/^dialog: /);
+          }
           send('/ws/fleet', frame);
           await attach.waitFor({ state: 'detached' });
           await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });

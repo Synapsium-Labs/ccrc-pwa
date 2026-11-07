@@ -2113,6 +2113,24 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     await act(async () => { fail(okJson({ error: 'internal' }, 500)); });
     await act(async () => { await Promise.resolve(); });
     expect(failRegion.textContent, 'the late failure draws nothing').toBe('');
+    third.unmount();
+    // Review 1628 F2: a late success toasts nothing, and a late answer that cannot be read says nothing in the status.
+    for (const [arm, answer] of [
+      ['a late success', () => accepted()],
+      ['a late unreadable answer', () => new Response('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } })],
+    ] as const) {
+      let land: (r: Response) => void = () => {};
+      const held = recorder(() => new Promise<Response>((res) => { land = res; }));
+      const view = renderCard(at(LEASE_ID), { fetch: held.fetch });
+      const status = view.container.querySelector<HTMLElement>('.proj-work [role="status"]')!;
+      await notDelegated();
+      view.rerender(cardElement(at(REPLACED)));
+      await act(async () => { land(answer()); });
+      await act(async () => { await new Promise((res) => setTimeout(res, 50)); });
+      expect(screen.queryByText(/^Worktree marked/), `${arm}: no toast`).toBeNull();
+      expect(status.textContent, `${arm}: no status`).toBe('');
+      view.unmount();
+    }
   });
 
   it('F5 (review 1626): a refusal is cleared when Attach goes because its session left the list, the state unchanged', async () => {
