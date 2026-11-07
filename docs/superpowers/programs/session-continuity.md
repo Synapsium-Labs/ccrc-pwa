@@ -1170,18 +1170,31 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     ranked the reduced spike first, then no spike, then the full spike on the fleet. The operator chose the reduced
     spike.
   - **The spec, rev 11.** §5.2 records the decision and its reasons, keeps the steps as first written beneath, and
-    replaces the decision rule: the manifest is primary, and native handoff, if ever wanted, is measured off the
-    fleet first (§11 items 7 and 8; D-8102). §5.3's graceful stop has its bound measured in stage 3's own wave,
-    behind a shadow arm (D-8104). §10 no longer waits on a stage-2 decision for stage 6's second part.
+    replaces the decision rule: the manifest is primary, and native handoff is recorded as decided on the evidence,
+    not measured (§11 items 7 and 8; D-8102). Making it primary later would be a new ruling; this coordinator
+    proposes measuring it off the fleet first. §5.3's graceful stop has its bound left to stage 3's own wave, where
+    this coordinator proposes a shadow arm (D-8104). §10 no longer waits on a stage-2 decision for stage 6's second
+    part, and §3, §5.6, §8, §9 and §11 item 5 carry rev-11 notes. Step 7's closure by D-5241 is this coordinator's
+    agreement, not a ruling (D-8103).
   - **The plan,** `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`, D-8102 to D-8109
     (issued 2026-11-07). One worker, the conductor, reads, mails a subject session on the scratch account and swaps it
-    through the route; the subject makes the calls. Task 1 reads the historical refusals and doctor's line with no
-    account (D-8105); Task 3 runs step 5 as a matrix of four script paths at one mid-run swap (D-8106); Task 4 runs
-    step 6 by a cut list (D-8107); the conductor's acts are bounded (D-8108), and every committed excerpt is redacted
-    (D-8109).
-  - **What the operator sets up** goes in its own item, after the plan's approval: two scratch accounts in one pool
-    (so a swap stays contained), the containment of real sessions, a scratch project and the subject session, consent
-    to swap the subject while it is busy, and a loan across at least one five-hour reset of each account.
+    with `ccd swap --interrupt` under the operator's consent; the subject makes the calls. Task 1 reads every resume
+    call on disk and doctor's line with no account (D-8105); Task 3 runs step 5 as a matrix of four script paths at
+    one mid-run swap, each row resuming its own run (D-8106); Task 4 runs step 6 by a cut list (D-8107); the
+    conductor's acts are bounded (D-8108), and every committed excerpt is redacted (D-8109).
+  - **Plan review** (three Opus lenses, a Sonnet refuter per important finding). Confirmed and fixed: the console's
+    swap route is out of a worker's reach (no client verb, and a session cookie when sign-in is armed), so the
+    conductor's swap is the open verb `ccd swap --interrupt`, the argv that route builds; and tagging the scratch
+    project does not keep the subject on the scratch accounts, because an untagged account serves a tagged project
+    (`ccd/ccd#_pool_ok`). Also fixed: each matrix row resumes its own run; the current-root path's outcome is
+    unknown (the strings predict a refusal), so the working-directory copy always runs; a restarted subject waits
+    for the conductor's go; the burn's agents are cheap and long-lived; the historical pass counts every resume
+    call; and the decisions the operator did not make are attributed to this coordinator.
+  - **What the operator sets up** goes in its own item, after the plan's approval: two scratch accounts in one pool;
+    a pool tag on every other account, or accepting that a rescue may move the subject onto one; how real sessions
+    are kept off the scratch accounts; a scratch project and the subject session; consent to swap the subject while
+    it is busy; whether the operator will type one `/add-dir`; and a loan across at least one five-hour reset of
+    each account.
   - **Routing for run 730 (clause 13).** A worker running a measurement whose judgement is in the reading: Opus at
     high, Haiku scouts only, workflow off, compact 40.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
@@ -1242,7 +1255,9 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   - and the shape noted with them: a queued-command list prompt with a readable kill beside an undumpable element
     drops that kill, with the reading partial.
 
-- **Wave 6 (stage 3) builds on what exists** (the survey of 2026-11-07; Decisions, 2026-11-07 14:40 and 22:40):
+- **Wave 6 (stage 3): this coordinator's proposals, for its plan and spec revision to settle** (the survey of
+  2026-11-07; Decisions, 2026-11-07 14:40 and 22:40; the consolidation rule in `CLAUDE.md`). Spec §5.3 still says
+  otherwise on the first and last points until then:
   - it extends the delegation broker's spool and server projection for the launch record and the manifest's
     readers, rather than adding a second writer beside `$REG/delegation/` (the spec's `$REG/<id>.deleg`);
   - it pins in tests the Workflow resume strings it relies on (`scriptPath must be a script path …`, `No journal

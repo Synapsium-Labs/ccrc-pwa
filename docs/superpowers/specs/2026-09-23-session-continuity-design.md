@@ -14,8 +14,9 @@ and its bytes (§1.2 item 1, §5.1, §8, §9; 2026-10-08) · rev 10 is an as-bui
 new operator ruling: labelled wave-4b annotations in §5.6, §5.7 and §9 record the child-scoped pressure variable, the
 carried-scope record, the direct pressure-kill metric and the live `/clear` promotion that closes D-3925 · rev 11
 records the operator's rulings of 2026-11-07 (§11, items 7 and 8): the spike resumes on a lent scratch account,
-reduced to steps 5 and 6; stage 3 is manifest-primary, decided on the evidence rather than measured; step 7 is
-closed by the working-state programme's D-5241 (§5.2, §5.3, §10) ·
+reduced to steps 5 and 6, and stage 3 is manifest-primary, decided on the evidence rather than measured; with
+notes in §3, §5.2, §5.3, §5.6, §8, §9, §10 and §11 item 5, among them step 7's closure by the working-state
+programme's D-5241, which this programme accepted (D-8103) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -199,7 +200,7 @@ auto-home at 04:17 UTC the next day.
 | C2 | Rescue timing: "least time interruption and max recovery potential so that we do not waste tokens and do not lose work, but also don't wait too long" (operator). | Stage 4. |
 | C3 | Reaper: "is there no more elegant way?" — no heuristic sweep (operator). | Stage 6: one variable plus the scope boundary the kernel enforces. Amended by C11. |
 | C4 | Headroom estimation dropped (operator). | No fan-out gate. Target choice keeps using the limits files it already reads. |
-| C5 | "Enhance recovery during account swap similar to how Claude Code itself does it" (operator). | Stage 2 spike decides stage 3's mechanism. |
+| C5 | "Enhance recovery during account swap similar to how Claude Code itself does it" (operator). | Stage 2 spike decides stage 3's mechanism. Rev 11: decided 2026-11-07 on the evidence, the manifest (§11 item 8). |
 | C6 | AMENDS post-swap-redrive R1 / D-2236: the rescue waits instead of swapping when the reset is near and Claude Code's auto-continue is armed, or when no target has room. | Stage 4. Slug `rescue-waits-near-reset`, D-3498. |
 | C7 | AMENDS routing §5.3 "a keystroke not accompanied by a field write is transient": the operator's own `/model`/`/effort` is written to the record before a restart. | Stage 7. Slug: `operator-model-survives-restart`. |
 | C8 | REVERSES the carry's "an existing destination is LEFT ALONE rather than merged". | Stage 1. Slug `sidecar-carry-merges`, D-3496. |
@@ -208,7 +209,7 @@ auto-home at 04:17 UTC the next day.
 | C11 | AMENDS C3 (operator, 2026-09-23, on §11 item 4's measurements): beside the variable and the scope boundary, a sweep stops dead ccd pane scopes that have done nothing for six hours and serve nothing; everything else is reported. | Stage 6. Slug: `inert-scope-sweep`. |
 | C12 | AMENDS D-3100's argument that a re-rendered banner "cannot reach a relocation" because the rescue arm sits below `SWAP_COOLDOWN`: the cooldown expires, and 32 of 248 rescues came from a banner the session carried in (§1.2 mechanism 6). A banner older than the session's landing is not a block, which also gives up the pane rung's immediacy for a pane positive that the transcript dates as carried in (§8). Shipped as D-3526 (#207): "the landing" is the pane's own process start with a swap after the row, and a landing whose Claude Code never came up is still moved. | Stage 4 rule 1. Slug `carried-in-banner-is-not-a-block`, D-3497; shipped by D-3526. |
 | C13 | The rescue-wait bound is 10 minutes (operator, 2026-09-23). | Stage 4 rule 2; §11 item 3. |
-| C14 | The slice ceiling is answered by measuring `OOMPolicy=continue` for pane scopes in the stage-2 spike, never by an aggregate `MemoryHigh` (operator, 2026-09-23). | Stage 2 step 7; §11 item 5. |
+| C14 | The slice ceiling is answered by measuring `OOMPolicy=continue` for pane scopes in the stage-2 spike, never by an aggregate `MemoryHigh` (operator, 2026-09-23). | Stage 2 step 7; §11 item 5. Rev 11: closed by the working-state programme's D-5241 (D-8103). |
 
 ## 4. Roles and authority
 
@@ -335,9 +336,10 @@ recorded as kind `bg` would make ccd refuse its own swap (D-4944); the carry nev
 Code's job-dir guard is per config root, so adoption across an account change is predicted to fail; Claude Code
 ends workflows and agents before its handoff, so their recovery is a resume by run id either way; and the handoff's
 gates and carrier changed after this spec was written (`CLAUDE_DISABLE_ADOPT`, `bgTakeover`, a per-job storage
-key) across a fleet that runs several builds. Step 2's bounded wait is measured in stage 3's own wave, behind a
-shadow arm. Step 7 is closed by the working-state programme's D-5241: `set-property` refuses the property, and two
-prefix drop-ins ship `OOMPolicy=continue`, which doctor's `oom-policy` check reads. Steps 5 and 6 run on the lent
+key) across a fleet that runs several builds. Step 2 is not run, so the graceful stop's bounded wait is left to
+stage 3's own wave (D-8104). Step 7 is closed by the working-state programme's D-5241, with this programme's
+agreement (D-8103): `set-property` refuses the property, and two prefix drop-ins ship `OOMPolicy=continue`, which
+doctor's `oom-policy` check reads. Steps 5 and 6 run on the lent
 scratch account (plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`): step 5 as a
 matrix of script paths at one mid-run swap, step 6 by a cut list. The steps as first written:
 
@@ -364,16 +366,16 @@ and a plain background agent running:
    lives (C14). If `set-property` refuses the property on a transient scope, record it: the remaining route is the
    user manager's `DefaultOOMPolicy`, which needs a re-exec of the fleet's user manager and returns to the operator.
 
-**Decision rule (amended 2026-11-07, §11 item 8).** ccd's manifest is primary for stage 3. Native handoff is not
-measured on the fleet; if it is ever wanted, it is measured off the fleet first, and making it primary is a new
-operator ruling. The graceful stop ships with stage 3. The spike's measurements, redacted, are committed with its
-results note. The rule as first written made native handoff primary only if it fired with both gates set, the next
+**Decision rule (amended 2026-11-07, §11 item 8).** ccd's manifest is primary for stage 3, and Claude Code's
+native handoff is recorded as decided on the evidence, not measured. Making it primary later would be a new
+operator ruling (D-8102). The graceful stop ships with stage 3. The spike's measurements, redacted, are committed
+with its results note. The rule as first written made native handoff primary only if it fired with both gates set, the next
 wake adopted across the account change, and no second restart authority engaged (or one could be switched off).
 
 ### 5.3 Stage 3 — recovery at every restart (ccd, hook, prompt)
 
 **The graceful stop.** Every ccd stop that will be followed by a resume sends `SIGTERM` to the Claude Code process
-and waits a bounded time, measured in this stage's own wave behind a shadow arm (rev 11), before the tmux kill. The unit is still stopped first, so
+and waits a bounded time, measured in this stage's own wave (rev 11, D-8104), before the tmux kill. The unit is still stopped first, so
 `Restart=always` cannot resurrect it under the old wrapper.
 
 **The launch record.** `session-hook.sh`'s PostToolUse arm appends one row to `$REG/<id>.deleg` for each Workflow
@@ -421,6 +423,7 @@ agents die on the limit again becomes `deferred-until-reset <resetsAt>`, and the
 stop on the limit again, stop and leave it listed.
 
 **Background shells** killed by the stop, or handed over natively, are listed so the session re-arms its watchers.
+(Rev 11: under the manifest none is handed over natively; each is killed and listed.)
 
 ### 5.4 Stage 4 — rescue timing, the herd, and swaps that cut work (ccd; its refusal of swaps that cut work needs stage 3)
 
@@ -589,7 +592,8 @@ accepting transcript loss.
      handoff record names one of its processes, and `$REG/scope-sweep-paused` is absent. A **handoff record** is
      Claude Code's native adopt record, naming a background shell handed "to the next wake", if the stage-2 spike
      makes native handoff primary; the stage-3 launch record carries run and agent ids, never a pid, so under
-     manifest-primary, and before stage 3, no record exists and that predicate is satisfied. A predicate it cannot
+     manifest-primary, and before stage 3, no record exists and that predicate is satisfied. (Rev 11: the manifest
+     is primary, §11 item 8, so no handoff record exists unless a new ruling changes it.) A predicate it cannot
      measure skips that scope for the tick and records nothing new; a scope seen live drops its entry, except one
      carried for a child cgroup or for the parent-walk hop cap, which keeps its previous line even live and gets
      no `old` listing (a scope with a child cgroup is never stopped).
@@ -775,7 +779,7 @@ actual restart or stop count.
 ## 8. Failure modes named
 
 - **The handoff fires but its record lands where the carry did not bring it:** why stage 1 ships first and the
-  spike measures the job directory's root.
+  spike measures the job directory's root. (Rev 11: not measured; under the manifest no native handoff fires, §5.2.)
 - **Mass rescue I/O:** the carry walk and the manifest scan take a non-blocking slot on every path and run under
   byte budgets, falling back to `(kept)` or `unmeasured` rather than waiting; the swap body is the place, never the
   spawn path; §9 measures `(kept: busy)`, `(kept: budget)`, `(kept: error)` and the `unmeasured` rate.
@@ -822,7 +826,7 @@ census deduplicated by run id, the post-swap outcome classifier, the pressure-ki
 | Stage | Metric | Baseline | Target |
 |---|---|---|---|
 | 1 | `(kept)` carries by reason (`busy`, `budget`, `error`, bare); journal-missing resume refusals; sidecar bytes copied, by cause (D-4501: first carries, merged files, bytes) | 774 of 1,310, all by existence; 8; every first carry `(copy)` since 2026-09-22, unsized | only `busy`/`budget`, under 2%, reported with and without the pairs stranded before stage 1's deploy; 0; `exdev-*` at 0 on a box whose filesystem has a read-write mount exposing every account root |
-| 2 | spike outcome | — | decides stage 3 |
+| 2 | spike outcome (rev 11: steps 5 and 6) | — | decides stage 3 (rev 11: decided by §11 item 8; the results set stage 3's redrive call and its `deferred-until-reset` class) |
 | 3 | rescues with live work that resumed the exact run; finished agents re-run by relaunches; manifest writes ending `unmeasured`; stalled vs not-stalled restarts with a non-empty manifest | 11 of 30; up to 3.6M tokens; —; — | over two thirds; near 0; under 5%; reported |
 | 4 | sessions with a fourth auto-rescue in an hour that no chain wait preceded, counting rescues that landed and asking it only of a fourth rescue the chain wait could have held (a dated block not past its five-hour reset's grace — rule 3's own gate; the raw count of sessions with 4 or more is reported beside it); chain waits that end in neither a swap nor a reset; non-rescue swaps that cut delegated work; rescues on a carried-in banner (since D-3526, only a landing whose Claude Code never came up); near-reset waits that end in a swap; pane positives suppressed by rule 1 that became a rescue within 5 min; no-room waits a stalled session outlived its own reset in, with the seconds past it (§11 item 6) | at least 1 (archive max 4), owed at the stage-4 reading, not re-measured for the restated metric; —; 4 of 5 manual swaps with live work; 32 of 248; —; —; — | 0; 0; 0; reported; reported; reported; reported |
 | 5 | holed or unmeasured wave-dones accepted without a note | not measured | 0 |
@@ -932,7 +936,8 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
 5. **The slice ceiling** (C14). 16 session deaths in 10 sessions from the OOM killer in a week, with the reap on,
    while the host had memory to spare (§1.3). The kill itself chose sensibly, usually a background worker; what
    turns it into a session death is `OOMPolicy=stop` on every pane scope, the user manager's `DefaultOOMPolicy`.
-   Stage 2 step 7 measures `OOMPolicy=continue` on a scratch pane scope. Two alternatives are closed:
+   Stage 2 step 7 measures `OOMPolicy=continue` on a scratch pane scope (rev 11: the working-state programme
+   measured it on 2026-10-17 and shipped it as two prefix drop-ins, D-5241; D-8103). Two alternatives are closed:
    - **An aggregate soft cap** (`MemoryHigh` on the slice or on `user@`) kills nothing and throttles every session
      at once. It froze the fleet on 2026-08-14 (`user@`) and on 2026-09-09 and three times on 2026-09-10 (the
      slice), and `deploy/assert-slice-policy.sh` refuses it at deploy.
