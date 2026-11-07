@@ -395,19 +395,20 @@ describe('a typed /compact sends no UserPromptSubmit (the measurement the tail i
 // no-op for the compaction's agent, and re-reads and keeps the main state the file holds. So from 2.1.311, where a
 // compaction fires two stops, the second does what the first does. This row replays each such version's own compaction
 // payloads, PreCompact through PostCompact, through the real hook, from three setups taken from 2.1.319's captures (an
-// idle `done`, a mid-turn `working`, and a `done` whose Stop left a background agent, which writes the delegated pair),
-// each with one unrelated roster entry, with `hook-main-state-v1` advertised and without it. The corpus holds no live ask
-// and no subagent's own wait (no AskUserQuestion or PermissionRequest in any capture), so neither is a setup here.
+// idle `done`, a mid-turn `working`, and `agent-iso-bg`'s first Stop, whose `background_tasks` holds the running agent,
+// so the delegated pair is live: at least 1, `subagent`), each with one unrelated roster entry, with `hook-main-state-v1`
+// advertised and without it, and holds the state, the roster and the pair kept after each stop and after PostCompact.
+// The corpus holds no live ask, no subagent's own wait (no AskUserQuestion or PermissionRequest in any capture) and
+// nothing that sets `interrupted`, so those keys are held only at their setup values.
 describe('every compaction SubagentStop keeps the main state, two from 2.1.311 as one before', () => {
   const twoStop = corpusVersions.filter((v) => stopsFor(v) === 2);
-  const lastStop = (ev: CapEv[]): CapEv => [...ev].reverse().find((e) => e.event === 'Stop')!;
   const SETUPS: Record<'done' | 'working' | 'done, delegated', () => CapEv> = {
     done: () => { const ev = capture('2.1.319', 'clear-compact-resume'); return ev[ev.findIndex((e) => e.event === 'PreCompact') - 1]!; },
     working: () => {
       const ev = capture('2.1.319', 'clear-compact-resume');
       return ev.slice(0, ev.findIndex((e) => e.event === 'PreCompact')).reverse().find((e) => e.event === 'UserPromptSubmit')!;
     },
-    'done, delegated': () => lastStop(capture('2.1.319', 'agent-iso-bg')),
+    'done, delegated': () => capture('2.1.319', 'agent-iso-bg').find((e) => e.event === 'Stop')!,
   };
   /** An unrelated agent's SubagentStart, from 2.1.319's agent-plain capture: it carries its own id. */
   const unrelatedStart = (): CapEv => capture('2.1.319', 'agent-plain').find((e) => e.event === 'SubagentStart')!;
@@ -453,7 +454,10 @@ describe('every compaction SubagentStop keeps the main state, two from 2.1.311 a
     const two = replay(caps, setup, v);
     expect(two.before['state']).toBe(from === 'working' ? 'working' : 'done');
     expect((two.before['subagents'] as unknown[]).length, 'the unrelated roster entry').toBe(1);
-    if (from === 'done, delegated') expect(two.before['bgDelegated'], 'the delegated pair is set').toBeTypeOf('number');
+    if (from === 'done, delegated') {
+      expect(two.before['bgDelegated'] as number, 'the delegated pair is live').toBeGreaterThanOrEqual(1);
+      expect(two.before['bgDelegatedKinds'], 'the delegated pair is live').toBe('subagent');
+    }
     expect(two.stops).toHaveLength(2);
     for (const k of two.stops) {
       expect(pick(k, KEPT)).toEqual(pick(two.before, KEPT));
@@ -467,9 +471,15 @@ describe('every compaction SubagentStop keeps the main state, two from 2.1.311 a
         expect(k['updatedAt'] as number).toBeGreaterThanOrEqual(two.t0);
       }
     }
+    // PostCompact writes nothing under the word (D-5239), so the end still holds what the stops kept.
+    expect(pick(two.end, KEPT), 'kept after PostCompact').toEqual(pick(two.before, KEPT));
     const one = replay(caps, setup, '2.1.299');
     expect(one.stops).toHaveLength(1);
-    const timeless = (s: Record<string, unknown>): Record<string, unknown> => { const { aliveAt: _a, updatedAt: _u, ...rest } = s; return rest; };
+    // `aliveAt` is a fresh reading on both branches; `updatedAt` only without the word (with it the stamp stands at T0).
+    const timeless = (s: Record<string, unknown>): Record<string, unknown> => {
+      const { aliveAt: _a, updatedAt: u, ...rest } = s;
+      return hms ? { ...rest, updatedAt: u } : rest;
+    };
     expect(timeless(two.end)).toEqual(timeless(one.end));
   });
 });
