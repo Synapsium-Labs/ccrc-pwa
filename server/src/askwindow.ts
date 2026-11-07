@@ -73,10 +73,13 @@ export function approvalWindowMs(agentId: string): number {
 
 /** Ceiling on how long a row may sit `'answering'` before `sweepAsks` gives up
  *  on the principal that took it and never came back (fix round 1, item 1 —
- *  the reviewer's own reasoning, verbatim): `sweepAsks` is the ONLY garbage
- *  collector `heldAsks` has. `detectDialogs`'s orphan-settle fires only on a
- *  NEW dialog id, and a session blocked on `AskUserQuestion` does not
- *  repaint — so a row stuck at `'answering'` (the press refused, `answerAsk`
+ *  the reviewer's own reasoning): `sweepAsks` is the ONLY collector of a held
+ *  ask whose dialog stays painted (the hold was `watch.ts`'s `heldAsks` map;
+ *  since Q3d it is an entry of `coord/questions.ts`'s `questionHolds`). The
+ *  orphan-settle (`settleReplaced`) fires only on a NEW dialog id, the clear
+ *  (`settleCleared`) only when the dialog leaves the pane, and a session
+ *  blocked on `AskUserQuestion` does neither — so a row stuck at
+ *  `'answering'` (the press refused, `answerAsk`
  *  threw, the request abandoned — `untakeAsk`'s own rollback never ran)
  *  would otherwise be kept forever, WITHIN THIS SERVER'S OWN LIFETIME:
  *  `releaseAsk` fails every sweep because the state is not `'held'`, and
@@ -84,13 +87,14 @@ export function approvalWindowMs(agentId: string): number {
  *  inverted.
  *
  *  NOT a restart bound (fix round 1, item 4 — a prior draft of this comment
- *  claimed it was, falsely): `heldAsks` is an in-memory `Map`, never
- *  reconstructed from the `asks` table at boot, so a row `'answering'` at
- *  restart time has no map entry the moment the process comes back —
- *  invisible to `sweepAsks` by construction, not merely slow to reach. A
- *  restart mid-hold loses the push outright, a pre-existing, accepted
- *  residual the design already names elsewhere; this ceiling has no way to
- *  bound a process that is no longer running to enforce it.
+ *  claimed it was, falsely): the hold lives in memory, so a restart empties
+ *  it, and this ceiling cannot bound a process that is no longer running.
+ *  Since D-5925 the boot re-seeds it from the `asks` table instead: a `held`
+ *  or `answering` row whose dialog the pane still paints, under the same
+ *  `askKey`, is held again with `answeringSince` null, so the ceiling counts
+ *  afresh from the first sweep that sees it `'answering'`; a row whose
+ *  dialog is gone or replaced settles `stale`. A lost `coord.db` has no rows
+ *  and re-seeds nothing.
  *
  *  Sixty seconds is generous, not tight: `answerAsk`'s whole job — take the
  *  row, press a digit, settle — happens well inside one `ASK_SWEEP_MS`
@@ -114,12 +118,15 @@ export const ASK_ANSWERING_MAX_MS = 60_000;
  * within one process lifetime, and only while `staleAsk` can still reach the
  * row. Two reachable failures broke it:
  *
- *   - RESTART MID-HOLD. `heldAsks` is never rehydrated from the table
- *     (deliberately — D-2169: the deferred push is the watcher's memory, and
- *     its loss is free) and there is no boot reconciliation. `dialogIds` is
- *     stamped on the priming tick BEFORE the `notify` gate, so no later tick
- *     ever re-mints and nothing clears the row. Every deploy therefore leaves
- *     one stuck chip per session that had a live ask.
+ *   - RESTART MID-HOLD. When this bound was added the hold was never
+ *     rehydrated from the table (D-2169: the deferred push is the watcher's
+ *     memory) and there was no boot reconciliation. `dialogIds` is stamped on
+ *     the priming tick BEFORE the `notify` gate, so no later tick re-minted
+ *     and nothing cleared the row: every deploy left one stuck chip per
+ *     session that had a live ask. Since D-5925 the boot re-seeds the hold
+ *     from the rows and settles `stale` a row whose dialog is gone, and this
+ *     bound stays the backstop, so the chip never depends on the re-seed
+ *     having reached the row.
  *   - A STRANDED `answering`. Closed at the CAS by F2(a) (`staleAsk` now names
  *     both live states), but the chip must not depend on that write having
  *     landed: `staleAsk` is called through a `try`/`catch` on every path, and
