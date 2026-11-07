@@ -28,7 +28,7 @@ changed `deskDoors()` to `header.shell-accounts .ins-door:not(.ins-home)`, and b
 The plan's own departures hold as written (`nav-holds-doors-only`, `settings-icon-door`, `home-door-follows-toprouteof`,
 `door-form-mounted`, `session-crumb-test-stays`, `rail-browser-file-renamed`). Found while building:
 
-- **`unknown-path-is-the-placeholder`** (ruled by this session's parent through a structured ask, 2026-11-07, as
+- **`unknown-path-is-the-placeholder`** (ask 325, ruled by this session's parent, 2026-11-07, as
   recommended). The plan's `every route says where you are` lists `/nope`, but an unknown path draws `app.tsx`'s fleet
   placeholder ("Select a session", no heading), and `topRouteOf` answers null there, so no door is current. On `main` the
   breadcrumb was empty at `/nope` too, so nothing is lost. `app.tsx` is outside the plan's files, so it is untouched: the
@@ -60,12 +60,15 @@ The plan's own departures hold as written (`nav-holds-doors-only`, `settings-ico
 - **`command-field-floor-pinned`**. The plan's mutant 7 (`.ins-command`'s `min-width` at `280px`) survives the browser's
   fit case: at 900 the field is 329 px wide, so a 280 px floor never binds and the bar keeps 49 px. A jsdom case pins the
   Interfaces' values (`flex: 1 100 0`, the floor `calc(var(--tap-min) + var(--sp-10))`) and goes red on it.
-- **`tip-reads-the-word`** (fix round 1, ruled through a structured ask, 2026-11-07, as recommended). The plan's Interfaces
+- **`tip-reads-the-word`** (ask 328, fix round 1, ruled 2026-11-07, as recommended). The plan's Interfaces
   have the icon form's tip read the door's whole name. Review 1638 A2 asked for label in name at 900 too; with the whole
   name in the tip and the pill beside it the shown text is "Inbox, 2 waiting for you 2", whose words are no run of the
   name's, space or no space. So the tip reads the door's word, and a counted door follows it with a space and its pill, as
   the word form does: both forms show "Inbox 2", and the name stays "Inbox, 2 waiting for you". It also keeps the widest
   tip inside the window (A1): Waiting on you's tip at a count of 1200 was the whole name and ran 2 px past the left edge.
+  Ruling 3 asks for that outcome, not a clamp: the word-only tip meets it without a clamp (review 1643 F2). The browser's
+  "the widest tips, by hover" case is its guard: Waiting on you at 1200 and Settings, at 900 and 1279 in both palettes.
+  A word long enough to put its tip outside the window would turn that case red.
 - **`tip-edge`** (review 1638 F2, ruled in fix round 1). The tip lies over the first row of lane cards, which are painted in
   its own `--bg-raised`, so it takes the desk's popover elevation (`--elev-pop`) and a hairline `--edge-subtle` border, as
   the lanes flyout does; it stays self-grounded on `--bg-raised` and `--ink-primary`. contrast-check passes (9804).
@@ -118,6 +121,10 @@ Each mutant was applied to the working tree from a saved copy, the named case wa
 `vitest.browser.config.ts`), and the copy was restored with its sha256 checked. All fourteen were re-run at fix round 1's
 tree (`TopBar.tsx` 02662e84028b, `frame.tsx` a7084380395b, `instrument.css` 34a6b334cdf5). Mutants 12 to 14 are fix round
 1's (review 1638 F1 and F2). Every one went red; the table is also in `instrument-shell.test.tsx`'s header.
+Fix round 2 (review 1643 F4) adds mutant 15, red first in the tip-word case (Settings at 1280: `aria-hidden` is absent),
+then green after restoring `TopBar.tsx` from its saved copy with sha256 `02662e84028b` checked. Mutants 4 and 12 were
+re-run too: 4 is red in label in name; 12 is red in all 16 browser tip cases and the jsdom edge pin. Each restored with
+its sha256 checked (`instrument.css` `34a6b334cdf5`).
 
 | # | Mutant | Red in |
 |---|---|---|
@@ -135,6 +142,7 @@ tree (`TopBar.tsx` 02662e84028b, `frame.tsx` a7084380395b, `instrument.css` 34a6
 | 12 | the tip's `z-index` line deleted | browser "the tip is drawn below the icon, by hover and by Tab" and "the widest tips, by hover" (16 of 16, "the tip is drawn on top: expected 'div.account-gauge'"); `instrument-shell` "the tip has an edge, …" |
 | 13 | the tip's hairline border dropped | `instrument-shell` "the tip has an edge: a hairline border and the popover elevation, on its own ground" |
 | 14 | the tip's popover elevation dropped | `instrument-shell` the same case |
+| 15 | the tip's `aria-hidden` dropped | `instrument-shell` "at 1280 and 1920 each door shows its word and no tip; … a tip reading its word" (Settings at 1280: expected `aria-hidden="true"`, absent) |
 
 ## Gates
 
@@ -159,5 +167,15 @@ At fix round 1's tree:
   green, so it was a one-off under load. The session-header Instrument 900 pair did not fail.
 - The server guard suites (deviation-refs, dtbd, citations, anchors, topology-clean, private-names, ownership, rings, the
   census suites and single-definition): 48 files, green.
+- The 133 server tests that read `pwa/src` as text: green (the line omitted from fix round 1's pushed note, already in
+  its PR body; corrected in fix round 2, review 1643 F1).
+
+At fix round 2's tree (review 1643, last round):
+
+- instrument-shell, phone-bar and control-census: 77 of 77, green. The `pwa` type check is green.
+- The browser `instrument-bar` file: 52 of 52, green; its 24 `DESK-NAV-FIGURE` lines match the figures above.
+- Mutants 15, 4 and 12: red where named, restored from saved copies with their sha256 checked (above).
+- The whole suites were not re-run, as ruled: this round changes only the tip-word test, its mutation-table comment,
+  the two stale comments and this record. No shipped source line changes.
 
 This box has no `/usr/bin/google-chrome`, so the browser runs set `CCRC_CHROME` to Playwright's own Chromium.

@@ -232,7 +232,8 @@
 //
 // Desk-nav Task A (D-8100): the rail's doors move into the top bar, the breadcrumb goes. The rail and top bar cases above
 // whose names say "rail" are history: the rail is gone, and the cases are "the desk top bar (desk-nav Task A)" below.
-// MUTATION TABLE (plan Task A Step 5, and fix round 1's 12 to 14 from review 1638; RUN, each mutant on the working tree from a
+// MUTATION TABLE (plan Task A Step 5, fix round 1's 12 to 14 from review 1638, and fix round 2's 15 from review 1643;
+// RUN, each mutant on the working tree from a
 // saved copy, restored and sha-checked, the named case alone; the browser rows under vitest.browser.config.ts):
 //   1 Archive inserted before Accounts ................. phone-bar "they are the desk places with Archive after Accounts"
 //   2 the wordmark door without commandDoor('go-fleet') "the wordmark door runs go-fleet, …"; phone-bar "the desk bar shows no fleet place, …";
@@ -252,6 +253,7 @@
 //  12 the tip's z-index line deleted ................... browser "… by hover and by Tab" and "the widest tips, by hover" (16 of 16, "drawn on top"); "the tip has an edge, …"
 //  13 the tip's hairline border dropped ................ "the tip has an edge: a hairline border and the popover elevation, on its own ground"
 //  14 the tip's popover elevation dropped .............. the same case
+//  15 the tip's aria-hidden dropped ................... "at 1280 and 1920 each door shows its word and no tip; … a tip reading its word" (Settings at 1280)
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
@@ -517,6 +519,8 @@ describe('the desk top bar (desk-nav Task A)', () => {
       }
       // Settings is an icon door with its tip at every width (`settings-icon-door`).
       expect(doorNamed('Settings').querySelector('.ins-door-tip')?.textContent, `${width}: Settings`).toBe('Settings');
+      // The tip is drawn, never read: the door's name already says its word (review 1643 F4, mutant 15).
+      expect(doorNamed('Settings').querySelector('.ins-door-tip'), `${width}: Settings`).toHaveAttribute('aria-hidden', 'true');
       expect(doorNamed('Settings').querySelector('.ins-door-word'), `${width}: Settings`).toBeNull();
       cleanup();
     }
@@ -526,6 +530,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
       for (const d of doors()) {
         const name = d.getAttribute('aria-label')!;
         expect(d.querySelector('.ins-door-tip')?.textContent, `${width} ${name}`).toBe(name.split(',')[0]);
+        expect(d.querySelector('.ins-door-tip'), `${width} ${name}`).toHaveAttribute('aria-hidden', 'true');
         expect(d.querySelector('.ins-door-word'), `${width} ${name}: no word`).toBeNull();
         expect(d.querySelector('svg'), `${width} ${name}: its icon`).not.toBeNull();
       }
@@ -952,7 +957,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
       mount('/', waitingFleet(2));
       const door = within(primary()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
       expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
-      // The tooltip says the same as the name, or the word starts it, and the pill prints the number.
+      // The word reads in both forms, as the label from 1280 and as the tip below it, and the pill prints the number.
       const words = width >= 1280;
       expect(door.querySelector(words ? '.ins-door-word' : '.ins-door-tip')?.textContent, `${width}px`).toBe('Inbox');
       expect(door.textContent, `${width}px: the word or the tip, then the count`).toBe('Inbox 2');

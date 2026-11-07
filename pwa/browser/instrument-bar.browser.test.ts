@@ -34,7 +34,7 @@ const item = (id: number): object => ({
  *  coordinator is one of them (refined-bar.browser.test.ts's shape, at three digits). */
 const LANES = seventeenLanes(nowSec);
 /** The fixture with `items` open items: 100 makes Waiting on you print "99+" with the hundred asking sessions (200 in its
- *  name); 1100 makes its count 1200, the widest name the clamp case reads (review 1638 A1). */
+ *  name); 1100 makes its count 1200. The widest-tips case reads the widest word, "Waiting on you" (review 1638 A1). */
 function fixtureWith(items: number): AppFixture {
   const waiting = { items: Array.from({ length: items }, (_, i) => item(i + 1)), cleared: [], goals: [] };
   return {
