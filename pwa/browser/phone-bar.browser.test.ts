@@ -373,7 +373,11 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
         const { ctx, page, errors } = await open(skin, width, path, ready);
         try {
           expect(await page.locator('nav.shell-phone-nav').count(), path).toBe(0);
-          expect(await page.locator('[data-command="go-fleet"]').count(), `${path}: no fleet place at a desk`).toBe(0);
+          // No fleet place at a desk: the one go-fleet there is Instrument's wordmark door, the way home (desk-nav Task A,
+          // D-8100, `phone-bar-browser-allows-the-home-door`), as the jsdom twin of this case reads; Refined draws none.
+          const home = page.locator('[data-command="go-fleet"]');
+          expect(await home.count(), `${path}: no fleet place at a desk`).toBe(skin === INSTRUMENT ? 1 : 0);
+          if (skin === INSTRUMENT) expect(await home.locator('[data-wordmark]').count(), `${path}: it is the wordmark door`).toBe(1);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();
