@@ -94,7 +94,8 @@ get wrong when editing `src/whitelist.ts`.
   a field (`validateReq` answers `bad-request` to a frame carrying one), and `src/testboxOp.ts` spawns only fixed
   templates through the bounded spawner (`src/testbox/exec.ts#boundedExec`), each with an explicit `{HOME, PATH, LANG}`
   and `TESTBOX_PROBE_DEADLINE_MS`: `systemctl --user show-environment` (found on the agent's own PATH; the user
-  manager's PATH is the one sessions get, D-7427), `$HOME/.local/bin/ccrc test --testbox-knobs host` (the fleet host's
+  manager's PATH is the one sessions get, D-7427; it alone also carries `XDG_RUNTIME_DIR` and
+  `DBUS_SESSION_BUS_ADDRESS`, defaulted from the uid by `userBusEnv`, or it cannot reach the user manager), `$HOME/.local/bin/ccrc test --testbox-knobs host` (the fleet host's
   test box settings, because this unit reads no `ccrc.env`), and the six version probes `node --version`,
   `npm --version`, `"$CCRC_CHROME" --version`, `python3 --version`, `git --version` and `tmux -V` on the user
   manager's PATH. It reads `~/.ccrc/build.json` and the token file `CCRC_TESTBOX_TOKEN_FILE` names, nothing else, and

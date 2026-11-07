@@ -11,7 +11,9 @@
 //   3. The six version probes, `node --version`, `npm --version`, `"$CCRC_CHROME" --version`, `python3 --version`,
 //      `git --version` and `tmux -V`, each resolved on the user manager's PATH.
 // Every one runs through the bounded spawner (`testbox/exec.ts#boundedExec`, no shell, its own process group, the whole
-// group killed at the bound) with the explicit environment `{HOME, PATH, LANG}` and `TESTBOX_PROBE_DEADLINE_MS`.
+// group killed at the bound) with the explicit environment `{HOME, PATH, LANG}` and `TESTBOX_PROBE_DEADLINE_MS`; the
+// first also carries `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` (`userBusEnv`), without which `systemctl --user`
+// cannot reach the user manager and nothing is measured.
 //
 // THE READS: `~/.ccrc/build.json` (a node file, for the release the fleet host runs) and the token file
 // `CCRC_TESTBOX_TOKEN_FILE` names. Nothing else is opened.
@@ -55,11 +57,22 @@ export interface TestboxOpSeams {
   readonly exec: (env: Readonly<Record<string, string>>, timeoutMs: number) => Exec;
   /** The agent's own PATH, used to find `systemctl` and nothing else. */
   readonly agentPath: string;
+  /** The user bus `systemctl --user` reaches the user manager over (`userBusEnv`), given to that spawn and no other. */
+  readonly userBus: Readonly<Record<string, string>>;
   readonly now: () => number;
 }
 
+/** `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` from `env`, each defaulted as ccd's `ccrc` defaults them
+ *  (`/run/user/<uid>`, then `unix:path=<that>/bus`): the agent unit may carry neither. Empty with no uid. */
+export function userBusEnv(env: Readonly<Record<string, string | undefined>>, uid: number | null): Record<string, string> {
+  const runtime = env.XDG_RUNTIME_DIR || (uid === null ? '' : `/run/user/${uid}`);
+  if (runtime === '') return {};
+  return { XDG_RUNTIME_DIR: runtime, DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS || `unix:path=${runtime}/bus` };
+}
+
 export const realTestboxSeams = (): TestboxOpSeams => ({
-  exec: boundedExec, agentPath: process.env.PATH ?? '/usr/bin:/bin', now: Date.now,
+  exec: boundedExec, agentPath: process.env.PATH ?? '/usr/bin:/bin',
+  userBus: userBusEnv(process.env, typeof process.getuid === 'function' ? process.getuid() : null), now: Date.now,
 });
 
 const VERSION = /^\d+(?:\.\d+)*[a-z]?$/;
@@ -118,7 +131,7 @@ const firstLine = (s: string): string => s.split('\n').find((l) => l.trim() !== 
 
 /** The user manager's environment, the settings and the six probes. Never throws. */
 async function readHost(home: string, s: TestboxOpSeams): Promise<HostRead> {
-  const shown = await s.exec({ HOME: home, PATH: s.agentPath, LANG: 'C' }, TESTBOX_PROBE_DEADLINE_MS)('systemctl', SHOW_ENV_ARGV)
+  const shown = await s.exec({ ...s.userBus, HOME: home, PATH: s.agentPath, LANG: 'C' }, TESTBOX_PROBE_DEADLINE_MS)('systemctl', SHOW_ENV_ARGV)
     .catch(() => null);
   const userEnv = shown !== null && shown.status === 0 && !shown.killed ? parseShowEnvironment(shown.stdout) : new Map<string, string>();
   const userPath = userEnv.get('PATH') ?? null;

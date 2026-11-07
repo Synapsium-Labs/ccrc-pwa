@@ -209,3 +209,38 @@ describe('Settings › Automation › Test box at phone, laptop and wide (D-7412
     }, 90_000);
   }
 });
+
+/** No test box set up: the server's `off` block (empty reasons, no box), with the switch on. */
+const OFF_BLOCK = { ...BLOCK, state: 'off', reasons: [], summary: 'off', switch: 'on', box: null };
+
+describe('Settings › Automation › Test box with no box set up, at phone, laptop and wide', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+      await ctx.route('**/api/testbox', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, testbox: OFF_BLOCK }) }));
+      try {
+        await page.goto(server!.origin + '/settings/automation');
+        const section = page.getByRole('region', { name: TITLE });
+        await expect.poll(() => section.locator('[data-testbox="off-note"]').count(), { timeout: 20_000 }).toBe(1);
+        const m = await section.evaluate(measure);
+        const note = await section.evaluate((el) => {
+          const r = el.querySelector('[data-testbox="off-note"]')!.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+        });
+        expect(m.band).toBe(view.band);
+        expect(m.card.scrollWidth, 'the card overflows sideways').toBeLessThanOrEqual(m.card.clientWidth);
+        expect(m.overflowing, 'an element inside the card scrolls sideways').toEqual([]);
+        expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
+        // The note sits under the state, inside the state line, as wide as the state's column.
+        expect(note.top).toBeGreaterThanOrEqual(m.state.bottom - 0.5);
+        expect(note.bottom).toBeLessThanOrEqual(m.stateLine.bottom + 0.5);
+        expect(Math.abs(note.left - m.state.left)).toBeLessThanOrEqual(1);
+        expect(note.right).toBeLessThanOrEqual(m.stateLine.right + 0.5);
+        expect(m.button).toBeNull();
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    }, 90_000);
+  }
+});
