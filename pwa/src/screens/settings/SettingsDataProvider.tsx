@@ -27,6 +27,7 @@ import { childReclaimMarker } from '../../fleet/childReclaimWords';
 import { useCollectLaneView, type CollectLanePoll } from '../../fleet/useCollectLaneView';
 import { useDispatchAbandonView, type DispatchAbandonPoll } from '../../fleet/useDispatchAbandonView';
 import { useScopeSweepView, type ScopeSweepPoll } from '../../fleet/useScopeSweepView';
+import { useDelegationAdoptView, type DelegationAdoptPoll } from '../../fleet/useDelegationAdoptView';
 import { useLinearWorkspaces, type LinearWorkspacesPoll } from '../../fleet/useLinearWorkspaces';
 import { useStallWatchView, type StallWatchPoll } from '../../fleet/useStallWatchView';
 import { useTestboxView, type TestboxPoll } from '../../fleet/useTestboxView';
@@ -62,6 +63,8 @@ export interface SettingsView {
   readonly dispatchAbandon: DispatchAbandonPoll;
   /** The sweep's two switches (D-7994), polled at the sweep's own beat. */
   readonly scopeSweep: ScopeSweepPoll;
+  /** The delegation lane's keep switch (D-8114), polled once a minute. */
+  readonly delegationAdopt: DelegationAdoptPoll;
   /** The test box block (TB10, D-7412), polled at the server poll's cadence. */
   readonly testbox: TestboxPoll;
   /** The Linear workspace keys and the legacy key (#1444, spec §10.2), shown on the Security page; read when the page
@@ -148,6 +151,10 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const scopeSweep = useMemo<ScopeSweepPoll>(
     () => ({ view: ss.view, failure: ss.failure, reload: ss.reload, settle: ss.settle }),
     [ss.view, ss.failure, ss.reload, ss.settle]);
+  const da = useDelegationAdoptView();
+  const delegationAdopt = useMemo<DelegationAdoptPoll>(
+    () => ({ view: da.view, failure: da.failure, reload: da.reload, settle: da.settle }),
+    [da.view, da.failure, da.reload, da.settle]);
   const tb = useTestboxView();
   const testbox = useMemo<TestboxPoll>(
     () => ({ view: tb.view, failure: tb.failure, reload: tb.reload }), [tb.view, tb.failure, tb.reload]);
@@ -203,8 +210,8 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
   const rereadPush = useCallback(() => setPushAsk((n) => n + 1), []);
 
   const view = useMemo<SettingsView>(
-    () => ({ updates, stall, collect, dispatchAbandon, scopeSweep, testbox, linear, pause, auth, push, rereadPush }),
-    [updates, stall, collect, dispatchAbandon, scopeSweep, testbox, linear, pause, auth, push, rereadPush],
+    () => ({ updates, stall, collect, dispatchAbandon, scopeSweep, delegationAdopt, testbox, linear, pause, auth, push, rereadPush }),
+    [updates, stall, collect, dispatchAbandon, scopeSweep, delegationAdopt, testbox, linear, pause, auth, push, rereadPush],
   );
   const pageView = useMemo<SettingsPageView>(() => ({ ...view, passkeys, refreshAuth }), [view, passkeys, refreshAuth]);
   // A layout effect, so the frame's first paint on Settings already has the view.
