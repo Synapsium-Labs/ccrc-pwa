@@ -48,7 +48,7 @@ never links work by a name, a path, a time or a working directory.
 | 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120, #1162, #1558 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done`; follow-up 9 #1162 merged 2026-10-23 as `0c439bb7d`, run 816 closed `done`; follow-up 10 #1558 merged 2026-10-27 as `66fd18299` (head `2155e5625`), run 968 still open; the seven-day soak was waived by the operator on 2026-10-28, not passed |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
 | 5v | visibility (scope decision 2026-11-02) | honest helper and workspace visibility in the PWA; no automatic end or reopening | pwa, through the server box | 4 | #2254 | **merged** 2026-11-04 as `1d5b09e01` at exact head `e0792867f` (run 1421, four review rounds; the fourth by the operator's lift of the cap); run 1421 closed `done` |
-| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). PR7 dispatched 2026-11-06 (run 1569) |
+| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357, #2397 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). The plan's Task 0, the corpus, #2397 on 2026-11-07 as `e53d64928` at `a4ee0565d` (run 1577, reviews 1591, 1605 and 1607; split out of PR7 by D-8053). PR7 dispatched 2026-11-06 (run 1569), in its second fix round |
 | 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); dispatched once the rest of wave 5 has landed and been used, when the operator says so |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
@@ -1902,6 +1902,53 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   the decider if any new version builds an unmeasured cell or reds a correlation row. The carried items are in the
   brief's carried file, review 1549's findings among them. Their reviewer's copy had been removed with its workspace, so
   the coordinator kept a copy.
+- **2026-11-06 — Task 0 left PR7.** PR7's first commit was the plan's Task 0: capture the Claude Code versions the
+  fleet runs that the correlation corpus lacked (then 2.1.311, 2.1.314, 2.1.316, 2.1.318 and 2.1.319). Its capture built
+  55 of 70 new cells unmeasured. The cause was the rig, not Claude Code: no scripted fan-out named a model, and the
+  session hook's fan-out arm (D-6798) denies such a call at its PreToolUse. The coordinator ruled the capture discarded
+  and Task 0 a run of its own (run 1577), with its own deviation block (D-8063 to D-8065), and PR7 went on to its
+  wave-done on the 14-version corpus (D-8053). The operator arms adoption only after both have landed and rolled out.
+- **2026-11-07 — The corpus landed (Task 0).** #2397 merged as `e53d64928` at `a4ee0565d` after three review rounds
+  (reviews 1591, 1605 and 1607). It changes test files and the plan only, so it ships nothing and needs no rollout.
+  Every scripted Agent or Task input and every workflow `agent(...)` call in the rig now names `haiku`, and a row runs
+  the real hook over every scripted fan-out (D-8063). The corpus covers 21 versions: 2.1.280 to 2.1.299, and 2.1.311,
+  2.1.312, 2.1.314, 2.1.316, 2.1.317, 2.1.318 and 2.1.319. Each new version measures 13 cells, and `interrupt-exit` is
+  unmeasured on all seven with the reason the 2.1.295 to 2.1.299 cells carry (D-8064). Review 1605 (round 2) found the
+  two-stop row's delegated setup started from a Stop with no background agent, so it held the delegated pair only at
+  zero; the setup now starts from the first Stop, with a live pair. Review 1607 (round 3) found nothing above advisory.
+  Two rulings were made during the run:
+  - On every new version a typed `/compact` fires two SubagentStops between PreCompact and PostCompact, where older
+    versions fire one. The coordinator read the hook's roster block and ruled a second stop harmless, and pinned it in
+    tests only: a closed version range for the count, and a row that replays each two-stop version's own payloads
+    through the real hook from three setups (D-8065).
+  - Review 1591 (round 1) found the run had captured the versions the lanes' updates name, not those the live sessions
+    run. The coordinator ruled that coverage is what the fleet runs: measure both ways and capture the union. 2.1.312
+    and 2.1.317, which live sessions ran though no lane's update named them, were captured in a second capture of their
+    own, and `CURRENT_LANES` is the union (D-8065).
+- **2026-11-07 — What the corpus measured.** No field the correlation, the spool parse or the watch reads changed on
+  the new versions. Two event counts did, and both are ruled: the compaction's second SubagentStop (D-8065), and
+  `interrupt-exit`'s unnamed SubagentStop at `/exit`, gone from 2.1.311 (D-8064). Two other changes are confounded with
+  something besides the version. The subagent meta's `model`, `isBuiltIn` and `finished` appear exactly when the
+  scenarios started naming a model. An admin record's new `refs` entry looks like the capture box's git, since it
+  appears on a plain `git worktree add` too. `pickedEffortModel` first appears on 2.1.317, and no server reader reads it.
+  The new event orderings are one capture each, so a race and a version change look the same. PR7's corpus row (W5-D12)
+  passed 23 of 23 over the 21 versions on a local merge with PR7 at `7980ba094`. The note `corpus.md`, beside the plan,
+  has the detail.
+- **2026-11-07 — Corrections for the corpus run.** D-8065 names "the coordinator's rulings of 2026-11-06"; the ruling on
+  review 1605's F1 was made on 2026-11-07 (UTC). The head commit's trailer for that amendment names F1's change only,
+  though the amended text also records F2's (the end check keeps `updatedAt` where the hook keeps the stamp).
+- **2026-11-07 — Carried from the corpus run's reviews.**
+  - The Rider: the comment in `ccd/session-hook.sh` that opens at `compactions-write-no-hookstate` (D-5239) says a typed
+    `/compact` fires "a SubagentStop", and from 2.1.311 it fires two (the run left the hook unchanged); in
+    `session-hook-compact-carry.test.ts`, the comment at the D-5239 line calls `dispatch-live-gate-v1` "the word", which
+    the lines below use for `hook-main-state-v1`; the plain `done` setup's check after PostCompact would not see a write
+    that keeps every kept key (the other setups and the end check would); and `corpus.md`'s "`interrupt-exit`'s lost
+    one" is measured against 2.1.295 to 2.1.299 only, since 2.1.280 to 2.1.294 had no such stop.
+  - Not measurable from the corpus: no capture holds an ask, a subagent wait or an `interrupted` flag before a
+    compaction, so the two-stop row holds those keys only at their setup values. A capture that raises one would be new
+    rig work.
+  - PR7: if the corpus landed before its push, PR7 merges `main` again, keeps both blocks of the plan's "Deviations
+    found" in ascending order, and runs W5-D12 over all 21 versions (its fix-round-2 ruling).
 
 ## Carried constraints
 
