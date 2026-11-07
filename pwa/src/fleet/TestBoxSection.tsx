@@ -4,7 +4,8 @@
 //
 // TWO FIELDS, NEVER FOLDED (D-7444). The switch's position is the block's `switch` field, never the tap: a write is
 // answered `requested`, and the re-read block says where the switch is. The state, with its reasons, is drawn whether
-// the switch is on or off, so a healthy box reads `ok` before anyone arms it.
+// the switch is on or off, so a healthy box reads `ok` before anyone arms it. `off` is the server's word for no box set
+// up (its reasons are empty), so the card says so under the state, and that an On switch waits for one.
 //
 // THE THREE WIDTHS (spec §2.7's table; D-7566). The band is read once, from the desk query (`useDesk`) and the wide
 // query below, and set on the card as `data-band`; the stylesheet lays each band out (`settings.css`):
@@ -39,6 +40,8 @@ export const TESTBOX_TEXT = {
   switchNote: 'When on, ccrc test sends each run it can to the test box, and runs it here whenever the box cannot take it.',
   switchUnknown: 'The server could not read the switch, so neither position is checked.',
   state: (summary: string) => `State: ${summary}`,
+  offNote: 'No test box is set up, so every run stays on this host.',
+  offSwitchOn: 'The switch takes effect once a box is set up.',
   lastAnswer: (ago: string) => `Last answer ${ago} ago`,
   service: (version: string, proto: number) => `Service ${version}, protocol ${proto}`,
   sync: 'Bring tools up to date',
@@ -223,7 +226,14 @@ function TestboxBody({ block, stale, poll, band }: { block: TestboxBlock; stale:
           <ResultLine line={switchLine.line} />
         </div>
         <div className="testbox-state-line" data-testbox="state-line">
-          <p className="testbox-state" data-testbox="state" data-state={block.state}>{T.state(block.summary)}</p>
+          <div className="testbox-state-text">
+            <p className="testbox-state" data-testbox="state" data-state={block.state}>{T.state(block.summary)}</p>
+            {block.state === 'off' && (
+              <p className="settings-note" data-testbox="off-note">
+                {T.offNote}{block.switch === 'on' && <>{' '}{T.offSwitchOn}</>}
+              </p>
+            )}
+          </div>
           {shown && (
             <Button
               variant="ghost"
