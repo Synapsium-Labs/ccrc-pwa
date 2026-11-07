@@ -142,6 +142,9 @@ const TWIN_FLOORS: Record<string, string> = {
   '.ref-bar-doors > .bell':
     "NotificationBell in REFINED'S DESK BAR, which has both floors (W2 Task S4b, D-5471). The fleet header copy, "
     + 'still drawn on the phone and in Instrument, is the one the `.bell` entry is about.',
+  '.ins-bar-doors > .bell':
+    "NotificationBell in INSTRUMENT'S DESK BAR, which has both floors (desk-nav Task A, D-8100). The fleet header copy, "
+    + 'still drawn on the phone, is the one the `.bell` entry is about.',
 };
 
 /** Does the rule with exactly this selector declare the floor token? */

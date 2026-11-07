@@ -3,10 +3,10 @@
 // only, and not in an open session, where the composer owns the bottom of the screen (`phoneBarShown`): mounted, never
 // CSS-hidden, like every width-gated part.
 //
-// ITS DOORS ARE THE CONSOLE'S PLACES, fleet first (`PLACES`, `lib/places.ts`, the one list the desk bar and the rail read
+// ITS DOORS ARE THE CONSOLE'S PLACES, fleet first (`PLACES`, `lib/places.ts`, the one list both desk bars read
 // too), then the Search door. Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by its route's
 // title and, while it counts something, by its count too ("Inbox, 2 waiting for you", `placeBadge`); the place the page is on
-// or under carries `aria-current="page"` (`topRouteOf`, the rail's and the breadcrumb's reader). Search is
+// or under carries `aria-current="page"` (`topRouteOf`, the reader of Instrument's top bar doors too). Search is
 // `commandDoor('open-palette')`, the desk bar's search door. This file holds markup and its own class names only
 // (`styles/shell.css`).
 import type { ReactNode } from 'react';

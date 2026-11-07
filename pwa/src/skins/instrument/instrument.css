@@ -3,17 +3,17 @@
    tokens, dense only under `@media (pointer: fine)`. Colour comes from the identity core's tokens and nothing here
    defines one (D-5094); every colour-bearing rule is a `contrast.test.ts` identity.
 
-   W2 Task S9 (D-5472): the shell at laptop and wide. The frame's keyed children keep their DOM order (bar, rail,
-   nav, detail, inspector, status), which is the focus order; the grid only places them. The top bar spans every
-   column of row 1, the rail's included, so the wordmark is the frame's top-left chrome. Width-gated parts mount
-   through `useMediaQuery` (`ShellFrame`); nothing here hides one by width. */
+   W2 Task S9 (D-5472): the shell at laptop and wide. The frame's keyed children keep their DOM order (bar, nav,
+   detail, inspector, status), which is the focus order; the grid only places them. The top bar spans every column of
+   row 1, so the wordmark is the frame's top-left chrome, and it holds the desk's doors (desk-nav Task A, D-8100): no
+   rail column. Width-gated parts mount through `useMediaQuery` (`ShellFrame`); nothing here hides one by width. */
 
 @media (min-width: 900px) {
   .ins-frame {
-    grid-template-columns: 52px 340px minmax(0, 1fr);
+    grid-template-columns: 340px minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
-  /* The fourth column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
+  /* The third column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
   /* The bar's line clears the lanes row (C12 item 19, `top-bar-sits-clear-of-the-lanes-row`): the command field and
      New session fill the line top to bottom, so the line takes the cards' own gap (`--sp-2`) below it and the same
      above it, and its controls sit centred between the header's top and the first line of cards. The header grows by
@@ -26,25 +26,13 @@
   .ins-frame .ins-topbar {
     margin-block-end: var(--sp-2);
   }
-  /* No `overflow` here: any value but visible makes the rail a clip box in both axes, which cuts away the tooltip
-     drawn beside it and lets the hidden tips scroll the rail sideways. Stacked above the list column, so the tip
-     draws over the list. */
-  .ins-frame .shell-rail {
-    grid-column: 1;
-    grid-row: 2;
-    min-height: 0;
-    position: relative;
-    z-index: 2;
-    border-right: 1px solid var(--edge-subtle);
-    background: var(--bg-surface);
-  }
   .ins-frame .shell-nav {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
     background: var(--bg-page);
   }
   .ins-frame .shell-detail {
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 2;
   }
   .ins-frame .shell-status {
@@ -53,17 +41,17 @@
   }
 }
 
-/* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px fourth track appears only with what fills
-   it. `ShellFrame` sets `data-inspector` from the set's Inspector part (a part fact, never a skin id), so Instrument,
-   which places none until S12, draws no empty column: the detail reaches the viewport's edge and the reading column is
-   the whole detail pane (1128 at 1600; Instrument's `--measure-chat` is 100% since D-8059). S12 sets the part, and the
-   track comes with it. */
+/* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px third track (the fourth until desk-nav Task A,
+   D-8100, took the rail's) appears only with what fills it. `ShellFrame` sets `data-inspector` from the set's Inspector part
+   (a part fact, never a skin id), so Instrument, which places none until S12, draws no empty column: the detail reaches the
+   viewport's edge and the reading column is the whole detail pane (1180 at 1600; Instrument's `--measure-chat` is 100% since
+   D-8059). S12 sets the part, and the track comes with it. */
 @media (min-width: 1600px) {
   .ins-frame {
-    grid-template-columns: 52px 420px minmax(0, 1fr);
+    grid-template-columns: 420px minmax(0, 1fr);
   }
   .ins-frame[data-inspector='placed'] {
-    grid-template-columns: 52px 420px minmax(0, 1fr) 320px;
+    grid-template-columns: 420px minmax(0, 1fr) 320px;
   }
 }
 
@@ -76,47 +64,12 @@
   min-height: var(--tap-min);
   min-width: 0;
 }
-/* The wordmark sits over the rail's 52px and runs past it: its left edge is the header's gutter, which the lanes row
-   under the line shares. */
-.ins-wordmark {
-  flex: none;
-}
-/* The breadcrumb gives first: it takes only the room the others leave (a zero basis), its middle crumbs truncate
-   before its last, and it keeps a floor, so it never vanishes. */
-.ins-crumbs {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  min-width: 16ch;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  list-style: none;
-  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-mono);
-  white-space: nowrap;
-}
-.ins-crumb {
-  flex: 0 10 auto;
-  min-width: 3ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ins-crumb:first-child {
-  flex: none;
-}
-.ins-crumb:last-child {
-  flex: 0 1 auto;
-  min-width: 6ch;
-}
-.ins-crumb + .ins-crumb::before {
-  content: '›';
-  padding: 0 var(--sp-1);
-}
-/* The command field: a door, not an input. Its words shrink away after the crumbs have given up their room; the search
-   glyph and ⌘K stay, and so does its accessible name. */
+/* The command field: a door, not an input. It takes the room the doors leave (desk-nav Task A, D-8100: the breadcrumb that
+   shared that room is gone), and its words shrink away when the room is short; the search glyph and ⌘K stay, and so does
+   its accessible name. */
 .ins-command {
   display: flex;
-  flex: 0 100 280px;
+  flex: 1 100 0;
   align-items: center;
   gap: var(--sp-2);
   width: auto;
@@ -138,70 +91,105 @@
   min-width: var(--tap-min);
 }
 
-/* ---- The rail ------------------------------------------------------------ */
+/* ---- The desk doors ----------------------------------------------------- */
 
-.ins-rail {
+/* The bar's one Primary nav (desk-nav Task A, D-8100): the wordmark door, then the six doors, at their own width; the
+   command field after them takes the rest. No `overflow` on the line, the nav or a door: any value but visible is a clip
+   box in both axes, which cuts away the tip drawn below a door. */
+.ins-doors {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  min-height: 100%;
-}
-.ins-rail-foot {
-  display: flex;
-  flex-direction: column;
+  flex: none;
   align-items: center;
-  margin-top: auto;
+  gap: var(--sp-1);
 }
-.ins-rail-item {
+.ins-door {
   position: relative;
   justify-content: center;
-  /* The track's width: the rail's border leaves 51px of it, and a 52px item would cut its own ring. */
-  width: 100%;
+  width: auto;
+  min-width: var(--tap-min);
   min-height: var(--tap-min);
+  white-space: nowrap;
 }
-/* The Inbox door's count of sessions waiting on the operator (T2e fix round 1, D-6335; since T2d, D-6330, it counts no
-   unread mail): the pill is `<CountBadge>`'s (its colours are the primitive's);
-   here it only sits on the door's top-right corner, over the icon's box, and takes no clicks of its own. */
-.ins-rail-count {
+/* The wordmark door: the header's gutter is its left edge, which the lanes row under the line shares. */
+.ins-home {
+  padding-inline: var(--sp-1);
+}
+/* A door's count (T2e fix round 1, D-6335; since T2d, D-6330, the Inbox counts no unread mail): the pill is
+   `<CountBadge>`'s (its colours are the primitive's); here it only sits on the icon's top-right corner, in both of a door's
+   forms, and takes no clicks of its own. */
+.ins-door-count {
   position: absolute;
   top: var(--sp-1);
   right: var(--sp-1);
   pointer-events: none;
 }
-/* The active item: a 2px accent rail on its leading edge, beside `aria-current="page"`. */
-.ins-rail-item[aria-current='page']::before {
+/* A door with its word: the pill is a flex item between the icon and the word (it follows the word in the DOM, so the name
+   and the shown text read word first), drawn up to the door's top and pulled back over the icon's top-right corner. In
+   the flow, the word starts after it whatever it prints, "99+" included, so the two never overlap. */
+.ins-door:has(.ins-door-word) .ins-door-count {
+  position: static;
+  order: 1;
+  align-self: flex-start;
+  margin-block-start: var(--sp-1);
+  margin-inline-start: calc(-1 * var(--sp-3));
+}
+.ins-door-word {
+  order: 2;
+}
+/* The current door: a 2px accent underline on its bottom edge, beside `aria-current="page"`, as the list column's chosen
+   tab is drawn (`.ins-tab[aria-selected='true']::after`). It takes no room, so choosing moves no door. */
+.ins-door[aria-current='page']::after {
   content: '';
   position: absolute;
-  top: var(--sp-2);
-  bottom: var(--sp-2);
-  left: 0;
-  width: 2px;
+  inset: auto 0 0;
+  height: 2px;
   background: var(--accent);
 }
-/* The tooltip: the item's word, shown on hover AND on keyboard focus, so a keyboard reader sees what a pointer
-   reader sees. Self-grounded: it paints its own ground. */
-.ins-rail-tip {
+/* The tooltip of an icon door (every door below 1280, and Settings at every width): the door's word, below its icon and
+   centred on it, shown on hover AND on keyboard focus, so a keyboard reader sees what a pointer reader sees. Self-grounded:
+   it paints its own ground, and it stacks above the lanes row under the line. That row's cards are painted in the same
+   `--bg-raised`, so the tip takes the desk's popover elevation and a hairline edge, as the lanes flyout does (review 1638
+   F2). */
+.ins-door-tip {
   position: absolute;
-  top: 50%;
-  left: calc(100% + var(--sp-1));
+  top: calc(100% + var(--sp-1));
+  left: 50%;
   z-index: var(--z-header);
   padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
   border-radius: var(--r-sm);
+  box-shadow: var(--elev-pop);
   background: var(--bg-raised);
   color: var(--ink-primary);
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-50%);
+  transform: translateX(-50%);
   transition: opacity var(--dur-fast) var(--curve-swift);
 }
 @media (hover: hover) {
-  .ins-rail-item:hover .ins-rail-tip {
+  .ins-door:hover .ins-door-tip {
     opacity: 1;
   }
 }
-.ins-rail-item:focus-visible .ins-rail-tip {
+.ins-door:focus-visible .ins-door-tip {
   opacity: 1;
+}
+/* The bell and Settings, after the command field. */
+.ins-bar-doors {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-1);
+}
+/* The bell is the fleet head's own control, 28 square there; in the bar it is a finger's square like its neighbours, as in
+   Refined's bar (`.ref-bar-doors > .bell`). */
+.ins-bar-doors > .bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
 }
 
 /* ---- The status bar ------------------------------------------------------ */

@@ -1,7 +1,7 @@
 // The route table (D-5466, W2 Task S2b): every path the shell routes, once.
 //
 // `app.tsx`'s ladder matches a path against this table and nothing else, the palette's "Go to" commands are derived
-// from its `top` rows (`command/commands.ts`), Instrument's breadcrumb reads its titles, and the parity test walks it.
+// from its `top` rows (`command/commands.ts`), Instrument's top bar doors read its titles, and the parity test walks it.
 // A route added later is added here, once; `app.test.tsx` holds the table and the ladder to each other both ways.
 //
 // Pure: no store, no DOM.
@@ -11,7 +11,7 @@ export interface Route {
   /** Stable, and the suffix of the route's "Go to" command (`go-${id}`). */
   readonly id: string;
   readonly pattern: RegExp;
-  /** The route's name as a person reads it: a "Go to" title, a breadcrumb. */
+  /** The route's name as a person reads it: a "Go to" title, a door's word. */
   readonly title: string;
   /** Offered directly by a phone navigation and by "Go to": a place, not a page reached from one. */
   readonly top: boolean;
@@ -69,7 +69,7 @@ export const ROUTES: readonly Route[] = [
   // segment, as the session row does, and the slug's GRAMMAR is the owner's (`shapeProgramSlug`, asked by `isProgrammeSlug`
   // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). A segment the
   // owner refuses is no match (`accepts`), so it is a path outside the table: the fleet on a phone, the placeholder on a desk,
-  // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no rail highlight (only `session` is
+  // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no current door (only `session` is
   // carried under Fleet, `topRouteOf`), no "Go to" row.
   { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
 ];
@@ -241,10 +241,10 @@ export function shellViewOf(path: string): 'fleet' | 'session' {
 }
 
 /** The top route a path is on or under: `/settings/updates` is under Settings, `/docs/a/b` is Docs, a session is
- *  under Fleet (its breadcrumb reads "Fleet › …"). Null for a path outside the table and for a route that is no
- *  place's page (the digest). Read by the rail's current item, the phone's bottom bar and the breadcrumb (W2 Task S9,
- *  D-5472), so they never disagree about where a page sits. A path outside the table is under no place, whatever it starts
- *  with (`/waiting/abc`, `/runs/x`), and so is one with a malformed escape, which `matchRoute` places outside it: the pane
+ *  under Fleet (Instrument's wordmark door is current there). Null for a path outside the table and for a route that is no
+ *  place's page (the digest). Read by the current door of Instrument's top bar doors and by the phone's bottom bar (W2 Task
+ *  S9, D-5472; desk-nav Task A, D-8100), so they never disagree about where a page sits. A path outside the table is under
+ *  no place, whatever it starts with (`/waiting/abc`, `/runs/x`), and so is one with a malformed escape, which `matchRoute` places outside it: the pane
  *  draws the placeholder there, and no door says the page is there (review 1437 F2, review 1466 F14). */
 export function topRouteOf(path: string): Route | null {
   const at = matchRoute(path);

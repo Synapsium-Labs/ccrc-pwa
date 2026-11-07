@@ -1,7 +1,7 @@
 // Getting around on a phone (desktop-polish PL10, D-7952; spec 2026-10-31 §2, D25; §9 "Getting around on a phone").
 //
 // The console's ONE list of places (`lib/places.ts`) is read by the phone's bottom bar (`PhoneBar`, both skins' `PhoneNav`),
-// Refined's desk bar and Instrument's rail. The phone bar shows every place, fleet first, with their badges and a Search door,
+// Refined's desk bar and Instrument's top bar doors. The phone bar shows every place, fleet first, with their badges and a Search door,
 // on every page but an open session; a desk's navigation shows no fleet place; nothing changes inside a session. jsdom applies
 // no media query, so the width is the frame's `useMediaQuery` answer (`atWidth`), and the bar's real layout is the browser
 // leg's (`browser/phone-bar.browser.test.ts`).
@@ -25,7 +25,7 @@ const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { DESK_PLACES, PLACES, phoneBarShown } = await import('../src/lib/places');
 const { ROUTES, topRouteOf } = await import('../src/lib/routes');
-const { RAIL_ITEMS } = await import('../src/skins/instrument/Rail');
+const { DESK_DOORS } = await import('../src/skins/instrument/TopBar');
 const { setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 
@@ -193,13 +193,16 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       }
     });
 
-    it('the desk bar and rail show no fleet place, and the phone bar shows it first', () => {
+    // Desk-nav Task A (D-8100): Instrument's wordmark is the desk's one way home, a door that runs go-fleet; no place door does.
+    it('the desk bar shows no fleet place, and the phone bar shows it first', () => {
       atWidth(1280);
       mount('/waiting');
       const primary = document.querySelector('nav[aria-label="Primary"]')!;
-      const desk = doorsOf(primary).filter((c) => c.startsWith('go-') && c !== 'go-settings' && c !== 'go-archive');
+      const desk = doorsOf(primary).filter((c) => c.startsWith('go-') && c !== 'go-fleet' && c !== 'go-settings' && c !== 'go-archive');
       expect(desk, 'the desk navigation').toEqual(DESK_TABS);
-      expect(doorsOf(document.body)).not.toContain('go-fleet');
+      const home = [...document.querySelectorAll('[data-command="go-fleet"]')];
+      expect(home, 'the one go-fleet at a desk is the wordmark door').toHaveLength(skin === INSTRUMENT ? 1 : 0);
+      if (skin === INSTRUMENT) expect(home[0]!.querySelector('[data-wordmark]'), 'it holds the wordmark').not.toBeNull();
       cleanup();
       atWidth(390);
       mount('/waiting');
@@ -234,9 +237,9 @@ describe('the fleet reserves the bar once', () => {
   });
 });
 
-describe("Instrument's rail reads the one list", () => {
-  it('its head is the desk places with Archive after Accounts, then its foot', () => {
-    const ids = RAIL_ITEMS.filter((i) => !('reserved' in i)).map((i) => i.id);
-    expect(ids).toEqual(['waiting', 'inbox', 'runs', 'accounts', 'archive', 'docs', 'bell', 'settings']);
+describe("Instrument's desk doors read the one list", () => {
+  it('they are the desk places with Archive after Accounts', () => {
+    const ids = DESK_DOORS.filter((i) => !('reserved' in i)).map((i) => i.id);
+    expect(ids).toEqual(['waiting', 'inbox', 'runs', 'accounts', 'archive', 'docs']);
   });
 });
