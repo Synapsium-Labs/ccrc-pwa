@@ -22,7 +22,9 @@ lane step (`delegationAdoptStep.ts`) and `watch.ts` gather and act.
 
 - **F1, liveness from presence (D-8092).** `adoptionParentFacts` decides `ParentFact.alive` from the row's `presence`: `alive`
   is alive, `dead` is dead, and `unknown` (tmux did not answer, D-309), `asleep` (a hibernated parent) and a row with no
-  `presence` are unmeasured, so a kept death holds and counts `waiting`. `deadSince` is read only while `presence` is `dead`. The
+  `presence` are unmeasured, so a kept death holds and counts `waiting` (since fix round 1, a row with an identity field unmeasured
+  too: F2 below). `deadSince` is the first-dead instant (the first pass whose `status` read dead) gated on this pass's liveness
+  reading dead, not two measured-dead passes; rule 5's settle and passes still bind (fix round 1, F3). The
   lane's first-dead memory still reads `status`, because the breaker reads it fail-shut; that is the "legitimately different"
   reason, recorded in `noteSessions`' comment and in `adoptionParentFacts`'. The lane rows send `presence` now: `sessionOf` derives
   it from the fixture's status, and the F1 rows set it.
@@ -65,14 +67,16 @@ lane step (`delegationAdoptStep.ts`) and `watch.ts` gather and act.
 ## Rows, red then green
 
 Every behaviour row below was run on PR7's merged tip (`67121c031`, this PR's base) with this PR's tests, and was red there for
-the reason named; every one is green at this PR's tip. The F6 (a), (b) and (d) rows and the effects-loop F4 row pin behaviour the
-base already had (they are the coverage review 1609 found missing), so they are green on the base and red only under their
-mutants.
+the reason named, except the cases marked as controls; every one is green at this PR's tip. The F6 (a), (b) and (d) rows and the
+effects-loop F4 row pin behaviour the base already had (they are the coverage review 1609 found missing), so they are green on the
+base and red only under their mutants. Two cases inside red rows are controls that pass on the base as they should: the lane F1
+row's `dead` case (it adopts there too) and the lane F9 row's `changed: true` case (the base always said "left changed").
 
 | Ruling | Row | On the base |
 |---|---|---|
 | F1 | `delegation-adoption.test.ts` F1 (presence); A7/F1 (the fact's new shape) | red: no `lastAlive`; `alive` from `status` |
-| F1 | `delegation-adoption-lane.test.ts` F1, presence `unknown` and `asleep` (and `dead`, the control) | red: adopted |
+| F1 | `delegation-adoption-lane.test.ts` F1, presence `unknown` and `asleep` | red: adopted |
+| F1 | lane F1, presence `dead` | green (control) |
 | F2 | lane F2 (a late stop stamp, a pass without the step, unbuilt, then built) | red: the retraction erased |
 | F3 | lane F3 (four asks, a cut after two answers) | red: nothing held |
 | F4 | lane F4 (a cut inside the carrier read) | red: the memory moved |
@@ -80,7 +84,8 @@ mutants.
 | F5 | L1 F5; lane F5 (alive on a pass without the step, then dead again) | red: adopted on the old death |
 | F6 | lane F6 (a); lane F2, F6 (b); lane F6 (d) | green (coverage) |
 | F8 | L1 F8 (four foreign bodies; an equal control) | red: adopted |
-| F9 | L1 F9; lane F9 (`changed: true`, `changed: 'unmeasured'`, no `lease-audit-v1`) | red: "left changed" for all |
+| F9 | L1 F9; lane F9 (`changed: 'unmeasured'`, no `lease-audit-v1`) | red: "left changed" for all |
+| F9 | lane F9 (`changed: true`) | green (control) |
 | F10 | L1 F10 (one comparator) | red: no shared function |
 | one `try` | lane, a throw out of the step and the carrier step still runs | red: no carrier minted |
 
@@ -132,19 +137,133 @@ checked (every one "sha ok"). Every mutant is killed.
 
 ## Measured, not departures
 
-- **Presence, not `rowStanding`.** The ruling names `presence`, and the decider reads it as the ruling says. `rowStanding` differs
-  at two edges, both in the safe direction here: a row `alive` with lifecycle `restarting` is alive for adoption (it drops a kept
-  death: a delay), and `unknown` with lifecycle `unmeasurable` is unmeasured for adoption where `rowStanding` reads `gone`.
+- **Presence, not `rowStanding`.** The ruling names `presence`, and the decider reads it as the ruling says (`adoptionAlive`).
+  Since fix round 1 (review 1622 F2) a row with an identity field unmeasured reads unmeasured, as `rowStanding` reads it doubt, so
+  the two now differ at two edges only, both in the safe direction here: a row `alive` with lifecycle `restarting` is alive for
+  adoption (it drops a kept death: a delay), and `unknown` with lifecycle `unmeasurable` is unmeasured for adoption where
+  `rowStanding` reads `gone` (it holds).
 - **A third wording for the digest (F9).** The checkpoint does not record what the adoption's audit showed (the floor rule), so a
   digest derived after a restart says neither "left changed" nor "could not be checked": "A worktree of delegated work by <parent>
   is kept: <path>". The ruling's two wordings stand wherever the lane remembers the audit, which is every notice queued without a
   restart in between.
 - **An unread incarnation drops (F5).** A last-alive pass whose incarnation the census did not read counts as the lease's
   incarnation, so a kept entry it postdates is dropped: a delay only, never a permission.
-- **The F6 (b) row's control.** "Nothing counted before the reading pass" proves the window; "every carrier read within the two
-  passes" (`lastRead` holds ten) differs under the rotation mutant.
+- **The F6 (b) row's controls.** Fix round 1 (review 1622 F5) replaced "nothing counted before the reading pass", which the loop's
+  own condition made true, with "no carrier is read before the reading pass" (`lastRead` empty until then), which reds if any lease
+  passes rule 4 early; "every carrier read within the two passes" (`lastRead` holds ten) differs under the rotation mutant.
+
+## Fix round 1 (review 1622)
+
+The coordinator's rulings on review 1622 (round 1 of at most 3, at `258f036a0`), taken whole: nothing critical, every finding in
+the safe direction, fixed because this PR exists to make adoption's evidence whole before the operator arms it. Departures: D-8092
+amended in place (F1, F2, F3), and D-8094 amended in place too (the coordinator's confirmation in run 1612), because F1 changes the
+`ParentFact` shapes it records (`lastAlive` a list, `retractedAt` for `deathRetracted`) and F5 the notice builders' arguments; no new
+number.
+
+- **F1, evidence kept until the step reads it.** `watch.ts`'s `lastAliveAt` is keyed by the parent and by the incarnation the
+  census read on the pass (`Map<parent, Map<incarnation | null, at>>`), recorded by `adoptionAlive` (so a `restarting` parent whose
+  `presence` is `alive` is recorded too: item (a) is fixed, in one line, not accepted). `retractedDeaths` keeps the pass each
+  retraction was made at. The lane notes `adoptDecidedAt`, the last pass whose adopt step reached the decider (its watch replaced),
+  and `forgetAdoptEvidence` forgets a retraction, and on a measured absence a last-alive instant, only at or before that pass. The
+  ruling names a measured absence; a retraction is kept the same way past a living pass and a later death, because each of those
+  erased it too (a retraction, then alive at a new incarnation, then dead, would otherwise adopt on the old count). The coordinator
+  confirmed that as F1's own rule, not a new one: a retraction is kept until the adopt step has run on a pass after it, whatever
+  erased it first; its row is the fourth F1 sequence and its mutant FR1-F1-alive (the living pass erases it). The decider asks
+  one disproof (`disproved`) before any rule reads a watch entry: the parent alive now at the lease's incarnation, a retraction
+  after the entry's `terminalAt`, or a last-alive pass after it at the lease's incarnation or an unread one; the evidence that
+  stands then (a measured absence, a changed incarnation, a later death) starts a watch of its own at the step's first read of it,
+  which is at or after its own instant. Accepted as delays, as ruled: (b) an unread incarnation counts as the lease's, so a kept
+  entry it postdates is dropped; (c) on a pass with no newer census the last census's incarnation is stamped.
+- **F2, an unmeasured identity holds.** `adoptionAlive` reads a row with any unmeasured identity field as unmeasured; the step
+  passes `sessions` whole (`unmeasured` among their fields) and decides nothing.
+- **F3, text.** The `ParentFact` and `adoptionParentFacts` comments and D-8092 say what `deadSince` is.
+- **F4.** (a) In the audit loop an answer drops its ask only when `adoptionAudits` holds it; one that is not definite keeps its ask
+  on a cut pass, so the next pass asks it again within the budget, and on an uncut pass it is fed as PR7 ruled. (b) The splice is
+  guarded against `-1`, with the reason it cannot miss today. (c) The four PR7 mutants the review re-ran are re-measured here.
+- **F5.** The audit's words are matched to the notice in L1: `AdoptLaneMemory.adopted` holds the answer rule 7 was fed
+  (`AdoptedAudit`), `owedLeaseNotices` takes it and words the item at a matching generation, and `buildAdoptionFeedRow` takes the
+  answer; the step calls neither `adoptAuditWord` nor a generation match. The effects-loop cut row asserts the digest's first line
+  carried across the cut pass; the lane F5 row and the three F1 rows assert the quiet pass did not run the step (`pass` unmoved);
+  the F6 (b) control is replaced (above). `hibernate-census`'s pass carries a census and `noteSessions` reads
+  `pass.census.incarnations` unguarded. The stale text is corrected: `old-dead-reads.test.ts`'s accepted `noteSessions, alive` read,
+  `watch.ts`'s comments, `shared/api.ts`'s `waiting` (every unmeasured-liveness case), and `pr7.md`'s two rows naming the replaced
+  lane row and its PR7-FR1-F3-unmeasured row.
+- **A crash between the journal and the feed row (F5, recorded).** An applied adoption whose process dies after the journal append
+  and before the feed row gets neither its record-only row nor its F9 wording: the next pass finds the lease no longer `ephemeral`,
+  and the digest mail is re-derived from the checkpoint with the neutral wording. This predates PR7b.
+- **Fixtures corrected.** `delegation-adoption.test.ts` W5-D6's "dead for two passes" fact said `alive: true` beside a `deadSince`,
+  which `adoptionParentFacts` never builds; with the disproof asked first it read as alive again, so it now says `alive: false`.
+  `adoptionAlive` spells its comparison as the first round did (`word === 'dead'`), so the hibernation census's reader table is
+  unchanged. `watch.ts` imports `adoptionAlive` through `delegationAdoptStep.ts`, which re-exports it, because the closed scope
+  census (`delegation-wave3.integration`, W5-SC1) keeps the wave-5 word in that module's path out of `watch.ts`; and `before` sits on
+  its own line, because the same file pins every line of the lane that names the store.
+
+### Rows, red then green (fix round 1)
+
+Run on the round's base (`258f036a0`'s three source files) with this round's tests, red there; green at this tip.
+
+| Ruling | Row (`delegation-adoption-lane.test.ts` unless named) | On the base |
+|---|---|---|
+| F1 | "review 1622 F1: alive at the lease's incarnation, then alive at a new one" | red: adopted on the old count |
+| F1 | "review 1622 F1: alive at the lease's incarnation, then measured absent" | red: adopted on the old count |
+| F1 | "review 1622 F1: a retraction, then measured absent" | red: adopted on the old count |
+| F1 | "review 1622 F1: a retraction, then alive at a new incarnation on a pass whose step never decides, then dead" | red: adopted on the old count |
+| F2 | "review 1622 F2: a row with an unmeasured identity field reads unmeasured" (and the L1 F1 row's identity case) | red: adopted |
+| F4 (a) | "review 1622 F4 (a): a cut after answers that are not definite keeps their asks" | red: two asks dropped |
+| F5 | the effects-loop cut row's digest line; L1 `owedLeaseNotices` with `adopted` | green on the base (the step matched it); red under FR1-F5-adopted and FR1-F5-match |
+
+### The mutation table (fix round 1)
+
+Every mutant below was run alone on this round's committed tree, bounded and restored as above (each "sha ok"); every one is
+killed. The first round's sixteen and REVIEW-X-deadalone are respelled where this round changed their line (PR7b-F1 in
+`adoptionAlive`, PR7b-F2 forgetting on the assembled rows whether read or not, PR7b-F3 without the in-loop hold, PR7b-F5 and
+PR7b-F6c as the `lastAlive` and retraction arms of `disproved`). The five `watch.ts` mutants were run again after the import and
+the `before` line moved (marked `@2`); their rows are the same, with the fourth F1 sequence added. Rows are named by their title's
+opening words.
+
+| Mutant | The mutation | Red rows |
+|---|---|---|
+| FR1-F1-slot | one last-alive slot per parent again | lane "alive at the lease's incarnation, then alive at a new one" |
+| FR1-F1-read | forget whether or not the step read it | lane "alive …, then measured absent", "a retraction, then measured absent", "a retraction, then alive at a new incarnation …" |
+| FR1-F1-alive | a living pass erases the retraction | lane "a retraction, then alive at a new incarnation …" |
+| FR1-F2 | `adoptionAlive` ignores `unmeasured` | L1 "F1: liveness is the row's presence"; lane "review 1622 F2" |
+| FR1-F4a | every answered ask dropped | lane "review 1622 F4 (a)" |
+| FR1-F5-adopted | a cut in the effects loop forgets the adopted audit | lane "F4: a pass cut inside the effects loop" |
+| FR1-F5-match | the audit word at any generation | L1 "owedLeaseNotices: every adopted lease at its generation" |
+| PR7b-F1 | liveness from `status` | L1 "A7, F1", "F1: liveness is the row's presence"; lane "F1: … presence unknown", "… asleep" |
+| PR7b-F2 | forget on the assembled rows, read or not | lane "F2: a late stop stamp …", "review 1622 F1: alive …, then measured absent", "… a retraction, then measured absent" |
+| PR7b-F3 | no hold inside the audit loop | lane "F3: four asks, a cut after two answers" |
+| PR7b-F4-read (X-cut132) | no cut check after a carrier read | lane "F4: a pass cut inside its carrier read" |
+| PR7b-F4-early | `asked` cleared and `pass` counted before the carrier reads | lane "F4: a pass cut inside its carrier read" |
+| PR7b-F4-effects (X-cut169) | no cut check after the effects | lane "F4: a pass cut inside the effects loop" |
+| PR7b-F4-break | no cut check inside the effects loop | lane "F4: a pass cut while the adopt transition is awaited", "F4: a pass cut inside the effects loop" |
+| PR7b-F5 | the `lastAlive` arm of `disproved` dropped | L1 "F5: a parent measured alive after the kept death"; lane "F5: alive on a pass where the step does not run", "review 1622 F1: alive … then alive at a new one", "… then measured absent" |
+| PR7b-F6a (X-treeunread) | `treeUnread: new Set()` | lane "F6 (a)" |
+| PR7b-F6b | no rotation | L1 "F2: ten candidates", "F10"; lane "F2, F6 (b)" |
+| PR7b-F6c | the retraction arm of `disproved` dropped | L1 "F7: a kept death that the lane retracts"; lane "F7: a death the lane kept, then retracted", "F2: a late stop stamp …", "review 1622 F1: a retraction, then measured absent" |
+| PR7b-F6d | `changed: false` drops the entry | L1 "W5-D10", "F6: a tree whose census record reads unreadable"; lane "F6 (d)" |
+| PR7b-F8 | generation only | L1 "F8 (D-8093)" |
+| PR7b-F9 | every audit word is `changed` | L1 "F9"; lane "F9: … changed: unmeasured", "F9: … no lease-audit-v1" |
+| PR7b-F10 | the comparator reversed | L1 "F2: ten candidates", "F10"; lane "F2, F6 (b)"; `delegation-carrier` "D-8034"; `delegation-carrier-lane` "one listing, every carrier behind …" |
+| PR7b-try | the step's `catch` rethrows | lane "the one-try advisory" |
+| REVIEW-X-deadalone | a present parent not alive is evidence on its own | L1 "F2: a death the lane saw is kept …", "F5", "F7"; lane "F2: a restart …", "F7", "F2: a late stop stamp …", "F5", "review 1622 F1: alive … then alive at a new one", "… then measured absent", "… a retraction, then measured absent", "review 1622 F2" (run before the fourth F1 row existed) |
+| PR7-W5-DM9b | owed notices from this pass's decisions | lane "W5-Q3b", "W5-Q4", "F6, A2", "F4: a pass cut inside the effects loop" |
+| PR7-FR1-F3-age | the hour dropped | L1 "F3, A8"; lane "F3: a held audit answer older than an hour", "A8", "F6 (d)" |
+| PR7-FR1-F6 | a held notice counted without asking for mail | lane "F6: a digest already sent is not owed while mail-disabled stands" |
+| PR7-FR1-F7-past46 | every lease past rules 1 to 3 read | L1 "F7: adoptionCarrierReads reads no lease without terminal evidence"; lane "F2, F6 (b)" |
 
 ## Suites and growth
+
+**Fix round 1.** Run alone at this round's tip through `ccrc test`, each file one run, all green: `delegation-adoption` 45,
+`delegation-adoption-lane` 55, `delegation-adoption-corpus` 23, `delegation-carrier` 25, `delegation-carrier-lane` 27,
+`delegation-projection` 44, `delegation-wave3.integration` 36, `delegation-watch` 311, `fleet-health` 54, `lease-routes` 24,
+`delegation-lease-acts` 19, `refusal-status` 27, `coord-store` 270, `run-session-census` 18, `mail-hardening` 19, `anchors` 9,
+`citations` 4, `topology-clean` 60, `coord-policy-rings` 19, `hibernate-census` 13, `delegation-pass-timing` 90, every
+`single-definition/*` file (24, `old-dead-reads` 8 among them) and every `rings/*` file (11), `typecheck-tests` 12,
+`GROWTH_CHECK=1` growth-check 54. `delegation-wave3.integration` was red first (two closed-scope rows, the import path and a pinned
+line, above) and green after. Growth against the base (`67121c031`): `watch.ts` +31 / -11 (+20 net, the brief's cap); `store.ts` +0.
+
+**The first round:**
 
 Run alone at this PR's tip through `ccrc test`, each file one run, all green: `delegation-adoption` 45, `delegation-adoption-lane` 49,
 `delegation-adoption-corpus` 23 (W5-D12 over 21 versions), `delegation-carrier` 25, `delegation-carrier-lane` 27,

@@ -184,7 +184,7 @@ commit merges it and keeps both sides. The rest are the coordinator's rulings, e
 | Item | Row (red under its mutant) | Mutant |
 |---|---|---|
 | F1 | W5-D5, W5-D6; F2 (L1, the decision kind pinned for three unmeasured parents); F1 (one measured absent pass, then eight unmeasured) | PR7-FR2-F1 |
-| F2 | F2 (L1: ten candidates, each read within two passes); F2 (lane: ten settled leases in shadow) | PR7-FR2-F2 |
+| F2 | F2 (L1: ten candidates, each read within two passes); F2 (lane: ten settled leases in shadow; PR7b replaced it with "F2, F6 (b)", `pr7b.md`) | PR7-FR2-F2 |
 | F3 | F2 restart (lane) | REVIEW-X-deadalone |
 | F4 | F4 (lane: a pass cut inside an awaited audit) | PR7-FR2-F4 |
 | F5 | F5 (L1) | PR7-FR2-F5 |
@@ -263,7 +263,7 @@ was narrowed by fix round 1 (review 1587 A3): round 1's table said "each shape",
 | PR7-FR1-F2-keep | `delegation-adoption.ts` | drop the keep (a measured dead parent's kept death no longer counts) | F2, F5, F7 (L1); F2 aged out (lane) |
 | PR7-FR1-F2-counter | `delegation-adoption.ts` | keep without counter-evidence at rule 4 | F2, F7, the F7 carrier-read row, W5-D3, W5-D4 (L1); F2 dead for 3 passes then alive, F7 (lane) |
 | PR7-FR1-F3-age | `delegation-adoption.ts` | drop the hour | F3 and A8 (L1); F3 past the hour, A8 (lane) |
-| PR7-FR1-F3-unmeasured | `delegation-adoption.ts` | hold an answer that is not definite | F3 and A8 (L1); F3 unmeasured (lane) |
+| PR7-FR1-F3-unmeasured | `delegation-adoption.ts` | hold an answer that is not definite | F3 and A8 (L1); F3 unmeasured (lane) only as `definite` answering true; spelled on the hold line alone, the lane row survives (the feed still asks `definite`), measured in PR7b (`pr7b.md`) |
 | PR7-FR1-A8-unchanged | `delegation-adoption.ts` | hold `changed: true` only | F3 and A8 (L1); A8 (lane) |
 | PR7-FR1-F4 | `delegationAdoptStep.ts` | record the keys before the effects | F4 (lane) |
 | PR7-FR1-F5 | `delegation-adoption.ts` | drop the date test | F5 (L1); F5 (lane) |
@@ -273,7 +273,7 @@ was narrowed by fix round 1 (review 1587 A3): round 1's table said "each shape",
 | PR7-FR1-F7-past46 | `delegation-adoption.ts` | read every lease past rules 1 to 3, as before | F7, F10 (h) |
 | PR7-FR1-A1 | `delegationAdoptStep.ts` | one memory for both lines | A1 (lane) |
 | PR7-FR2-F1 | `delegation-adoption.ts` | count and decide on an unmeasured read (round 1's code) | W5-D5, W5-D6, F2, F1 (one measured pass, then eight unmeasured) (L1) |
-| PR7-FR2-F2 | `delegation-adoption.ts` | no rotation: the first 8 every pass | F2 (L1, ten candidates); F2 (lane, ten settled leases) |
+| PR7-FR2-F2 | `delegation-adoption.ts` | no rotation: the first 8 every pass | F2 (L1, ten candidates); F2 (lane, ten settled leases; PR7b replaced it with "F2, F6 (b)", `pr7b.md`) |
 | REVIEW-X-deadalone | `delegation-adoption.ts` | a present parent that is not alive is evidence on its own | F2, F5, F7 (L1); F2 restart, F7 (lane) |
 | PR7-FR2-F4 | `delegationAdoptStep.ts` | no check after the awaited audits | F4 (lane: a pass cut inside an awaited audit) |
 | PR7-FR2-F5 | `delegation-adoption.ts` | `keep()` without the alive-again check | F5 (L1) |

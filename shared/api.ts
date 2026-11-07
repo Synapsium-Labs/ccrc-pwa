@@ -12293,7 +12293,8 @@ export interface DelegationCarrierHealth {
  *  breaker, `unmeasured` when the marker or the breaker did not read. `adopted`: adoptions decided this pass. `wouldAdopt`: the ones
  *  shadow only recorded. `waiting` (review 1609 F10): leases waiting on rule 3's journalled `seen`, on their carrier's read-back (unread, past
  *  the read bound, behind, or not equal to the lease), on the settle or its stable passes, on a breaker that is not clear, on a kept death
- *  whose parent did not read this pass (the registry, the incarnation, or a liveness of `unknown` or `asleep`), or on a census record that
+ *  whose parent did not read this pass (the registry, the incarnation, or a liveness that is unmeasured: `unknown`, `asleep`, no
+ *  `presence`, an identity field unmeasured, or a parent the pass does not name; review 1622 F2, F5), or on a census record that
  *  read `unreadable`. `unchanged`: an audit proved the tree unchanged, so it stays `ephemeral`. `unaudited`: audits past the per-pass bound. `conflicting`: leases waiting for the operator's
  *  resolve. `unsupported`: leases a box that cannot hold a tree leaves waiting. `uncensused`: leases whose project the census did not
  *  reach. `owed`: notices derived from durable state and not queued this pass (mail held, or the recipient unmeasured). */
