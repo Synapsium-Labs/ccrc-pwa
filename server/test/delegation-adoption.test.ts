@@ -2,14 +2,15 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   DELEGATION_ADOPTABLE_SOURCES, DELEGATION_ADOPT_CARRIER_READS_PER_PASS, DELEGATION_ADOPT_SETTLE_MS, DELEGATION_AUDITS_PER_PASS, DELEGATION_AUDIT_HOLD_MS,
-  DELEGATION_HOLD_CLOSING, DELEGATION_REMINDER_LEAD_MS, adoptTerminalEvidenceAt, adoptionAudits, adoptionCarrierReads, adoptionParentFacts, buildLeaseDigest,
-  buildLeaseReminder, decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptWatch, type AdoptionInput, type AdoptionParentReads,
-  type HeldLeaseAudit, type ParentFact,
+  DELEGATION_HOLD_CLOSING, DELEGATION_REMINDER_LEAD_MS, adoptAuditWord, adoptTerminalEvidenceAt, adoptionAudits, adoptionCarrierReads, adoptionParentFacts,
+  adoptionAlive, buildAdoptionFeedRow, buildLeaseDigest, buildLeaseReminder, decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptWatch,
+  type AdoptionInput, type AdoptionParentReads, type HeldLeaseAudit, type ParentFact,
 } from '../src/coord/delegation-adoption.js';
+import { carrierReadsOf, leastRecentlyRead } from '../src/coord/delegation-carrier.js';
 import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
 import { leaseCoordinatorOf } from '../src/coord/delegation-lease-acts.js';
 import type { DelegationActivityRow, DelegationCheckpointV1, DelegationLeaseRow } from '../src/coord/delegation-model.js';
-import { checkpointWithLease } from './delegationLeaseFixture.js';
+import { checkpointWithLease, equalCarrier } from './delegationLeaseFixture.js';
 
 const T0 = Date.parse('2026-11-10T12:00:00Z');
 const DAY = 86_400_000;
@@ -28,8 +29,9 @@ const withActivity = (over: Partial<DelegationLeaseRow>, activity: Partial<Deleg
 const ended = (over: Partial<DelegationLeaseRow> = {}) => withActivity(over, { executionState: 'ended', endedAt: iso(T0) });
 const active = (over: Partial<DelegationLeaseRow> = {}) => withActivity(over, { executionState: 'active', endedAt: null });
 const live = (l: DelegationLeaseRow, over: Partial<ParentFact> = {}): ParentFact =>
-  ({ registry: 'present', incarnation: l.parentIncarnation, deadSince: null, ccd: true, alive: true, deathRetracted: false, ...over });
-const carrier = (l: DelegationLeaseRow, generation = l.generation) => ({ kind: 'carrier', body: { generation, state: 'ephemeral' } }) as never;
+  ({ registry: 'present', incarnation: l.parentIncarnation, deadSince: null, ccd: true, alive: true, retractedAt: null, lastAlive: [], ...over });
+/** PR7b (review 1609 F8): a read-back EQUAL to the lease as PR6 compares it, at `generation`. */
+const carrier = (l: DelegationLeaseRow, generation = l.generation) => equalCarrier(l, { generation });
 
 const base = (cp: DelegationCheckpointV1, nowMs: number, over: Partial<AdoptionInput> = {}): AdoptionInput => {
   const l = cp.leases[0]!;
@@ -102,7 +104,7 @@ describe('decideAdoption', () => {
     const unread = decideAdoption(base(cp, T0 + 30 * DAY, { parents: nullInc }));
     expect(unread.decisions, 'a settled watch, then an unread incarnation: no decision (review 1604 F1)').toEqual([]);
     expect(unread.watch.get(l.leaseId), 'held exactly as it was').toEqual({ generation: 1, terminalAt: iso(T0), passes: 2 });
-    const dead = new Map([[l.parentId, live(l, { deadSince: iso(T0 - 120_000) })]]);
+    const dead = new Map([[l.parentId, live(l, { alive: false, deadSince: iso(T0 - 120_000) })]]);
     expect(kinds(decideAdoption(base(cp, SETTLED, { parents: dead }))), 'dead for two passes outside its restart window').toEqual(['adopt']);
   });
 
@@ -312,6 +314,9 @@ describe('the carrier reads, the clamp, the notices and the audit parser', () =>
     expect(owedLeaseNotices(cp, now, () => ({ kind: 'record-only' }))).toEqual([]);
     expect(owedLeaseNotices(cp, now, () => ({ kind: 'unmeasured' })).map((o) => o.recipient), 'an unmeasured recipient holds it, owed').toEqual([{ kind: 'unmeasured' }]);
     expect(owedLeaseNotices(ended(), now, to('x')), 'an ephemeral lease is owed nothing').toEqual([]);
+    const g = owedLeaseNotices(cp, now, to('x'))[0]!.item.generation, yes = { ok: true, changed: true, token: 't' } as never;
+    expect(owedLeaseNotices(cp, now, to('x'), new Map([[cp.leases[0]!.leaseId, { generation: g, audit: yes }]]))[0]!.item.audit, 'review 1622 F5: L1 matches the remembered audit').toBe('changed');
+    expect(owedLeaseNotices(cp, now, to('x'), new Map([[cp.leases[0]!.leaseId, { generation: g + 2, audit: yes }]]))[0]!.item.audit, 'CONTROL: another generation claims neither').toBeUndefined();
     const readopted = { ...cp, leases: [{ ...l, generation: 4 }] };
     const subjects = [cp, readopted].map((c) => buildLeaseDigest('coord-a-demo', owedLeaseNotices(c, now, to('coord-a-demo'))[0]!.item, { retain: true, promote: false }).subject);
     expect(subjects).toEqual([`delegation: worktree kept for coord-a-demo (${l.leaseId}, generation 2)`,
@@ -357,23 +362,23 @@ describe('the carrier reads, the clamp, the notices and the audit parser', () =>
 
 describe('review 1587 (fix round 1): the parents, kept evidence, held audits and bounded carrier reads', () => {
   const reads = (l: DelegationLeaseRow, over: Partial<AdoptionParentReads> = {}): AdoptionParentReads => ({ now: iso(SETTLED), registryListed: true,
-    listedIds: new Set([l.parentId]), built: new Set([l.parentId]), sessions: [{ id: l.parentId, status: 'idle' }], retracted: new Set(),
-    incarnations: new Map([[l.parentId, { kind: 'measured', incarnation: l.parentIncarnation }]]), firstDead: new Map(), ...over });
+    listedIds: new Set([l.parentId]), built: new Set([l.parentId]), sessions: [{ id: l.parentId, presence: 'alive' }], retracted: new Map(),
+    lastAlive: new Map(), incarnations: new Map([[l.parentId, { kind: 'measured', incarnation: l.parentIncarnation }]]), firstDead: new Map(), ...over });
 
   it('A7, F1: adoptionParentFacts — a built row is present; listed but not built, no listing or no listed ids is unmeasured; unlisted is absent', () => {
     const cp = active();
     const l = cp.leases[0]!;
     const fact = (over: Partial<AdoptionParentReads>) => adoptionParentFacts(cp, reads(l, over)).get(l.parentId);
-    expect(fact({})).toEqual({ registry: 'present', incarnation: l.parentIncarnation, deadSince: null, ccd: true, alive: true, deathRetracted: false });
+    expect(fact({})).toEqual({ registry: 'present', incarnation: l.parentIncarnation, deadSince: null, ccd: true, alive: true, retractedAt: null,
+      lastAlive: [] });
     expect(fact({ sessions: [] })?.alive, 'not among the pass\'s sessions: liveness unmeasured').toBeNull();
-    expect(fact({ sessions: [{ id: l.parentId, status: 'busy' }] })?.alive).toBe(true);
-    expect(fact({ retracted: new Set([l.parentId]) })?.deathRetracted, 'review 1604 F7').toBe(true);
+    expect(fact({ retracted: new Map([[l.parentId, SETTLED - 60_000]]) })?.retractedAt, 'review 1604 F7, 1622 F1: the pass it was retracted at').toBe(iso(SETTLED - 60_000));
     expect(fact({ built: new Set() }), 'F1: the listing names it, the registry could not assemble it').toMatchObject({ registry: 'unmeasured', ccd: false });
     expect(fact({ built: new Set(), listedIds: new Set() })).toMatchObject({ registry: 'absent', ccd: false });
     expect(fact({ registryListed: false })).toMatchObject({ registry: 'unmeasured', ccd: false });
     expect(fact({ listedIds: null })).toMatchObject({ registry: 'unmeasured', ccd: false });
     expect(fact({ incarnations: new Map([[l.parentId, { kind: 'unmeasured' }]]) })?.incarnation).toBeNull();
-    const dead = [{ id: l.parentId, status: 'dead' }];
+    const dead = [{ id: l.parentId, presence: 'dead' as const }];
     expect(fact({ sessions: dead, firstDead: new Map([[l.parentId, SETTLED - 60_000]]) })).toMatchObject({ deadSince: iso(SETTLED - 60_000), alive: false });
     expect(fact({ sessions: dead, firstDead: new Map([[l.parentId, SETTLED]]) })?.deadSince, 'recorded this pass: evidence from the next').toBeNull();
   });
@@ -474,7 +479,7 @@ describe('review 1587 (fix round 1): the parents, kept evidence, held audits and
     };
     const read = reads(cp, SETTLED, over);
     expect(read).toEqual(leases.slice(0, DELEGATION_ADOPT_CARRIER_READS_PER_PASS).map((l) => l.leaseId));
-    const r = decideAdoption(base(cp, SETTLED, { ...over, carriers: new Map(read.map((id) => [id, carrier(l0)])) }));
+    const r = decideAdoption(base(cp, SETTLED, { ...over, carriers: new Map(read.map((id) => [id, carrier(leases.find((l) => l.leaseId === id)!)])) }));   // PR7b: each its own, equal
     expect(r.decisions.filter((d) => d.kind === 'adopt')).toHaveLength(DELEGATION_ADOPT_CARRIER_READS_PER_PASS);
     expect(r.health.waiting, 'the two over the bound wait a pass, watch kept').toBe(2);
     expect(r.watch.get(leases[9]!.leaseId)).toEqual({ generation: 1, terminalAt: iso(T0), passes: 2 });
@@ -547,11 +552,13 @@ describe('review 1604 (fix round 2): unmeasured reads hold, the reads rotate, an
   it('F7: a kept death that the lane retracts (a stop stamp dated at or before it) is dropped and never adopts', () => {
     const cp = active();
     const l = cp.leases[0]!;
-    const retracted = new Map([[l.parentId, live(l, { alive: false, deathRetracted: true })]]);
+    const retracted = new Map([[l.parentId, live(l, { alive: false, retractedAt: iso(T0 + 60_000) })]]);
     const r = decideAdoption(base(cp, SETTLED, { parents: retracted, watch: settled(l) }));
     expect(r.decisions).toEqual([]);
     expect(r.watch.size).toBe(0);
     expect(kinds(decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, live(l, { alive: false })]]), watch: settled(l) }))), 'CONTROL').toEqual(['adopt']);
+    const before = new Map([[l.parentId, live(l, { alive: false, retractedAt: iso(T0) })]]);
+    expect(kinds(decideAdoption(base(cp, SETTLED, { parents: before, watch: settled(l) }))), 'review 1622 F1, CONTROL: a retraction not after the kept instant drops nothing').toEqual(['adopt']);
   });
 
   it('F8: a backward clock step does not hold an answer past the hour', () => {
@@ -570,5 +577,102 @@ describe('review 1604 (fix round 2): unmeasured reads hold, the reads rotate, an
     expect(adoptionCarrierReads(input, new Map())).toEqual([]);
     const { carriers: _c, ...one } = base(ended(), SETTLED);
     expect(adoptionCarrierReads(one, new Map()), 'CONTROL: generation 1 is read').toHaveLength(1);
+  });
+});
+
+// PR7b (run 1612): the coordinator's rulings on review 1609, the third review of PR7.
+describe('review 1609 (PR7b): liveness from presence, an outlived death, PR6\'s equality, the audit\'s words and the one comparator', () => {
+  const settled = (l: DelegationLeaseRow) => new Map([[l.leaseId, { generation: 1, terminalAt: iso(T0), passes: 2 }]]);
+  const reads = (l: DelegationLeaseRow, over: Partial<AdoptionParentReads> = {}): AdoptionParentReads => ({ now: iso(SETTLED), registryListed: true,
+    listedIds: new Set([l.parentId]), built: new Set([l.parentId]), sessions: [{ id: l.parentId, presence: 'alive' }], retracted: new Map(),
+    lastAlive: new Map(), incarnations: new Map([[l.parentId, { kind: 'measured', incarnation: l.parentIncarnation }]]), firstDead: new Map(), ...over });
+
+  it('F1: liveness is the row\'s presence: alive and dead are measured; unknown (D-309), asleep and no presence are not, and give no dead-since', () => {
+    const cp = active();
+    const l = cp.leases[0]!;
+    const died = new Map([[l.parentId, SETTLED - 120_000]]);
+    const fact = (presence: 'alive' | 'dead' | 'unknown' | 'asleep' | undefined) =>
+      adoptionParentFacts(cp, reads(l, { sessions: [{ id: l.parentId, presence }], firstDead: died })).get(l.parentId)!;
+    expect(fact('alive')).toMatchObject({ alive: true, deadSince: null });
+    expect(fact('dead')).toMatchObject({ alive: false, deadSince: iso(SETTLED - 120_000) });
+    for (const p of ['unknown', 'asleep', undefined] as const) expect(fact(p), String(p)).toMatchObject({ alive: null, deadSince: null });
+    const doubt = adoptionParentFacts(cp, reads(l, { sessions: [{ id: l.parentId, presence: 'dead', unmeasured: ['uuid'] }], firstDead: died })).get(l.parentId)!;
+    expect(doubt, 'review 1622 F2: an unmeasured identity field is doubt, as rowStanding reads it').toMatchObject({ alive: null, deadSince: null });
+    expect(adoptionAlive({ presence: 'dead', unmeasured: [] }), 'CONTROL: nothing unmeasured').toBe(false);
+    // a kept death and a parent tmux did not answer for (or asleep): held exactly, counted waiting, no decision
+    for (const p of ['unknown', 'asleep'] as const) {
+      const r = decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, fact(p)]]), watch: settled(l) }));
+      expect(r.decisions, p).toEqual([]);
+      expect(r.watch.get(l.leaseId), p).toEqual({ generation: 1, terminalAt: iso(T0), passes: 2 });
+      expect(r.health.waiting, p).toBe(1);
+      expect(decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, fact(p)]]), watch: new Map() })).watch.size, `${p}: starts no watch`).toBe(0);
+    }
+    expect(kinds(decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, fact('dead')]]), watch: settled(l) }))), 'CONTROL: measured dead adopts').toEqual(['adopt']);
+  });
+
+  it('F5: a parent measured alive after the kept death, on a pass the decider never saw, ends it; dead again, the new death\'s own window applies', () => {
+    const cp = active();
+    const l = cp.leases[0]!;
+    const deadAgain = (seen: ParentFact['lastAlive'][number]) => live(l, { alive: false, deadSince: iso(SETTLED - 60_000), lastAlive: [seen] });
+    const after = { at: iso(T0 + 60_000), incarnation: l.parentIncarnation };
+    const r = decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, deadAgain(after)]]), watch: settled(l) }));
+    expect(r.decisions, 'the old death is gone').toEqual([]);
+    expect(r.watch.get(l.leaseId), 'the new death starts its own watch at this pass').toEqual({ generation: 1, terminalAt: iso(SETTLED), passes: 1 });
+    expect(decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, deadAgain({ ...after, incarnation: null })]]), watch: settled(l) })).decisions,
+      'an incarnation the census did not read then: the same').toEqual([]);
+    expect(kinds(decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, deadAgain({ ...after, incarnation: 'g-other' })]]), watch: settled(l) }))),
+      'CONTROL: alive at another incarnation is not the lease\'s parent alive again').toEqual(['adopt']);
+    expect(kinds(decideAdoption(base(cp, SETTLED, { parents: new Map([[l.parentId, deadAgain({ ...after, at: iso(T0) })]]), watch: settled(l) }))),
+      'CONTROL: alive at the kept instant, not after it').toEqual(['adopt']);
+    const done = ended();
+    const e = done.leases[0]!;
+    expect(kinds(decideAdoption(base(done, SETTLED, { parents: new Map([[e.parentId, live(e, { lastAlive: [{ at: iso(SETTLED), incarnation: e.parentIncarnation }] })]]) }))),
+      'CONTROL: an ended activity is never outlived (the parent lives on after its agent)').toEqual(['adopt']);
+  });
+
+  it('F8 (D-8093): rule 3 asks PR6\'s equality: a foreign carrier at the lease\'s generation waits; an equal one adopts', () => {
+    const cp = ended();
+    const l = cp.leases[0]!;
+    for (const over of [{ journalSeq: l.currentJournalSequence + 1 }, { state: 'adopted' as const }, { parentIncarnation: 'g-other' }, { activityId: 'a'.repeat(64) }]) {
+      const r = decideAdoption(base(cp, SETTLED, { carriers: new Map([[l.leaseId, equalCarrier(l, over)]]) }));
+      expect(r.decisions, JSON.stringify(over)).toEqual([]);
+      expect(r.health.waiting, JSON.stringify(over)).toBe(1);
+      expect(r.watch.get(l.leaseId), `${JSON.stringify(over)}: the watch is kept`).toEqual({ generation: 1, terminalAt: iso(T0), passes: 2 });
+    }
+    expect(kinds(decideAdoption(base(cp, SETTLED, { carriers: new Map([[l.leaseId, equalCarrier(l)]]) }))), 'CONTROL: equal').toEqual(['adopt']);
+  });
+
+  it('F9: the feed row and the digest say "left changed" only for changed: true; an answer rule 7 counted as changed says it could not be checked', () => {
+    const yes = { ok: true, changed: true, token: 't' } as never, half = { ok: true, changed: 'unmeasured', token: 't' } as never;
+    const refused = { ok: false, refusal: 'unmeasured', detail: 'x' } as never;
+    expect(adoptAuditWord(yes)).toBe('changed');
+    for (const a of [half, refused, 'unsupported' as const, undefined]) expect(adoptAuditWord(a), JSON.stringify(a)).toBe('unchecked');
+    const lease = { leaseId: 'l-1', project: 'demo', adminRecord: 'wt-x' };
+    expect(buildAdoptionFeedRow(lease, iso(T0), yes)).toEqual({ title: 'worktree kept: demo/wt-x',
+      body: `Delegated work left this worktree changed; it is kept until ${iso(T0)} (lease l-1).` });
+    expect(buildAdoptionFeedRow(lease, iso(T0), half)).toEqual({ title: 'worktree kept: demo/wt-x',
+      body: `This delegated worktree is kept because its changes could not be checked, until ${iso(T0)} (lease l-1).` });
+    const item = { leaseId: 'l-1', generation: 2, canonicalPath: '/w/demo/wt-x', parentId: 'lane-a-demo', expiresAt: iso(T0) };
+    const first = (audit?: 'changed' | 'unchecked') =>
+      buildLeaseDigest('lane-a-demo', audit === undefined ? item : { ...item, audit }, { retain: true, promote: false }).body.split('\n')[0];
+    expect(first('changed')).toBe('A worktree that delegated work by lane-a-demo left changed is kept: /w/demo/wt-x');
+    expect(first('unchecked')).toBe('A worktree of delegated work by lane-a-demo is kept because its changes could not be checked: /w/demo/wt-x');
+    expect(first(), 'not remembered (a restart): it claims neither').toBe('A worktree of delegated work by lane-a-demo is kept: /w/demo/wt-x');
+  });
+
+  it('F10: PR6\'s re-reads and adoption\'s reads share one comparator: never read first, then the least recently read, then the given order', () => {
+    expect(leastRecentlyRead(['a', 'b', 'c', 'd'], new Map([['a', 3], ['b', 1], ['d', 1]]), 3)).toEqual(['c', 'b', 'd']);
+    const one = ended();
+    const l0 = one.leases[0]!;
+    const leases = Array.from({ length: 10 }, (_, i) => ({ ...l0, leaseId: `5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4f${String(i).padStart(2, '0')}`,
+      adminRecord: `wt-${i}`, creatingJournalSequence: 5 + i }));
+    const cp = { ...one, leases };
+    const lastRead = new Map(leases.map((l, i) => [l.leaseId, 10 - i] as const));
+    const { carriers: _unused, ...input } = base(cp, SETTLED, {
+      treePresent: new Set(leases.map((l) => delegationTreeKey(l.project, l.adminRecord))),
+      watch: new Map(leases.map((l) => [l.leaseId, { generation: 1, terminalAt: iso(T0), passes: 2 }])),
+    });
+    expect(adoptionCarrierReads(input, lastRead)).toEqual(carrierReadsOf(cp, lastRead).reverify);
+    expect(adoptionCarrierReads(input, lastRead)).toEqual(leases.slice(2).reverse().map((l) => l.leaseId));
   });
 });

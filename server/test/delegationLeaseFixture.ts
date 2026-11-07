@@ -3,6 +3,7 @@
 import {
   deriveDelegationLineageId, emptyDelegationCheckpoint, type DelegationCheckpointV1, type DelegationLeaseRow,
 } from '../src/coord/delegation-model.js';
+import type { CarrierReadBack, DelegationCarrierBody } from '../src/coord/delegation-carrier.js';
 
 /** `deriveDelegationActivityId` of the fixture natural key over the fixture journalId (delegation-model.test.ts's vector). */
 const ACTIVITY_ID_FROM_JOURNAL = '9239bd0ac5b8d4af700cd38ae205546b428bc6b605ef1d9adcd09c1796afcbfc';
@@ -34,3 +35,13 @@ export const checkpointWithLease = (over: Partial<DelegationLeaseRow> = {}, extr
     ...extra,
   };
 };
+
+/** The carrier read back that EQUALS `lease` as PR6 compares it (`carrierReadBackVersus`: its generation, state, sequence and identity),
+ *  with `over` laid on its body (PR7b, review 1609 F8: adoption asks for that equality). */
+export const equalCarrier = (lease: DelegationLeaseRow, over: Partial<DelegationCarrierBody> = {}): CarrierReadBack => ({ kind: 'carrier', body: {
+  v: 1, leaseId: lease.leaseId, generation: lease.generation, state: lease.releasedAt !== null ? 'released' : lease.disposition,
+  journalSeq: lease.currentJournalSequence, parentId: lease.parentId, parentIncarnation: lease.parentIncarnation, activityId: lease.activityId,
+  source: lease.sourceKind, project: lease.project, adminRecord: lease.adminRecord, canonicalPath: lease.canonicalPath,
+  fingerprint: 'f'.repeat(64), claudeBase: null, branch: null, expiresAt: null, releaseReason: null, promotedRun: null, promotedSession: null,
+  markedAt: 1, ...over,
+} });

@@ -303,7 +303,7 @@ describe('the hibernation census (D-5242)', () => {
 // The one reader this census changed in behaviour (beside the ones the plan names): the delegation lane's death memory.
 describe('the delegation lane never counts a sleep as a death (D-5242)', () => {
   const pass = (sessions: { id: string; status: string; hibernatedAt?: number | null }[], now: number) =>
-    ({ records: [], sessions: sessions.map((s) => ({ project: 'project-a', ...s })), now }) as never;
+    ({ records: [], sessions: sessions.map((s) => ({ project: 'project-a', ...s })), now, census: { incarnations: new Map() } }) as never;   // a lane pass always carries its census
   // The lane is private to the watcher (`delegationLane()`); its two methods are reached through it, as the tick does.
   type Lane = { noteSessions(p: unknown): void; firstDeadParents(): { parentId: string }[] };
   const lane = (w: FleetWatcher): Lane => (w as unknown as { delegationLane(): Lane }).delegationLane();
