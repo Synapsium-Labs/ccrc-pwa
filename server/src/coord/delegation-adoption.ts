@@ -246,10 +246,11 @@ const auditChanged = (a: LeaseAuditAnswer | 'unsupported'): boolean => a === 'un
 
 /**
  * One pass's adoption decisions (plan "## PR7", rules 1 to 9), oldest lease first, the reminders and the attention items. A lease that
- * fails a rule leaves `ephemeral` as it is and loses its watch entry, unless the rule waits (rules 2, 3, 5 to 8), which keeps it. Two
- * departures, both D-8058 (review 1587): a parent's death the lane already saw stays evidence until the parent is measured alive at the
- * lease's incarnation (F2), and rule 3's read-back is checked after rule 6, because the lane reads a carrier only for a lease past rules
- * 4 to 6 (F7, `adoptionCarrierReads`).
+ * fails a rule leaves `ephemeral` as it is and loses its watch entry, unless the rule waits (rules 2, 3, 5 to 8), which keeps it. The
+ * departures are D-8058's: a parent's death the lane already saw stays evidence, moves only on a measured read of the parent, and is
+ * dropped when the parent is alive again at the lease's incarnation or the lane retracts the death (reviews 1587 F2, 1604 F1, F5, F7);
+ * an unreadable census record and a definite `changed: false` keep the entry (1604 F6); and rule 3's read-back is checked after rule 6,
+ * because the lane reads a carrier only for a lease past rules 4 to 6 (1587 F7, `adoptionCarrierReads`).
  * `raised` in the answer is every attention key that still stands, which the lane keeps for the next pass.
  */
 export function decideAdoption(input: AdoptionInput): { decisions: readonly AdoptionDecision[]; watch: Map<string, AdoptWatch>;
