@@ -14,7 +14,7 @@
 //
 // EXEMPT (`wire-totality.data.ts#WIRE_TOTALITY_EXEMPTIONS`, D-6045's entry shape, stamped in
 // `exemption-age.data.ts`) is the merge-day debt. It started at the merge-day count (31) minus this PR's three lists, it may only
-// shrink, and every entry carries its reason. Adding a list to an exempt union makes the stale-entry row red until its
+// shrink, and every entry carries its reason. #2371 drained it to the one union whose file may hold no value. Adding a list to an exempt union makes the stale-entry row red until its
 // entry goes and `EXEMPT_PINNED` drops with it; adding a new listless union is red until it gets a list.
 import { describe, it, expect } from 'vitest';
 import { readdirSync } from 'node:fs';
@@ -31,9 +31,9 @@ import { WORKSPACE_STATES, WORKSPACE_VERBS, isWorkspaceState, isWorkspaceVerb } 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHARED = path.join(ROOT, 'shared');
 
-/** The merge-day count of listless exported literal unions in `shared/*.ts` was 31; this PR lists three. LOWER IT,
- *  NEVER RAISE IT: a new listless union gets a list, not an entry. */
-const EXEMPT_PINNED = 28;
+/** The merge-day count of listless exported literal unions in `shared/*.ts` was 31; this PR listed three and #2371
+ *  listed 27 more. LOWER IT, NEVER RAISE IT: a new listless union gets a list, not an entry. */
+const EXEMPT_PINNED = 1;
 
 
 interface Union { key: string; name: string; literals: string[]; line: number }
