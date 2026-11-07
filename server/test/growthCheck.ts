@@ -224,6 +224,32 @@ export function addedFiles(baseSha: string, headSha: string, cwd: string): strin
   return gitRead(['diff', '--name-only', '--diff-filter=A', '-z', baseSha, headSha], cwd).split('\0').filter((p) => p !== '');
 }
 
+/** The files listed by hand: the union of spec §5.2 and the ARCH-01 ticket. The ccd libraries are not here:
+ *  `growthFiles` finds them. */
+export const GROWTH_FILES: readonly string[] = [
+  'ccd/ccd',
+  'ccd/ccrc',
+  'ccd/session-hook.sh',
+  'server/src/watch.ts',
+  'server/src/coord/store.ts',
+  'server/src/coord/routes.ts',
+  'server/src/server.ts',
+  'server/src/sessionws.ts',
+  'pwa/src/lib/api.ts',
+];
+
+/** A file directly in `ccd/lib/` ending `.sh`. The `.jq` and `.py` programs beside them are not libraries. */
+const CCD_LIBRARY = /^ccd\/lib\/[^/]+\.sh$/;
+
+/** The files the armed rows measure between two shas: `GROWTH_FILES`, then every ccd library at either sha, sorted, so
+ *  a library is held from the PR that adds it and no list has to name it (D-6913 listed one by hand; #2006). A sha git
+ *  cannot read throws: an empty answer would drop every library from the check. */
+export function growthFiles(baseSha: string, headSha: string, cwd: string): string[] {
+  const at = (sha: string): string[] => gitRead(['ls-tree', '--name-only', '-z', sha, '--', 'ccd/lib/'], cwd)
+    .split('\0').filter((p) => CCD_LIBRARY.test(p));
+  return [...GROWTH_FILES, ...[...new Set([...at(baseSha), ...at(headSha)])].sort()];
+}
+
 /** The listed files that grew by more than GROWTH_LIMIT, minus the waived: the
  *  same diff adds a file under L1_L2_NEW_FILE_DIRS, or shrinks another listed
  *  file by at least as much as this one grew. A listed file absent at either

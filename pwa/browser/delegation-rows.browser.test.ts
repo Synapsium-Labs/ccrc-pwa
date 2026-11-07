@@ -42,7 +42,7 @@ const RUNS = [{
   dispatchedAt: NOW - 3_000_000, closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
     clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null,
+  childReclaim: null, reviewCap: null, hadChild: false,
 }];
 
 const SESSIONS = [

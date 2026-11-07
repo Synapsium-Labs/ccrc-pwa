@@ -40,9 +40,9 @@ import { openExternal } from '../lib/markdown';
 import { ensureSession } from '../session/useEnsure';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
-  CHECK_AGAIN_LABEL, CLOSE, DONE, LEDGER, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
+  CHECK_AGAIN_LABEL, CLOSE, DONE, MINT_NEW_TOKEN, PASTE_A_TOKEN, PASTE_INSTEAD, REAUTH_WRONG, REPLACE_TOKEN,
   REVOKE_PAGES, SIGN_IN_AGAIN, SIGN_IN_LEDGER, signInLedger, START_SWITCH_AGAIN, STATE_LAMPS, STEP_UP_AGAIN_SIGN_OUT,
-  SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, chatgptSignedInLine, checkingLine, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
+  SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, chatgptSignedInLine, checkedLine, checkingLine, identityLine, laneActRefusal, reauthEnd, reauthInstalled, reauthIntro,
   reauthRestartLead, reauthSignOutConfirm, reauthStart, reauthStartRefusal, reauthTitle, reauthWasLine, revokeOldWords,
   signOutRefused, signOutUnknown, statedRefused,
 } from '../fleet/accountWords';
@@ -184,7 +184,7 @@ export function ReauthSheet(props: ReauthSheetProps): ReactNode {
       if (!live.current) return;
       setChecked(a.lane);
       setCheckNotice(null);
-      settle(LEDGER.checked);
+      settle(checkedLine(a.lane));
     } catch (e) {
       if (!live.current) return;
       const text = laneActRefusal('check', id, e);

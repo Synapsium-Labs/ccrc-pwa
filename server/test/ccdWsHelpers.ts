@@ -695,6 +695,10 @@ export const toolAdjToken = (h: Pick<CcdHarness, 'sh'>): string => {
 export const sessionTmpToken = (h: Pick<CcdHarness, 'sh'>, childLeaf?: string): string =>
   ` CCRC_SESSION_TMPDIR='${childLeaf ?? h.sh('printf %s "${TMPDIR:-/tmp}"')}'`;
 
+/** D-8050: the step that puts `$HOME/.local/bin` on the pane's PATH, read from ccd's one definition. Both launch lines
+ *  splice it before their last `cd`; `ccd-session-path.test.ts` runs it, so the pins below read it and do not restate it. */
+export const sessionPanePath = (h: Pick<CcdHarness, 'sh'>): string => h.sh('printf %s "$SESSION_PANE_PATH"');
+
 export function makeCcdHarness(prefix: string): CcdHarness {
   const home = mkTmp(prefix);
   // BEFORE anything else: sourcing ccd without a roster is fatal by design, so

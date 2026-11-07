@@ -64,7 +64,7 @@ const RUN = (over: Partial<RunSummary> = {}): RunSummary => ({
   claimedBy: ID, resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null,
   handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null, ...over,
+  childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 /** The worker of `RUN()`, carrying the run binding the current server sends for it (D-7182, C7d). */
 const WORKER = (): FleetSession =>

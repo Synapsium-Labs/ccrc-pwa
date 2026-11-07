@@ -5693,6 +5693,38 @@ describe('ccrc account remove', () => {
     expect(ej['kept']).toContain(join(external, externalSecret));
   });
 
+  it("an external lane's settings env stays: it is that launcher's credential, and ccrc never wrote it (D-8051 (15))", () => {
+    const home = box('ccrc-account-remove-external-env-');
+    seedRosterJson(home, [UPSTREAM,
+      { id: 'lane-x', label: 'lab·dev0', hue: 'amber', configDirSuffix: '.claude-lane-x',
+        homeAble: false, telemetry: 'none', exec: { kind: 'external', provider: 'compatible', baseUrl: 'https://orchard-api/v1' } }]);
+    plantLauncher(home, 'lane-x', '#!/bin/sh\n# somebody else wrote this\nexit 0\n');
+    plantTmux(home, []);
+    const cfg = join(home, '.claude-lane-x');
+    mkdirSync(join(cfg, 'skills', 'ccrc-worker'), { recursive: true });
+    const env = { ANTHROPIC_API_KEY: 'sk-canary', ANTHROPIC_BASE_URL: 'https://orchard-api/v1', OTHER: 'kept' };
+    writeFileSync(join(cfg, 'settings.json'), `${JSON.stringify({ env })}\n`);
+    const r = run(home, ['account', 'remove', '--id', 'lane-x']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')).env).toEqual(env);
+    // ccrc's own skills and hooks do leave, and the sheet's sentence says they do.
+    expect(existsSync(join(cfg, 'skills', 'ccrc-worker'))).toBe(false);
+    expect(oneObject(r)['kept']).toContain(cfg);
+  });
+
+  it("a generated lane's settings env is ccrc's, and goes with the lane (D-8051 (15))", () => {
+    const home = box('ccrc-account-remove-generated-env-');
+    seedRosterJson(home, [UPSTREAM, HOMEABLE('alt-max', 'violet'), HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'alt-max', 'team-shared']) plantLauncher(home, id);
+    plantTmux(home, []);
+    const cfg = join(home, '.claude-alt-max');
+    mkdirSync(cfg, { recursive: true });
+    writeFileSync(join(cfg, 'settings.json'), `${JSON.stringify({ env: { ANTHROPIC_API_KEY: '', ANTHROPIC_BASE_URL: 'https://orchard-api/v1', OTHER: 'kept' } })}\n`);
+    const r = run(home, ['account', 'remove', '--id', 'alt-max']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8')).env).toEqual({ OTHER: 'kept' });
+  });
+
   it('removes a codex launcher but keeps its OAuth when told to, and its optional secrets', async () => {
     // FREE PORTS, NOT CODEX_LANE'S (Plan 2b-2 Task 8): removal now stops and
     // reaps the lane, and the stop PROBES both ports before it decides a tier
@@ -8667,6 +8699,16 @@ describe('deploy/account-op.mjs classify: four exit codes, and only two of them 
     expect(r.code, r.stderr).toBe(0);
     expect(JSON.parse(r.stdout)).toMatchObject(
       { verdict: 'auth-dead', source: 'auth-status' });
+  });
+
+  it('a provider refusal is auth-dead at 401 and at 403; a status with no row of its own stays unknown (D-8051 (16))', () => {
+    const probe = (status: number | null, result: string): Record<string, unknown> => JSON.parse(opRun(['classify', '--source', 'probe', '--exit', '1'],
+      `${JSON.stringify({ is_error: true, terminal_reason: 'api_error', api_error_status: status, result })}\n`).stdout);
+    expect(probe(401, 'Not logged in · Please run /login')).toMatchObject({ verdict: 'auth-dead' });
+    expect(probe(403, 'API Error: 403 OAuth token has been revoked')).toMatchObject({ verdict: 'auth-dead', detail: 'API Error: 403 OAuth token has been revoked' });
+    expect(probe(403, '')).toMatchObject({ verdict: 'auth-dead', detail: 'the endpoint refused the credential (403)' });
+    expect(probe(429, 'API Error: 429 slow down')).toMatchObject({ verdict: 'unknown' });
+    expect(probe(null, 'API Error: 500 Internal server error')).toMatchObject({ verdict: 'unreachable' });
   });
 
   it('no parseable answer is exit 3 with stdout EMPTY — not a row, not a refusal', () => {

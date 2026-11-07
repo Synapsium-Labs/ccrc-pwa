@@ -1450,7 +1450,7 @@ describe('SessionScreen: the coordination line (D-5527)', () => {
     openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null, closedAt: null, handoffCommit: null,
     items: { done: 0, total: 0 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
-              briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null,
+              briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false,
   } as const;
   const mount = (sessions: FleetSession[], runs: readonly (typeof run41)[] = [run41]) => {
     const store = createSessionStore(CHILD, { makeSocket: fakeSocket, api: { prompt: vi.fn().mockResolvedValue(undefined) } });

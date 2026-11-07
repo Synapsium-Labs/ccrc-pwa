@@ -6,12 +6,15 @@
 // and word, which words lift as trouble cards and in what order, the roll-up subtitle, the two age lines, the identity
 // line, and each trouble card's three sentences and its command.
 import {
-  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, sourceAt, stateWordFor,
+  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, NOTHING_LEARNED, WINDOW_LIMITED_PCT, checkFinding, kindCodeOf, sourceAt, stateWordFor,
   type AccountStateAnswer, type AccountStateWord,
 } from '../../../shared/accounts';
 import { SWAP_REFUSALS, type AccountsConnect, type AccountUsage, type LaneNotReadyReason, type LaneWire, type RosterWire } from '../../../shared/api';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { formatAge, formatReset } from './formatReset';
+
+/** A clause as a sentence of its own: the state word's source and the ledger say the same finding. */
+const sentence = (clause: string): string => `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
 
 /** The lamp: a glyph and its word, never a glyph alone (spec §4.1; identity core). One row per state word, in the
  *  words' own precedence, so a new word is a compile error here before it is a lamp with no name. */
@@ -208,7 +211,9 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         : keyLane ? `key was refused by ${entry?.provider === 'openrouter' ? 'OpenRouter' : 'its provider'}`
           : 'sign-in was refused';
       return {
-        wrong: `${id}'s ${what} (HTTP 401)${ago}.`,
+        // Only the marker is a measured 401: a check of `auth-dead` may have made no request at all (D-8051 (20)).
+        wrong: answer.source === 'HTTP 401' ? `${id}'s ${what} (HTTP 401)${ago}.`
+          : `${id}'s ${what}, or it has none${ago === '' ? '' : ` (${ago.trim()})`}.`,
         effect: `New sessions are not placed here.${sessions > 0 ? ` ${sessionsOn(sessions)} will fail their next turn.` : ''}`,
         lead: credentialLane
           ? 'Replace its credential on the fleet host, then check it again:'
@@ -264,22 +269,26 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         move: null,
       };
     }
-    case 'inconclusive':
-      return answer.source === 'lane state unreadable'
-        ? {
+    case 'inconclusive': {
+      if (answer.source === 'lane state unreadable') {
+        return {
           wrong: `${id}'s lane state could not be read.`,
           effect: 'Nothing here says whether the credential works; it may be fine.',
           lead: 'Check it again on the fleet host, which writes the lane state anew:',
           commands: [fixCommands.check(id)],
           move: null,
-        }
-        : {
-          wrong: "The last check couldn't reach the provider.",
-          effect: 'Nothing was learned about the credential; it may be fine.',
-          lead: 'Check it again on the fleet host:',
-          commands: [fixCommands.check(id)],
-          move: null,
         };
+      }
+      // The source's first clause is what the check found, and its last what that means for the credential.
+      const [found = answer.source, , credential = NOTHING_LEARNED] = answer.source.split(' · ');
+      return {
+        wrong: sentence(found),
+        effect: sentence(credential),
+        lead: 'Check it again on the fleet host:',
+        commands: [fixCommands.check(id)],
+        move: null,
+      };
+    }
     default:
       return null;
   }
@@ -459,6 +468,23 @@ export const LEDGER = {
   reading: "… reading the fleet host's accounts again",
 } as const;
 
+/** What a check found, in the words after "The check did not pass:". `checkFinding` holds every verdict but a refusal. */
+function checkFound(verdict: string | undefined): string {
+  if (verdict === undefined) return `the fleet host recorded no result. ${sentence(NOTHING_LEARNED)}`;
+  if (verdict === 'auth-dead') return `${STATE_LAMPS['signed-out'].word.toLowerCase()}. The provider refused this lane's credential, or it has none.`;
+  const { found, credential } = checkFinding(verdict);
+  return `it ${found}. ${sentence(credential)}`;
+}
+/** An answered check's ledger line (D-8051 (12)). The check route answers 200 with the lane whatever the probe found, so
+ *  a resolved call is not a pass: only a verdict of `ok` says Checked, and a lane with no verdict says so. "First-run
+ *  setup verified" is for a lane that is ready: the verb exits 0 when the probe passes and its seed refuses, and three of
+ *  the four sheets have nothing beneath this line to correct it (D-8051 (18)). */
+export function checkedLine(lane: Pick<LaneWire, 'check' | 'ready' | 'notReadyReason'>): string {
+  const verdict = lane.check?.verdict;
+  if (verdict !== 'ok') return `The check did not pass: ${checkFound(verdict)}`;
+  return lane.ready ? LEDGER.checked : `✓ Checked: one test reply. ${notReadyWords(lane.notReadyReason)}`;
+}
+
 /** Outcome unknown (spec §6.2's terminal states): the add's answer never came. */
 export const OUTCOME_UNKNOWN = "The fleet host didn't answer in time. The lane may exist; checking…";
 /** The re-read found no such lane: nothing was added, and nothing is sent again on its own. */
@@ -477,7 +503,7 @@ type AddRefusalWord = Extract<RouteRefusal,
   'key-rejected' | 'token-unverified' | 'key-charset' | 'duplicate-id' | 'lane-busy' | 'auth-in-progress'
   | 'unsupported' | 'insecure-origin' | 'auth-off' | 'unauthenticated' | 'unavailable' | 'bad-account-id'>;
 const ADD_REFUSAL_TEXT: Readonly<Record<AddRefusalWord, { frame: AddRefusalFrame; text: (id: string) => string }>> = {
-  'key-rejected': { frame: 'method', text: () => 'That token was refused (HTTP 401). Nothing was saved.' },
+  'key-rejected': { frame: 'method', text: () => 'That token was refused. Nothing was saved.' },
   'token-unverified': { frame: 'method', text: () => "Anthropic didn't answer: nothing was saved. Try again." },
   'key-charset': {
     frame: 'method',
@@ -530,12 +556,13 @@ export const checkLatency = (ms: number): string => `Checked: one test reply in 
  *  literal branch on a code). `field` reads one more word off the body (`reason`, `verbCode`), already held to a word. */
 type LaneRefusalWord = Extract<RouteRefusal,
   'not-ready' | 'last-enabled-home' | 'lane-busy' | 'outcome-unknown' | 'not-found' | 'unsupported' | 'insecure-origin'
-  | 'unavailable' | 'lane-act-refused'>;
+  | 'unavailable' | 'lane-act-refused' | 'check-unrecorded'>;
 const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: string, field: (k: string) => string | undefined) => string>> = {
   'not-ready': (_id, _what, field) => notReadyWords(field('reason') as LaneNotReadyReason | undefined),
   'last-enabled-home': (id) => `${id} is the only lane that can take new sessions. Turn another on first.`,
   'lane-busy': (id) => `${id} is busy with another account change. Try again in a moment.`,
   'outcome-unknown': (id, what) => `The fleet host didn't answer in time, so whether ${id} was ${what} is unknown. The screen reads it again.`,
+  'check-unrecorded': (id) => `The check ran, but its result couldn't be read back from the fleet host, so what this screen shows for ${id} is out of date. Run it on the fleet host to see the result: ${fixCommands.check(id)}`,
   'not-found': (id) => `${id} is no longer on this box's roster.`,
   'unsupported': () => 'The fleet host needs an update before lanes can be switched or checked here.',
   'insecure-origin': () => "Accounts can't be changed over plain HTTP.",
@@ -682,8 +709,15 @@ export const READING_LANE = (id: string): string => `Reading ${id} on the fleet 
 export const typedConfirmLabel = (id: string): string => `Type ${id} to confirm`;
 /** What Remove deletes. A managed Codex lane's credential is its sign-in folder, so its sentence follows that lane's line
  *  and never says the credential goes: turned off, the verb keeps the folder. Turned on, the verb still keeps one that is
- *  outside ccrc's home, that another lane reaches, or whose fate it can't read, so the sentence says "if". */
-export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep'): string => {
+ *  outside ccrc's home, that another lane reaches, or whose fate it can't read, so the sentence says "if". A lane ccrc only
+ *  records (`recorded`, D-8051 (13)) has its own: the verb keeps that lane's launcher, any secrets file it names and its
+ *  settings env, and runs no sign-out, so all it takes is the roster row, the records beside it and ccrc's own hooks and
+ *  skills (D-8051 (15)). The last sentence says "if": the verb keeps a secrets file off the path ccrc expects (D-8051 (19)). */
+export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep' | 'recorded'): string => {
+  if (codexFolder === 'recorded') {
+    return `Removing ${id} takes it off the fleet host's roster, removes ccrc's state records for it, and takes ccrc's own hooks and skills out of its config folder. `
+      + 'Its launcher, whatever credential that launcher uses, the rest of its config folder and its transcripts stay: ccrc only records this lane.';
+  }
   if (codexFolder === 'keep') {
     return `Removing ${id} deletes everything that runs it on the fleet host. Its ChatGPT sign-in folder, config folder and transcripts stay.`;
   }
@@ -691,7 +725,7 @@ export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep'): 
     return `Removing ${id} deletes everything that runs it on the fleet host, and its ChatGPT sign-in folder if that's safe to delete. `
       + 'Its config folder and transcripts stay.';
   }
-  return `Removing ${id} deletes its credential on the fleet host and everything that runs it. Its config folder and transcripts stay.`;
+  return `Removing ${id} deletes everything that runs it on the fleet host, and its credential if that's safe to delete. Its config folder and transcripts stay.`;
 };
 /** Discard (spec §11.5): one tap with step-up, for a never-enabled lane with no sessions. */
 export const DISCARD_LANE = 'Discard this lane';
@@ -818,7 +852,7 @@ type ReplaceRefusalWord = Extract<RouteRefusal,
 /** What a refused replacement leaves, by what the app may say of the old token. */
 const replaceLeft = (id: string, old: OldCredential): string => oldCredentialLine(id, old, `${id} keeps its old token.`);
 const REPLACE_REFUSAL_TEXT: Readonly<Record<ReplaceRefusalWord, (id: string, old: OldCredential) => string>> = {
-  'key-rejected': (id, old) => `That token was refused (HTTP 401). ${replaceLeft(id, old)}`,
+  'key-rejected': (id, old) => `That token was refused. ${replaceLeft(id, old)}`,
   'token-unverified': (id, old) =>
     `Anthropic didn't answer, so nothing was saved. ${oldCredentialLine(id, old, `${id} keeps its old token.`, `${id} is as it was.`)} Try again.`,
   'key-charset': (id, old) => `That isn't a token: it holds a line break or a control character, or is too long. ${replaceLeft(id, old)}`,

@@ -416,7 +416,7 @@ const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 
 const worker = sess({ id: 'demo-still-cove', workspace: 'still-cove' });
@@ -1477,7 +1477,7 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     claimedBy: 'coord-a', resumed: false, clearedAt: null, openedAt: 1, dispatchStartedAt: null, dispatchedAt: null,
     closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true,
-      clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, ...over,
+      clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
   });
   const cardFor = (w: DelegationProjectionWire, sessions = [coordA], runs: RunSummary[] = []) =>
     fleetTree(withRunBinding(sessions, runs), [], runs, {}, w).find((g) => g.project === 'project-a')!;

@@ -17,7 +17,8 @@
 //   (c) the rejection rows (D-7226): `propagate` readers reject the executor (no notice, no effect) and land in the
 //       caller's own sentence; `judged` readers answer their step's sentence;
 //   (d) child-spent's three `gone` sources (D-7230);
-//   (e) the held-at-the-act rows (child-spent's `reclaim-paused` re-read at step 6 since C4o, D-7401);
+//   (e) the held-at-the-act rows (child-spent's `reclaim-paused` re-read at step 6 since C4o, D-7401; the store re-read
+//       nearest the argv on child-spent and archive-expired, D-8091);
 //   (f) temp-orphan's synchronous tail (two probes);
 //   (g) the collector's call order;
 //   (h) the side-effect rows (D-7199);
@@ -232,6 +233,14 @@ const childRig = async (o: ChildOpts = {}) => {
       coord.bindSession(r.id, KID);
       return r.id;
     },
+    /** An open run naming the child as its worker, claimed by a session the registry does not list: old enough (the
+     *  caller's clock) and still `planned`, it is a stale sibling, which keeps nothing once that absence is proven. */
+    openGoneSibling: (): number => {
+      const r = coord.openRun({ program: 'w-gone', title: 'w-gone', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-gone' });
+      if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+      coord.bindSession(r.id, KID);
+      return r.id;
+    },
     /** A finished run the child itself coordinated. */
     coordinated: (): void => {
       const r = coord.openRun({ program: 'w-own', title: 'w-own', project: 'demo', wave: 1, waveOf: null, claimedBy: KID });
@@ -293,6 +302,10 @@ const CHILD_STEPS: ReadonlyArray<{ readonly step: string; readonly opts?: ChildO
     argv: () => [KAUDIT] },
   { step: '6 disabled at the act', set: (k) => { k.hooks.audit = () => { k.raise(CHILD_RECLAIM_DISABLED_MARKER); }; },
     want: (k) => deferredC(k, 'paused-at-server', 'child-reclaim-disabled is set at the act: child reclaim is switched off'), argv: () => [KAUDIT] },
+  { step: '6a siblings at the act', set: (k) => { k.hooks.audit = () => { (k as { sib?: number }).sib = k.openSibling(); }; },
+    want: (k) => deferredC(k, 'siblings-open', `open run(s) #${(k as { sib?: number }).sib} still name this workspace at the act`), argv: () => [KAUDIT] },
+  { step: '6a coordinated at the act', set: (k) => { k.hooks.audit = () => { k.coordinated(); }; },
+    want: (k) => deferredC(k, 'siblings-open', `${KID} has coordinated run(s) at the act`), argv: () => [KAUDIT] },
 ];
 
 describe('child-spent (reclaimChild): the step matrix (C4h a)', () => {
@@ -552,6 +565,91 @@ describe('child-spent (reclaimChild): rejections, gone, the act, effects, argv a
     expect(k.argvs).toEqual([KAUDIT]);
   });
 
+  it('child-spent: held at the act — the off switch at the act answers before the store at the act (the listing is the last await)', async () => {
+    const k = await childRig();
+    k.hooks.audit = () => { k.openSibling(); k.raise(CHILD_RECLAIM_DISABLED_MARKER); };
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'paused-at-server',
+      'child-reclaim-disabled is set at the act: child reclaim is switched off'));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: held at the act — a run bound during step 6\'s listing, after the audit, composes no ws-reclaim', async () => {
+    const k = await childRig();
+    let sib = 0;
+    k.hooks.listing = (n) => { if (n === 4) sib = k.openSibling(); };
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'siblings-open', `open run(s) #${sib} still name this workspace at the act`));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: the store at the act — no microtask queued at its last read runs before the argv', async () => {
+    // The sibling read's claimant half is asynchronous; the late step takes none of it, so the store rows it reads are
+    // the ones the argv is composed on. Each store read queues a probe: a late read that awaited anything would run the
+    // probe of its own last read before ws-reclaim.
+    const k = await childRig();
+    const probe = { ran: 0, queued: 0, atArgv: -1 };
+    const arm = (): void => { probe.queued += 1; const at = probe.queued; queueMicrotask(() => { probe.ran = at; }); };
+    const b = k.coord.bindingsOf.bind(k.coord);
+    k.coord.bindingsOf = ((id: string) => { arm(); return b(id); }) as typeof k.coord.bindingsOf;
+    const c = k.coord.childReclaimCoordinatorClaims.bind(k.coord);
+    k.coord.childReclaimCoordinatorClaims = ((...a: Parameters<typeof c>) => { arm(); return c(...a); }) as typeof c;
+    const runCcd = k.deps.runCcd;
+    k.deps.runCcd = (argv) => { if (argv[0] === 'ws-reclaim') probe.atArgv = probe.ran; return runCcd(argv); };
+    expect(await reclaimChild(k.deps, k.req)).toMatchObject({ kind: 'reclaimed' });
+    expect(probe.queued, 'the store was read twice, each with its fence').toBeGreaterThanOrEqual(4);
+    expect(probe.atArgv, 'the decide reads\' probes ran; neither of the late reads\' had').toBe(probe.queued - 2);
+  });
+
+  it('child-spent: the store at the act — a stale sibling the decide read proved stale still keeps nothing, and the verb is composed', async () => {
+    const k = await childRig();
+    k.openGoneSibling();
+    k.deps.now = () => Date.now() + STALE_SIBLING_MS + 60_000;
+    expect(await reclaimChild(k.deps, k.req)).toMatchObject({ kind: 'reclaimed' });
+    expect(k.argvs).toEqual([KAUDIT, kAct(k.runId)]);
+  });
+
+  it('child-spent: the store at the act — a stale-shaped run no decide read placed keeps the child (its claimant is doubt, and doubt keeps)', async () => {
+    const k = await childRig();
+    let sib = 0;
+    k.deps.now = () => Date.now() + STALE_SIBLING_MS + 60_000;
+    // Its claimant was never measured, so the late read, which measures nothing, must not read it as proven gone. Its
+    // age is the clock's: the run opened during the audit, and the row's clock stands past the ceiling.
+    k.hooks.audit = () => { sib = k.openGoneSibling(); };
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'siblings-open', `open run(s) #${sib} still name this workspace at the act`));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: the store at the act — a run the decide read proved stale that dispatched during the audit keeps the child', async () => {
+    const k = await childRig();
+    const sib = k.openGoneSibling();
+    k.deps.now = () => Date.now() + STALE_SIBLING_MS + 60_000;
+    k.hooks.audit = () => { k.coord.markDispatchStarted(sib, Date.now()); };
+    expect(await reclaimChild(k.deps, k.req)).toEqual(deferredC(k, 'siblings-open', `open run(s) #${sib} still name this workspace at the act`));
+    expect(k.argvs).toEqual([KAUDIT]);
+  });
+
+  it('child-spent: the store at the act — a store that cannot say defers, and no verb is composed (its answer, and its throw)', async () => {
+    const said1 = await childRig();
+    const worker = said1.coord.bindingsOf.bind(said1.coord);
+    let reads = 0;
+    said1.coord.bindingsOf = ((id: string) => {
+      reads += 1;
+      return reads === 1 ? worker(id) : { ...worker(id), worker: () => ({ ok: false as const, detail: 'the store is locked' }) };
+    }) as typeof said1.coord.bindingsOf;
+    expect(await reclaimChild(said1.deps, said1.req)).toEqual(deferredC(said1, 'siblings-unreadable', 'the store is locked'));
+    expect(said1.argvs).toEqual([KAUDIT]);
+    const threw = await childRig();
+    const of = threw.coord.bindingsOf.bind(threw.coord);
+    let again = 0;
+    threw.coord.bindingsOf = ((id: string) => {
+      again += 1;
+      if (again > 1) throw new Error('database is locked');
+      return of(id);
+    }) as typeof threw.coord.bindingsOf;
+    expect(await reclaimChild(threw.deps, threw.req)).toEqual(deferredC(threw, 'siblings-unreadable',
+      `the run store could not be read at the act (database is locked), so whether a run names ${KID} cannot be said`));
+    expect(threw.argvs).toEqual([KAUDIT]);
+  });
+
   it('child-spent: an unmeasurable listing at step 6 still answers the child-reclaim-disabled sentence', async () => {
     const k = await childRig();
     k.hooks.listing = (n) => (n === 4 ? 'null' : undefined);
@@ -718,6 +816,28 @@ const expiryRig = async (o: { readonly caps?: readonly string[] | null; readonly
       coord.bindSession(r.id, sessionId);
       return r.id;
     },
+    /** An open run the row claims: it coordinates. */
+    claimRun: (): void => {
+      const r = coord.openRun({ program: 'w-claim', title: 'w-claim', project: 'demo', wave: 1, waveOf: null, claimedBy: sessionId });
+      if (!('id' in r)) throw new Error('openRun refused');
+    },
+    /** A closed review run naming the row, of a work run that is still open: the review conjunct keeps it. */
+    reviewOf: (): void => {
+      const work = coord.openRun({ program: 'w-work', title: 'w-work', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+      if (!('id' in work)) throw new Error('openRun refused');
+      const rev = coord.openRun({ program: 'w-rev', title: 'w-rev', project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord',
+        kind: 'review', reviews: work.id });
+      if (!('id' in rev)) throw new Error('openRun refused');
+      coord.bindSession(rev.id, sessionId);
+      const closed = coord.closeRun({ runId: rev.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'w-rev', viaClosing: false });
+      if (!closed.ok) throw new Error('closeRun refused');
+    },
+    /** A finished run the row itself coordinated. */
+    coordinated: (): void => {
+      const r = coord.openRun({ program: 'w-own', title: 'w-own', project: 'demo', wave: 1, waveOf: null, claimedBy: sessionId });
+      if (!('id' in r)) throw new Error('openRun refused');
+      coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'w-own', viaClosing: false });
+    },
   };
 };
 type ExpiryRig = Awaited<ReturnType<typeof expiryRig>>;
@@ -750,6 +870,14 @@ const EXPIRY_STEPS: ReadonlyArray<{ readonly step: string; readonly opts?: Param
     want: answeredX({ kind: 'refused', token: 'held', detail: 'a hold stands', inUse: [], auditExpiresAt: DUE }), argv: [XAUDIT] },
   { step: '6 switches at the act', set: (x) => { x.hooks.audit = () => { x.raise(RECLAIM_PAUSE_MARKER); }; },
     want: answeredX({ kind: 'deferred', why: 'paused-at-server', detail: 'reclaim-paused is raised: cleanup is paused fleet-wide' }), argv: [XAUDIT] },
+  { step: '6a store at the act: a worker', set: (x) => { x.hooks.audit = () => { x.bindWorker(); }; },
+    want: answeredX({ kind: 'deferred', why: 'open-run', detail: `the coordination store, re-read at the act, keeps ${XID} (open-run)` }), argv: [XAUDIT] },
+  { step: '6a store at the act: a claimant', set: (x) => { x.hooks.audit = () => { x.claimRun(); }; },
+    want: answeredX({ kind: 'deferred', why: 'coordinating', detail: `the coordination store, re-read at the act, keeps ${XID} (coordinating)` }), argv: [XAUDIT] },
+  { step: '6a store at the act: a review', set: (x) => { x.hooks.audit = () => { x.reviewOf(); }; },
+    want: answeredX({ kind: 'deferred', why: 'review-open', detail: `the coordination store, re-read at the act, keeps ${XID} (review-open)` }), argv: [XAUDIT] },
+  { step: '6a store at the act, before the shadow arm', opts: { live: false }, set: (x) => { x.hooks.audit = () => { x.bindWorker(); }; },
+    want: answeredX({ kind: 'deferred', why: 'open-run', detail: `the coordination store, re-read at the act, keeps ${XID} (open-run)` }), argv: [XAUDIT] },
   { step: '7 shadow', opts: { live: false }, set: () => {},
     want: answeredX({ kind: 'would-expire', sensitive: 0 }), argv: [XAUDIT] },
 ];
@@ -810,6 +938,62 @@ describe('archive-expired (expireArchived): the step matrix (C4h a)', () => {
     y.hooks.audit = () => { y.lower(EXPIRE_LANE_LIVE_MARKER); };
     expect(await expireArchived(y.deps, y.req)).toEqual(answeredX({ kind: 'would-expire', sensitive: 0 }));
     expect(y.argvs).toEqual([XAUDIT]);
+  });
+
+  it('archive-expired: held at the act — the switches at the act answer before the store at the act (the listing is the last await)', async () => {
+    const x = await expiryRig();
+    x.hooks.audit = () => { x.bindWorker(); x.raise(RECLAIM_PAUSE_MARKER); };
+    expect(await expireArchived(x.deps, x.req)).toEqual(answeredX({ kind: 'deferred', why: 'paused-at-server',
+      detail: 'reclaim-paused is raised: cleanup is paused fleet-wide' }));
+    expect(x.argvs).toEqual([XAUDIT]);
+  });
+
+  it('archive-expired: held at the act — a run bound during the last listing, after the audit, composes no ws-expire', async () => {
+    const x = await expiryRig();
+    x.hooks.listing = (n) => { if (n === 2) x.bindWorker(); };
+    expect(await expireArchived(x.deps, x.req)).toEqual(answeredX({ kind: 'deferred', why: 'open-run',
+      detail: `the coordination store, re-read at the act, keeps ${XID} (open-run)` }));
+    expect(x.argvs).toEqual([XAUDIT]);
+  });
+
+  it('archive-expired: held at the act — a child row that coordinated during the audit composes no ws-expire', async () => {
+    const x = await expiryRig({ childOf: 4 });
+    x.raise(EXPIRE_CHILD_LIVE_MARKER);
+    x.hooks.audit = () => { x.coordinated(); };
+    expect(await expireArchived(x.deps, x.req)).toEqual({ ...answeredX({ kind: 'deferred', why: 'coordinating',
+      detail: `the coordination store, re-read at the act, keeps ${XID} (coordinating)` }), child: true });
+    expect(x.argvs).toEqual([['ws-audit', '--session', XID, '--expire', '--child-of', '4']]);
+  });
+
+  it('archive-expired: the store at the act — a store that cannot say defers (store-unreadable), and no verb is composed', async () => {
+    const x = await expiryRig();
+    const of = x.coord.bindingsOf.bind(x.coord);
+    let reads = 0;
+    x.coord.bindingsOf = ((id: string) => {
+      reads += 1;
+      if (reads > 1) throw new Error('database is locked');
+      return of(id);
+    }) as typeof x.coord.bindingsOf;
+    expect(await expireArchived(x.deps, x.req)).toEqual(answeredX({ kind: 'deferred', why: 'store-unreadable',
+      detail: `the coordination store, re-read at the act, keeps ${XID} (store-unreadable)` }));
+    expect(x.argvs).toEqual([XAUDIT]);
+  });
+
+  it('archive-expired: the store at the act — no microtask queued at its read runs before the argv', async () => {
+    const x = await expiryRig();
+    const probe = { ran: 0, queued: 0, atArgv: -1 };
+    const b = x.coord.bindingsOf.bind(x.coord);
+    x.coord.bindingsOf = ((id: string) => {
+      probe.queued += 1;
+      const at = probe.queued;
+      queueMicrotask(() => { probe.ran = at; });
+      return b(id);
+    }) as typeof x.coord.bindingsOf;
+    const runCcd = x.deps.runCcd;
+    x.deps.runCcd = (argv) => { if (argv[0] === 'ws-expire') probe.atArgv = probe.ran; return runCcd(argv); };
+    expect(await expireArchived(x.deps, x.req)).toMatchObject({ kind: 'expired' });
+    expect(probe.queued, 'the store was read at decide and at the act').toBe(2);
+    expect(probe.atArgv, 'the decide read\'s probe ran; the late read\'s had not').toBe(1);
   });
 
   it('archive-expired: held at the act — expire-v1, or a child row\'s expire-child-v1, withdrawn during the audit composes no ws-expire', async () => {
@@ -1345,9 +1529,11 @@ const READER_MODES: ReadonlyArray<{ readonly reason: 'child-spent' | 'archive-ex
   { reason: 'child-spent', reader: 'presence (viewers.isVisible)', mode: 'propagate' },
   { reason: 'child-spent', reader: 'audit (childReclaimAudit)', mode: 'propagate' },
   { reason: 'child-spent', reader: '6 the disabled read at the act', mode: 'judged' },
+  { reason: 'child-spent', reader: '6a the store at the act', mode: 'judged' },
   { reason: 'child-spent', reader: 'act (childReclaimAct)', mode: 'propagate' },
   { reason: 'archive-expired', reader: 'the switches (expirySwitches, both reads)', mode: 'judged' },
   { reason: 'archive-expired', reader: 'the store (readExpiryStore)', mode: 'judged' },
+  { reason: 'archive-expired', reader: 'the store at the act (readExpiryStore)', mode: 'judged' },
   { reason: 'archive-expired', reader: 'presence (viewers.isVisible)', mode: 'propagate' },
   { reason: 'archive-expired', reader: 'audit (expireAudit)', mode: 'propagate' },
   { reason: 'archive-expired', reader: 'act (expireAct)', mode: 'propagate' },
@@ -1364,8 +1550,8 @@ const READER_MODES: ReadonlyArray<{ readonly reason: 'child-spent' | 'archive-ex
 describe('the difference table (C4h b; plan item 2 and item 16)', () => {
   it('each reader\'s rejection mode, per reason: propagate or judged', () => {
     const by = (reason: string, mode: string): number => READER_MODES.filter((r) => r.reason === reason && r.mode === mode).length;
-    expect([by('child-spent', 'propagate'), by('child-spent', 'judged')]).toEqual([6, 5]);
-    expect([by('archive-expired', 'propagate'), by('archive-expired', 'judged')]).toEqual([3, 2]);
+    expect([by('child-spent', 'propagate'), by('child-spent', 'judged')]).toEqual([6, 6]);
+    expect([by('archive-expired', 'propagate'), by('archive-expired', 'judged')]).toEqual([3, 3]);
     expect([by('temp-orphan', 'propagate'), by('temp-orphan', 'judged')]).toEqual([4, 4]);
   });
 
@@ -1564,7 +1750,8 @@ import {
   parseChildReclaimAudit, parseChildReclaimAuditFailed, type ChildSpentFacts,
 } from '../src/coord/childReclaim.js';
 import { readSessionRecord } from '../src/registry.js';
-import { readChildSiblings } from '../src/coord/siblingRead.js';
+import { childSiblingsAtAct, readChildSiblingsPlaced } from '../src/coord/siblingRead.js';
+import { STALE_SIBLING_MS } from '../src/coord/staleSibling.js';
 import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledSentence,
 } from '../src/coord/childReclaimDisabled.js';
@@ -1674,7 +1861,7 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
       return read.kind === 'absent' || read.kind === 'unmeasurable'
         ? { read, again: await childReclaimRowListing(deps, req.sessionId) } : { read };
     },
-    [RETIRE_STEPS.store]: () => readChildSiblings(deps, req.sessionId, now()),
+    [RETIRE_STEPS.store]: () => readChildSiblingsPlaced(deps, req.sessionId, now()),
     [RETIRE_STEPS.coordinated]: (f) => {
       const r = f[RETIRE_STEPS.record]?.read;
       if (r?.kind !== 'found') throw new Error('the fence read before a found record');
@@ -1699,6 +1886,13 @@ const childReaders = (k: ChildRig): Readers<ChildSpentFacts> => {
     [RETIRE_STEPS.markerMatch]: () => true,
     [RETIRE_STEPS.auditGeneration]: () => true,
     [RETIRE_STEPS.offSwitchLast]: () => childActSwitches(k),
+    [RETIRE_STEPS.storeLast]: (f) => {
+      const placed = f[RETIRE_STEPS.store];
+      const r = f[RETIRE_STEPS.record]?.read;
+      if (placed === undefined || !placed.ok || r?.kind !== 'found') throw new Error('the store at the act read before a clean store');
+      return { siblings: childSiblingsAtAct(deps.coord, req.sessionId, now(), placed.claimants),
+        coordinated: childReclaimHasCoordinated(deps.coord, req.sessionId, now(), childReclaimRowUuid(r.record)) };
+    },
   };
 };
 const CHILD_READS = (l: string): boolean => l === 'readdir' || l === 'readdirMeasured' || l === 'generation' || l === 'presence' || l === 'store' || l === 'claims'
@@ -1880,6 +2074,7 @@ const expiryReaders = (x: ExpiryRig): Readers<ArchiveExpiredFacts> => {
     [RETIRE_STEPS.archiveMatch]: () => true,
     [RETIRE_STEPS.auditVerdict]: () => true,
     [RETIRE_STEPS.switchesLast]: () => expirySwitchesOf(x),
+    [RETIRE_STEPS.storeLast]: () => readExpiryStore(deps.coord, req.sessionId, req.childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }),
     [RETIRE_STEPS.live]: () => true,
   };
 };
@@ -2210,9 +2405,9 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
 
   it('each row\'s steps in the old ladder\'s order, each step once, the audit between decide and act', () => {
     expect(stepsOf(ROWS[0]!)).toEqual(['record', 'store', 'coordinated', 'switches', 'off-switch', 'generation', 'presence', 'capability',
-      'audit', 'audit-verdict', 'marker-match', 'audit-generation', 'off-switch-last']);
+      'audit', 'audit-verdict', 'marker-match', 'audit-generation', 'off-switch-last', 'store-last']);
     expect(stepsOf(ROWS[1]!)).toEqual(['id', 'capability', 'switches', 'store', 'presence', 'audit', 'archive-match', 'audit-verdict',
-      'switches-last', 'live']);
+      'switches-last', 'store-last', 'live']);
     expect(stepsOf(ROWS[2]!)).toEqual(['capability', 'id', 'switches', 'presence', 'audit', 'stale-generation', 'audit-verdict', 'licence',
       'hold', 'switches-last', 'latch', 'lane', 'flip', 'safety', 'licence-stands', 'presence-last', 'hold-last', 'live', 'loose-marker']);
     for (const r of ROWS) expect(new Set(stepsOf(r)).size, r.name).toBe(stepsOf(r).length);
@@ -2223,19 +2418,20 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
   it('each row\'s rejection modes are C4h\'s measured table (judged where the ladder\'s own try catches; a wrapper\'s fold is its fact)', () => {
     const judged = (r: RetireReason<never, RetireFactSet, unknown>): string[] =>
       [...r.decide, r.audit, ...r.act].filter((s) => s.onReject === 'judged').map((s) => s.step);
-    expect(judged(ROWS[0]!)).toEqual(['coordinated', 'switches', 'generation']);
+    expect(judged(ROWS[0]!)).toEqual(['coordinated', 'switches', 'generation', 'store-last']);
     expect(judged(ROWS[1]!)).toEqual([]);
     expect(judged(ROWS[2]!)).toEqual([]);
     // C4h's judged readers: the three above, and the wrappers that fold their own rejection into their answer.
     const FOLDED: Record<string, RetireStep> = {
       "2b' the disabled read": RETIRE_STEPS.offSwitch, '6 the disabled read at the act': RETIRE_STEPS.offSwitchLast,
       'the switches (expirySwitches, both reads)': RETIRE_STEPS.switches, 'the store (readExpiryStore)': RETIRE_STEPS.store,
+      'the store at the act (readExpiryStore)': RETIRE_STEPS.storeLast,
       'the switches (collectSwitches, both reads)': RETIRE_STEPS.switches, 'the audit (collectAudit)': RETIRE_STEPS.audit,
       'the hold (collectOpenRunHold, both reads)': RETIRE_STEPS.hold, 'the act (ws-collect)': RETIRE_STEPS.looseMarker,
     };
     const LADDER_TRY: Record<string, RetireStep> = {
       '2a the coordination fence': RETIRE_STEPS.coordinated, '2b the pause read': RETIRE_STEPS.switches,
-      '2c the generation read': RETIRE_STEPS.generation,
+      '2c the generation read': RETIRE_STEPS.generation, '6a the store at the act': RETIRE_STEPS.storeLast,
     };
     for (const m of READER_MODES.filter((x) => x.mode === 'judged')) {
       expect(LADDER_TRY[m.reader] ?? FOLDED[m.reader], m.reader).toBeDefined();
@@ -2249,10 +2445,10 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
     expect(syncOf(ROWS[0]!)).toEqual([
       ['record', false], ['store', false], ['coordinated', true], ['switches', false], ['off-switch', false],
       ['generation', false], ['presence', true], ['capability', true], ['audit', false], ['audit-verdict', true],
-      ['marker-match', true], ['audit-generation', true], ['off-switch-last', false]]);
+      ['marker-match', true], ['audit-generation', true], ['off-switch-last', false], ['store-last', true]]);
     expect(syncOf(ROWS[1]!)).toEqual([
       ['id', true], ['capability', true], ['switches', false], ['store', true], ['presence', true], ['audit', false],
-      ['archive-match', true], ['audit-verdict', true], ['switches-last', false], ['live', true]]);
+      ['archive-match', true], ['audit-verdict', true], ['switches-last', false], ['store-last', true], ['live', true]]);
     expect(syncOf(ROWS[2]!)).toEqual([
       ['capability', true], ['id', true], ['switches', false], ['presence', true], ['audit', false],
       ['stale-generation', true], ['audit-verdict', true], ['licence', true], ['hold', true], ['switches-last', false],
@@ -2261,6 +2457,11 @@ describe('decideRetire: the rows carry the difference table (C4i; D-7166, D-7173
     // C4h (f): after its last listing, temp-orphan's ladder reaches the verb with no await.
     const tail = syncOf(ROWS[2]!);
     expect(tail.slice(tail.findIndex(([s]) => s === RETIRE_STEPS.switchesLast) + 1).every(([, sync]) => sync)).toBe(true);
+    // The other two rows' store-last is their tail's last read, past their last await (D-8091).
+    for (const row of [ROWS[0]!, ROWS[1]!]) {
+      const steps = syncOf(row);
+      expect(steps.slice(steps.findIndex(([s]) => s === RETIRE_STEPS.storeLast)).every(([, sync]) => sync), row.name).toBe(true);
+    }
   });
 
   it('the listing steps: child-spent lists once per marker, the other two once per step for every marker', () => {

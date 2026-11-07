@@ -40,6 +40,11 @@ const ROSTER = {
     // The file, not `exec.kind`, decides token vs sign-in: a generated Anthropic lane with no file is sign-in
     // (D-5517: a rule keyed off exec.kind must go red here, not only in accounts-route).
     entry('lane-h', 'violet', { kind: 'generated', provider: 'anthropic' }, 'anthropic'),
+    // A launcher ccrc only records, under each provider that isn't OpenAI's (D-8051 (13)).
+    entry('lane-i', 'green', { kind: 'external', provider: 'anthropic' }),
+    entry('lane-j', 'amber', { kind: 'external', provider: 'openrouter' }),
+    // ccrc writes this one's wrapper, so it isn't a recorded lane, and it isn't a Codex lane ccrc owns either.
+    entry('lane-k', 'blue', { kind: 'generated', provider: 'openai' }),
   ],
 };
 
@@ -81,18 +86,22 @@ describe('rosterKindOf: the lane kind, derived once from the parsed entry (D-551
 
   it('an entry with no provider carries no provider or kind: absence is not anthropic', () => {
     const k = rosterKindOf(byId('lane-f'));
-    expect(k).toEqual({ telemetry: 'none' });
+    expect(k).toEqual({ telemetry: 'none', managed: false });
     expect('provider' in k, 'an undeclared external lane must not grow a provider').toBe(false);
     expect('kind' in k).toBe(false);
-    expect('managed' in k).toBe(false);
   });
 
   it('an OpenAI lane ccrc does not own is a codex lane that says so: managed is false, not absent', () => {
     expect(rosterKindOf(byId('lane-g'))).toEqual({ provider: 'openai', kind: 'codex', telemetry: 'none', managed: false });
   });
 
-  it('managed rides OpenAI lanes only', () => {
-    for (const id of ['lane-a', 'lane-b', 'lane-d', 'lane-e', 'lane-f', 'lane-h']) {
+  it('managed is false on every lane ccrc only records, whatever its provider, because Remove says what the verb does (D-8051 (13))', () => {
+    expect(rosterKindOf(byId('lane-i'))).toEqual({ provider: 'anthropic', kind: 'sign-in', telemetry: 'none', managed: false });
+    expect(rosterKindOf(byId('lane-j'))).toEqual({ provider: 'openrouter', kind: 'key', telemetry: 'none', managed: false });
+  });
+
+  it('managed is absent on a lane ccrc runs that is not its Codex lane, and false never means anything but a recorded launcher', () => {
+    for (const id of ['lane-a', 'lane-b', 'lane-d', 'lane-e', 'lane-h', 'lane-k']) {
       expect('managed' in rosterKindOf(byId(id)), id).toBe(false);
     }
   });
@@ -122,9 +131,12 @@ describe('GET /api/accounts carries the kind on every roster entry (D-5517)', ()
       'lane-c': ['openai', 'codex', 'codex', true],
       'lane-d': ['openrouter', 'key', 'none', undefined],
       'lane-e': ['compatible', 'key', 'anthropic', undefined],
-      'lane-f': [undefined, undefined, 'none', undefined],
+      'lane-f': [undefined, undefined, 'none', false],
       'lane-g': ['openai', 'codex', 'none', false],
       'lane-h': ['anthropic', 'sign-in', 'anthropic', undefined],
+      'lane-i': ['anthropic', 'sign-in', 'none', false],
+      'lane-j': ['openrouter', 'key', 'none', false],
+      'lane-k': ['openai', 'codex', 'none', undefined],
     });
     for (const r of roster) {
       expect(Object.keys(r), r.id).not.toContain('exec');

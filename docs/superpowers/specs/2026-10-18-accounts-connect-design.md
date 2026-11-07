@@ -246,11 +246,11 @@ A lane shows **one** state word, with a lamp-style glyph and a word (identity co
 | State | Glyph + word | When (and the source the card names) | Read from | Loudness |
 |---|---|---|---|---|
 | **Off** | `○ Off` | the kill-switch marker. "Off on the fleet host · new lane, not enabled yet", or "· switched off 3d ago" (from the lane state's `enabledAt`/`disabledAt`) | today's `disabled` on `GET /api/accounts`; lane state for the age | quiet: `--ink-secondary` |
-| **Signed out** (expired) | `✕ Signed out` | a 401: `check` verdict `auth-dead`, or the `<id>-authdead` marker from `ccd-account-health`, or `auth status` `loggedIn:false`. "Signed out · HTTP 401 · checked 2h ago" | today's `authDead`; lane state `check` | **loud, achromatic** (below) |
+| **Signed out** (expired) | `✕ Signed out` | a refusal: `check` verdict `auth-dead` (a 401, a 403 or `auth status` `loggedIn:false`), or the `<id>-authdead` marker from `ccd-account-health`. "Signed out · the provider refused its credential, or it has none · checked 2h ago", and "Signed out · HTTP 401" for the marker, the one measured 401 (D-8051 (20)) | today's `authDead`; lane state `check` | **loud, achromatic** (below) |
 | **Rate-limited** | `◐ Rate-limited` | the 5h or 7d window at ≥100%, or an OpenRouter key whose `limit_remaining ≤ 0`. "5h limit reached · resets in 1h 12m" | `~/.cc-limits/<id>.json` (today); lane state `credit` | `--status-attention` dot at lamp scale only, and a word |
 | **Expiring** | `◔ Expiring` | a **minted** token lane whose recorded `mintedAt` + 365 d is under 30 d away: "token minted 11 months ago · about 3 weeks left · estimated". Or an OpenRouter key at ≤10% of its limit: "credit low · $1.20 of $20 left". Or a key ccrc minted whose `keyExpiresAt` is under 14 d away: "key expires in 9 days · set when minted". A pasted token (no `mintedAt`), a login lane and a Codex lane are **never** Expiring | lane state `mintedAt`, `credit`, `keyExpiresAt` | `--ink-primary` word, attention dot |
 | **Signed in** | `● Signed in` | the last `check` was `ok`, or the login lane's `auth status` said `loggedIn:true`, inside 7 d. "Signed in as … · Max · checked 4m ago" | lane state `check`, `identity` | quiet: `--ink-primary` |
-| **Inconclusive** | `~ Inconclusive` | the last check was `unreachable`, `timeout` or `unknown`. "Couldn't reach the provider · 60 s · 14:09 · nothing was learned about the credential" | lane state `check` | `--ink-secondary` |
+| **Inconclusive** | `~ Inconclusive` | the last check was `unreachable`, `timeout` or `unknown`. "the last check couldn't reach the provider, or got a server error back · checked 2h ago · nothing was learned about the credential; it may be fine". `unknown` never says "may be fine" (D-8051 (16)) | lane state `check` | `--ink-secondary` |
 | **Not checked** | `— Not checked` | no check has ever run, or the newest is older than 7 d (09-05: a measurement is never rewritten as "not measured", so this reads "— Last checked 9d ago", never blank) | lane state `check` (absent or old) | `--ink-tertiary`, dashed slot |
 
 - **The loud state is achromatic, and it is not the reversed slab.** D-5101 (#616) retired the reverse-video slab. On a **Refined card**, Signed out instead takes the tint + 2px rail idiom from #616, in `--ink-primary` (not `--accent`, which means living or selected): a 2px `--ink-primary` left rail, the `--bg-raised` ground, the word in semibold, and the fix as the card's first action. Refined cards have no selection state, so the rail means only this. **In Instrument's table** the selected row already uses the tint plus a 2px `--accent` left rail, so Signed out there gets **no rail**: it is marked by the lamp glyph, the word and its group (§12.2), and the rail is kept for selection. No colour token is introduced. The only red on the screen stays inside the probe well (`--diff-del`, 09-05 §12.5).
@@ -264,14 +264,14 @@ Lanes in Signed out, Rate-limited, Expiring or Inconclusive lift to the top of t
 
 | State | What is wrong | Its effect | The fix (buttons) |
 |---|---|---|---|
-| Signed out (sign-in lane) | "lane-b's sign-in was refused (HTTP 401) 2h ago." | "New sessions are not placed here. 3 sessions on it will fail their next turn." | **Switch to a long-lived token** (primary, Q1) · Sign in again · Move 3 sessions off · Check again |
-| Signed out (token lane) | "lane-c's token was refused (HTTP 401) 2h ago." | as above | **Mint a new token** (primary) · Paste a token · Move 3 sessions off · Check again |
-| Signed out (OpenRouter key) | "lane-d's key was refused by OpenRouter (HTTP 401)." | as above | **Mint a replacement** when a management key is installed, else **Replace key** · Move 3 sessions off |
+| Signed out (sign-in lane) | "lane-b's sign-in was refused, or it has none (2h ago)." | "New sessions are not placed here. 3 sessions on it will fail their next turn." | **Switch to a long-lived token** (primary, Q1) · Sign in again · Move 3 sessions off · Check again |
+| Signed out (token lane) | "lane-c's token was refused, or it has none (2h ago)." | as above | **Mint a new token** (primary) · Paste a token · Move 3 sessions off · Check again |
+| Signed out (OpenRouter key) | "lane-d's key was refused by OpenRouter, or it has none (2h ago)." | as above | **Mint a replacement** when a management key is installed, else **Replace key** · Move 3 sessions off |
 | Rate-limited | "lane-b reached its 5-hour limit." | "Resets in 1h 12m. 4 sessions on it are waiting." | **Move 4 sessions off** · Switch lane off |
 | Expiring (minted token) | "lane-c's token was minted about 11 months ago." | "Long-lived tokens last about a year. When it lapses the lane signs out." | **Replace token** · Switch to sign-in |
 | Expiring (credit) | "lane-d's OpenRouter key has $1.20 of $20 left." | "When it hits zero, requests on it fail." | for a minted key, **Raise the limit** (step-up, under the ceiling, §8.8); otherwise **Open OpenRouter credits ↗** · Replace key |
 | Expiring (minted key) | "lane-d's key expires in 9 days." | "When it lapses, requests on it fail." | **Mint a replacement** (§8.8) |
-| Inconclusive | "The last check couldn't reach the provider." | "Nothing was learned about the credential; it may be fine." | **Check again** |
+| Inconclusive | "The last check couldn't reach the provider, or got a server error back." | "Nothing was learned about the credential; it may be fine." (`unknown`: "Don't rely on the credential until a check passes.") | **Check again** |
 
 ### 4.3 The roll-up header
 

@@ -70,7 +70,8 @@ EVENTS.push({ kind: 'tool_use', uuid: 'u1', ts: TS, toolId: 't1', name: 'Bash', 
 EVENTS.push({ kind: 'tool_result', ts: TS, toolId: 't1', text: 'result-line-1 ok\nresult-line-2 ok', isError: false });
 for (let i = 1; i <= 8; i += 1) prose(`Prose after the card ${i}`);
 // A second Bash card whose result is sixty lines (taller than `--well-max`), and two AskUserQuestion cards whose answer
-// chips are a one-line reply that fits and a typed reply of 150 words that wraps well past `--well-max`. The harness
+// chips are a one-line reply that fits and a typed reply of 400 words that wraps well past `--well-max` (150 until the
+// desk width, D-8059, widened the column to 1200 and the pane: 150 words no longer passed the cap at 1920). The harness
 // parses `"<question>"=(no option selected) notes: <typed reply>` into the chip (`tool-card.tsx`'s `askAnswers`).
 EVENTS.push({ kind: 'tool_use', uuid: 'u2', ts: TS, toolId: 't2', name: 'Bash', input: JSON.stringify({ command: 'npm run tall-check' }) });
 EVENTS.push({
@@ -91,7 +92,7 @@ const ask = (id: string, question: string, reply: string): void => {
 ask('t3', 'Which workspace should the short check run in?', 'chipfit-start project-a');
 for (let i = 1; i <= 5; i += 1) prose(`Prose after the short chip ${i}`);
 ask('t4', 'Which workspace should the long check run in?',
-  `chip-start ${Array.from({ length: 150 }, (_, i) => `reply-word-${String(i + 1).padStart(3, '0')}`).join(' ')}`);
+  `chip-start ${Array.from({ length: 400 }, (_, i) => `reply-word-${String(i + 1).padStart(3, '0')}`).join(' ')}`);
 for (let i = 1; i <= 8; i += 1) prose(`Prose after the tall chip ${i}`);
 
 // ---- the page half: what each wheel is measured on -----------------------------------------------------------------

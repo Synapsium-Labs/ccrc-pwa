@@ -15,7 +15,7 @@
 // frame, so it fires on a real transition and never on an unrelated re-render.
 import { useEffect, useRef, useState } from 'react';
 import type { RunsPageAnswer, RunSummary } from '../../../shared/api';
-import { appendOlderRunPage, childReclaimDoneRefreshDue, childReclaimRefreshDue, childRunsSeen, mergeFirstRunPage } from '../fleet/runWords';
+import { appendOlderRunPage, childReclaimDoneRefreshDue, childReclaimRefreshDue, mergeFirstRunPage } from '../fleet/runWords';
 import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import type { FleetStore } from '../stores/fleet';
 import { api } from '../lib/api';
@@ -304,12 +304,8 @@ export function useColdRuns(
   // restarted server, or one older than the field) is never a reason to read,
   // and the first value this board sees is its baseline, not a change.
   //
-  // Which runs had a child is remembered across frames (`childRunsSeen`). This
-  // effect is declared first, so it runs first in a commit that changes both.
-  const childRunsRef = useRef<ReadonlySet<number>>(new Set<number>());
-  useEffect(() => {
-    childRunsRef.current = childRunsSeen(childRunsRef.current, sessions, cold ?? []);
-  }, [sessions, cold]);
+  // Which runs had a child is the server's to say (`RunSummary.hadChild`, D-8068),
+  // so a board reloaded after the child left reads the same as one that saw it.
   // `undefined` = no coord frame seen yet by this board; null = seen, no value.
   const prevDoneAtRef = useRef<number | null | undefined>(undefined);
   useEffect(() => {
@@ -317,7 +313,7 @@ export function useColdRuns(
     const after = childReclaimDoneAtOf(coordFrame);
     const before = prevDoneAtRef.current;
     prevDoneAtRef.current = after;
-    if (rereadOnTransitions && before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
+    if (rereadOnTransitions && before !== undefined && childReclaimDoneRefreshDue(cold ?? [], before, after)) {
       void loadCold();
     }
     // The coord frame's dependencies only, as wave 5's effect takes the fleet

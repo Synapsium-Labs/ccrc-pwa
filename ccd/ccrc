@@ -9501,7 +9501,9 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
       fi
     done
   fi
-  _acct_settings_env "$cfg" clear "Home cleanup may now be partial. $stands"
+  # AN EXTERNAL LANE'S ENV BLOCK IS ITS LAUNCHER'S (D-8051 (15)). `add` is the only ccrc writer of ANTHROPIC_API_KEY and
+  # ANTHROPIC_BASE_URL, and it makes generated lanes: on an external lane those two are the launcher's credential.
+  [ "$ACCT_KIND" = external ] || _acct_settings_env "$cfg" clear "Home cleanup may now be partial. $stands"
   [ -f "$inst" ] || return 0
   bash "$inst" --remove --homes "$cfg" >/dev/null \
     || _acct_refuse 1 hooks-remove "$inst --remove refused for $cfg. Its diagnostic is above; home cleanup may now be partial. $stands"
@@ -10718,7 +10720,7 @@ _acct_token_probe() {   # <id> <what-still-stands> [<config dir holding a sign-i
   verdict="$(jq -r '.verdict // empty' <<<"$row" 2>/dev/null)" || verdict=""
   case "$verdict" in
     ok) return 0 ;;
-    auth-dead) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That $what was refused (HTTP 401). $stands" ;;
+    auth-dead) ACCT_CREDENTIAL=""; _acct_refuse 1 key-rejected "That $what was refused. $stands" ;;
     *) ACCT_CREDENTIAL=""; _acct_refuse 1 token-unverified "Anthropic didn't answer ($verdict${verdict:+, }exit $rc), so the $what could not be checked: $stands Try again." ;;
   esac
 }

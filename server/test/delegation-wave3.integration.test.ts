@@ -1183,7 +1183,9 @@ describe('8. the closed scope census', () => {
       ]],
       ['retain', /\bretain\w*/i, []],
       ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
-      ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx']],
+      // `heldByRowsWords.ts` joined it with cleanup un-wedge R2 (D-8000): its one reader reads R2's `coord.cleanupHeldBy` wire
+      // field, the cleanup lanes' held-by answer. It is no part of the delegation broker.
+      ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/heldByRowsWords.ts']],
     ];
     for (const [stem, re, allowed] of MAIN_HAS) {
       expect(pwaWordOffenders(ui, read, re, allowed), `${stem}: a PWA file new to this word`).toEqual([]);

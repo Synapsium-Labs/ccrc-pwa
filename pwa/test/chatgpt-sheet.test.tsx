@@ -16,7 +16,7 @@ import { laneNotReadyReason, stateWordFor, type LaneState, type LaneStateRead } 
 import { AUTH_POLL_MS, ConnectSheet, type ConnectClient, type ConnectSheetProps, type SignInClient } from '../src/accounts/ConnectSheet';
 import { ReauthSheet, troubleActs, type ReauthClient } from '../src/accounts/ReauthSheet';
 import { RemoveSheet, type RemoveClient } from '../src/accounts/RemoveSheet';
-import { heldAttemptOf, managedCodex, resumableAttempt, resumeSheetFor, waitsOnOperator } from '../src/accounts/connectFlow';
+import { heldAttemptOf, managedCodex, recordedOnly, resumableAttempt, resumeSheetFor, waitsOnOperator } from '../src/accounts/connectFlow';
 import {
   CANCEL_SIGN_IN, CHATGPT_MODELS, CHATGPT_SIGNED_IN, CODE_FIELD_LABEL, CODEX_FOLDER_KEPT, CODEX_FOLDER_LINE, COMPROMISE_TITLE, COME_BACK,
   COME_BACK_APPROVED, COPIED, COPY_CODE, COPY_LINK, DEVICE_CODE_LABEL, DEVICE_CODE_NOTE, FRAME_SAID, LEDGER, OPEN_CHATGPT, OPEN_LINK, SIGN_IN_AGAIN, SIGN_OUT_RESTART,
@@ -646,18 +646,19 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
     ok: true, roster: [ROSTER[0]!], removed: ['~/.local/share/ccrc/codex/lane-g-abc123'], kept: [], rehomed: [],
     atProvider: [{ kind: 'codex', state: 'still-valid', revokeAt: 'chatgpt-settings' }],
   };
-  const open = async (id: string, onLane: LaneWire = LANE_READY): Promise<{ [K in keyof RemoveClient]: Mock<RemoveClient[K]> }> => {
+  const open = async (id: string, onLane: LaneWire = LANE_READY, extra?: RosterWire): Promise<{ [K in keyof RemoveClient]: Mock<RemoveClient[K]> }> => {
+    const rows = [...ROSTER, EXTERNAL, ...(extra === undefined ? [] : [extra])];
     const client = {
       accountRemoveCheck: vi.fn<RemoveClient['accountRemoveCheck']>(async () => CHECK),
       accountRemove: vi.fn<RemoveClient['accountRemove']>(async () => REMOVED),
       accountRevokeAck: vi.fn<RemoveClient['accountRevokeAck']>(async () => ({ ok: true as const })),
     };
     const store = createFleetStore({ makeSocket: () => ({ close: () => {}, send: () => {} }) as never });
-    act(() => { store.setState({ conn: 'open', sessions: [], roster: [...ROSTER, EXTERNAL], usage: [] }); });
+    act(() => { store.setState({ conn: 'open', sessions: [], roster: rows, usage: [] }); });
     render(
       <RemoveSheet
         id={id} open onClose={vi.fn()} lane={onLane} connect={CONNECT()} blocked={null} refresh={vi.fn(async () => 'ok' as const)}
-        readRoster={() => [...ROSTER, EXTERNAL]} client={client} wake={vi.fn(async () => {})} fleet={store}
+        readRoster={() => rows} client={client} wake={vi.fn(async () => {})} fleet={store}
       />,
     );
     await settle();
@@ -708,8 +709,37 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
   });
 
   it('a lane with no such line keeps its own sentence', async () => {
+    await open('lane-a');
+    expect(screen.getByText(removeConsequence('lane-a'))).toBeInTheDocument();
+    // The verb keeps a secrets file off the path ccrc expects, so the sentence says "if", as the Codex one does (D-8051 (19)).
+    expect(removeConsequence('lane-a'))
+      .toBe("Removing lane-a deletes everything that runs it on the fleet host, and its credential if that's safe to delete. Its config folder and transcripts stay.");
+  });
+
+  it("a lane ccrc only records keeps its launcher and its credential, which is what the verb does, and the sentence says so (D-8051 (13))", async () => {
     await open('lane-x');
-    expect(screen.getByText(removeConsequence('lane-x'))).toBeInTheDocument();
+    const line = 'Removing lane-x takes it off the fleet host\'s roster, removes ccrc\'s state records for it, and takes ccrc\'s own hooks and skills out of its config folder. '
+      + 'Its launcher, whatever credential that launcher uses, the rest of its config folder and its transcripts stay: ccrc only records this lane.';
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(document.querySelector('[data-frame="remove"]')?.textContent).not.toMatch(/deletes/i);
+  });
+
+  it('every lane ccrc only records reads that way, whichever provider its row names, or none', async () => {
+    const line = /^Removing lane-w takes it off/;
+    const { provider: _p, kind: _k, ...undeclared } = lane('lane-w', { managed: false });
+    const rows: RosterWire[] = [
+      lane('lane-w', { provider: 'anthropic', kind: 'token', managed: false }), lane('lane-w', { provider: 'openrouter', kind: 'key', managed: false }), undeclared,
+    ];
+    for (const row of rows) {
+      await open('lane-w', LANE_READY, row);
+      expect(screen.getByText(line), row.provider).toBeInTheDocument();
+      cleanup();
+    }
+    // A row that doesn't say is not a recorded lane: `managed` is absent on every lane ccrc runs but a Codex one.
+    expect(recordedOnly(lane('lane-w', { provider: 'anthropic', kind: 'token' }))).toBe(false);
+    expect(recordedOnly(undefined)).toBe(false);
+    expect(recordedOnly(ROSTER[1])).toBe(false);
+    expect(recordedOnly(EXTERNAL)).toBe(true);
   });
 
   it("turned off, it promises only what the box does: on a Signed-out lane too, it never says the sign-in works", async () => {
@@ -726,6 +756,19 @@ describe("Remove's Codex line (spec §11 step 4, G20)", () => {
     expect(screen.queryByText(CODEX_FOLDER_KEPT)).toBeNull();
     await remove('lane-x');
     expect(c.accountRemove).toHaveBeenCalledWith('lane-x', { mode: 'remove', confirmId: 'lane-x' });
+  });
+
+  it('the line is held while the remove is in flight, so the sentence cannot disagree with what was sent', async () => {
+    const c = await open('lane-g');
+    c.accountRemove.mockReturnValue(new Promise(() => {}));
+    const line = screen.getByRole('checkbox', { name: CODEX_FOLDER_LINE });
+    expect(line).toBeEnabled();
+    await remove('lane-g');
+    expect(c.accountRemove).toHaveBeenCalledWith('lane-g', { mode: 'remove', confirmId: 'lane-g', codexAuth: 'delete' });
+    expect(line).toBeDisabled();
+    fireEvent.click(line);
+    expect(line).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText(removeConsequence('lane-g', 'delete'))).toBeInTheDocument();
   });
 
   it('the ledger links chatgpt.com, and any other lane has no such line', async () => {

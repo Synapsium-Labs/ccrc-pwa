@@ -59,6 +59,9 @@ export const addMethodField = (m: ConnectMethod): { method?: ConnectMethod } => 
 /** Whether a lane is a Codex lane ccrc owns end to end. `kind: 'codex'` also covers an OpenAI lane ccrc only records, which
  *  has no sign-in folder and no sign-in the box can install (D-8051 (9)). An older server's row doesn't say, so it isn't. */
 export const managedCodex = (row: Pick<RosterWire, 'kind' | 'managed'> | undefined): boolean => row?.kind === 'codex' && row.managed === true;
+/** A launcher ccrc only records, under any provider or none (D-8051 (13)): Remove keeps its launcher and its credential. A
+ *  row that doesn't say is a lane ccrc runs, since `managed` is absent on all but its Codex lanes. */
+export const recordedOnly = (row: Pick<RosterWire, 'managed'> | undefined): boolean => row?.managed === false;
 
 /** One row of a choice: its value, and the reason it narrows in place (`null`: it may be chosen). */
 export interface Choice<T> { readonly value: T; readonly narrowed: string | null }

@@ -185,6 +185,7 @@ _tload() {
 # (unless its own command is a systemd-run around a test, which is WRAPPED like any other), and a command word
 # that is no package manager, node, test program or `$variable` is light whatever its arguments say, so `grep vitest`,
 # `git commit -m 'npm test'` and `echo tsc` stay light.
+# A heredoc body is text unless something can run it (`_tbodies`, below): a command fed by one is read as it was.
 _tvalflag() {   # <flag> -> 0 when a vitest or jest flag takes the next word as its value
   case "$1" in
     -c|--config|-r|--root|--dir|--project|--reporter|--reporters|--outputFile|--environment|--env|-t|--testNamePattern \
@@ -394,6 +395,207 @@ _tsegments() {   # <string>
   if [ "$have" = 1 ]; then { [ "$skip" = 1 ] && skip=0; } || seg+="$w$US"; fi
   [ -z "$seg" ] || printf '%s\n' "$seg"
 }
+# A HEREDOC BODY IS TEXT UNLESS SOMETHING CAN RUN IT (D-8052). `_tsegments` reads every line as a command, so a line of a
+# pull request body or a node script read as a test run. `_tbodies` drops a body from what `_tsegments` reads, and it fails
+# closed: it drops bodies only when it can read the whole string and `_tinert` clears every command on it. In every other
+# case it returns 1 and the string goes through whole, its bodies read as commands, as they always were. So a miss here
+# costs a false denial and never a missed run.
+#
+# `_tbodies` gives up on what it does not model: a backquote, `$[…]`, a process substitution, a `${…}` with anything in it
+# that the lexer would have to follow, a delimiter that is not plain, a body with no end, a line that starts with the
+# delimiter without being it (in a substitution, bash ends a body at `EOF)`), a `>&` target that goes on after its digits
+# (`>&1cat bash` runs `bash`, and `_tsegments` would read `cat`), and a heredoc still open at a `)` or read in another
+# nesting than it opened in, which is also where a shift in `$((1<<2))` ends up. An unquoted delimiter's body
+# is expanded, so a live `$(` or backquote in it is a command that bash runs whatever reads the body, and a
+# backslash-newline in it can move where the body ends: the reader gives up on both.
+#
+# Outside a body and a single quote, a backslash-newline joins two lines, so it leaves `out`: what `_tinert` and
+# `_tsegments` read is the one line bash reads. The reader follows that after a blank only. Inside a word the two halves
+# can make a `$(`, a `<<` or a command word it would have to see whole, and it gives up.
+#
+# `_tsegments` cuts a word at `$(` and at a quoted newline, so what follows reads as a line of its own and an assignment
+# before a command hides the command (`X="$(true)" bash`). So neither reaches it from here: a substitution moves to a line
+# of its own below the text and SUB stays in the word, and a quoted newline becomes NL. The same goes for `$'…'`, which it
+# does not know, and which becomes `$` and SUB. What `_tinert` clears is then what `_tsegments` reads, word for word.
+#
+# It leaves two marks for `_tinert`: OP stands in for a `<<word`, so the command it hangs on is seen, and SUB stands in for a
+# substitution, so a command with one in its words is seen, and a substitution with no command before it, whose output is
+# itself a command, reads as a command word no list holds.
+_tbodies() {   # <shell string> -> prints it without its bodies, or returns 1 and the caller keeps it whole
+  local LC_ALL=C OP=$'\036' SUB=$'\035' NL=$'\034' FD='^[0-9-]+[^0-9[:blank:];&|()<>-]' PLAIN='^\$\{[^]}[:space:]'\''"`$<>()|&;]*\}'
+  local out="" lifted="" ctx="" top s c d b e q n i k=0 l=0 cont quoted strip piped=0
+  local -a L=() PD=() PQ=() PT=() PC=() OUTER=()
+  mapfile -t L <<<"$1"
+  while ((l < ${#L[@]})); do
+    s="${L[l]}"; n=${#s}; cont=0
+    for ((i = 0; i < n; i++)); do
+      c="${s:i:1}"; top="${ctx: -1}"
+      case "$top" in
+        "'") [ "$c" != "'" ] || ctx="${ctx%?}"; out+="$c"; continue ;;
+        a) if [ "$c" = '\' ]; then i=$((i + 1)); continue; fi
+           [ "$c" != "'" ] || ctx="${ctx%?}"; continue ;;
+      esac
+      case "$c" in
+        '\') if ((i + 1 == n)); then
+               [[ "${out: -1}" == [[:blank:]] ]] || return 1
+               cont=1; continue
+             fi
+             i=$((i + 1)); out+="$c${s:i:1}"; continue ;;
+        '`') return 1 ;;
+        '"') if [ "$top" = '"' ]; then ctx="${ctx%?}"; else ctx+='"'; fi; out+="$c"; continue ;;
+        '$')
+          case "${s:i+1:1}" in
+            '(') OUTER+=("$out$SUB"); out=""; ctx+=s; i=$((i + 1)); continue ;;
+            '[') return 1 ;;
+            '{') [[ "${s:i}" =~ $PLAIN ]] || return 1
+                 out+="${BASH_REMATCH[0]}"; i=$((i + ${#BASH_REMATCH[0]} - 1)); continue ;;
+            "'") if [ "$top" != '"' ]; then out+="\$$SUB"; ctx+=a; i=$((i + 1)); continue; fi ;;
+          esac ;;
+      esac
+      if [ "$top" = '"' ]; then out+="$c"; continue; fi
+      case "$c" in
+        "'") ctx+="'" ;;
+        '#')
+          if ((i == 0)) || [[ "${s:i-1:1}" == [[:blank:]\;\&\|\(\)\<\>] ]]; then out+="${s:i}"; break; fi ;;
+        '(') ((i == 0)) || [[ "${s:i-1:1}" != [\<\>] ]] || return 1
+             ctx+='(' ;;
+        ')') [ -n "$ctx" ] || return 1
+             ((k == ${#PD[@]})) || [ "${PC[${#PC[@]}-1]}" != "$ctx" ] || return 1
+             ctx="${ctx%?}"
+             if [ "$top" = s ]; then
+               lifted+="$out"$'\n'; out="${OUTER[${#OUTER[@]}-1]}"; unset 'OUTER[${#OUTER[@]}-1]'; continue
+             fi ;;
+        '&') [[ "${s:i-1:1}" != [\<\>] || ! "${s:i+1}" =~ $FD ]] || return 1 ;;
+        '|') if [ "${s:i+1:1}" = '|' ]; then out+="$c"; i=$((i + 1)); else piped=1; fi ;;
+        '<')
+          if [ "${s:i+1:1}" = '<' ] && [ "${s:i+2:1}" = '<' ]; then
+            out+='<<'; i=$((i + 2))
+          elif [ "${s:i+1:1}" = '<' ]; then
+            i=$((i + 2)); strip=0; quoted=0; d=""
+            if [ "${s:i:1}" = - ]; then strip=1; i=$((i + 1)); fi
+            while [[ "${s:i:1}" == [[:blank:]] ]]; do i=$((i + 1)); done
+            while ((i < n)); do
+              c="${s:i:1}"
+              case "$c" in
+                ' '|$'\t'|';'|'&'|'|'|'<'|'>'|'('|')') break ;;
+                "'"|'"')
+                  quoted=1; q="$c"; i=$((i + 1))
+                  while ((i < n)) && [ "${s:i:1}" != "$q" ]; do d+="${s:i:1}"; i=$((i + 1)); done
+                  ((i < n)) || return 1 ;;
+                '\') quoted=1; i=$((i + 1)); ((i < n)) || return 1; d+="${s:i:1}" ;;
+                *) d+="$c" ;;
+              esac
+              i=$((i + 1))
+            done
+            [[ "$d" =~ ^[A-Za-z0-9_.:+/=@%,-]+$ ]] || return 1
+            PD+=("$d"); PQ+=("$quoted"); PT+=("$strip"); PC+=("$ctx")
+            out+=" $OP "; i=$((i - 1)); continue
+          fi ;;
+      esac
+      out+="$c"
+    done
+    l=$((l + 1))
+    top="${ctx: -1}"
+    if ((cont == 0)) && [[ "$top" != ["'"a\"] ]]; then
+      while ((k < ${#PD[@]})); do
+        [ "${PC[k]}" = "$ctx" ] || return 1
+        d="${PD[k]}"
+        while :; do
+          ((l < ${#L[@]})) || return 1
+          b="${L[l]}"; l=$((l + 1))
+          [ "${PT[k]}" = 0 ] || b="${b#"${b%%[!$'\t']*}"}"
+          [ "$b" != "$d" ] || break
+          [[ "$b" != "$d"* ]] || return 1
+          if [ "${PQ[k]}" = 0 ]; then
+            e="${b//\\\\/}"
+            [[ "$e" != *\\ ]] || return 1
+            e="${e//\\\$/}"; e="${e//\\\`/}"
+            [[ "$e" != *'$('* && "$e" != *'`'* ]] || return 1
+          fi
+        done
+        k=$((k + 1))
+      done
+    fi
+    ((l >= ${#L[@]} || cont == 1)) && continue
+    if [[ "$top" == ["'"a\"] ]]; then out+="$NL"; else out+=$'\n'; fi
+  done
+  [ -z "$ctx" ] && ((cont == 0 && k > 0 && k == ${#PD[@]})) || return 1
+  out+=$'\n'"$lifted"
+  _tinert "$out" "$piped" || return 1
+  printf '%s' "${out//[$OP$SUB$NL]/}"
+}
+# `_tinert` clears a line for `_tbodies`, by an allowlist, since a shell is one of many things that run text. A command word
+# is read through `_tstrip`'s prefixes, so `sudo tee` is `tee`, `xargs sh` is `sh`, and `eval` is `sh`. READERS read a body, a
+# substitution or an argument as data. Each word is spelled in full: a path is not the program it names. `make` runs a file
+# of commands, so it is on neither list. A prefix counts only by its plain name, since `./time cat` runs `./time`, and
+# never with `env -S`, which runs a string.
+#
+# The test programs the classifier reads for itself pass beside a body (`npx vitest run a.test.ts && git commit -F - <<EOF`,
+# read by the classifier as it always was), but `npx bash` is a shell, so each must also pass `_tprogram`. No word on its
+# line may hold a `$`, since a variable can carry a body (`read -r X <<EOF`, then `npx $X`). No body may reach it: it is not
+# the command a body hangs on, and the line holds no pipe, no substitution kept in a variable, and no body fed to a group
+# or a loop (`{ …; } <<EOF`), which is known only at the end of the group, so that check is made last. An
+# `npm_config_script_shell` anywhere on the line counts the same, since it makes a package script a run of that file.
+_tinert() {   # <string with its marks> <1 when a pipe is on it> -> 0 when no command on it can run a body
+  local strict="$2" tier=0 line marked w OP=$'\036' SUB=$'\035' US=$'\037'
+  local -a ws
+  [[ "${1,,}" != *npm_config_script* ]] || strict=1
+  while IFS= read -r line; do
+    marked=0
+    [[ "$line" != *[$OP$SUB]* ]] || marked=1
+    [[ ! "$line" =~ =[^$US]*$SUB ]] || strict=1
+    line="${line//$OP$US/}"
+    IFS="$US" read -r -a ws <<<"$line"
+    if [ ${#ws[@]} -eq 0 ]; then strict=1; continue; fi   # only a mark: `( … ) <<EOF`
+    _tstrip "${ws[@]}"
+    if [ ${#TW[@]} -eq 0 ]; then
+      for w in "${ws[@]}"; do
+        [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] && continue
+        case "$w" in '!'|'{'|'}'|then|do|else|elif|if|while|until) ;; *) return 1 ;; esac
+      done
+      [ "$marked" = 0 ] || strict=1   # `} <<EOF`
+      continue
+    fi
+    case "${TW[0]}" in
+      fi|done) [ "$marked" = 0 ] || strict=1 ;;
+      cat|tee|gh|git|node|python|python3|jq|sed|awk|grep|rg|head|tail|wc|sort|uniq|tr|cut|base64|curl|ccrc-api \
+        |echo|printf|read|cd|pwd|ls|mkdir|rmdir|touch|rm|cp|mv|ln|chmod|sleep|date|export|unset|set \
+        |test|'['|'[['|:|true|false) ;;
+      npx|bunx|pnpx|npm|pnpm|yarn|bun|vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker|ccrc|ccrc-test)
+        [ "$marked" = 0 ] && [[ "$line" != *'$'* ]] && _tprogram "${TW[@]}" || return 1
+        tier=1 ;;
+      *) return 1 ;;
+    esac
+    for w in "${ws[@]:0:${#ws[@]}-${#TW[@]}}"; do
+      case "$w" in [A-Za-z_]*=*) ;; */*|-*S*|--s*) return 1 ;; esac
+    done
+  done < <(_tsegments "$1")
+  [ "$strict$tier" != 11 ]
+}
+# `_tprogram` names what may stand beside a body. `npx`, `bunx`, `pnpx`, `npm exec`, `pnpm dlx`, `yarn <bin>` and `bun <file>`
+# run whatever follows them, a shell or a file a body was written to included, so it reads the word that says what runs:
+# a test program by name, or a package script by a name on the list. `ccrc test` runs its command, so that is read too. A
+# script shell runs a package script through the file it names, so a line with one is no test program, however it is cut.
+_tprogram() {   # <command word> <word>... -> 0 when what runs is a test program or a listed package script
+  local w
+  for w in "$@"; do case "$w" in --script*) return 1 ;; esac; done
+  case "${1:-}" in
+    npx|bunx|pnpx) shift ;;
+    npm|pnpm|yarn|bun)
+      shift
+      case "${1:-}" in run|run-script) shift ;; esac
+      [[ "${1:-}" != *[!A-Za-z0-9:_-]* ]] || return 1
+      case "${1:-}" in test*|t|tst|typecheck*|build*|lint*|check*|install|i|ci) return 0 ;; esac
+      return 1 ;;
+    ccrc|ccrc-test)
+      if [ "$1" = ccrc ]; then [ "${2:-}" = test ] || return 1; shift; fi
+      shift
+      while [ $# -gt 0 ]; do case "$1" in --) shift; break ;; -*) shift ;; *) break ;; esac; done
+      _tprogram "$@"; return ;;
+  esac
+  case "${1:-}" in vitest|jest|tsc|vue-tsc|tsgo|playwright|stryker) return 0 ;; esac
+  return 1
+}
 _tcmd_heavy() {   # <wide> <how: argv, shell or hook> <command> [<arg>...] -> 0 heavy
   # argv: the wrapper's own command, read whole. shell: one simple command of a shell string, read only when its command
   # word is a test program. hook: as shell, and a `ccrc test` command is skipped, as already contained.
@@ -452,8 +654,10 @@ _tcmd_heavy() {   # <wide> <how: argv, shell or hook> <command> [<arg>...] -> 0 
 # whole string is read, so a bare heavy command before it never hides it.
 TWRAPPED=0 TLINE_SR=0
 _tshell_heavy() {   # <wide> <how: shell or hook> <shell string> -> 0 when a simple command in it is heavy (or wrapped)
-  local wide="$1" how="${2/argv/shell}" line sr hit=1
+  local wide="$1" how="${2/argv/shell}" line sr hit=1 s="$3"
   local -a ws
+  # In a subshell, so that an error in the reader is a failed read too, and the string stays whole.
+  if [[ "$s" == *'<<'* ]]; then s=$(_tbodies "$s") || s="$3"; fi
   while IFS= read -r line; do
     IFS=$'\037' read -r -a ws <<<"$line"
     [ ${#ws[@]} -gt 0 ] || continue
@@ -466,7 +670,7 @@ _tshell_heavy() {   # <wide> <how: shell or hook> <shell string> -> 0 when a sim
       hit=0
     fi
     [ "$TWRAPPED" = 0 ] || return 0   # a nested string (`sh -c '…'`) found one
-  done < <(_tsegments "$3")
+  done < <(_tsegments "$s")
   return "$hit"
 }
 _heavy() {   # <wide> <command> [<arg>...] -> 0 heavy, 1 light

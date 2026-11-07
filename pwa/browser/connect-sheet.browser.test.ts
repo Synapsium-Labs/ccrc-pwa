@@ -43,7 +43,12 @@ const acct = (wrapper: string): Record<string, unknown> => ({
 const rostered = (id: string, hue: string): Record<string, unknown> => ({
   id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'token',
 });
-const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
+const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true, check: { verdict: 'ok', at: now } };
+/** The check route's answer for a probe that found no provider: a 200 with the lane, like any other. */
+const UNREACHED = {
+  state: { word: 'inconclusive', source: "the last check couldn't reach the provider", at: now }, ready: false, notReadyReason: 'check-failed',
+  check: { verdict: 'unreachable', at: now },
+};
 const ROSTER = [rostered('lane-a', 'cyan'), rostered('lane-b', 'violet')];
 const ACCOUNTS = {
   accounts: [acct('lane-a'), acct('lane-b')],
@@ -158,6 +163,10 @@ describe('the Add account door and the connect sheet at every width and skin (D-
       const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
       try {
         const add = await addRoute(ctx);
+        let checkPasses = false;
+        await ctx.route(`**/api/accounts/${LONG_ID}/check`, async (route) => {
+          await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, lane: checkPasses ? READY : UNREACHED }) });
+        });
         await page.goto(server!.origin + '/');
         await go(page, '/accounts');
         await page.waitForSelector('.accounts-row[data-lane="lane-b"]', { timeout: 30_000 });
@@ -262,7 +271,7 @@ describe('the Add account door and the connect sheet at every width and skin (D-
           notice: document.querySelector('[data-frame="method"] .acct-notice')?.textContent ?? '',
           field: document.querySelector<HTMLInputElement>('.acct-secret input')?.value ?? null,
         }));
-        expect(refused.notice).toBe('That token was refused (HTTP 401). Nothing was saved.');
+        expect(refused.notice).toBe('That token was refused. Nothing was saved.');
         expect(refused.field, 'a refused paste re-presents an empty field').toBe('');
         await step(page, 'refused paste');
 
@@ -271,6 +280,22 @@ describe('the Add account door and the connect sheet at every width and skin (D-
         await page.fill('.acct-secret input', token);
         await page.click('[data-frame="method"] button.btn-primary');
         await page.waitForSelector('[data-frame="result"]', { timeout: 30_000 });
+
+        // A check that did not pass (D-8051 (12)): its sentence wraps inside the sheet, nothing says Checked, and Turn it on
+        // is held. Check again passes.
+        const failed = await page.evaluate(() => {
+          const panel = document.querySelector<HTMLElement>('.sheet-panel')!.getBoundingClientRect();
+          const line = [...document.querySelectorAll<HTMLElement>('.acct-ledger-text')].at(-1)!;
+          const b = line.getBoundingClientRect();
+          return { text: line.textContent, inside: b.left >= panel.left && b.right <= panel.right, sheet: document.querySelector('.sheet-panel')!.textContent ?? '' };
+        });
+        expect(failed.text).toBe("The check did not pass: it couldn't reach the provider, or got a server error back. Nothing was learned about the credential; it may be fine.");
+        expect(failed.inside, 'the sentence stays inside the sheet').toBe(true);
+        expect(failed.sheet).not.toContain('Checked');
+        await step(page, 'a check that did not pass');
+        checkPasses = true;
+        await page.click('[data-frame="result"] button:text-is("Check again")');
+        await page.waitForFunction(() => [...document.querySelectorAll('.acct-ledger-text')].at(-1)?.textContent?.startsWith('✓ Checked'));
         const r = await page.evaluate(() => ({
           turnOn: [...document.querySelectorAll('[data-frame="result"] button')].some((b) => b.textContent === 'Turn it on'),
           ledger: document.querySelectorAll('.acct-ledger > li').length,
@@ -295,7 +320,7 @@ const OFFLINE_VIEWS: AppView[] = SKINS.flatMap((skin) => [360, 1280].map((width)
 const OFFLINE_READ = /^You're offline: nothing was sent\. Read \d+m ago\.$/;
 const OFFLINE_NEVER = "You're offline: nothing was sent. Nothing has been read from the server since this page opened.";
 /** The box as before, each lane last checked two minutes ago, so its source counts on from the page's clock. */
-const CHECKED = { state: { word: 'signed-in', source: 'checked 2m ago', at: now - 120_000 }, ready: true };
+const CHECKED = { state: { word: 'signed-in', source: 'checked 2m ago', at: now - 120_000 }, ready: true, check: { verdict: 'ok', at: now - 120_000 } };
 const OFFLINE_FIXTURE: AppFixture = {
   ...FIXTURE,
   api: { ...FIXTURE.api, '/api/accounts': { ...ACCOUNTS, lanes: { 'lane-a': CHECKED, 'lane-b': CHECKED } } },

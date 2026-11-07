@@ -48,7 +48,7 @@ import { ApiError, api } from '../lib/api';
 import {
   ADD_LANE, ADD_REFUSED, DOOR_META, FRAME_SAID, PICK_ANOTHER_NAME, STEP_UP_AGAIN, PROVIDER_ROWS, DOOR_WORD, LEDGER, NEEDS_APP_UPDATE, OUTCOME_UNKNOWN, TOKEN_CLEARED, TOKEN_FIELD_LABEL,
   READ_AGAIN, addRefusal, configDirFoundText, laneActRefusal, notFoundAfterUnknown, resultDone, stillUnknownAfterUnknown,
-  ADD_AND_SIGN_IN, CHATGPT_MODELS, DISCARD_LANE, DONE, SIGN_IN_LEDGER, checkingLine, signInLedger,
+  ADD_AND_SIGN_IN, CHATGPT_MODELS, DISCARD_LANE, DONE, SIGN_IN_LEDGER, checkedLine, checkingLine, signInLedger,
   STEP_UP_AGAIN_DISCARD, STEP_UP_AGAIN_SIGN_OUT, START_AGAIN, discardedDone, removeRefusal, removeUnknown,
   signOutConfirm, signOutRefused, signOutUnknown, statedRefused, STEP_UP_AGAIN_ADD,
 } from '../fleet/accountWords';
@@ -175,7 +175,9 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       const ms = Date.now() - t0;
       setLatency(ms);
       setLane(a.lane);
-      settle(LEDGER.checked);
+      const line = checkedLine(a.lane);
+      settle(line);
+      if (line !== LEDGER.checked) refused = line;
       setNotice(null);
     } catch (e) {
       if (!live.current) return;
@@ -190,7 +192,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
     await refresh();
     if (!live.current) return;
     setFrame('result');
-    // The terminal state is announced as what it is: the refusal, or the lane added and off.
+    // The terminal state is announced as what it is: the refusal, a check that did not pass, or the lane added and off.
     alert(refused ?? resultDone(id, false));
   };
 

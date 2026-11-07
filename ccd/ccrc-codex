@@ -76,8 +76,9 @@
 # `missing-dependency` without node (`_codex_deps`: node runs models-op.mjs,
 # lane.json's one writer), and the PATH it looks on is THIS pane's: the tmux
 # server's, which a supervised session inherits from the service manager that
-# started it — `claude-session@.service` sets no PATH, and neither ccd nor the
-# wrapper changes it — never an operator's login shell. MEASURED on the fleet
+# started it — `claude-session@.service` sets no PATH, the wrapper leaves it
+# alone, and ccd's launch line only adds ~/.local/bin at its end (D-8050) — never
+# an operator's login shell. MEASURED on the fleet
 # box (2026-09-28, read-only): the live tmux server's PATH is exactly the user
 # manager's `show-environment` PATH, which holds no ~/.local/bin. The same
 # PATH is the one ccrc's own `ExecStart=/usr/bin/env node …` units resolve

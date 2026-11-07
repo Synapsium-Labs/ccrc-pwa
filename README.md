@@ -6848,7 +6848,14 @@ typecheck through `ccrc test`. The session hook reads every Bash call that could
 --classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
 flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
 its own on every session (`ccrc test -- systemd-run … <test>` included) and, on a fleet box (Linux, a registered
-session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-7298): the sessions are
+session), a heavy run in command position outside `ccrc test`. A heredoc body is text, not commands, when the classifier
+can read the whole line and every command on it is one that does not run the body, so a pull request body that mentions
+`npm run typecheck` is not a test run. A body fed to a shell or `ssh`, piped on to one, or written to a file a shell then
+runs is still read as commands, and so is every body on a line the classifier cannot read, or on which it finds a command
+it does not know; an assignment before a command does not hide a shell from that reading, except a quoted substitution nested in another quoted substitution, which main misses too; `npx bash` is a shell, so a
+test program stands beside a body only by name, and with no `$` or script shell on its line; an unquoted heredoc's live
+`$(…)` or backquote is a command bash really runs. The name is trusted, not what it resolves to, and a reader on the list
+can still run code by its own means, such as `awk`'s `system()` or `node -e` (D-8052). The scope is good faith (D-7298): the sessions are
 cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
 already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
 spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`
@@ -7829,7 +7836,7 @@ every changed path vitest cannot follow (a ccd script, Python, a JSON or SQL fix
 whole tree or the diff (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings,
 ccd-contexts, dtbd, the tests-inclusive typecheck, the oss metadata, the pin suites, and every test that runs
 `git ls-files`, `git diff` or `git merge-base` itself), and the session-hook suites when `ccd/ccd`,
-`ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
+a `ccd/lib/*.sh`, `ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
 (`.github/ci/reach.mjs`). The browser suite, `node-floor`, the perf legs and the macOS legs do not run on it. The four
 required checks report on what ran. A head branch under `train/`, the `full-ci` label, or a change to shared
 infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a

@@ -62,7 +62,13 @@ async function rig(): Promise<Rig> {
       acts.push(`${sub} ${id}`);
       if (held) await held;
       if (sub === 'enable') rmSync(path.join(reg, `${id}-disabled`), { force: true });
-      if (sub === 'check') rmSync(path.join(reg, `${id}-authdead`), { force: true });
+      if (sub === 'check') {
+        rmSync(path.join(reg, `${id}-authdead`), { force: true });
+        const measuredAt = '2026-11-06T12:00:00Z';
+        mkdirSync(path.join(reg, '.accounts'), { recursive: true });
+        writeFileSync(path.join(reg, '.accounts', `${id}.json`), JSON.stringify({ check: { verdict: 'ok', at: measuredAt } }));
+        return { kind: 'exited', code: 0, stdout: JSON.stringify({ ok: true, health: { verdict: 'ok', measuredAt } }) };
+      }
       return { kind: 'exited', code: 0, stdout: '{}' };
     },
   };

@@ -20,7 +20,7 @@ const run = (id: number, over: Partial<RunSummary> = {}): RunSummary => ({
   claimedBy: 'coord-a', resumed: false, clearedAt: null, openedAt: T - 1_000_000, dispatchStartedAt: null, dispatchedAt: T - 900_000,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null, ...over,
+  childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
 const closed = (id: number, over: Partial<RunSummary> = {}): RunSummary => run(id, { state: 'done', closedAt: T - 60_000, ...over });
 

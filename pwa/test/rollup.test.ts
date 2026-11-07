@@ -285,7 +285,7 @@ describe('W4-U0: today\'s rollup, characterised before delegation rows (delegati
         "b169673beafb166f",
         "8fced958f5a5b724",
         "8e8f172ba93a5225",
-        "bf9d75639981e8bd",
+        "b080c253864469ec",
         "4412f9d16b480eb2",
         "7cc9d90d9a833ac7",
         "f24265ec7a89a366",

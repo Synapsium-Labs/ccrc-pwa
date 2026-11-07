@@ -241,6 +241,7 @@ _ws_gc_prune_row -> _lc_tx
 _ws_gc_prune_row -> _reg_get
 _ws_gc_prune_row -> _reg_retire
 _ws_gc_scan -> _reg_get
+_ws_held_by_put -> _reg_read
 _ws_loose_collect -> _lc_emit
 _ws_loose_collect -> _lc_refuse
 _ws_loose_finish -> _lc_done

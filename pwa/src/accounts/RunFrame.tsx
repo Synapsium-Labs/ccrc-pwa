@@ -149,8 +149,9 @@ export function UrlCard({ url, host, method }: { url: string; host: string; meth
 
 /**
  * THE USER CODE (spec §7.2 step 5; Task A25, D-8051): the device code the server accepted beside the URL, at 24px mono
- * with `--tracking-caps` on one line, with its own Copy. It is not a secret, so it is plain text the operator can read
- * across to the page; a Copy that fails selects it, as the URL card's does.
+ * with `--tracking-caps` on one line, with its own Copy. It is plain text the operator reads across to the page, and its
+ * note says not to share it: a code bound by the wrong party ties that party's account to the lane (D-8051 (11)). A Copy
+ * that fails selects it, as the URL card's does.
  */
 export function UserCodeWell({ code }: { code: string }): ReactNode {
   const field = useRef<HTMLElement>(null);
