@@ -38,7 +38,7 @@ interface World {
   home: string; registryDir: string; watcher: FleetWatcher; coord: CoordStore; argvs: string[][]; fleet: { connected: boolean; downSince: null; ccdVerbs: string[] | null };
   audit: Audit; feed: { title: string; body: string }[]; pushes: string[];
   /** PR7b (review 1609 F1): `presence` defaults from `status` (`dead` for dead, else `alive`); set it to send a row tmux did not answer for. */
-  sessions: { id: string; incarnation: string; status?: 'idle' | 'dead'; stoppedAt?: number; presence?: Presence }[];
+  sessions: { id: string; incarnation: string; status?: 'idle' | 'dead'; stoppedAt?: number; presence?: Presence; unmeasured?: string[] }[];
   /** PR7b: run inside the fixture io before it reads a file or lists a directory (review 1609 F4, the one-`try` advisory). */
   onRead?: (file: string) => void; onList?: (dir: string) => void;
   /** Review 1604 F4: run inside the recording `ws-lease-audit`, before it answers. */
@@ -110,8 +110,8 @@ function world(opts: { caps?: string[] | null } = {}): World {
 
 const WTX: DelegationCensusRecord = { project: 'demo', adminRecord: 'wt-x', canonicalPath: '/w/demo/.claude/worktrees/wt-x', headBranch: null,
   headSha: 'a'.repeat(40), claudeBase: 'b'.repeat(40), locked: false, baseAgreesFirstLog: true, state: 'present', diagnostic: null };
-const sessionOf = (id: string, status: 'idle' | 'dead' = 'idle', stoppedAt?: number, presence?: Presence) => ({ id, project: 'demo', status,
-  presence: presence ?? (status === 'dead' ? 'dead' : 'alive'),
+const sessionOf = (id: string, status: 'idle' | 'dead' = 'idle', stoppedAt?: number, presence?: Presence, unmeasured: string[] = []) => ({ id, project: 'demo', status,
+  presence: presence ?? (status === 'dead' ? 'dead' : 'alive'), unmeasured,
   stoppedBy: (stoppedAt === undefined ? null : { at: stoppedAt, surface: 'ccd' }) as FleetSession['stoppedBy'], archivedAt: null as FleetSession['archivedAt'] });
 /** One census pass at `ms`: the census lists `recs`, and the registry lists the world's sessions (an absent session: no row; an unbuilt
  *  one: named by the listing, with no record and no session). */
@@ -121,7 +121,7 @@ const pass = async (w: World, ms: number, recs: DelegationCensusRecord[] = [WTX]
     incarnations: new Map(w.sessions.map((s) => [s.id, { kind: 'measured', incarnation: s.incarnation }] as const)) };
   if (census) (w.watcher as unknown as { delegationCensus: DelegationCensusPass | null }).delegationCensus = c;
   (w.watcher as unknown as { listedIds: ReadonlySet<string> | null }).listedIds = new Set(w.sessions.map((x) => x.id));
-  const s = w.sessions.filter((x) => !w.unbuilt.includes(x.id)).map((x) => sessionOf(x.id, x.status, x.stoppedAt, x.presence));
+  const s = w.sessions.filter((x) => !w.unbuilt.includes(x.id)).map((x) => sessionOf(x.id, x.status, x.stoppedAt, x.presence, x.unmeasured));
   await w.watcher.sweepDelegation(s as never, s.map((x) => ({ id: x.id, project: x.project, child: { kind: 'none' } })) as never);
 };
 /** PR7b: a pass with no newer census, so the lane notes its sessions and the adoption step does not run (review 1609 F2, F5). */
@@ -638,8 +638,9 @@ describe('PR7 fix round 2: rotation, a pass cut inside an audit, and a retracted
 
 // PR7b (run 1612): the coordinator's rulings on review 1609, the third review of PR7.
 describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts that keep what came back, an outlived death, and the step\'s own try', () => {
-  type Memo = { asked: { leaseId: string }[]; audits: Map<string, unknown>; watch: Map<string, unknown>; health: { waiting: number; wouldAdopt: number } | null };
-  type LaneMemo = { firstDead: Map<string, number>; retractedDeaths: Set<string>; running: Map<AbortController, Promise<unknown>>; adoptMemory: Memo };
+  type Memo = { asked: { leaseId: string }[]; audits: Map<string, unknown>; watch: Map<string, unknown>; health: { waiting: number; wouldAdopt: number } | null; pass: number };
+  type LaneMemo = { firstDead: Map<string, number>; retractedDeaths: Map<string, number>; lastAliveAt: Map<string, Map<string | null, number>>;
+    running: Map<AbortController, Promise<unknown>>; adoptMemory: Memo };
   const laneOf = (w: World): LaneMemo => (w.watcher as unknown as { delegationLane(): LaneMemo }).delegationLane();
   const disposition = (durable: DelegationDurability, id: string) => leaseOf(durable, id).disposition;
   const dead = (w: World, more: Partial<World['sessions'][number]> = {}): void => { w.sessions = [{ id: OWNER, incarnation: INC, status: 'dead', ...more }]; };
@@ -742,7 +743,8 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(mail(w), 'no notice queued on the cut pass').toEqual([]);
     expect(JSON.stringify(laneOf(w).adoptMemory.health), 'and no health written').toBe(health0);
     await pass(w, at(21), trees);
-    expect(mail(w).map((m) => m.subject)).toContain(`delegation: worktree kept for ${OWNER} (${lease.leaseId}, generation 2)`);
+    const kept = mail(w).find((m) => m.subject === `delegation: worktree kept for ${OWNER} (${lease.leaseId}, generation 2)`);
+    expect(kept?.body.split('\n')[0], 'review 1622 F5: the audit\'s words, remembered across the cut pass').toBe(`A worktree that delegated work by ${OWNER} left changed is kept: ${lease.canonicalPath}`);
   }, ROW_MS);
 
   it('F5: alive on a pass where the step does not run, then dead again: the new death\'s own settle and passes apply', async () => {
@@ -753,12 +755,73 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     for (let n = 3; n < 6; n += 1) await pass(w, at(n));
     expect(laneOf(w).adoptMemory.watch.has(lease.leaseId), 'CONTROL: the first death is kept').toBe(true);
     w.sessions = [{ id: OWNER, incarnation: INC }];
+    const steps = laneOf(w).adoptMemory.pass;
     await quietPass(w, at(6));
+    expect(laneOf(w).adoptMemory.pass, 'review 1622 F5, CONTROL: the quiet pass did not run the step').toBe(steps);
     dead(w);
     for (let n = 7; n < 13; n += 1) await pass(w, at(n));
     expect(disposition(durable, lease.leaseId), 'not on the first death').toBe('ephemeral');
     await passesUntilKept(w, durable, lease.leaseId, 13, 6);
     expect(leaseOf(durable, lease.leaseId)).toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(8)) });
+  }, ROW_MS);
+
+  // Review 1622 F1: three sequences, each with the evidence that ends the kept death measured on a pass that does not run the step.
+  const keptDeath = async () => {
+    const r = await leased({ ended: false });
+    touch(r.w, 'delegation-adopt');
+    for (let n = 0; n < 3; n += 1) await pass(r.w, at(n));
+    dead(r.w);
+    for (let n = 3; n < 6; n += 1) await pass(r.w, at(n));
+    expect(laneOf(r.w).adoptMemory.watch.get(r.lease.leaseId), 'CONTROL: the death is kept').toMatchObject({ terminalAt: iso(at(4)) });
+    return r;
+  };
+  const NEW_INC = '7f3c9a10-6666-4aaa-8bbb-0123456789ef';
+  it.each([
+    ['alive at the lease\'s incarnation, then alive at a new one', (w: World) => { w.sessions = [{ id: OWNER, incarnation: INC }]; },
+      (w: World) => { w.sessions = [{ id: OWNER, incarnation: NEW_INC }]; }],
+    ['alive at the lease\'s incarnation, then measured absent', (w: World) => { w.sessions = [{ id: OWNER, incarnation: INC }]; },
+      (w: World) => { w.sessions = []; }],
+    ['a retraction, then measured absent', (w: World) => { dead(w, { stoppedAt: at(3) }); }, (w: World) => { w.sessions = []; }],
+  ] as const)('review 1622 F1: %s — never adopts on the old count, only after the new evidence\'s own settle and passes', async (_name, quiet, next) => {
+    const { w, durable, lease } = await keptDeath();
+    quiet(w);
+    const steps = laneOf(w).adoptMemory.pass;
+    await quietPass(w, at(6));
+    expect(laneOf(w).adoptMemory.pass, 'CONTROL: the quiet pass did not run the step').toBe(steps);
+    next(w);
+    for (let n = 7; n < 12; n += 1) await pass(w, at(n));
+    expect(disposition(durable, lease.leaseId), 'CONTROL: not settled from the new evidence yet').toBe('ephemeral');
+    await passesUntilKept(w, durable, lease.leaseId, 12, 6);
+    expect(leaseOf(durable, lease.leaseId), 'the settle starts at the step\'s first read of the new evidence').toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(7)) });
+  }, ROW_MS);
+
+  it('review 1622 F2: a row with an unmeasured identity field reads unmeasured, so a kept death holds; CONTROL: unmeasured [] adopts', async () => {
+    const { w, durable, lease } = await keptDeath();
+    dead(w, { unmeasured: ['uuid'] });
+    for (let n = 6; n < 24; n += 1) await pass(w, at(n));
+    expect(disposition(durable, lease.leaseId)).toBe('ephemeral');
+    expect(health(w)).toMatchObject({ waiting: 1, adopted: 0 });
+    dead(w, { unmeasured: [] });
+    await passesUntilKept(w, durable, lease.leaseId, 24, 6);
+    expect(disposition(durable, lease.leaseId), 'CONTROL').toBe('adopted');
+  }, ROW_MS);
+
+  it('review 1622 F4 (a): a cut after answers that are not definite keeps their asks, so the next pass asks all four again', async () => {
+    const { w, durable, lease } = await leased();
+    w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
+    const { trees, ids } = await more(durable, lease, 3);
+    for (let n = 0; n < 20 && laneOf(w).adoptMemory.asked.length < 4; n += 1) await pass(w, at(n), trees);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: all four asked in one pass').toEqual([...ids].sort());
+    let calls = 0, late: Promise<unknown>[] = [];
+    w.onAudit = () => { calls += 1; if (calls === 3) late = cutNow(w); };
+    await pass(w, at(30), trees);
+    await Promise.allSettled(late);
+    w.onAudit = undefined;
+    expect(laneOf(w).adoptMemory.audits.size, 'CONTROL: nothing held').toBe(0);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'every ask kept').toEqual([...ids].sort());
+    const before = audits(w).length;
+    await pass(w, at(31), trees);
+    expect(audits(w).slice(before).map((a) => a[2]).sort(), 'the next pass asks all four').toEqual([...ids].sort());
   }, ROW_MS);
 
   it('F6 (a): a census record that reads unreadable holds the entry, counted waiting; read again, it adopts on the first pass', async () => {
@@ -784,7 +847,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     for (; n < 20 && durable.state().checkpoint.leases.some((l) => l.carrierGenerationSeen !== 1); n += 1) await pass(w, at(n), trees);
     w.sessions = [];                                                                // measured absent: every lease's terminal evidence at once
     for (; n < 40 && (laneOf(w).adoptMemory.health?.wouldAdopt ?? 0) === 0; n += 1) {
-      expect(logged().size, 'CONTROL: nothing is counted before the reading pass').toBe(0);
+      expect((laneOf(w).adoptMemory as unknown as { lastRead: Map<string, number> }).lastRead.size, 'CONTROL: no carrier is read before the reading pass').toBe(0);
       await pass(w, at(n), trees);
     }
     const first = logged();

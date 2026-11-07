@@ -99,6 +99,7 @@ import { planNativeRemoved } from './coord/delegation-lease-state.js';
 import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
 import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
 import { adoptionHealthShown, emptyAdoptLaneMemory, runAdoptStep } from './coord/delegationAdoptStep.js';
+import { adoptionAlive } from './coord/delegation-adoption.js';
 import { DELEGATION_RETENTION_FLOOR_MS } from './coord/delegation-journal.js';
 import { delegationCompactionLine } from './coord/delegation-compaction.js';
 import { nodeDelegationFilePort } from './coord/delegation-file-port.js';
@@ -10273,8 +10274,10 @@ class DelegationLane {
   private lastAlive = new Set<string>();
   private aliveSeen = false;
   private readonly firstDead = new Map<string, number>();
-  private readonly retractedDeaths = new Set<string>();   // PR7 (review 1604 F7): a counted death a stop or archive stamp retracted
-  private readonly lastAliveAt = new Map<string, { at: number; incarnation: string | null }>();   // PR7b (review 1609 F5): adoption reads it
+  /** Adoption's evidence (D-8092): a death a stamp retracted (1604 F7), and each parent's last alive pass per incarnation (1609 F5, 1622 F1). */
+  private readonly retractedDeaths = new Map<string, number>();
+  private readonly lastAliveAt = new Map<string, Map<string | null, number>>();
+  private adoptDecidedAt = -Infinity;
   /** Rung 2's positive meta reads (a point lookup in the parent's own transcript tree), kept for the process: a meta is read evidence,
    *  not journal evidence, so it is never durable and is read again after a restart. */
   private readonly pointMetas = new Map<string, LanePointMeta>();
@@ -10952,13 +10955,14 @@ class DelegationLane {
           }
           // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
           if (durable.state().phase === 'ready' && !pass.signal.aborted) {
-            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push }, before = this.adoptMemory.watch;
             try {                                                         // PR7b: a throw here never skips PR6's carrier step
               await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
                 notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
               }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, listedIds: this.listedIds(), registryListed: this.registryListed,
                 sessions: pass.sessions, retracted: this.retractedDeaths, lastAlive: this.lastAliveAt, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
             } catch (err) { console.warn(`ccrc-server: delegation adoption step threw: ${err instanceof Error ? err.message : String(err)}`); }
+            if (this.adoptMemory.watch !== before) this.adoptDecidedAt = Math.max(this.adoptDecidedAt, pass.now);   // the decider read this pass's memory
           }
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();
@@ -11053,7 +11057,14 @@ class DelegationLane {
    *  a new ruling, and is not taken here. A hibernated row (D-5242) is excluded at any instant by its own conjunct; `ccd hibernate` writes
    *  `.hibernated`, then `_ws_unsupervise` (the stop stamp), then kills the pane, so a torn tick can record a hibernation as a death with neither
    *  field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable) counts as before.
-   *  Legitimately different from adoption (D-8092): this memory reads `status`, fail-shut for the breaker; adoption reads `presence`. */
+   *  Legitimately different from adoption (D-8092): this memory reads `status`, fail-shut for the breaker; adoption's liveness and the last-alive
+   *  memory read `adoptionAlive` (`presence`, and doubt for an unmeasured identity), while `deadSince` is this memory's instant gated on it. */
+  /** Review 1622 F1: forgets a retraction (and, absent, last-alive instants) only once the adopt step decided on a pass at or after it. */
+  private forgetAdoptEvidence(id: string, absent = false): void {
+    const read = (at: number): boolean => at <= this.adoptDecidedAt, slots = this.lastAliveAt.get(id);
+    if (read(this.retractedDeaths.get(id) ?? Infinity)) this.retractedDeaths.delete(id);
+    if (absent && slots !== undefined) { for (const [inc, at] of slots) if (read(at)) slots.delete(inc); if (slots.size === 0) this.lastAliveAt.delete(id); }
+  }
   private noteSessions(pass: LanePass): void {
     for (const r of pass.records) this.sessionProject.set(r.id, r.project);
     for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
@@ -11066,22 +11077,23 @@ class DelegationLane {
         const stopAt = stoppedBy !== null ? stoppedBy.at : archivedAt !== null ? archivedAt * 1000 : null;
         const recorded = this.firstDead.get(s.id);
         if (stopAt !== null && recorded !== undefined) {
-          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); this.retractedDeaths.add(s.id); continue; }
+          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); this.retractedDeaths.set(s.id, pass.now); continue; }
         } else if (stopAt !== null) {
           if (stopAt <= pass.now + DELEGATION_CLOCK_SKEW_MS) continue;
         }
         // D-5242: a HIBERNATED row went down on purpose (`ccd hibernate`, journalled as deliberate) — it is asleep, not a
         // death, so it never feeds the delegation breaker, which suspends at two fresh parent deaths in its window and
         // would otherwise trip on every burst of sleeps (the sweeps put up to six down in one window).
-        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) { this.firstDead.set(s.id, pass.now); this.retractedDeaths.delete(s.id); }
+        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) { this.firstDead.set(s.id, pass.now); this.forgetAdoptEvidence(s.id); }
       }
     }
-    for (const id of alive) {
-      const inc = pass.census?.incarnations.get(id);              // a pass read with no census records an unread incarnation
-      this.firstDead.delete(id); this.retractedDeaths.delete(id); this.lastAliveAt.set(id, { at: pass.now, incarnation: inc?.kind === 'measured' ? inc.incarnation : null });
+    for (const id of alive) { this.firstDead.delete(id); this.forgetAdoptEvidence(id); }
+    for (const s of pass.sessions) {      // review 1622 F1: by parent and incarnation; the last census's incarnation when none is newer (accepted)
+      const inc = pass.census.incarnations.get(s.id), slots = this.lastAliveAt.get(s.id) ?? new Map<string | null, number>();
+      if (adoptionAlive(s) === true) this.lastAliveAt.set(s.id, slots.set(inc?.kind === 'measured' ? inc.incarnation : null, pass.now));
     }
     const listed = this.listedIds();      // review 1609 F2: forgotten only on a measured absence; a listed row left unbuilt keeps both
-    if (listed !== null) for (const kept of [this.retractedDeaths, this.lastAliveAt]) for (const id of kept.keys()) if (!listed.has(id)) kept.delete(id);
+    if (listed !== null) for (const id of [...this.retractedDeaths.keys(), ...this.lastAliveAt.keys()]) if (!listed.has(id)) this.forgetAdoptEvidence(id, true);
     for (const [id, at] of this.firstDead) if (pass.now - at > DELEGATION_DEAD_MEMORY_MS) this.firstDead.delete(id);
     this.lastAlive = alive;
     this.aliveSeen = true;

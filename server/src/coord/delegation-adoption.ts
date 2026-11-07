@@ -11,8 +11,8 @@
 // a background agent stopped (ledger amendment `orphaned-background-agent-has-no-terminal-event`). No end is inferred from silence, a
 // live parent, a missing `SessionEnd`, a SubagentStop alone, a paused workflow, an `unknown` status or an unmeasured read. A raw or
 // attached lease is never adopted here (D-6999); a conflicting one waits for the operator's resolve (D-7003, D-7821).
-import type { DelegationAdoptionHealth, DelegationLeaseSourceKind, LeaseAuditAnswer, LeaseAuditRefusal, Presence } from '../../../shared/api.js';
-import { LEASE_AUDIT_REFUSALS } from '../../../shared/api.js';
+import type { DelegationAdoptionHealth, DelegationLeaseSourceKind, IdentityField, LeaseAuditAnswer, LeaseAuditRefusal, Presence } from '../../../shared/api.js';
+import { LEASE_AUDIT_REFUSALS, unmeasuredFields } from '../../../shared/api.js';
 import { delegationTreeKey } from './delegation-correlation.js';
 import { parseDelegationInstant, formatDelegationInstant, type DelegationCheckpointV1, type DelegationLeaseRow } from './delegation-model.js';
 import { DELEGATION_LEASE_EXPIRY_MS, delegationCarrierStateOf } from './delegation-lease-state.js';
@@ -35,16 +35,25 @@ export const DELEGATION_ADOPT_CARRIER_READS_PER_PASS = 8;
 /** The lease sources this lane adopts (rule 1). A `raw` lease is attached by the operator (D-6999); `attached` is the operator's already. */
 export const DELEGATION_ADOPTABLE_SOURCES = ['agent', 'workflow'] as const satisfies readonly DelegationLeaseSourceKind[];
 
-/** What the lane measured of a lease's parent this pass: its registry row, the incarnation it reads, since when a supervisor has been
- *  measured dead outside its restart window for two passes (the lane's `firstDead`, read only while this pass's `presence` is `dead`,
- *  review 1609 F1), whether it is a ccd session (a registry row), whether this pass measured it alive or dead from its row's `presence`
- *  (`alive` and `dead`; `null` for `unknown`, `asleep`, no `presence`, or a session the pass does not name: its liveness is unmeasured),
- *  whether the lane retracted a death it had counted for it (a stop or archive stamp dated at or before it, review 1604 F7), and the
- *  last pass the lane measured it alive, with the incarnation the census read then (review 1609 F5; `null` incarnation: unread).
+/** What the lane measured of a lease's parent this pass: its registry row, the incarnation it reads, the lane's first-dead instant (the
+ *  first pass whose `status` read dead, review 1622 F3) while this pass measures it dead, whether it is a ccd session (a registry row),
+ *  whether this pass measured it alive or dead (`adoptionAlive`: `null` when unmeasured), the pass at which the lane retracted a death it
+ *  had counted for it (a stop or archive stamp dated at or before it, review 1604 F7; null: none standing), and, for each incarnation the
+ *  census read on a pass the lane measured it alive, the last such pass (review 1609 F5, 1622 F1; `null` incarnation: unread).
  *  `unmeasured`, a null incarnation and a null `alive` are never evidence. */
 export interface ParentFact {
   registry: 'present' | 'absent' | 'unmeasured'; incarnation: string | null; deadSince: string | null; ccd: boolean; alive: boolean | null;
-  deathRetracted: boolean; lastAlive: { at: string; incarnation: string | null } | null;
+  retractedAt: string | null; lastAlive: readonly { at: string; incarnation: string | null }[];
+}
+
+/** A parent row's liveness for adoption (review 1609 F1, 1622 F2): its `presence` `alive` is alive and `dead` is dead; `unknown` (tmux did not
+ *  answer, D-309), `asleep` (a hibernated parent: a deliberate stop, not a death), no `presence`, a row with any identity field unmeasured
+ *  (`rowStanding` reads it `doubt`) and a session the pass does not name are unmeasured (`null`). The lane's last-alive memory records a
+ *  pass by this same answer. */
+export function adoptionAlive(row: { readonly presence?: Presence | undefined; readonly unmeasured?: readonly IdentityField[] | undefined } | undefined): boolean | null {
+  if (row === undefined || unmeasuredFields({ unmeasured: row.unmeasured ?? [] }).length > 0) return null;
+  const word = row.presence;
+  return word === 'alive' ? true : word === 'dead' ? false : null;
 }
 
 /** The reads one pass of the lane makes of the parents (review 1587 A7: the step passes them, this file classifies them). */
@@ -56,13 +65,15 @@ export interface AdoptionParentReads {
   listedIds: ReadonlySet<string> | null;
   /** The ids whose row the registry assembled this pass (the pass's records). */
   built: ReadonlySet<string>;
-  /** The sessions this pass measured, with their row's `presence` (review 1609 F1); a session they do not name is unmeasured. */
-  sessions: readonly { readonly id: string; readonly presence?: Presence | undefined }[];
-  /** The parents whose counted death the lane retracted (review 1604 F7), until they are alive again, die again or are measured absent
-   *  from the registry's listing (review 1609 F2). */
-  retracted: ReadonlySet<string>;
-  /** The lane's last-alive instants (epoch ms) and the incarnation the census read on that pass (review 1609 F5). */
-  lastAlive: ReadonlyMap<string, { readonly at: number; readonly incarnation: string | null }>;
+  /** The sessions this pass measured, with their row's `presence` and unmeasured identity fields (review 1609 F1, 1622 F2); a session
+   *  they do not name is unmeasured. */
+  sessions: readonly { readonly id: string; readonly presence?: Presence | undefined; readonly unmeasured?: readonly IdentityField[] | undefined }[];
+  /** The pass (epoch ms) at which the lane retracted a parent's counted death (review 1604 F7), kept until the adoption step has read it
+   *  and the parent is alive again, dies again or is measured absent from the registry's listing (review 1609 F2, 1622 F1). */
+  retracted: ReadonlyMap<string, number>;
+  /** The lane's last-alive instants (epoch ms), by parent and by the incarnation the census read on that pass (review 1609 F5, 1622 F1),
+   *  each kept until the adoption step has read it and the parent is measured absent. */
+  lastAlive: ReadonlyMap<string, ReadonlyMap<string | null, number>>;
   /** The census's settled incarnations. */
   incarnations: ReadonlyMap<string, { readonly kind: 'measured'; readonly incarnation: string } | { readonly kind: 'unmeasured' }>;
   /** The lane's first-dead instants (epoch ms), as the breaker reads them. */
@@ -71,24 +82,25 @@ export interface AdoptionParentReads {
 
 /** Each lease parent's facts this pass (review 1587 A7, F1). A row the registry assembled is present. A row its listing named that it
  *  could not assemble (a uuid, wrapper or workdir that read back empty, or raced a removal) is unmeasured, never absent; only an id the
- *  listing did not name is absent, and no listing is unmeasured. Liveness is the row's `presence` (review 1609 F1, as the projection's
- *  `livenessOf` reads a row): `alive` is alive, `dead` is dead, and `unknown` (tmux did not answer, D-309) and `asleep` (a hibernated
- *  parent: a deliberate stop, not a death) are unmeasured. `deadSince` is the lane's first-dead instant once a later pass reads it, and
- *  only while the parent is measured `dead`: the lane's first-dead memory reads `status`, which is `dead` for every pane tmux did not
- *  call live, and stays so because the breaker reads it in the fail-shut direction (D-8092). */
+ *  listing did not name is absent, and no listing is unmeasured. Liveness is `adoptionAlive` (review 1609 F1, 1622 F2): the row's
+ *  `presence`, and unmeasured for a row with an identity field unmeasured. It and `rowStanding` differ only where `pr7b.md` names, each
+ *  in the safe direction. `deadSince` is the lane's first-dead instant, the first pass whose `status` read dead, once a later pass reads
+ *  it, and only while this pass's liveness is measured dead (review 1622 F3): it is not two measured-dead passes, and rule 5's settle and
+ *  passes still bind. The first-dead memory reads `status`, which is `dead` for every pane tmux did not call live, and stays so because
+ *  the breaker reads it in the fail-shut direction (D-8092). */
 export function adoptionParentFacts(checkpoint: DelegationCheckpointV1, reads: AdoptionParentReads): Map<string, ParentFact> {
   const nowMs = parseDelegationInstant(reads.now), out = new Map<string, ParentFact>();
-  const presence = new Map(reads.sessions.map((x) => [x.id, x.presence] as const));
+  const rows = new Map(reads.sessions.map((x) => [x.id, x] as const));
   for (const { parentId } of checkpoint.leases) {
     if (out.has(parentId)) continue;
     const registry = !reads.registryListed || reads.listedIds === null ? 'unmeasured'
       : reads.built.has(parentId) ? 'present' : reads.listedIds.has(parentId) ? 'unmeasured' : 'absent';
-    const inc = reads.incarnations.get(parentId), dead = reads.firstDead.get(parentId), word = presence.get(parentId);
-    const alive = word === 'alive' ? true : word === 'dead' ? false : null, seen = reads.lastAlive.get(parentId);
+    const inc = reads.incarnations.get(parentId), dead = reads.firstDead.get(parentId), alive = adoptionAlive(rows.get(parentId));
+    const retracted = reads.retracted.get(parentId);
     out.set(parentId, { registry, incarnation: inc?.kind === 'measured' ? inc.incarnation : null,
       deadSince: alive === false && dead !== undefined && dead < nowMs ? formatDelegationInstant(dead) : null, ccd: registry === 'present',
-      alive, deathRetracted: reads.retracted.has(parentId),
-      lastAlive: seen === undefined ? null : { at: formatDelegationInstant(seen.at), incarnation: seen.incarnation } });
+      alive, retractedAt: retracted === undefined ? null : formatDelegationInstant(retracted),
+      lastAlive: [...(reads.lastAlive.get(parentId) ?? [])].map(([incarnation, at]) => ({ at: formatDelegationInstant(at), incarnation })) });
   }
   return out;
 }
@@ -234,22 +246,20 @@ function terminalOf(cp: DelegationCheckpointV1, lease: DelegationLeaseRow, paren
   return parent.incarnation !== null && parent.incarnation !== lease.parentIncarnation ? first : null;
 }
 
-/** Review 1587 F2 and 1604 F5, F7 (D-8058): the counter-evidence that drops a parent's death the lane already saw: the parent measured
- *  alive this pass at the lease's incarnation (its row present), or the lane's retraction of the death it had counted (a deliberate stop
- *  first read as a crash). The retraction drops it whatever the incarnation the census reads now: a delay only, since a later death
- *  starts a watch of its own (review 1609 F7). An ended activity never needs keeping (it is in the journal), so it is never disproved
- *  here. Asked at every rule that keeps a watch entry. */
-const deathDisproved = (cp: DelegationCheckpointV1, lease: DelegationLeaseRow, parent: ParentFact | undefined): boolean =>
-  !activityEnded(cp, lease) && parent !== undefined
-  && ((parent.registry === 'present' && parent.alive === true && parent.incarnation === lease.parentIncarnation) || parent.deathRetracted);
-/** Review 1609 F5: a watch entry the parent outlived. The lane measured the parent alive after the entry's `terminalAt`, at the lease's
- *  incarnation or at one the census did not read, on a pass the decider may not have seen (the step runs only on a newer census), so
- *  the death it rests on ended and the entry is gone: a later death starts its own settle and passes. An ended activity's instant is
- *  never outlived (the parent lives on after its agent). */
-const outlived = (cp: DelegationCheckpointV1, lease: DelegationLeaseRow, parent: ParentFact | undefined, w: AdoptWatch): boolean => {
-  const seen = parent?.lastAlive ?? null;
-  return seen !== null && !activityEnded(cp, lease) && (seen.incarnation === null || seen.incarnation === lease.parentIncarnation)
-    && parseDelegationInstant(seen.at) > parseDelegationInstant(w.terminalAt);
+/** Review 1587 F2, 1604 F5, F7, 1609 F5 and 1622 F1 (D-8058, D-8092): the counter-evidence that drops a watch entry, asked once, before
+ *  any rule reads the entry: the parent measured alive this pass at the lease's incarnation (its row present); the lane's retraction of a
+ *  death it had counted (a deliberate stop first read as a crash), made after the entry's `terminalAt`; or a pass the lane measured the
+ *  parent alive after that instant, at the lease's incarnation or at one the census did not read. The last two may have been measured on
+ *  passes the decider did not see (the step runs only on a newer census), so the lane keeps them until the step has read them. Whatever
+ *  evidence stands now (a measured absence, a changed incarnation, a later death) then starts a watch of its own, with its own settle and
+ *  passes, never the old count. An ended activity never needs keeping (it is in the journal) and its instant is never outlived (the parent
+ *  lives on after its agent), so it is never disproved here. */
+const disproved = (cp: DelegationCheckpointV1, lease: DelegationLeaseRow, parent: ParentFact | undefined, w: AdoptWatch): boolean => {
+  if (parent === undefined || activityEnded(cp, lease)) return false;
+  const after = (at: string): boolean => parseDelegationInstant(at) > parseDelegationInstant(w.terminalAt);
+  return (parent.registry === 'present' && parent.alive === true && parent.incarnation === lease.parentIncarnation)
+    || (parent.retractedAt !== null && after(parent.retractedAt))
+    || parent.lastAlive.some((seen) => (seen.incarnation === null || seen.incarnation === lease.parentIncarnation) && after(seen.at));
 };
 const activityEnded = (cp: DelegationCheckpointV1, lease: DelegationLeaseRow): boolean => {
   const activity = cp.activities.find((a) => a.activityId === lease.activityId);
@@ -271,7 +281,8 @@ const auditChanged = (a: LeaseAuditAnswer | 'unsupported'): boolean => a === 'un
  * dropped when the parent is alive again at the lease's incarnation or the lane retracts the death (reviews 1587 F2, 1604 F1, F5, F7);
  * an unreadable census record and a definite `changed: false` keep the entry (1604 F6); rule 3's read-back is checked after rule 6,
  * because the lane reads a carrier only for a lease past rules 4 to 6 (1587 F7, `adoptionCarrierReads`); and an entry the parent
- * outlived is gone (1609 F5). Rule 3's read-back must equal the lease as PR6 compares it, not only its generation (1609 F8, D-8093).
+ * outlived, or whose death the lane retracted, is gone before any rule reads it, even when the lane measured that on a pass the step did
+ * not run (1609 F5, 1622 F1). Rule 3's read-back must equal the lease as PR6 compares it, not only its generation (1609 F8, D-8093).
  * `raised` in the answer is every attention key that still stands, which the lane keeps for the next pass.
  */
 export function decideAdoption(input: AdoptionInput): { decisions: readonly AdoptionDecision[]; watch: Map<string, AdoptWatch>;
@@ -298,8 +309,8 @@ function walkAdoption(input: Omit<AdoptionInput, 'carriers'>, carriers: Readonly
   for (const lease of [...cp.leases].sort(order)) {
     if (lease.releasedAt !== null || !isAdoptable(lease)) continue;                                   // rule 1 (D-6999)
     const id = lease.leaseId, key = delegationTreeKey(lease.project, lease.adminRecord), parent = input.parents.get(lease.parentId);
-    const watched = input.watch.get(id), prior = watched !== undefined && outlived(cp, lease, parent, watched) ? undefined : watched;   // 1609 F5
-    const keep = (): void => { if (prior !== undefined && !deathDisproved(cp, lease, parent)) watch.set(id, prior); };   // 1604 F5, F7
+    const watched = input.watch.get(id), prior = watched !== undefined && disproved(cp, lease, parent, watched) ? undefined : watched;   // 1622 F1
+    const keep = (): void => { if (prior !== undefined) watch.set(id, prior); };                       // 1604 F5
     if (delegationCarrierStateOf(lease, carrierRow(cp, id)) !== 'ephemeral') continue;               // rule 2
     if (input.conflicting.has(key)) {                                                                 // rule 2: waits for the operator
       keep();
@@ -312,7 +323,7 @@ function walkAdoption(input: Omit<AdoptionInput, 'carriers'>, carriers: Readonly
     if (!input.boxHolds) { keep(); health.unsupported += 1; continue; }
     const same = prior !== undefined && prior.generation === lease.generation ? prior : undefined;   // rule 4 (W5-D9: a new generation resets)
     let terminalAt = terminalOf(cp, lease, parent, same?.terminalAt ?? input.now);
-    if (terminalAt === null && same !== undefined && !deathDisproved(cp, lease, parent)) {           // F2: a death seen is kept (D-8058)
+    if (terminalAt === null && same !== undefined) {                                                  // F2: a death seen is kept (D-8058)
       if (!parentMeasured(parent)) { watch.set(id, same); health.waiting += 1; continue; }         // 1604 F1: an unmeasured read holds
       terminalAt = same.terminalAt;                                                                   // measured dead: counts the pass
     }
@@ -379,9 +390,12 @@ export type AdoptAuditWord = 'changed' | 'unchecked';
 export function adoptAuditWord(audit: LeaseAuditAnswer | 'unsupported' | undefined): AdoptAuditWord {
   return audit !== undefined && audit !== 'unsupported' && audit.ok && audit.changed === true ? 'changed' : 'unchecked';
 }
-/** The feed row an applied adoption writes (record-only), in the words its audit earned (review 1609 F9). */
+/** What the lane remembers of an applied adoption (review 1609 F9): the generation it wrote and the audit answer rule 7 was fed. */
+export interface AdoptedAudit { generation: number; audit: LeaseAuditAnswer | 'unsupported' | undefined }
+/** The feed row an applied adoption writes (record-only), in the words its audit earned (review 1609 F9, 1622 F5: worded here). */
 export function buildAdoptionFeedRow(lease: Pick<DelegationLeaseRow, 'leaseId' | 'project' | 'adminRecord'>, expiresAt: string,
-  audit: AdoptAuditWord): { title: string; body: string } {
+  answer: LeaseAuditAnswer | 'unsupported' | undefined): { title: string; body: string } {
+  const audit = adoptAuditWord(answer);
   return {
     title: `worktree kept: ${lease.project}/${lease.adminRecord}`,
     body: audit === 'changed' ? `Delegated work left this worktree changed; it is kept until ${expiresAt} (lease ${lease.leaseId}).`
@@ -396,9 +410,12 @@ export interface LeaseDigestDoors { retain: true; promote: boolean }
  * its current generation, before its hold ends (review 1587 F5: no dated notice after its date; the `expired:` attention item covers the
  * lease), with a recipient to mail or one unmeasured (which holds the notice; `record-only` is owed no mail). A lease is adopted only from `ephemeral`, so the generation an adopted lease stands at is
  * its adoption's; a promotion that is refused back to `adopted` lands two generations later and is owed a notice of its own (review
- * 1462 M3). Never built from this pass's decisions: the caller asks `hasMailWithSubject` inside `queueRunlessNotice`'s transaction.
+ * 1462 M3). Never built from this pass's decisions: the caller asks `hasMailWithSubject` inside `queueRunlessNotice`'s transaction. An
+ * item carries its adoption's audit word when `adopted` (the lane's memory) remembers that adoption at the item's generation (review 1609
+ * F9, 1622 F5); otherwise it carries none.
  */
-export function owedLeaseNotices(checkpoint: DelegationCheckpointV1, now: string, recipientOf: (l: DelegationLeaseRow) => LeaseRecipient):
+export function owedLeaseNotices(checkpoint: DelegationCheckpointV1, now: string, recipientOf: (l: DelegationLeaseRow) => LeaseRecipient,
+  adopted: ReadonlyMap<string, AdoptedAudit> = new Map()):
   readonly { recipient: Exclude<LeaseRecipient, { kind: 'record-only' }>; item: LeaseDigestItem }[] {
   const out: { recipient: Exclude<LeaseRecipient, { kind: 'record-only' }>; item: LeaseDigestItem }[] = [];
   const nowMs = parseDelegationInstant(now);
@@ -408,8 +425,9 @@ export function owedLeaseNotices(checkpoint: DelegationCheckpointV1, now: string
     if (delegationCarrierStateOf(lease, carrierRow(checkpoint, lease.leaseId)) !== 'adopted') continue;
     const recipient = recipientOf(lease);
     if (recipient.kind === 'record-only') continue;
+    const how = adopted.get(lease.leaseId);
     out.push({ recipient, item: { leaseId: lease.leaseId, generation: lease.generation, canonicalPath: lease.canonicalPath,
-      parentId: lease.parentId, expiresAt: lease.cleanupDueAt } });
+      parentId: lease.parentId, expiresAt: lease.cleanupDueAt, ...(how?.generation === lease.generation ? { audit: adoptAuditWord(how.audit) } : {}) } });
   }
   return out;
 }

@@ -27,7 +27,7 @@ const ACCEPTED: readonly Accepted[] = [
   { file: 'server/src/watch.ts', site: 'the tick\'s push copy, `projects`',
     why: 'wording only: it asks which projects have a running pane, which is what `status` says' },
   { file: 'server/src/watch.ts', site: 'noteSessions, `alive`',
-    why: 'the delegation breaker\'s memory of running panes; its comment counts a restart and doubt as dead on purpose' },
+    why: 'the delegation breaker\'s memory of running panes; its comment counts a restart and doubt as dead on purpose. It also lets adoption forget a retraction the step has read; adoption\'s own liveness and last-alive memory read `adoptionAlive` (`presence`), D-8092' },
   { file: 'server/src/watch.ts', site: 'noteSessions, the death loop',
     why: 'the same memory; it consults `hibernatedAt` itself, so a sleep never feeds the breaker' },
   { file: 'server/src/watch.ts', site: 'ownersOf',
