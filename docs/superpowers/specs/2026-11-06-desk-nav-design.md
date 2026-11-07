@@ -8,7 +8,7 @@ The operator asked for two things at a desk: move Instrument's left rail into th
 **Part A, the desk top bar (Instrument, 900 px and wider):** the rail column goes. The top bar carries the one `<nav aria-label="Primary">`: the wordmark (now the way home, named for the Fleet page), the six doors, the command field, the bell, Settings and New session. The breadcrumb and `breadcrumb.ts` are removed. The main pane gains 52 px at every desk width. Refined and phones do not change.
 **Part B, the desk Docs head (both skins, 600 px and wider):** one row holds back, the crumbs, the reader's Aa control and the three actions; the truth line becomes one dense line under it. The document's title moves from y = 382 to about y = 200 at 1280 × 800.
 **Sequencing:** Part A overlaps no open work and can go first. Part B lands after #2346 merges and its take-up wave lands, and it moves that wave's 1280 desk figure on purpose.
-**What you need to check:** the three questions under "Waiting on you": Part A as drawn, Part B's target and its dense truth line, and who builds Part B and when. The mockup draws both parts before and after.
+**What was decided:** the operator approved all three questions as recommended on 2026-11-07 (items 62, 63 and 64); see "Where things stand". The mockup draws both parts before and after.
 
 ## 1. Context
 
@@ -264,21 +264,21 @@ The coordinator recommends each row; the operator rules on A1, B1 and B3 (the "W
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
-| A1 | Instrument's desk navigation | Keep the rail; move the doors into the top bar | Move them into the bar, where the breadcrumb's empty space is; the main pane gains 52 px | Proposed |
-| A2 | Door form by width | Labels always; icons always; labels from 1280 | Icon and label from 1280 px, icon only from 900 to 1279 with the tooltip below | Proposed |
-| A3 | The breadcrumb | Keep it shortened; remove it | Remove it and `breadcrumb.ts`: every page already says where it is (§2.4) | Proposed |
-| A4 | Home on a desk | A Fleet door; the wordmark | The wordmark, named "ccrc, Fleet": no seventh door, and it closes the one gap the crumb filled | Proposed |
-| A5 | Current door | Side bar; underline; filled ground | A 2 px accent underline, as Instrument's list tabs do, with `aria-current="page"` | Proposed |
-| A6 | Focus order | Command field first; doors first | Doors first, then the command field, then bell, Settings, New session | Proposed |
-| A7 | Bell size | Leave at 28 px; raise | Raise to the 44 px floor while it moves | Proposed |
-| A8 | One bar for both skins | Merge; keep two bars on one list | Two bars, one list (`DESK_PLACES`), Archive added at one point | Proposed |
-| A9 | The `Rail` part slot | Keep it empty; remove it | Remove it with the frame's rail branch: no skin draws one | Proposed |
-| A10 | The lanes row | Change now; leave | Leave it; its height is listed under Later | Proposed |
-| B1 | The desk Docs head | Keep three rows; one row plus a dense line | One row, plus a dense truth line; title at about y = 200 from 382 at 1280 × 800 | Proposed |
-| B2 | Truth line form | Dense line; "Page details" disclosure | Dense line: the freshness chip and commit stay in view (§3.3) | Proposed |
-| B3 | Who builds Part B, and when | Fold into #2346's take-up wave; this programme after it | This programme, after the take-up wave lands, so that wave keeps its approved scope | Proposed |
-| B4 | The reader's Aa at a desk | Frame's own bar; the host bar | The host bar, #2346's mechanism with its condition widened; no second mechanism | Proposed |
-| B5 | Layout by pointer | One row only under a fine pointer; one row at 600 px and wider, density by pointer | One row at every pointer from 600 px; only the 28 px density is fine-pointer | Proposed |
+| A1 | Instrument's desk navigation | Keep the rail; move the doors into the top bar | Move them into the bar, where the breadcrumb's empty space is; the main pane gains 52 px | Agreed |
+| A2 | Door form by width | Labels always; icons always; labels from 1280 | Icon and label from 1280 px, icon only from 900 to 1279 with the tooltip below | Agreed |
+| A3 | The breadcrumb | Keep it shortened; remove it | Remove it and `breadcrumb.ts`: every page already says where it is (§2.4) | Agreed |
+| A4 | Home on a desk | A Fleet door; the wordmark | The wordmark, named "ccrc, Fleet": no seventh door, and it closes the one gap the crumb filled | Agreed |
+| A5 | Current door | Side bar; underline; filled ground | A 2 px accent underline, as Instrument's list tabs do, with `aria-current="page"` | Agreed |
+| A6 | Focus order | Command field first; doors first | Doors first, then the command field, then bell, Settings, New session | Agreed |
+| A7 | Bell size | Leave at 28 px; raise | Raise to the 44 px floor while it moves | Agreed |
+| A8 | One bar for both skins | Merge; keep two bars on one list | Two bars, one list (`DESK_PLACES`), Archive added at one point | Agreed |
+| A9 | The `Rail` part slot | Keep it empty; remove it | Remove it with the frame's rail branch: no skin draws one | Agreed |
+| A10 | The lanes row | Change now; leave | Leave it; its height is listed under Later | Agreed |
+| B1 | The desk Docs head | Keep three rows; one row plus a dense line | One row, plus a dense truth line; title at about y = 200 from 382 at 1280 × 800 | Agreed |
+| B2 | Truth line form | Dense line; "Page details" disclosure | Dense line: the freshness chip and commit stay in view (§3.3) | Agreed |
+| B3 | Who builds Part B, and when | Fold into #2346's take-up wave; this programme after it | This programme, after the take-up wave lands, so that wave keeps its approved scope | Agreed |
+| B4 | The reader's Aa at a desk | Frame's own bar; the host bar | The host bar, #2346's mechanism with its condition widened; no second mechanism | Agreed |
+| B5 | Layout by pointer | One row only under a fine pointer; one row at 600 px and wider, density by pointer | One row at every pointer from 600 px; only the 28 px density is fine-pointer | Agreed |
 
 ## Where things stand
 
