@@ -369,12 +369,16 @@ absorption, and the re-send round per land-sync in strict repositories.
   setBy, detail)`;
 - `landing_projects(operatorPaused, mainRedHold)`: two booleans, because they have different remedies; the line
   is paused while either is set;
-- `landing_intents(runId, project, key)`, keyed to runs, taken at dispatch, independent of entries.
+- `landing_intents(runId, project, key)`, keyed to runs, taken at dispatch, independent of entries. A key is the
+  repository's issue or PR number, `#<n>`, or a deviation number, `D-<n>` (ruling 16).
 
 Columns re-measured from ccd's files — `pinnedSha` and landed state — are recomputable; order edges,
-`fixesMain`, pause, withdrawals and intents are **central authoritative state**, like `pool_edges`, journalled to
+`fixesMain`, pause and withdrawals are **central authoritative state**, like `pool_edges`, journalled to
 `~/.ccrc/landing.log`. On reconstruction the journal wins for authoritative columns and the sweep wins for landed
-state. `CLAUDE.md`'s coord.db invariant is amended to name this second exception.
+state. `CLAUDE.md`'s coord.db invariant is amended to name this second exception. Intents are central state too, but
+they are not journalled (amended 2026-11-07, ruling 17): they live in `coord.db` beside the runs that hold them. A
+hold ends when its run ends, and runs live only in `coord.db`, so an intent restored without its run would have
+nothing to judge it by. A lost database loses both together, and a snapshot restores both together.
 
 **Entries and pins.** An entry is created on `advance → merging`, pinned to the verdict's `measured.branchTip` —
 the actual PR head, which after stage 4 may be a base-only merge — with `handoffCommit` kept as its own column.
@@ -766,8 +770,9 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
 - Box token gates every landing write except the two `SESSION_ONLY` doors; the census tests are extended.
 - The done-fingerprint still re-measures the workspace tip; stage 4 widens acceptance only along a ccd-proven
   chain, only for opted-in projects.
-- **Amended — coord.db.** Landing order, pauses, withdrawals and intents are central authoritative state with a
-  journal, the second named exception after `pool_edges`.
+- **Amended — coord.db.** Landing order, pauses and withdrawals are central authoritative state with a journal, the
+  second named exception after `pool_edges`. Intents are central state kept in `coord.db` with their runs, with no
+  journal (ruling 17, 2026-11-07).
 - **Amended — ccd verbs.** "Zero new ccd verbs for coordination mutation" is read as written (runs and mail).
   `land-candidate` is a fleet git act in the `pr-open` class: it pushes and deletes only its own
   `refs/heads/ccrc/land/*` family, non-force. `ccd-land-probe` is read-only by code. The operator reshapes the
@@ -891,6 +896,15 @@ Decided on the draft of §5.7, 2026-10-21 (each as the draft recommended):
 14. **Rollout.** `ccrc rollout --to` the prerelease that carries the merge, then the installed skill text is
     verified in every home.
 15. **The branch read.** The reads ask about the PR's own base branch, not the literal `main`.
+
+Decided on wave 5g's plan, 2026-11-07 (each as the plan proposed; D-8080, D-8081):
+
+16. **An intent's key** is the repository's issue or PR number, `#<n>`, or a deviation number, `D-<n>` (§5.5).
+    Coordinators already share those two numbers, so two coordinators naming the same change name the same key.
+    Free text would rarely match.
+17. **Intents are not journalled.** They live in `coord.db` with the runs that hold them, and `landing.log` carries
+    no intent record (§5.5, §7). A hold ends with its run, and the journal's parser refuses a record kind it does not
+    know, so an intent record would stop an older build that reads `landing.log` from starting.
 
 ## 12. Failure modes named
 

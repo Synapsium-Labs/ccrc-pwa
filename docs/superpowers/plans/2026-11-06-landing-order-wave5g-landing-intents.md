@@ -8,7 +8,7 @@
 - **A programme never blocks itself**, so wave N+1 may name what wave N named (D-8083). A review run names no intents (D-8084).
 - **The refusal** is the last check of dispatch's `request` step. It answers 409 with the key and the holding run, and the run stays `planned` (D-8085).
 - **One writer.** The intents are written in the transaction that marks the run dispatched, and the dispatch's `200` names the keys it wrote, so a coordinator can tell a server that took no hold (D-8086).
-- **Not journalled.** Intents live in `coord.db` beside the runs that hold them, and the spec's sentence is amended to say so (D-8080; the operator's item 60).
+- **Not journalled.** Intents live in `coord.db` beside the runs that hold them, and the spec's sentence is amended to say so (D-8080; the operator's item 60, answered 2026-11-07).
 
 **Why:**
 - Spec §5.5 counts 28 PRs in 120 days that were closed unmerged because a sibling landed the same change first, and §10 sets stage 5's target for that count at under 5. An intent makes the second dispatch of the same change a refusal instead of a wasted wave.
@@ -44,12 +44,12 @@
 
 ## The operator's two choices (item 60)
 
-The spec leaves two things open, and the second departs from its text. This plan is written on the proposed answers; if the operator answers otherwise, the plan changes before it is approved.
+The spec leaves two things open, and the second departs from its text. The operator answered both as proposed on 2026-11-07 (item 60), and the spec's §11 records them as rulings 16 and 17.
 1. **The key** is `#<n>` or `D-<n>` (D-8081). A key stops a duplicate only if two coordinators would each write the same key for the same change, and those are the two numbers the fleet already shares. Free text would rarely match.
 2. **No journal** (D-8080). The spec says intents are journalled to `~/.ccrc/landing.log`. But a hold ends when its run ends, and runs live only in `coord.db`, so an intent restored from the journal without its run has nothing to judge it by. The journal's parser also refuses every record kind it does not know (`landingJournalPolicy.ts#parseLandingJournal`), so after the first intent record, a server rolled back to a build from 5f up to just before 5g (the builds that read `landing.log`) would refuse to start until the file was moved aside. Intents therefore live in `coord.db` with their runs: a lost database loses both together, and a snapshot restores both together. `CLAUDE.md` needs no change: its coord.db bullet already lists `the landing line` among what a lost database loses, and its authority-recovery sentence lists what `landing.log` restores, which intents are not.
 
 ## What this does not claim
-- **No journal record, and no `CLAUDE.md` change** (D-8080). The coordinator amends the spec's §5.5 and §7 sentences on the plan's own PR.
+- **No journal record, and no `CLAUDE.md` change** (D-8080). The spec's §5.5 and §7 sentences are amended on the plan's own PR.
 - **No read route and no view field** (D-8087). The refusal names the holding run, which is all the coordinator needs to act. `GET /api/landing` is unchanged. The console's doors are 5k's.
 - **No release write.** Nothing in close, abandon, the dead-coordinator lane or reclaim changes (D-8082).
 - **No instrument** (D-8088). Stage 5's §10 metric is read by the coordinator at the two-week reading, by hand.
@@ -270,7 +270,7 @@ git commit -m "docs(skills): landing intents at dispatch, and step 6 names the r
 
 This plan's numbers are D-8080 to D-8089, issued on 2026-11-06.
 
-- **D-8080** — `landing-intents-not-journalled` (Task 1): landing intents live in `coord.db` beside the runs that hold them and write no `landing.log` record, departing from spec §5.5's and §7's journalling sentence. A hold ends with its run, and runs live only in `coord.db`, so a journalled intent restored without its run has nothing to judge it by; and the journal's parser refuses unknown kinds, so the first intent record would stop a server rolled back to a build from 5f up to just before 5g, the builds that read `landing.log`, from starting. The operator rules on it in item 60, and the spec's two sentences are amended on the plan's PR.
+- **D-8080** — `landing-intents-not-journalled` (Task 1): landing intents live in `coord.db` beside the runs that hold them and write no `landing.log` record, departing from spec §5.5's and §7's journalling sentence. A hold ends with its run, and runs live only in `coord.db`, so a journalled intent restored without its run has nothing to judge it by; and the journal's parser refuses unknown kinds, so the first intent record would stop a server rolled back to a build from 5f up to just before 5g, the builds that read `landing.log`, from starting. The operator ruled on it in item 60 on 2026-11-07, as proposed, and the spec's two sentences are amended on the plan's PR (§11, ruling 17).
 - **D-8081** — `landing-intent-key-grammar` (Tasks 1, 3): a key is `#<n>` or `D-<n>`, with `n` a positive integer of at most nine digits and no leading zero. A dispatch names at most 8, each once. Anything else is refused `bad-request` with a `detail` starting `intents:`.
 - **D-8082** — `landing-intent-held-while-run-open` (Task 1): a landing intent is held while its run's state is not in `TERMINAL_RUN_STATES`, and nothing writes its end. Every door that closes a run releases it alike, including the dead-coordinator lane's `sweep` close, which the first carried constraint says a landing reading must treat as the operator's abandon. Closes gain no dependency on the line.
 - **D-8083** — `landing-intent-same-programme-never-blocks` (Task 2): a hold by a run of the dispatching run's own programme never refuses. One coordinator owns a programme (clause 8) and opens wave N+1 before it closes wave N, so a per-run hold would otherwise refuse the programme's own next wave.
@@ -283,10 +283,9 @@ This plan's numbers are D-8080 to D-8089, issued on 2026-11-06.
 
 ## Where things stand
 
-**Agreed:** the spec's stage 5 and its split into sub-waves (Decisions, 2026-10-30 23:24); 5g's table of its own (D-7611).
+**Agreed:** the spec's stage 5 and its split into sub-waves (Decisions, 2026-10-30 23:24); 5g's table of its own (D-7611); keys of `#<n>` or `D-<n>`, and intents kept in `coord.db`, not journalled (item 60, 2026-11-07; D-8080, D-8081; spec §11, rulings 16 and 17).
 
 **Waiting on you:**
-- Item 60: the key's form and whether intents are journalled (D-8080, D-8081).
-- The plan's approval, once its review is answered.
+- The plan's approval.
 
 **Later:** 5h (the landed reader), 5i (the line's head), 5j and 5k (the doors); and stage 5's two-week reading (D-8088).
