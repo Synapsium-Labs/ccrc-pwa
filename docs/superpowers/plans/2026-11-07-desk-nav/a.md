@@ -45,12 +45,12 @@ The plan's own departures hold as written (`nav-holds-doors-only`, `settings-ico
   flow the word starts after the pill whatever it prints. In the icon form the pill keeps the rail's corner, `--sp-1` in.
   The browser Inbox case now reads 900 and 1280: at both the pill straddles the icon's right edge with the `--sp-1` top
   inset; at 900 it has the rail's right inset, and at 1280 the word clears it.
-- **`phone-bar-browser-allows-the-home-door`** (ruled by this session's parent through a structured ask, 2026-11-07, as
-  recommended). The Global Constraints list `phone-bar` (browser) as unchanged, but its "no bar at a desk" case counted
+- **`phone-bar-browser-allows-the-home-door`** (ask 326, option 0, ruled 2026-11-07, with its terms in mail 16404). The Global Constraints list `phone-bar` (browser) as unchanged, but its "no bar at a desk" case counted
   `go-fleet` doors at a desk, and the plan's wordmark door runs `go-fleet`. Step 3 amends the jsdom twin of that case and
   not this one, so the whole browser suite's first run was red there (Instrument, 900 and 1280). The one line now reads as
-  the jsdom twin does: at a desk the only `go-fleet` is Instrument's wordmark door, holding the wordmark, and Refined draws
-  none. The file was claimed (3763) before the edit.
+  the jsdom twin does: at 900 and 1280 there is no phone bar, and the only `go-fleet` control is Instrument's wordmark door,
+  inside the header's Primary nav; Refined draws none. Every other assertion in the file is unchanged, and the file was
+  claimed (3763) before the edit.
 - **`command-field-floor-pinned`**. The plan's mutant 7 (`.ins-command`'s `min-width` at `280px`) survives the browser's
   fit case: at 900 the field is 329 px wide, so a 280 px floor never binds and the bar keeps 49 px. A jsdom case pins the
   Interfaces' values (`flex: 1 100 0`, the floor `calc(var(--tap-min) + var(--sp-10))`) and goes red on it.

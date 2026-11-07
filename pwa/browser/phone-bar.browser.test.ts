@@ -377,7 +377,10 @@ describe.each(SKINS)('the phone bar in %s', (skin) => {
           // D-8100, `phone-bar-browser-allows-the-home-door`), as the jsdom twin of this case reads; Refined draws none.
           const home = page.locator('[data-command="go-fleet"]');
           expect(await home.count(), `${path}: no fleet place at a desk`).toBe(skin === INSTRUMENT ? 1 : 0);
-          if (skin === INSTRUMENT) expect(await home.locator('[data-wordmark]').count(), `${path}: it is the wordmark door`).toBe(1);
+          if (skin === INSTRUMENT) {
+            expect(await page.locator('header nav[aria-label="Primary"] > [data-command="go-fleet"] [data-wordmark]').count(),
+              `${path}: it is the wordmark door, in the header's Primary nav`).toBe(1);
+          }
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();
