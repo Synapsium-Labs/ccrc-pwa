@@ -715,7 +715,7 @@ Reuse the ruled plan's Task W1 (`2026-10-21-runs-auto-expire-and-programme-view.
 - Modify: `shared/switches.ts`, `server/src/coord/routes.ts` (`GET/POST /api/coord/run-close`), `pwa/src/screens/RunsAdvancedScreen.tsx`
 - Test: `server/test/run-close-switch.test.ts` (new), `pwa/test/runs-advanced.test.tsx`
 
-- [ ] **Step 1: Write the failing tests.** `three states per group, default shadow`, `a row shows its state word, Turn off and Turn on, and Back to shadow when on` (o7), `Turn on lists what would close now, with reasons`, `a run the row fits but the lane holds, such as 1085 with a live session, is named under the list and not in it`, `while coordination is paused every row reads held with no would-close list, Turn on is disabled, and POST /api/coord/run-close refuses to arm` (o12), `session only`, `a marker remains an emergency override`, `the crash row gets the same control`, `closes and refusals of the last 7 days show per group`.
+- [ ] **Step 1: Write the failing tests.** `three states per group, default shadow`, `a row shows its state word, Turn off and Turn on, and Back to shadow when on` (o7), `Turn on lists every run that would close once on, with reasons, and counts those closing now and those closing when their time runs out`, `a run the row fits but the lane holds, such as 1085 with a live session, is named under the list and not in it`, `a run whose E1 warning cannot be delivered, such as 65, 66 and 83 under an archived coordinator, is named under the list and not counted in it` (o2, A58), `the Advanced row's count matches the sheet's`, `while coordination is paused every row reads held with no would-close list, Turn on is disabled, and POST /api/coord/run-close refuses to arm` (o12), `session only`, `a marker remains an emergency override`, `the crash row gets the same control`, `closes and refusals of the last 7 days show per group`.
 - [ ] **Step 2: Run** them. Expected: FAIL.
 - [ ] **Step 3: Implement.** The operator arms after 3 days of shadow and reading the list. No session arms a lane.
 - [ ] **Step 4: Run** them. Expected: PASS.
@@ -764,7 +764,7 @@ After each PWA wave, run `pwa/browser/runs-widths.browser.test.ts` and compare i
 
 Each PWA wave reverts as its PR. New wire fields are optional, so a revert leaves older readers working. Lanes fall back to shadow from Advanced.
 
-Migrations add columns and an index, with one exception: Task 2's migration rewrites every `programs.title`, so reverting B1's code leaves the new short names in place. To restore them, run the statement that `run-titles.test.ts` pins, which sets each `programs.title` from its newest run's `title` (spec §18). `RunVerdicts` is in memory, so it needs no rollback. The `gone_since` table stays on a revert, and an older build never names it.
+Migrations add columns, an index and one table, `gone_since`, with one exception: Task 2's migration rewrites every `programs.title`, so reverting B1's code leaves the new short names in place. To restore them, run the statement that `run-titles.test.ts` pins, which sets each `programs.title` from its newest run's `title` (spec §18). `RunVerdicts` is in memory, so it needs no rollback. The `gone_since` table stays on a revert, and an older build never names it.
 
 ## Deviations found
 

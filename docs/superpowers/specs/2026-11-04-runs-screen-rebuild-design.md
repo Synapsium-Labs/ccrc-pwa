@@ -261,7 +261,7 @@ The checks, the flaws and the reviews of rev 4 and rev 5 left these open. They a
 
 ### 4.6 The operator's rulings of 2026-11-07
 
-The operator answered the frames' verdict page on 2026-11-07, every answer as recommended (D-8115). The frames are approved for the build, with the known errors fixed: the "Abandon 12 runs?" and Turn on sheets say "Live coordinators are told.", because run 899's coordinator is stopped, and run 1085 has one story, a live session whose `.child` marker cannot be read, so its sheet says cannot tell and its row reads "Nothing closes this on its own" (§12.1). The fixed frames are `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-frames.html`. A35 to A61 are accepted as drawn, the ten with no frame included. A45 changes with n3.
+The operator answered the frames' verdict page on 2026-11-07, every answer as recommended (D-8115). The frames are approved for the build, with the known errors fixed: the "Abandon 12 runs?" and Turn on sheets say "Live coordinators are told.", because run 899's coordinator is stopped, and run 1085 has one story: a live session, so its row reads "Nothing closes this on its own" (§12.1), and a sheet that says cannot tell. Its unreadable `.child` marker is a drawn sample, not a measured fact: no marker was read (§19), so the frames draw that case on 1085 to show the sheet. The fixed frames are `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-frames.html`. A35 to A61 are accepted as drawn, the ten with no frame included. A45 changes with n3.
 
 **The 14 open points.** Each was a place where the spec was silent or said two things.
 
@@ -1125,7 +1125,8 @@ Over today's 28 planned runs, approximately. Activity here comes from run stamps
 - 18 of the 26 planned runs over 7 days close. The ruled target of zero is unreachable.
 - 417 fits no row: its claimant and worker were stopped in a 13-second burst on 2026-10-27, and the journal's `verb` is null, so E3s won't count it. E4 would fit, but it waits on #119.
 - 848 fits no row: E4 covers only dispatched and working.
-- 1085 fits E1r but has a live session and a dispatch stamp, so R1's hold handling applies. Its `closes` is null, so its row reads "Nothing closes this on its own" (A53), and the Turn on sheet names it under the would-close list, not in it, to be checked before arming. So the screen's first group would close 17, not this replay's 18.
+- 1085 fits E1r but has a live session and a dispatch stamp, so R1's hold handling applies. Its `closes` is null, so its row reads "Nothing closes this on its own" (A53), and the Turn on sheet names it under the would-close list, not in it, to be checked before arming. So the screen's first group would close 17 in shadow, not this replay's 18.
+- 65, 66 and 83 fit E1, and in shadow their rows show hours (o2). Their coordinator is archived, so once armed their warning is never delivered, and 24 h after it is due each becomes an "Open the coordinator" item (A58, §12.2), not a close. Arming the first group would therefore close 14: 11 now and 3 when their time runs out (899, 396 and 984). The Turn on sheet and the Advanced row give those numbers, and name 65, 66 and 83 under the list with 1085.
 - 1085 and 1257 fit neither E2 nor D-7319: both need no bound session.
 - The marker `dead-coordinator-lane-live` is absent on the box, so that lane is shadow.
 
@@ -1164,7 +1165,7 @@ Each lane group gets a three-state control on Advanced: off, shadow, on. Its def
 
 The row shows the state word, Turn off and Turn on, and "Back to shadow" on a row that is on (o7). While coordination is paused no group can be armed: every row reads held, has no would-close list, and Turn on is disabled (o12).
 
-"Turn on" opens a sheet listing what would close now, with the reasons, and under it any run the row fits but the lane holds, such as 1085. Title: "Let ccrc close these on its own?" Confirm: Turn on. Cancel: Keep it in shadow. The crash row's marker gets the same control, which ends a hand-only arming that this work would otherwise leave behind.
+"Turn on" opens a sheet listing every run that would close once the group is on, with the reasons, and how many close now and how many when their time runs out: for the first group, "14 runs would close, 11 now and 3 when their time runs out." The Advanced row gives the same count. Under the list it names any run the row fits that the lane would not close: one the lane holds, such as 1085, and one whose E1 warning cannot be delivered, such as 65, 66 and 83 under an archived coordinator, which reach the operator as "Open the coordinator" items instead (§12.1, A58). Title: "Let ccrc close these on its own?" Confirm: Turn on. Cancel: Keep it in shadow. The crash row's marker gets the same control, which ends a hand-only arming that this work would otherwise leave behind.
 
 ### 12.4 Targets, replaced
 
