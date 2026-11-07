@@ -114,6 +114,12 @@ The four moves, each its own commit and each green after it:
   F2, a header cell's kept text, is a header cell `#651 merged` keeping `merged` as plain text beside the `#651` mark. Both
   are in `chat-marks.test.ts`, as the brief says; F2 runs the parse with the plugin there, since a header cell exists only
   in a tree.
+- **`main-merged-for-hadchild`.** Fix round 2's first push (`0e2ab463d`) went red in CI on the merge with main only: #2404
+  (D-8068) made `hadChild` a required field of `RunSummary` after that push, and `runs-arrival.test.tsx`'s `run()` fixture
+  built one without it (TS2322; `git merge-tree` was clean, as the conflict is in the types, not the text). By the
+  coordinator's ruling (option A) the branch absorbed `origin/main` once with `git merge` (merge commit `50673962d`), and the
+  fixture sets `hadChild: false`, with no cast. Re-gated: the pwa type check, `runs-arrival` and `chat-links`, and the whole
+  pwa suite (472 files, 13 991 passed, 3 skipped).
 - **`browser-main-red-from-export`.** Step 5's "run on main (red)" was measured on a `git archive` of `origin/main`
   (`pwa`, `ui`, `shared`) with this workspace's `node_modules` borrowed: 8 of 8 failed, as no name in chat was a link.
 
