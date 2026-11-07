@@ -123,14 +123,18 @@
   right: var(--sp-1);
   pointer-events: none;
 }
-/* A door with its word: the pill keeps the icon's top-right corner (the icon is the door's first box, after its `px-1`), and
-   a counted door opens the gap between its icon and its word, so the word clears the pill. */
+/* A door with its word: the pill is a flex item between the icon and the word (it follows the word in the DOM, so the name
+   and the shown text read word first), drawn up to the door's top and pulled back over the icon's top-right corner. In
+   the flow, the word starts after it whatever it prints, "99+" included, so the two never overlap. */
 .ins-door:has(.ins-door-word) .ins-door-count {
-  right: auto;
-  left: var(--sp-3);
+  position: static;
+  order: 1;
+  align-self: flex-start;
+  margin-block-start: var(--sp-1);
+  margin-inline-start: calc(-1 * var(--sp-3));
 }
-.ins-door:has(.ins-door-word):has(.ins-door-count) {
-  gap: var(--sp-3);
+.ins-door-word {
+  order: 2;
 }
 /* The current door: a 2px accent underline on its bottom edge, beside `aria-current="page"`, as the list column's chosen
    tab is drawn (`.ins-tab[aria-selected='true']::after`). It takes no room, so choosing moves no door. */

@@ -1,7 +1,8 @@
 // Instrument's desk, measured in a real Chrome over the production build (W2 desk polish, Task T2e, D-6335; T2g, D-6715).
 // The jsdom suites (test/instrument-shell.test.tsx, test/instrument-list.test.tsx) pin the rules that produce this
 // geometry; this file holds the geometry: no empty fourth column (the reading column is the whole detail pane at 1600,
-// 1128, since D-8059 made Instrument's `--measure-chat` 100%, and the detail reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
+// 1180 since desk-nav Task A, D-8100, gave it the rail's 52 px, D-8059 having made Instrument's `--measure-chat` 100%, and the
+// detail reaches the viewport's edge), no head in the list column (T2e removed its chrome and T2g its count line; this fixture
 // has no pool lag, so nothing else draws there and the first row starts higher), a status row of two lines and at most
 // 42 px under a fine pointer when its name and state fit (every row at most three lines and under 61 px: the name,
 // `waiting · needs you` and the context, when a long name and the state do not fit side by side; T3b, R21's F2 and
@@ -38,7 +39,8 @@
 // T2g's review R51 F1 (carried by T2f, D-6371; RUN with -t "release waiting", each mutant reverted):
 //   `/api/updates` dropped from WITH_RUNS .............. the same case (`TimeoutError: page.waitForFunction: Timeout 20000ms exceeded.`: the indicator is never drawn)
 //   `<UpdateIndicator form="status" />` dropped from StatusBar.tsx  the same case (`TimeoutError: page.waitForFunction: Timeout 20000ms exceeded.`: the indicator is never drawn)
-// T2e review R32, F7 (carried into T2g; RUN with -t "Inbox count", each mutant reverted):
+// T2e review R32, F7 (carried into T2g; RUN with -t "Inbox count", each mutant reverted; the class is `.ins-door-count` and
+// the door the bar's since desk-nav Task A, D-8100, whose case reads it at 900 and 1280):
 //   `.ins-rail-count` without `position: absolute` ..... "at 1280x800 the count pill sits on the Inbox door's top-right corner, inside the door"
 //                                                         (`top inset 13.203125 vs --sp-1 4: expected 9.203125 to be less than or equal to 2`; both themes)
 //   `.ins-rail-count` without `right: var(--sp-1)` ..... the same case (`right inset 16.203125 vs --sp-1 4: expected 12.203125 to be less than or equal to 2`)
@@ -189,10 +191,11 @@ describe('no empty fourth column', () => {
             sideScroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
         });
-        // Three tracks (the rail, the list, the detail): the 320 px fourth track is S12's, with the Inspector part.
-        expect(m.tracks, 'grid tracks').toEqual(['52px', '420px', '1128px']);
+        // Two tracks (the list, the detail; desk-nav Task A, D-8100, took the rail's): the 320 px third track is S12's, with
+        // the Inspector part.
+        expect(m.tracks, 'grid tracks').toEqual(['420px', '1180px']);
         expect(m.inspectors, 'Instrument places no inspector yet').toBe(0);
-        expect(m.composerW, 'the reading column: the whole detail pane (D-8059)').toBe(1128);
+        expect(m.composerW, 'the reading column: the whole detail pane (D-8059)').toBe(1180);
         expect(m.detailRight, "the detail reaches the viewport's right edge").toBe(1600);
         expect(m.sideScroll).toBe(0);
         expect(errors).toEqual([]);
@@ -202,9 +205,9 @@ describe('no empty fourth column', () => {
     });
   }
 
-  it('the tracks follow the width: 52 340 below 1600, 52 420 from 1600, never a fourth', async () => {
-    for (const [width, tracks] of [[1280, ['52px', '340px', '888px']], [1599, ['52px', '340px', '1207px']],
-      [1920, ['52px', '420px', '1448px']]] as const) {
+  it('the tracks follow the width: 340 below 1600, 420 from 1600, never a third (desk-nav Task A, D-8100)', async () => {
+    for (const [width, tracks] of [[900, ['340px', '560px']], [1280, ['340px', '940px']], [1599, ['340px', '1259px']],
+      [1920, ['420px', '1500px']]] as const) {
       const { ctx, page } = await open(PHOSPHOR, width, 900, '/');
       try {
         const got = await page.evaluate(() => getComputedStyle(document.querySelector('.app-shell')!).gridTemplateColumns.split(' '));
@@ -226,15 +229,16 @@ const BEFORE = 352;
 const AFTER_OFFSET = 223;
 const BUDGET = BEFORE - AFTER_OFFSET;
 
-describe("the rail's Inbox count (T2e review R32, F7)", () => {
-  for (const theme of THEMES) {
-    it(`at 1280x800 the count pill sits on the Inbox door's top-right corner, inside the door (${theme})`, async () => {
-      const { ctx, page } = await open(theme, 1280, 800, '/');
+describe("the bar's Inbox count (T2e review R32, F7; desk-nav Task A, D-8100)", () => {
+  for (const [width, theme] of [900, 1280].flatMap((w) => THEMES.map((t) => [w, t] as const))) {
+    it(`at ${width}x800 the count pill sits on the Inbox door's icon, at its top-right corner, inside the door (${theme})`, async () => {
+      const { ctx, page } = await open(theme, width, 800, '/');
       try {
-        await page.waitForSelector('.ins-rail-count', { timeout: 20_000 });
+        await page.waitForSelector('.ins-door-count', { timeout: 20_000 });
         const m = await page.evaluate(() => {
-          const door = document.querySelector('.ins-rail-item[aria-label="Inbox, 3 waiting for you"]')!;
-          const pill = door.querySelector('.ins-rail-count')!;
+          const door = document.querySelector('.ins-door[aria-label="Inbox, 3 waiting for you"]')!;
+          const pill = door.querySelector('.ins-door-count')!;
+          const icon = door.querySelector('svg')!.getBoundingClientRect();
           // `--sp-1` as the page resolves it: the width of a probe that takes the token.
           const probe = document.createElement('div');
           probe.style.cssText = 'position:absolute;visibility:hidden;width:var(--sp-1)';
@@ -243,18 +247,30 @@ describe("the rail's Inbox count (T2e review R32, F7)", () => {
           probe.remove();
           const d = door.getBoundingClientRect();
           const p = pill.getBoundingClientRect();
+          const word = door.querySelector('.ins-door-word')?.getBoundingClientRect() ?? null;
           return {
             sp1, pillText: pill.textContent,
             inside: { left: p.left - d.left, top: p.top - d.top, right: d.right - p.right, bottom: d.bottom - p.bottom },
+            // The pill against the icon's right edge, and the word's left edge against the pill's right (null below 1280).
+            overIconRight: { from: p.left - icon.right, to: p.right - icon.right },
+            wordClears: word === null ? null : word.left - p.right,
           };
         });
         expect(m.pillText, 'the pill prints the count').toBe('3');
         expect(m.sp1, '--sp-1 resolves to a length').toBeGreaterThan(0);
         // Inside the door's box (a pixel of rounding).
         for (const [edge, gap] of Object.entries(m.inside)) expect(gap, `the pill's ${edge} edge is inside the door`).toBeGreaterThanOrEqual(-1);
-        // On its top-right corner: the `--sp-1` inset from the right and the top edges, give or take the border and a pixel.
-        expect(Math.abs(m.inside.right - m.sp1), `right inset ${m.inside.right} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+        // On the icon's top-right corner: the `--sp-1` inset from the door's top, and across the icon's right edge.
         expect(Math.abs(m.inside.top - m.sp1), `top inset ${m.inside.top} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+        expect(m.overIconRight.from, "the pill starts left of the icon's right edge").toBeLessThan(0);
+        expect(m.overIconRight.to, "and ends right of it").toBeGreaterThan(0);
+        if (width < 1280) {
+          // The icon door: the pill on the door's top-right corner, `--sp-1` in, as the rail drew it.
+          expect(Math.abs(m.inside.right - m.sp1), `right inset ${m.inside.right} vs --sp-1 ${m.sp1}`).toBeLessThanOrEqual(2);
+        } else {
+          // The door with its word: the word starts clear of the pill.
+          expect(m.wordClears, 'the word clears the pill').toBeGreaterThanOrEqual(-0.5);
+        }
       } finally {
         await ctx.close();
       }

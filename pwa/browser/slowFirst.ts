@@ -67,7 +67,7 @@ export const FILE_MS: Readonly<Record<string, number>> = {
   'account-knob.browser.test.ts': 15854,
   'instrument-group-seen.browser.test.ts': 15318,
   'palette-search.browser.test.ts': 15227,
-  'instrument-rail.browser.test.ts': 14857,
+  'instrument-bar.browser.test.ts': 14857,
   'refined-bar.browser.test.ts': 14590,
   'fleet-toggle-row.browser.test.ts': 14257,
   'skin-default.browser.test.ts': 13098,
