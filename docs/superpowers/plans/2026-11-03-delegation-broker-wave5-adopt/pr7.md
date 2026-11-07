@@ -303,21 +303,21 @@ sessions. `store.ts` is unchanged. The two new coord files are `delegation-adopt
 
 ## Suites at the tip
 
-Fix round 1's tip ran every suite alone, through `ccrc test`. That is 226 files: the plan's "PR7 at its tip" list, the
-coordinator's fix-round list (`lease-routes`, `delegation-lease-acts`, the corpus suites, `refusal-status`, `coord-store`,
-`run-session-census`, `anchors`, `topology-clean`, every `single-definition` file, `typecheck-tests`, `deviation-refs` and
-`dtbd` after a fetch) and the 199 guard suites `fast-plan.mjs#guardTests` derives. Then `growth-check` armed and the pwa
-typecheck. The corpus suites and W5-D12 ran on the 14-version corpus.
+Fix round 2's tip merges `origin/main` twice: first for #2409, then for the corpus PR #2397, which merged during the round.
+With #2397 the matrix holds 21 versions, and W5-D12 (`delegation-adoption-corpus`) is green over all of them, 23 rows. Every
+suite on the coordinator's round-2 list ran alone through `ccrc test`, 77 files in all. They were the adoption suites, the rest
+of the "PR7 at its tip" list and #2409's suites (`delegation-projection`, `claim-sweep`, `delegation-lease-acts`,
+`hibernate-census`, `lease-routes`, `session-ladders-characterization`, `tick-refused-lanes`, and the two `single-definition`
+files). They also included `refusal-status`, `coord-store`, `run-session-census`, `delegation-fixtures`, `delegation-rig`,
+`anchors`, `citations`, `topology-clean`, every `stall-*`, `single-definition/*` and `rings/*` file, `typecheck-tests`, and
+`deviation-refs` and `dtbd` after a fetch. Then `GROWTH_CHECK=1` growth-check, `cd pwa` `tsc --noEmit` and pwa's
+`delegation-words` (#2409's) ran. All are green on their first run. The remaining guard suites were not re-run one by one: the
+full-ci run on the exact tip is their arbiter, as the ruling says.
 
-- Green: every one, except `retire-executors-pin`.
-- `typecheck-tests` was red on its run: two rows typed a watch as `never`, and the corpus row's parent lacked `ParentFact`'s
-  new `alive`. Fixed in their own commit; green alone, and the two suites green again.
-- `rings/watcher-store-port` (a 20 s `beforeAll` timeout), `delegation-recovery` (two 20 s timeouts, then a descriptor left
-  open by a timed-out row) and `secret-mask` (a 250 ms timing bound read 289 ms) were red under load. Each is green alone:
-  22/22, 465/465 and 96 passed with 1 skipped. Another worktree was running `delegation-recovery` at the same time, and
-  none of the three reaches a module fix round 1 changes.
-- `retire-executors-pin` is red, 9 of 206. It reds on the fleet box on a clean `main` too (the brief), so the merge queue
-  judges it.
+Fix round 1's tip ran 226 files alone: the "PR7 at its tip" list, that round's list and the 199 guard suites
+`fast-plan.mjs#guardTests` derives. `typecheck-tests` was red there (two rows typed a watch as `never`, and the corpus row's
+parent lacked `alive`), fixed in their own commit. `rings/watcher-store-port`, `delegation-recovery` and `secret-mask` were red
+under load and green alone. `retire-executors-pin` is red on the fleet box, also on a clean `main`, and the merge queue judges it.
 
 The first round's runs (at `d399d063f`) were the same list less the fix-round additions. There `spawn-group-pin` was red
 first, until the corpus replay's hook spawn went through `spawnSyncGroup`. `typecheck-tests` was red twice there, once for
