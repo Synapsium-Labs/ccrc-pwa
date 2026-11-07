@@ -69,7 +69,7 @@ export const ROUTES: readonly Route[] = [
   // segment, as the session row does, and the slug's GRAMMAR is the owner's (`shapeProgramSlug`, asked by `isProgrammeSlug`
   // below): a second copy of its pattern here would be one more place to be wrong (`pl5b-route-owner-grammar`). A segment the
   // owner refuses is no match (`accepts`), so it is a path outside the table: the fleet on a phone, the placeholder on a desk,
-  // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no rail highlight (only `session` is
+  // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no current door (only `session` is
   // carried under Fleet, `topRouteOf`), no "Go to" row.
   { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
 ];

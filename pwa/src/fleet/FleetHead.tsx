@@ -26,8 +26,8 @@ export function FleetHead(
     /** The account-pool projection's lag, when there is one to show. */
     poolLag: string | null;
     /** The wordmark and the doors. False where the skin's frame holds them: Refined's bar holds both, and Instrument's
-     *  top bar holds the wordmark while its rail holds the doors (Refined's `Sidebar` and Instrument's `ListColumn` at a
-     *  desk, W2 Task S4b, T2e): the readouts stay here, and the identity mark is drawn once. With no
+     *  top bar holds both too, since desk-nav Task A (D-8100) moved the rail's doors into it (Refined's `Sidebar` and
+     *  Instrument's `ListColumn` at a desk, W2 Task S4b, T2e): the readouts stay here, and the identity mark is drawn once. With no
      *  chrome, no count line and no lag the head draws nothing (T2g, D-6715). */
     chrome?: boolean;
   },

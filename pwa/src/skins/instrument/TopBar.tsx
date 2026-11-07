@@ -20,10 +20,12 @@
 // number while it is above zero.
 //
 // A DOOR'S TWO FORMS. From `DOOR_WORDS_QUERY` (1280) a door shows its icon and its word; below it, its icon and a tip below it
-// that reads its name, shown on hover and on keyboard focus (instrument.css). Which one is MOUNTED by `useMediaQuery`, never
-// both and never CSS-hidden (`door-form-mounted`), so the text a reader is shown is the text label-in-name measures (D-7897):
-// a hidden tip would put the whole name and the count in the shown text. Settings is an icon door with its tip at every width
-// (`settings-icon-door`), as Refined's gear is.
+// that reads the same word, shown on hover and on keyboard focus (instrument.css). Either way a counted door follows the word
+// with a space and its pill, so both forms show "Inbox 2" and label in name holds at every desk width (D-7897): the tip reads
+// the word, not the whole name, because the name's count is the pill's (`tip-reads-the-word`, desk-nav fix round 1). Which
+// form is MOUNTED by `useMediaQuery`, never both and never CSS-hidden (`door-form-mounted`), so the text a reader is shown is
+// the text label-in-name measures. Settings is an icon door with its tip at every width (`settings-icon-door`), as Refined's
+// gear is.
 //
 // RESERVED, NOT RENDERED: Activity is F4's (W4). Its entry is here so the activity log adds one flag, and no control that does
 // nothing ships.
@@ -88,8 +90,10 @@ function DeskDoorEntry({ id, icon, current, badges, words }: {
       {...commandDoor(`go-${id}`)}
     >
       {words
-        ? <><span className="ins-door-word">{word}</span>{count > 0 && ' '}{pill}</>
-        : <><span className="ins-door-tip" aria-hidden="true">{name}</span>{pill}</>}
+        ? <span className="ins-door-word">{word}</span>
+        : <span className="ins-door-tip" aria-hidden="true">{word}</span>}
+      {count > 0 && ' '}
+      {pill}
     </Door>
   );
 }

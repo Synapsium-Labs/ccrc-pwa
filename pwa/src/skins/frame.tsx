@@ -135,7 +135,7 @@ export function ShellFrame({ set, view, detailRef, children, nav }: ShellFramePr
       {/* `data-inspector` is a PART FACT, never a skin-id comparison (W2 desk polish T2e, D-6335): `placed` when the set
           has an Inspector part and it is shown, `none` when it does not or a person hid it (desktop polish T3e, D-6385).
           A skin's sheet keys its inspector track on it, so a set that places no inspector, or a hidden one, draws no
-          empty column for one (Instrument's 320px fourth track at >=1600, which S12 fills). */}
+          empty column for one (Instrument's 320px third track at >=1600, which S12 fills). */}
       <div
         className={`app-shell ${set.frameClass}`}
         data-view={view}

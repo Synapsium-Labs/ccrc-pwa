@@ -1169,7 +1169,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`
       'src/session/chat.css',
-      'src/skins/instrument/instrument.css', // Instrument's shell (W2 Task S9, D-5472): the rail's tooltip is self-grounded
+      'src/skins/instrument/instrument.css', // Instrument's shell (W2 Task S9, D-5472): the top bar door's tooltip is self-grounded
       'src/skins/refined/refined.css',       // W2 Task S2b: header-only until S4b
       'src/styles/base.css',
       'src/styles/shell.css',

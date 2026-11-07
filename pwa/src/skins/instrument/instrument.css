@@ -13,7 +13,7 @@
     grid-template-columns: 340px minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
-  /* The fourth column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
+  /* The third column is the inspector's (S12), and exists only with an Inspector part (below, at >=1600). */
   /* The bar's line clears the lanes row (C12 item 19, `top-bar-sits-clear-of-the-lanes-row`): the command field and
      New session fill the line top to bottom, so the line takes the cards' own gap (`--sp-2`) below it and the same
      above it, and its controls sit centred between the header's top and the first line of cards. The header grows by
@@ -41,11 +41,11 @@
   }
 }
 
-/* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px fourth track appears only with what fills
-   it. `ShellFrame` sets `data-inspector` from the set's Inspector part (a part fact, never a skin id), so Instrument,
-   which places none until S12, draws no empty column: the detail reaches the viewport's edge and the reading column is
-   the whole detail pane (1128 at 1600; Instrument's `--measure-chat` is 100% since D-8059). S12 sets the part, and the
-   track comes with it. */
+/* W2 desk polish T2e (D-6335): the list column widens at 1600, and the 320px third track (the fourth until desk-nav Task A,
+   D-8100, took the rail's) appears only with what fills it. `ShellFrame` sets `data-inspector` from the set's Inspector part
+   (a part fact, never a skin id), so Instrument, which places none until S12, draws no empty column: the detail reaches the
+   viewport's edge and the reading column is the whole detail pane (1180 at 1600; Instrument's `--measure-chat` is 100% since
+   D-8059). S12 sets the part, and the track comes with it. */
 @media (min-width: 1600px) {
   .ins-frame {
     grid-template-columns: 420px minmax(0, 1fr);
@@ -142,20 +142,23 @@
   content: '';
   position: absolute;
   inset: auto 0 0;
-  bottom: 0;
   height: 2px;
   background: var(--accent);
 }
-/* The tooltip, below 1280: the door's name, below its icon and centred on it, shown on hover AND on keyboard focus, so a
-   keyboard reader sees what a pointer reader sees. Self-grounded: it paints its own ground, and it stacks above the
-   lanes row under the line. */
+/* The tooltip of an icon door (every door below 1280, and Settings at every width): the door's word, below its icon and
+   centred on it, shown on hover AND on keyboard focus, so a keyboard reader sees what a pointer reader sees. Self-grounded:
+   it paints its own ground, and it stacks above the lanes row under the line. That row's cards are painted in the same
+   `--bg-raised`, so the tip takes the desk's popover elevation and a hairline edge, as the lanes flyout does (review 1638
+   F2). */
 .ins-door-tip {
   position: absolute;
   top: calc(100% + var(--sp-1));
   left: 50%;
   z-index: var(--z-header);
   padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--edge-subtle);
   border-radius: var(--r-sm);
+  box-shadow: var(--elev-pop);
   background: var(--bg-raised);
   color: var(--ink-primary);
   white-space: nowrap;
