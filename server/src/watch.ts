@@ -353,7 +353,7 @@ interface StallResolution {
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
- * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid `assembleFleet` read for every alive
+ * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid the assembly read (`FleetAssembly.panePids`) for every alive
  * row: `null` when tmux answered none, and no entry for a pane that was not alive. `records` holds the registry rows
  * this tick read. REQUIRED: the lane has no pid or uuid read of its own, so production and the tests run one path.
  */
@@ -2719,8 +2719,8 @@ export class FleetWatcher {
       // generation per sweep. Awaiting it would put the dialog detector and
       // the busy->idle push behind a journal read.
       void this.sweepLifecycle().catch(() => { /* one bad sweep must not kill the poll */ });
-      // `records` PASSED IN, never re-read here: `assembleFleet` would
-      // otherwise take its OWN read (`records ?? await readRegistry(...)`),
+      // `records` PASSED IN, never re-read here: `assembleFleetWithPanePids` would
+      // otherwise take its OWN read (`readRegistryMeasured`, when `records` is absent),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
       // in remote mode, 4 [registry-read-census:fields] unconditional reads and
       // one per other listed field per session, so a 24-session fleet's floor is 97
@@ -2747,7 +2747,7 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to the assembly as `limitsRead`
       const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
         pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
         hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
@@ -2894,7 +2894,7 @@ export class FleetWatcher {
       }
       // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
       // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
-      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
+      // the assembly returned (`FleetAssembly.panePids`) and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
       // listing's refused ids too, so a refused worker or claimant holds as unmeasured rather than reading as absent
       // from `sessions` (`tick-lanes-hold-a-refused-id`). It is never awaited: its reads are async, so it cannot sit in
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick

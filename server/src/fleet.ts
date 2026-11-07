@@ -226,8 +226,8 @@ function readHeldApprovals(coord: WatcherCoordPort | undefined, childIds: readon
  * per-session `readCurrentAsk` was (found by the full suite rather than by
  * any Task 19 test: `push-copy.test.ts`'s "a broken coord.db degrades,
  * never crashes the poll" and `fleetws.test.ts`'s matching cold-start
- * case): `assembleFleet` is called UNWRAPPED from both `FleetWatcher.tick()`
- * and the `/ws/fleet` connect handler, and `node:sqlite` throws
+ * case): the assembly is called UNWRAPPED from both `FleetWatcher.tick()`
+ * (`assembleFleetWithPanePids`) and the `/ws/fleet` connect handler, and `node:sqlite` throws
  * SYNCHRONOUSLY on a closed connection or a lock race. Because this is now
  * ONE call per assembly rather than one per session, a broken box warns
  * ONCE per tick/connect/request here, not once per session — the "20
@@ -606,6 +606,7 @@ export async function assembleFleet(
   return (await assembleFleetWithPanePids(io, cfg, tmux, readLive, now, opts)).sessions;
 }
 
+/** The assembly itself, with the pane pid it read for each alive row as its own output (`FleetAssembly`). */
 export async function assembleFleetWithPanePids(
   io: FleetIO,
   cfg: CcrcConfig,
@@ -772,7 +773,7 @@ export async function assembleFleetWithPanePids(
     //
     // `nowMs` DECISION (task-9-report.md carries the full reasoning, corrected
     // in fix round 1 after MEASUREMENT — see below): `now` is THIS PROCESS's
-    // own clock (`Date.now()`, `assembleFleet`'s own default parameter), not
+    // own clock (`Date.now()`, through `fleetNow()`, `assembleFleet`'s default `now`), not
     // the fleet host's — `r.supervisedAt` can be written on a REMOTE box
     // across `remote/io.ts`'s seam, and that protocol carries no clock op at
     // all (`stat`'s `mtimeMs` is the nearest thing, and no caller threads it
