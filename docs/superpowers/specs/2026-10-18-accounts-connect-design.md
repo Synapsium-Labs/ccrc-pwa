@@ -458,8 +458,10 @@ One radio group, written to the roster by `add` (or later by `ccrc account set`,
 
 | Choice | Roster | Line |
 |---|---|---|
-| **Overflow only** (default) | `homeAble:false`, `selectable:true` | "Not used unless you pick it for a session, or a pool sends work here. Nothing is billed until then." |
+| **Overflow only** (default) | `homeAble:false`, `selectable:true` | "Not used unless you pick it for a session or add it to a pool. Nothing is billed until then." |
 | **A full lane** | `homeAble:true`, `selectable:true` | "New sessions may be placed here like any other lane. Pay-per-use: watch the credit." |
+
+**Note (2026-11-07, D-8098).** The Overflow only line was untrue until this date: an enabled non-home-able lane was in the auto-swap rotation with no operator act. The operator ruled that a pay-per-use lane joins the rotation only when a pool names it, either the session's project pool (the lane is tagged into that pool) or a session's registry `pool` list. A full lane is unchanged: making it home-able is the operator's choice.
 
 Pool membership stays on the existing pool chip (`POST /api/pools/accounts/:id`) once the lane exists. Using the key for tooling other than sessions (for example handoff workers) is out of scope: those use their own provider and their own key.
 

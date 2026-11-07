@@ -91,6 +91,8 @@
 //     emits ids, home-ability, `CCRC_MEASURED`, the upstream id, config dirs,
 //     labels and hues, and `generateWrapperBody` reads `id`,
 //     `configDirSuffix`, `execKind` and `secretsFile`.
+//     `provider` became the exception with D-8098: the emitter reads it
+//     for `CCRC_PAY_PER_USE`, so it is now returned.
 //
 // One import, and only one: `./base-url.mjs`, the endpoint gate, which
 // imports nothing itself. Everything else here is a hand-kept copy, for the
@@ -144,8 +146,8 @@ export const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  TypeScript — and its agreement with `PROVIDER_IDS` is asserted element for
  *  element by `gen-accounts.test.ts`, which is a stronger mechanism than the
  *  one `HUES` above has: hues reach bash through `_ccrc_hue` and a divergent
- *  order changes generated stdout, while `provider` reaches no bash at all
- *  (§4.3 puts it in the lane's own `settings.json`). */
+ *  order changes generated stdout, while `provider` reaches bash only as
+ *  `CCRC_PAY_PER_USE` membership (D-8098; §4.3 puts it in the lane's own `settings.json`). */
 const PROVIDER_IDS = new Set(['anthropic', 'openrouter', 'compatible', 'openai']);
 
 /** The providers whose lanes may carry `exec.models` — `PROVIDERS[p].apiKeyModels`.
@@ -376,8 +378,9 @@ function checkAccount(raw, index) {
     }
   }
 
-  // `provider`, `baseUrl` and `models` — validated here, returned by nothing.
-  // The emitter reads none of them (`shared/generate.mjs:206-238`) and neither
+  // `baseUrl` and `models` — validated here, returned by nothing. `provider` is
+  // returned since D-8098: the emitter reads it for `CCRC_PAY_PER_USE`.
+  // Otherwise the emitter reads none of them (`shared/generate.mjs:206-238`) and neither
   // does the wrapper writer, so returning them would be dead code in the one
   // file in this tree no typechecker checks (`server/tsconfig.json` sets no
   // `checkJs`). They are validated because the SERVER refuses to boot on them,
@@ -548,7 +551,7 @@ function checkAccount(raw, index) {
     : {};
   return {
     id, label, configDirSuffix: suffix, homeAble, telemetry, hue,
-    execKind: exec['kind'], secretsFile: exec['secretsFile'],
+    execKind: exec['kind'], secretsFile: exec['secretsFile'], provider: exec['provider'],
     pool: pool === undefined ? null : pool,
     ...codexTopology,
   };

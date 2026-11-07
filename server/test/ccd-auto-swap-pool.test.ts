@@ -644,42 +644,72 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
       .toBe('claude-b');
   });
 
-  describe('an overflow OpenRouter lane is the same last resort, and its sessions bill the key (D-8023 (16))', () => {
-    // What `add --placement overflow` writes, measured here because the README says it and the lane spends money:
-    // `homeAble: false` keeps it out of placement and nothing more, and no statusline ever gives it a limits file, so
-    // `_avail` reads it as free for as long as it is enabled.
+  describe('a pay-per-use overflow lane joins the rotation only when a pool names it (D-8098)', () => {
+    // What `add --placement overflow` writes. `homeAble: false` keeps it out of placement, and no statusline ever
+    // gives it a limits file, so `_avail` reads it as free. Before D-8098 being enabled was enough to take a blocked
+    // session with no operator act, and every session it took billed the key. Now a pool has to name it.
     const OPENROUTER_LANE = 'lane-d';
-    const plantLane = (): void => {
+    const plantLane = (pool?: string): void => {
       seedAccountsSh(h.home, {
         ...POOLED_TEST_ROSTER,
         accounts: [...POOLED_TEST_ROSTER.accounts, {
           id: OPENROUTER_LANE, label: 'lane·d', configDirSuffix: `.claude-${OPENROUTER_LANE}`,
           exec: { kind: 'generated', provider: 'openrouter', secretsFile: `.cc-secrets/${OPENROUTER_LANE}-openrouter.env` },
-          homeAble: false, hue: 'amber', telemetry: 'openrouter',
+          homeAble: false, hue: 'amber', telemetry: 'openrouter', ...(pool ? { pool } : {}),
         }],
       });
+      if (pool) plantPoolEpoch(h.home, { ...POOL_BY_ID, [OPENROUTER_LANE]: pool });
       install(OPENROUTER_LANE);
     };
-    const pinned = (): void => {
+    const pinned = (pool?: string): void => {
       seed(); plantNotify(); tagPool('demo', 'pool-b');
       writeLimits('claude-b', 99, 99);
       writeLimits('claude-d', 99, 99);
-      plantLane();
+      plantLane(pool);
     };
+    const defaultPool = (): string[] => h.sh(`_default_pool ${ID}`).trim().split(/\s+/);
 
-    it('enabled, the tick dispatches a blocked session onto it with no operator act', () => {
+    it('enabled but named by no pool, it is NOT in the default pool and the session strands', () => {
       pinned();
+      expect(h.sh(`echo "\${CCRC_PAY_PER_USE[@]}"`).trim(), 'the generator projects the provider').toBe(OPENROUTER_LANE);
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+      tick(BLOCKED);
+      expect(h.calls().join('\n'), 'nothing bills the key').not.toContain('dispatch');
+      expect(h.reg(ID, 'stranded')).not.toContain(OPENROUTER_LANE);
+      expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
+    });
+
+    it('in the project\'s pool, it IS a candidate and the tick dispatches onto it', () => {
+      pinned('pool-b');
+      expect(defaultPool()).toContain(OPENROUTER_LANE);
       tick(BLOCKED_REAL_DISPATCH);
       expect(h.calls().join('\n')).toMatch(new RegExp(`exec '[^']*/ccd' swap '${ID}' '${OPENROUTER_LANE}'`));
     });
 
-    it('disabled, it is out of the rotation and the session strands', () => {
+    it('in another pool, it stays out — the pool has to be the project\'s own', () => {
+      pinned('pool-a');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    it('named by the session\'s registry `pool` list, it IS a candidate', () => {
       pinned();
+      h.sh(`_reg_set ${ID} pool "claude-b claude-d ${OPENROUTER_LANE}"`);
+      tick(BLOCKED_REAL_DISPATCH);
+      expect(h.calls().join('\n')).toMatch(new RegExp(`exec '[^']*/ccd' swap '${ID}' '${OPENROUTER_LANE}'`));
+    });
+
+    it('a session already on it is not evacuated by the rule', () => {
+      pinned();
+      h.sh(`_reg_set ${ID} wrapper ${OPENROUTER_LANE}`);
+      expect(h.sh(`_swap_target ${ID} ${OPENROUTER_LANE} claude-b; echo "rc=$?"`).trim()).toBe('rc=0');
+    });
+
+    it('disabled, it is out of the rotation even when a pool names it', () => {
+      pinned('pool-b');
       disable(OPENROUTER_LANE);
       tick(BLOCKED);
       expect(h.calls().join('\n'), 'nothing is placeable').not.toContain('dispatch');
       expect(h.reg(ID, 'stranded')).not.toContain(OPENROUTER_LANE);
-      expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
     });
   });
 
