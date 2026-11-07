@@ -369,12 +369,16 @@ absorption, and the re-send round per land-sync in strict repositories.
   setBy, detail)`;
 - `landing_projects(operatorPaused, mainRedHold)`: two booleans, because they have different remedies; the line
   is paused while either is set;
-- `landing_intents(runId, project, key)`, keyed to runs, taken at dispatch, independent of entries.
+- `landing_intents(runId, project, key)`, keyed to runs, taken at dispatch, independent of entries. A key is the
+  repository's issue or PR number, `#<n>`, or a deviation number, `D-<n>` (ruling 16).
 
 Columns re-measured from ccd's files — `pinnedSha` and landed state — are recomputable; order edges,
-`fixesMain`, pause, withdrawals and intents are **central authoritative state**, like `pool_edges`, journalled to
+`fixesMain`, pause and withdrawals are **central authoritative state**, like `pool_edges`, journalled to
 `~/.ccrc/landing.log`. On reconstruction the journal wins for authoritative columns and the sweep wins for landed
-state. `CLAUDE.md`'s coord.db invariant is amended to name this second exception.
+state. `CLAUDE.md`'s coord.db invariant is amended to name this second exception. Intents are central state too, but
+they are not journalled (amended 2026-11-07, ruling 17): they live in `coord.db` beside the runs that hold them. A
+hold ends when its run ends, and runs live only in `coord.db`, so an intent restored without its run would have
+nothing to judge it by. A lost database loses both together, and a snapshot restores both together.
 
 **Entries and pins.** An entry is created on `advance → merging`, pinned to the verdict's `measured.branchTip` —
 the actual PR head, which after stage 4 may be a base-only merge — with `handoffCommit` kept as its own column.
@@ -766,8 +770,9 @@ required/advisory split waits. None of it is needed for 5.7.1–5.7.6.
 - Box token gates every landing write except the two `SESSION_ONLY` doors; the census tests are extended.
 - The done-fingerprint still re-measures the workspace tip; stage 4 widens acceptance only along a ccd-proven
   chain, only for opted-in projects.
-- **Amended — coord.db.** Landing order, pauses, withdrawals and intents are central authoritative state with a
-  journal, the second named exception after `pool_edges`.
+- **Amended — coord.db.** Landing order, pauses and withdrawals are central authoritative state with a journal, the
+  second named exception after `pool_edges`. Intents are central state kept in `coord.db` with their runs, with no
+  journal (ruling 17, 2026-11-07).
 - **Amended — ccd verbs.** "Zero new ccd verbs for coordination mutation" is read as written (runs and mail).
   `land-candidate` is a fleet git act in the `pr-open` class: it pushes and deletes only its own
   `refs/heads/ccrc/land/*` family, non-force. `ccd-land-probe` is read-only by code. The operator reshapes the
@@ -843,7 +848,7 @@ A stage whose metric has not moved two weeks after rollout is retired or redesig
 
 ## 11. Operator decisions
 
-**Amendment 2026-10-25 (ruling R5, overturned).** The operator overturned "no unattended lander": "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". Unattended landing is now the goal when every safeguard holds (§3, R5): the native merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to the operator's overturn: workers still never merge their own PR. Stages 3 to 5 are untouched here; whether to withdraw them is a separate operator decision. Where stage text says a landing never comes from a timer or the PWA (§5.5), R5 as amended governs. Rulings of the same day, recorded with it: **ruling 5** — governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the wave lifecycle's pointer to the narrow approval licence (§5.7.4, §11 item 10): `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. **Ruling 2** — the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. **Ruling 3** — the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open. Ledger: D-6857.
+**Amendment 2026-10-25 (ruling R5, overturned).** The operator overturned "no unattended lander": "WE WANT UNATTENDED MERGES ... maximise autonomy with safeguards". Unattended landing is now the goal when every safeguard holds (§3, R5): the native merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and there is no `--admin` and no `update-branch`. Orchestrator call, open to the operator's overturn: workers still never merge their own PR. Stages 3 to 5 are untouched here; whether to withdraw them is a separate operator decision. Where stage text says a landing never comes from a timer or the PWA (§5.5), R5 as amended governs. Rulings of the same day, recorded with it: **ruling 5** — governance of merges (who may merge, `--admin`, GitHub API merges, bypass) belongs to the repository's external policy authority, not to ccrc text; ccrc provides the enforcement points. It supersedes the wave lifecycle's pointer to the narrow approval licence (§5.7.4, §11 item 10): `--admin` and GitHub API merge or enqueue calls are governed by that authority, and until it answers (wave 2b) a coordinator never uses them. **Ruling 2** — the live queue's grouping (build 2, merge 3) is accepted; one release may cover several commits. **Ruling 3** — the two private repositories should drop strict protection; the native queue is not available on their plan, so how they land is open. Ledger: D-6857. (Answered 2026-10-30: they land by a direct merge once the PR's own checks pass, route G of §5.7.4, and nothing tests a PR combined with `main` there before it lands; the strict-protection flip stays the operator's, R10. Ledger, Decisions, 2026-10-30 23:24; recorded here 2026-11-06.)
 
 **Amendment 2026-10-28 (§5.7 follows ruling 5).** No ruling is new here, and the record above stands as written.
 Wave 3e (#1127) shipped the landing verdict without the approval licence, as ruling 5 requires, and review runs 1138
@@ -891,6 +896,15 @@ Decided on the draft of §5.7, 2026-10-21 (each as the draft recommended):
 14. **Rollout.** `ccrc rollout --to` the prerelease that carries the merge, then the installed skill text is
     verified in every home.
 15. **The branch read.** The reads ask about the PR's own base branch, not the literal `main`.
+
+Decided on wave 5g's plan, 2026-11-07 (each as the plan proposed; D-8080, D-8081):
+
+16. **An intent's key** is the repository's issue or PR number, `#<n>`, or a deviation number, `D-<n>` (§5.5).
+    Coordinators already share those two numbers, so two coordinators naming the same change are likely to name
+    the same key, while free text would rarely match.
+17. **Intents are not journalled.** They live in `coord.db` with the runs that hold them, and `landing.log` carries
+    no intent record (§5.5, §7). A hold ends with its run, and the journal's parser refuses a record kind it does not
+    know, so an intent record would stop an older build that reads `landing.log` from starting.
 
 ## 12. Failure modes named
 
