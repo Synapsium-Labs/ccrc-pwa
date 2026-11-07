@@ -229,7 +229,7 @@
 //   `PhoneFab` mounted at every width .................. "exactly one [data-command=new-session] at 900, 1280 and 1920"
 //   `PhoneFab` with its own `onClick` that navigates ... "at 390 the round + dispatches the new-session door event"
 //   `PhoneFab` gated on a narrower width (min-width: 600px) "at 899 the round + is the one New session door"
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -242,6 +242,7 @@ import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
+import { labelInName, shownText } from './labelInName';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -254,7 +255,7 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES } = await import('../src/lib/routes');
-const { DESK_DOORS: RAIL_ITEMS } = await import('../src/skins/instrument/TopBar');
+const { DESK_DOORS: RAIL_ITEMS, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
 const { ShellFrame } = await import('../src/skins/frame');
@@ -284,8 +285,6 @@ function mount(at: string, sessions: FleetSession[] = [S, WS]): void {
   render(<App />);
 }
 
-const rail = (): HTMLElement => screen.getByRole('navigation', { name: 'Primary' });
-const railDoors = (): HTMLElement[] => within(rail()).getAllByRole('button').filter((b) => b.hasAttribute('data-command'));
 const topBar = (): HTMLElement => document.querySelector<HTMLElement>('header.shell-accounts')!;
 const footer = (): HTMLElement => document.querySelector<HTMLElement>('footer.shell-status')!;
 
@@ -387,99 +386,245 @@ describe('the desk doors, characterized', () => {
   });
 });
 
-describe('the rail', () => {
-  it('the rail renders RAIL_ITEMS in order, Activity not rendered, each with its word as its name and at least --tap-min tall', () => {
+// ---- Desk-nav Task A (D-8100): the doors in the top bar ----------------------------------------------------------
+
+/** The bar's line, and its controls in DOM order: every `[data-command]` and the bell. */
+const barLine = (): HTMLElement => topBar().querySelector<HTMLElement>('.ins-topbar')!;
+const barControls = (root: Element = topBar()): Element[] => [...root.querySelectorAll('[data-command], .bell')];
+/** The wordmark door, and the six place doors. */
+const homeDoor = (): HTMLElement => topBar().querySelector<HTMLElement>('.ins-door.ins-home')!;
+const placeDoors = (): HTMLElement[] => within(primary()).getAllByRole('button').filter((b) => !b.classList.contains('ins-home'));
+const primary = (): HTMLElement => screen.getByRole('navigation', { name: 'Primary' });
+const doorNamed = (name: string): HTMLElement => within(topBar()).getByRole('button', { name });
+const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
+
+/** One path per `ROUTES` row, and one outside the table. */
+const ROUTE_PATHS: Record<string, string> = {
+  fleet: '/', session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
+  programme: '/programmes/prog-a',
+};
+
+describe('the desk top bar (desk-nav Task A)', () => {
+  it("the bar's DOM order is its focus order", () => {
+    stubAt(1280);
     mount('/');
-    const routeItems = RAIL_ITEMS.filter((i) => !('reserved' in i) && !('bell' in i));
-    const words = routeItems.map((i) => ROUTES.find((r) => r.id === i.id)!.title);
-    // No fleet item: the sessions are in the column beside every page at a desk (desktop-polish PL10, D-7952; D25).
-    expect(words).toEqual(['Waiting on you', 'Inbox', 'Runs', 'Accounts', 'Archive', 'Docs', 'Settings']);
-    expect(railDoors().map((b) => b.getAttribute('aria-label'))).toEqual(words);
+    const order = barControls().map((el) => el.getAttribute('data-command') ?? '(bell)');
+    expect(order.slice(0, 11)).toEqual([
+      'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'open-palette', '(bell)', 'go-settings',
+      'new-session',
+    ]);
+    // The eleven are the bar's line, and every control after them is the lanes row's, under the line.
+    for (const el of barControls().slice(0, 11)) expect(barLine().contains(el), el.outerHTML.slice(0, 60)).toBe(true);
+    const strip = topBar().querySelector('.accounts-strip')!;
+    for (const el of barControls().slice(11)) expect(strip.contains(el), el.outerHTML.slice(0, 60)).toBe(true);
+    // The bar is the frame's first chrome after the skip link, and no other landmark sits before the list column.
+    const frame = document.querySelector('.app-shell')!;
+    const kids = [...frame.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('aria-label') ? `:${c.getAttribute('aria-label')}` : ''));
+    expect(kids.slice(0, 4)).toEqual(['a', 'header', 'div', 'main']);
+  });
+
+  it('the Primary nav holds the wordmark door and the six doors, and nothing else', () => {
+    stubAt(1280);
+    mount('/');
+    const nav = primary();
+    expect(nav.closest('.ins-topbar')).not.toBeNull();
+    expect([...nav.children].map((c) => c.getAttribute('data-command')))
+      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
     // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
     expect(RAIL_ITEMS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
-    expect(within(rail()).queryByRole('button', { name: /activity/i })).toBeNull();
-    expect(within(rail()).getAllByRole('button').filter((b) => b.hasAttribute('disabled'))).toEqual([]);
-    expect(rail().textContent).not.toMatch(/activity/i);
-    // Every door is the tap floor tall: `Door`'s own floor, and the rail's rule restates it.
-    for (const b of railDoors()) expect(b.className).toContain('min-h-tap');
-    expect(declsOf('.ins-rail-item')).toMatch(/min-height:\s*var\(--tap-min\)/);
+    expect(within(nav).queryByRole('button', { name: /activity/i })).toBeNull();
+    expect(nav.textContent).not.toMatch(/activity/i);
+    expect(within(nav).getAllByRole('button').filter((b) => b.hasAttribute('disabled'))).toEqual([]);
+    // Every door is the tap floor tall and wide: `Door`'s own floor, and the bar's rule restates the width.
+    for (const b of within(nav).getAllByRole('button')) expect(b.className).toContain('min-h-tap');
+    expect(declsOf('.ins-door')).toMatch(/min-width:\s*var\(--tap-min\)/);
   });
 
-  it('the rail never clips its tooltips: it is no scroll container, and each item fits its track', () => {
-    // A rail with any `overflow` other than visible is a clip box in BOTH axes (overflow-y: auto computes overflow-x
-    // to auto), so a tooltip drawn beside it is cut away and the hidden tips widen it into a sideways scroller.
-    for (const media of [null, '(min-width: 900px)', '(min-width: 1600px)'] as const) {
-      expect(declsOf('.ins-frame .shell-rail', media), String(media)).not.toMatch(/overflow/);
-      expect(declsOf('.ins-rail', media), String(media)).not.toMatch(/overflow/);
+  it('exactly one nav[aria-label="Primary"] at 900, 1280 and 1920 in both skins, none at 899', () => {
+    for (const skin of [INSTRUMENT, REFINED]) {
+      act(() => { setSkin(skin); });
+      for (const width of [899, 900, 1280, 1920]) {
+        stubAt(width);
+        mount('/');
+        expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${skin} ${width}`).toBe(width >= 900 ? 1 : 0);
+        cleanup();
+      }
     }
-    // It stacks above the list column, so the tooltip draws over the list, not under it.
-    expect(declsOf('.ins-frame .shell-rail', '(min-width: 900px)')).toMatch(/position:\s*relative/);
-    expect(declsOf('.ins-frame .shell-rail', '(min-width: 900px)')).toMatch(/z-index:/);
-    // The item is the track's width, never a fixed 52px inside a track its border makes 51px: no cut ring.
-    expect(declsOf('.ins-rail-item')).toMatch(/width:\s*100%/);
-    expect(declsOf('.ins-rail-item')).not.toMatch(/width:\s*\d+px/);
   });
 
-  it('the active rail item carries aria-current=page, and only one does; the fleet and a session, under no rail item, mark none', () => {
-    // The fleet is the column beside every page at a desk, and no rail item (desktop-polish PL10, D-7952; D25).
-    for (const [at, word] of [['/', null], ['/runs', 'Runs'], ['/settings/updates', 'Settings'], ['/docs', 'Docs'], [`/s/${S.id}`, null]] as const) {
+  it('the wordmark door runs go-fleet, is named "ccrc, Fleet", holds the wordmark, and is current on / and on a session', () => {
+    stubAt(1280);
+    expect(HOME_DOOR_NAME).toBe(`ccrc, ${FLEET()}`);
+    for (const at of ['/', `/s/${S.id}`, `/s/${WS.id}`]) {
       mount(at);
-      const current = railDoors().filter((b) => b.getAttribute('aria-current') === 'page');
-      expect(current.map((b) => b.getAttribute('aria-label')), at).toEqual(word === null ? [] : [word]);
+      const home = homeDoor();
+      expect(home, at).toBe(doorNamed('ccrc, Fleet'));
+      expect(home).toHaveAttribute('data-command', 'go-fleet');
+      expect(home.querySelector('[data-wordmark]'), `${at}: the wordmark is inside the door`).not.toBeNull();
+      expect(topBar().querySelectorAll('[data-wordmark]'), `${at}: one wordmark`).toHaveLength(1);
+      expect(home, at).toHaveAttribute('aria-current', 'page');
+      cleanup();
+    }
+    mount('/runs');
+    fireEvent.click(homeDoor());
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('it is current nowhere else', () => {
+    stubAt(1280);
+    for (const at of ['/runs', '/mail', '/settings', '/settings/updates', '/docs', '/waiting', '/waiting/1', '/archive', '/digest', '/nope']) {
+      mount(at);
+      expect(homeDoor().getAttribute('aria-current'), at).toBeNull();
       cleanup();
     }
   });
 
-  it('every rail item, the command field and + carry their data-command; a rail item\'s tooltip shows on focus-visible', () => {
-    mount('/');
-    expect(railDoors().map((b) => b.getAttribute('data-command')))
-      .toEqual(['go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'go-settings']);
-    expect(within(topBar()).getByRole('button', { name: 'Search or run a command' })).toHaveAttribute('data-command', 'open-palette');
-    expect(within(topBar()).getByRole('button', { name: 'New session' })).toHaveAttribute('data-command', 'new-session');
-    // The word is in each door, for its tooltip.
-    for (const b of railDoors()) expect(b.querySelector('.ins-rail-tip')?.textContent).toBe(b.getAttribute('aria-label'));
-    expect(declsOf('.ins-rail-item:hover .ins-rail-tip', '(hover: hover)')).toMatch(/opacity:\s*1/);
-    expect(declsOf('.ins-rail-item:focus-visible .ins-rail-tip')).toMatch(/opacity:\s*1/);
+  it('at 1280 and 1920 each door shows its word and no tip; at 900 and 1279 its icon and a tip reading its name', () => {
+    const doors = (): HTMLElement[] => [...placeDoors(), doorNamed('Settings')];
+    for (const width of [1280, 1920]) {
+      stubAt(width);
+      mount('/');
+      for (const d of placeDoors()) {
+        const name = d.getAttribute('aria-label')!;
+        expect(d.querySelector('.ins-door-word')?.textContent, `${width} ${name}`).toBe(name);
+        expect(d.querySelector('.ins-door-tip'), `${width} ${name}: no tip`).toBeNull();
+        expect(d.querySelector('svg'), `${width} ${name}: its icon`).not.toBeNull();
+      }
+      // Settings is an icon door with its tip at every width (`settings-icon-door`).
+      expect(doorNamed('Settings').querySelector('.ins-door-tip')?.textContent, `${width}: Settings`).toBe('Settings');
+      expect(doorNamed('Settings').querySelector('.ins-door-word'), `${width}: Settings`).toBeNull();
+      cleanup();
+    }
+    for (const width of [900, 1279]) {
+      stubAt(width);
+      mount('/');
+      for (const d of doors()) {
+        const name = d.getAttribute('aria-label')!;
+        expect(d.querySelector('.ins-door-tip')?.textContent, `${width} ${name}`).toBe(name);
+        expect(d.querySelector('.ins-door-word'), `${width} ${name}: no word`).toBeNull();
+        expect(d.querySelector('svg'), `${width} ${name}: its icon`).not.toBeNull();
+      }
+      cleanup();
+    }
+    expect(DOOR_WORDS_QUERY).toBe('(min-width: 1280px)');
   });
 
-  it('a rail door runs its command: Runs goes to /runs', () => {
-    mount('/');
-    fireEvent.click(railDoors().find((b) => b.getAttribute('aria-label') === 'Runs')!);
-    expect(window.location.pathname).toBe('/runs');
+  it('label in name at 1280', () => {
+    stubAt(1280);
+    const runs = [
+      { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
+    ] as unknown as RunSummary[];
+    act(() => useFleetStore.setState({ runs, runsFrameSeen: true, fleetFrameSeen: true, waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
+    try {
+      mount('/', withRunBinding([fleetSession({ id: 'ask-0', project: 'proj', bucket: 'attention' })], runs));
+      const counted = placeDoors().filter((d) => d.querySelector('.ins-door-count') !== null).map((d) => d.getAttribute('data-command'));
+      expect(counted, 'the counted doors').toEqual(['go-waiting', 'go-inbox', 'go-runs']);
+      for (const d of [homeDoor(), ...placeDoors()]) {
+        const name = d.getAttribute('aria-label')!;
+        expect(labelInName(shownText(d), name), `${JSON.stringify(shownText(d))} in ${JSON.stringify(name)}`).toBe(true);
+      }
+      // The visible words start the name.
+      expect(shownText(homeDoor())).toBe('ccrc');
+      expect(shownText(doorNamed('Inbox, 1 waiting for you'))).toBe('Inbox 1');
+    } finally {
+      act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
+    }
   });
-});
 
-describe('the top bar', () => {
-  it("the breadcrumb reads ROUTES' titles, and the session's title on a session route", () => {
-    const crumbs = (): string[] => [...topBar().querySelectorAll('.ins-crumb')].map((c) => c.textContent ?? '');
-    const title = (id: string): string => ROUTES.find((r) => r.id === id)!.title;
+  it('the current door\'s underline is 2px of --accent on its bottom edge', () => {
+    const rule = declsOf(".ins-door[aria-current='page']::after");
+    expect(rule).toMatch(/content:\s*''/);
+    expect(rule).toMatch(/position:\s*absolute/);
+    expect(rule).toMatch(/bottom:\s*0/);
+    expect(rule).toMatch(/height:\s*2px/);
+    expect(rule).toMatch(/background:\s*var\(--accent\)/);
+    expect(declsOf(".ins-door[aria-current='page']::before")).toBe('');
+  });
+
+  it('no rule names .ins-rail or .shell-rail', () => {
+    expect(CSS).not.toMatch(/\.ins-rail|\.shell-rail/);
+    for (const name of readdirSync(SKIN_DIR, { recursive: true }) as string[]) {
+      if (!/\.(css|tsx?)$/.test(name)) continue;
+      expect(readFileSync(path.join(SKIN_DIR, name), 'utf8'), name).not.toMatch(/ins-rail|shell-rail/);
+    }
+  });
+
+  it('no breadcrumb', () => {
+    for (const at of ['/', '/runs', '/settings/updates', `/s/${WS.id}`]) {
+      mount(at);
+      expect(document.querySelector('ol[aria-label="Breadcrumb"]'), at).toBeNull();
+      expect(document.querySelector('.ins-crumb, .ins-crumbs'), at).toBeNull();
+      cleanup();
+    }
+    expect(existsSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'breadcrumb.ts'))).toBe(false);
+    expect(CSS).not.toMatch(/\.ins-crumb/);
+  });
+
+  it('no set has a Rail part', () => {
+    expect(Object.keys(INSTRUMENT_SET)).not.toContain('Rail');
+    expect(Object.keys(REFINED_SET)).not.toContain('Rail');
+  });
+
+  it('the grid has two tracks below 1600 and from 1600, a third only with an inspector', () => {
+    expect(declsOf('.ins-frame', '(min-width: 900px)')).toMatch(/grid-template-columns:\s*340px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf(".ins-frame[data-inspector='placed']", '(min-width: 1600px)'))
+      .toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\) 320px\s*(;|$)/);
+    expect(CSS).not.toMatch(/\b52px\b/);
+    expect(declsOf('.ins-frame .shell-accounts', '(min-width: 900px)')).toMatch(/grid-column:\s*1\s*\/\s*-1/);
+    expect(declsOf('.ins-frame .shell-nav', '(min-width: 900px)')).toMatch(/grid-column:\s*1\s*(;|$)/);
+    expect(declsOf('.ins-frame .shell-detail', '(min-width: 900px)')).toMatch(/grid-column:\s*2\s*(;|$)/);
+  });
+
+  it('the bell in the bar is at the tap floor', () => {
+    stubAt(1280);
+    mount('/');
+    expect(topBar().querySelector('.ins-bar-doors > .bell')).not.toBeNull();
+    const rule = declsOf('.ins-bar-doors > .bell');
+    expect(rule).toMatch(/min-height:\s*var\(--tap-min\)/);
+    expect(rule).toMatch(/min-width:\s*var\(--tap-min\)/);
+  });
+
+  it('every route says where you are', () => {
+    stubAt(1280);
+    act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
+    const paths = [...ROUTES.map((r) => ROUTE_PATHS[r.id] ?? r.path), '/nope'];
+    expect(paths.every((p) => p !== null), 'a path for every row').toBe(true);
+    for (const at of paths as string[]) {
+      mount(at);
+      const current = topBar().querySelectorAll('[aria-current="page"]');
+      const detail = document.querySelector('main.shell-detail')!;
+      const heading = detail.querySelector('h1, .chat-title');
+      const says = current.length === 1 || (heading !== null && (heading.textContent ?? '').trim() !== '');
+      expect(current.length, `${at}: at most one current door`).toBeLessThanOrEqual(1);
+      expect(says, `${at}: a current door or the page's own heading`).toBe(true);
+      cleanup();
+    }
+  });
+
+  it('the chords reach their places from a bar door', () => {
+    stubAt(1280);
     mount('/runs');
-    expect(crumbs()).toEqual([title('runs')]);
+    const runsDoor = placeDoors().find((d) => d.getAttribute('data-command') === 'go-runs')!;
+    for (const [key, where] of [['i', '/mail'], ['a', '/accounts'], ['s', '/settings'], ['f', '/']] as const) {
+      act(() => { runsDoor.focus(); });
+      expect(document.activeElement, key).toBe(runsDoor);
+      fireEvent.keyDown(runsDoor, { key: 'g' });
+      fireEvent.keyDown(runsDoor, { key });
+      expect(window.location.pathname, `g ${key}`).toBe(where);
+    }
     cleanup();
-    mount('/settings/updates');
-    expect(crumbs()).toEqual([title('settings'), title('settings-updates')]);
-    cleanup();
-    mount(`/s/${WS.id}`);
-    // The session header's own words: its project, then the workspace's label.
-    expect(crumbs()).toEqual([title('fleet'), 'project-a', 'quiet-basin']);
-    expect(topBar().querySelector('.ins-crumb:last-child')).toHaveAttribute('aria-current', 'page');
-    // A crumb the bar cuts short (the overflow order gives crumbs up first) still shows its whole word on hover.
-    for (const c of topBar().querySelectorAll('.ins-crumb')) expect(c).toHaveAttribute('title', c.textContent ?? '');
-    cleanup();
-    mount(`/s/${S.id}`);
-    expect(crumbs()).toEqual([title('fleet'), 'project-a']);
-  });
-
-  it('a session the fleet does not list reads Fleet › Session, never a name guessed from its id', () => {
-    mount('/s/project-z-unlisted-basin');
-    const crumbs = [...topBar().querySelectorAll('.ins-crumb')].map((c) => c.textContent ?? '');
-    expect(crumbs).toEqual([ROUTES.find((r) => r.id === 'fleet')!.title, ROUTES.find((r) => r.id === 'session')!.title]);
+    mount('/runs');
+    fireEvent.click(homeDoor());
+    expect(window.location.pathname).toBe('/');
   });
 
   it('the command field opens the palette, and is not a text field', () => {
     mount('/');
     const field = within(topBar()).getByRole('button', { name: 'Search or run a command' });
     expect(field.tagName).toBe('BUTTON');
+    expect(field).toHaveAttribute('data-command', 'open-palette');
+    expect(within(topBar()).getByRole('button', { name: 'New session' })).toHaveAttribute('data-command', 'new-session');
     expect(within(topBar()).queryByRole('textbox')).toBeNull();
     expect(within(topBar()).queryByRole('combobox')).toBeNull();
     expect(topBar().querySelector('input, textarea, [contenteditable]')).toBeNull();
@@ -488,29 +633,18 @@ describe('the top bar', () => {
     expect(screen.getByRole('combobox', { name: 'Command palette' })).toBeInTheDocument();
   });
 
-  it('the top bar renders the wordmark first, then the crumbs, the command field and +', () => {
+  it('a door runs its command: Runs goes to /runs', () => {
+    stubAt(900);
     mount('/');
-    const bar = topBar();
-    const order = [
-      bar.querySelector('[data-wordmark]'),
-      bar.querySelector('.ins-crumbs'),
-      within(bar).getByRole('button', { name: 'Search or run a command' }),
-      within(bar).getByRole('button', { name: 'New session' }),
-    ];
-    for (const el of order) expect(el).not.toBeNull();
-    for (let i = 1; i < order.length; i += 1) {
-      expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `item ${i}`).toBeTruthy();
-    }
-    // The wordmark is the frame's first chrome after the skip link: the bar precedes the rail in DOM order.
-    const frame = document.querySelector('.app-shell')!;
-    const kids = [...frame.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('aria-label') ? `:${c.getAttribute('aria-label')}` : ''));
-    expect(kids.slice(0, 5)).toEqual(['a', 'header', 'nav:Primary', 'div', 'main']);
+    fireEvent.click(placeDoors().find((b) => b.getAttribute('data-command') === 'go-runs')!);
+    expect(window.location.pathname).toBe('/runs');
   });
 
-  it("the top bar spans the rail's column", () => {
-    expect(declsOf('.ins-frame .shell-accounts', '(min-width: 900px)')).toMatch(/grid-column:\s*1\s*\/\s*-1/);
-    expect(declsOf('.ins-frame .shell-rail', '(min-width: 900px)')).toMatch(/grid-column:\s*1\b/);
-    expect(declsOf('.ins-frame .shell-rail', '(min-width: 900px)')).toMatch(/grid-row:\s*2/);
+  it("a door's tip shows on hover and on focus-visible, below it, and the bar is no clip box", () => {
+    expect(declsOf('.ins-door:hover .ins-door-tip', '(hover: hover)')).toMatch(/opacity:\s*1/);
+    expect(declsOf('.ins-door:focus-visible .ins-door-tip')).toMatch(/opacity:\s*1/);
+    expect(declsOf('.ins-door-tip')).toMatch(/top:\s*calc\(100% \+ var\(--sp-1\)\)/);
+    for (const sel of ['.ins-topbar', '.ins-doors', '.ins-door', '.ins-bar-doors']) expect(declsOf(sel), sel).not.toMatch(/overflow/);
   });
 });
 
@@ -642,8 +776,8 @@ describe('one instance per width', () => {
       const meters = document.querySelectorAll('.accounts-strip');
       expect(meters.length, `${at}: lanes`).toBe(1);
       expect(meters[0]!.closest('header.shell-accounts') !== null, at).toBe(desk);
-      // The rail and the status bar are desk parts: mounted at 900, absent at 899.
-      expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: rail`).toBe(desk ? 1 : 0);
+      // The bar's Primary nav and the status bar are desk parts: mounted at 900, absent at 899.
+      expect(document.querySelectorAll('nav[aria-label="Primary"]').length, `${at}: the desk doors`).toBe(desk ? 1 : 0);
       expect(document.querySelectorAll('footer.shell-status').length, `${at}: status bar`).toBe(desk ? 1 : 0);
       cleanup();
     }
@@ -704,9 +838,9 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     expect(INSTRUMENT_SET.Inspector).toBeNull();
     expect(attr({ ...INSTRUMENT_SET, ...bare })).toBe('none');
     // The sheet keys the 320px track on the attribute and on nothing else.
-    expect(declsOf('.ins-frame', '(min-width: 1600px)')).toMatch(/grid-template-columns:\s*52px 420px minmax\(0, 1fr\)\s*(;|$)/);
+    expect(declsOf('.ins-frame', '(min-width: 1600px)')).toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\)\s*(;|$)/);
     expect(declsOf(".ins-frame[data-inspector='placed']", '(min-width: 1600px)'))
-      .toMatch(/grid-template-columns:\s*52px 420px minmax\(0, 1fr\) 320px/);
+      .toMatch(/grid-template-columns:\s*420px minmax\(0, 1fr\) 320px/);
     for (const media of [null, '(min-width: 900px)'] as const) expect(declsOf('.ins-frame', media), String(media)).not.toMatch(/\b320px/);
     expect(declsOf('.ins-frame', '(min-width: 1600px)')).not.toMatch(/\b320px/);
   });
@@ -746,19 +880,25 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     ];
   }
 
-  it("the rail's Inbox door says 'waiting for you' with Refined's count", () => {
+  // Desk-nav Task A (D-8100): a badged door draws one CountBadge, aria-hidden, printing badgePrint, in both forms: with its
+  // word from 1280, and with its tip below it from 900 to 1279.
+  it("the bar's Inbox door says 'waiting for you' with Refined's count, in both forms", () => {
     for (const width of [900, 1280, 1920]) {
       stubAt(width);
       mount('/', waitingFleet(2));
-      const door = within(rail()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
+      const door = within(primary()).getByRole('button', { name: 'Inbox, 2 waiting for you' });
       expect(door, `${width}px`).toHaveAttribute('data-command', 'go-inbox');
-      // The tooltip says the same as the name, and the pill prints the number.
-      expect(door.querySelector('.ins-rail-tip')?.textContent, `${width}px: tooltip`).toBe('Inbox, 2 waiting for you');
-      expect(door.textContent, `${width}px: tooltip, then the count`).toBe('Inbox, 2 waiting for you2');
+      // The tooltip says the same as the name, or the word starts it, and the pill prints the number.
+      const words = width >= 1280;
+      expect(door.querySelector(words ? '.ins-door-word' : '.ins-door-tip')?.textContent, `${width}px`)
+        .toBe(words ? 'Inbox' : 'Inbox, 2 waiting for you');
+      expect(door.textContent, `${width}px: the word or the tip, then the count`).toBe(words ? 'Inbox 2' : 'Inbox, 2 waiting for you2');
+      expect(door.querySelectorAll('.ins-door-count'), `${width}px: one pill`).toHaveLength(1);
+      expect(door.querySelector('.ins-door-count'), `${width}px`).toHaveAttribute('aria-hidden', 'true');
       // Nothing else in the frame names or draws the count: the list head's Mail door is gone at a desk.
       expect(doorCounts(), `${width}px`).toEqual({ wordmark: 1, docs: 1, accounts: 1, settings: 1, inbox: 1, mail: 0, waiting: 1, bell: 1 });
       expect(document.querySelector('.mail-badge'), `${width}px`).toBeNull();
-      expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: count pills`).toHaveLength(1);
+      expect(document.querySelectorAll('.ins-door-count, .mail-badge-count'), `${width}px: count pills`).toHaveLength(1);
       cleanup();
     }
     // Refined's tab counts the same fleet the same way (R32's F1): one function, so no skin's door counts for itself.
@@ -771,26 +911,31 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     // The printed count is capped like the sibling doors' and the name carries the real number.
     stubAt(1280);
     mount('/', waitingFleet(120));
-    const capped = within(rail()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
-    expect(capped.textContent).toBe('Inbox, 120 waiting for you99+');
+    const capped = within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' });
+    expect(capped.textContent).toBe('Inbox 99+');
+    cleanup();
+    stubAt(900);
+    mount('/', waitingFleet(120));
+    expect(within(primary()).getByRole('button', { name: 'Inbox, 120 waiting for you' }).textContent).toBe('Inbox, 120 waiting for you99+');
   });
 
-  // Desktop-polish PL5a (D-7712): the rail's Waiting on you door counts the open items plus the sessions' questions.
-  it("the rail's Waiting on you door says 'waiting on you' with its count, never counting an item being checked", () => {
+  // Desktop-polish PL5a (D-7712): the bar's Waiting on you door counts the open items plus the sessions' questions.
+  it("the bar's Waiting on you door says 'waiting on you' with its count, never counting an item being checked", () => {
     stubAt(1280);
     const sessions = waitingFleet(1);
     act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }) }));
     mount('/', sessions);
-    const door = within(rail()).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }); // 1 open item + 1 question
+    const door = within(primary()).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }); // 1 open item + 1 question
     expect(door).toHaveAttribute('data-command', 'go-waiting');
-    expect(door.querySelector('.ins-rail-tip')?.textContent).toBe('Waiting on you, 2 waiting on you');
+    expect(door.querySelector('.ins-door-word')?.textContent).toBe('Waiting on you');
+    expect(door.querySelector('.ins-door-count')?.textContent).toBe('2');
     fireEvent.click(door);
     expect(window.location.pathname).toBe('/waiting');
   });
 
-  // Review 1466 F4 (desktop-polish PL10, fix round 1): the rail's badges are `placeBadge`'s, the one decision the phone bar and
-  // Refined's desk bar read, so the rail's Runs door counts the open runs that need the operator as theirs do.
-  it("the rail's Runs door says 'needs you' with the count the phone bar and Refined's tab show", () => {
+  // Review 1466 F4 (desktop-polish PL10, fix round 1): the bar's badges are `placeBadge`'s, the one decision the phone bar and
+  // Refined's desk bar read, so the bar's Runs door counts the open runs that need the operator as theirs do.
+  it("the bar's Runs door says 'needs you' with the count the phone bar and Refined's tab show", () => {
     stubAt(1280);
     const runs = [
       { id: 1, state: 'working', closedAt: null, sessionId: 'ask-0', claimedBy: null },
@@ -800,11 +945,18 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     act(() => useFleetStore.setState({ runs, runsFrameSeen: true }));
     try {
       mount('/', sessions);
-      const door = within(rail()).getByRole('button', { name: 'Runs, 1 needs you' });
+      const door = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
       expect(door).toHaveAttribute('data-command', 'go-runs');
-      expect(door.querySelector('.ins-rail-tip')?.textContent).toBe('Runs, 1 needs you');
-      expect(door.querySelector('.ins-rail-count')?.textContent).toBe('1');
+      expect(door.querySelector('.ins-door-word')?.textContent).toBe('Runs');
+      expect(door.querySelector('.ins-door-count')?.textContent).toBe('1');
       cleanup();
+      stubAt(1279);
+      mount('/', sessions);
+      const tipped = within(primary()).getByRole('button', { name: 'Runs, 1 needs you' });
+      expect(tipped.querySelector('.ins-door-tip')?.textContent).toBe('Runs, 1 needs you');
+      expect(tipped.querySelector('.ins-door-count')?.textContent).toBe('1');
+      cleanup();
+      stubAt(1280);
       act(() => { setSkin(REFINED); });
       mount('/', sessions);
       expect(screen.getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');
@@ -818,10 +970,10 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     for (const width of [900, 1920]) {
       stubAt(width);
       mount('/', waitingFleet(0));
-      const door = within(rail()).getByRole('button', { name: 'Inbox' });
+      const door = within(primary()).getByRole('button', { name: 'Inbox' });
       expect(door.textContent, `${width}px`).toBe('Inbox');
-      expect(door.querySelector('.ins-rail-count'), `${width}px`).toBeNull();
-      expect(document.querySelectorAll('.ins-rail-count, .mail-badge-count'), `${width}px: no count pill anywhere`).toHaveLength(0);
+      expect(door.querySelector('.ins-door-count'), `${width}px`).toBeNull();
+      expect(document.querySelectorAll('.ins-door-count, .mail-badge-count'), `${width}px: no count pill anywhere`).toHaveLength(0);
       expect(doorCounts(), `${width}px`).toMatchObject({ inbox: 1, mail: 0, waiting: 0 });
       cleanup();
     }
@@ -830,7 +982,7 @@ describe('the desk (T2e): no second head in the list column, no empty fourth col
     const sessions = waitingFleet(2);
     act(() => useFleetStore.setState({ fleetFrameSeen: false }));
     mount('/', sessions);
-    expect(within(rail()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
+    expect(within(primary()).getByRole('button', { name: 'Inbox' }).textContent).toBe('Inbox');
   });
 
   it('the pool-lag readout shows once at the desk when the epochs differ', () => {
