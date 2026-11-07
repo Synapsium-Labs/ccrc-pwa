@@ -12,7 +12,10 @@ counts as measured (wave 4, 2026-10-05) · rev 9 amends stage 1 for issue #317 (
 `EXDEV` refused routes through a read-write mount of the whole filesystem, proved by inode, and a copy names its cause
 and its bytes (§1.2 item 1, §5.1, §8, §9; 2026-10-08) · rev 10 is an as-built amendment for wave 4b (2026-10-15), not a
 new operator ruling: labelled wave-4b annotations in §5.6, §5.7 and §9 record the child-scoped pressure variable, the
-carried-scope record, the direct pressure-kill metric and the live `/clear` promotion that closes D-3925 ·
+carried-scope record, the direct pressure-kill metric and the live `/clear` promotion that closes D-3925 · rev 11
+records the operator's rulings of 2026-11-07 (§11, items 7 and 8): the spike resumes on a lent scratch account,
+reduced to steps 5 and 6; stage 3 is manifest-primary, decided on the evidence rather than measured; step 7 is
+closed by the working-state programme's D-5241 (§5.2, §5.3, §10) ·
 **Date:** 2026-09-23 ·
 **Branch:** `ws/enhance-ccrc-for-parallel-agents` (based on `origin/main` `bbb5e714`) ·
 **Companion:** `2026-09-23-landing-order-and-main-churn-design.md`. Its stage 5 needs this spec's stage 1; this
@@ -326,6 +329,18 @@ merge was neither deferred nor kept. It reuses this proof, and it keeps the sour
 
 ### 5.2 Stage 2 — spike: Claude Code's native exit handoff under ccd (half a day; decides stage 3)
 
+**Amended 2026-11-07 (rev 11, §11 item 8).** The spike is reduced to steps 5 and 6, and the decision it was to
+make is made on the evidence. Steps 1 to 4 are not run: no ccd door launches a session under the bg kind, and a pane
+recorded as kind `bg` would make ccd refuse its own swap (D-4944); the carry never copies `<config>/jobs/` and Claude
+Code's job-dir guard is per config root, so adoption across an account change is predicted to fail; Claude Code
+ends workflows and agents before its handoff, so their recovery is a resume by run id either way; and the handoff's
+gates and carrier changed after this spec was written (`CLAUDE_DISABLE_ADOPT`, `bgTakeover`, a per-job storage
+key) across a fleet that runs several builds. Step 2's bounded wait is measured in stage 3's own wave, behind a
+shadow arm. Step 7 is closed by the working-state programme's D-5241: `set-property` refuses the property, and two
+prefix drop-ins ship `OOMPolicy=continue`, which doctor's `oom-policy` check reads. Steps 5 and 6 run on the lent
+scratch account (plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`): step 5 as a
+matrix of script paths at one mid-run swap, step 6 by a cut list. The steps as first written:
+
 On one scratch session on a scratch account, with a Bash background watcher, a Monitor task, a two-agent workflow
 and a plain background agent running:
 
@@ -349,15 +364,16 @@ and a plain background agent running:
    lives (C14). If `set-property` refuses the property on a transient scope, record it: the remaining route is the
    user manager's `DefaultOOMPolicy`, which needs a re-exec of the fleet's user manager and returns to the operator.
 
-**Decision rule.** Native handoff is primary for stage 3 only if it fires with both gates set, the next wake
-adopts across the account change, and no second restart authority engages (or it can be switched off). Otherwise
-ccd's manifest is primary. Either way the graceful stop ships. The spike's transcript and measurements are
-committed with the plan.
+**Decision rule (amended 2026-11-07, §11 item 8).** ccd's manifest is primary for stage 3. Native handoff is not
+measured on the fleet; if it is ever wanted, it is measured off the fleet first, and making it primary is a new
+operator ruling. The graceful stop ships with stage 3. The spike's measurements, redacted, are committed with its
+results note. The rule as first written made native handoff primary only if it fired with both gates set, the next
+wake adopted across the account change, and no second restart authority engaged (or one could be switched off).
 
 ### 5.3 Stage 3 — recovery at every restart (ccd, hook, prompt)
 
 **The graceful stop.** Every ccd stop that will be followed by a resume sends `SIGTERM` to the Claude Code process
-and waits a bounded time, measured in the spike, before the tmux kill. The unit is still stopped first, so
+and waits a bounded time, measured in this stage's own wave behind a shadow arm (rev 11), before the tmux kill. The unit is still stopped first, so
 `Restart=always` cannot resurrect it under the old wrapper.
 
 **The launch record.** `session-hook.sh`'s PostToolUse arm appends one row to `$REG/<id>.deleg` for each Workflow
@@ -870,7 +886,7 @@ of swaps that cut work reads stage 3's manifest scan and ships after it. Stage 6
 been counted (§5.6; rev 8: waves 4 and 4b) — needs nothing from stages 1–5 and
 can ship any time. Before stage 3 no handoff record exists, so a handed-over waiter with no CPU and no socket can be
 stopped; that is §5.6's named cost. The second, ccd stopping a scope when it ends a pane, ships with or after stage
-3 and the stage-2 decision on native handoff, whose record it reads. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
+3. The stage-2 decision is made (rev 11: the manifest is primary), so no native handoff record exists for it to read. Stage 7 is independent. Stage 5's clauses are appended after the landing spec's
 stage 1. The landing spec's stage 5 needs this spec's stage 1.
 
 ## 11. Operator decisions
@@ -935,6 +951,17 @@ Decided on the written spec, 2026-09-23 — items 1–2 first, items 3–5 on th
    ruled (2026-09-24): no in-place restart; stage 4's instrument counts the no-room waits that outlive their own
    reset by more than `RESCUE_WAIT_GRACE` without ending in place, and the seconds each spent past it (§9), and the
    question comes back with that count in hand. It is tracked outside the repository as its own ticket.
+
+Decided 2026-11-07, when the operator offered a scratch account (the programme's items 59 and 75):
+
+7. **The programme resumes, and the operator lends a scratch account for the spike.** This lifts the stop of
+   2026-10-20, which held waves 5 to 9 until an account was offered.
+8. **The reduced spike; the manifest is primary.** Of the four shapes offered (reduced; full on the fleet after a ccd
+   change; full off the fleet on a throwaway box; none), the operator chose the reduced one. Stage 3 uses ccd's
+   manifest, decided on the evidence in §5.2's amendment, and the account is spent on step 5 (which resume call
+   works after an ordinary swap) and step 6 (a paused workflow under a blocked parent). A full spike on the fleet
+   would first need a change to the swap and resume guards every live session runs, larger than first counted and
+   likely to outlast the loan; skipping the spike would ship stage 3's redrive call untested after a real swap.
 
 ## 12. Out of scope, named
 
