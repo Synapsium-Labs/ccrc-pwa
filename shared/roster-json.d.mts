@@ -1,10 +1,11 @@
 import type { AccountDef, Hue, ExecSpec, CodexBridgeMode, CodexUpstream } from './roster.js';
+import type { ProviderId } from './providers.js';
 
 /**
  * One account as validated by `rosterFromJson` — the flattened shape Task
  * 5's wrapper writer and `deploy/gen-accounts.mjs`'s emitter both consume
- * structurally. `execKind` and `secretsFile` are `checkAccount`'s own
- * projection of `shared/roster.ts`'s nested `exec: ExecSpec` (D-75, closed
+ * structurally. `execKind`, `secretsFile` and `provider` are `checkAccount`'s
+ * own projection of `shared/roster.ts`'s nested `exec: ExecSpec` (D-75, closed
  * by the move to this file); every other field matches `AccountDef`
  * one-for-one.
  */
@@ -32,6 +33,11 @@ export interface RosterJsonAccount {
    *  used to add "including whenever `execKind` is not `'generated'`", which the code never did
    *  (D-1855). */
   secretsFile: string | undefined;
+  /** `exec.provider` exactly as the roster spelled it, `undefined` when absent
+   *  (always on `upstream`, and on a `generated` row `parseRoster` would default
+   *  to `anthropic`). Returned since D-8098: `generateAccountsSh` reads it for
+   *  `CCRC_PAY_PER_USE`. */
+  provider: ProviderId | undefined;
   /** Present only when `execKind === 'codex'`: the lane's two listener ports
    *  and OAuth directory, copied exactly from its validated exec topology. */
   proxyPort?: number;

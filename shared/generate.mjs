@@ -62,6 +62,7 @@
 //    deliberately does. Two independent locks on one door, on purpose.
 
 import { SUBAGENT_CLASSES } from './models.mjs';
+import { API_KEY_PROVIDERS } from './roster-json.mjs';
 
 /**
  * Backslash-escapes the characters that are still live inside a
@@ -259,6 +260,13 @@ export function generateAccountsSh(roster) {
   // value, `none`, and a lane on some future backend would answer yes). So the
   // positive membership is emitted, exactly as the Anthropic one is.
   const codexIds = roster.accounts.filter((a) => a.telemetry === 'codex').map((a) => a.id);
+  // WHICH LANES BILL PER USE (D-8098). The roster has no billing field, so this
+  // reads the provider: an API-key lane (openrouter, compatible) spends the key's
+  // credit on every session it takes. ccd keeps such a lane out of the default
+  // auto-swap rotation unless a pool names it. Both producers carry the field:
+  // `parseRoster` under `exec`, `rosterFromJson` flat beside `execKind`.
+  const payPerUseIds = roster.accounts
+    .filter((a) => API_KEY_PROVIDERS.has(a.exec ? a.exec.provider : a.provider)).map((a) => a.id);
 
   const cfgArms = roster.byIdLengthDesc
     .map((a) => `    ${a.id}) echo "$HOME/${dqEscape(a.configDirSuffix)}" ;;`)
@@ -347,6 +355,7 @@ CCRC_MEASURED=${idArray(measuredIds)}
 CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
 CCRC_SUBAGENT_CLASSES=${idArray(SUBAGENT_CLASSES)}
 CCRC_CODEX_BACKEND=${idArray(codexIds)}
+CCRC_PAY_PER_USE=${idArray(payPerUseIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {
   case "$1" in

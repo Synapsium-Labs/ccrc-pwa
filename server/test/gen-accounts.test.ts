@@ -829,18 +829,30 @@ describe('gen-accounts.mjs rejects everything parseRoster rejects', () => {
 // ONE difference between the two projections, and the pins below say exactly
 // that rather than being loosened to "some difference is fine": remove that one
 // arm and the bytes, and the digest, are equal again.
+//
+// A SECOND ONE NOW DOES (D-8098): `exec.provider` reaches bash as
+// `CCRC_PAY_PER_USE` membership, never as the word itself, and the pins below
+// fold that one line too.
 describe('the new roster fields do not reach accounts.sh', () => {
   /** The single line the upstream's declared secrets file adds (D-3524). */
   const UPSTREAM_SECRETS_ARM = `    one) printf '%s\\n' ".cc-secrets/one-oauth.env" ;;\n`;
+  /** A SECOND ONE (D-8098): the provider reaches bash as membership only. The
+   *  enriched `two` is a `compatible` key lane, so it is in `CCRC_PAY_PER_USE`;
+   *  the plain `two` defaults to `anthropic` and is not. */
+  const PAY_PER_USE_LINE = ['CCRC_PAY_PER_USE=(two)\n', 'CCRC_PAY_PER_USE=()\n'] as const;
+  const fold = (sh: string): string =>
+    sh.replace(UPSTREAM_SECRETS_ARM, '').replace(PAY_PER_USE_LINE[0], PAY_PER_USE_LINE[1]);
 
-  it('an enriched roster and a plain one project to the SAME bytes, but for the upstream\'s secrets-file arm', () => {
+  it('an enriched roster and a plain one project to the SAME bytes, but for the upstream\'s secrets-file arm and the pay-per-use line', () => {
     const enriched = generateAccountsSh(parseRoster(ENRICHED_ROSTER));
     const plain = generateAccountsSh(parseRoster(PLAIN_ROSTER));
     expect(enriched).toContain(UPSTREAM_SECRETS_ARM);
-    expect(enriched.replace(UPSTREAM_SECRETS_ARM, '')).toBe(plain);
+    expect(enriched).toContain(PAY_PER_USE_LINE[0]);
+    expect(plain).toContain(PAY_PER_USE_LINE[1]);
+    expect(fold(enriched)).toBe(plain);
   });
 
-  it('…and to the same digest, but for that arm — which the two boxes now see, as they see a pool tag', () => {
+  it('…and to the same digest, but for those two — which the two boxes now see, as they see a pool tag', () => {
     // `bodyDigest` over the marked text is what `ownRosterFp` is; comparing the
     // digests rather than only the strings states the property in the terms the
     // divergence banner is computed in. A secrets-file declaration made on one
@@ -849,7 +861,7 @@ describe('the new roster fields do not reach accounts.sh', () => {
     const enriched = generateAccountsSh(parseRoster(ENRICHED_ROSTER));
     const plain = generateAccountsSh(parseRoster(PLAIN_ROSTER));
     expect(bodyDigest(markGenerated(enriched))).not.toBe(bodyDigest(markGenerated(plain)));
-    expect(bodyDigest(markGenerated(enriched.replace(UPSTREAM_SECRETS_ARM, ''))))
+    expect(bodyDigest(markGenerated(fold(enriched))))
       .toBe(bodyDigest(markGenerated(plain)));
   });
 

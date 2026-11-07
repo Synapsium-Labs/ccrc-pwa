@@ -1620,7 +1620,7 @@ without it neither half of ccrc runs:
 `accounts.sh` is a pure projection of `accounts.json` — `deploy/gen-accounts.mjs`
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
-`CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
+`CCRC_UPSTREAM`, `CCRC_PAY_PER_USE`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
 `_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
@@ -1638,7 +1638,10 @@ what the PWA renders; `homeAble: false` holds an account out of automatic
 placement and out of being any session's default home, while leaving it in the
 auto-swap rotation as an **overflow lane** — a LAST RESORT, chosen only when no
 home-able account survives the rotation's whole filter, never merely because it
-scored better — for as long as it is installed and not kill-switched.
+scored better — for as long as it is installed and not kill-switched. A
+pay-per-use lane (an OpenRouter or compatible key) is the exception: it joins the
+rotation only when a pool names it, the project's pool or a session's registry
+`pool` list (D-8098).
 `touch ~/.cc-sessions/<id>-disabled` is the per-lane brake, and a session that
 overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
@@ -1956,9 +1959,10 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   status, and only no answer at all says to try again. A box that cannot read the answer refuses `no-answer`. There is no "save anyway". The lane state keeps the key hint, how the key came, its label,
   limit, reset and credit, a new key's facts replacing the old key's whole, and `check` reads the credit again. The
   Accounts card draws the hint, the validation's age and the credit's state words. `--placement overflow` (the default) writes `homeAble:
-  false`: placement never picks the lane and it is no session's default home, but once enabled it is in the auto-swap
-  rotation as an overflow lane, the last resort above, so a limited session can land on it with no operator act and bill
-  the key. `ccrc account disable` keeps it out. `full` writes `homeAble: true`; no other provider takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
+  false`: placement never picks the lane and it is no session's default home, and being enabled does not put it in the
+  auto-swap rotation (D-8098). It joins as an overflow lane, the last resort above, only when a pool names it: tag it
+  into a project's pool, or list it in a session's registry `pool`. Nothing bills the key until then. `ccrc account
+  disable` keeps it out either way. `full` writes `homeAble: true`; no other provider takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
   `anthropic/claude-<class>-<version>` of each class, refusing `catalogue-unreachable` with nothing written when the
   catalogue cannot be read or names none for opus, sonnet or haiku; after the converge it writes the class registry from
   the same catalogue (`ccrc models <id> init openrouter --suggested`). `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four

@@ -1357,7 +1357,8 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 #
 # An account that is NOT home-able is an OVERFLOW-ONLY lane: never a placement
 # target and never a default HOME — CCRC_HOME_ABLE is the whole of that answer
-# — but, while installed and not kill-switched, a candidate the ROTATION picks
+# — but, while installed and not kill-switched (and, for a pay-per-use lane,
+# named by a pool, D-8098), a candidate the ROTATION picks
 # only when no home-able account survives its whole filter (`_swap_target`'s
 # last-resort bracket: home-able candidates are tried first, and a non-home-able
 # one is picked only when that bracket comes up empty — never merely because it
@@ -1796,7 +1797,7 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # standing ("UNSET IS NOT EMPTY", `_wrapper_rostered_now`'s "UNSET FIRST").
 # `server/test/ccd-supervise-roster-reread.test.ts` holds both lists equal to
 # what the generator writes, so a field added there reds here until it is named.
-_CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM)
+_CCD_ROSTER_VARS=(CCRC_ACCOUNTS CCRC_HOME_ABLE CCRC_MEASURED CCRC_ANTHROPIC_BACKEND CCRC_SUBAGENT_CLASSES CCRC_CODEX_BACKEND CCRC_UPSTREAM CCRC_PAY_PER_USE)
 _CCD_ROSTER_FNS=(_ccrc_cfg_dir _ccrc_id_wrapper _ccrc_dir_id _ccrc_label _ccrc_hue _ccrc_pool _ccrc_secrets_file _ccrc_auth_dir)
 # The fingerprint is the file's BYTES, read with builtins: no `stat`, no hash,
 # so the check `cmd_supervise` makes every loop costs no fork (the tick budget,
@@ -2474,6 +2475,16 @@ _is_codex_backend() {
   local w="$1" v
   declare -p CCRC_CODEX_BACKEND >/dev/null 2>&1 || { [[ "$w" == gpt ]]; return $?; }
   for v in "${CCRC_CODEX_BACKEND[@]}"; do [[ "$w" == "$v" ]] && return 0; done
+  return 1
+}
+# A LANE THAT BILLS PER USE (D-8098): its roster provider is an API-key one
+# (openrouter or compatible). The roster has no billing field, so the provider
+# is the fact, projected as CCRC_PAY_PER_USE. An accounts.sh from before the
+# array answers "no" for every lane, which is the old rotation.
+_is_pay_per_use() {
+  local w="$1" v
+  declare -p CCRC_PAY_PER_USE >/dev/null 2>&1 || return 1
+  for v in "${CCRC_PAY_PER_USE[@]}"; do [[ "$w" == "$v" ]] && return 0; done
   return 1
 }
 # The same membership, enumerated rather than tested, for the one caller that
@@ -3289,10 +3300,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 209
-# invocations across 178 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 210
+# invocations across 179 non-comment lines.
 #
-# THE LAST MOVE WAS `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -7209,7 +7220,7 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # and never scores an overflow lane, so the parity above still holds for it
   # exactly as written. ROTATION — `_swap_target` — walks `_pool_for`, which
   # since #61 includes every installed, non-kill-switched lane that is NOT
-  # home-able, and it DOES score such a lane with `_limit_score`: gpt's
+  # home-able (a pay-per-use one only when a pool names it, D-8098), and it DOES score such a lane with `_limit_score`: gpt's
   # half-null file reads as 0 there. That reading cannot beat an Anthropic
   # account, because `_swap_target` keeps overflow lanes in a bracket of their
   # own and reaches it only when no home-able candidate passed `_pool_ok`,
@@ -18578,8 +18589,20 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # the operator's opt-out for the whole rotation rather than for one session.
   # Narrow per session with a space-separated list in the registry `pool` field.
   #
-  # `$1` is the session id every caller passes (`_pool_for`); the default pool
-  # is currently the same for every session, so it is accepted and unused.
+  # A PAY-PER-USE LANE IS THE EXCEPTION (operator ruling 2026-11-07, D-8098).
+  # Being enabled is not enough for a non-home-able lane whose provider bills
+  # per use (`_is_pay_per_use`): every session it takes spends the key. It joins
+  # only when a pool names it — the session's project is tagged with a pool and
+  # the lane's own pool, as the projection measures it, is that same pool. A
+  # hand-set registry `pool` list names it too, because `_pool_for` then never
+  # calls this function. A session already on such a lane is not evacuated:
+  # nothing checks that `cur` is a pool member, the same asymmetry as above. A
+  # HOME-ABLE pay-per-use lane is left as it is: the operator made it a home
+  # knowingly, so it stays in the unconditional half.
+  #
+  # `$1` is the session id every caller passes (`_pool_for`). Only that rule
+  # reads it, for the project's pool tag, and only when a pay-per-use lane is
+  # enabled; for every other lane the default pool is the same for every session.
   #
   # A SPACE-JOINED STRING, not an array, and `_swap_target` consumes it through
   # an UNQUOTED `for cand in $(_pool_for "$id")` — word splitting is the
@@ -18598,10 +18621,15 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # WITHIN each bracket — among home-able candidates tied on score, or among
   # overflow lanes tied on score — which is roster declaration order, same as
   # `_ws_least_loaded` and `projectHome`.
-  local pool="${CCRC_HOME_ABLE[*]}" w
+  local pool="${CCRC_HOME_ABLE[*]}" w pps=''
   for w in "${CCRC_ACCOUNTS[@]}"; do
     _is_home_able "$w" && continue
-    _account_ok "$w" && pool="$pool $w"
+    _account_ok "$w" || continue
+    if _is_pay_per_use "$w"; then
+      [[ -n "$pps" ]] || pps=$(_project_pool_state "$(_reg_get "$1" project)")
+      [[ "$pps" == "named "* && "$(_acct_pool_state "$w")" == "$pps" ]] || continue
+    fi
+    pool="$pool $w"
   done
   echo "$pool"
 }
@@ -29000,12 +29028,13 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # REVERSED at the wave-2b merge (D-1910). This header used to put "a non-home-able
   # lane" alongside the excluded-by-registry case as a reason NOT to name — and
   # since PR #61 (operator decision 2026-09-07) that is exactly backwards: an
-  # installed, non-kill-switched overflow lane IS in `_pool_for`, `_swap_target`
+  # installed, non-kill-switched overflow lane IS in `_pool_for` (a pay-per-use
+  # one only when a pool names it, D-8098), `_swap_target`
   # will rank it in its last-resort bracket, and a census that hid it would omit
   # the one candidate the rotation was still willing to use. `_default_pool`
   # already applied installation and the kill-switch before this walk sees the
-  # list, so a lane that reaches here is a real destination and its annotation
-  # is a real remedy. This is one claim with #61's own, not two: see its
+  # list, and also left out a pay-per-use lane no pool names (D-8098), so a lane
+  # that reaches here is a real destination and its annotation is a real remedy. This is one claim with #61's own, not two: see its
   # sentence in the placement-parity block, `grep -n '_strand_why. (account
   # pools, wave 2b) mirrors' ccd/ccd` — "mirrors `_swap_target`'s walk, so it
   # names an overflow lane too". If either sentence is ever changed, change both.

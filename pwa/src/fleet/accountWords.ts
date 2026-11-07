@@ -464,7 +464,11 @@ export const LEDGER = {
   checkingCodex: (id: string): string => `… checking ${id}: one test reply, which starts this lane's gateway`,
   checked: '✓ Checked: one test reply · first-run setup verified',
   enabling: (id: string): string => `… turning ${id} on`,
+  /** Turned on, for a lane that does not bill per use: ccd's default auto-swap pool takes any enabled one. */
   on: '✓ On · new sessions can land here. Swap rotation includes it within a minute.',
+  /** Turned on, for a pay-per-use lane (`onLedgerLine`): the sheet adds it overflow only, and ccd keeps such a lane out
+   *  of the auto-swap rotation unless a pool names it (D-8098). */
+  onPayPerUse: '✓ On · new sessions can land here. It joins swap rotation only for a project whose pool names it.',
   reading: "… reading the fleet host's accounts again",
 } as const;
 

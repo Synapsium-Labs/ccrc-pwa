@@ -77,6 +77,7 @@ _account_still_rostered	C1
 _is_home_able	C1
 _is_anthropic_backend	C1
 _is_codex_backend	C1
+_is_pay_per_use	C1
 _codex_lanes	C1
 _acct_pool	C1
 _pool_sync_installed	C1
