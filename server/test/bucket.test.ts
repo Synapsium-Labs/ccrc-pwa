@@ -305,8 +305,7 @@ describe('sessionBucket', () => {
       ['claude-a-project-f', { state: 'waiting', updatedAt: 1784600000000, event: null, ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
     ]);
     const withWaitingHook = await assembleFleet(
-      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
-    );
+      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, { hookStates: waitingHookStates });
 
     const before = withoutHook.find((x) => x.id === 'claude-a-project-f')!;
     const afterWaiting = withWaitingHook.find((x) => x.id === 'claude-a-project-f')!;
@@ -499,8 +498,7 @@ describe('sessionBucket', () => {
         { state: 'done', updatedAt: 1784600000000, event: 'SessionStart', ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0, interrupted: false }],
     ]);
     const fleet = await assembleFleet(
-      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, sessionStartDone,
-    );
+      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, { hookStates: sessionStartDone });
     const s = fleet.find((x) => x.id === 'claude-a-project-f')!;
     // The raw hook field is unchanged — the mail delivery gate still reads it.
     expect(s.hookState).toBe('done');
@@ -669,7 +667,7 @@ describe('a Stop that leaves delegated work running (D-5231)', () => {
       };
       const cfg = loadConfig({ CCRC_HOME: home });
       const fleet = await assembleFleet(localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), Math.floor(Date.now() / 1000),
-        undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+        { hookStates: new Map([[ID, raw.state]]) });
       return fleet.find((x) => x.id === ID)!;
     };
     const subagent = (status: string): Record<string, unknown> =>
@@ -776,7 +774,7 @@ describe('a carried done stands through delegated work, and the rung holds it wo
       if (!raw.ok) throw new Error(`unreadable hookstate after event ${i}: ${raw.reason}`);
       expect(raw.state, `after ${i} agent events`).toMatchObject({ state: 'done', event: 'Stop', updatedAt: stopAt });
       const fleet = await assembleFleet(localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), Math.floor(Date.now() / 1000),
-        undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+        { hookStates: new Map([[ID, raw.state]]) });
       const row = fleet.find((x) => x.id === ID)!;
       expect(row.status, `after ${i} agent events`).toBe('busy');
       expect(row.background, `after ${i} agent events`).toEqual({ count: 2, kinds: ['subagent'] });

@@ -4,7 +4,7 @@ import type { WatcherDeps } from './deps.js';
 import { timed } from './perf/recorder.js';
 import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
-import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
+import { assembleFleetWithPanePids, fleetNow, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
 import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
@@ -43,7 +43,7 @@ import {
 import { askActions } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
-// module — `watch.ts` imports `assembleFleet` from it — so they now live
+// module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
 import { ASK_SETTLE_TICKS } from './askwindow.js';
@@ -2747,9 +2747,12 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const panePids = new Map<string, number | null>();
       const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
-      const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
+      const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
+        pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
+        hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
+        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits,
+      }));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
       this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
