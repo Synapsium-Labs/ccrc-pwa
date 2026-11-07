@@ -351,20 +351,22 @@ export function workspaceAddBody(opts: WorkspaceAddOptions): Record<string, unkn
   return Object.keys(body).length === 0 ? undefined : body;
 }
 
-/** A worktree door's answer as the PWA reads it (delegation broker wave 5, PR10): accepted, with the date the worktree is
- *  kept until; refused, with its word (a door word, or one this build does not know, which the row says as a plain
- *  refusal); or a 2xx whose body could not be read. Only the fields the PWA uses are read: `ok`, `expiresAt`, and a
- *  refusal's `error`. The server's `detail` is never read: the row never draws it (D-8097). */
+/** A worktree door's answer as the PWA reads it (delegation broker wave 5, PR10): accepted, with its `expiresAt` as it
+ *  came (the date the worktree is kept until, which the words module reads, review 1624 F7); refused, with its word (a
+ *  door word, or one this build does not know, which the row says as a plain refusal); or a 2xx whose body could not be
+ *  read. Only `ok` and a refusal's `error` are read here. The server's `detail` is never read: the row never draws it
+ *  (D-8097). */
 export type DoorAnswer =
-  | { readonly ok: true; readonly expiresAt: string | null }
+  | { readonly ok: true; readonly expiresAt: unknown }
   | { readonly ok: false; readonly error: string }
   | 'unreadable';
 /** A door's 2xx body: accepted only when it says `ok: true`; anything else is `unreadable` (the act was accepted, what it
- *  did is unknown), never a thrown parse. `expiresAt` follows the wire's one absence rule (`delegationLeaseExpiresAtOf`):
- *  only a string is a date, and absence or null is no date known (review 1623 F8 (a)). */
+ *  did is unknown), never a thrown parse. `expiresAt` is handed on as it came: the words module reads it, once, through
+ *  the wire's own reader (`actDoneWord`), so the field has one reader and one absence rule (review 1623 F8 (a), review
+ *  1624 F7, the coordinator's ruling: the scope census keeps the broker's word out of this file). */
 export function readDoorAnswer(body: unknown): DoorAnswer {
   if (!isRecord(body) || body.ok !== true) return 'unreadable';
-  return { ok: true, expiresAt: typeof body.expiresAt === 'string' ? body.expiresAt : null };
+  return { ok: true, expiresAt: body.expiresAt };
 }
 /** The statuses the doors refuse with: each door word's one status (`LEASE_DOOR_REFUSALS`). */
 const DOOR_STATUSES: ReadonlySet<number> = new Set(Object.values(LEASE_DOOR_REFUSALS));

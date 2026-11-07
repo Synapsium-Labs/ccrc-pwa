@@ -391,6 +391,13 @@ export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: s
 export function offersControl(controls: readonly WorktreeControl[], asked: WorktreeControl): boolean {
   return controls.some((c) => c.act === asked.act && (c.act !== 'attach' || (asked.act === 'attach' && c.parent === asked.parent)));
 }
+/** What a row offers, as one value to compare: the record its controls act on, the worktree's state on the wire (none for
+ *  an unowned row) and each control, an attach with its session. A refusal is about the act it answered, so the row clears
+ *  its sentence when this changes (review 1624 F5): a row whose record is replaced (review 1626 F4), whose controls go and
+ *  come back, or whose state moves, no longer says the old refusal. */
+export function offerOf(leaseId: string, controls: readonly WorktreeControl[], l: DelegationLeaseWire | null = null): string {
+  return [leaseId, l === null ? '' : dispositionOf(l) ?? '', ...controls.map((c) => (c.act === 'attach' ? `attach ${c.parent}` : c.act))].join(' ');
+}
 
 /** Each control's label. */
 export const ACT_WORD: Readonly<Record<WorktreeAct, string>> = { keep: KEEP_WORD, attach: ATTACH_WORD, foreign: NOT_DELEGATED_WORD };
@@ -407,11 +414,14 @@ export const ACT_VERB: Readonly<Record<WorktreeAct, string>> = {
   keep: 'keep the worktree', attach: 'attach the worktree', foreign: 'mark the worktree not delegated',
 };
 /** The note after a door accepted the act, with the date the worktree is kept until when the answer gives one. The row
- *  itself changes when the next frame carries it. */
-export function actDoneWord(c: WorktreeControl, expiresAt: string | null, now: number): string {
-  if (c.act === 'keep') return keptWord(expiresAt, now);
+ *  itself changes when the next frame carries it. `expiresAt` is the answer's field as it came (`readDoorAnswer` hands it
+ *  on unread), read here by the wire's one reader, which checks its type: only a string is a date, and absence or null
+ *  is no date known (review 1623 F8 (a), review 1624 F7). */
+export function actDoneWord(c: WorktreeControl, expiresAt: unknown, now: number): string {
+  const at = delegationLeaseExpiresAtOf({ expiresAt: expiresAt as string | null });
+  if (c.act === 'keep') return keptWord(at, now);
   if (c.act === 'foreign') return 'Worktree marked not delegated';
-  const d = expiresAt === null ? null : dateWord(expiresAt, now);
+  const d = at === null ? null : dateWord(at, now);
   return d === null ? `Worktree attached to ${c.parentLabel}` : `Worktree attached to ${c.parentLabel}, kept until ${d}`;
 }
 /** A 2xx whose body could not be read: the act was accepted, and what it did shows with the next frame. */

@@ -192,11 +192,18 @@ const scrollToEnd = (): void => {
     if ((y === 'auto' || y === 'scroll') && el.scrollHeight > el.clientHeight + 1) el.scrollTop = el.scrollHeight;
   }
 };
-/** At that resting place, every button of the fleet list drawn whole in view: a tap at its centre reaches it, and its box
- *  meets no floating button (Refined's `+ New`, Instrument's round `+`). The page's last row of controls must be among
- *  them; the list's own last rows (the fleet foot, Add project) follow it, and the list's end padding is what keeps the
- *  last of them clear, so a list that stops reserving the button's band is seen here. */
-const measureResting = (): { lastShown: boolean; buttons: { name: string; control: boolean; reached: boolean; underFab: string | null }[] } => {
+/** At that resting place, every button drawn whole in view from the fleet list's first card to the Add project row:
+ *  a tap at its centre reaches it, and its box meets no floating button (Refined's `+ New`, Instrument's round `+`). The
+ *  measured set is the fleet list's buttons (the cards' controls and toggles, then the fleet foot's toggle, the list's
+ *  own last row) and the Add project row, which follows the list outside it (review 1624 F8). The page's last row of
+ *  controls must be among them, and so must the Add project row: the screen's own bottom padding (`.fleet`'s) is the band
+ *  that keeps that last row clear, so a screen that stops reserving it is seen here (review 1626 F6, measured: cut alone
+ *  it reds at 390). The list's end padding sits above the Add project row, so this check does not measure it. Only a phone's width mounts a floating button; at 1280 and 1920 neither skin does (`fabs` is 0), so there the
+ *  overlap half of the check is empty by design and the tap half still runs. */
+const measureResting = (): {
+  lastShown: boolean; addShown: boolean; fabs: number;
+  buttons: { name: string; control: boolean; reached: boolean; underFab: string | null }[];
+} => {
   const list = document.querySelector<HTMLElement>('.fleet-list')!;
   let view = { top: 0, bottom: window.innerHeight };
   for (let el = list.parentElement; el !== null; el = el.parentElement) {
@@ -210,12 +217,14 @@ const measureResting = (): { lastShown: boolean; buttons: { name: string; contro
   const last = [...list.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls')].filter((c) => c.querySelector('button') !== null).at(-1);
   const fabs = [...document.querySelectorAll<HTMLElement>('.ref-fab, .fab')].map((f) => f.getBoundingClientRect())
     .filter((f) => f.width > 0 && f.height > 0);
-  const shown = [...list.querySelectorAll<HTMLElement>('button')].filter((b) => {
+  const add = document.querySelector<HTMLElement>('.fleet-add-project-row');
+  const shown = [...list.querySelectorAll<HTMLElement>('button'), ...(add === null ? [] : [add])].filter((b) => {
     const r = b.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && r.top >= view.top - 0.5 && r.bottom <= view.bottom + 0.5;
   });
   return {
     lastShown: last !== undefined && [...last.querySelectorAll<HTMLElement>('button')].every((b) => shown.includes(b)),
+    addShown: add !== null && shown.includes(add), fabs: fabs.length,
     buttons: shown.map((b) => {
       const r = b.getBoundingClientRect();
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -435,6 +444,8 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           const resting = await page.evaluate(measureResting);
           expect(resting.lastShown, 'the last row of controls is drawn whole at the end of the list').toBe(true);
           expect(resting.buttons.some((c) => c.control), 'the last row of controls is measured').toBe(true);
+          expect(resting.addShown, 'the Add project row is drawn whole at the end of the page, and measured').toBe(true);
+          expect(resting.fabs, 'a floating button at a phone\'s width only').toBe(width === 390 ? 1 : 0);
           for (const c of resting.buttons) {
             expect(c.underFab, `${c.name}: clear of the floating button at the end of the list`).toBeNull();
             expect(c.reached, `${c.name}: a tap at its centre reaches it at the end of the list`).toBe(true);
@@ -484,6 +495,114 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
         }
       });
     }
+  }
+});
+
+// ---- where the focus goes around a worktree control's real sheet (review 1624 F3) ------------------------------------
+// jsdom unmounts a closed sheet at once, so the card suite cannot see what the real one does: its panel stays mounted
+// through a 180-320 ms exit, holding the focus, and it gives the focus back to its opener as it closes. Both arms (the
+// bottom sheet at 390, the centred dialog at 1280 and 1920), in both skins and both palettes (review 1626 F14), on the lone
+// session's raw worktree, which offers all three controls: Cancel gives the focus back to the control that opened the
+// confirm; Keep leaves it on the row's box; a confirmed act that is refused leaves it on the box with the sentence said;
+// and an ask the row stops offering while it is open (the row moves to `promoted`, so Attach, its opener, goes) places it
+// on the box in the commit that closes the ask, while the closing panel still holds it (review 1626 F10). A row that
+// leaves while its confirm is open (its record dropped, or its state one this build cannot read) hands the focus to its
+// card's heading (review 1626 F2), also after a `Tab` has moved the focus inside the confirm, which arms the confirm's
+// focus trap: the hand-off waits until the trap has gone (review 1628 F1).
+const FOCUS_ROW = 'agent-l1';
+/** What holds the focus, named the way the row would name it. */
+const focusAt = (): string => {
+  const a = document.activeElement;
+  if (a === null || a === document.body) return 'body';
+  if (a.closest('[role="dialog"]') !== null) return `dialog: ${(a.textContent ?? '').trim() || a.getAttribute('aria-label') || a.tagName}`;
+  if (a.classList.contains('proj-work-controls')) return `box: ${a.getAttribute('aria-label') ?? ''}`;
+  if (a.classList.contains('proj-card-toggle')) return `card: ${a.querySelector('.proj-card-name')?.textContent ?? ''}`;
+  return a.getAttribute('aria-label') ?? a.className;
+};
+const keptAnswer = (): string => JSON.stringify({ ok: true, lease: 'l-lone', generation: 2, disposition: 'retained',
+  expiresAt: new Date(NOW + 7 * 86_400_000).toISOString(), carrier: 'pending' });
+
+/** The next frame with the lone session's worktree changed by `over`, or gone when `over` is null. */
+const withLone = (over: object | null): object => ({ type: 'delegation', delegation: { ...DELEGATION,
+  leases: DELEGATION.leases.flatMap((l) => (l.leaseId !== 'l-lone' ? [l] : over === null ? [] : [{ ...l, ...over }])) } });
+
+describe.each(SKINS)('the focus around a worktree control\'s real sheet in %s (review 1624 F3)', (skin) => {
+  for (const theme of THEMES) for (const width of WIDTHS) {
+    it(`at ${width} (${theme}): Cancel, Keep, a refusal and a dropped ask each leave the focus where the row says`, async () => {
+      const { ctx, page, errors, send } = await open(skin, theme, width);
+      try {
+        const control = (name: string) => page.getByRole('button', { name: `${name} (${FOCUS_ROW})`, exact: true });
+        const settled = async (): Promise<void> => {
+          await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });
+          await page.waitForTimeout(150);
+        };
+        // Cancel: the sheet gives the focus back to the control that opened it.
+        await control('Not delegated').scrollIntoViewIfNeeded();
+        await control('Not delegated').click();
+        await page.waitForSelector('[role="dialog"]');
+        expect(await page.evaluate(focusAt), 'a danger confirm opens on Cancel').toBe('dialog: Cancel');
+        await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+        await settled();
+        expect(await page.evaluate(focusAt), 'after Cancel').toBe(`Not delegated (${FOCUS_ROW})`);
+        // Keep acts at once: the focus waits on the row's box while the controls are disabled, and stays there.
+        await page.route('**/api/leases/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: keptAnswer() }));
+        await control('Keep worktree').click();
+        await page.getByText(/^Worktree kept until/).first().waitFor();
+        expect(await page.evaluate(focusAt), 'after Keep').toBe(`box: Worktree ${FOCUS_ROW}`);
+        // A confirmed act the door refuses: the sentence is said, and the focus is on the box.
+        await page.unroute('**/api/leases/**');
+        await page.route('**/api/leases/**', (route) => route.fulfill({ status: 409, contentType: 'application/json',
+          body: JSON.stringify({ ok: false, error: 'carrier-behind', detail: '' }) }));
+        await control('Attach to…').click();
+        await page.waitForSelector('[role="dialog"]');
+        await page.getByRole('dialog').getByRole('button', { name: 'Attach to lone-tidy-pass', exact: true }).click();
+        await page.locator('.proj-card [role="alert"]', { hasText: 'has not caught up' }).first().waitFor();
+        await settled();
+        expect(await page.evaluate(focusAt), 'after a refusal').toBe(`box: Worktree ${FOCUS_ROW}`);
+        // A dropped ask: Attach is open when the next frame moves the row to `promoted`. Attach, the sheet's opener, is
+        // gone, so the sheet gives the focus back to nothing, and the closing panel holds it until the row places it.
+        await page.unroute('**/api/leases/**');
+        await control('Attach to…').click();
+        await page.waitForSelector('[role="dialog"]');
+        send('/ws/fleet', withLone({ disposition: 'promoted' }));
+        await control('Attach to…').waitFor({ state: 'detached' });
+        await settled();
+        expect(await page.evaluate(focusAt), 'after a dropped ask').toBe(`box: Worktree ${FOCUS_ROW}`);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it(`at ${width} (${theme}): a row that leaves while its confirm is open hands the focus to its card's heading (review 1626 F2)`, async () => {
+      const { ctx, page, errors, send } = await open(skin, theme, width);
+      try {
+        const attach = page.getByRole('button', { name: `Attach to… (${FOCUS_ROW})`, exact: true });
+        for (const [variant, frame, key] of [
+          ['its record dropped', withLone(null), null],
+          ['its state one this build cannot read', withLone({ disposition: 'future-word' }), null],
+          ['its record dropped, after a Tab inside the confirm', withLone(null), 'Tab'],
+          ['its state one this build cannot read, after a Tab inside the confirm', withLone({ disposition: 'future-word' }), 'Tab'],
+        ] as const) {
+          send('/ws/fleet', withLone({}));
+          await attach.scrollIntoViewIfNeeded();
+          await attach.click();
+          await page.waitForSelector('[role="dialog"]');
+          if (key !== null) {
+            await page.keyboard.press(key);
+            expect(await page.evaluate(focusAt), `${variant}: the focus moved inside the confirm`).toMatch(/^dialog: /);
+          }
+          send('/ws/fleet', frame);
+          await attach.waitFor({ state: 'detached' });
+          await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });
+          await page.waitForTimeout(300);
+          expect(await page.evaluate(focusAt), variant).toBe('card: project-a');
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
   }
 });
 
