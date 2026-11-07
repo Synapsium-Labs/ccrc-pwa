@@ -795,6 +795,27 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(leaseOf(durable, lease.leaseId), 'the settle starts at the step\'s first read of the new evidence').toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(7)) });
   }, ROW_MS);
 
+  it('review 1622 F1: a retraction, then alive at a new incarnation on a pass whose step never decides, then dead — never adopts on the old count', async () => {
+    const { w, durable, lease } = await keptDeath();
+    dead(w, { stoppedAt: at(3) });
+    await quietPass(w, at(6));
+    expect(laneOf(w).retractedDeaths.has(OWNER), 'CONTROL: retracted on a pass that does not run the step').toBe(true);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let armed = true;
+    w.onList = (dir) => { if (armed && dir === w.registryDir) { armed = false; throw new Error('fixture: the adoption step throws before deciding'); } };
+    w.sessions = [{ id: OWNER, incarnation: NEW_INC }];
+    const steps = laneOf(w).adoptMemory.pass;
+    await pass(w, at(7));                                                    // alive at a new incarnation: the step throws, so nothing reads it
+    expect(armed, 'CONTROL: the step threw').toBe(false);
+    expect(laneOf(w).adoptMemory.pass, 'CONTROL: the decider did not run').toBe(steps);
+    expect(laneOf(w).retractedDeaths.has(OWNER), 'the living pass keeps the retraction the step has not read').toBe(true);
+    w.sessions = [{ id: OWNER, incarnation: NEW_INC, status: 'dead' }];
+    for (let n = 8; n < 13; n += 1) await pass(w, at(n));
+    expect(disposition(durable, lease.leaseId), 'CONTROL: not settled from the new evidence yet').toBe('ephemeral');
+    await passesUntilKept(w, durable, lease.leaseId, 13, 6);
+    expect(leaseOf(durable, lease.leaseId), 'the new evidence\'s own settle').toMatchObject({ disposition: 'adopted', terminalEvidenceAt: iso(at(8)) });
+  }, ROW_MS);
+
   it('review 1622 F2: a row with an unmeasured identity field reads unmeasured, so a kept death holds; CONTROL: unmeasured [] adopts', async () => {
     const { w, durable, lease } = await keptDeath();
     dead(w, { unmeasured: ['uuid'] });
