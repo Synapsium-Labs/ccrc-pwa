@@ -380,7 +380,7 @@ The table is author's call A4. First match wins. Any uncertain reading means no 
 
 | Order | Reason (`stuck.reason`) | Holds when | Heading | Row line, in the operator's words | Live [M] | Reaches it |
 |---:|---|---|---|---|---:|---|
-| 1 | `owner-gone` | The claimant reads gone (below) for 1 hour; or the run started and its worker reads gone with no move for 24 hours; or, from B8, E5's condition holds. Hibernated is never gone | Owner gone | One line per cause (below) | 5 | 65, 66, 83: E1, showing hours (o2). 417, 848: no row |
+| 1 | `owner-gone` | The claimant reads gone (below) for 1 hour; or the run started and its worker reads gone with no move for 24 hours; or, from B8, E5's condition holds. Hibernated is never gone | Owner gone | One line per cause (below) | 5 | 65, 66, 83: E1, showing hours (o2), not E3 (§12.2). 417, 848: no row |
 | 2 | `start-never-landed` | Planned; `dispatchStartedAt` set; `dispatchedAt` null; over 1 hour | Start never finished | "Started 8 days ago and never landed" | 2 | 1085: E1r, under R1. 1257: no row |
 | 3 | `review-of-closed` | Planned review whose target run is closed, or, from B7, has a later review that reached `working` or `done`; over 1 hour | Review of finished work | One line per cause (below) | 12 | E1r |
 | 4 | `overtaken` | Planned work; a later wave of the programme has left planned; over 24 hours | Overtaken by later waves | "A later wave moved on 28 days ago" | 7 | No row of its own (A11). E1 reaches one only when nothing past planned is open: 730 is skipped today for recent activity alone |
@@ -1133,6 +1133,7 @@ Over today's 28 planned runs, approximately. Activity here comes from run stamps
 
 - **No new lane row.** 417, 848, 1257 and the 7 overtaken runs stay for a person, through the Stuck band (A3, A11). Each says "Nothing closes this on its own", so the gap is visible and not silent.
 - **The rows land in the ruled order** (E1 and E1r, then E3, E3s and E5, then E2 and E4), after S1.
+- **E1 over E3 for a planned run under an archived coordinator (o2).** When both rows fit such a run, E1 decides it: the run keeps E1's anchor and hours, and E3 writes no `closes` for it and does not close it. So 65, 66 and 83 read the same before and after B8.
 - **`lastDispatchAttemptAt`** stays as ruled. R4 otherwise stands; only the screen's reading of "last move" differs (§11.2).
 - **The lane schedule.** `LANE_SCHEDULE` has landed, so the lane uses a row of it and adds no clock.
 - **A close an armed lane refuses goes to the coordinator first (A59).** The ruled never list says it is "told to the coordinator when it lives", and shown under needs you only when the coordinator is gone. So the item is the last step, not the first:

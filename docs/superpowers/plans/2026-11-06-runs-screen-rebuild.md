@@ -742,7 +742,7 @@ Reuse the ruled plan's Task W1 (`2026-10-21-runs-auto-expire-and-programme-view.
 
 Reuse the ruled Task W2 (D-6172) with spec §12's amendments. `closesOf` gains these rows at §7's graces. `runStuck` gains `name-reused` with E5, and `run-stuck-closes.test.ts`'s `every run the lane lists has a verdict` gains these rows. Rows read `claimantGone`, so a substrate stamp holds them as it holds the verdict (A56).
 
-- [ ] **Step 1: Write the failing tests.** W2's pins, plus `E3 and the crash row read the first pass plus 1 h`, `E3s the first pass plus 24 h`, `E5 the next pass`, `activity leaves E3, E3s, E5 and the crash row where they were`, `a busy worker under a gone coordinator has closes null`, `E5's condition reads owner-gone with name-reused`, `a substrate stamp on the claimant holds E3, E3s and the crash row, with no close and no closes`, `run 83's shape reads the held marker and closes through E1 or E3`.
+- [ ] **Step 1: Write the failing tests.** W2's pins, plus `E3 and the crash row read the first pass plus 1 h`, `E3s the first pass plus 24 h`, `E5 the next pass`, `activity leaves E3, E3s, E5 and the crash row where they were`, `a busy worker under a gone coordinator has closes null`, `E5's condition reads owner-gone with name-reused`, `a substrate stamp on the claimant holds E3, E3s and the crash row, with no close and no closes`, `65, 66 and 83 stay on E1 with hours and E3 gives them no closes` (o2, §12.2's precedence rule).
 - [ ] **Step 2: Run** them, then implement, then run them again. Expected: FAIL, then PASS.
 - [ ] **Step 3: Commit.**
 
