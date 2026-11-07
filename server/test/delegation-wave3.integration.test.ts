@@ -1192,7 +1192,9 @@ describe('8. the closed scope census', () => {
       ['retain', /\bretain\w*/i, ['pwa/src/lib/api.ts', 'pwa/src/fleet/delegationWords.ts']],
       // Delegation wave 5 PR10 (O5-6 (a)): the words module alone reads the wire's carrier state (PR7's field) and spells its words.
       ['disposition', /disposition/i, ['pwa/src/fleet/delegationWords.ts']],
-      ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
+      // Delegation wave 5 PR10, fix round 1 (F5, D-8097): the door word `carrier-behind`, a key of the words module's refusal
+      // table; no string the module makes public says it.
+      ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx', 'pwa/src/fleet/delegationWords.ts']],
       // `heldByRowsWords.ts` joined it with cleanup un-wedge R2 (D-8000): its one reader reads R2's `coord.cleanupHeldBy` wire
       // field, the cleanup lanes' held-by answer. It is no part of the delegation broker.
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/heldByRowsWords.ts']],

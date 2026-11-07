@@ -4,9 +4,12 @@
 // project-card.test.tsx's delegation renders do, with both delegation groups open; `worldWithLease(over)` is a world whose
 // frame holds one worktree row (`delegationFixture`'s `lease`, a newer server's: it carries a disposition and an expiry,
 // with `over` applied last, so a test can drop them); `okJson(body)` is a `Response` with status 200 and that JSON.
+// `cardElement(world)` is the card itself, with the app's toast host, for a `rerender` to a changed frame.
 // Neutral names only (`project-a`, `coord-a`, `worker-a`). A test that calls `renderCard` unstubs globals after itself.
 import { render, type RenderResult } from '@testing-library/react';
+import type { ReactElement } from 'react';
 import { vi } from 'vitest';
+import { ToastHost } from '@ccrc/ui';
 import type { DelegationLeaseWire, DelegationProjectionWire, DelegationUnownedWire, FleetSession } from '../../shared/api';
 import { ProjectCard } from '../src/fleet/ProjectCard';
 import { fleetTree } from '../src/fleet/fleetTree';
@@ -40,12 +43,17 @@ export const okJson = (body: unknown, status = 200): Response =>
 
 export type CardFetch = (url: string, init?: RequestInit) => Response | Promise<Response>;
 
-/** The card over `world`, with both delegation groups open and `fetch` answering through `opts.fetch` (by default a 500, so
- *  a test that did not expect a call sees one fail). */
+/** The card over `world`, both delegation groups open, with the app's toast host beside it. */
+export function cardElement(world: CardWorld): ReactElement {
+  const group = fleetTree(withRunBinding([...world.sessions], []), [], [], {}, world.frame).find((g) => g.project === 'project-a');
+  if (group === undefined) throw new Error('no project-a card');
+  return <><ProjectCard group={group} onOpen={() => {}} onActions={() => {}} offlineOpen unownedOpen nowMs={CARD_NOW} /><ToastHost /></>;
+}
+
+/** The card over `world`, with `fetch` answering through `opts.fetch` (by default a 500, so a test that did not expect a
+ *  call sees one fail). Re-render another world with `rerender(cardElement(next))`. */
 export function renderCard(world: CardWorld, opts: { fetch?: CardFetch } = {}): RenderResult {
   const answer: CardFetch = opts.fetch ?? (() => okJson({ error: 'unexpected-call' }, 500));
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => answer(String(input), init)));
-  const group = fleetTree(withRunBinding([...world.sessions], []), [], [], {}, world.frame).find((g) => g.project === 'project-a');
-  if (group === undefined) throw new Error('no project-a card');
-  return render(<ProjectCard group={group} onOpen={() => {}} onActions={() => {}} offlineOpen unownedOpen nowMs={CARD_NOW} />);
+  return render(cardElement(world));
 }

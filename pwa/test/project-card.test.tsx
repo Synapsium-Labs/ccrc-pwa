@@ -1,6 +1,6 @@
 // A card is always a project; a line is always a session. No bare path.
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { DelegationProjectionWire, FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
 import { fleetSession, hibernatedSession, DEAD_LIFECYCLE } from './fleetFixture';
@@ -21,7 +21,7 @@ import { fleetTree } from '../src/fleet/fleetTree';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 import { NO_ROLLUP_PREFS, rollupCard, toggleChildren, type RollupPrefs } from '../src/fleet/rollup';
 import { WARN_GLYPH } from '@ccrc/ui';
-import { COORD_A, LEASE_ID, okJson, renderCard, worldWithLease, worldWithUnowned } from './leaseCardFixture';
+import { COORD_A, LEASE_ID, cardElement, okJson, renderCard, worldWithLease, worldWithUnowned } from './leaseCardFixture';
 
 // vitest runs without globals, so RTL's auto-cleanup never registers itself —
 // without this, rerender/multi-render tests below leak DOM across `it` blocks.
@@ -1585,14 +1585,16 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
 });
 
 // Delegation broker wave 5, PR10 (Task 5.10.2): the worktree controls on a card's rows. The words module decides which control a
-// row offers and spells every word; the card draws them, asks first where the words say so, calls the door, and shows a
-// refusal's detail on the row. O5-8 (c) (D-7847) and D-8095: an unowned row offers Not delegated only, and only through the
-// lease the projection hid on its tree.
+// row offers and spells every word; the card draws them, asks first where the words say so, calls the door, and says a
+// refusal in worktree words (D-8097). O5-8 (c) (D-7847) and D-8095: an unowned row offers Not delegated only, and only
+// through the lease the projection hid on its tree. Fix round 1 (review 1615): focus after an act (F2), the refusal's
+// region (F3), Attach only with a live own session (F4), tone, focus, toast and busy pinned (F6), and F9's details.
 describe('worktree controls on a project card (delegation broker wave 5, PR10)', () => {
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
   type Call = { url: string; body: unknown };
-  const recorder = (answer: (url: string) => Response = () => okJson({ ok: true, lease: LEASE_ID, generation: 2,
-    disposition: 'retained', expiresAt: '2026-11-24T12:00:00.000Z', carrier: 'pending' })) => {
+  const accepted = (expiresAt: string | null = '2026-11-24T12:00:00.000Z') => okJson({ ok: true, lease: LEASE_ID, generation: 2,
+    disposition: 'retained', expiresAt, carrier: 'pending' });
+  const recorder = (answer: (url: string) => Response | Promise<Response> = () => accepted()) => {
     const calls: Call[] = [];
     return { calls, fetch: (url: string, init?: RequestInit) => {
       calls.push({ url, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
@@ -1600,39 +1602,65 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     } };
   };
   const RESOLVE = new RegExp(`/api/leases/${LEASE_ID}/resolve$`);
+  const rowOf = (container: HTMLElement, worktree = 'agent-a1'): HTMLElement =>
+    [...container.querySelectorAll<HTMLElement>('.proj-work')].find((r) => r.textContent?.includes(worktree))!;
+  /** F2: the focus sits on a live element in the row (never a disabled control). */
+  const focusInRow = (row: HTMLElement): void => {
+    const at = document.activeElement as HTMLElement | null;
+    expect(at !== null && row.contains(at), `focus is in the row, not on ${at?.tagName}.${at?.className}`).toBe(true);
+    expect((at as HTMLButtonElement).disabled ?? false, 'focus is not on a disabled control').toBe(false);
+  };
+  const confirmButton = (dialog: HTMLElement, name: string): HTMLElement => within(dialog).getByRole('button', { name });
 
-  it('W5-U4: an adopted worktree row shows its kept-until date and a Keep worktree control that calls operator-retain', async () => {
-    const calls: string[] = [];
-    const { getByRole, getByText } = renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }),
-      { fetch: (url: string) => { calls.push(url); return okJson({ ok: true, disposition: 'retained', expiresAt: '2026-11-24T12:00:00.000Z' }); } });
-    expect(getByText('kept until 17 Nov')).toBeTruthy();
-    expect(getByText('worktree kept')).toBeTruthy();
-    await userEvent.click(getByRole('button', { name: 'Keep worktree' }));
-    expect(calls).toEqual([expect.stringMatching(/\/api\/leases\/[0-9a-f-]{36}\/operator-retain$/)]);
+  it('W5-U4: an adopted row says it is kept until its date once, and Keep calls operator-retain, toasts its date and keeps the focus', async () => {
+    const r = recorder();
+    const { container, getByRole, getByText } = renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }),
+      { fetch: r.fetch });
+    expect(getByText('worktree kept until 17 Nov')).toBeTruthy();
+    expect(container.textContent).not.toMatch(/kept\b.*\bkept until/);
+    await userEvent.click(getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(r.calls.map((c) => c.url)).toEqual([expect.stringMatching(/\/api\/leases\/[0-9a-f-]{36}\/operator-retain$/)]);
+    expect(await screen.findByText('Worktree kept until 24 Nov')).toBeTruthy();
+    focusInRow(rowOf(container));
   });
 
-  it('W5-U5: an inferred row\'s Attach offers only its own parent and posts {action:\'attach\', parent} to resolve', async () => {
+  it('W5-U5: an inferred row\'s Attach offers only its own session, posts {action:\'attach\', parent}, says its date and keeps the focus', async () => {
     const r = recorder();
-    renderCard(worldWithLease({ sourceKind: 'raw' }), { fetch: r.fetch });
-    await userEvent.click(screen.getByRole('button', { name: 'Attach to…' }));
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
     expect(r.calls).toEqual([]);
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain('Attach this worktree to coord-a?');
     // The one choice is the worktree's own session: no picker, no list of sessions.
     expect(screen.queryByRole('listbox')).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Attach to coord-a' }));
+    await userEvent.click(confirmButton(dialog, 'Attach to coord-a'));
     expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'attach', parent: 'coord-a' } }]);
+    expect(await screen.findByText('Worktree attached to coord-a, kept until 24 Nov')).toBeTruthy();
+    focusInRow(rowOf(container));
   });
 
   it('W5-U5 (R9): a programme worker\'s inferred worktree attaches to the worker, never to the coordinator it is drawn under', async () => {
     const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
     const r = recorder();
     renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a' }, [COORD_A, worker]), { fetch: r.fetch });
-    await userEvent.click(screen.getByRole('button', { name: 'Attach to…' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Attach to… (agent-a1)' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Attach to worker-a' }));
     expect(screen.queryByRole('button', { name: 'Attach to coord-a' })).toBeNull();
     expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'attach', parent: 'worker-a' } }]);
+  });
+
+  it('F4: Attach shows only while the worktree\'s own session is listed live; a raw row whose session is gone offers none', () => {
+    const worker = fleetSession({ id: 'worker-a', project: 'project-a', workspace: 'worker-a', workdir: '/work/project-a/.ws/worker-a', role: 'child' });
+    const gone = renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-gone', group: 'offline-coordinator' }));
+    const row = rowOf(gone.container);
+    expect(row.textContent).toContain('from coord-gone');
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Not delegated']);
+    gone.unmount();
+    // CONTROL: the same offline row whose own session (`via`) is listed live offers Attach to it.
+    const live = renderCard(worldWithLease({ sourceKind: 'raw', parentId: 'coord-gone', via: 'worker-a', group: 'offline-coordinator' },
+      [COORD_A, worker]));
+    expect(within(rowOf(live.container)).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
   });
 
   it('W5-U6: an unowned row with a hidden lease offers Not delegated only, posting to that lease; with none it offers nothing', async () => {
@@ -1641,29 +1669,48 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     const row = container.querySelector<HTMLElement>('.proj-work')!;
     expect([...row.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Not delegated']);
     // D-8095: the wire carries no parent for the hidden lease, so no attach can be posted from this row.
-    expect(screen.queryByRole('button', { name: 'Attach to…' })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'Not delegated' }));
-    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    expect(screen.queryByRole('button', { name: /^Attach/ })).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-u1)' }));
+    await userEvent.click(confirmButton(await screen.findByRole('dialog'), 'Not delegated'));
     expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'foreign' } }]);
     unmount();
     const none = renderCard(worldWithUnowned({ verdict: 'conflicting' }));
     expect(none.container.querySelector('.proj-work')).not.toBeNull();
     expect(none.container.querySelector('.proj-work button')).toBeNull();
+    expect(none.container.querySelector('.proj-work-controls')).toBeNull();
   });
 
-  it('W5-U7: Not delegated asks for confirmation, says what it means, and posts {action:\'foreign\'} only after it', async () => {
+  it('W5-U7 (F6): Not delegated asks first in the danger tone with Cancel focused, says what it means, and posts only after it', async () => {
     const r = recorder();
-    renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
-    await userEvent.click(screen.getByRole('button', { name: 'Not delegated' }));
+    const { container } = renderCard(worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toContain(
       'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.');
+    expect(confirmButton(dialog, 'Not delegated').className, 'the danger tone').toMatch(/\bbtn-danger\b/);
+    expect(document.activeElement, 'Cancel holds the focus').toBe(confirmButton(dialog, 'Cancel'));
     expect(r.calls).toEqual([]);
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(confirmButton(dialog, 'Cancel'));
     expect(r.calls).toEqual([]);
-    await userEvent.click(screen.getByRole('button', { name: 'Not delegated' }));
-    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not delegated' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    await userEvent.click(confirmButton(await screen.findByRole('dialog'), 'Not delegated'));
     expect(r.calls).toEqual([{ url: expect.stringMatching(RESOLVE), body: { action: 'foreign' } }]);
+    expect(await screen.findByText('Worktree marked not delegated')).toBeTruthy();
+    focusInRow(rowOf(container));
+  });
+
+  it('F2: a row that leaves while it holds the focus hands it to its card\'s toggle', async () => {
+    const r = recorder();
+    const world = worldWithLease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { container, rerender } = renderCard(world, { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    await userEvent.click(confirmButton(await screen.findByRole('dialog'), 'Not delegated'));
+    await screen.findByText('Worktree marked not delegated');
+    focusInRow(rowOf(container));
+    // The next frame carries no row for it.
+    rerender(cardElement({ ...world, frame: { ...world.frame, leases: [] } }));
+    expect(container.querySelector('.proj-work')).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector('.proj-card-toggle'));
   });
 
   it('W5-U8: a transferring row says "moving to a run" and offers no control; a promoted one offers only Not delegated', () => {
@@ -1677,21 +1724,83 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     expect([...promoted.container.querySelectorAll('.proj-work button')].map((b) => b.textContent)).toEqual(['Not delegated']);
   });
 
-  it('W5-U9: a refusal\'s detail shows on the row, and nothing is retried by itself', async () => {
-    const detail = 'the box has not read this worktree back at its newest change yet';
+  it('W5-U9 (D-8097, F3): a refusal is said in worktree words in a region mounted empty, its detail never drawn, and nothing retries', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const detail = 'lease 0b0c3f8e is behind its carrier; retry operator-retain later';
     const r = recorder(() => okJson({ ok: false, error: 'carrier-behind', detail }, 409));
     const { container } = renderCard(worldWithLease({ disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
-    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree' }));
-    const row = container.querySelector<HTMLElement>('.proj-work')!;
-    expect(await within(row).findByText(detail)).toBeTruthy();
-    expect(r.calls).toHaveLength(1);
-    // A failure that is no door's answer says so on the row too, in the app's words.
-    const broken = recorder(() => okJson({ error: 'internal' }, 500));
+    const row = rowOf(container);
+    const region = within(row).getByRole('alert');
+    expect(region.textContent, 'the region is mounted empty, before it has anything to say').toBe('');
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await within(row).findByText('The fleet box has not caught up with this worktree yet. Try again shortly.')).toBe(region);
+    expect(within(row).getByRole('alert'), 'the same region, its text swapped').toBe(region);
+    expect(document.body.textContent).not.toContain(detail);
+    expect(document.body.textContent).not.toMatch(/operator-retain|carrier-behind/);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(r.calls, 'nothing is retried by itself').toHaveLength(1);
+  });
+
+  it('D-8097: a refusal word this build does not know says one plain sentence; a failure that is no answer says the app\'s words', async () => {
+    const unknown = recorder(() => okJson({ ok: false, error: 'future-word', detail: 'a newer lease rule refused this' }, 409));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: unknown.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await within(rowOf(container)).findByText('The server refused this.')).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/future-word|newer lease rule/);
     cleanup();
+    const broken = recorder(() => okJson({ error: 'internal' }, 500));
     renderCard(worldWithLease({ disposition: 'retained' }), { fetch: broken.fetch });
-    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
     expect(await screen.findByText(/^Couldn't keep the worktree/)).toBeTruthy();
     expect(broken.calls).toHaveLength(1);
+  });
+
+  it('F1 (measured, not a departure): a raw row on a conflicting tree, and a box without the hold, each say their refusal', async () => {
+    for (const [error, sentence] of [
+      ['lease-conflicting', 'Two sessions claimed this worktree, so it cannot be kept until that is settled: attach it to its session, or mark it not delegated.'],
+      ['box-unsupported', 'The fleet box cannot hold this worktree back from the disk sweep until its ccrc is updated.'],
+    ] as const) {
+      const r = recorder(() => okJson({ ok: false, error, detail: 'lease refused' }, error === 'box-unsupported' ? 503 : 409));
+      const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'ephemeral' }), { fetch: r.fetch });
+      await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+      expect(await within(rowOf(container)).findByText(sentence), error).toBeTruthy();
+      cleanup();
+    }
+  });
+
+  it('F6: every control is disabled while an act is in flight, and comes back when it ends', async () => {
+    let release: (r: Response) => void = () => {};
+    const r = recorder(() => new Promise<Response>((res) => { release = res; }));
+    const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'retained' }), { fetch: r.fetch });
+    const buttons = () => within(rowOf(container)).getAllByRole('button') as HTMLButtonElement[];
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(buttons().map((b) => b.disabled)).toEqual([true, true, true]);
+    focusInRow(rowOf(container));
+    await act(async () => { release(accepted()); });
+    await screen.findByText('Worktree kept until 24 Nov');
+    expect(buttons().map((b) => b.disabled)).toEqual([false, false, false]);
+  });
+
+  // F9 (a), the confirm's words as it closes, is `worktree-confirm-close.test.tsx`'s: jsdom unmounts a closed sheet at once.
+  it('F9 (b): an ask is dropped when its row stops offering the act, and it never reopens or posts by itself', async () => {
+    const r = recorder();
+    const world = (disposition: 'adopted' | 'transferring') => worldWithLease({ disposition, expiresAt: '2026-11-17T12:00:00.000Z' });
+    const { rerender } = renderCard(world('adopted'), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Not delegated (agent-a1)' }));
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    rerender(cardElement(world('transferring')));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    rerender(cardElement(world('adopted')));
+    expect(screen.queryByRole('dialog'), 'the ask does not come back with the control').toBeNull();
+    expect(r.calls).toEqual([]);
+  });
+
+  it('F9 (c): a 2xx whose body is not JSON says the act was accepted and its answer unread, with no thrown parse', async () => {
+    const r = recorder(() => new Response('<html>ok</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained' }), { fetch: r.fetch });
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(await within(rowOf(container)).findByText(
+      'The server accepted this, but its answer could not be read; the row updates with its next change.')).toBeTruthy();
   });
 
   it('W5-U10: an older server\'s rows (no disposition, no hidden lease) render byte for byte as on the base', () => {
@@ -1707,10 +1816,12 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     expect([...container.querySelectorAll('.proj-work')].map((r) => r.outerHTML)).toEqual(BASE);
   });
 
-  it('W5-U11: the three controls are buttons named by their words, drawn by the design system\'s Button', () => {
+  it('W5-U11 (F9 (f)): the three controls are buttons named by their words and their worktree, drawn by the design system\'s Button', () => {
     const { container } = renderCard(worldWithLease({ sourceKind: 'raw', disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }));
-    const row = container.querySelector<HTMLElement>('.proj-work')!;
+    const row = rowOf(container);
     expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['Keep worktree', 'Attach to…', 'Not delegated']);
+    expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label')))
+      .toEqual(['Keep worktree (agent-a1)', 'Attach to… (agent-a1)', 'Not delegated (agent-a1)']);
     // `Button` (@ccrc/ui) carries its own tap floor, which is why control-census registers no `<Button>` call site.
     for (const b of within(row).getAllByRole('button')) expect(b.className).toMatch(/\bmin-h-tap\b/);
     expect(row.textContent).not.toMatch(/lease|adopt|retain|clean|spool|running/i);

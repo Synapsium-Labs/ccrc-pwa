@@ -156,24 +156,48 @@ const measureRows = (): RowFit[] => [...document.querySelectorAll<HTMLElement>('
   };
 });
 
-/** PR10: every worktree control on a card: its label, whether it sits inside its row and its card, its height, and the
- *  tap floor the token resolves to here (a coarse pointer at 390, so the floor is measured where a thumb uses it). */
-const measureControls = (): { floor: number; coarse: boolean; controls: { text: string; inRow: boolean; inCard: boolean; height: number }[] } => {
+/** PR10: every worktree control on a card: its label and accessible name, whether it sits inside its row and its card on
+ *  all four sides (fix round 1, F9 (j)), its height, and whether a tap at its centre, with the control scrolled to the
+ *  middle of the screen, reaches it rather than the floating button (F9 (i)); and the tap floor the token resolves to (a
+ *  coarse pointer at 390, so the floor is measured where a thumb uses it). */
+const measureControls = (): { floor: number; controls: { text: string; name: string; inRow: boolean; inCard: boolean;
+  height: number; reached: boolean }[] } => {
   const probe = document.createElement('div');
   probe.style.height = 'var(--tap-min)';
   document.body.append(probe);
   const floor = probe.getBoundingClientRect().height;
   probe.remove();
-  const within = (a: DOMRect, b: DOMRect): boolean => a.left >= b.left - 0.5 && a.right <= b.right + 0.5;
+  const within = (a: DOMRect, b: DOMRect): boolean =>
+    a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
   return {
-    floor, coarse: matchMedia('(pointer: coarse)').matches,
+    floor,
     controls: [...document.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls button')].map((b) => {
+      b.scrollIntoView({ block: 'center', inline: 'nearest' });
       const r = b.getBoundingClientRect();
-      return { text: b.textContent ?? '', inRow: within(r, b.closest('.proj-work')!.getBoundingClientRect()),
-        inCard: within(r, b.closest('.proj-card')!.getBoundingClientRect()), height: r.height };
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { text: b.textContent ?? '', name: b.getAttribute('aria-label') ?? '',
+        inRow: within(r, b.closest('.proj-work')!.getBoundingClientRect()),
+        inCard: within(r, b.closest('.proj-card')!.getBoundingClientRect()), height: r.height,
+        reached: hit !== null && b.contains(hit) };
     }),
   };
 };
+
+/** PR10 fix round 1, F9 (h): on every delegation work line drawn with a visible bracket, the bracket sits on the words' first line
+ *  (its vertical centre inside the first word's box), even when the line wraps its controls under the words. */
+const measureBrackets = (): { text: string; onWords: boolean; wrapped: boolean }[] =>
+  [...document.querySelectorAll<HTMLElement>('.proj-card .proj-nest')].flatMap((nest) => {
+    const bracket = nest.querySelector<HTMLElement>(':scope > .proj-nest-bracket');
+    const work = nest.querySelector<HTMLElement>(':scope > .proj-work');
+    const first = work?.querySelector<HTMLElement>('.proj-work-part');
+    if (bracket === null || work === null || first === null || first === undefined) return [];
+    const br = bracket.getBoundingClientRect();
+    const fr = first.getBoundingClientRect();
+    if (br.width === 0 || br.height === 0) return [];   // a row in a programme box draws no bracket
+    const mid = br.top + br.height / 2;
+    return [{ text: work.textContent ?? '', onWords: mid >= fr.top - 0.5 && mid <= fr.bottom + 0.5,
+      wrapped: work.getBoundingClientRect().height > fr.height * 2 }];
+  });
 
 /** The fleet foot's region and each of its rows: inside the fleet list's box, and nothing overflowing its own box. A
  *  region without its `min-width: 0` widens the list's one grid track past the list, which this sees at every width,
@@ -348,16 +372,24 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           // R9: the worker's live activity is a chip on its row, never a row.
           const r9 = await page.evaluate(() => [...document.querySelectorAll('.sess-meta-chip')].map((e) => e.textContent));
           expect(r9).toContain('1 delegated');
-          // PR10: the six controls of the three newer-server rows, each inside its row and card; a phone's reach the tap floor.
+          // PR10: the six controls of the three newer-server rows, each inside its row and card on all four sides, reached by
+          // a tap at its centre (never under the floating button), named uniquely, and on a phone at the tap floor.
           const shown = await page.evaluate(measureControls);
           expect(shown.controls.map((c) => c.text).sort(), 'the worktree controls').toEqual(
             ['Attach to…', 'Keep worktree', 'Keep worktree', 'Not delegated', 'Not delegated', 'Not delegated']);
+          expect(new Set(shown.controls.map((c) => c.name)).size, 'each control\'s name is its own').toBe(6);
           for (const c of shown.controls) {
-            expect(c.inRow, `${c.text}: inside its row`).toBe(true);
-            expect(c.inCard, `${c.text}: inside its card`).toBe(true);
-            if (width === 390) expect(c.height, `${c.text}: reaches the tap floor`).toBeGreaterThanOrEqual(shown.floor - 0.5);
+            expect(c.name.startsWith(c.text), `${c.name}: its name carries its label`).toBe(true);
+            expect(c.inRow, `${c.name}: inside its row`).toBe(true);
+            expect(c.inCard, `${c.name}: inside its card`).toBe(true);
+            expect(c.reached, `${c.name}: a tap at its centre reaches it`).toBe(true);
+            if (width === 390) expect(c.height, `${c.name}: reaches the tap floor`).toBeGreaterThanOrEqual(shown.floor - 0.5);
           }
-          expect(rows.some((r) => r.text.includes('worktree kept') && r.text.includes('kept until')), 'the kept words').toBe(true);
+          expect(rows.some((r) => r.text.includes('worktree kept until')), 'the kept words, said once').toBe(true);
+          const brackets = await page.evaluate(measureBrackets);
+          expect(brackets.length, 'the bracketed work lines').toBeGreaterThan(0);
+          for (const b of brackets) expect(b.onWords, `${b.text}: its bracket sits on the words' first line`).toBe(true);
+          if (width === 390) expect(brackets.some((b) => b.wrapped), 'a line that wraps is measured').toBe(true);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

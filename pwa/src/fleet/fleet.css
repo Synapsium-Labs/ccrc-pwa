@@ -2158,6 +2158,13 @@ button.proj-card-pool::before {
   font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
+/* A delegation work line that wraps (a worktree's controls drop under its words, delegation broker wave 5 PR10) keeps its
+   bracket on the words' first line: the bracket and the line sit on their first baseline, which a one-line row's centre
+   already shares, rather than on the centre of the whole wrapped line. */
+.proj-nest:has(> .proj-work) > .proj-nest-bracket,
+.proj-nest:has(> .proj-work) > .proj-work {
+  align-self: baseline;
+}
 
 /* The child that does not exist yet. NOT a tap surface and never a --glow: a
    spawn in flight is a state, not a living pane, and there is no session to

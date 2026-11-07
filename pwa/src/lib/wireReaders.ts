@@ -350,3 +350,26 @@ export function workspaceAddBody(opts: WorkspaceAddOptions): Record<string, unkn
   };
   return Object.keys(body).length === 0 ? undefined : body;
 }
+
+/** A worktree door's answer as the PWA reads it (delegation broker wave 5, PR10): accepted, with the date the worktree is
+ *  kept until; refused, with its word (a door word, or one this build does not know, which the row says as a plain
+ *  refusal) and the server's detail, which the row never draws (D-8097); or a 2xx whose body could not be read. Only the
+ *  fields the PWA uses are read: `ok`, `expiresAt`, and a refusal's `error` and `detail`. */
+export type DoorAnswer =
+  | { readonly ok: true; readonly expiresAt: string | null }
+  | { readonly ok: false; readonly error: string; readonly detail: string }
+  | 'unreadable';
+/** A door's 2xx body: accepted only when it says `ok: true` with a string or null `expiresAt`; anything else is
+ *  `unreadable` (the act was accepted, what it did is unknown), never a thrown parse. */
+export function readDoorAnswer(body: unknown): DoorAnswer {
+  if (!isRecord(body) || body.ok !== true) return 'unreadable';
+  const exp = body.expiresAt;
+  return typeof exp === 'string' || exp === null ? { ok: true, expiresAt: exp } : 'unreadable';
+}
+/** A failed request's body as a refusal (`{ok: false, error, detail}` with a string word), or null: then it is no answer
+ *  at all, and the request rejects. */
+export function readDoorRefusal(body: unknown): Extract<DoorAnswer, { ok: false }> | null {
+  if (!isRecord(body) || body.ok !== false || typeof body.error !== 'string') return null;
+  return { ok: false, error: body.error, detail: typeof body.detail === 'string' ? body.detail : '' };
+}
+

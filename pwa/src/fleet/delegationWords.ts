@@ -19,7 +19,7 @@
 // Imports only `shared/api` and `lib/wire` (never `./fleetTree` or `./nestFleet`, which import from here: a cycle).
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, delegationLeaseDispositionOf,
-  delegationLeaseExpiresAtOf, type DelegationActivityWire, type DelegationCarrierState, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
+  delegationLeaseExpiresAtOf, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
   type DelegationProjectionWire, type DelegationUnownedWire,
 } from '../../../shared/api';
 import { isRecord } from '../lib/wire';
@@ -274,9 +274,10 @@ export function delegationParts(rows: readonly { kind: 'activity' | 'lease' }[])
 // THE WORKTREE CONTROLS (delegation broker wave 5, PR10). The operator keeps a worktree, attaches an inferred one to its own
 // session, or says one is not delegated work; each row reads its disposition and the date it is kept until. O5-6 (a)
 // (D-7845): these words keep W4-U10's census closed, so none says lease, adopt, retain, clean or spool, and none says
-// running. O5-8 (c) (D-7847): there are no tree doors, so an unowned row acts only through the lease the projection hid on
-// its tree, and one with none offers nothing. A row from an older server (no `disposition`, no `leaseId`) offers nothing
-// and says nothing new. No control implies the work is live or done; promotion is a run open, never a control here.
+// running; a refusal is said in these words too, never as the server's own text (D-8097). O5-8 (c) (D-7847): there are no
+// tree doors, so an unowned row acts only through the lease the projection hid on its tree, and one with none offers
+// nothing. A row from an older server (no `disposition`, no `leaseId`) offers nothing and says nothing new. No control
+// implies the work is live or done; promotion is a run open, never a control here.
 
 /** The operator's keep (`POST /api/leases/:lease/operator-retain`). */
 export const KEEP_WORD = 'Keep worktree';
@@ -291,11 +292,17 @@ export const DISPOSITION_WORD: Readonly<Record<Exclude<DelegationCarrierState, '
   ephemeral: null, adopted: 'worktree kept', retained: 'worktree kept', transferring: 'moving to a run', promoted: 'moved to a run',
 };
 
-/** The one act a control asks for. */
-export type WorktreeAct = 'keep' | 'attach' | 'foreign';
+/** One control a row offers. Attach carries its one choice, the worktree's own session, so no attach can be drawn
+ *  without a session to post (F10: no runtime guard stands in for the type). */
+export type WorktreeControl =
+  | { readonly act: 'keep' }
+  | { readonly act: 'attach'; readonly parent: string; readonly parentLabel: string }
+  | { readonly act: 'foreign' };
+export type WorktreeAct = WorktreeControl['act'];
 
 /** `disposition`'s reader on this page: the wire's one reader (`delegationLeaseDispositionOf`), so absence and a word this
- *  build cannot name both read null, and a null offers no control. */
+ *  build cannot name both read null, and a null offers no control. Unlike a liveness or a group, an unknown disposition
+ *  is not drawn as `unrecognised`: it says nothing and offers nothing, the side that acts on nothing it cannot name. */
 export function dispositionOf(l: DelegationLeaseWire): keyof typeof DISPOSITION_WORD | null {
   return delegationLeaseDispositionOf(l);
 }
@@ -313,6 +320,11 @@ export function hiddenLeaseOf(u: DelegationUnownedWire): string | null {
  *  display parent, the coordinator, and `via` is the worker whose lease it is. */
 export function leaseParentOf(l: DelegationLeaseWire): string {
   return l.via ?? l.parentId;
+}
+/** F4: a session the PWA lists as live: present in the fleet list and not archived. A session the list does not carry
+ *  is not live here, so no attach to it is offered (the door would refuse `not-live-parent`). */
+export function listedLive(s: { readonly archivedAt: number | null } | null | undefined): boolean {
+  return s !== null && s !== undefined && s.archivedAt === null;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
@@ -336,36 +348,90 @@ export function keptWord(expiresAt: string | null, now: number): string {
   return d === null ? 'Worktree kept' : `Worktree kept until ${d}`;
 }
 
-/** The words a worktree row adds after its own: its disposition and, while it is held, the date it is kept until. An older
- *  server's row (no `disposition`) adds none, and so renders as before. */
+/** The words a worktree row adds after its own: its disposition, said once with the date while it is held ("worktree kept
+ *  until 14 Nov", F9 (g)). An older server's row (no `disposition`) adds none, and so renders as before. */
 export function worktreeStateParts(l: DelegationLeaseWire, now: number): readonly string[] {
   const d = dispositionOf(l);
   if (d === null) return [];
   const exp = expiryOf(l);
   const word = DISPOSITION_WORD[d];
-  return [...(word === null ? [] : [word]), ...((d === 'adopted' || d === 'retained') && exp !== null ? [keptUntilWord(exp, now)] : [])];
+  if (word === null) return [];
+  return [(d === 'adopted' || d === 'retained') && exp !== null ? `worktree ${keptUntilWord(exp, now)}` : word];
 }
 
 /** The controls a worktree row offers (PR10's rules): Keep while `ephemeral`, `adopted` or `retained`; Attach on an
- *  inferred (raw) worktree in those states; Not delegated on every state but `transferring`. Nothing without a disposition. */
-export function worktreeActs(l: DelegationLeaseWire): readonly WorktreeAct[] {
+ *  inferred (raw) worktree in those states, only while its own session is listed live (`liveParentLabel` non-null, F4);
+ *  Not delegated on every state but `transferring`. Nothing without a disposition. Keep stays on a raw worktree whose tree
+ *  is in conflict and on a box without the hold: the wire says neither, so the door's refusal says it (F1, D-8097). */
+export function worktreeControls(l: DelegationLeaseWire, liveParentLabel: string | null): readonly WorktreeControl[] {
   const d = dispositionOf(l);
   if (d === null || d === 'transferring') return [];
   const held = d === 'ephemeral' || d === 'adopted' || d === 'retained';
-  return [...(held ? ['keep' as const] : []), ...(held && l.sourceKind === 'raw' ? ['attach' as const] : []), 'foreign'];
+  const attach: readonly WorktreeControl[] = held && l.sourceKind === 'raw' && liveParentLabel !== null
+    ? [{ act: 'attach', parent: leaseParentOf(l), parentLabel: liveParentLabel }] : [];
+  return [...(held ? [{ act: 'keep' } as const] : []), ...attach, { act: 'foreign' }];
 }
-/** The controls an unowned row offers: only through the lease the projection hid on its tree (O5-8 (c)). */
-export function unownedActs(u: DelegationUnownedWire): readonly WorktreeAct[] {
-  return hiddenLeaseOf(u) === null ? [] : ['foreign'];
+/** An unowned row's controls: only through the lease the projection hid on its tree (O5-8 (c)), and only Not delegated
+ *  (D-8095: the wire names no parent for that lease). Null when it hid none. */
+export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null {
+  const leaseId = hiddenLeaseOf(u);
+  return leaseId === null ? null : { leaseId, controls: [{ act: 'foreign' }] };
+}
+
+/** Each control's label. */
+export const ACT_WORD: Readonly<Record<WorktreeAct, string>> = { keep: KEEP_WORD, attach: ATTACH_WORD, foreign: NOT_DELEGATED_WORD };
+/** A control's accessible name: its label and the row's worktree, so two rows' controls never share a name (F9 (f)). */
+export function controlName(act: WorktreeAct, worktree: string): string {
+  return `${ACT_WORD[act]} (${worktree})`;
+}
+/** Each act as a verb, for the app's "Couldn't <verb> — <why>" when a request gets no door's answer (`failedTo`). */
+export const ACT_VERB: Readonly<Record<WorktreeAct, string>> = {
+  keep: 'keep the worktree', attach: 'attach the worktree', foreign: 'mark the worktree not delegated',
+};
+/** The note after a door accepted the act, with the date the worktree is kept until when the answer gives one. The row
+ *  itself changes when the next frame carries it. */
+export function actDoneWord(c: WorktreeControl, expiresAt: string | null, now: number): string {
+  if (c.act === 'keep') return keptWord(expiresAt, now);
+  if (c.act === 'foreign') return 'Worktree marked not delegated';
+  const d = expiresAt === null ? null : dateWord(expiresAt, now);
+  return d === null ? `Worktree attached to ${c.parentLabel}` : `Worktree attached to ${c.parentLabel}, kept until ${d}`;
+}
+/** A 2xx whose body could not be read: the act was accepted, and what it did shows with the next frame. */
+export const ANSWER_UNREAD_WORD = 'The server accepted this, but its answer could not be read; the row updates with its next change.';
+
+/** D-8097 (F5): each door refusal in the operator's words (worktree, session, run, kept), never the server's own text,
+ *  which names the broker's internals. Keyed by the L0 type (`LEASE_DOOR_REFUSALS`), so a new refusal is a compile error
+ *  here until it has a sentence. */
+export const REFUSAL_WORD: Readonly<Record<LeaseDoorRefusal, string>> = {
+  'lease-unknown': 'The server has no record of this worktree.',
+  'lease-released': 'This worktree is no longer held: it was removed, moved to a run or marked not delegated.',
+  'not-lease-parent': 'A worktree can only be attached to its own session.',
+  'wrong-disposition': "This worktree's state does not allow that now.",
+  'not-ready': 'The server is still reading its records. Try again shortly.',
+  'incarnation-changed': 'The session restarted while this was done. Check the row before you try again.',
+  'registry-unmeasurable': 'The list of sessions could not be read just now. Try again shortly.',
+  'not-live-parent': "This worktree's session is not live, so it cannot be attached to it.",
+  'tree-not-unowned': 'This worktree is not unowned work.',
+  'bad-request': 'The server could not read this request.',
+  'lease-conflicting': 'Two sessions claimed this worktree, so it cannot be kept until that is settled: attach it to its session, or mark it not delegated.',
+  'carrier-behind': 'The fleet box has not caught up with this worktree yet. Try again shortly.',
+  'box-unsupported': 'The fleet box cannot hold this worktree back from the disk sweep until its ccrc is updated.',
+  'tree-unleased': 'No delegated work is recorded on this worktree.',
+};
+/** A refusal word this build does not know: one plain sentence, never the word or the server's detail. */
+export const REFUSED_WORD = 'The server refused this.';
+/** A refusal's sentence. */
+export function refusalWord(error: unknown): string {
+  return typeof error === 'string' && Object.hasOwn(REFUSAL_WORD, error) ? REFUSAL_WORD[error as LeaseDoorRefusal] : REFUSED_WORD;
 }
 
 /** A confirm's words. */
 export interface ConfirmWords { readonly title: string; readonly consequence: string; readonly confirmLabel: string }
-/** Attach asks first and names its one choice, the worktree's own session. */
+/** Attach asks first and names its one choice, the worktree's own session. It names no date: the server sets it. */
 export function attachConfirm(parentLabel: string): ConfirmWords {
   return {
     title: `Attach this worktree to ${parentLabel}?`,
-    consequence: `It is kept for ${parentLabel}, and held back from the disk sweep until its date. It is never moved to another session.`,
+    consequence: `It is then kept for ${parentLabel}, and held back from the disk sweep. It is never moved to another session.`,
     confirmLabel: `Attach to ${parentLabel}`,
   };
 }
@@ -375,15 +441,7 @@ export const notDelegatedConfirm: ConfirmWords = {
   consequence: 'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.',
   confirmLabel: NOT_DELEGATED_WORD,
 };
-/** Each control's label. */
-export const ACT_WORD: Readonly<Record<WorktreeAct, string>> = { keep: KEEP_WORD, attach: ATTACH_WORD, foreign: NOT_DELEGATED_WORD };
-/** Each act as a verb, for the app's "Couldn't <verb> — <why>" when a request gets no door's answer (`failedTo`). */
-export const ACT_VERB: Readonly<Record<WorktreeAct, string>> = {
-  keep: 'keep the worktree', attach: 'attach the worktree', foreign: 'mark the worktree not delegated',
-};
-/** The note after a door accepted the act. The row itself changes when the next frame carries it. */
-export function actDoneWord(act: WorktreeAct, expiresAt: string | null, parentLabel: string | null, now: number): string {
-  if (act === 'keep') return keptWord(expiresAt, now);
-  return act === 'attach' ? `Worktree attached to ${parentLabel ?? 'its session'}` : 'Worktree marked not delegated';
+/** The confirm for a control (Keep asks nothing). */
+export function confirmFor(c: WorktreeControl): ConfirmWords | null {
+  return c.act === 'attach' ? attachConfirm(c.parentLabel) : c.act === 'foreign' ? notDelegatedConfirm : null;
 }
-

@@ -13,7 +13,7 @@ import {
   readDelegation, unlistedToggle, worktreeLine,
 } from '../src/fleet/delegationWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
-import { DELEGATION_CARRIER_STATES } from '../../shared/api';
+import { DELEGATION_CARRIER_STATES, LEASE_DOOR_REFUSALS } from '../../shared/api';
 
 describe('delegationWords (delegation broker wave 4, PR2)', () => {
   it('W4-U6: the inferred chip holds exactly for a raw or marked worktree, in every group, workspace and via', () => {
@@ -229,8 +229,10 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
 });
 
 // Delegation broker wave 5, PR10 Task 5.10.1: a worktree's keep, attach and disposition words, and the readers of the wire
-// fields PR7 and PR8 added. O5-6 (a) (D-7845): the census stays closed; O5-8 (c) (D-7847): no tree doors.
+// fields PR7 and PR8 added. O5-6 (a) (D-7845): the census stays closed; O5-8 (c) (D-7847): no tree doors; D-8097: a refusal
+// is said in worktree words.
 describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
+  const NOW = Date.parse('2026-11-07T09:00:00.000Z');
   const strings = (vs: readonly unknown[]): string[] => {
     const out: string[] = [];
     const collect = (v: unknown): void => {
@@ -240,14 +242,15 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
     for (const v of vs) collect(v);
     return out;
   };
+  const acts = (cs: readonly words.WorktreeControl[]): string[] => cs.map((c) => c.act);
 
   it('W5-U1: every reader returns null for a wire without its field (an older server), and reads the field when present', () => {
     expect(words.dispositionOf(lease())).toBeNull();
     expect(words.expiryOf(lease())).toBeNull();
     expect(words.hiddenLeaseOf(unowned())).toBeNull();
-    expect(words.worktreeActs(lease())).toEqual([]);
-    expect(words.worktreeActs(lease({ sourceKind: 'raw' }))).toEqual([]);
-    expect(words.unownedActs(unowned())).toEqual([]);
+    expect(words.worktreeControls(lease(), 'coord-a')).toEqual([]);
+    expect(words.worktreeControls(lease({ sourceKind: 'raw' }), 'coord-a')).toEqual([]);
+    expect(words.unownedControls(unowned())).toBeNull();
     expect(words.dispositionOf(lease({ disposition: 'adopted' }))).toBe('adopted');
     expect(words.dispositionOf(lease({ disposition: 'future-word' as never }))).toBeNull();
     expect(words.expiryOf(lease({ expiresAt: '2026-11-17T12:00:00.000Z' }))).toBe('2026-11-17T12:00:00.000Z');
@@ -263,24 +266,25 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
   });
 
   it('W5-U2: keptUntilWord formats the UTC day and month, adds the year only when it differs, and never says expires', () => {
-    const now = Date.parse('2026-11-07T09:00:00.000Z');
-    expect(words.keptUntilWord('2026-11-17T12:00:00.000Z', now)).toBe('kept until 17 Nov');
+    expect(words.keptUntilWord('2026-11-17T12:00:00.000Z', NOW)).toBe('kept until 17 Nov');
     // UTC, not the reader's zone: 23:30 UTC on the 30th is the 30th.
-    expect(words.keptUntilWord('2026-11-30T23:30:00.000Z', now)).toBe('kept until 30 Nov');
-    expect(words.keptUntilWord('2027-01-03T00:00:00.000Z', now)).toBe('kept until 3 Jan 2027');
-    expect(words.keptUntilWord('not a date', now)).toBe('kept, until a date that could not be read');
+    expect(words.keptUntilWord('2026-11-30T23:30:00.000Z', NOW)).toBe('kept until 30 Nov');
+    expect(words.keptUntilWord('2027-01-03T00:00:00.000Z', NOW)).toBe('kept until 3 Jan 2027');
+    expect(words.keptUntilWord('not a date', NOW)).toBe('kept, until a date that could not be read');
     for (const s of ['2026-11-17T12:00:00.000Z', '2027-01-03T00:00:00.000Z', 'not a date']) {
-      expect(words.keptUntilWord(s, now)).not.toMatch(/expire/i);
+      expect(words.keptUntilWord(s, NOW)).not.toMatch(/expire/i);
     }
   });
 
-  it('W5-U3: W4-U10\'s census and the running ban stay green with the control words; every disposition has its word', () => {
-    const now = Date.parse('2026-11-07T09:00:00.000Z');
+  it('W5-U3: W4-U10\'s census and the running ban stay green with the control and refusal words; every table is total', () => {
+    const attach: words.WorktreeControl = { act: 'attach', parent: 'coord-a', parentLabel: 'coord-a' };
     const exported = Object.fromEntries(Object.entries(words).filter(([, v]) => typeof v !== 'function'));
-    const all = strings([exported, words.keptUntilWord('2026-11-17T12:00:00.000Z', now), words.keptUntilWord('x', now),
-      words.attachConfirm('coord-a'), words.notDelegatedConfirm, words.keptWord('2026-11-24T12:00:00.000Z', now),
-      words.keptWord(null, now), ...(['keep', 'attach', 'foreign'] as const).flatMap((a) =>
-        [words.actDoneWord(a, '2026-11-24T12:00:00.000Z', 'coord-a', now), words.actDoneWord(a, null, null, now)])]);
+    const all = strings([exported, words.keptUntilWord('2026-11-17T12:00:00.000Z', NOW), words.keptUntilWord('x', NOW),
+      words.attachConfirm('coord-a'), words.notDelegatedConfirm, words.keptWord('2026-11-24T12:00:00.000Z', NOW),
+      words.keptWord(null, NOW), words.confirmFor(attach), words.refusalWord('future-word'),
+      ...([{ act: 'keep' }, attach, { act: 'foreign' }] as const).flatMap((c) =>
+        [words.actDoneWord(c, '2026-11-24T12:00:00.000Z', NOW), words.actDoneWord(c, null, NOW), words.controlName(c.act, 'agent-a1')]),
+      ...Object.keys(LEASE_DOOR_REFUSALS).map((k) => words.refusalWord(k))]);
     expect(all).toContain('Keep worktree');
     expect(all).toContain('Attach to…');
     expect(all).toContain('Not delegated');
@@ -299,34 +303,68 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
       'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.');
   });
 
-  it('W5-U8 (words): which controls a worktree row offers, by disposition and source (O5-8 (c))', () => {
-    const acts = (over: Parameters<typeof lease>[0]) => words.worktreeActs(lease(over));
-    expect(acts({ disposition: 'ephemeral' })).toEqual(['keep', 'foreign']);
-    expect(acts({ disposition: 'adopted' })).toEqual(['keep', 'foreign']);
-    expect(acts({ disposition: 'retained' })).toEqual(['keep', 'foreign']);
-    expect(acts({ disposition: 'transferring' })).toEqual([]);
-    expect(acts({ disposition: 'promoted' })).toEqual(['foreign']);
-    expect(acts({ disposition: 'ephemeral', sourceKind: 'raw' })).toEqual(['keep', 'attach', 'foreign']);
-    expect(acts({ disposition: 'retained', sourceKind: 'raw' })).toEqual(['keep', 'attach', 'foreign']);
-    expect(acts({ disposition: 'transferring', sourceKind: 'raw' })).toEqual([]);
-    // An unowned row acts only through the lease the projection hid on its tree; with none it offers nothing.
-    expect(words.unownedActs(unowned({ leaseId: 'lease-h' }))).toEqual(['foreign']);
-    expect(words.unownedActs(unowned({ verdict: 'conflicting' }))).toEqual([]);
-    // The lease's own parent is the only attach choice: under R9 the row's parentId is the coordinator and via is the parent.
+  it('D-8097 (F5): every door refusal has one sentence in worktree words, derived from the L0 list; an unknown word has one', () => {
+    expect(Object.keys(words.REFUSAL_WORD).sort()).toEqual(Object.keys(LEASE_DOOR_REFUSALS).sort());
+    for (const [code, sentence] of Object.entries(words.REFUSAL_WORD)) {
+      expect(sentence, code).not.toMatch(/lease|adopt|retain|clean|spool|running/i);
+      expect(sentence, code).not.toContain(code);
+      expect(words.refusalWord(code), code).toBe(sentence);
+    }
+    expect(new Set(Object.values(words.REFUSAL_WORD)).size, 'one sentence per word').toBe(Object.keys(LEASE_DOOR_REFUSALS).length);
+    for (const unknown of ['future-word', '', 42, null, undefined, 'toString', '__proto__']) {
+      expect(words.refusalWord(unknown), String(unknown)).toBe('The server refused this.');
+    }
+  });
+
+  it('W5-U8 (words): which controls a worktree row offers, by disposition, source and its session\'s liveness (O5-8 (c), F4)', () => {
+    const of = (over: Parameters<typeof lease>[0], live: string | null = 'coord-a') => acts(words.worktreeControls(lease(over), live));
+    expect(of({ disposition: 'ephemeral' })).toEqual(['keep', 'foreign']);
+    expect(of({ disposition: 'adopted' })).toEqual(['keep', 'foreign']);
+    expect(of({ disposition: 'retained' })).toEqual(['keep', 'foreign']);
+    expect(of({ disposition: 'transferring' })).toEqual([]);
+    expect(of({ disposition: 'promoted' })).toEqual(['foreign']);
+    expect(of({ disposition: 'ephemeral', sourceKind: 'raw' })).toEqual(['keep', 'attach', 'foreign']);
+    expect(of({ disposition: 'retained', sourceKind: 'raw' })).toEqual(['keep', 'attach', 'foreign']);
+    expect(of({ disposition: 'transferring', sourceKind: 'raw' })).toEqual([]);
+    // F4: with no live own session, no Attach.
+    expect(of({ disposition: 'ephemeral', sourceKind: 'raw' }, null)).toEqual(['keep', 'foreign']);
+    // The attach carries its one choice: the worktree's own session (`via` under R9), with the label it was given.
+    expect(words.worktreeControls(lease({ disposition: 'ephemeral', sourceKind: 'raw', parentId: 'coord-a', via: 'worker-a' }), 'worker one')[1])
+      .toEqual({ act: 'attach', parent: 'worker-a', parentLabel: 'worker one' });
+    expect(words.unownedControls(unowned({ leaseId: 'lease-h' }))).toEqual({ leaseId: 'lease-h', controls: [{ act: 'foreign' }] });
+    expect(words.unownedControls(unowned({ verdict: 'conflicting' }))).toBeNull();
     expect(words.leaseParentOf(lease({ parentId: 'coord-a', via: 'worker-a' }))).toBe('worker-a');
     expect(words.leaseParentOf(lease({ parentId: 'coord-a', via: null }))).toBe('coord-a');
+    expect(words.listedLive(null)).toBe(false);
+    expect(words.listedLive(undefined)).toBe(false);
+    expect(words.listedLive({ archivedAt: 1_800_000_000_000 })).toBe(false);
+    expect(words.listedLive({ archivedAt: null })).toBe(true);
   });
 
-  it('the disposition words join a worktree line only on a newer server\'s row, and the kept date only with a hold', () => {
-    const now = Date.parse('2026-11-07T09:00:00.000Z');
-    expect(words.worktreeStateParts(lease(), now)).toEqual([]);
-    expect(words.worktreeStateParts(lease({ disposition: 'ephemeral', expiresAt: null }), now)).toEqual([]);
-    expect(words.worktreeStateParts(lease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), now))
-      .toEqual(['worktree kept', 'kept until 17 Nov']);
-    expect(words.worktreeStateParts(lease({ disposition: 'retained', expiresAt: null }), now)).toEqual(['worktree kept']);
-    expect(words.worktreeStateParts(lease({ disposition: 'transferring', expiresAt: '2026-11-17T12:00:00.000Z' }), now))
+  it('F9 (g): a kept row says its state once, with its date; the other states say their word; an older row says nothing', () => {
+    expect(words.worktreeStateParts(lease(), NOW)).toEqual([]);
+    expect(words.worktreeStateParts(lease({ disposition: 'ephemeral', expiresAt: null }), NOW)).toEqual([]);
+    expect(words.worktreeStateParts(lease({ disposition: 'adopted', expiresAt: '2026-11-17T12:00:00.000Z' }), NOW))
+      .toEqual(['worktree kept until 17 Nov']);
+    expect(words.worktreeStateParts(lease({ disposition: 'retained', expiresAt: null }), NOW)).toEqual(['worktree kept']);
+    expect(words.worktreeStateParts(lease({ disposition: 'transferring', expiresAt: '2026-11-17T12:00:00.000Z' }), NOW))
       .toEqual(['moving to a run']);
-    expect(words.worktreeStateParts(lease({ disposition: 'promoted' }), now)).toEqual(['moved to a run']);
+    expect(words.worktreeStateParts(lease({ disposition: 'promoted' }), NOW)).toEqual(['moved to a run']);
+  });
+
+  it('F9 (e), (f): the attach note says its date; each control\'s name carries its label and its worktree', () => {
+    const attach: words.WorktreeControl = { act: 'attach', parent: 'coord-a', parentLabel: 'coord-a' };
+    expect(words.actDoneWord(attach, '2026-11-14T12:00:00.000Z', NOW)).toBe('Worktree attached to coord-a, kept until 14 Nov');
+    expect(words.actDoneWord(attach, null, NOW)).toBe('Worktree attached to coord-a');
+    expect(words.actDoneWord({ act: 'keep' }, '2026-11-14T12:00:00.000Z', NOW)).toBe('Worktree kept until 14 Nov');
+    expect(words.actDoneWord({ act: 'foreign' }, null, NOW)).toBe('Worktree marked not delegated');
+    expect(words.controlName('keep', 'agent-a1')).toBe('Keep worktree (agent-a1)');
+    expect(words.controlName('attach', 'agent-a1')).toBe('Attach to… (agent-a1)');
+    expect(words.controlName('foreign', 'agent-a1')).toBe('Not delegated (agent-a1)');
+    // The Attach confirm names its one choice and no date (the server sets it).
+    expect(words.confirmFor(attach)).toEqual(words.attachConfirm('coord-a'));
+    expect(words.attachConfirm('coord-a').consequence).not.toMatch(/until|date|\d/);
+    expect(words.confirmFor({ act: 'keep' })).toBeNull();
+    expect(words.confirmFor({ act: 'foreign' })).toBe(words.notDelegatedConfirm);
   });
 });
-
