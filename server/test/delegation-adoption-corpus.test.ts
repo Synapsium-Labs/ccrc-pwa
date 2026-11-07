@@ -21,6 +21,7 @@ import {
 } from '../src/coord/delegation-adoption.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { equalCarrier } from './delegationLeaseFixture.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
@@ -132,11 +133,11 @@ function decide(scenario: string, cp: DelegationCheckpointV1, census: readonly D
   const at = Math.max(Date.now(), ...cp.activities.flatMap((a) => (a.endedAt === null ? [] : [Date.parse(a.endedAt)]))) + DELEGATION_ADOPT_SETTLE_MS + 60_000;
   return decideAdoption({
     now: formatDelegationInstant(at), checkpoint: { ...cp, leases },
-    carriers: new Map(leases.map((l) => [l.leaseId, { kind: 'carrier', body: { generation: 1, state: 'ephemeral' } } as never])),
+    carriers: new Map(leases.map((l) => [l.leaseId, equalCarrier(l)])),                             // PR7b (review 1609 F8): equal, as PR6 compares
     treePresent: new Set(census.map((r) => delegationTreeKey(r.project, r.adminRecord))), censused: new Set([PROJECT]),
     audits: new Map(leases.map((l) => [l.leaseId, { ok: true, changed: AUDIT[scenario]! } as never])),
     watch: new Map(leases.map((l) => [l.leaseId, { generation: 1, terminalAt: formatDelegationInstant(at - DELEGATION_ADOPT_SETTLE_MS - 60_000), passes: 2 }])),
-    parents: new Map([[OWNER, { registry: 'present', incarnation: INC, deadSince: null, ccd: true, alive: true, deathRetracted: false }]]), conflicting: new Set(),
+    parents: new Map([[OWNER, { registry: 'present', incarnation: INC, deadSince: null, ccd: true, alive: true, deathRetracted: false, lastAlive: null }]]), conflicting: new Set(),
     boxHolds: true, breaker: 'clear', marker: 'present',
   }).decisions;
 }

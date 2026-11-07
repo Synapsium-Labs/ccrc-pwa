@@ -160,10 +160,15 @@ const upToDateOf = (l: DelegationLeaseRow): boolean => l.generation > 0 && (l.ca
 export function carrierReadsOf(checkpoint: DelegationCheckpointV1, lastRead: ReadonlyMap<string, number>): { behind: string[]; reverify: string[] } {
   const leases = [...checkpoint.leases].sort(order);
   const behind = leases.filter((l) => l.generation > 0 && !upToDateOf(l)).map((l) => l.leaseId);
-  const reverify = leases.filter((l) => upToDateOf(l) && l.releasedAt === null)
-    .map((l, i) => ({ id: l.leaseId, i, last: lastRead.get(l.leaseId) ?? -1 }))
-    .sort((a, b) => a.last - b.last || a.i - b.i).slice(0, DELEGATION_CARRIER_REVERIFY_PER_PASS).map((x) => x.id);
+  const reverify = leastRecentlyRead(leases.filter((l) => upToDateOf(l) && l.releasedAt === null).map((l) => l.leaseId), lastRead,
+    DELEGATION_CARRIER_REVERIFY_PER_PASS);
   return { behind, reverify };
+}
+
+/** D-8034's order of a bounded carrier read, the ONE comparator for PR6's re-reads and PR7's adoption reads (review 1609 F10): never
+ *  read first, then the least recently read by `lastRead`'s pass ordinal, then `ids`' own order among equals; at most `bound`. */
+export function leastRecentlyRead(ids: readonly string[], lastRead: ReadonlyMap<string, number>, bound: number): string[] {
+  return ids.map((id, i) => ({ id, i, last: lastRead.get(id) ?? -1 })).sort((a, b) => a.last - b.last || a.i - b.i).slice(0, bound).map((x) => x.id);
 }
 
 /**

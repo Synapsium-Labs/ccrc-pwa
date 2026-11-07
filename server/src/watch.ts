@@ -10274,6 +10274,7 @@ class DelegationLane {
   private aliveSeen = false;
   private readonly firstDead = new Map<string, number>();
   private readonly retractedDeaths = new Set<string>();   // PR7 (review 1604 F7): a counted death a stop or archive stamp retracted
+  private readonly lastAliveAt = new Map<string, { at: number; incarnation: string | null }>();   // PR7b (review 1609 F5): adoption reads it
   /** Rung 2's positive meta reads (a point lookup in the parent's own transcript tree), kept for the process: a meta is read evidence,
    *  not journal evidence, so it is never durable and is read again after a restart. */
   private readonly pointMetas = new Map<string, LanePointMeta>();
@@ -10952,10 +10953,12 @@ class DelegationLane {
           // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
           if (durable.state().phase === 'ready' && !pass.signal.aborted) {
             const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
-            await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
-              notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
-            }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, listedIds: this.listedIds(), registryListed: this.registryListed,
-              sessions: pass.sessions, retracted: this.retractedDeaths, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
+            try {                                                         // PR7b: a throw here never skips PR6's carrier step
+              await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
+                notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
+              }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, listedIds: this.listedIds(), registryListed: this.registryListed,
+                sessions: pass.sessions, retracted: this.retractedDeaths, lastAlive: this.lastAliveAt, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
+            } catch (err) { console.warn(`ccrc-server: delegation adoption step threw: ${err instanceof Error ? err.message : String(err)}`); }
           }
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();
@@ -11049,7 +11052,8 @@ class DelegationLane {
    *  archive marker that outlived its pane (a kill that failed after `_ws_unsupervise`) also hides that pane's later crash; a lower bound would be
    *  a new ruling, and is not taken here. A hibernated row (D-5242) is excluded at any instant by its own conjunct; `ccd hibernate` writes
    *  `.hibernated`, then `_ws_unsupervise` (the stop stamp), then kills the pane, so a torn tick can record a hibernation as a death with neither
-   *  field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable) counts as before. */
+   *  field set, and the erasure above clears it on the next pass. Every other dead row (`restarting`, unmeasurable) counts as before.
+   *  Legitimately different from adoption (D-8092): this memory reads `status`, fail-shut for the breaker; adoption reads `presence`. */
   private noteSessions(pass: LanePass): void {
     for (const r of pass.records) this.sessionProject.set(r.id, r.project);
     for (const s of pass.sessions) this.sessionProject.set(s.id, s.project);
@@ -11072,8 +11076,12 @@ class DelegationLane {
         if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) { this.firstDead.set(s.id, pass.now); this.retractedDeaths.delete(s.id); }
       }
     }
-    for (const id of alive) { this.firstDead.delete(id); this.retractedDeaths.delete(id); }
-    for (const id of this.retractedDeaths) if (!pass.records.some((r) => r.id === id)) this.retractedDeaths.delete(id);   // left the registry
+    for (const id of alive) {
+      const inc = pass.census.incarnations.get(id);
+      this.firstDead.delete(id); this.retractedDeaths.delete(id); this.lastAliveAt.set(id, { at: pass.now, incarnation: inc?.kind === 'measured' ? inc.incarnation : null });
+    }
+    const listed = this.listedIds();      // review 1609 F2: forgotten only on a measured absence; a listed row left unbuilt keeps both
+    if (listed !== null) for (const kept of [this.retractedDeaths, this.lastAliveAt]) for (const id of kept.keys()) if (!listed.has(id)) kept.delete(id);
     for (const [id, at] of this.firstDead) if (pass.now - at > DELEGATION_DEAD_MEMORY_MS) this.firstDead.delete(id);
     this.lastAlive = alive;
     this.aliveSeen = true;
