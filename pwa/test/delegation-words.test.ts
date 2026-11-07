@@ -397,18 +397,25 @@ describe('worktree controls\' words (delegation broker wave 5, PR10)', () => {
 });
 
 describe('a door\'s accepted answer (review 1624 F7)', () => {
-  it('reads expiresAt by the wire\'s own reader, so the field has one absence rule', async () => {
+  const AT = Date.parse('2026-11-07T09:00:00.000Z');
+  it('is handed on as it came, and read once, in the words module, by the wire\'s own reader', async () => {
     vi.resetModules();
     const { readDoorAnswer } = await import('../src/lib/wireReaders');
+    const fresh = await import('../src/fleet/delegationWords');
     const reader = vi.mocked((await import('../../shared/api')).delegationLeaseExpiresAtOf);
-    const body = { ok: true, expiresAt: '2026-11-24T12:00:00.000Z' };
-    // Whatever the wire's reader answers is the answer's date: a copy of the rule beside it would answer for itself.
-    reader.mockReturnValueOnce('2027-01-02T00:00:00.000Z');
-    expect(readDoorAnswer(body)).toEqual({ ok: true, expiresAt: '2027-01-02T00:00:00.000Z' });
-    expect(reader).toHaveBeenLastCalledWith(body);
-    // CONTROL: the real rule, through the reader: absence and null are no date known; only a string is one.
-    expect(readDoorAnswer({ ok: true })).toEqual({ ok: true, expiresAt: null });
-    expect(readDoorAnswer({ ok: true, expiresAt: null })).toEqual({ ok: true, expiresAt: null });
-    expect(readDoorAnswer(body)).toEqual({ ok: true, expiresAt: '2026-11-24T12:00:00.000Z' });
+    // The client reads `ok` and passes `expiresAt` on untouched, whatever it holds: it applies no rule of its own.
+    for (const v of ['2026-11-24T12:00:00.000Z', null, 42, { at: 1 }]) {
+      expect(readDoorAnswer({ ok: true, expiresAt: v }), String(v)).toEqual({ ok: true, expiresAt: v });
+    }
+    // The note's date is whatever the wire's reader answers: a copy of the rule beside it would answer for itself.
+    reader.mockReturnValueOnce('2026-12-02T00:00:00.000Z');
+    expect(fresh.actDoneWord({ act: 'keep' }, '2026-11-24T12:00:00.000Z', AT)).toBe('Worktree kept until 2 Dec');
+    expect(reader).toHaveBeenLastCalledWith({ expiresAt: '2026-11-24T12:00:00.000Z' });
+    // CONTROL: through the real rule, absence, null and a value that is no string are no date known; a string is one.
+    for (const v of [undefined, null, 42]) expect(fresh.actDoneWord({ act: 'keep' }, v, AT), String(v)).toBe('Worktree kept');
+    // A 2xx with no `expiresAt`, through the client and then the words (review 1623 F8 (a)): no date known.
+    const absent = readDoorAnswer({ ok: true });
+    expect(absent !== 'unreadable' && absent.ok ? fresh.actDoneWord({ act: 'keep' }, absent.expiresAt, AT) : absent).toBe('Worktree kept');
+    expect(fresh.actDoneWord({ act: 'keep' }, '2026-11-24T12:00:00.000Z', AT)).toBe('Worktree kept until 24 Nov');
   });
 });

@@ -413,11 +413,14 @@ export const ACT_VERB: Readonly<Record<WorktreeAct, string>> = {
   keep: 'keep the worktree', attach: 'attach the worktree', foreign: 'mark the worktree not delegated',
 };
 /** The note after a door accepted the act, with the date the worktree is kept until when the answer gives one. The row
- *  itself changes when the next frame carries it. */
-export function actDoneWord(c: WorktreeControl, expiresAt: string | null, now: number): string {
-  if (c.act === 'keep') return keptWord(expiresAt, now);
+ *  itself changes when the next frame carries it. `expiresAt` is the answer's field as it came (`readDoorAnswer` hands it
+ *  on unread), read here by the wire's one reader, which checks its type: only a string is a date, and absence or null
+ *  is no date known (review 1623 F8 (a), review 1624 F7). */
+export function actDoneWord(c: WorktreeControl, expiresAt: unknown, now: number): string {
+  const at = delegationLeaseExpiresAtOf({ expiresAt: expiresAt as string | null });
+  if (c.act === 'keep') return keptWord(at, now);
   if (c.act === 'foreign') return 'Worktree marked not delegated';
-  const d = expiresAt === null ? null : dateWord(expiresAt, now);
+  const d = at === null ? null : dateWord(at, now);
   return d === null ? `Worktree attached to ${c.parentLabel}` : `Worktree attached to ${c.parentLabel}, kept until ${d}`;
 }
 /** A 2xx whose body could not be read: the act was accepted, and what it did shows with the next frame. */

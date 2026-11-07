@@ -8,10 +8,10 @@ drawn string stays in the operator's words (worktree, session, run, kept). The c
 
 ## Ledger
 
-No new number. No text of D-8095, D-8096 or D-8097 changes: D-8096 (2) already says `expiresAt` follows the wire's one
-absence rule, which is now literally its one reader (F7), and D-8097's region is still "mounted empty" (F5 empties its
-text; the region stays). `pr10.md` is corrected in place where these rulings say so (F3, F5, F11 (e)); the head commit's
-`Ledger-Edit` trailer names that.
+No new number. D-8096 (2) is amended in place for F7 (below): a 2xx's `expiresAt` is handed on as it came and read once,
+in the words module, by the wire's own reader. D-8095 and D-8097 are unchanged: D-8097's region is still "mounted empty"
+(F5 empties its text; the region stays). `pr10.md` is corrected in place where these rulings say so (F3, F5, F11 (e)).
+The head commit's `Ledger-Edit` trailer names both.
 
 ## What changed
 
@@ -33,8 +33,9 @@ text; the region stays). `pr10.md` is corrected in place where these rulings say
 - **F5 (ruled: clear it)**: the words module's `offerOf` spells what a row offers: the worktree's state on the wire and
   each control, an attach with its session. When it changes, the refusal sentence is cleared; the region stays mounted.
   `pr10.md`'s F3 (c) text is corrected.
-- **F7** (`pwa/src/lib/wireReaders.ts`, `readDoorAnswer`): `expiresAt` is read by `delegationLeaseExpiresAtOf`, the wire's
-  own reader, so the field has one absence rule.
+- **F7** (the coordinator's ruling on a conflict, below): `readDoorAnswer` reads `ok` and hands `expiresAt` on as it came;
+  `actDoneWord`, in the words module, reads it once through `delegationLeaseExpiresAtOf`, the wire's own reader, so the
+  field has one reader and one absence rule. D-8096 (2) is amended in place to say so.
 - **F8** (browser): the resting-place check also hit-tests the Add project row, which follows the fleet list outside it,
   and its comment says what it measures. It also counts the floating buttons: one at 390, none at 1280 and 1920, where
   neither skin mounts one. There the overlap half of the check is empty by design, and the tap half still runs.
@@ -55,12 +56,12 @@ text; the region stays). `pr10.md` is corrected in place where these rulings say
 | F4 (a) | "an act in flight (review 1624 F4 (a))" | `worktree-confirm-close.test.tsx` | the code it pins is the base's, which is right: red under F4a-inflight and F4a-send-only | green |
 | F4 (b) | "F4 (b) (review 1624): an unowned row that loses its controls …" | `project-card.test.tsx` | the code it pins is the base's, which is right: red under F4b-grouped | green |
 | F5 | "F5 (review 1624): a refusal is cleared when the row's state moves …", and F3 (c)'s last assertion | `project-card.test.tsx` | red without the clearing (F5-clear) and without the state in `offerOf` (F5-state) | green |
-| F7 | "a door's accepted answer (review 1624 F7)" | `delegation-words.test.ts` | red on the base's own line (F7-base-line) | green |
+| F7 | "a door's accepted answer (review 1624 F7)" | `delegation-words.test.ts` | red under a client that applies its own rule, as the base's did (F7r-client-reads), and under a copy of the rule in the words (F7r-words-respell) | green |
 | F8 | the resting-place check, now with the Add project row and the floating-button count | `delegation-rows.browser.test.ts` | green under F8-pad2 on the base (review 1624 measured it) | green; red under F8-pad2 |
 | F11 (a) | "F11 (a) (review 1624): an open Not delegated drops its ask when the record … is replaced" | `project-card.test.tsx` | red under the base's `offered` (F11a-lease) | green |
 
-The F7 row loads a fresh `wireReaders` over a wrapped `shared/api`: the test setup loads the client through the fleet
-store before any test file's mock applies, so a static import would read the real reader.
+The F7 row loads a fresh `wireReaders` and words module over a wrapped `shared/api`: the test setup loads both through the
+fleet store before any test file's mock applies, so a static import would read the real reader.
 
 ## Mutation table
 
@@ -84,9 +85,11 @@ result.
 | F4b-grouped | the unowned row's `grouped` dropped | F4 (b) (review 1624) |
 | F5-clear | the clearing effect deleted | F5 (review 1624), F3 (c) |
 | F5-state | `offerOf` without the worktree's state | F5 (review 1624) |
-| F7-base-line | the base's own spelling of the rule | the F7 row (the card file stays green: the behaviour is the same) |
-| F7-respell-changed | a re-spelled rule, absence read as an empty date | the F7 row |
-| F7-shared | the wire's reader reads absence as an empty date | F8 (a) (review 1623), through the row's own kept words |
+| F7r-client-reads | `readDoorAnswer` applies the rule itself again, as the base did | the F7 row ("42: expected { ok: true, expiresAt: null }"); the card file stays green, since the behaviour is the same |
+| F7r-words-respell | `actDoneWord` spells the rule itself instead of calling the reader | the F7 row (the reader's answer is not the note's date); the card file green, as above |
+| F7r-words-respell-changed | `actDoneWord` spells the rule itself and changes it: an absent date reads as today | the F7 row; F8 (a) (review 1623) in the card file |
+| F7r-caller-changed | the card's toast call re-spells the rule and changes it the same way | F8 (a) (review 1623) in the card file |
+| F7r-shared | the wire's reader reads absence as an empty date | W5-U1 and F9 (g) in the words file, and F8 (a) (review 1623) in the card file, all through the row's own kept words; the F7 row stays green (an empty date is no date to `keptWord`) |
 | F11a-lease | `offered` without the record's id | F11 (a) (review 1624) |
 | F8-pad2 | `.fleet-list`'s end padding 0 and `.fleet`'s bottom padding cut to `--safe-bottom` | the browser suite at 390, 4 failed: "+ Add project: clear of the floating button at the end of the list" |
 
@@ -108,6 +111,13 @@ red this round's rows too.
   a confirm and a Keep together, in both orders, and that pins the pair (F4a-inflight) and the act's own check
   (F4a-send-only). The confirm's check alone stays green: whenever it would refuse, the act's check refuses the same post
   one call later. It is kept as it stands; deleting it is no part of these rulings.
+- **F7 and the scope census.** The ruled fix, `readDoorAnswer` calling `delegationLeaseExpiresAtOf`, turned the wave-3 scope
+  census red ("8. the closed scope census": "a PWA file outside PR2's list that names the broker: `wireReaders.ts`"): its
+  wave-4 word is `/delegation/i` with no word boundary, so any import naming the reader, or a path through the words
+  module, names the broker in a file the census does not allow it in, and the brief keeps the census lines as they are.
+  Asked as a structured question; the coordinator ruled "read it in the words module", which this round builds, with
+  D-8096 (2) amended in place. No census line changes. The ruling asked that a mutant which re-spells the rule in the
+  caller and changes it red a row: F7r-words-respell-changed and F7r-caller-changed each red F8 (a) (review 1623).
 - **F7's mutants.** Re-spelling the rule cannot change a toast: both spellings agree on every string, and `keptWord`
   reads an empty date as none. So F8 (a) (review 1623) stays green under a re-spelling, as the ruling expected ("the
   existing F8 (a) row still passes"). The F7 row is the one that tells the reader's answer from a copy's.
