@@ -5,7 +5,7 @@
 // (connected app-wide in app.tsx) supplies the header's live identity.
 // DialogSheet mounts between the transcript and the strips (its card is inline at the desk), the TerminalDrawer at the
 // bottom.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import { backgroundOnlyRefusal, repoLabel, sessionWithCoordinator, substrateFault, type FleetSession, type RouteField, type SessionStatus } from '../../../shared/api';
 import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, toast, useNow } from '@ccrc/ui';
@@ -23,6 +23,8 @@ import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { getSessionStore, type SessionStore } from '../stores/session';
 import { ChatList } from '../session/ChatList';
+import { ChatRefsContext } from '../session/chatRefsContext';
+import type { ChatRefContext } from '../lib/chatRefs';
 import { Composer } from '../session/Composer';
 import { DialogSheet } from '../session/DialogSheet';
 import { heldAskLine } from '../session/askWords';
@@ -143,6 +145,9 @@ export function useWakeOnOpen(
 
   return { asleepAt, waking: asleep && shown !== 'armed', pending: shown === 'pending', wake };
 }
+
+/** The ids in a comma-joined key, as numbers (empty: none). */
+const idSet = (key: string): ReadonlySet<number> => new Set(key === '' ? [] : key.split(',').map(Number));
 
 export function SessionScreen({
   id,
@@ -305,6 +310,15 @@ export function SessionScreen({
   // for this project in that read, or a row whose `repo` is not `named` —
   // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
+  // Chat reading Task L (D-8062): what the chat knows to resolve a name, for `ChatRef` and `linkify`. The ids the console
+  // holds (the runs frame, the Waiting on you list and its cleared rows) are read as one string each, so a frame that changes
+  // none of them changes no context and re-renders no name.
+  const runIdsKey = useFleet((s) => s.runs.map((r) => r.id).join(','));
+  const itemIdsKey = useFleet((s) => (s.waiting === null ? '' : [...s.waiting.items, ...s.waiting.cleared].map((i) => i.id).join(',')));
+  const branch = live?.branch ?? null;
+  const chatRefs = useMemo((): ChatRefContext => ({
+    repo, project, branch, knownRuns: idSet(runIdsKey), knownItems: idSet(itemIdsKey),
+  }), [repo, project, branch, runIdsKey, itemIdsKey]);
   const activeRuns = fleetRuns.filter((r) => !isRunClosed(r));
   const coordination = live === null ? null : coordinationOf(live, parent === null ? [] : [parent], activeRuns);
   // D-5545: the header's facts, from the model the fleet card reads, over the same inputs the card is given —
@@ -659,19 +673,21 @@ export function SessionScreen({
             </p>
           </div>
         ) : (
-          <ChatList
-            id={id}
-            events={events}
-            pending={pending}
-            busy={pulsing}
-            onRetry={onRetry}
-            onDiscard={onDiscard}
-            askPending={askPending}
-            askBelow={askInline}
-            answerLabel={answerLabel}
-            onAnswer={onAnswer}
-            day={day}
-          />
+          <ChatRefsContext value={chatRefs}>
+            <ChatList
+              id={id}
+              events={events}
+              pending={pending}
+              busy={pulsing}
+              onRetry={onRetry}
+              onDiscard={onDiscard}
+              askPending={askPending}
+              askBelow={askInline}
+              answerLabel={answerLabel}
+              onAnswer={onAnswer}
+              day={day}
+            />
+          </ChatRefsContext>
         )}
       </div>
 

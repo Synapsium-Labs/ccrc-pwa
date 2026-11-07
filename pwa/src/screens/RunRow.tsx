@@ -56,6 +56,8 @@ export const RunRow = memo(function RunRow({
   onAbandon,
   onResume,
   loadSpend,
+  arrived = false,
+  rowRef,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -93,6 +95,11 @@ export const RunRow = memo(function RunRow({
   onResume: (run: RunSummary) => void;
   /** `GET /api/runs/:id`'s `spend` (D-6799), injected by the screen for the reason `loadCaps` is. */
   loadSpend: (id: number) => Promise<RunSpend>;
+  /** The board arrived at this run from `/runs?run=<id>` (chat reading Task L, D-8062): the row wears `data-arrived`. */
+  arrived?: boolean;
+  /** The screen's record of its mounted rows, for the arrival (`useArrival`): called with this run's id and its `<li>`, then
+   *  with `null` when it unmounts. Stable on the screen's side, so the row's memo holds. */
+  rowRef?: (id: number, el: HTMLLIElement | null) => void;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -376,10 +383,17 @@ export const RunRow = memo(function RunRow({
   // branch) live in the row's title and the controls' accessible names only.
   const where = run.workspace ?? run.branch;
   const rowTitle = where === null ? `run ${run.id}` : `run ${run.id} · ${where}`;
+  // The arrival (Task L): every row is a programmatic focus target only (tabindex -1, never a tab stop), as the accounts
+  // screen's lane rows are, so `/runs?run=<id>` can focus it; the arrived one is marked.
+  const arrival = {
+    tabIndex: -1,
+    'data-arrived': arrived ? 'true' : undefined,
+    ref: rowRef === undefined ? undefined : (el: HTMLLIElement | null) => rowRef(run.id, el),
+  };
   return run.sessionId === null || childReclaimGone(reclaim)
-    ? <li className="run-row" data-inert="true" title={rowTitle}>{body}{resumeButton}{abandonButton}</li>
+    ? <li className="run-row" data-inert="true" title={rowTitle} {...arrival}>{body}{resumeButton}{abandonButton}</li>
     : (
-      <li className="run-row" title={rowTitle}>
+      <li className="run-row" title={rowTitle} {...arrival}>
         <button type="button" className="run-open" onClick={() => navigate(sessionPath(run.sessionId!))}>
           {body}
         </button>

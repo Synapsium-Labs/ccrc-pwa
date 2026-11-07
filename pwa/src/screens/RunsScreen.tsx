@@ -32,12 +32,12 @@
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
-  programmeTitle, runsByProgram, waveLabel, coordinatorOf, workerOf,
+  programmeTitle, runNotLoadedLine, runsByProgram, waveLabel, coordinatorOf, workerOf,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
@@ -48,6 +48,9 @@ import { CapsControl } from '../fleet/CapsControl';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
+import { useLocation } from '../lib/router';
+import { runParam } from '../lib/routes';
+import { useArrival } from '../lib/useArrival';
 import { backToFleet } from '../command/door';
 import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -120,7 +123,8 @@ export function RunsScreen({
   // The archive read — the only carrier of a finished run — with its race
   // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
   // none of which rendered anything.
-  const { cold, state: coldState, reload: loadCold, loadOlder, hasOlder } = useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
+  const { cold, state: coldState, reading: coldReading, reload: loadCold, loadOlder, hasOlder } =
+    useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
   // Only a page that FAILED says so: a page `dropped` as stale (a re-read landed meanwhile) is not an error, and the next tap
@@ -200,12 +204,17 @@ export function RunsScreen({
   const finished = useMemo(() => (cold ?? [])
     .filter((r) => isRunClosed(r))
     .sort((a, b) => (runClosedAt(b) ?? 0) - (runClosedAt(a) ?? 0)), [cold]);
-  const [shownFinished, setShownFinished] = useState(FINISHED_FOLD);
+  const [foldAt, setFoldAt] = useState(FINISHED_FOLD);
+  // The run `/runs?run=<id>` names (chat reading Task L, D-8062). A finished one past the fold is unfolded to, so its row
+  // mounts and the arrival can reach it.
+  const runId = runParam(useLocation().search);
+  const runAtFinished = runId === null ? -1 : finished.findIndex((r) => r.id === runId);
+  const shownFinished = Math.max(foldAt, runAtFinished + 1);
   const finishedHead = useRef<HTMLParagraphElement>(null);
   const focusHeadNext = useRef(false);
   const showMoreFinished = (): void => {
     focusHeadNext.current = true;
-    setShownFinished((n) => n + FINISHED_FOLD);
+    setFoldAt(shownFinished + FINISHED_FOLD);
   };
   // The click's own commit consumes the flag, whether or not focus moves: the
   // door unmounts with the last batch, so focus has to land somewhere that stays,
@@ -281,6 +290,21 @@ export function RunsScreen({
   // for the second half: active rows present, finished's own read failed.
   const coldFailed = coldState === 'error';
 
+  // The arrival at `?run=<id>` (chat reading Task L, D-8062), on the accounts screen's mechanism (`useArrival`): the run's row
+  // exists once a group that holds it is drawn. When neither the live frame nor the archive pages read so far hold it, the
+  // board says so, but only once both have answered (`runsFrameSeen`, and the archive read `ok` with no re-read on its way):
+  // before that it says nothing. One rule (review 1597, fix round 2 ruling 2): a followed run arrives once per value of `?run=`,
+  // so the board holds the record while the row is missing (`hold`, always) and only a change of key clears it; and the line
+  // waits for a re-read issued after the row left the frame, because `useColdRuns` raises `reading` in the render that sees
+  // a run leave. A run that closes under its own page so keeps its one arrival and its mark, whatever the archive held.
+  const rowRefs = useRef(new Map<number, HTMLElement>());
+  const rowRef = useCallback((id: number, el: HTMLLIElement | null): void => {
+    if (el === null) rowRefs.current.delete(id); else rowRefs.current.set(id, el);
+  }, []);
+  const runRowExists = runId !== null && !noSignalYet && (runAtFinished >= 0 || active.some((r) => r.id === runId));
+  const arrivedRun = useArrival(runId, runRowExists, rowRefs.current, true);
+  const runNotLoaded = runId !== null && !runRowExists && runsFrameSeen && coldState === 'ok' && !coldReading;
+
   // A finished row reads `finishedClock(now)`, not the 1 s tick (D-6442): its
   // readouts are minute-grained, and a steady `nowMs` is what lets its `memo` hold.
   const finishedNow = finishedClock(now);
@@ -298,6 +322,8 @@ export function RunsScreen({
       onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
       loadSpend={loadSpend}
+      arrived={arrivedRun === run.id}
+      rowRef={rowRef}
     />
   );
 
@@ -351,6 +377,9 @@ export function RunsScreen({
       {/* D-6911: every open work run whose review cap waits on the operator, above the groups. Reads `active`, so a
           closed run never waits; renders nothing when no run does. */}
       <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
+
+      {/* Chat reading Task L (D-8062): a run named by `?run=` that the board has not loaded, said once both sources answered. */}
+      {runNotLoaded && <EmptyState data-state="ok" role="status">{runNotLoadedLine(runId)}</EmptyState>}
 
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not

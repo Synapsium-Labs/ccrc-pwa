@@ -3,6 +3,10 @@
 // how a bold lead-in is read. Recognising only: which address a mark resolves to (and whether a small id the console
 // does not hold stays text) is Task L's `chat-refs.test.ts`.
 import { describe, expect, it } from 'vitest';
+import { unified } from 'unified';
+import remarkParse from 'remark-parse';
+import remarkGfm from 'remark-gfm';
+import { remarkChatMarks } from '../src/lib/remarkChatMarks';
 import {
   ACTION_LEADS, MARK_ATTR, STATUS_LINKERS, STATUS_SUBJECTS, STATUS_WORDS, isMarkKind, leadKind, leadingStatus, markRuns,
   statusTone, wholeMark, type Mark, type MarkRun,
@@ -80,6 +84,8 @@ describe('ordinary words the grammar leaves as text (negatives)', () => {
     // Fix round 2 (review 1575 F4): `_` and a combining mark are word characters, and S3 reads a whole word.
     ['snake_4c677d328', 'name snake_4c677d328'],
     ['a combining mark before a hex run', 'cafe\u0301abc1234'],
+    // Review 1579 F1: the commit grammar's 7-character floor. Six hex characters with a digit and a letter are text.
+    ['abc123 (six hex, under the floor)', 'at abc123 now'],
   ])('%s', (_name, text) => {
     expect(marksOf(text)).toEqual([]);
   });
@@ -218,5 +224,23 @@ describe('the table itself', () => {
   it('isMarkKind accepts the five kinds and nothing else', () => {
     for (const k of ['pr', 'run', 'item', 'doc', 'commit']) expect(isMarkKind(k)).toBe(true);
     for (const k of ['', 'mail', 'PR', 'toString']) expect(isMarkKind(k)).toBe(false);
+  });
+});
+
+// Review 1579 F2: a header cell keeps its text. A status word there is not labelled (review 1575 F3), and it is not dropped
+// either: it stays text, joined to the text beside it, and a name in the cell is still marked.
+describe('a header cell keeps its text (review 1579 F2)', () => {
+  type Node = { type: string; value?: string; children?: Node[]; data?: { hProperties?: Record<string, unknown> } };
+  const parse = unified().use(remarkParse).use(remarkGfm).use(remarkChatMarks);
+  const text = (n: Node): string => n.value ?? (n.children ?? []).map(text).join('');
+
+  it('the header cell `#651 merged` keeps `merged` as text beside the #651 mark', () => {
+    const tree = parse.runSync(parse.parse('| #651 merged |\n|---|\n| x |\n')) as unknown as Node;
+    const cell = tree.children![0]!.children![0]!.children![0]!;
+    expect(cell.type).toBe('tableCell');
+    expect(text(cell)).toBe('#651 merged');
+    expect(cell.children!.map((n) => [n.value ?? text(n), n.data?.hProperties?.[MARK_ATTR.kind] ?? null])).toEqual([
+      ['#651', 'pr'], [' merged', null],
+    ]);
   });
 });

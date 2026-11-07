@@ -132,6 +132,24 @@ export function laneParam(search: string): string | null {
   return id === null || id === '' ? null : id;
 }
 
+/** The runs route's one query (chat reading Task L, D-8062; spec 2026-11-06 R10): a run named in chat opens the board at its
+ *  row, a query on the existing `runs` route as the lane query is on `accounts`, until a page for one run exists. */
+export const RUNS_RUN_QUERY = 'run';
+
+/** The one builder of `/runs?run=<id>`; `runParam` is its one reader. */
+export function runsRunHref(id: number): string {
+  return `/runs?${new URLSearchParams({ [RUNS_RUN_QUERY]: String(id) }).toString()}`;
+}
+
+/** The run id in a `location.search`-shaped string, with or without its leading `?`: a positive integer written in plain
+ *  decimal digits, else null (absent, empty, zero, signed, fractional, an exponent, or anything else). */
+export function runParam(search: string): number | null {
+  const raw = new URLSearchParams(search).get(RUNS_RUN_QUERY);
+  if (raw === null || !/^[0-9]+$/.test(raw)) return null;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 /** The accounts route's resume query (accounts plan Task A23, D-7871; spec §6.2): `/accounts?resume=<id>` opens the
  *  sheet of the sign-in this session started on lane `<id>`, at its code field. Only a shortcut: the attempt itself is
  *  read from `GET /api/accounts`, never from the URL or storage. */
@@ -177,6 +195,41 @@ export function matchRoute(path: string): RouteMatch | null {
     return { route, param };
   }
   return null;
+}
+
+/** A console path: segments of unreserved and percent-escaped characters, then an optional query or fragment. */
+const CONSOLE_PATH = /^(\/[A-Za-z0-9._~%/-]*)([?#][^\s]*)?$/;
+
+/** A console path as the browser resolves it (dot-segments, `%2e` ones too), or null when it resolves to another origin's
+ *  shape (`//host/…`) or the URL parser refuses it: the path a tap opens, which is the one `matchRoute` must judge (review 1466
+ *  F8). Never throws (review 1586 F2). */
+function resolvedPath(path: string): string | null {
+  let resolved: string;
+  try {
+    resolved = new URL(path, 'https://console.invalid').pathname;
+  } catch {
+    return null;
+  }
+  return resolved.startsWith('//') ? null : resolved;
+}
+
+/** A protocol-relative address (`//host…`, or `/\host…`, which a browser reads the same way): another origin's, never a console
+ *  path, refused before it is resolved, because it resolves to its host's path (`//host/runs` to `/runs`; review 1586 F3). */
+const PROTOCOL_RELATIVE = /^\/[/\\]/;
+
+/** The in-app address a console path is, or null (moved here from `ledgers/ledgerLinks.ts`, its console-path arm, so the ledgers
+ *  and chat ask one decision: chat reading Task L, D-8062). A path the console routes (`matchRoute`, asked of the path as the
+ *  browser resolves it) becomes that resolved path plus its query or fragment. Null for anything else: not a console path, the
+ *  bare root, a protocol-relative address (`//host…` or `/\host…`, refused before it is resolved, whatever path it would
+ *  resolve to), a dot-segment escape that resolves to another origin's shape, a path the URL parser refuses, or a path the
+ *  table does not route. Never throws: chat's `a` arm asks it of every Markdown link (review 1586 F2). */
+export function routedHref(text: string): string | null {
+  if (PROTOCOL_RELATIVE.test(text)) return null;
+  const m = CONSOLE_PATH.exec(text);
+  if (m === null || m[1] === undefined || m[1] === '/') return null;
+  const path = resolvedPath(m[1]);
+  if (path === null || path === '/' || matchRoute(path) === null) return null;
+  return `${path}${m[2] ?? ''}`;
 }
 
 /** The frame's view for a path (the phone swap, `shell.css`): `fleet` on the fleet route and on a path outside the

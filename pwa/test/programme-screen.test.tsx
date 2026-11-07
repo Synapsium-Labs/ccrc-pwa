@@ -12,7 +12,7 @@ import { PROGRAM_SLUG_MAX_CHARS } from '../../shared/api';
 import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath, shellViewOf, topRouteOf } from '../src/lib/routes';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { STORED_TEXT, type RemoveSecret } from '../src/ledgers/ItemView';
-import { itemPath } from '../src/ledgers/WaitingRoutes';
+import { itemPath } from '../src/ledgers/ledgerWords';
 import { createFleetStore } from '../src/stores/fleet';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';

@@ -24,9 +24,11 @@ describe('the ledgers console has one owner of each reader, builder and list (ca
   });
 
   it('every Docs address the ledgers draw, and the link splitter, are built in ledgerLinks.ts alone (PL10)', () => {
-    for (const name of ['linkRuns', 'docHref', 'specHref', 'homeProjectOf', 'programmeSpecHref']) {
+    for (const name of ['linkRuns', 'specHref', 'homeProjectOf', 'programmeSpecHref']) {
       expect(holders(decl(name)), name).toEqual(['pwa/src/ledgers/ledgerLinks.ts']);
     }
+    // `docHref` moved to the Docs context's link owner when chat came to ask it too (chat reading Task L, D-8062).
+    expect(holders(decl('docHref')), 'docHref').toEqual(['pwa/src/docs/docsLinks.ts']);
   });
 
   // Review 1466 F5 and F6 (PL10 fix round 1): the D28 boundary is ONE decider asked on both sides, so the console never draws

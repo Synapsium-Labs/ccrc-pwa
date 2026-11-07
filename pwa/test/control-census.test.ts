@@ -338,15 +338,14 @@ const CONTROLS: Record<string, string> = {
     'VARIANT buttonVariants. The Goals page\'s "N waiting on you" link to the one Waiting on you list, filtered to the '
     + 'programme (desktop-polish PL11, D-7986): `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this '
     + 'census checks. An anchor, not a button, because it navigates; it stands alone, so it is no in-sentence TextLink.',
-  'session/MessageBubble.tsx <a> (none)':
-    'INLINE. Links inside a sentence — the bare-URL splitter in a user turn. '
-    + 'WCAG 2.2 SC 2.5.8 exempts a target that is "in a sentence or block of '
-    + 'text", and it has to: giving a link in prose a 44px box would reflow '
-    + 'the prose around every link.',
   'lib/markdown.tsx <a> (none)':
-    'INLINE. The same exemption for react-markdown\'s `a` mapping, which moved '
-    + 'here with the rest of chat\'s component map (native Docs reader W4), and '
-    + 'for the plain link a refused image source renders as instead.',
+    'INLINE. Links inside a sentence: react-markdown\'s `a` mapping, which moved '
+    + 'here with the rest of chat\'s component map (native Docs reader W4), '
+    + 'the plain link a refused image source renders as instead, and `ChatLink`, '
+    + 'chat\'s one anchor, which the bare-URL splitter in a user turn draws too '
+    + '(chat reading Task L, D-8062). WCAG 2.2 SC 2.5.8 exempts a target that is '
+    + '"in a sentence or block of text", and it has to: giving a link in prose a '
+    + '44px box would reflow the prose around every link.',
   'session/MessageBubble.tsx <a> msg-img-link':
     'INLINE, with a different reason: the anchor wraps an IMAGE and '
     + '`.msg-img-link` is `height: auto`, so the target is whatever the image '
