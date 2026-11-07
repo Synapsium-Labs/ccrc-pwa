@@ -17,7 +17,7 @@ import { raiseAuthLostFrom } from './auth';
 import { ApiError } from './apiError';
 import { LONG_READ_MS, limitedFetch, type ReadOpts } from './readLimit';
 import { questionAnswerRequest } from '../session/answerLifecycle';
-import { ANSWERED, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
+import { ANSWERED, readDoorAnswer, readDoorRefusal, type DoorAnswer, answered, linearViewOf, linearWorkspacesOf, linearWorkspacesNotConnectedOf, rotateRefusalOf, readRotateStarted, linearNotConnectedOf, readResolve, readProjectAdd, readWorkspaceAdd, readWorkspaceTitle, archiveBody, workspaceAddBody, type ArchiveOptions, type UpdateIntentRequest, type WorkspaceAddAnswer, type WorkspaceAddOptions, type WorkspaceTitleAnswer, type WorkspaceTitleChange, type LinearWorkspacesRead } from './wireReaders';
 import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import { READER_LAB_RUNS_PATH, readerLabClosePath, readerLabProbePath, readerLabRunPath } from '../../../shared/readerLab';
 import {
@@ -154,6 +154,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     (await (await request(path, jsonInit(body))).json().catch(() => unreadable)) as T;
 
   const sid = (id: string): string => `/api/sessions/${encodeURIComponent(id)}`;
+
+  /** A worktree door's POST (delegation broker wave 5, PR10). A 2xx is read by `readDoorAnswer` (`postJsonOr`: a body that
+   *  is not JSON reads `unreadable`, never a thrown parse). A failed request is a door's ANSWER (`readDoorRefusal`, review
+   *  1623 F2) in four parts: (1) a door word only at its own status; (2) a word the route vocabulary names that is no door
+   *  word never (a 401 `unauthenticated`, which the funnel has already raised, a 403, a 429, a 501 `not-configured`);
+   *  (3) a word in neither, which only a newer server sends, only at a door's status, said as a plain refusal; (4) a body
+   *  without `ok: false` and a string `error` never. Every other failure rejects with its `ApiError`. */
+  const doorPost = async (path: string, body: object): Promise<DoorAnswer> => {
+    try {
+      return readDoorAnswer(await postJsonOr<unknown>(path, 'unreadable', body));
+    } catch (err) {
+      const refusal = err instanceof ApiError ? readDoorRefusal(err.status, err.body) : null;
+      if (refusal === null) throw err;
+      return refusal;
+    }
+  };
 
   return {
     /**
@@ -998,6 +1014,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         }),
       };
     })(),
+    /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a
+     *  worktree for another 7 days. Session-gated when armed; no box token. Body `{}`. */
+    operatorRetainLease: (leaseId: string): Promise<DoorAnswer> =>
+      doorPost(`/api/leases/${encodeURIComponent(leaseId)}/operator-retain`, {}),
+    /** `POST /api/leases/:lease/resolve` (PR8; PR10's "Attach to…" and "Not delegated"): attach to the worktree's OWN parent, or
+     *  say it is not delegated work. Session-gated when armed; no box token. Under O5-8 (c) `target` is a lease id. */
+    resolveLease: (target: string, body: { action: 'attach'; parent: string } | { action: 'foreign' }): Promise<DoorAnswer> =>
+      doorPost(`/api/leases/${encodeURIComponent(target)}/resolve`, body),
     /**
      * The reader lab's door (the reader lab plan of 2026-11-03, Task 9; the reader lab design, section 4). Through
      * `request`, so a 401 raises the one login overlay and every other refusal rejects with its `ApiError`; the lab's run

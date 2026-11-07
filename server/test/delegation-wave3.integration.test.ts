@@ -1164,14 +1164,16 @@ describe('8. the closed scope census', () => {
     expect(pwaWordOffenders(Object.keys(other), (f) => other[f]!, W4_WORD, W4_PWA_FILES), 'CONTROL: a file outside the list is red').toEqual(
       ['pwa/src/fleet/Other.tsx']);
     // ...the stems main never names are allowed nowhere...
-    const NEVER = /disposition|\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
+    // Delegation wave 5 PR10 (O5-6 (a)): `disposition` left this list for its own row below, allowed in the words module only.
+    const NEVER = /\bspool|cleanup(?:Due|State|Population|Evidence|Queue|Token)|auditToken|explicitIntent|coordinatorIntent|stageGate/i;
     expect(pwaWordOffenders(ui, read, NEVER, []), 'a PWA file that names the broker').toEqual([]);
     // ...and the stems main already uses in other senses (the update lease, a roster `adopt`, CSS `retain`, a `carrier` in account copy)
     // are allowed in exactly the files main has them in. A new file that names one is a new PWA source to look at.
     // R80 N3: re-measured with comments stripped, so each list holds the files whose CODE names the word (a comment no longer counts).
     const MAIN_HAS: ReadonlyArray<[string, RegExp, readonly string[]]> = [
       // wave 4: PR2's rows name the frame's `leases`, in its named files only
-      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts', ...W4_PWA_FILES]],
+      // Delegation wave 5 PR10 (O5-6 (a)): `pwa/src/lib/api.ts` joins for the two worktree door URLs (`/api/leases/:lease/...`).
+      ['lease', /\bleases?\b|\blease[A-Z]\w*/, ['pwa/src/fleet/HaltBanner.tsx', 'pwa/src/fleet/updateHalt.ts', ...W4_PWA_FILES, 'pwa/src/lib/api.ts']],
       // `workspaceAddWords.ts` joined the list with the named-workspace add: its refusal text for an account that cannot take the
       // session names ccd's own remedy ("adopt them there with: ccd start ..."), the worktree-onto-an-account sense `ccd` has always
       // used. It is user-facing copy, a string and no identifier, and no part of the delegation broker's adoption.
@@ -1181,9 +1183,18 @@ describe('8. the closed scope census', () => {
       ['adopt', /\badopt\w*/i, [
         'pwa/src/fleet/SessionActionsSheet.tsx', 'pwa/src/fleet/workspaceAddWords.ts', 'pwa/src/screens/settings/SecuritySection.tsx',
         'pwa/src/accounts/ConnectSheet.tsx', 'pwa/src/fleet/accountWords.ts',
+        // Delegation wave 5 PR10 (O5-6 (a)): the wire's carrier-state word `adopted`, a key and a compared value in the words
+        // module; no string the module makes public says it.
+        'pwa/src/fleet/delegationWords.ts',
       ]],
-      ['retain', /\bretain\w*/i, []],
-      ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx']],
+      // Delegation wave 5 PR10 (O5-6 (a)): the operator's keep door's URL (`/operator-retain`) in `pwa/src/lib/api.ts`, and the
+      // wire's carrier-state word `retained`, a key and a compared value in the words module; no string it makes public says it.
+      ['retain', /\bretain\w*/i, ['pwa/src/lib/api.ts', 'pwa/src/fleet/delegationWords.ts']],
+      // Delegation wave 5 PR10 (O5-6 (a)): the words module alone reads the wire's carrier state (PR7's field) and spells its words.
+      ['disposition', /disposition/i, ['pwa/src/fleet/delegationWords.ts']],
+      // Delegation wave 5 PR10, fix round 1 (F5, D-8097): the door word `carrier-behind`, a key of the words module's refusal
+      // table; no string the module makes public says it.
+      ['carrier', /\bcarrier\w*/i, ['pwa/src/fleet/AccountPoolSheet.tsx', 'pwa/src/fleet/delegationWords.ts']],
       // `heldByRowsWords.ts` joined it with cleanup un-wedge R2 (D-8000): its one reader reads R2's `coord.cleanupHeldBy` wire
       // field, the cleanup lanes' held-by answer. It is no part of the delegation broker.
       ['cleanup', /\bcleanup[A-Z]\w*/, ['pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/heldByRowsWords.ts']],

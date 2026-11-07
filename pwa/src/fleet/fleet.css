@@ -2158,6 +2158,13 @@ button.proj-card-pool::before {
   font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
+/* A delegation work line that wraps (a worktree's controls drop under its words, delegation broker wave 5 PR10) keeps its
+   bracket on the words' first line: the bracket and the line sit on their first baseline, which a one-line row's centre
+   already shares, rather than on the centre of the whole wrapped line. */
+.proj-nest:has(> .proj-work) > .proj-nest-bracket,
+.proj-nest:has(> .proj-work) > .proj-work {
+  align-self: baseline;
+}
 
 /* The child that does not exist yet. NOT a tap surface and never a --glow: a
    spawn in flight is a state, not a living pane, and there is no session to
@@ -2270,6 +2277,25 @@ button.proj-card-pool::before {
   font-family: var(--family-mono);
   font-size: var(--fs-2xs);
   color: var(--ink-secondary);
+}
+
+/* A worktree row's controls (delegation broker wave 5, PR10): Keep, Attach and Not delegated, and the sentence a refused or
+   unread act leaves. They follow the words and chips and wrap as the row does, so on a phone they drop under the words
+   rather than squeezing them; each button carries its own tap floor (`Button`). The sentence breaks anywhere it must. */
+.proj-work-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+/* The box takes focus from script only (`tabIndex=-1`), after an act disables its buttons: it is not a control, so
+   base.css's page-wide ring stays off it, as off the fleet column (above). Review 1623 F8 (d). */
+.proj-work-controls:focus-visible {
+  outline: none;
 }
 
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
