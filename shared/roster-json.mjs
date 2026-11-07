@@ -378,16 +378,18 @@ function checkAccount(raw, index) {
     }
   }
 
-  // `baseUrl` and `models` — validated here, returned by nothing. `provider` is
-  // returned since D-8098: the emitter reads it for `CCRC_PAY_PER_USE`.
-  // Otherwise the emitter reads none of them (`shared/generate.mjs:206-238`) and neither
+  // `baseUrl` and `models` — validated here, returned by nothing. The emitter
+  // (`generateAccountsSh`, `shared/generate.mjs:242-364`) reads neither, nor
   // does the wrapper writer, so returning them would be dead code in the one
   // file in this tree no typechecker checks (`server/tsconfig.json` sets no
-  // `checkJs`). They are validated because the SERVER refuses to boot on them,
-  // and that is this file's whole job.
+  // `checkJs`). `provider` is validated AND returned since D-8098: the emitter
+  // reads it for `CCRC_PAY_PER_USE` (`shared/generate.mjs:268`). All three are
+  // validated because the SERVER refuses to boot on them, and that is this
+  // file's whole job.
   //
   // These three gates are INVISIBLE to `gen-accounts.test.ts`'s byte-agreement
-  // direction, because none of the fields reaches `accounts.sh`. The REJECT
+  // direction: `baseUrl` and `models` never reach `accounts.sh`, and a refused
+  // `provider` never produces one to compare. The REJECT
   // table is the only half of that harness that covers them (D-1861), and it
   // carries a row for each.
   if (exec['kind'] !== 'upstream' && exec['kind'] !== 'codex') {

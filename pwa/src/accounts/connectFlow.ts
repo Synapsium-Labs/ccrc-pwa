@@ -9,7 +9,7 @@ import { isAccountStdin } from '../../../shared/account-argv';
 import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared/providers';
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
 import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
-import { NOT_ON_THIS_FLEET_YET, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
+import { LEDGER, NOT_ON_THIS_FLEET_YET, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
 import { AUTH_DEVICE_CODE_METHODS, AUTH_TERMINAL_STATES, type AuthMethod, type AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
@@ -53,6 +53,12 @@ export const showsDeviceCode = (m: SignInMethod): boolean => AUTH_DEVICE_CODE_ME
 export const waitsOnOperator = (m: SignInMethod, state: AuthStatusState | undefined): boolean =>
   state === 'waiting-code' || (showsDeviceCode(m) && state === 'url');
 export const sheetRuns = (provider: DoorProvider, method: ConnectMethod): boolean => SHEET_RUNS.has(`${provider}:${method}`);
+/** The ledger's line once Turn it on lands. A lane this sheet adds is overflow only (spec §8.4's default), so whether the
+ *  auto-swap rotation takes it is the provider's question: a pay-per-use one, an API-key provider
+ *  (`PROVIDERS[p].apiKeyModels`, the set ccd's `CCRC_PAY_PER_USE` is generated from), joins only where a pool names it
+ *  (D-8098). */
+export const onLedgerLine = (provider: DoorProvider | null): string =>
+  (provider !== null && PROVIDERS[provider].apiKeyModels ? LEDGER.onPayPerUse : LEDGER.on);
 /** The add's `method` field. A ChatGPT lane's add has none (spec §7.2 step 3; D-8051 (7)): `openai-login` is what its
  *  `auth/start` runs, and `add`'s own list refuses it `bad-field`, so sending it would stop every add before the verb. */
 export const addMethodField = (m: ConnectMethod): { method?: ConnectMethod } => (m === 'openai-login' ? {} : { method: m });

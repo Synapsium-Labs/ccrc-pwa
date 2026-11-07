@@ -64,7 +64,7 @@ import { RunFrame, type LedgerLine } from './RunFrame';
 import { SecretField, type SecretFieldHandle } from './SecretField';
 import { useStepUp, type StepUp, type StepUpDeps } from './useStepUp';
 import {
-  addMethodField, defaultHue, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
+  addMethodField, defaultHue, onLedgerLine, isSignInMethod, methodChoices, providerChoices, secretShapeOk, sheetRuns, type DoorProvider,
 } from './connectFlow';
 import { readLaneAfterSignOut } from './useOldCredential';
 import { SignInLive, WrongAccountAct, fieldOf, newLaneEnd, useSignInAttempt, wordOf, type Attempt, type HeldAttempt, type SignInRoutes } from './useSignInAttempt';
@@ -341,7 +341,7 @@ export function ConnectSheet(props: ConnectSheetProps): ReactNode {
       setLane(a.lane);
       const nowOn = a.lane.state.word !== 'off';
       setOn(nowOn);
-      settle(nowOn ? LEDGER.on : resultDone(id, false));
+      settle(nowOn ? onLedgerLine(provider) : resultDone(id, false));
       setNotice(null);
       alert(resultDone(id, nowOn));
     } catch (e) {

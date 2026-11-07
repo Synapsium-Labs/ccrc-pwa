@@ -691,6 +691,32 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
       expect(defaultPool()).not.toContain(OPENROUTER_LANE);
     });
 
+    it('an untagged project leaves it out even when the lane carries a pool — no pool names it for this session', () => {
+      seed(); plantNotify();
+      plantLane('pool-b');
+      expect(h.sh(`_project_pool_state demo`).trim()).toBe('untagged');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    // Linux only, like `_strand_why`'s projection case above: on darwin `_pool_sync_installed` is false by
+    // configuration, so an absent projection reads the declared tag there and is not a fleet box's cold state.
+    itLinux('on a fleet box with no pool projection, it stays out: the rule fails closed', () => {
+      pinned('pool-b');
+      plantPoolSyncTimer(h.home);
+      expect(defaultPool(), 'the control: the same fixture with the projection readable admits it').toContain(OPENROUTER_LANE);
+      plantPoolEpoch(h.home, undefined);
+      expect(h.sh(`_acct_pool_state ${OPENROUTER_LANE}`).trim()).toBe('unreadable');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
+    it('with a pool projection it cannot read, it stays out: the rule fails closed', () => {
+      pinned('pool-b');
+      expect(defaultPool(), 'the control: the same fixture with the projection readable admits it').toContain(OPENROUTER_LANE);
+      fs.writeFileSync(reg('pool-epoch'), 'not a projection\n');
+      expect(h.sh(`_acct_pool_state ${OPENROUTER_LANE}`).trim()).toBe('malformed');
+      expect(defaultPool()).not.toContain(OPENROUTER_LANE);
+    });
+
     it('named by the session\'s registry `pool` list, it IS a candidate', () => {
       pinned();
       h.sh(`_reg_set ${ID} pool "claude-b claude-d ${OPENROUTER_LANE}"`);

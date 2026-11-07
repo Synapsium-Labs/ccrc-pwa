@@ -10,7 +10,7 @@ import { newLaneConfigSuffix } from '../../shared/roster';
 import { PROVIDERS } from '../../shared/providers';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { ConnectSheet, type ConnectClient, type ConnectSheetProps } from '../src/accounts/ConnectSheet';
-import { defaultHue, methodChoices } from '../src/accounts/connectFlow';
+import { DOOR_PROVIDERS, defaultHue, methodChoices, onLedgerLine } from '../src/accounts/connectFlow';
 import {
   DOOR_NARROWED, LEDGER, METHOD_LINES, NOT_ON_THIS_FLEET_YET, OUTCOME_UNKNOWN, READ_AGAIN, checkedLine, notFoundAfterUnknown, offlineRefusal,
   resultDone, stillUnknownAfterUnknown,
@@ -481,6 +481,14 @@ describe('Run and Result (spec §6.2, §6.3, §12.3)', () => {
     // The add carried the paste, the provider, the name and the hue, and nothing a later wave adds.
     const body = client.accountAdd.mock.calls[0]![0] as AccountAddBody;
     expect(body).toEqual({ provider: 'anthropic', id: 'lane-c', label: 'Lane C', hue: 'blue', method: 'paste', credential: TOKEN });
+  });
+
+  it('Turn it on says the rotation takes the lane only where that is true: a pay-per-use lane joins where a pool names it (D-8098)', () => {
+    const lines = Object.fromEntries(DOOR_PROVIDERS.map((p) => [p, onLedgerLine(p)]));
+    expect(lines).toEqual({ anthropic: LEDGER.on, openai: LEDGER.on, openrouter: LEDGER.onPayPerUse });
+    expect(LEDGER.onPayPerUse).toBe('✓ On · new sessions can land here. It joins swap rotation only for a project whose pool names it.');
+    for (const p of DOOR_PROVIDERS) expect(onLedgerLine(p) === LEDGER.onPayPerUse).toBe(PROVIDERS[p].apiKeyModels);
+    expect(onLedgerLine(null)).toBe(LEDGER.on);
   });
 
   it('a refused check holds Turn it on, with the refusal beneath it and Check again beside it (D-7740 (4))', async () => {

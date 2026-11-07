@@ -1357,7 +1357,8 @@ POOL_NAME_RE='^[a-z][a-z0-9-]{0,31}$'
 #
 # An account that is NOT home-able is an OVERFLOW-ONLY lane: never a placement
 # target and never a default HOME — CCRC_HOME_ABLE is the whole of that answer
-# — but, while installed and not kill-switched, a candidate the ROTATION picks
+# — but, while installed and not kill-switched (and, for a pay-per-use lane,
+# named by a pool, D-8098), a candidate the ROTATION picks
 # only when no home-able account survives its whole filter (`_swap_target`'s
 # last-resort bracket: home-able candidates are tried first, and a non-home-able
 # one is picked only when that bracket comes up empty — never merely because it
@@ -7219,7 +7220,7 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # and never scores an overflow lane, so the parity above still holds for it
   # exactly as written. ROTATION — `_swap_target` — walks `_pool_for`, which
   # since #61 includes every installed, non-kill-switched lane that is NOT
-  # home-able, and it DOES score such a lane with `_limit_score`: gpt's
+  # home-able (a pay-per-use one only when a pool names it, D-8098), and it DOES score such a lane with `_limit_score`: gpt's
   # half-null file reads as 0 there. That reading cannot beat an Anthropic
   # account, because `_swap_target` keeps overflow lanes in a bracket of their
   # own and reaches it only when no home-able candidate passed `_pool_ok`,
@@ -29027,12 +29028,13 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # REVERSED at the wave-2b merge (D-1910). This header used to put "a non-home-able
   # lane" alongside the excluded-by-registry case as a reason NOT to name — and
   # since PR #61 (operator decision 2026-09-07) that is exactly backwards: an
-  # installed, non-kill-switched overflow lane IS in `_pool_for`, `_swap_target`
+  # installed, non-kill-switched overflow lane IS in `_pool_for` (a pay-per-use
+  # one only when a pool names it, D-8098), `_swap_target`
   # will rank it in its last-resort bracket, and a census that hid it would omit
   # the one candidate the rotation was still willing to use. `_default_pool`
   # already applied installation and the kill-switch before this walk sees the
-  # list, so a lane that reaches here is a real destination and its annotation
-  # is a real remedy. This is one claim with #61's own, not two: see its
+  # list, and also left out a pay-per-use lane no pool names (D-8098), so a lane
+  # that reaches here is a real destination and its annotation is a real remedy. This is one claim with #61's own, not two: see its
   # sentence in the placement-parity block, `grep -n '_strand_why. (account
   # pools, wave 2b) mirrors' ccd/ccd` — "mirrors `_swap_target`'s walk, so it
   # names an overflow lane too". If either sentence is ever changed, change both.
