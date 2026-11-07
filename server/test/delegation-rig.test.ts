@@ -1443,6 +1443,73 @@ describe('rig.sh setup (fixture HOME and repo)', () => {
   }, 120_000);
 });
 
+// rig.sh setup registers TODAY's ccd/session-hook.sh, so a scripted fan-out its fan-out arm (D-6798) denies stops at its
+// PreToolUse, no subagent starts, and the cell builds `unmeasured` on every version: 55 of 70 new cells did so on
+// 2026-11-06, before the scenarios named a model. This row feeds the real hook, in a fixture HOME under the rig's own
+// session name, every scenario's scripted Agent, Task and Workflow call, and expects no deny. The hook decides: no rule
+// of it is copied here, and the two controls only prove that a deny would be seen.
+describe('every scenario\'s scripted fan-out passes today\'s session hook', () => {
+  const HOOK = path.join(TREE, 'ccd/session-hook.sh');
+  const SESSION_ID = 'rig-hookcap';
+  const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
+  type ToolUse = { name?: string; nameAny?: string[]; input?: unknown };
+  type Entry = { tool_use?: ToolUse; blocks?: Array<{ tool_use?: ToolUse }> };
+  /** Every scripted Agent, Task or Workflow call, as [scenario, tool, input], read from every place the mock answers a
+   *  tool_use from (mockapi.mjs#blocksOf): each of `entries`, `default` and `sideDefault`, through its `blocks` when it has
+   *  them and its `tool_use` when not. A `nameAny` entry counts once per name it lists, and a missing `input` is sent as
+   *  `{}`, as the mock sends it. */
+  const fanOuts = (): Array<[string, string, unknown]> => {
+    const dir = path.join(RIG, 'scenarios');
+    const out: Array<[string, string, unknown]> = [];
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.json')).sort()) {
+      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as { entries: Entry[]; default?: Entry; sideDefault?: Entry };
+      for (const e of [...s.entries, ...(s.default ? [s.default] : []), ...(s.sideDefault ? [s.sideDefault] : [])]) {
+        for (const b of e.blocks ?? (e.tool_use ? [{ tool_use: e.tool_use }] : [])) {
+          const t = b.tool_use;
+          if (!t) continue;
+          for (const name of t.nameAny ?? (t.name ? [t.name] : [])) {
+            if (name === 'Agent' || name === 'Task' || name === 'Workflow') out.push([f.replace(/\.json$/, ''), name, t.input ?? {}]);
+          }
+        }
+      }
+    }
+    return out;
+  };
+
+  it('no scenario\'s Agent, Task or Workflow call is denied at its PreToolUse', () => {
+    const home = mkTmp('ccrc-dlg-fanout-');
+    const reg = path.join(home, '.cc-sessions');
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, `${SESSION_ID}.generation`), GENERATION);
+    const bin = path.join(home, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf 'cc-${SESSION_ID}\\n'\n`, { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, TMUX_PANE: '%1',
+      CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    };
+    /** The hook's deny reason for this call, or null when it denied nothing. */
+    const deny = (tool: string, input: unknown): string | null => {
+      const r = spawnSync('bash', [HOOK], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: '/rig/repo' }), encoding: 'utf8', env });
+      expect(r.status, `${tool}: the hook exits 0`).toBe(0);
+      const out = r.stdout.trim();
+      if (out === '') return null;
+      const e = JSON.parse(out) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+      return e.hookSpecificOutput?.permissionDecision === 'deny' ? String(e.hookSpecificOutput.permissionDecisionReason) : null;
+    };
+    // The controls: the harness reaches the fan-out arm, so the empty answers below are the hook's allow.
+    expect(deny('Agent', { description: 'x', prompt: 'x', subagent_type: 'general-purpose' }), 'control: Agent').not.toBeNull();
+    expect(deny('Workflow', { script: "await agent('x', { label: 'x' })\n" }), 'control: Workflow').not.toBeNull();
+    const calls = fanOuts();
+    expect(new Set(calls.map(([s]) => s)).size, 'the scenarios that fan out').toBe(11);
+    // A scenario inlines its workflow script: a `scriptPath` would be read on this host, where the hook allows a missing file.
+    for (const [s, tool, input] of calls) {
+      if (tool === 'Workflow') expect(Object.keys(input as object), `${s}: the script is inline`).not.toContain('scriptPath');
+    }
+    for (const [s, tool, input] of calls) expect(deny(tool, input), `${s}: ${tool}`).toBeNull();
+  }, 120_000);
+});
+
 const SANITIZE = path.join(RIG, 'sanitize.mjs');
 /** A raw bundle as rig.sh's `collect` leaves it, for a run root that is only a STRING here. */
 function rawBundle(raw: string, root: string, version: string, scenario: string, caps: Array<[string, number, object]>, versionsDir = '/opt/fake-claude/versions'): string {
