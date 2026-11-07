@@ -68,6 +68,16 @@ describe('server/src runtime imports never point outward (ARCH-04 stage 2, D-604
     }
   });
 
+  it('CONTROL: coord/store.ts is L3 by its header, so a runtime import of CoordStore from an L1 file is outward (#2370)', () => {
+    // Its `node:sqlite` import is type-only, so its facts alone read L1; the header declaration is what holds it.
+    expect(serverRing('server/src/coord/store.ts').ring).toBe('L3');
+    const file = 'server/src/coord/planted.ts';
+    const planted = parseSource("import { CoordStore } from './store.js';\nexport const f = () => CoordStore;\n");
+    expect(outwardRuntimeEdges(file, planted, ringOf, exists).map((e) => `${e.fromRing} ${e.from} -> ${e.toRing} ${e.to}`))
+      .toEqual(['L1 server/src/coord/planted.ts -> L3 server/src/coord/store.ts']);
+    expect(outwardRuntimeEdges(file, parseSource("import type { CoordStore } from './store.js';"), ringOf, exists)).toEqual([]);
+  });
+
   it('CONTROL: the docs ring pin\'s role table, a declaration by the spec, is single-definition\'s copy', () => {
     const sd = parseFile(path.join(REPO, 'server/test/single-definition/docs-ring.test.ts'));
     const init = sd.bindings.find((b) => b.name === 'DOCS_RING_ROLES')?.init ?? '';

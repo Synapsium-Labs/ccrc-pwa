@@ -138,7 +138,7 @@ reviewer checks a file by reading its import block.
   `// null = missing` on `FleetIO.readFile` is false today and is the proximate cause of
   at least three ledger entries. Ports are declared **by the consumer** (`SendDeps`,
   `AskDeps`, `VerifyDoneDeps` already do this), not one-per-collaborator by decree.
-- **L3 adapters** — `io.ts`, `remote/io.ts`, `exec.ts`, `coord/db.ts`, `store.ts`, `push.ts`.
+- **L3 adapters** — `io.ts`, `remote/io.ts`, `exec.ts`, `coord/db.ts`, `coord/store.ts`, `push.ts`.
   **An adapter may not narrow a distinction it received.** `remote/io.ts` receives
   `{ok:false,err}` and `{missing:true}` from the wire and throws both away to match
   `localIO`. That downgrade is the single highest-yield rule in this document.

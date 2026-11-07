@@ -1,3 +1,6 @@
+// The coordination store, ring L3 (the 08-10 spec's adapter list): every coordination read and write runs a
+// `node:sqlite` statement on the connection it is handed. That import is type-only, so the facts alone would read
+// L1; this declaration is what makes a runtime import of `CoordStore` from an L1 file an outward edge (#2370).
 import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
