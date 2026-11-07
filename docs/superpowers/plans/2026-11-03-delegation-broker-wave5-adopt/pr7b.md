@@ -39,7 +39,8 @@ lane step (`delegationAdoptStep.ts`) and `watch.ts` gather and act.
   second cut inside the same await removes the ask (PR7c); nothing else is written after a cut.
 - **F4, the cut after every awaited read.** The step reads the cut after the registry listing, after each audit and after each
   carrier read. `asked` is cleared and `pass` counted only below the last awaited read. What a cut writes, at each point:
-  - inside the listing, or before the first audit answers: nothing;
+  - inside the listing: nothing; inside the first audit's own await: that ask's mark, or, at a second such cut with no answer
+    between, its drop (PR7c, review 1630 F1; review 1640 F3);
   - inside the audits: only the definite answers that came back before the cut, each held and its ask dropped (F3); a
     non-definite one is not held and keeps its ask, dropped when it is answered non-definite on a second pass (fix round 1,
     F4 (a); fix round 2, F3); the ask in whose own await the cut came is marked, and dropped at a second such cut (PR7c, review 1630 F1);

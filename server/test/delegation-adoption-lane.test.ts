@@ -968,6 +968,38 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(k, 'the first decider pass is the ninth').toBe(9);
   }, ROW_MS);
 
+  it('review 1640 F1: a cut that arrives while the audit is already awaiting (a timer\'s cut) is seen by the race\'s abort listener: the ask is dropped at its second cut, its audit still out, and the first decider pass is the ninth', async () => {
+    const { w, durable, lease } = await leased();
+    w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
+    const { trees, ids } = await more(durable, lease, 3);
+    for (let n = 0; n < 20 && laneOf(w).adoptMemory.asked.length < 4; n += 1) await pass(w, at(n), trees);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: all four asked in one pass').toEqual([...ids].sort());
+    const order = laneOf(w).adoptMemory.asked.map((a) => a.leaseId);
+    const steps = laneOf(w).adoptMemory.pass;
+    let release = (): void => undefined;
+    w.holdAudit = new Promise<void>((r) => { release = r; });                     // every audit outlives its pass until the row ends
+    const late: Promise<unknown>[] = [], uncutAtAsk: boolean[] = [];
+    w.onAudit = () => {                                                            // not inside runCcd: on a later macrotask, so the
+      uncutAtAsk.push(laneOf(w).running.size > 0 && [...laneOf(w).running.keys()].every((ac) => !ac.signal.aborted));
+      setImmediate(() => { late.push(...cutNow(w)); });                            // step is already awaiting the race when it lands
+    };
+    const settle = (): Promise<void> => new Promise((r) => { setImmediate(r); });  // the microtasks after the cut, never the held audit
+    let k = 0;
+    try {
+      for (; k < 12 && laneOf(w).adoptMemory.pass === steps; k += 1) {
+        await pass(w, at(30 + k), trees);                                          // the harness never waits for the late audit
+        await settle();
+        if (k === 1) expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId), 'the second cut drops the first ask at the cut, its audit still out').toEqual(order.slice(1));
+      }
+    } finally {
+      w.onAudit = undefined;
+      release();
+      await Promise.allSettled(late);
+    }
+    expect(uncutAtAsk.length > 0 && uncutAtAsk.every(Boolean), 'CONTROL: every cut arrived after its audit was asked, on an uncut pass').toBe(true);
+    expect(k, 'the first decider pass is the ninth').toBe(9);
+  }, ROW_MS);
+
   it('F6 (a): a census record that reads unreadable holds the entry, counted waiting; read again, it adopts on the first pass', async () => {
     const { w, durable, lease } = await leased();
     for (let n = 0; n < 12 && (laneOf(w).adoptMemory.health?.wouldAdopt ?? 0) === 0; n += 1) await pass(w, at(n));

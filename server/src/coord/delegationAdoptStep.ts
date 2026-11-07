@@ -117,7 +117,9 @@ export async function runLeaseAudit(d: Pick<AdoptStepDeps, 'runCcd' | 'fleetStat
 
 /** Review 1634 F1: one audit's await, raced against the pass's signal, so the step sees a cut when it happens and not when a late
  *  audit returns (the audit call takes no signal; `RunCcd` and the audit's bound stay as they are). After a cut the late answer, or a
- *  late rejection, is consumed by the handlers below and ignored: nothing is written from it, and nothing goes unhandled. */
+ *  late rejection, is consumed by the handlers below and ignored: nothing is written from it, and nothing goes unhandled. The
+ *  rejection arm fires only on a synchronous throw before `runCcd` runs, since `runLeaseAudit` turns every `runCcd` throw into an
+ *  `unmeasured` answer; no row measures it (review 1640 F4). */
 function auditOrCut(d: Pick<AdoptStepDeps, 'runCcd' | 'fleetState' | 'signal'>, leaseId: string, generation: number): Promise<LeaseAuditAnswer | 'cut'> {
   const audit = runLeaseAudit(d, leaseId, generation);
   const signal = d.signal;
@@ -141,8 +143,10 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
   const mailHeld = switches[MAIL_DISABLED_MARKER] !== 'clear';
   const auditable = ccdCan(d.fleetState, 'leaseAudit');
   const fresh = new Map<string, HeldLeaseAudit>();
-  // Never -1 today (review 1634 F2): a cut is seen in the microtasks after its abort, before any later pass starts (a pass starts from a
-  // timer), and no other step writes `asked` meanwhile (one uncut pass runs at a time, and every cut one returns at its cut). The guard
+  // Never -1 today (review 1634 F2, reasons corrected by 1640 F2): the lane runs single-flight (`flight: 'skip'`), so a second pass
+  // cannot start until `pass()` returns, and `pass()` aborts its signal in its `finally`; this step's continuation after a raced abort
+  // runs in the same microtask drain, before anything a later pass can do. Only the audit's await is raced: a pass cut in the listing,
+  // a carrier read or `transitionLease` returns when that await settles, and none of those resume paths writes `asked`. The guard
   // stays: a -1 splice would drop the last ask, another lease's.
   const drop = (ask: AdoptLaneMemory['asked'][number]): void => {
     const at = memory.asked.indexOf(ask);
@@ -180,7 +184,9 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     if (cut()) return;                   // review 1609 F4: after every awaited read, carriers included
     carriers.set(id, rb);
   }
-  memory.asked.length = 0;               // below the last awaited read (review 1609 F4): a cut pass has written only the audits it held, its asks' marks and the drop of an ask cut twice
+  // Below the last awaited read (review 1609 F4). A cut pass has written only lane memory of its audit loop (review 1640 F3): the audits
+  // it held and their asks' drops, `keptOnce` on a non-definite answer, its asks' marks set or cleared, and the drop of an ask cut twice.
+  memory.asked.length = 0;
   const pass = (memory.pass += 1);
   memory.audits = held;
   for (const id of carriers.keys()) memory.lastRead.set(id, pass);

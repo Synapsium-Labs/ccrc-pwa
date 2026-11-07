@@ -109,6 +109,16 @@ The four the rulings name, re-run here with the same bound and restore. Each sti
   is a change to the adapter's contract, and the mark was enough, so it was not built.
 - **The floor rule.** No transition-table row, no `assertLease` rule or decision, no fold, no journal kind, entry field or
   checkpoint member is added or changed. `store.ts` +0; `watch.ts` one line changed, net 0.
+- **A raced audit can outlive `close()` (review 1640, observation).** After a cut the raced `ws-lease-audit` is no longer inside
+  the pass's work, so `close()`, which waits for the passes' work, does not wait for it. The audit is read-only, and its late result
+  writes nothing and logs nothing, so its child may outlive `close()` with no effect.
+- **The bound with mixed latency (review 1640, observation).** The 2K + 1 bound (the ninth pass at K = 4) is the always-slow case,
+  and it is the only case a row measures. With mixed latency an ask can take more of its own passes, because an answer clears the
+  mark: a definite answer drops it at once; otherwise its events are cuts inside its own await (C) and non-definite answers (N), and
+  two C with no answer between drop it (the mark), as does a second N (`keptOnce`, which no answer clears). So the longest run is
+  C, N, C and then a C or an N, which drops it on its fourth (for example C, N, C, C). Each pass that is cut only inside an audit
+  gives at least one ask one of its events, so while only audits cut the pass the decider comes by pass 4K + 1 (the seventeenth at
+  K = 4). That figure is argued from the mark and `keptOnce`, not measured.
 
 ## Fix round 1 (review 1634)
 
@@ -127,9 +137,11 @@ surfaced) are carried to the Rider.
   audit is cut; after the second pass the first ask is dropped while its audit is still out, and the first decider pass is the
   ninth. Mutant PR7c-FR1-norace (the plain await again) reds it at that drop (`expected [ …(4) ] to deeply equal [ …(3) ]`), and,
   measured with that assertion disabled for the one run, at the bound alone (`expected 12 to be 9`: no decider pass within twelve).
-- **F2, the `drop` guard.** With the race, `indexOf` cannot answer -1 again: a cut is seen in the microtasks after its abort,
-  before any later pass can start (a pass starts from a timer), and no other step writes `asked` meanwhile (one uncut pass runs at a
-  time, and every cut one returns at its cut, its later awaits writing nothing to `asked`). The comment says so; the guard stays,
+- **F2, the `drop` guard.** With the race, `indexOf` cannot answer -1 again. The reasons as corrected in fix round 2 (review 1640
+  F2): the lane runs single-flight (`flight: 'skip'`), so a second pass cannot start until `pass()` returns, and `pass()` aborts its
+  signal in its `finally`; the step's continuation after a raced abort runs in the same microtask drain, before anything a later
+  pass can do. Only the audit's await is raced: a pass cut in the listing, a carrier read or `transitionLease` returns when that
+  await settles, and none of those resume paths writes `asked`. The comment says so; the guard stays,
   because a -1 splice would drop the last ask, another lease's. EXTRA-noguard (the guard removed) survives, measured (105 of 105),
   which is what an unreachable guard gives. The comment above `asked.length = 0` now names the drop of an ask cut twice among a cut
   pass's writes.
@@ -171,7 +183,66 @@ Run alone on this round's tree, bounded and restored as above ("sha ok" each tim
 | X-cut132 | no cut check after each carrier read | "F4: a pass cut inside its carrier read writes no lane memory" |
 | X-cut169 | no cut check after the effects loop | "F4: a pass cut inside the effects loop keeps the adoption that landed, acts no further, and queues its notice on the next pass" |
 
+## Fix round 2 (review 1640)
+
+The coordinator's rulings on review 1640 (round 2 of at most 3, at `166e04e8a`), taken whole: nothing critical, and the production
+code reads correct. No new number, and no D-text changes. The step's code is unchanged this round; only its comments change. Review
+1634's F4 and F5 stay carried, as does a re-ask while a cut pass's audit is still out (two concurrent read-only audits of one tree),
+which predates PR7c.
+
+- **F1, the race's abort listener has its row.** Every earlier row cut the pass synchronously inside the fixture's `runCcd`, so the
+  signal was already aborted when the race was set up and its pre-check arm resolved; the listener arm, the one a real timer cut
+  takes, had no row. New row "review 1640 F1: a cut that arrives while the audit is already awaiting (a timer's cut) …": `onAudit`
+  records that the pass is uncut when its audit is asked, and schedules the cut on a later macrotask (`setImmediate`), so the step is
+  already awaiting the race when the abort lands. It asserts the same drop at the second cut while the audit is still out, and that
+  the first decider pass is the ninth. The row found no defect, so the step's code is unchanged.
+- **F2, the guard's reasons (text).** The comment above `drop` and this note's fix-round-1 F2 bullet keep the conclusion (-1 is
+  unreachable) and give the corrected reasons (single-flight, the abort in `pass()`'s `finally`, the same microtask drain; only the
+  audit is raced, and no other resume path writes `asked`).
+- **F3, a cut pass's writes (text).** The comment at `asked.length = 0` lists every write a cut pass can make: the audits it held
+  and their asks' drops, `keptOnce` on a non-definite answer, its asks' marks set or cleared, and the drop of an ask cut twice.
+  `pr7b.md`'s F4 bullet says that a cut inside the first audit's own await writes that ask's mark, or drops it on the second cut.
+- **F4, the rejection arm (text).** The race's docstring says the rejection arm fires only on a synchronous throw before `runCcd`
+  runs (`runLeaseAudit` turns every `runCcd` throw into an `unmeasured` answer), and that no row measures it.
+- **F5, the PR body.** PR #2426's body now says what the PR is: the mark and the drop, the race against the pass signal, the
+  overlap row and the listener row, and the lane suite's count (61).
+- **Observations.** The two are under "Measured, not departures": a raced audit can outlive `close()`, and the bound with mixed
+  latency.
+
+### Rows, red then green (fix round 2)
+
+| Ruling | Row | On fix round 1's step |
+|---|---|---|
+| F1 | "review 1640 F1: a cut that arrives while the audit is already awaiting (a timer's cut) …" | green: fix round 1's code was already right, and the row is its missing guard; red under PR7c-FR1-nolistener (`the second cut drops the first ask at the cut, its audit still out: expected [ …(4) ] to deeply equal [ …(3) ]`) |
+
+### The mutation table (fix round 2)
+
+Run alone on this round's tree, bounded and restored as above ("sha ok" each time, the tree clean after each). The lane suite has
+61 tests here and the L1 suite 45 (106 a run).
+
+| Mutant | The mutation | Red rows (lane) |
+|---|---|---|
+| PR7c-FR1-nolistener (review 1640's) | the race's `else signal.addEventListener('abort', …)` arm deleted | "review 1640 F1: a cut that arrives while the audit is already awaiting …" |
+| PR7c-FR1-norace | the audit awaited plainly again | "review 1634 F1: overlapping passes …", "review 1640 F1: a cut that arrives while the audit is already awaiting …" |
+| PR7c-F1-unmarked | no mark before the await | "F4: a pass cut inside an awaited audit writes no lane memory but its ask's cut mark …", "review 1627 F3: a non-definite answer keeps its ask once", "review 1630 F1: an audit slower than the pass budget …", "review 1630 F1: an answer on an uncut await clears an ask's cut mark …", "review 1634 F1: overlapping passes …", "review 1640 F1: a cut that arrives while the audit is already awaiting …" |
+| PR7c-F1-nodrop | a second cut keeps the ask | "review 1627 F3: a non-definite answer keeps its ask once", "review 1630 F1: an audit slower than the pass budget …", "review 1634 F1: overlapping passes …", "review 1640 F1: a cut that arrives while the audit is already awaiting …" |
+| PR7c-F1-noclear | an answer does not clear the mark | "review 1630 F1: an answer on an uncut await clears an ask's cut mark …" |
+| FR2-F3-everycut | a non-definite answer keeps its ask through every pass | "review 1627 F3: a non-definite answer keeps its ask once" |
+| FR1-F4a | every answered ask dropped | "review 1622 F4 (a): a cut after answers that are not definite …", "review 1627 F3: a non-definite answer keeps its ask once", "review 1630 F1: an answer on an uncut await clears an ask's cut mark …" |
+| X-cut132 | no cut check after each carrier read | "F4: a pass cut inside its carrier read writes no lane memory" |
+| X-cut169 | no cut check after the effects loop | "F4: a pass cut inside the effects loop keeps the adoption that landed, acts no further, and queues its notice on the next pass" |
+
 ## Suites and growth
+
+**Fix round 2.** Run alone at this round's tip through `ccrc test`, each file one run, all green on their first run:
+`delegation-adoption` 45, `delegation-adoption-lane` 61, `delegation-adoption-corpus` 23, `delegation-carrier` 25,
+`delegation-carrier-lane` 27, `delegation-projection` 44, `delegation-wave3.integration` 36, `delegation-watch` 311,
+`hibernate-census` 13, `delegation-pass-timing` 90, `old-dead-reads` 8, `fleet-health` 54, `coord-store` 270, `anchors` 9,
+`citations` 4, `topology-clean` 60, `coord-policy-rings` 19, every `single-definition/*` file (24 files, 1097 tests) and every
+`rings/*` file (11 files, 125 tests), `typecheck-tests` 12, `GROWTH_CHECK=1` growth-check 54, and `deviation-refs` and `dtbd`
+after `git fetch origin` (`cf00d1020`, which merges clean: `git merge-tree` exit 0). The server's `tsc --noEmit` exits 0.
+Growth against `main` (`cf00d1020`): `watch.ts` +0, `store.ts` +0; `delegationAdoptStep.ts` 240 to 277 (this round adds comment
+lines only).
 
 **Fix round 1.** Run alone at this round's tip through `ccrc test`, each file one run, all green on their first run:
 `delegation-adoption` 45, `delegation-adoption-lane` 60, `delegation-adoption-corpus` 23, `delegation-carrier` 25,
