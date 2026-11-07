@@ -2,7 +2,9 @@
 // (`./delegation-adoption.ts`) needs, runs it, and acts on its answer. It decides nothing the decider decides.
 //
 // Each pass, in order: one listing of the registry (the `delegation-adopt` marker and `mail-disabled`, absent, present and
-// unmeasured kept apart), the audits the previous pass asked for (`ws-lease-audit`, behind `lease-audit-v1`, read-only), the parents'
+// unmeasured kept apart), the audits the previous pass asked for (`ws-lease-audit`, behind `lease-audit-v1`, read-only; each answer
+// back on an uncut pass that `adoptionAudits` holds is held at once and its ask dropped, review 1609 F3, while one it does not hold keeps
+// its ask through one cut pass, never two, review 1622 F4 and 1627 F3; the cut is read after every awaited read, 1609 F4), the parents'
 // facts and the audits fed and held (both classified in L1, review 1587 A7 and F3), the carriers of the leases past rules 4 to 6 read
 // HERE at decision time, at most `DELEGATION_ADOPT_CARRIER_READS_PER_PASS` (never PR6's read-backs, D-8034; review 1587 F7), the decider, then the
 // effects: `adopt` through PR5b's `transitionLease` (a feed row on `applied`; the carrier is marked by PR6's step later in the same
@@ -28,18 +30,21 @@ import { readDelegationCarrier } from './delegationCarrierMark.js';
 import type { CarrierReadBack } from './delegation-carrier.js';
 import { queueRunlessNotice } from './rundefsTx.js';
 import {
-  adoptTerminalEvidenceAt, adoptionAudits, adoptionCarrierReads, adoptionParentFacts, buildLeaseDigest, delegationAdoptionHealthShown, buildLeaseReminder,
-  decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptWatch, type AdoptionInput, type HeldLeaseAudit, type LeaseDigestItem, type LeaseRecipient,
-  type ParentFact,
+  adoptTerminalEvidenceAt, adoptionAudits, adoptionCarrierReads, adoptionParentFacts, buildAdoptionFeedRow, buildLeaseDigest, delegationAdoptionHealthShown,
+  buildLeaseReminder, decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptedAudit, type AdoptWatch, type AdoptionInput, type HeldLeaseAudit,
+  type LeaseDigestItem, type LeaseRecipient, type ParentFact,
 } from './delegation-adoption.js';
+import type { IdentityField, Presence } from '../../../shared/api.js';
+/** The lane's last-alive memory records a pass by the decider's own liveness answer (review 1622 F1). */
+export { adoptionAlive } from './delegation-adoption.js';
 
 export interface AdoptLaneMemory {
   /** The decider's watch, carried pass to pass. */
   watch: Map<string, AdoptWatch>;
   /** The attention keys still standing whose notice ran (review 1587 F4: a key is recorded only after its notice). */
   raised: Set<string>;
-  /** The audits the last pass asked for, run at the start of this one. */
-  asked: { leaseId: string; generation: number }[];
+  /** The audits the last pass asked for, run at the start of this one; `keptOnce` marks an ask a cut pass kept (review 1627 F3). */
+  asked: { leaseId: string; generation: number; keptOnce?: true }[];
   /** The definite audit answers held (`adoptionAudits`: a candidate's generation, at most `DELEGATION_AUDIT_HOLD_MS`). */
   audits: Map<string, HeldLeaseAudit>;
   /** leaseId -> the generation whose shadow line was logged, and apart from it the generation whose refusal was (review 1587 A1): one
@@ -50,12 +55,15 @@ export interface AdoptLaneMemory {
    *  PR6's re-reads do (review 1604 F2), pruned with the lease. */
   pass: number;
   readonly lastRead: Map<string, number>;
+  /** leaseId -> the generation an applied adoption wrote and the audit answer it was fed, for the notice's words (review 1609 F9, worded
+   *  in L1, 1622 F5); pruned with the lease. A process's own: after a restart a notice claims neither. */
+  readonly adopted: Map<string, AdoptedAudit>;
   health: DelegationAdoptionHealth | null;
 }
 /** The health block's `adoption` member: the last pass's counts, or null when every count is zero (D-8035's rule). */
 export const adoptionHealthShown = (memory: AdoptLaneMemory): DelegationAdoptionHealth | null => delegationAdoptionHealthShown(memory.health);
 export const emptyAdoptLaneMemory = (): AdoptLaneMemory => ({ watch: new Map(), raised: new Set(), asked: [], audits: new Map(), shadowLogged: new Map(),
-  refusalLogged: new Map(), pass: 0, lastRead: new Map(), health: null });
+  refusalLogged: new Map(), pass: 0, lastRead: new Map(), adopted: new Map(), health: null });
 
 export interface AdoptStepDeps {
   readonly io: Pick<FleetIO, 'readFileMeasured' | 'readdirMeasured'>;
@@ -78,9 +86,12 @@ export interface AdoptPassFacts {
   records: readonly { id: string }[];
   listedIds: ReadonlySet<string> | null;
   registryListed: boolean;
-  /** The sessions this pass measured, with their status, and the parents whose counted death the lane retracted (review 1604 F7). */
-  sessions: readonly { readonly id: string; readonly status: string }[];
-  retracted: ReadonlySet<string>;
+  /** The sessions this pass measured, with their row's `presence` and unmeasured identity fields (review 1609 F1, 1622 F2), and the pass
+   *  at which the lane retracted each parent's counted death (review 1604 F7, 1622 F1). */
+  sessions: readonly { readonly id: string; readonly presence?: Presence | undefined; readonly unmeasured?: readonly IdentityField[] | undefined }[];
+  retracted: ReadonlyMap<string, number>;
+  /** The lane's last-alive instants, by parent and by the incarnation read then (review 1609 F5, 1622 F1). */
+  lastAlive: ReadonlyMap<string, ReadonlyMap<string | null, number>>;
   /** The census's settled incarnations. */
   incarnations: ReadonlyMap<string, ParentIncarnation>;
   /** The lane's first-dead instants (epoch ms), as the breaker reads them. */
@@ -104,39 +115,49 @@ export async function runLeaseAudit(d: Pick<AdoptStepDeps, 'runCcd' | 'fleetStat
 /** The lane's adoption step for one pass (the caller holds a ready applier and runs it between native-removed and the carriers). */
 export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f: AdoptPassFacts): Promise<void> {
   const now = formatDelegationInstant(f.nowMs);
-  const cut = (): boolean => d.signal?.aborted === true;          // read after every await: an await can cut the pass
+  const cut = (): boolean => d.signal?.aborted === true;          // read after every await: an await can cut the pass (review 1609 F4)
   const listing = await d.io.readdirMeasured(d.registryDir, undefined, d.signal);
+  if (cut()) return;
   const switches = readSwitches(listing.ok ? listing.entries : null);
   const marker = switches[DELEGATION_ADOPT_MARKER] === 'set' ? 'present' : switches[DELEGATION_ADOPT_MARKER] === 'clear' ? 'absent' : 'unmeasured';
   const mailHeld = switches[MAIL_DISABLED_MARKER] !== 'clear';
+  const auditable = ccdCan(d.fleetState, 'leaseAudit');
   const fresh = new Map<string, HeldLeaseAudit>();
   for (const ask of [...memory.asked]) {
-    if (cut()) break;
-    fresh.set(ask.leaseId, { generation: ask.generation, answer: await runLeaseAudit(d, ask.leaseId, ask.generation), at: now });
+    if (cut()) return;
+    const answer: HeldLeaseAudit = { generation: ask.generation, answer: await runLeaseAudit(d, ask.leaseId, ask.generation), at: now };
+    if (cut()) return;                   // review 1604 F4: an answer back on a cut pass is not written
+    fresh.set(ask.leaseId, answer);      // fed on an uncut pass, whatever it says (rule 7, as PR7 ruled)
+    memory.audits = adoptionAudits({ now, checkpoint: d.durable.state().checkpoint as DelegationCheckpointV1, auditable, held: memory.audits,
+      fresh: new Map([[ask.leaseId, answer]]) }).held;
+    if (memory.audits.get(ask.leaseId) !== answer && ask.keptOnce !== true) { ask.keptOnce = true; continue; }  // review 1622 F4, 1627 F3: not held
+    // (not definite): its ask stays for a cut pass's successor once; asked again and cut again, it is dropped, so no cut keeps it for good
+    const at = memory.asked.indexOf(ask);                      // review 1609 F3: a held answer's ask is dropped at once (a later cut keeps the answer), and so is one kept once.
+    if (at !== -1) memory.asked.splice(at, 1);                 // Never -1 today (the loop walks a copy, and a stale pass returns at its cut)
   }
-  if (cut()) return;                     // review 1604 F4: a cut pass writes no lane memory and queues nothing
-  memory.asked.length = 0;
-  const pass = (memory.pass += 1);
   const cp = d.durable.state().checkpoint as DelegationCheckpointV1;
   const conflicting = conflictingTreeKeys(cp);
-  const { audits, held } = adoptionAudits({ now, checkpoint: cp, auditable: ccdCan(d.fleetState, 'leaseAudit'), held: memory.audits, fresh });
+  const { audits, held } = adoptionAudits({ now, checkpoint: cp, auditable, held: memory.audits, fresh });
   const parents = adoptionParentFacts(cp, { now, registryListed: f.registryListed, listedIds: f.listedIds, built: new Set(f.records.map((x) => x.id)),
-    sessions: f.sessions, retracted: f.retracted, incarnations: f.incarnations, firstDead: f.firstDead });
+    sessions: f.sessions, retracted: f.retracted, lastAlive: f.lastAlive, incarnations: f.incarnations, firstDead: f.firstDead });
   const trees = (state: string) => new Set(f.census.filter((x) => x.state === state).map((x) => delegationTreeKey(x.project, x.adminRecord)));
   const input: Omit<AdoptionInput, 'carriers'> = { now, checkpoint: cp, treePresent: trees('present'), treeUnread: trees('unreadable'), censused: f.censused, audits, watch: memory.watch, parents, conflicting, boxHolds: boxHoldsTrees(d.fleetState), breaker: f.breaker, marker, raised: memory.raised };
   const carriers = new Map<string, CarrierReadBack>();
   for (const id of adoptionCarrierReads(input, memory.lastRead)) {
     if (cut()) return;
-    carriers.set(id, await readDelegationCarrier(d, id));
+    const rb = await readDelegationCarrier(d, id);
+    if (cut()) return;                   // review 1609 F4: after every awaited read, carriers included
+    carriers.set(id, rb);
   }
-  if (cut()) return;                     // F4, after the last awaited read
+  memory.asked.length = 0;               // below the last awaited read (review 1609 F4): a cut pass has written only the audits it held
+  const pass = (memory.pass += 1);
   memory.audits = held;
   for (const id of carriers.keys()) memory.lastRead.set(id, pass);
   const r = decideAdoption({ ...input, carriers });
   memory.watch = r.watch;
   memory.raised = new Set([...memory.raised].filter((k) => r.raised.has(k)));       // a key leaves when its condition clears (F4)
   const unreleased = new Set(cp.leases.filter((l) => l.releasedAt === null).map((l) => l.leaseId));
-  for (const kept of [memory.shadowLogged, memory.refusalLogged, memory.lastRead]) for (const id of kept.keys()) if (!unreleased.has(id)) kept.delete(id);
+  for (const kept of [memory.shadowLogged, memory.refusalLogged, memory.lastRead, memory.adopted]) for (const id of kept.keys()) if (!unreleased.has(id)) kept.delete(id);
   const leaseOf = (id: string): DelegationLeaseRow | undefined => cp.leases.find((l) => l.leaseId === id);
   const once = (logged: Map<string, number>, l: DelegationLeaseRow, line: string): void => {
     if (logged.get(l.leaseId) === l.generation) return;
@@ -144,7 +165,7 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     console.warn(line);
   };
   for (const dec of r.decisions) {
-    if (cut()) break;
+    if (cut()) break;                    // review 1609 F4: a cut stops further effects; what already landed keeps its memory
     const lease = 'leaseId' in dec ? leaseOf(dec.leaseId) : undefined;
     if (dec.kind === 'audit') memory.asked.push({ leaseId: dec.leaseId, generation: dec.generation });
     else if (dec.kind === 'attention') {
@@ -159,22 +180,25 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
           expiresAt: dec.expiresAt, terminalEvidenceAt: adoptTerminalEvidenceAt(dec.terminalAt, lease), runId: null, promotedSession: null,
           auditEvidence: audit !== undefined && audit !== 'unsupported' && audit.ok ? audit.token : null, carrierRequired: true, resolvesThrough: null });
         if (out.kind === 'applied') {
-          d.notice(`worktree kept: ${lease.project}/${lease.adminRecord}`, `Delegated work left this worktree changed; it is kept until ${dec.expiresAt} (lease ${lease.leaseId}).`, 'record-only');
+          memory.adopted.set(lease.leaseId, { generation: out.generation, audit });
+          const row = buildAdoptionFeedRow(lease, dec.expiresAt, audit);
+          d.notice(row.title, row.body, 'record-only');
         } else once(memory.refusalLogged, lease, `ccrc-server: delegation: adoption of ${lease.leaseId} ${out.kind === 'refused' ? `refused ${out.refusal}: ${out.detail}` : 'already applied'}`);
       } catch (err) {
         console.warn(`ccrc-server: delegation: adoption of ${lease.leaseId} threw: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
-  if (cut()) return;                     // F4, after the effects' awaits
-  memory.health = { ...r.health, owed: queueOwedNotices({ ...d, coord: d.mail.coord }, d.durable.state().checkpoint as DelegationCheckpointV1, now, parents, r.decisions, mailHeld) };
+  if (cut()) return;                     // F4, after the effects' awaits: no health and no notice on a cut pass
+  memory.health = { ...r.health, owed: queueOwedNotices({ ...d, coord: d.mail.coord }, d.durable.state().checkpoint as DelegationCheckpointV1, now, parents, r.decisions, mailHeld, memory.adopted) };
 }
 
 /** Queues every notice owed from durable state (D-7812), each through `queueRunlessNotice`; answers how many are owed and not yet sent
  *  (review 1587 F6): one held while `mail-disabled` stands whose subject has no mail yet, one for a recipient unmeasured (which holds it),
  *  and one whose queue threw. With no store nothing is mailed and every notice counts. */
 function queueOwedNotices(d: AdoptStepDeps & { coord?: WatcherCoordPort | undefined }, cp: DelegationCheckpointV1, now: string,
-  parents: ReadonlyMap<string, ParentFact>, decisions: ReturnType<typeof decideAdoption>['decisions'], mailHeld: boolean): number {
+  parents: ReadonlyMap<string, ParentFact>, decisions: ReturnType<typeof decideAdoption>['decisions'], mailHeld: boolean,
+  adopted: ReadonlyMap<string, AdoptedAudit>): number {
   const coordinators = new Map<string, Parameters<typeof leaseCoordinatorOf>[1] | null>();
   const recipientOf = (l: DelegationLeaseRow): LeaseRecipient => {
     if (d.coord === undefined) return { kind: 'unmeasured' };
@@ -189,7 +213,7 @@ function queueOwedNotices(d: AdoptStepDeps & { coord?: WatcherCoordPort | undefi
   };
   let owed = 0;
   const due: { toId: string; subject: string; body: string }[] = [];
-  for (const { recipient, item } of owedLeaseNotices(cp, now, recipientOf)) {
+  for (const { recipient, item } of owedLeaseNotices(cp, now, recipientOf, adopted)) {   // review 1609 F9: L1 matches the remembered audit
     if (recipient.kind === 'unmeasured') owed += 1;
     else due.push({ toId: recipient.to, ...buildLeaseDigest(recipient.to, item, { retain: true, promote: false }) });
   }
