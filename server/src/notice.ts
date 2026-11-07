@@ -140,13 +140,16 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
   return { recorded, archived };
 }
 
-/** D-6732 (ARCH-59 (#794)): a push that is no `NotifyEvent`, for the one writer that has no ring row to
- *  make: the `notify.sh` banner's model-class push (`POST /api/notify` with `push: true`). Its missing feed record is
- *  a residual of W2 that D-5211 states, and no `NotifyEvent` kind fits a model-class line (a new kind widens `shared/api.ts`'s union and the
- *  PWA's per-kind tables), so it takes neither the gate, the ring nor the archive: the caller's policy has already
- *  decided it is pushable, and this only sends it. The push is the funnel's, so the one `PushService.notify` call for a
- *  notice stays in this file. A rejected send is logged under `failed` (the text before ` (reason)`) and never thrown,
- *  because the caller has already answered. */
+/** D-6732 (ARCH-59 (#794)): a push that is no `NotifyEvent`, for the two writers that have no ring row to make.
+ *  - The `notify.sh` banner's model-class push (`POST /api/notify` with `push: true`). Its missing feed record is a
+ *    residual of W2 that D-5211 states, and no `NotifyEvent` kind fits a model-class line (a new kind widens
+ *    `shared/api.ts`'s union and the PWA's per-kind tables).
+ *  - The new-release push (`FleetWatcher.pushRelease`, D-3296): a release has no session, so there is nothing for the
+ *    presence gate to ask and no row to keep. Its once-per-release guard is the caller's persisted mark.
+ *  So it takes neither the gate, the ring nor the archive: passing through here gates NOTHING. The caller's policy has
+ *  already decided it is pushable, and this only sends it. The push is the funnel's, so the one `PushService.notify`
+ *  call for a notice stays in this file. A rejected send is logged under `failed` (the text before ` (reason)`) and
+ *  never thrown, because the caller has already answered. */
 export function notifyPushOnly(deps: Pick<NoticeDeps, 'push'>, payload: PushPayload, failed: string): void {
   sendPush(deps.push, payload, failed);
 }

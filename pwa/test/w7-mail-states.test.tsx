@@ -67,7 +67,7 @@ describe('MailScreen: its request schedule (the default loaders, through the api
     sessionId: 'session-a', workspace: 'ws-a', branch: null, state: 'working', kind: 'work', reviews: null, claimedBy: 'coord-a', resumed: false, clearedAt: null,
     openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-    childReclaim: null, reviewCap: null });
+    childReclaim: null, reviewCap: null, hadChild: false });
 
   it('one api.feed(100) and one api.runs(true) per mount; none on a run leaving the live slice, a session leaving the fleet frame or a new reclaim end; one more feed read on each re-open', async () => {
     const feed = vi.spyOn(api, 'feed').mockResolvedValue({ events: [] } as never);

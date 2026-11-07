@@ -2,7 +2,7 @@
 // never a field it did not check. Pure (L1) apart from `ApiError`'s class, a leaf. `lib/api.ts` re-exports all of it
 // (ARCH-13b, #557).
 import type { AutoMode, ArchiveAnswer, ArchiveBody, ArchiveRefusal, Dialog, DialogAnswered, NotifyMode, RouteFields, UpdateChannel } from '../../../shared/api';
-import { isArchiveRefusal } from '../../../shared/api';
+import { isArchiveRefusal, isLeaseDoorRefusal, LEASE_DOOR_REFUSALS } from '../../../shared/api';
 import {
   LINEAR_CHECK_OUTCOMES, LINEAR_DETAILS_PROBLEMS, LINEAR_TEAMS_MAX, isLinearStoredName, isLinearTeamKey, isLinearUrlKey, isLinearUuid,
   type LinearCheckOutcome, type LinearConnectionView, type LinearLegacyRow, type LinearTeamShown, type LinearWorkspaceView,
@@ -12,7 +12,7 @@ import { isResolveReason, type LookupNote, type ResolveRead } from '../fleet/wor
 import { isNodeRole } from '../../../shared/node-role';
 import { TOKEN_TRANSPORTS } from '../../../shared/agent-protocol';
 import { BOX_TOKEN_PHASES, OWED_REASONS, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, type BoxTokenView, type RotateAnswer } from '../../../shared/box-token';
-import type { RouteRefusal } from '../../../shared/refusal';
+import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal';
 import type { ProjectAddAnswer } from '../../../shared/projectAdd';
 import { ApiError } from './apiError';
 import { refusalText } from './refusalWords';
@@ -350,3 +350,36 @@ export function workspaceAddBody(opts: WorkspaceAddOptions): Record<string, unkn
   };
   return Object.keys(body).length === 0 ? undefined : body;
 }
+
+/** A worktree door's answer as the PWA reads it (delegation broker wave 5, PR10): accepted, with its `expiresAt` as it
+ *  came (the date the worktree is kept until, which the words module reads, review 1624 F7); refused, with its word (a
+ *  door word, or one this build does not know, which the row says as a plain refusal); or a 2xx whose body could not be
+ *  read. Only `ok` and a refusal's `error` are read here. The server's `detail` is never read: the row never draws it
+ *  (D-8097). */
+export type DoorAnswer =
+  | { readonly ok: true; readonly expiresAt: unknown }
+  | { readonly ok: false; readonly error: string }
+  | 'unreadable';
+/** A door's 2xx body: accepted only when it says `ok: true`; anything else is `unreadable` (the act was accepted, what it
+ *  did is unknown), never a thrown parse. `expiresAt` is handed on as it came: the words module reads it, once, through
+ *  the wire's own reader (`actDoneWord`), so the field has one reader and one absence rule (review 1623 F8 (a), review
+ *  1624 F7, the coordinator's ruling: the scope census keeps the broker's word out of this file). */
+export function readDoorAnswer(body: unknown): DoorAnswer {
+  if (!isRecord(body) || body.ok !== true) return 'unreadable';
+  return { ok: true, expiresAt: body.expiresAt };
+}
+/** The statuses the doors refuse with: each door word's one status (`LEASE_DOOR_REFUSALS`). */
+const DOOR_STATUSES: ReadonlySet<number> = new Set(Object.values(LEASE_DOOR_REFUSALS));
+/** A failed request's status and body as a door refusal, or null: then it is no door's answer, and the request rejects
+ *  with its `ApiError` (review 1623 F2). A body is a refusal only as `{ok: false, error}` with a string word, and then:
+ *  a door word only at its own status; a word the server's route vocabulary names for something else never (a 401
+ *  `unauthenticated`, a 403 `foreign-origin`, a 429 `rate-limited`, a 501 `not-configured`: `REFUSAL_STATUS`); and a
+ *  word in neither, which only a newer server sends, only at a door's status, where the row says it as a plain refusal. */
+export function readDoorRefusal(status: number, body: unknown): Extract<DoorAnswer, { ok: false }> | null {
+  if (!isRecord(body) || body.ok !== false || typeof body.error !== 'string') return null;
+  const error = body.error;
+  const door = isLeaseDoorRefusal(error) ? LEASE_DOOR_REFUSALS[error] === status
+    : !Object.hasOwn(REFUSAL_STATUS, error) && DOOR_STATUSES.has(status);
+  return door ? { ok: false, error } : null;
+}
+

@@ -48,7 +48,7 @@ never links work by a name, a path, a time or a working directory.
 | 3 | 2 Observe | exact-pane and turn-marker corrections; current-lane recapture; bounded hook spools; additive byte-safe ingestion; journal/checkpoint and one complete `delegation_*` migration; census, correlation and report-only reconciliation; checkpoint-owned health; delegation-hooks doctor; coordinator intent and clause 17 | fleet first, then server; skills/doctor | 2 | #448, #597, #681, #698, #711, #736, #832, #1068, #1097, #1115, #1120, #1162, #1558 | **merged** 2026-10-18 as `46c50a9a4` (03:04:32Z), a squash of head `1ee3c784a`, after reviews 518, 533, 544, 556, 563, 578 and 583; run 360 closed `done`; dispatched 2026-10-14 00:25:04Z: run 360 to a fresh child (`ccrc-pwa-soft-delta`, branch `ws/soft-delta`) with all 16 items, from plan commit `081636389`, after every overlapping claim's holder consented (decisions below); plan and O1–O5 operator-approved 2026-10-09; block 4633–4664; pre-soak follow-up #597 merged 2026-10-18 as `c1453e422` (22:04:47Z), a squash of head `7cb2ccda5`, after reviews 610, 615 and 617; run 600 closed `done`; D-5433..D-5436 used from block D-5433..D-5438; prerelease `v0.0.299`; follow-up 2 #681 merged 2026-10-19 as `c44bea401`, run 627 closed `done`; follow-up 3 #698 merged 2026-10-19 as `da2610662`, run 629 closed `done`; follow-up 4 #711 merged 2026-10-19 as `2f7e88cdd`, run 632 closed `done`, and its docs fix #736 merged the same day as `2e0dd3ede`; follow-up 5 #832 merged 2026-10-21 as `69aac52f5`, run 645 closed `done`; follow-up 6 #1068 merged 2026-10-21 as `7da6498a7`, run 728 closed `done`; follow-up 7 #1097 merged 2026-10-22 as `bc231bbcb`, run 740 closed `done`; follow-up 7b #1115 merged 2026-10-22 as `bb1a9478d`, run 762 closed `done`; follow-up 8 #1120 merged 2026-10-22 as `3fe68e1de`, run 768 closed `done`; follow-up 9 #1162 merged 2026-10-23 as `0c439bb7d`, run 816 closed `done`; follow-up 10 #1558 merged 2026-10-27 as `66fd18299` (head `2155e5625`), run 968 still open; the seven-day soak was waived by the operator on 2026-10-28, not passed |
 | 4 | 3 Project | the `delegation` frame; activity and lease rows in the PWA; a ccd prune of absent owners' spool directories (operator ruling 2026-10-14) | server + pwa, plus the fleet box for the ccd prune (order set by its plan) | 3 | #1614, #1627, #1619, #2191 | **merged**: PR1 #1614 on 2026-10-31 as `3ce530dad` and PR2 #1627 on 2026-10-31 as `c555df234` (both landed by another session at the operator's go; runs 584 and 1021 still open); PR4 #1619 on 2026-11-03 as `27cd78962` from `c9eaf82fc`, after reviews 1365 and 1367, run 1020 closed `done`; PR3 #2191 on 2026-11-03 as `30b270d19` from `ef3b85d46`, after reviews 1384, 1390 and 1397, run 1007 closed `done`; the two-day gate was waived by the operator on 2026-10-28, not passed |
 | 5v | visibility (scope decision 2026-11-02) | honest helper and workspace visibility in the PWA; no automatic end or reopening | pwa, through the server box | 4 | #2254 | **merged** 2026-11-04 as `1d5b09e01` at exact head `e0792867f` (run 1421, four review rounds; the fourth by the operator's lift of the cap); run 1421 closed `done` |
-| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). PR7 dispatched 2026-11-06 (run 1569) |
+| 5 | 4 Adopt | `ws-lease-mark` and carriers; read-only `ws-lease-audit`; `ws-add --base`, dark; adoption; digest mail; retain and resolve; the console's worktree controls | **AGENT-FIRST**, then server | 4 | #2256, #2269, #2267, #2268, #2303, #2330, #2354, #2357, #2397, #2396, #2419, #2422, #2420 | planned in #2167, approved 2026-11-04. **Merged:** PR1 #2256 on 2026-11-04 as `a520aaace` at reviewed head `aa8579d65` (run 1422, reviews 1429, 1438 and 1439); PR5a #2269 on 2026-11-04 as `08e3b290a` at `fa23688f7` (run 1443, reviews 1451 and 1462); PR2 #2267 on 2026-11-04 as `4b0614ab1` at `c549da67a` (run 1444, reviews 1446, 1461 and 1467, then a land-sync merge); PR3 #2268 on 2026-11-04 as `01db39fd7` at `f5d36368e` (run 1445, reviews 1449, 1457 and 1474); PR4 #2303 on 2026-11-05 as `c8c7bb482` at `530cd7bcd` (run 1471, reviews 1475, 1482 and 1485); PR5b #2330 on 2026-11-05 as `06627f84a` at `a83ed03b4` (run 1489, reviews 1498 and 1508); PR6 #2354 on 2026-11-06 as `0b8755c1e` at `9cea88c09` (run 1540, reviews 1546, 1547 and 1549). PR8 #2357 on 2026-11-06 as `4413ff1df` at `6b64c7ffa` (run 1550, reviews 1554 and 1564). The plan's Task 0, the corpus, #2397 on 2026-11-07 as `e53d64928` at `a4ee0565d` (run 1577, reviews 1591, 1605 and 1607; split out of PR7 by D-8053). PR7 #2396 on 2026-11-07 as `67121c031` at `7c4c3190c` (run 1569, reviews 1587, 1604 and 1609), first in v0.0.1020, shadow. PR10 #2419 on 2026-11-07 as `0ba6431c6` at `bd01a4171` (run 1613, reviews 1615, 1623 and 1624), the PWA's keep, attach and "not delegated" controls. PR10b #2422 on 2026-11-07 as `a80986312` at `b12b0c4fd` (run 1625, reviews 1626, 1628 and 1629), PR10's review leftovers. PR7b #2420 on 2026-11-07 as `b018bd2b1` at `ad726423c` (run 1612, reviews 1622, 1627 and 1630), review 1609's findings on PR7. PR7c (review 1630's liveness finding, run 1631) dispatched 2026-11-07 |
 | 5b | 4 Adopt (promotion) | promotion through `ws-add --base` (the plan's PR9a and PR9b) | server | 5 | — | split out of wave 5 by the operator on 2026-11-04 (D-7940); dispatched once the rest of wave 5 has landed and been used, when the operator says so |
 | 6 | 5 Clean (shadow) | audit tokens for due leases; shadow rows; the shadow review | server | 5 | — | dropped by the operator on 2026-10-26 (D-7002) |
 | 7 | 6 Clean (live) | `ws-lease-clean`; the executor taking a target record | **AGENT-FIRST**, then server | 6; #166 wave 4's sweep (merged #215, live) | — | dropped by the operator on 2026-10-26 (D-7002) |
@@ -1902,6 +1902,217 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
   the decider if any new version builds an unmeasured cell or reds a correlation row. The carried items are in the
   brief's carried file, review 1549's findings among them. Their reviewer's copy had been removed with its workspace, so
   the coordinator kept a copy.
+- **2026-11-06 — Task 0 left PR7.** PR7's first commit was the plan's Task 0: capture the Claude Code versions the
+  fleet runs that the correlation corpus lacked (then 2.1.311, 2.1.314, 2.1.316, 2.1.318 and 2.1.319). Its capture built
+  55 of 70 new cells unmeasured. The cause was the rig, not Claude Code: no scripted fan-out named a model, and the
+  session hook's fan-out arm (D-6798) denies such a call at its PreToolUse. The coordinator ruled the capture discarded
+  and Task 0 a run of its own (run 1577), with its own deviation block (D-8063 to D-8065), and PR7 went on to its
+  wave-done on the 14-version corpus (D-8053). The operator arms adoption only after both have landed and rolled out.
+- **2026-11-07 — The corpus landed (Task 0).** #2397 merged as `e53d64928` at `a4ee0565d` after three review rounds
+  (reviews 1591, 1605 and 1607). It changes test files and the plan only, so it ships nothing and needs no rollout.
+  Every scripted Agent or Task input and every workflow `agent(...)` call in the rig now names `haiku`, and a row runs
+  the real hook over every scripted fan-out (D-8063). The corpus covers 21 versions: 2.1.280 to 2.1.299, and 2.1.311,
+  2.1.312, 2.1.314, 2.1.316, 2.1.317, 2.1.318 and 2.1.319. Each new version measures 13 cells, and `interrupt-exit` is
+  unmeasured on all seven with the reason the 2.1.295 to 2.1.299 cells carry (D-8064). Review 1605 (round 2) found the
+  two-stop row's delegated setup started from a Stop with no background agent, so it held the delegated pair only at
+  zero; the setup now starts from the first Stop, with a live pair. Review 1607 (round 3) found nothing above advisory.
+  Two rulings were made during the run:
+  - On every new version a typed `/compact` fires two SubagentStops between PreCompact and PostCompact, where older
+    versions fire one. The coordinator read the hook's roster block and ruled a second stop harmless, and pinned it in
+    tests only: a closed version range for the count, and a row that replays each two-stop version's own payloads
+    through the real hook from three setups (D-8065).
+  - Review 1591 (round 1) found the run had captured the versions the lanes' updates name, not those the live sessions
+    run. The coordinator ruled that coverage is what the fleet runs: measure both ways and capture the union. 2.1.312
+    and 2.1.317, which live sessions ran though no lane's update named them, were captured in a second capture of their
+    own, and `CURRENT_LANES` is the union (D-8065).
+- **2026-11-07 — What the corpus measured.** No field the correlation, the spool parse or the watch reads changed on
+  the new versions. Two event counts did, and both are ruled: the compaction's second SubagentStop (D-8065), and
+  `interrupt-exit`'s unnamed SubagentStop at `/exit`, gone from 2.1.311 (D-8064). Two other changes are confounded with
+  something besides the version. The subagent meta's `model`, `isBuiltIn` and `finished` appear exactly when the
+  scenarios started naming a model. An admin record's new `refs` entry looks like the capture box's git, since it
+  appears on a plain `git worktree add` too. `pickedEffortModel` first appears on 2.1.317, and no server reader reads it.
+  The new event orderings are one capture each, so a race and a version change look the same. PR7's corpus row (W5-D12)
+  passed 23 of 23 over the 21 versions on a local merge with PR7 at `7980ba094`. The note `corpus.md`, beside the plan,
+  has the detail.
+- **2026-11-07 — Corrections for the corpus run.** D-8065 names "the coordinator's rulings of 2026-11-06"; the ruling on
+  review 1605's F1 was made on 2026-11-07 (UTC). The head commit's trailer for that amendment names F1's change only,
+  though the amended text also records F2's (the end check keeps `updatedAt` where the hook keeps the stamp).
+- **2026-11-07 — Carried from the corpus run's reviews.**
+  - The Rider: the comment in `ccd/session-hook.sh` that opens at `compactions-write-no-hookstate` (D-5239) says a typed
+    `/compact` fires "a SubagentStop", and from 2.1.311 it fires two (the run left the hook unchanged); in
+    `session-hook-compact-carry.test.ts`, the comment at the D-5239 line calls `dispatch-live-gate-v1` "the word", which
+    the lines below use for `hook-main-state-v1`; the plain `done` setup's check after PostCompact would not see a write
+    that keeps every kept key (the other setups and the end check would); and `corpus.md`'s "`interrupt-exit`'s lost
+    one" is measured against 2.1.295 to 2.1.299 only, since 2.1.280 to 2.1.294 had no such stop.
+  - Not measurable from the corpus: no capture holds an ask, a subagent wait or an `interrupted` flag before a
+    compaction, so the two-stop row holds those keys only at their setup values. A capture that raises one would be new
+    rig work.
+  - PR7: if the corpus landed before its push, PR7 merges `main` again, keeps both blocks of the plan's "Deviations
+    found" in ascending order, and runs W5-D12 over all 21 versions (its fix-round-2 ruling).
+- **2026-11-07 — PR7 landed (adoption, the digest and the reminder).** #2396 merged as `67121c031` at `7c4c3190c` after
+  three review rounds (reviews 1587, 1604 and 1609), first in v0.0.1020. The lane's adoption step holds a delegated
+  worktree for 7 days once its parent's work has provably ended: terminal evidence, a settle, two stable passes, a
+  census record of the tree, a carrier read back at the lease's generation, and a read-only audit. It mails the owner a
+  digest naming `ccrc-api leases retain`, and a reminder before the hold ends. It ships in shadow: until the operator
+  creates `$REG/delegation-adopt` by hand, the lane only counts and logs what it would adopt (`adoption.wouldAdopt`).
+  Every act writes through PR5b's `transitionLease`, under the floor rule. The decider is L1 and pure; the step passes
+  reads and acts.
+  - Round 1 (review 1587) found seven important gaps in what the step fed the decider and in the memory it kept
+    between passes. The fixes moved the parent's classification into L1, read a listed but unbuilt registry row as
+    unmeasured, kept a death the lane had seen until the parent is measured alive at the lease's incarnation, held only
+    definite audit answers and for at most an hour, recorded an attention key only after its notice ran, sent no digest
+    after its date, and split the recipient's three answers.
+  - Round 2 (review 1604) found three important gaps. A kept death could still act on a pass whose parent read was
+    unmeasured (now such a pass decides nothing). The carrier-read bound took the same first eight leases every pass
+    (now the reads rotate, as PR6's do). And the restart row could not fail (now it reads the new lane). The round
+    first merged `main`, for #2409's delegation-card change and then for the corpus (#2397), and W5-D12 passed over
+    21 versions.
+  - Its departures are D-8053 to D-8058: D-8053 Task 0 left PR7; D-8054 `boxHolds` needs the mark lock; D-8055 the
+    step is its own module; D-8056 a notice is owed at the lease's current generation; D-8057 audit answers held while
+    watched, definite only and for at most an hour; D-8058 a death the lane saw is kept, with its interfaces. D-8037,
+    D-8057, D-8058 and D-7812 were amended in place. The note `pr7.md`, beside the plan, has the 54-row mutation table.
+- **2026-11-07 — PR7 accepted at the review cap, with a follow-up.** Review 1609 (round 3, the last the cap allows)
+  found one important gap that predates round 2. A tmux `unknown` reads as status `dead` (D-309), and the decider took
+  a parent's liveness from that status. So a faulted pane counts as a death, and the decider's liveness-unmeasured arm
+  has no production case. It found nine minor gaps besides. Every one is in the safe direction (a wrong 7-day hold,
+  never a removal), and in shadow the cost is a would-adopt count that can run high. The coordinator accepted PR7 at
+  its reviewed head rather than ask for the cap to be lifted. It carried every finding to a follow-up PR inside wave 5,
+  PR7b (run 1612, with its own deviation block), which must land and roll out before the operator creates the adoption
+  marker.
+- **2026-11-07 — Carried from PR7's reviews.**
+  - PR7b, the whole of review 1609:
+    - liveness from `presence`, with `unknown` and `asleep` unmeasured, and the breaker keeping `status` (fail-shut);
+    - a retracted death erased only on a measured absence;
+    - audit answers held as they come back on an uncut pass;
+    - cut checks after every awaited read;
+    - an "alive again" the decider did not see ends a kept death;
+    - four missing rows;
+    - rule 3 asking PR6's read-back for `equal`;
+    - "left changed" only for a definite answer;
+    - the stale text, one carrier-read comparator, and the step in its own `try`.
+  - The Rider, from review 1604's advisories: `adoption.wouldAdopt` dips for one pass when a lease's decision is
+    `audit`; the shared `catch`'s wording after an applied adoption; a `remind` from the checkpoint read before the
+    effects' awaits; a hanging `ws-lease-audit` cutting PR6's carrier step while it hangs; and moving the step's
+    remaining classifications (the marker word, `mailHeld`, the recipient's unmeasured cases, the `owed` arithmetic)
+    into L1.
+- **2026-11-07 — Item 66, and the dispatch after PR7.** Item 66 asks for the server box at v0.0.1020 or later, and says
+  not to create the adoption marker yet. A separate item comes when PR7b has rolled out. The server box's floor stays
+  v0.0.966. PR7b (run 1612) and PR10 (run 1613, with its own block) went out from `main` with PR7 merged. PR10 is
+  the PWA's keep, attach and "not delegated" controls under O5-8 (c), so it has no tree doors. The two touch separate
+  files. PR9 (promotion, wave 5b) waits for the operator.
+- **2026-11-07 — PR10 landed (the PWA's worktree controls).** #2419 merged as `0ba6431c6` at `bd01a4171` after
+  three review rounds (reviews 1615, 1623 and 1624). A delegated worktree's row in the PWA now offers Keep, Attach and
+  "Not delegated", through the operator's two doors (`operator-retain` and `resolve`, PR8). Keep acts at once. Attach
+  and "Not delegated" ask first ("Not delegated" in the danger tone, with Cancel focused), post once, and say a refusal
+  as one sentence in the operator's words. Attach shows only while the row's own parent is listed and not archived. An
+  older server's row draws no controls and renders as before. No server source file changed.
+  - Round 1 (review 1615) found three important gaps. Keep stays on rows the server may refuse, because the wire
+    carries no conflict fact and no hold-capability fact, so the refusal is said in worktree words. Focus now lands on a
+    live control after every act. And Not delegated's tone, default focus, toast and in-flight `disabled` each have a
+    row. The round also mapped every door refusal to one sentence derived from the L0 list, so a new code fails to
+    compile until it has one, and the server's raw detail is never drawn (D-8097).
+  - Round 2 (review 1623) found two important gaps in round 1's own fixes. A tap on a closing confirm could post twice
+    (now a ref set at commit guards it). And the refusal reader took any `ok:false` body as a door's answer (now it
+    reads the four parts D-8096 (2) states). It also kept the focus and the alert region alive when a row's controls
+    fall to none.
+  - Its departures are D-8095 to D-8097: D-8095 the hidden lease's unowned row offers "Not delegated" only, since the
+    wire carries no parent for it; D-8096 where the plan's PR10 text meets `main`, in four numbered parts, among them
+    the five census lines; D-8097 refusals in worktree words. The note `pr10.md`, beside the plan, has the mutation
+    table.
+- **2026-11-07 — PR10 accepted at the review cap, with a follow-up.** Review 1624 (round 3, the last) found every
+  round-2 ruling in the code with its row and mutant, nothing critical and nothing that blocks landing. Its leftovers
+  are minor in effect: two parts of the refusal reading have no row (the code is right); a focus flag can go stale after
+  a removal, then move the focus and scroll at an unrelated moment; no browser row asserts focus on the real sheet; two
+  guards are pinned by no row alone; and a refusal sentence stays drawn after the controls return. The coordinator
+  accepted PR10 at its reviewed head and carried them to a follow-up PR inside wave 5, PR10b (run 1625, no deviation
+  block expected).
+- **2026-11-07 — Carried from PR10's reviews.**
+  - PR10b, from review 1624: rows for the refusal reading's parts (3) and (4); the focus flag cleared in the hand-off,
+    and `preventScroll` on every script focus; a browser row on the real sheet, with the "dropped" placement measured
+    there; rows for the in-flight checks and the unowned row's group hand-off; a refusal cleared when the row's offered
+    acts change; `expiresAt` read through the wire's one reader; the floating-button check measuring the Add project
+    row; an open confirm posting only to the lease it asked about; and the mutation log's counts and edit text.
+  - The Rider, from review 1615: the hidden lease's parent on the unowned wire, so Attach can show on that row; a
+    conflict fact and a hold-capability fact on the lease wire, so Keep can hide where it would be refused; and the
+    scope census's blindness to camelCase and uppercase names, which predates PR10.
+  - The Rider, from review 1624: the 501 `not-configured` sentence names a kickoff on a worktree row (nearly
+    unreachable); no focus ring and no `aria-busy` on the script-focused box, as the app's other script-only targets;
+    the last row's group toggle leaving before its row; `not-ready`'s one sentence covering four server conditions; and,
+    on `main`, `apiErrorText`'s lookup on a plain object.
+- **2026-11-07 — Item 68, and the dispatch after PR10.** Item 68 asks for the server box at v0.0.1021 or later, the
+  first release with PR10; the PWA ships with it. It also carries PR7, so the one move covers item 66, and it says again
+  not to create the adoption marker. The server box's floor stays v0.0.966. PR10b (run 1625) went out from `main` with
+  PR10 merged, to a fresh worker. It touches only `pwa/`; PR7b (run 1612) touches no `pwa/` file, so the two run side
+  by side. PR9 (promotion, wave 5b) waits for the operator.
+- **2026-11-07 — PR10b landed (the PWA's worktree controls, finished).** #2422 merged as `a80986312` at `b12b0c4fd`
+  after three review rounds (reviews 1626, 1628 and 1629). It closes review 1624's leftovers on PR10. The two
+  untested parts of the refusal reading have rows. The focus lands on the row's heading, or its box, at every seam the
+  reviews reached, and no script focus scrolls. A refusal clears when the row's offer changes, and the offer includes
+  the record's id, so a lease replaced on an unowned row drops its ask and its late answer. `expiresAt` has one reader.
+  The floating-button check measures the Add project row. No server source file changed, and no number was issued.
+  - Ask 324 (F7): the wave-3 scope census reds any PWA file outside its list whose code names `delegation`, so
+    `wireReaders.ts` could not import the wire's `expiresAt` reader. The coordinator ruled that `readDoorAnswer` hands
+    the field on unread and the words module reads it, so the census lines PR10 ruled stay as they are. D-8096 (2) was
+    amended in place.
+  - Round 1 (review 1626) found 15 minor gaps at the seams: focus lost when a row's controls go or the row leaves
+    while its confirm is open, a refusal that outlived its record, and guards no row could red. Round 2 (review 1628)
+    measured one important gap in a real browser. Once the keyboard focus had moved inside an open confirm, a row that
+    left lost the focus to the page, because the confirm's focus trap was still live during the hand-off. The hand-off
+    is now deferred until the trap has gone, and only takes a focus still on the page or in the departed panel. Round
+    3 (review 1629) found nothing important.
+- **2026-11-07 — Carried from PR10b's reviews, to the Rider.**
+  - The page stays `aria-hidden` while an open confirm closes: a refusal's live region, and any focus the row places,
+    may not be announced (every `QuickConfirm` caller). `Shift+Tab` pressed first inside an open confirm leaves it
+    (the same trap root, in `ui/`).
+  - Rows not yet written: the deferred hand-off's guard conditions; a Tab that provably moved the focus; a grouped
+    row's hand-off when the row leaves, and when its whole group leaves with it; and the hand-off and `preventScroll` in
+    a real browser.
+  - Code shape: one control key shared by `offersControl` and `offerOf`; `actDoneWord`'s type assertion; the order of
+    the two arms in the unmount cleanup; a comment that overstates when the trap has gone.
+  - `pr10b.md` says it cites nothing outside the repository, but its mutation records still lean on the worker's raw
+    log; the tables are the record in the tree.
+- **2026-11-07 — Item 70.** Item 70 asks for the server box at v0.0.1022 or later, the first release with PR10b; the
+  PWA ships with it. It carries PR7 and PR10 too, so the one move covers items 66 and 68, and it says again not to
+  create the adoption marker. The server box's floor stays v0.0.966. PR7b (run 1612) is the last open run of wave 5;
+  PR9 (promotion, wave 5b) waits for the operator.
+- **2026-11-07 — PR7b landed (adoption's evidence, hardened).** #2420 merged as `b018bd2b1` at `ad726423c` after three
+  review rounds (reviews 1622, 1627 and 1630). It closes review 1609's findings on PR7, every one in the safe
+  direction, before the operator arms adoption. A parent's liveness for adoption comes from `presence`: `unknown` (tmux
+  doubt) and `asleep` are unmeasured, so the lease holds, while the breaker keeps reading `status`, which fails shut
+  (D-8092). Rule 3 asks PR6's read-back for `equal`, not only the generation (D-8093). Every audit answer that returns
+  on an uncut pass is held at once, and the pass checks for a cut after every awaited read. A "left changed" word is
+  said only for a definite answer, and the step runs in its own `try`, so a throw no longer skips PR6's carrier step.
+  - Round 1 (review 1622) keyed the last-alive memory by parent and incarnation. Neither that memory nor a retraction
+    is erased before the adopt step has run on a later pass, whatever erased it first (the coordinator's extension
+    during the round). A row with any unmeasured identity field reads `alive: null`. Only a held answer drops its ask.
+    D-8092 and D-8094 were amended in place.
+  - Round 2 (review 1627) found the read gate compares wall-clock instants. A backward clock step can bring a 7-day
+    hold forward, never remove anything. The coordinator accepted it and recorded it in `pr7b.md` and D-8092, and
+    carried keying by the pass ordinal to the Rider. A non-definite answer now keeps its ask through one cut only. A
+    restarting parent read alive by presence has its row.
+  - Round 3 (review 1630) found nothing that blocks landing, and its reviewer would arm adoption on PR7b.
+  - Its departures are D-8092 to D-8094: D-8092 liveness from `presence`, the breaker on `status`; D-8093 the carrier
+    read-back is equality; D-8094 the interfaces PR9 consumes, beside D-8058 (4). The note `pr7b.md`, beside the plan,
+    has the mutation tables.
+- **2026-11-07 — PR7b accepted, with a follow-up for the lane's liveness.** Review 1630 found one gap that is
+  important for the lane's liveness, not its safety, and that PR7 had too. A `ws-lease-audit` slower than what is left
+  of the 45 s pass budget is cut inside its own await on every pass, and its ask is never marked or dropped. While it
+  stays slow, the decider and PR6's carrier step do not run. The coordinator landed PR7b and dispatched PR7c (run 1631,
+  no deviation block expected). PR7c marks an ask before its await and drops it after two passes cut there, and fixes
+  four text items.
+- **2026-11-07 — Carried from PR7b's reviews, to the Rider.**
+  - Key the adoption read gate and the retraction by the pass ordinal (`pass.seq`), not wall-clock instants.
+  - A server-only restart clears the breaker's window memory, so a lease already carrying terminal evidence can settle
+    inside what would have been a suspended window. Rules 5 to 7 and the marker still bind.
+  - With 16 or more candidates and persistently non-definite audits, the carrier reads and the audits alternate, so
+    those answers are never consumed (a delay only).
+- **2026-11-07 — Items 71 and 72.** Item 71 asks for the server box at v0.0.1023 or later, the first release with
+  PR7b. It carries PR7, PR10 and PR10b too, so the one move covers items 66, 68 and 70. Item 72 is the separate item
+  promised with item 66: adoption can be switched on once the server box runs v0.0.1023 or later. It names what to
+  check first: the fleet box's `ccd caps` lists `lease-audit-v1`, and the shadow `adoption.wouldAdopt` counts and log
+  lines name worktrees that hold real work. Then the operator creates `$REG/delegation-adopt` by hand (O5-7 (a),
+  D-7846). It may be switched on before or after PR7c lands. The server box's floor stays v0.0.966. PR7c (run 1631) is
+  the open run of wave 5; PR9 (promotion, wave 5b) waits for the operator.
 
 ## Carried constraints
 

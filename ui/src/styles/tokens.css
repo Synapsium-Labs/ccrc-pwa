@@ -424,7 +424,7 @@
   --head-h:       56px;          /* a page's sticky header (PageScaffold, D-5102). Tap-bearing (D-5667) */
   --section-flow:  column-reverse; /* a Section head's flex-direction: the scope ABOVE the title (D-5666) */
   --measure-chat:  1200px;        /* the transcript's column at a desk (spec 2026-11-06 R2) */
-  --measure-chat-prose: 76ch;     /* the chat's prose inside that column, from 900 (D-8059) */
+  --measure-chat-prose: 90ch;     /* the chat's prose inside that column, from 900 (D-8059) */
 
   /* The METER's shape (D-5098), read by @ccrc/ui's Meter (meter.css). One
      segment with no gap is the continuous bar: Refined's, at 5px, which is

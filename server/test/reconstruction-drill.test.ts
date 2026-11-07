@@ -290,6 +290,10 @@ describe('the reconstruction drill', () => {
                                          // reviews open before the cap refuses again: the PERMISSIVE
                                          // direction, not a safe one (review 951 F3). Not rebuilt because
                                          // its inputs are not rebuilt, never because losing it is safe.
+      'hadChild',                        // D-8068: migration 41's column, and no artifact stamps it. The live
+                                         // `.child` mark names only the minting run, and a reclaimed child has
+                                         // none. So a DB loss reads every rebuilt row false, and those rows get
+                                         // the chip triggers alone: a label refreshes later, nothing else.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
@@ -330,6 +334,7 @@ describe('the reconstruction drill', () => {
       reviewCap: true,
       childIds: true,
       lastMoveAt: true,
+      hadChild: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
     // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
@@ -350,13 +355,14 @@ describe('the reconstruction drill', () => {
     // live runs frame derives it on every tick (`childrenOf`, `coord/runWire.ts`) from the runs and the fleet's marks.
     // Bumped 27 -> 28: `lastMoveAt` (D-7334). NOT in UNRECOVERABLE, `childIds`' reason: nothing stores it, the runs frame
     // derives it on every tick (`withLastMoves`, `coord/runWire.ts`) from the run's events and mail.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(28);
+    // Bumped 28 -> 29: `hadChild` (D-8068), named in UNRECOVERABLE above.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(29);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(18);
+    expect(UNRECOVERABLE.length).toBe(19);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

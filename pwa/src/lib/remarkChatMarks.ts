@@ -18,7 +18,15 @@
 //     marked: there the ground is a tint, and the contrast gate measures these rules on the page ground only.
 // It never descends into code, a link, an image, a reference or raw HTML. Explicit-stack walks, as `remarkAlerts`'s, so a
 // deep tree cannot overflow the call stack. React-free and DOM-free: the parse worker imports it.
-import { MARK_ATTR, leadKind, leadingStatus, markRuns, statusTone, type LeadKind } from './chatMarks';
+//
+// S3's label check reads past its own text node (chat reading Task C fix round 2, review 1592 F4; c-s3-negation): the
+// text nodes of a paragraph, a heading or a table cell share one `LabelScan` over the block's flattened text, so a
+// negator back to the start of a label's clause, or a `?` ending its sentence, counts from a neighbouring node:
+// "**No** tests failed." and "Has #651 merged into `main`?" give no label. The block's nodes are asked in document
+// order, so the scan is one pass. The context never makes or moves a name or a label; only `chatMarks.ts` reads it.
+import {
+  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, statusTone, type LeadKind, type MarkRun,
+} from './chatMarks';
 
 interface MdNode {
   type: string;
@@ -41,6 +49,30 @@ function setAttr(node: MdNode, attr: string, value: string): void {
 const span = (value: string, props: Record<string, string>): MdNode => ({
   type: 'text', value, data: { hName: 'span', hProperties: props },
 });
+
+/** The blocks whose inline text is one run of prose for S3's label check. */
+const BLOCKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'tableCell']);
+
+/** `markRuns`' runs of each plain text node the walk will reach below `block`, with the block as their context: its
+ *  text as written (inline code included, a hard break as a line break), scanned once, in document order. */
+function blockRuns(block: MdNode, into: Map<MdNode, readonly MarkRun[]>): void {
+  let flat = '';
+  const at: { node: MdNode; offset: number }[] = [];
+  const stack: { node: MdNode; walked: boolean }[] = [{ node: block, walked: true }];
+  while (stack.length > 0) {
+    const { node: n, walked } = stack.pop()!;
+    const value = n.type === 'break' ? '\n' : n.value;
+    if (typeof value === 'string') {
+      if (walked && n.type === 'text' && n.data?.hName === undefined) at.push({ node: n, offset: flat.length });
+      flat += value;
+    }
+    const c = n.children;
+    const below = walked && !SKIP.has(n.type);
+    if (c) for (let i = c.length - 1; i >= 0; i -= 1) stack.push({ node: c[i]!, walked: below });
+  }
+  const scan = new LabelScan(flat);
+  for (const { node, offset } of at) into.set(node, markRuns(node.value ?? '', { scan, offset }));
+}
 
 /** The text of `node` and everything below it, as written (inline code included), by an explicit stack. */
 function plainText(node: MdNode): string {
@@ -94,9 +126,9 @@ function splitLeadingStatus(cell: MdNode): void {
   cell.children!.splice(0, 1, ...parts);
 }
 
-/** A text node as `markRuns`' runs; `null` when there is nothing to mark. Where `labels` is false (a header cell) a
- *  status run stays text, joined to the text beside it, and only names are marked. */
-function textRuns(node: MdNode, labels: boolean): MdNode[] | null {
+/** A text node as `markRuns`' runs (`blockRuns`' when its block made them); `null` when there is nothing to mark. Where
+ *  `labels` is false (a header cell) a status run stays text, joined to the text beside it, and only names are marked. */
+function textRuns(node: MdNode, labels: boolean, made: readonly MarkRun[] | undefined): MdNode[] | null {
   const out: MdNode[] = [];
   let marked = false;
   const pushText = (value: string): void => {
@@ -104,7 +136,7 @@ function textRuns(node: MdNode, labels: boolean): MdNode[] | null {
     if (last !== undefined && last.data === undefined) last.value = (last.value ?? '') + value;
     else out.push({ type: 'text', value });
   };
-  for (const r of markRuns(node.value ?? '')) {
+  for (const r of made ?? markRuns(node.value ?? '')) {
     if (r.kind === 'text' || (r.kind === 'status' && !labels)) {
       pushText(r.text);
     } else if (r.kind === 'mark') {
@@ -126,9 +158,11 @@ export function remarkChatMarks(): (tree: unknown) => void {
     // Each entry carries `labels`: false inside a table's header row (its first row), where no status label of any
     // kind is written, S1, S2 or S3 (fix round 2, review 1575 F3). This flag is the one place that gates all three.
     const stack: { node: MdNode; labels: boolean }[] = [{ node: root, labels: true }];
+    const made = new Map<MdNode, readonly MarkRun[]>();
     while (stack.length > 0) {
       const { node, labels } = stack.pop()!;
       if (labels && node.type === 'tableCell') splitLeadingStatus(node);
+      if (labels && BLOCKS.has(node.type)) blockRuns(node, made);
       if (labels && node.type === 'strong' && (node.children ?? []).every((c) => c.type === 'text')) {
         const tone = statusTone(plainText(node));
         if (tone !== null) setAttr(node, MARK_ATTR.status, tone);
@@ -138,7 +172,7 @@ export function remarkChatMarks(): (tree: unknown) => void {
       const next: MdNode[] = [];
       children.forEach((child, index) => {
         if (child.type === 'text' && child.data?.hName === undefined) {
-          const runs = textRuns(child, labels);
+          const runs = textRuns(child, labels, made.get(child));
           if (runs === null) next.push(child);
           else for (const run of runs) next.push(run);
           return;

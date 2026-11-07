@@ -10,7 +10,7 @@
   "settleS": 10,
   "entries": [
     {"label": "main-call", "match": {"kind": "tools", "lastUser": "dlg wf-iso-resume"},
-     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfr', description: 'dlg wf resume' }\nconst r = await Promise.all([agent('dlg-wf-r1', { label: 'r1', isolation: 'worktree' }), agent('dlg-wf-r2', { label: 'r2', isolation: 'worktree' })])\nreturn r\n"}}},
+     "tool_use": {"name": "Workflow", "input": {"script": "export const meta = { name: 'dlgwfr', description: 'dlg wf resume' }\nconst r = await Promise.all([agent('dlg-wf-r1', { label: 'r1', model: 'haiku', isolation: 'worktree' }), agent('dlg-wf-r2', { label: 'r2', model: 'haiku', isolation: 'worktree' })])\nreturn r\n"}}},
     {"label": "r1-hang", "match": {"kind": "tools", "lastUser": "dlg-wf-r1"}, "hang_ms": 600000, "text": "never"},
     {"label": "r2", "match": {"kind": "tools", "lastUser": "dlg-wf-r2"}, "text": "DLG-WF-R2"},
     {"label": "r1-resumed", "match": {"kind": "tools", "lastUser": "dlg-wf-r1"}, "text": "DLG-WF-R1"}

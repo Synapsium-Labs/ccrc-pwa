@@ -7,7 +7,10 @@
 // them ever asked.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { MessageBubble } from '../src/session/MessageBubble';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MessageBubble, linkify } from '../src/session/MessageBubble';
+import type { ChatRefContext } from '../src/lib/chatRefs';
+import { ChatRefsContext } from '../src/session/chatRefsContext';
 
 // `cleanup` AND `restoreAllMocks`: measured, because the second link case
 // below spied `window.open` while the first case's spy was still installed,
@@ -352,5 +355,42 @@ describe('a system message whose first line is blank', () => {
       text: '\nthe body is below',
     }} />);
     expect(screen.getByText('system message')).toBeInTheDocument();
+  });
+});
+
+// Chat reading Task L (D-8062; spec 2026-11-06 R9): `linkify` stays the one owner of links in the operator's own text, and with a
+// context it links the names `markRuns` finds between the URLs.
+describe('linkify links names in the operator\'s own text (chat reading Task L)', () => {
+  const ctx: ChatRefContext = {
+    repo: 'owner-a/repo-a', project: 'project-a', branch: 'ws/one', knownRuns: new Set(), knownItems: new Set(),
+  };
+  const html = (text: string, c: ChatRefContext | null = null): string => renderToStaticMarkup(<>{linkify(text, c)}</>);
+
+  it('linkify links #651 in the operator\'s own text under a context', () => {
+    const out = html('is #651 merged? see https://example.com/x and run 1527', ctx);
+    expect(out).toContain('<a href="https://github.com/owner-a/repo-a/issues/651" target="_blank" rel="noopener noreferrer">#651</a>');
+    expect(out).toContain('<a href="https://example.com/x" target="_blank" rel="noopener noreferrer">https://example.com/x</a>');
+    expect(out).toContain('<a href="/runs?run=1527">run 1527</a>');
+  });
+
+  it('linkify with no context is today\'s output', () => {
+    const text = 'is #651 merged? see https://example.com/x and run 1527';
+    expect(html(text)).toBe('is #651 merged? see <a href="https://example.com/x" target="_blank" rel="noopener noreferrer">https://example.com/x</a> and run 1527');
+    expect(html(text)).toBe(html(text, null));
+  });
+
+  it('linkify draws no status label', () => {
+    const out = html('#651 merged and CI green', ctx);
+    expect(out).not.toContain('data-status');
+    expect(out).toBe('<a href="https://github.com/owner-a/repo-a/issues/651" target="_blank" rel="noopener noreferrer">#651</a> merged and CI green');
+  });
+
+  it('a user message under a provider links its names', () => {
+    const { container } = render(
+      <ChatRefsContext value={ctx}>
+        <MessageBubble id="s" event={{ kind: 'user', uuid: 'u1', ts: '2026-07-21T20:00:00Z', text: 'check #651' }} />
+      </ChatRefsContext>,
+    );
+    expect(container.querySelector('.msg-user a')?.getAttribute('href')).toBe('https://github.com/owner-a/repo-a/issues/651');
   });
 });

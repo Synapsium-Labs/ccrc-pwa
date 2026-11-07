@@ -988,10 +988,12 @@
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
-  /* The arrived lane's row (AccountsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
+  /* The arrived lane's row (AccountsScreen) and run row (RunsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
      is removed by the script-focus rule (`:focus`, so the second selector outranks it), so the same inset outline marks it. */
   .accounts-row[data-arrived],
-  .accounts-row[data-arrived][tabindex="-1"]:focus {
+  .accounts-row[data-arrived][tabindex="-1"]:focus,
+  .run-row[data-arrived],
+  .run-row[data-arrived][tabindex="-1"]:focus {
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
@@ -2156,6 +2158,13 @@ button.proj-card-pool::before {
   font-size: var(--fs-xs);
   color: var(--ink-tertiary);
 }
+/* A delegation work line that wraps (a worktree's controls drop under its words, delegation broker wave 5 PR10) keeps its
+   bracket on the words' first line: the bracket and the line sit on their first baseline, which a one-line row's centre
+   already shares, rather than on the centre of the whole wrapped line. */
+.proj-nest:has(> .proj-work) > .proj-nest-bracket,
+.proj-nest:has(> .proj-work) > .proj-work {
+  align-self: baseline;
+}
 
 /* The child that does not exist yet. NOT a tap surface and never a --glow: a
    spawn in flight is a state, not a living pane, and there is no session to
@@ -2268,6 +2277,25 @@ button.proj-card-pool::before {
   font-family: var(--family-mono);
   font-size: var(--fs-2xs);
   color: var(--ink-secondary);
+}
+
+/* A worktree row's controls (delegation broker wave 5, PR10): Keep, Attach and Not delegated, and the sentence a refused or
+   unread act leaves. They follow the words and chips and wrap as the row does, so on a phone they drop under the words
+   rather than squeezing them; each button carries its own tap floor (`Button`). The sentence breaks anywhere it must. */
+.proj-work-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-meta);
+  color: var(--ink-secondary);
+}
+/* The box takes focus from script only (`tabIndex=-1`), after an act disables its buttons: it is not a control, so
+   base.css's page-wide ring stays off it, as off the fleet column (above). Review 1623 F8 (d). */
+.proj-work-controls:focus-visible {
+  outline: none;
 }
 
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
@@ -2429,11 +2457,14 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
-/* A lane arrived at from a card (`/accounts?lane=<id>`): the screen scrolls it into view and focuses it by script, so
+/* A lane arrived at from a card (`/accounts?lane=<id>`), or a run from a name in chat (`/runs?run=<id>`, chat reading Task L,
+   D-8062): the screen scrolls it into view and focuses it by script, so
    the row is a focus target with no ring of its own (tabindex -1, never a tab stop), and the one quiet edge says which
    row the card meant. An inset shadow on the row's own ground, not a border: it moves no layout and adds no ink. */
-.accounts-row[tabindex="-1"]:focus { outline: none; }
-.accounts-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
+.accounts-row[tabindex="-1"]:focus,
+.run-row[tabindex="-1"]:focus { outline: none; }
+.accounts-row[data-arrived],
+.run-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */

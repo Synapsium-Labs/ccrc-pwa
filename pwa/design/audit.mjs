@@ -973,6 +973,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the inferred chip and the creating Bash call's chip on a raw worktree's line (D-6999), words in a currentColor frame like .sess-workson, on the same card ground; it paints no background of its own",
   },
+  '.proj-work-controls': {
+    under: ['var(--bg-surface)'],
+    why: "a worktree line's controls and the sentence a refused or unread act leaves (delegation broker wave 5, PR10), inside the same .proj-work line on the same card ground; it paints no background of its own, and its buttons are the design system's, which carry their own pairs. The selector names no ancestor, so no route could ground it",
+  },
   '.proj-released-toggle, .proj-archived-toggle, .proj-children-toggle, .proj-group-toggle': {
     under: ['var(--bg-surface)'],
     why: "the card's fold toggles (workspace lifecycle spec §5.1), and since D-6088 the coordinator's folded-workers line, which sits in .proj-card-body on the same card ground; rekeyed when that selector joined the rule. Siblings of .proj-card-body inside the card, on the card's own ground. Rekeyed again when the delegation broker's two group headers (wave 4) joined it: the same disclosure, on the same ground. ONE rule since both became <BareRow>: they had declared the same seven declarations as each other as well as the six the component carries, and this key moved with them — a rule key is `<basename> <selector>`, so merging two selectors rekeys, which the gate said out loud rather than passing quietly. Neither sets a background of its own and the selector names no ancestor, so no route could ground it",
@@ -1038,6 +1042,22 @@ export const INHERITED_GROUNDS = {
   '.msg-assist li::marker': {
     under: ['var(--bg-page)'],
     why: "the bullet and the ordered list's NUMBER, which is text, in --ink-tertiary. It sat in the uncovered census while the preflight's `list-style: none` kept every prose marker from painting; prose.css now restores them, so the pair is real and is measured. .msg-assist paints nothing (the .msg-plain-note reasoning), so .chat's --bg-page is behind it — and in the Docs reader, .doc-body.msg-assist on .docs-screen, the same --bg-page. A list inside a callout sits on that callout's tint instead, and has a rule of its own for it — `.msg-assist .callout li::marker`, --ink-secondary — which needs no entry here: its selector names `.msg-assist .callout`, so the descendant route measures it on each of the five tints the stylesheet binds",
+  },
+  // ── chat colour (chat reading Task C, D-8061; @ccrc/ui prose.css) ───────
+  // The lead-ins and the action list's markers set an ink and paint no ground.
+  // The four status labels need no entry: each paints a solid tint of its own,
+  // so the self-grounded route measures it.
+  ".msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='action']:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *)": {
+    under: ['var(--bg-page)'],
+    why: "an action lead-in (\"What to do:\") in --status-attention-text. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it. remarkChatMarks marks a lead-in at the top level only, a root paragraph or the first paragraph of an item of a root list, never inside a callout or a quote, whose tinted or surface ground this entry would not describe. The scope keeps the Docs reader and an opened recap out, and the :not() a checked task item's lead-in, which keeps the prose's bold ink",
+  },
+  ".msg-assist:not(.doc-body):not(.compaction-body) strong[data-lead='info']:not(.task-list-item:has(> input:checked, > p:first-child > input:checked) *)": {
+    under: ['var(--bg-page)'],
+    why: "any other lead-in (\"Why I can't do it.\") in --acct-blue, the NOTE callout's hue. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it. remarkChatMarks marks a lead-in at the top level only, never inside a callout or a quote. The scope keeps the Docs reader and an opened recap out, and the :not() a checked task item's lead-in, which keeps the prose's bold ink",
+  },
+  ".msg-assist:not(.doc-body):not(.compaction-body) :is(ul, ol)[data-after-lead='action'] > li::marker": {
+    under: ['var(--bg-page)'],
+    why: "the bullet or NUMBER, which is text, of a list straight after an action lead-in, in --status-attention-text. .msg-assist has no fill of its own (as the .msg-assist thead th entry says), so .chat's --bg-page is behind it: the .msg-assist li::marker entry's ground. remarkChatMarks flags a root-level list only, after a root-level paragraph, never one inside a callout or a quote",
   },
   // ── native Docs reader W4, Task 6: chat's plain-text note ─────────────
   '.msg-plain-note': {

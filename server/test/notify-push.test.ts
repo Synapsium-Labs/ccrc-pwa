@@ -805,10 +805,10 @@ describe('the push patterns are built from their owners, every shape uses them, 
 
 describe('the direct callers of PushService.notify in server/src (the consolidation design, §3 K6; ARCH-59)', () => {
   // The notify funnel (notice.ts) is the one way a notice is raised, and the one place `PushService.notify` is called for
-  // one (ARCH-59, #794: /api/notify's models push goes through `notifyPushOnly`, which shares `sendPush` with `raise`).
-  // One caller is left outside it: the watcher's release sender (`pushRelease`, watch.ts) is sessionless (D-3296): a
-  // release is about the fleet, not a session, so it has no session for the presence gate and keeps no `NotifyLog` or
-  // feed record. This list is what a later wave finds it by.
+  // one (ARCH-59, #794: /api/notify's models push and the watcher's release push (`pushRelease`, watch.ts) both go through
+  // `notifyPushOnly`, which shares `sendPush` with `raise`). No caller is left outside it. The release push stays
+  // sessionless (D-3296): a release is about the fleet, not a session, so it has no session for the presence gate and
+  // keeps no `NotifyLog` or feed record, and going through the helper changes none of that.
   //
   // WHAT IT CATCHES: any line, in any JS or TS source file under server/src, that spells a call of a member named `notify`
   // in one of NOTIFY_SPELLINGS' forms once its inline `/* … */` spans are stripped, unless what is left begins with `//`,
@@ -850,8 +850,8 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
     return out;
   };
 
-  it('are the funnel and the watcher\'s release sender, once each, and no others', () => {
-    expect(callers()).toEqual({ 'notice.ts': 1, 'watch.ts': 1 });
+  it('are the funnel alone, once, and no others', () => {
+    expect(callers()).toEqual({ 'notice.ts': 1 });
   });
 
   it('the banner\'s bus frames have one writer, notice.ts: no other file emits a `notice` event or a `type: \'notice\'` session frame (ARCH-59, #794)', () => {

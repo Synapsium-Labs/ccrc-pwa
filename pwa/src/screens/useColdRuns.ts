@@ -15,7 +15,7 @@
 // frame, so it fires on a real transition and never on an unrelated re-render.
 import { useEffect, useRef, useState } from 'react';
 import type { RunsPageAnswer, RunSummary } from '../../../shared/api';
-import { appendOlderRunPage, childReclaimDoneRefreshDue, childReclaimRefreshDue, childRunsSeen, mergeFirstRunPage } from '../fleet/runWords';
+import { appendOlderRunPage, childReclaimDoneRefreshDue, childReclaimRefreshDue, mergeFirstRunPage } from '../fleet/runWords';
 import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import type { FleetStore } from '../stores/fleet';
 import { api } from '../lib/api';
@@ -66,6 +66,11 @@ export interface ColdRuns {
    * It is the RE-READ's state: only `loadCold` sets and clears it. A failed older page is `loadOlder`'s own outcome.
    */
   readonly state: 'loading' | 'ok' | 'error';
+  /** Whether a re-read is on its way: from the mount, which always reads, until the newest re-read issued settles (chat reading
+   *  Task L, D-8062; review 1586 F4). A run leaving the live frame raises it in the very render that shows it gone, before the
+   *  effect issues that re-read (review 1597 F2), so an answer read before the run left is never the last word on it. `state`
+   *  keeps the last answer meanwhile, so a held `ok` may be about to change. An older page (`loadOlder`) is not a re-read. */
+  readonly reading: boolean;
   /** Re-read now. The two sheets that close a run call it on `onDone`: the
    *  finished half of the board has no source but this read. */
   readonly reload: () => Promise<void>;
@@ -110,6 +115,7 @@ export function useColdRuns(
   const heldPages = page === undefined ? null : store.getState().runPages;
   const [cold, setCold] = useState<RunSummary[] | null>(heldPages?.runs ?? null);
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>(heldPages === null ? 'loading' : 'ok');
+  const [reading, setReading] = useState(true);
   const hasOlder = store((s) => page !== undefined && s.runPages !== null && s.runPages.nextBefore !== null);
 
   // Held in a ref, not the effect's own dependency array — the same fix
@@ -158,11 +164,14 @@ export function useColdRuns(
   const applied = useRef(0);
   const loadCold = (): Promise<void> => {
     const seq = ++issued.current;
+    setReading(true);
+    // The newest re-read issued settling ends the reading, whatever it answered; an older one settling leaves it on its way.
+    const settled = (): void => { if (aliveRef.current && seq === issued.current) setReading(false); };
     const limit = pageRef.current;
-    const reading = limit === undefined
+    const request = limit === undefined
       ? (loadRunsRef.current as ColdLoader)()
       : (loadRunsRef.current as PagedLoader)(limit);
-    return reading
+    return request
       .then((r) => {
         // The body is read BEFORE the mark moves: a success whose body cannot be
         // read (a `null` answer) throws here, reaches the `catch` below as an
@@ -184,7 +193,8 @@ export function useColdRuns(
         setColdState('ok');
       })
       // A failed read changes only `state`: the rows, and the stored pages, stay (never a fold to empty).
-      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
+      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); })
+      .finally(settled);
   };
 
   // The older page in flight, if any: a second tap on "Show older" while one is on its way joins it rather than
@@ -199,7 +209,7 @@ export function useColdRuns(
     // answer, read of the older archive, is then dropped (the next "Show older" asks again).
     const askedAt = issued.current;
     const asked = held.nextBefore;
-    const reading = (loadRunsRef.current as PagedLoader)(limit, asked)
+    const request = (loadRunsRef.current as PagedLoader)(limit, asked)
       .then((r): OlderOutcome => {
         const answer = runsPageOf(r);
         if (!aliveRef.current || issued.current !== askedAt) return 'dropped';
@@ -216,8 +226,8 @@ export function useColdRuns(
       })
       .catch((): OlderOutcome => 'failed')   // the older page's own outcome: it says nothing about the re-read (F3)
       .finally(() => { olderInflight.current = null; });
-    olderInflight.current = reading;
-    return reading;
+    olderInflight.current = request;
+    return request;
   };
 
   useEffect(() => {
@@ -241,6 +251,18 @@ export function useColdRuns(
   // the live active set stops being there (a close, or a run leaving this box's
   // view some other way).
   const prevLiveIdsRef = useRef<Set<number> | null>(null);
+  // The same vanish, seen DURING the render that brings it (review 1597 F2): the re-read below is issued only in the effect,
+  // after that render commits, so `reading` is raised here first, by React's own "adjust state when a value changes" form.
+  // No render shows a held answer as the last word on a run that has just left the frame. The live rows last rendered are
+  // kept as state, under the same conditions as the effect's ref: a frame seen, a schedule that re-reads.
+  const [renderedLive, setRenderedLive] = useState<RunSummary[] | null>(null);
+  if (rereadOnTransitions && runsFrameSeen && live !== renderedLive) {
+    setRenderedLive(live);
+    if (renderedLive !== null) {
+      const ids = new Set(live.map((r) => r.id));
+      if (renderedLive.some((r) => !ids.has(r.id))) setReading(true);
+    }
+  }
   useEffect(() => {
     if (!runsFrameSeen) return;
     const ids = new Set(live.map((r) => r.id));
@@ -282,12 +304,8 @@ export function useColdRuns(
   // restarted server, or one older than the field) is never a reason to read,
   // and the first value this board sees is its baseline, not a change.
   //
-  // Which runs had a child is remembered across frames (`childRunsSeen`). This
-  // effect is declared first, so it runs first in a commit that changes both.
-  const childRunsRef = useRef<ReadonlySet<number>>(new Set<number>());
-  useEffect(() => {
-    childRunsRef.current = childRunsSeen(childRunsRef.current, sessions, cold ?? []);
-  }, [sessions, cold]);
+  // Which runs had a child is the server's to say (`RunSummary.hadChild`, D-8068),
+  // so a board reloaded after the child left reads the same as one that saw it.
   // `undefined` = no coord frame seen yet by this board; null = seen, no value.
   const prevDoneAtRef = useRef<number | null | undefined>(undefined);
   useEffect(() => {
@@ -295,7 +313,7 @@ export function useColdRuns(
     const after = childReclaimDoneAtOf(coordFrame);
     const before = prevDoneAtRef.current;
     prevDoneAtRef.current = after;
-    if (rereadOnTransitions && before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
+    if (rereadOnTransitions && before !== undefined && childReclaimDoneRefreshDue(cold ?? [], before, after)) {
       void loadCold();
     }
     // The coord frame's dependencies only, as wave 5's effect takes the fleet
@@ -304,5 +322,5 @@ export function useColdRuns(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordFrame, coordFrameSeen]);
 
-  return { cold, state: coldState, reload: loadCold, loadOlder, hasOlder };
+  return { cold, state: coldState, reading, reload: loadCold, loadOlder, hasOlder };
 }

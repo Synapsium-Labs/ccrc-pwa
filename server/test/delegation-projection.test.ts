@@ -26,7 +26,7 @@ import { delegationTreeKey } from '../src/coord/delegation-correlation.js';
 import { conflictingTreeKeys, delegationTreeTarget, disownedTreeKey, disownedTreeKeys, resolvedAttemptCovered } from '../src/coord/delegation-conflicts.js';
 import { decideOperatorRetain, decideResolve, decideRetain, parseLeaseTarget } from '../src/coord/delegation-lease-acts.js';
 import { delegationSha256Hex, emptyDelegationCheckpoint, type DelegationLeaseCarrierRow } from '../src/coord/delegation-model.js';
-import { DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_CREATOR_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS } from '../../shared/api.js';
+import { DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_CREATOR_KINDS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, FLEET_PROTO, delegationLeaseDispositionOf, delegationLeaseExpiresAtOf } from '../../shared/api.js';
 
 const T0 = Date.parse('2026-10-20T00:00:00.000Z');
 const at = (min: number): string => formatDelegationInstant(T0 + min * 60_000);
@@ -73,7 +73,7 @@ function census(
     incarnations: new Map(Object.entries(incarnations)),
   };
 }
-const alive = (id: string, over: Partial<DelegationProjectionSession> = {}): DelegationProjectionSession => ({ id, status: 'idle', ...over });
+const alive = (id: string, over: Partial<DelegationProjectionSession> = {}): DelegationProjectionSession => ({ id, presence: 'alive', lifecycle: 'running', ...over });
 function run(id: number, sessionId: string, claimedBy: string | null, openedMin: number, closedMin: number | null): DelegationProjectionRun {
   return { id, sessionId, claimedBy, openedAt: ms(openedMin), closedAt: closedMin === null ? null : ms(closedMin) };
 }
@@ -81,14 +81,15 @@ function input(over: {
   activities?: DelegationActivityRow[]; leases?: DelegationLeaseRow[]; attempts?: DelegationAttemptRow[];
   carriers?: DelegationLeaseCarrierRow[];
   census?: DelegationProjectionInput['census']; absences?: { project: string; adminRecord: string }[];
-  sessions?: DelegationProjectionSession[]; runs?: DelegationProjectionRun[];
+  sessions?: DelegationProjectionSession[]; refused?: ReadonlySet<string>; runs?: DelegationProjectionRun[];
 }): DelegationProjectionInput {
   return {
     checkpoint: {
       activities: over.activities ?? [], leases: over.leases ?? [], attempts: over.attempts ?? [],
       ...(over.carriers === undefined ? {} : { leaseCarriers: over.carriers }),
     },
-    census: over.census ?? census(), absences: over.absences ?? [], sessions: over.sessions ?? [alive('p')], runs: over.runs ?? [],
+    census: over.census ?? census(), absences: over.absences ?? [], sessions: over.sessions ?? [alive('p')],
+    refused: over.refused ?? new Set(), runs: over.runs ?? [],
   };
 }
 
@@ -113,8 +114,37 @@ describe('projectDelegation: activity rows and liveness', () => {
   });
 
   it('W4-P3: a dead parent reads stale, never live', () => {
-    const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', { status: 'dead' })] }));
+    const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', { presence: 'dead', lifecycle: 'orphan' })] }));
     expect(out.activities.map((a) => a.liveness)).toEqual(['stale']);
+  });
+
+  // D-6908: every row read `stale` before; the frame's real rows are driven in `session-ladders-characterization.test.ts`.
+  it.each([
+    ['a sleeping parent has its own word', { presence: 'asleep', lifecycle: 'stopped' }, 'asleep'],
+    ['a parent tmux did not answer for is doubt', { presence: 'unknown', lifecycle: 'orphan' }, 'unmeasured'],
+    ['a restarting parent is doubt', { presence: 'alive', lifecycle: 'restarting' }, 'unmeasured'],
+    ['a parent row with no presence said nothing, which is doubt', { presence: undefined, lifecycle: null }, 'unmeasured'],
+    ['a live parent with an identity field unmeasured is doubt, as a claim reads it', { unmeasured: ['workdir'] }, 'unmeasured'],
+    ['a dead parent with an identity field unmeasured is doubt too', { presence: 'dead', lifecycle: 'orphan', unmeasured: ['workdir'] }, 'unmeasured'],
+    ['a torn stamp over a gone pane stays stale: the ruling keeps two cases, not this one', { presence: 'unknown', lifecycle: 'unmeasurable' }, 'stale'],
+  ] as const)('%s', (_name, row, word) => {
+    const out = projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [alive('p', row)] }));
+    expect(out.activities.map((a) => a.liveness)).toEqual([word]);
+  });
+
+  it('a parent the listing refused is doubt, though no row lists it; one simply unlisted stays stale', () => {
+    const one = (refused: ReadonlySet<string>) =>
+      projectDelegation(input({ activities: [activity({ activityId: 'a1' })], sessions: [], refused })).activities[0]!.liveness;
+    expect(one(new Set(['p']))).toBe('unmeasured');
+    expect(one(new Set())).toBe('stale');
+  });
+
+  it('an ended activity reads ended whatever its parent, so a sleeper shows no entry for finished work', () => {
+    const out = projectDelegation(input({
+      activities: [activity({ activityId: 'a1', executionState: 'ended', endedAt: at(15) })],
+      sessions: [alive('p', { presence: 'asleep', lifecycle: 'stopped' })],
+    }));
+    expect(out.activities).toEqual([]);
   });
 
   it('W4-P4: another incarnation reads stale; an unmeasured or absent incarnation reads unmeasured; an unknown execution unmeasured', () => {
@@ -523,5 +553,57 @@ describe('delegation-conflicts: the one derivation of conflict, resolution, diso
     expect([...disownedTreeKeys(cp)]).toEqual([disownedTreeKey(PROJECT, 't1', 'main')]);
     expect(disownedTreeKeys(cp).has(disownedTreeKey(PROJECT, 't1', 'other')), 'another creation base is another tree').toBe(false);
     expect(disownedTreeKey('a', 'b-c', null)).not.toBe(disownedTreeKey('a-b', 'c', null));
+  });
+});
+
+// Delegation broker wave 5, PR7 (Task 5.7.4): the lease row carries its disposition and expiry, additively.
+describe('PR7: the lease row\'s disposition and expiry (W5-W1, W5-W2)', () => {
+  it('W5-W1: an adopted row carries disposition adopted and expiresAt = cleanupDueAt; an ephemeral one ephemeral and null; a transferring one transferring', () => {
+    const out = projectDelegation(input({
+      leases: [
+        lease({ leaseId: 'l1', adminRecord: 't1', disposition: 'adopted', adoptedAt: at(20), cleanupDueAt: at(20 + 7 * 1440) }),
+        lease({ leaseId: 'l2', adminRecord: 't2' }),
+        lease({ leaseId: 'l3', adminRecord: 't3', disposition: 'retained', retainedAt: at(21), cleanupDueAt: at(21 + 7 * 1440) }),
+      ],
+      carriers: [{ leaseId: 'l3', transferringSince: at(25), transferRun: 9, promotedRun: null, promotedSession: null, releaseReason: null, resolvedThrough: null }],
+      census: census({ [PROJECT]: [record('t1'), record('t2'), record('t3')] }),
+    }));
+    expect(out.leases.map((l) => [l.leaseId, l.disposition, l.expiresAt])).toEqual([
+      ['l1', 'adopted', at(20 + 7 * 1440)], ['l2', 'ephemeral', null], ['l3', 'transferring', at(21 + 7 * 1440)]]);
+    expect(delegationLeaseDispositionOf(out.leases[0]!)).toBe('adopted');
+    expect(delegationLeaseExpiresAtOf(out.leases[1]!)).toBeNull();
+  });
+
+  it('W5-W2: the frame stays additive — the kebab check admits the carrier words, FLEET_PROTO is 1, and an older row (no member) reads as null', () => {
+    for (const w of ['ephemeral', 'adopted', 'retained', 'transferring', 'promoted']) expect(isDelegationProjectionKebab(w), w).toBe(true);
+    expect(FLEET_PROTO).toBe(1);
+    const older = { leaseId: 'l1' } as never;
+    expect(delegationLeaseDispositionOf(older)).toBeNull();
+    expect(delegationLeaseExpiresAtOf(older)).toBeNull();
+    expect(delegationLeaseDispositionOf({ disposition: 'released' } as never), 'released is never a row\'s word').toBeNull();
+  });
+});
+
+// Review 1564 F2 (carried into PR7; RULED accept): `treeLeaseOf` stays ownership-blind, so an unowned row and a `tree-<key>` resolve
+// name the same lease; and its order (oldest first by first observation, then lease id) is pinned both ways.
+describe('1564 F2: the tree\'s lease, ownership-blind, in its one order', () => {
+  it('the moved worktree: the attempt\'s path is not owned and the lease\'s path is, so the unowned row stands and names that lease', () => {
+    const owned = lease({ leaseId: 'l1', adminRecord: 't1', canonicalPath: `/wt/${PROJECT}/slug-1` });
+    const out = projectDelegation(input({ leases: [owned], attempts: [conflict()], sessions: [alive('p'), alive(`${PROJECT}-slug-1`)] }));
+    expect(out.leases, 'the lease row is skipped: a ccd workspace owns its path').toEqual([]);
+    expect(out.unowned.map((u) => [u.adminRecord, u.leaseId])).toEqual([['t1', 'l1']]);
+    const notOwned = projectDelegation(input({ leases: [owned], attempts: [conflict()], sessions: [alive('p')] }));
+    expect(notOwned.unowned.map((u) => [u.adminRecord, u.leaseId]), 'CONTROL: unowned, the same lease is named').toEqual([['t1', 'l1']]);
+  });
+
+  it('the order: two hidden candidates name the one observed first, whatever their ids; at one instant, the lower id', () => {
+    const later = lease({ leaseId: 'aaaaaaaa-0000-4000-8000-000000000001', adminRecord: 't1', firstObservedAt: at(14) });
+    const earlier = lease({ leaseId: 'ffffffff-0000-4000-8000-000000000002', adminRecord: 't1', firstObservedAt: at(13) });
+    const byInstant = projectDelegation(input({ leases: [later, earlier], attempts: [conflict()] }));
+    expect(byInstant.unowned.map((u) => u.leaseId), 'first observed wins over the lower id').toEqual([earlier.leaseId]);
+    const high = lease({ leaseId: 'cccccccc-0000-4000-8000-000000000003', adminRecord: 't1', firstObservedAt: at(13) });
+    const low = lease({ leaseId: 'bbbbbbbb-0000-4000-8000-000000000004', adminRecord: 't1', firstObservedAt: at(13) });
+    const byId = projectDelegation(input({ leases: [high, low], attempts: [conflict()] }));
+    expect(byId.unowned.map((u) => u.leaseId), 'at one instant the lower id wins, whatever the list order').toEqual([low.leaseId]);
   });
 });

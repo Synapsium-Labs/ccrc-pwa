@@ -51,6 +51,9 @@ import { retireAct, type RetireActPort } from '../retireLane.js';
  *      refusal is classified, so another archive's refusal is never folded onto the queued one (review 313, F2);
  *   6. the switches read ONCE MORE, nearest the argv — `expire-lane-live` decides SHADOW or LIVE at the act, and a
  *      pause raised during the audit stops it — whatever the lane believed when it queued the row;
+ *   6a. the STORE read ONCE MORE, past the last await (D-8091), so it answers for the audit and that listing
+ *      too, and the argv is composed in its synchronous segment. It stands before the shadow arm, so "would expire"
+ *      says what the verb would have done;
  *   7. shadow: "would expire", and stop. A CHILD (`childOf`, D-6641) also needs `expire-v1`'s sibling capability
  *      and `expire-child-live`, both asked again here; either missing is shadow or `unsupported`, never the flag. Live: the verb, the capability asked AGAIN in the act's own scope.
  * It NEVER kills, never stops a unit, never retries inside itself: ccd does the act, and re-proves the token inside
@@ -315,6 +318,7 @@ export interface ArchiveExpiredFacts {
   readonly [RETIRE_STEPS.archiveMatch]?: RetireNoRead;
   readonly [RETIRE_STEPS.auditVerdict]?: RetireNoRead;
   readonly [RETIRE_STEPS.switchesLast]?: ExpirySwitchesRead;
+  readonly [RETIRE_STEPS.storeLast]?: ExpiryStoreRead;
   readonly [RETIRE_STEPS.live]?: RetireNoRead;
 }
 
@@ -341,6 +345,13 @@ function expiryIdJudge(sessionId: string, req: ExpireArchivedRequest): ExpireArc
   return null;
 }
 
+/** Steps 3 and 6a: the store's one reading (`archivedExpiryStoreSkip`). */
+function expiryStoreJudge(read: ExpiryStoreRead, req: ExpireArchivedRequest): ExpireArchivedResult | null {
+  const kept = archivedExpiryStoreSkip(read);
+  return kept !== null ? expiryAnswerOf(req)({ kind: 'deferred', why: kept,
+    detail: `the coordination store, re-read at the act, keeps ${req.sessionId} (${kept})` }) : null;
+}
+
 /** Steps 2 and 6: `expirySwitches`' pause, its detail passed through as it is worded (D-7224). */
 function expirySwitchesJudge(first: ExpirySwitchesRead, req: ExpireArchivedRequest): ExpireArchivedResult | null {
   const answer = expiryAnswerOf(req);
@@ -362,6 +373,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
     { step: RETIRE_STEPS.archiveMatch, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.auditVerdict, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.switchesLast, sync: false, onReject: 'propagate', markers: EXPIRY_SWITCH_MARKERS },
+    { step: RETIRE_STEPS.storeLast, sync: true, onReject: 'propagate' },
     { step: RETIRE_STEPS.live, sync: true, onReject: 'propagate' },
   ],
   listing: RETIRE_LISTING_MODES.measuredOnce,
@@ -374,11 +386,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
       (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'unsupported', detail: `the fleet host does not advertise ${EXPIRE_CHILD_CAP}` }),
     ]),
     [RETIRE_STEPS.switches]: (first, _f, req) => expirySwitchesJudge(first, req),
-    [RETIRE_STEPS.store]: (read, _f, req) => {
-      const kept = archivedExpiryStoreSkip(read);
-      return kept !== null ? expiryAnswerOf(req)({ kind: 'deferred', why: kept,
-        detail: `the coordination store, re-read at the act, keeps ${req.sessionId} (${kept})` }) : null;
-    },
+    [RETIRE_STEPS.store]: (read, _f, req) => expiryStoreJudge(read, req),
     [RETIRE_STEPS.viewer]: viewerJudge<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult>(
       RETIRE_VIEWER_RULES.noCeiling,
       (req) => expiryAnswerOf(req)({ kind: 'deferred', why: 'presence', detail: 'someone is viewing this session' })),
@@ -411,6 +419,7 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
       return null;
     },
     [RETIRE_STEPS.switchesLast]: (last, _f, req) => expirySwitchesJudge(last, req),
+    [RETIRE_STEPS.storeLast]: (read, _f, req) => expiryStoreJudge(read, req),
     [RETIRE_STEPS.live]: (_n, f, req) => {
       const answer = expiryAnswerOf(req);
       const last = f[RETIRE_STEPS.switchesLast];
@@ -428,7 +437,8 @@ export const ARCHIVE_EXPIRED_RETIRE: RetireReason<ExpireArchivedRequest, Archive
  * ARCHIVE-EXPIRED'S PORT (D-7169): `ARCHIVE_EXPIRED_RETIRE`'s readers, each the statement the executor's ladder ran for
  * that step and nothing else, and the act with its verb mapping. The id predicate is `expiryIdJudge`'s (D-7204): the
  * `id` reader hands over the session id. Both listings are `expirySwitches`, not edited (D-7224); the shadow arm reads
- * the last one's `live` and `childLive`, so ONE listing answers both. The audit and the act have no try, as before: a
+ * the last one's `live` and `childLive`, so ONE listing answers both. Both store steps are `readExpiryStore`, which is
+ * synchronous and folds its own throw, so the second needs no split the way child-spent's does. The audit and the act have no try, as before: a
  * rejection rejects `expireArchived` into its caller's catch (D-7226). The one outcome effect is the nested-rescue
  * shadow, on an audit refusal only, after the archive-match check (D-7199). The lane writes the feed row.
  */
@@ -437,18 +447,20 @@ export function expireRetirePort(
 ): RetireActPort<ExpireArchivedRequest, ArchiveExpiredFacts, ExpireArchivedResult> {
   const { sessionId, archivedAt, childOf } = req;
   const answer = expiryAnswerOf(req);
+  const store = (): ExpiryStoreRead => readExpiryStore(deps.coord, sessionId, childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null });
   return {
     read: {
       [RETIRE_STEPS.id]: () => sessionId,
       [RETIRE_STEPS.capability]: () => [ccdCan(deps.fleetState, 'wsExpire'),
         childOf === undefined || capSupported(deps.fleetState, EXPIRE_CHILD_CAP)],
       [RETIRE_STEPS.switches]: () => expirySwitches(deps),
-      [RETIRE_STEPS.store]: () => readExpiryStore(deps.coord, sessionId, childOf === undefined ? undefined : { rowUuid: req.rowUuid ?? null }),
+      [RETIRE_STEPS.store]: store,
       [RETIRE_STEPS.viewer]: () => deps.viewers?.isVisible(sessionId) === true,
       [RETIRE_STEPS.audit]: () => expireAudit(deps, sessionId, childOf),
       [RETIRE_STEPS.archiveMatch]: () => true,
       [RETIRE_STEPS.auditVerdict]: () => true,
       [RETIRE_STEPS.switchesLast]: () => expirySwitches(deps),
+      [RETIRE_STEPS.storeLast]: store,
       [RETIRE_STEPS.live]: () => true,
     },
     act: async (facts) => {

@@ -328,8 +328,8 @@ export interface FleetSession {
    *  bump. */
   lastEnd: LastEnd | null;
   /** D-5242 (`hibernate-long-idle-sessions`): when `ccd hibernate` put this session to sleep, epoch MS, from
-   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep, and on a
-   *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
+   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep. A listed marker
+   *  that gives no time carries the stop stamp's time instead, and null with no readable stop stamp (D-8067). ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
   /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
@@ -6990,6 +6990,27 @@ export interface RunSummary {
    */
   reviewCap: ReviewCapStatus | null;
 
+  /**
+   * D-8068: this run held a child workspace. Its dispatch asked ccd for one and a session was bound, or a later wave was
+   * bound to a session an earlier run minted. The fact outlives the child: it is what says a finished row with no chip
+   * may still be waiting for one, after the child's registry row is gone and after a reload.
+   *
+   * `childIds` cannot answer this (it names only OPEN runs with a bound worker), and neither can `childReclaim`, whose
+   * `null` is also the race's own answer. The workspace's `.child` mark names only the minting run; this names every run
+   * the child served, the hand-over wave's row included.
+   *
+   * A ROW STORED BEFORE THE FIELD reads through migration 41's backfill, never as a flat false. The answer can be true
+   * for a run with no marked child (a row older than child marks, or a recycled name's later row), and on a live row
+   * for one whose failed attempt kept its mark and then bound a session that is no child. Each costs one spare archive
+   * read per reclaim end and nothing else. Nothing refuses, renders or reclaims on it.
+   *
+   * Written and read on the server alone: the fleet box sends no new frame, so a fleet on another version is no concern
+   * of this field. ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a
+   * literal). Read it ONLY through `runHadChild` (`pwa/src/fleet/runWords.ts`), because an older server omits it and a
+   * `RunSummary` is cast, never revived: absent reads as false, which leaves the chip triggers and no more.
+   */
+  hadChild: boolean;
+
   /** The ids of the open runs this run's COORDINATOR (`claimedBy`) has working for it, each bound to the incarnation of
    *  the worker it was opened for: `childrenOf` (`server/src/coord/runBinding.ts`), asked once per frame. The same list
    *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through
@@ -11911,10 +11932,12 @@ export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[numb
  *  measures the helper itself (delegation visibility, spec §1), so no reader draws one as "running" or "recent".
  *  `live`: its end is not recorded and its parent is live in the incarnation that started it; execution is NOT
  *  confirmed. `stale`: its end is not recorded, and its parent is gone, dead or in another incarnation (its stop was
- *  not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, or its parent's
- *  incarnation was not measured. */
-export type DelegationLiveness = 'live' | 'stale' | 'ended' | 'unmeasured';
-const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, ended: true, unmeasured: true };
+ *  not seen). `asleep`: its end is not recorded and its parent is hibernated (D-6908), so nothing is gone and nothing
+ *  is measured. `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, its parent's
+ *  incarnation was not measured, or its parent is in doubt (restarting, tmux did not answer, or an identity field
+ *  unmeasured; D-6908). ADDITIVE: an older PWA reads a word it has never heard of as `unmeasured`. */
+export type DelegationLiveness = 'live' | 'stale' | 'asleep' | 'ended' | 'unmeasured';
+const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, asleep: true, ended: true, unmeasured: true };
 export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];
 export function isDelegationLiveness(v: unknown): v is DelegationLiveness {
   return typeof v === 'string' && (DELEGATION_LIVENESS as readonly string[]).includes(v);
@@ -11989,6 +12012,22 @@ export interface DelegationLeaseWire {
   /** Non-null exactly when `sourceKind` is `raw` (D-6999). */
   inferred: DelegationInferredWire | null;
   firstObservedAt: string;
+  /** Delegation wave 5 PR7: the lease's carrier state (`ephemeral`, `adopted`, `retained`, `transferring`, `promoted`). Absent from an older
+   *  server. Read it through `delegationLeaseDispositionOf`. */
+  disposition?: Exclude<DelegationCarrierState, 'released'>;
+  /** Delegation wave 5 PR7: until when an adopted or retained tree is held back from the orphan lane (its `cleanupDueAt`), else null.
+   *  Absent from an older server. Read it through `delegationLeaseExpiresAtOf`. */
+  expiresAt?: string | null;
+}
+
+/** `disposition`'s one reader (PR7): absence permits and reads as null, unknown (an older server's row). */
+export function delegationLeaseDispositionOf(row: Pick<DelegationLeaseWire, 'disposition'>): Exclude<DelegationCarrierState, 'released'> | null {
+  const d: unknown = row.disposition;
+  return isDelegationCarrierState(d) && d !== 'released' ? d : null;
+}
+/** `expiresAt`'s one reader (PR7): absence and null both read as null (no hold known); only a string is an expiry. */
+export function delegationLeaseExpiresAtOf(row: { readonly expiresAt?: string | null }): string | null {
+  return typeof row.expiresAt === 'string' ? row.expiresAt : null;
 }
 
 export interface DelegationUnownedWire {
@@ -12229,18 +12268,44 @@ export interface DelegationObservationHealth {
    * every carrier is marked. Read it through `delegationCarrierHealthOf`.
    */
   carriers?: DelegationCarrierHealth;
+  /**
+   * Wave 5 (PR7): the lane's adoption step, as of its last pass. Absent whenever every count is zero (D-8035's rule), and from an older
+   * server: absence says nothing was counted, never that nothing waits. Read it through `delegationAdoptionHealthOf`.
+   */
+  adoption?: DelegationAdoptionHealth;
 }
 
 /** Wave 5 (PR6): what the lane's carrier step counted in its last pass (`server/src/coord/delegation-carrier.ts#planCarrierSteps`).
  *  `marked`: leases whose journalled `seen` equals their generation, where no read this pass contradicted it (a lease not re-read this
  *  pass is counted from the journal). `pending`: marks the per-pass bound left for a later pass. `unsupported`: leases that would get a
- *  step on a box that reports `lease-mark-v1` (a released lease that never had a carrier gets none) on a box that does not, and leases
+ *  step on a box that reports `lease-mark-v1` on a box that does not, a released lease counted from the journal (its carrier was read
+ *  back at some generation; one whose carrier never was counts nothing, review 1549 F1), and leases
  *  whose mark would hold a tree on a box that does not report `lease-mark-lock-v1` (D-8037). `mismatched`: a carrier ahead of its lease
  *  or naming another sequence, state or identity, never overwritten. `unmeasured`: a carrier or listing that did not read. `unowned`: an
  *  unreleased carrier no journal lease owns. `refused`: leases whose last mark the box refused in a word that stands until their
  *  generation or tree changes, or until thirty passes have gone by (D-8039). */
 export interface DelegationCarrierHealth {
   marked: number; pending: number; unsupported: number; mismatched: number; unmeasured: number; unowned: number; refused: number;
+}
+
+/** Wave 5 (PR7): what the lane's adoption step decided in its last pass (the server's L1 decider, `decideAdoption`).
+ *  `mode`: `live` adopts, `shadow` (the operator's adoption marker absent) only records what it would adopt, `suspended` waits on the
+ *  breaker, `unmeasured` when the marker or the breaker did not read. `adopted`: adoptions decided this pass. `wouldAdopt`: the ones
+ *  shadow only recorded. `waiting` (review 1609 F10): leases waiting on rule 3's journalled `seen`, on their carrier's read-back (unread, past
+ *  the read bound, behind, or not equal to the lease), on the settle or its stable passes, on a breaker that is not clear, on a kept death
+ *  whose parent did not read this pass (the registry, the incarnation, or a liveness that is unmeasured: `unknown`, `asleep`, no
+ *  `presence`, an identity field unmeasured, or a parent the pass does not name; review 1622 F2, F5), or on a census record that
+ *  read `unreadable`. `unchanged`: an audit proved the tree unchanged, so it stays `ephemeral`. `unaudited`: audits past the per-pass bound. `conflicting`: leases waiting for the operator's
+ *  resolve. `unsupported`: leases a box that cannot hold a tree leaves waiting. `uncensused`: leases whose project the census did not
+ *  reach. `owed`: notices derived from durable state and not queued this pass (mail held, or the recipient unmeasured). */
+export interface DelegationAdoptionHealth {
+  mode: 'live' | 'shadow' | 'suspended' | 'unmeasured'; adopted: number; wouldAdopt: number; waiting: number; unchanged: number;
+  unaudited: number; conflicting: number; unsupported: number; uncensused: number; owed: number;
+}
+
+/** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block). */
+export function delegationAdoptionHealthOf(health: Pick<DelegationObservationHealth, 'adoption'>): DelegationAdoptionHealth | null {
+  return typeof health.adoption === 'object' && health.adoption !== null ? health.adoption : null;
 }
 
 /** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every

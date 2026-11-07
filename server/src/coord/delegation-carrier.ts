@@ -160,10 +160,15 @@ const upToDateOf = (l: DelegationLeaseRow): boolean => l.generation > 0 && (l.ca
 export function carrierReadsOf(checkpoint: DelegationCheckpointV1, lastRead: ReadonlyMap<string, number>): { behind: string[]; reverify: string[] } {
   const leases = [...checkpoint.leases].sort(order);
   const behind = leases.filter((l) => l.generation > 0 && !upToDateOf(l)).map((l) => l.leaseId);
-  const reverify = leases.filter((l) => upToDateOf(l) && l.releasedAt === null)
-    .map((l, i) => ({ id: l.leaseId, i, last: lastRead.get(l.leaseId) ?? -1 }))
-    .sort((a, b) => a.last - b.last || a.i - b.i).slice(0, DELEGATION_CARRIER_REVERIFY_PER_PASS).map((x) => x.id);
+  const reverify = leastRecentlyRead(leases.filter((l) => upToDateOf(l) && l.releasedAt === null).map((l) => l.leaseId), lastRead,
+    DELEGATION_CARRIER_REVERIFY_PER_PASS);
   return { behind, reverify };
+}
+
+/** D-8034's order of a bounded carrier read, the ONE comparator for PR6's re-reads and PR7's adoption reads (review 1609 F10): never
+ *  read first, then the least recently read by `lastRead`'s pass ordinal, then `ids`' own order among equals; at most `bound`. */
+export function leastRecentlyRead(ids: readonly string[], lastRead: ReadonlyMap<string, number>, bound: number): string[] {
+  return ids.map((id, i) => ({ id, i, last: lastRead.get(id) ?? -1 })).sort((a, b) => a.last - b.last || a.i - b.i).slice(0, bound).map((x) => x.id);
 }
 
 /**
@@ -194,8 +199,10 @@ export function planCarrierSteps(input: {
     const released = lease.releasedAt !== null;
     const upToDate = upToDateOf(lease);
     if (!input.supported) {                                           // rule 1: only a lease that would get a step on a supported box
+      // review 1549 F1: a box that reads nothing has no read-back, so a released lease counts from journal evidence: its carrier was
+      // read back at some generation (`carrierGenerationSeen` above 0), so the box held one, which a supported box would mark released
       const rb = input.readBack.get(lease.leaseId);
-      if (lease.generation === 0 ? !released : !upToDate && (!released || rb?.kind === 'carrier')) health.unsupported += 1;
+      if (lease.generation === 0 ? !released : !upToDate && (!released || (lease.carrierGenerationSeen ?? 0) > 0 || rb?.kind === 'carrier')) health.unsupported += 1;
       continue;
     }
     if (lease.generation === 0) { if (!released) spend({ kind: 'mint', leaseId: lease.leaseId, expectGeneration: 0 }, lease.leaseId); continue; }   // rule 2

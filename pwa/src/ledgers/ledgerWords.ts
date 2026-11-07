@@ -11,6 +11,7 @@ import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingVie
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { isRunClosed, sessionProgramme } from '../fleet/runWords';
+import { waitingPath } from '../lib/routes';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
 export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
@@ -259,6 +260,17 @@ export function fromWord(list: ItemList): string {
   if (list.programme === null) return 'waiting';
   return `${list.back === 'goals' ? 'goals' : 'waiting'}:${list.programme}`;
 }
+
+/** The item path's query naming the list it was opened from (plan PL9): it rides the URL, so a reload or a shared link keeps it.
+ *  The combined list's own query, its side rail's filter, is `PROGRAMME_FILTER_QUERY` (`lib/routes.ts`, beside `waitingPath`).
+ *  Moved here from `WaitingRoutes.tsx` with `itemPath`, so chat's resolver, an L1 module, can ask it (chat reading Task L,
+ *  D-8062). */
+export const FROM_QUERY = 'from';
+
+/** The one builder of an item's path, `/waiting/<id>`, which the `item` row of the route table parses, with `?from=` naming the
+ *  list it is opened from (plan PL9). The combined list, unfiltered, is the default and writes no query. */
+export const itemPath = (id: number, list: ItemList = COMBINED_LIST): string =>
+  `${waitingPath()}/${id}${list.programme === null ? '' : `?${new URLSearchParams({ [FROM_QUERY]: fromWord(list) })}`}`;
 
 /** The list a `from` word names, or the combined list for a word that names none (absent, unknown or malformed). An older page's
  *  `programme:<slug>` (its programme view's share of the list, before PL11) names the combined list filtered to that programme;

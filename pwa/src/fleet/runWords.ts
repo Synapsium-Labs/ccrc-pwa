@@ -420,6 +420,12 @@ export function resumeNote(
  *  away. A fold, not a removal: nothing is dropped from the archive. */
 export const FINISHED_FOLD = 20;
 
+/** What the board says when a run named by `/runs?run=<id>` (chat reading Task L, D-8062) is in neither the live frame nor the
+ *  archive pages read so far: it may be older than the pages loaded, or no run at all. */
+export function runNotLoadedLine(id: number): string {
+  return `Run ${id} is not among the runs loaded here.`;
+}
+
 /** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
  *  a closed row (`formatAge` over `dispatchedAt`, `resumeNote`'s title,
  *  `childReclaimTitle`) is minute-grained. The step's lag ADDS to the board's own:
@@ -821,6 +827,10 @@ export function childReclaimRefreshDue(
   return false;
 }
 
+/** THE ONE READER of `RunSummary.hadChild` (D-8068). Only a literal `true` counts: the wire is cast, never revived, and
+ *  an older server omits the key, which then asks for no read the chip triggers do not. */
+export const runHadChild = (run: { hadChild?: unknown }): boolean => run.hadChild === true;
+
 /**
  * Should the board re-read its archive because the server's newest reclaim end
  * moved (child-reclamation wave 6, spec §5.9)? The vanish trigger above
@@ -832,17 +842,18 @@ export function childReclaimRefreshDue(
  * never only an increase, because a restarted server reads null first), and
  * some FINISHED row is unsettled:
  *   • its chip is pending, deferred or paused; or
- *   • it has no chip and `hadChild` holds its run, which is the race's own row.
+ *   • it has no chip and the server says it had a child (`runHadChild`), which
+ *     is the race's own row, on any board, a reloaded one included (D-8068).
  * An open row is never counted: its chip is blank by design.
  */
 export function childReclaimDoneRefreshDue(
-  runs: readonly RunSummary[], hadChild: ReadonlySet<number>, before: number | null, after: number | null,
+  runs: readonly RunSummary[], before: number | null, after: number | null,
 ): boolean {
   if (after === null || after === before) return false;
   for (const run of runs) {
     if (!isRunClosed(run)) continue;
     const chip = childReclaimChip(run);
-    if (chip === null ? hadChild.has(run.id) : CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+    if (chip === null ? runHadChild(run) : CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
   }
   return false;
 }
@@ -859,13 +870,13 @@ export type ChildMarkRead =
   | { readonly kind: 'unrecognised' };
 
 /** THE ONE READER of `FleetSession.child` in `pwa/src`. Optional here although the
- *  wire type requires it: the live `fleet` frame is cast, never revived. Three
- *  callers: `childOfRunLabel` (the fleet line), `abandonChildOf` (the abandon
- *  sheet) and `childRunsSeen` (the board's memory of which runs had a child).
+ *  wire type requires it: the live `fleet` frame is cast, never revived. Two
+ *  callers: `childOfRunLabel` (the fleet line) and `abandonChildOf` (the abandon
+ *  sheet).
  *  Which runs can be this workspace's is the wire's binding now (`workerOf`,
  *  D-7182), not a reading of the mark.
  *  The label says nothing for `none` OR `unrecognised`; the sheet must hedge on
- *  `unrecognised` and not on `none`; the board's memory keeps `child` alone. So
+ *  `unrecognised` and not on `none`. So
  *  this answers four ways, and the label's `null` is never reused as a mark. */
 export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   const c: unknown = session.child;
@@ -879,32 +890,6 @@ export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   if (o.kind === 'unreadable') return { kind: 'unreadable' };
   return { kind: 'unrecognised' };
 };
-
-/**
- * A NAMED READER (D-7214): its question is "which finished runs had a child",
- * not which session is a run's worker, so it reads the server's own `.child`
- * mark and the cold rows' reclaim chips, never `RunSummary.childIds` (which
- * names only OPEN runs with a bound worker, so it never names a finished one).
- * Counted by the run-binding census and may only shrink.
- *
- * The run ids this board knows had a child (child-reclamation wave 6). A fleet
- * frame's child mark names its minting run, and a finished row carries a chip
- * only for a child. By the time the reclaim's end reaches the coord frame, the
- * child has left the fleet frame and its row may carry no chip, so the board
- * accumulates the answer across frames and reads. Never forgets: the set lives
- * as long as the board, and holds a few integers. Returns a new set.
- */
-export function childRunsSeen(
-  seen: ReadonlySet<number>, sessions: readonly { child?: ChildMark }[], runs: readonly RunSummary[],
-): ReadonlySet<number> {
-  const out = new Set(seen);
-  for (const s of sessions) {
-    const m = childMarkOf(s);
-    if (m.kind === 'child') out.add(m.runId);
-  }
-  for (const run of runs) if (childReclaimChip(run) !== null) out.add(run.id);
-  return out;
-}
 
 export interface ChildOfRunLabel {
   readonly text: string;

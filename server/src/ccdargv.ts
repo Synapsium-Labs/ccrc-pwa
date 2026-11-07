@@ -607,7 +607,8 @@ export const CCD_ARGV = {
    *  `git worktree add` start point and nothing else (`$REG/<id>.base`, the branch and the PR target are unchanged, D-7827).
    *  A NEW KEY, never a widened `wsAddWorker` (`wsAddNamed`'s rule). `--base` LEADS beside `--child`, which the verb requires,
    *  so an older ccd binds it as the project and refuses (D-6164) instead of dropping it and starting at origin's base.
-   *  Behind `WS_ADD_BASE_CAP`; its one composer is PR9's dispatch arm. */
+   *  Behind `WS_ADD_BASE_CAP`; its one composer is PR9's dispatch arm, which must call `markHadChild` before it sends this,
+   *  as the fresh-spawn arm does (D-8068): `run-had-child.test.ts` reds on any composer until its row says so. */
   wsAddWorkerBase: (p: string, dec: ActorFlags | null, route: RouteFields | null, child: number, base: string,
                     slug: string | null, routeDefault: boolean) =>
                  argv(['ws-add', '--no-rc', ...childFlags(child), '--base', commitId(base), ...routeFlags(route),

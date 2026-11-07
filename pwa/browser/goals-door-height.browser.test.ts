@@ -137,7 +137,7 @@ const run = (id: number, program: string, owner: string, p: Pair): object => ({
   unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
     clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null,
+  childReclaim: null, reviewCap: null, hadChild: false,
 });
 const RUNS = ALL_PAIRS.flatMap((p) => [
   run(p.inRun, slugOf('in', p.slug), idOf('pi', p), p), run(p.outRun, slugOf('out', p.slug), idOf('po', p), p),

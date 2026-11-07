@@ -871,10 +871,10 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
   });
 
   describe('captured payloads, replayed whole (every version in the corpus)', () => {
-    // EVERY version in `fixtures/delegation/` (14 at the time of writing, 2.1.280 to 2.1.299), read from the directory and not listed
+    // EVERY version in `fixtures/delegation/`, read from the directory and not listed
     // here, so a recapture adds its rows. A cell the matrix marks `unmeasured` is skipped, never relied on. Six scenarios per version
     // cover each kind of line the hook writes: plain and isolated Agent, isolated and plain Workflow, a raw Bash worktree, and the
-    // /compact-and-/clear run (SessionStart sources, SessionEnd reasons, the unpaired SubagentStop). This is also the soundness
+    // /compact-and-/clear run (SessionStart sources, SessionEnd reasons, the unpaired SubagentStops). This is also the soundness
     // check for the hook's payload prefilter: a delegation event the prefilter missed would be a line missing here.
     const SCENARIOS = ['agent-plain', 'agent-iso-bg', 'wf-iso', 'wf-plain', 'raw-worktree', 'clear-compact-resume'];
     const MATRIX = (JSON.parse(fs.readFileSync(path.join(FIXTURES, 'matrix.json'), 'utf8')) as { cells: Record<string, { status: string }> }).cells;

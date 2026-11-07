@@ -19,8 +19,8 @@
 //      RECORDED (the `tree-scanners` artifact, tree-scanners.mjs) and what the static detector `scansSourceTree`
 //      finds, so a shard whose record was lost, or a listing the capture cannot see, drops no scanner the detector
 //      knows; without a readable artifact, the static detector alone;
-//   4. the session-hook suites when ccd/ccd, ccd/session-hook.sh or shared/api.ts changed (SESSION_HOOK_TRIGGERS):
-//      the hook is bash, so no import reaches it.
+//   4. the session-hook suites when ccd/ccd, a ccd/lib/*.sh, ccd/session-hook.sh or shared/api.ts changed
+//      (reachesSessionHook): the hook is bash, so no import reaches it.
 // What this leaves out — a test the map has no entry for or does not trust, a TypeScript file a test reads as text
 // without importing it — the merge queue's full run catches before anything lands; the builder ran the scoped
 // tests before pushing.
@@ -360,6 +360,9 @@ export function guardTests(live, readSource, durations = null, recorded = null, 
 
 /** A change to one of these runs every session-hook suite. */
 export const SESSION_HOOK_TRIGGERS = ['ccd/ccd', 'ccd/session-hook.sh', 'shared/api.ts'];
+/** So does a change to a ccd library: ccd/ccd's code, in a file of its own. Matched by shape, so no list names one. */
+const CCD_LIBRARY = /^ccd\/lib\/[^/]+\.sh$/;
+const reachesSessionHook = (f) => SESSION_HOOK_TRIGGERS.includes(f) || CCD_LIBRARY.test(f);
 const SESSION_HOOK_TEST = /^server\/test\/session-hook[^/]*\.test\.ts$/;
 
 /**
@@ -377,7 +380,7 @@ export function fastSelection({ live, related, untraced = [], guards, changed })
   const guardLive = guards.filter((f) => liveSet.has(f));
   for (const f of guardLive) chosen.add(f);
   const files = changed.map((f) => f.trim()).filter(Boolean);
-  const hook = files.some((f) => SESSION_HOOK_TRIGGERS.includes(f));
+  const hook = files.some(reachesSessionHook);
   if (hook) for (const f of live) if (SESSION_HOOK_TEST.test(f)) chosen.add(f);
   return { files: [...chosen].sort(), related: new Set(relatedLive).size, untraced: new Set(untracedLive).size, guards: guardLive.length, hook };
 }

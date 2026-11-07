@@ -331,6 +331,14 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
+  // Delegation broker wave 5, PR7 (Task 5.7.1, W5-X2): the adoption marker is hand-only; no file in server/src, shared, ccd, agent/src
+  // or deploy writes it (the operator touches it on the fleet box after reading the shadow's would-adopt counts).
+  it('delegation-adopt: hand-only, no writer in the tree (W5-X2)', () => {
+    expect(SWITCHES['delegation-adopt'].writer).toBe('hand-only');
+    expect(constsOf('delegation-adopt'), 'CONTROL: the switchboard defines it').toEqual(['DELEGATION_ADOPT_MARKER']);
+    expect(writersOf('delegation-adopt')).toEqual([]);
+  });
+
   // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer
   // `hand-only`. Nothing in the tree writes `landing-disabled` or `landing-checks-live` (the operator arms the lane
   // by hand, after a week of agreeing shadow rows).

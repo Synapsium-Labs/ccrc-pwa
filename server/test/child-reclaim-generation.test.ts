@@ -160,8 +160,8 @@ describe('one implementation each', () => {
       .toEqual(['server/src/coord/childReclaim.ts', 'server/src/depsShedPass.ts']);
     const hasCoordinated = 'childReclaimHasCoordinated(';
     expect(src.map(([f, t]) => [f, count(t, hasCoordinated)] as const).filter(([, n]) => n > 0),
-      'its definition, step 2a and step 5; the close; and the expiry lane\'s child arm').toEqual([
-      ['server/src/coord/childReclaim.ts', 3], ['server/src/coord/close.ts', 1],
+      'its definition, step 2a, step 5 and step 6a; the close; and the expiry lane\'s child arm').toEqual([
+      ['server/src/coord/childReclaim.ts', 4], ['server/src/coord/close.ts', 1],
       ['server/src/coord/expireArchived.ts', 1],
     ]);
     // The birth's ONE placement (spec §5.7) works as follows. `childReclaimBornAt` alone reads the birth
