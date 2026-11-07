@@ -1,9 +1,10 @@
 // The console's places (desktop-polish PL10, D-7952; spec 2026-10-31 §2, D25): the ONE list of the places the navigation
 // offers, in its order, with each place's icon. Pure (ring L1): no store, no DOM.
 //
-// Three readers, no second list: Refined's desk bar (`AppBar`, its tabs), Instrument's rail (`Rail`, its head) and the phone's
-// bottom bar (`PhoneBar`, shared by both skins). A place added here appears on all three with no second edit. Each id is a
-// `ROUTES` row that is `top`, and its door is the registry's own "Go to" command (`commandDoor('go-<id>')`).
+// Three readers, no second list: Refined's desk bar (`AppBar`, its tabs), Instrument's top bar doors (`TopBar`,
+// `DESK_DOORS`) and the phone's bottom bar (`PhoneBar`, shared by both skins). A place added here appears on all three with no
+// second edit. Each id is a `ROUTES` row that is `top`, and its door is the registry's own "Go to" command
+// (`commandDoor('go-<id>')`).
 //
 // THE FLEET PLACE IS THE PHONE'S ONLY (D25). At a desk the sessions are in the column beside every page, so neither desk
 // navigation shows a fleet place (`DESK_PLACES`); on a phone the bar is how the operator gets back to the sessions from another

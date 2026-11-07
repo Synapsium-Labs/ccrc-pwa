@@ -683,7 +683,7 @@ describe('the substrate gate — Archive, Restart and Restore refuse a session n
 
 // — keyboard discipline —
 
-describe('breadcrumb', () => {
+describe("the session header's crumb", () => {
   it('names the project before the workspace', () => {
     // The title is the session (its row's label); the crumb before it is the project (desktop polish T3c, D-6333).
     const { container } = render(<SessionHeaderHost {...props({ session: fleetSession({

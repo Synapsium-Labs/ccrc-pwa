@@ -1,5 +1,5 @@
 // The navigation's counts are what waits on the operator (T2d, D-6330), ONE function each, read by every door that shows
-// one through `placeBadge`: Refined's desk tabs, Instrument's rail and the phone's bottom bar (the plan's "one derived value,
+// one through `placeBadge`: Refined's desk tabs, Instrument's top bar doors and the phone's bottom bar (the plan's "one derived value,
 // one function"; desktop-polish PL10, D-7952, which retired the fleet head's mail door). A door that counted for itself could disagree with
 // the fleet's own count on the same screen. The Inbox's own rows keep their unread mark (`raisesUnread`, D-5431), so
 // the door and the rows never claim the same number.
@@ -76,8 +76,8 @@ export interface NavBadges {
 }
 
 /** A place's badge (`lib/places.ts`): its count and the word its accessible name says after the count ("Inbox, 2 waiting
- *  for you"). The one decision of which place counts what, read by Refined's desk bar, Instrument's rail and the phone's bottom bar
- *  (desktop-polish PL10, D-7952; review 1466 F4); a place that counts nothing, or a count not heard yet, answers 0. */
+ *  for you"). The one decision of which place counts what, read by Refined's desk bar, Instrument's top bar doors and the
+ *  phone's bottom bar (desktop-polish PL10, D-7952; review 1466 F4); a place that counts nothing, or a count not heard yet, answers 0. */
 export function placeBadge(id: string, badges: NavBadges): { count: number; word: string } {
   if (id === 'inbox') return { count: badges.waiting ?? 0, word: INBOX_BADGE_UNIT };
   if (id === 'runs') return { count: badges.runsNeedYou ?? 0, word: RUNS_BADGE_UNIT };

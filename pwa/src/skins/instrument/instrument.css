@@ -64,47 +64,12 @@
   min-height: var(--tap-min);
   min-width: 0;
 }
-/* The wordmark sits over the rail's 52px and runs past it: its left edge is the header's gutter, which the lanes row
-   under the line shares. */
-.ins-wordmark {
-  flex: none;
-}
-/* The breadcrumb gives first: it takes only the room the others leave (a zero basis), its middle crumbs truncate
-   before its last, and it keeps a floor, so it never vanishes. */
-.ins-crumbs {
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  min-width: 16ch;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  list-style: none;
-  font: var(--weight-regular) var(--fs-meta) / var(--lh-normal) var(--family-mono);
-  white-space: nowrap;
-}
-.ins-crumb {
-  flex: 0 10 auto;
-  min-width: 3ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ins-crumb:first-child {
-  flex: none;
-}
-.ins-crumb:last-child {
-  flex: 0 1 auto;
-  min-width: 6ch;
-}
-.ins-crumb + .ins-crumb::before {
-  content: '›';
-  padding: 0 var(--sp-1);
-}
-/* The command field: a door, not an input. Its words shrink away after the crumbs have given up their room; the search
-   glyph and ⌘K stay, and so does its accessible name. */
+/* The command field: a door, not an input. It takes the room the doors leave (desk-nav Task A, D-8100: the breadcrumb that
+   shared that room is gone), and its words shrink away when the room is short; the search glyph and ⌘K stay, and so does
+   its accessible name. */
 .ins-command {
   display: flex;
-  flex: 0 100 280px;
+  flex: 1 100 0;
   align-items: center;
   gap: var(--sp-2);
   width: auto;
@@ -128,7 +93,9 @@
 
 /* ---- The desk doors ----------------------------------------------------- */
 
-/* The bar's doors (desk-nav Task A, D-8100), moved from the rail: one line of icon doors after the wordmark. */
+/* The bar's one Primary nav (desk-nav Task A, D-8100): the wordmark door, then the six doors, at their own width; the
+   command field after them takes the rest. No `overflow` on the line, the nav or a door: any value but visible is a clip
+   box in both axes, which cuts away the tip drawn below a door. */
 .ins-doors {
   display: flex;
   flex: none;
@@ -138,30 +105,46 @@
 .ins-door {
   position: relative;
   justify-content: center;
+  width: auto;
   min-width: var(--tap-min);
   min-height: var(--tap-min);
+  white-space: nowrap;
+}
+/* The wordmark door: the header's gutter is its left edge, which the lanes row under the line shares. */
+.ins-home {
+  padding-inline: var(--sp-1);
 }
 /* A door's count (T2e fix round 1, D-6335; since T2d, D-6330, the Inbox counts no unread mail): the pill is
-   `<CountBadge>`'s (its colours are the primitive's); here it only sits on the door's top-right corner, over the icon's
-   box, and takes no clicks of its own. */
+   `<CountBadge>`'s (its colours are the primitive's); here it only sits on the icon's top-right corner, in both of a door's
+   forms, and takes no clicks of its own. */
 .ins-door-count {
   position: absolute;
   top: var(--sp-1);
   right: var(--sp-1);
   pointer-events: none;
 }
-/* The active door: a 2px accent mark, beside `aria-current="page"`. */
-.ins-door[aria-current='page']::before {
+/* A door with its word: the pill keeps the icon's top-right corner (the icon is the door's first box, after its `px-1`), and
+   a counted door opens the gap between its icon and its word, so the word clears the pill. */
+.ins-door:has(.ins-door-word) .ins-door-count {
+  right: auto;
+  left: var(--sp-3);
+}
+.ins-door:has(.ins-door-word):has(.ins-door-count) {
+  gap: var(--sp-3);
+}
+/* The current door: a 2px accent underline on its bottom edge, beside `aria-current="page"`, as the list column's chosen
+   tab is drawn (`.ins-tab[aria-selected='true']::after`). It takes no room, so choosing moves no door. */
+.ins-door[aria-current='page']::after {
   content: '';
   position: absolute;
-  top: var(--sp-2);
-  bottom: var(--sp-2);
-  left: 0;
-  width: 2px;
+  inset: auto 0 0;
+  bottom: 0;
+  height: 2px;
   background: var(--accent);
 }
-/* The tooltip: the door's name, below it, shown on hover AND on keyboard focus, so a keyboard reader sees what a
-   pointer reader sees. Self-grounded: it paints its own ground. */
+/* The tooltip, below 1280: the door's name, below its icon and centred on it, shown on hover AND on keyboard focus, so a
+   keyboard reader sees what a pointer reader sees. Self-grounded: it paints its own ground, and it stacks above the
+   lanes row under the line. */
 .ins-door-tip {
   position: absolute;
   top: calc(100% + var(--sp-1));
@@ -185,11 +168,21 @@
 .ins-door:focus-visible .ins-door-tip {
   opacity: 1;
 }
+/* The bell and Settings, after the command field. */
 .ins-bar-doors {
   display: flex;
   flex: none;
   align-items: center;
   gap: var(--sp-1);
+}
+/* The bell is the fleet head's own control, 28 square there; in the bar it is a finger's square like its neighbours, as in
+   Refined's bar (`.ref-bar-doors > .bell`). */
+.ins-bar-doors > .bell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
 }
 
 /* ---- The status bar ------------------------------------------------------ */

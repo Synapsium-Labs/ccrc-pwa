@@ -419,7 +419,7 @@ describe('focus after a switch is never on <body>', () => {
 
   it('a control inside a part the switch replaced: focus moves to #content', () => {
     // The frame is driven directly with two sets whose bars differ and that
-    // place nothing else (Instrument's rail and status bar, W2 Task S9, read
+    // place nothing else (Instrument's status bar, W2 Task S9, reads
     // providers this case does not mount).
     function BarA(): ReactNode { return <button type="button">Bar A</button>; }
     function BarB(): ReactNode { return <button type="button">Bar B</button>; }

@@ -242,7 +242,7 @@ import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
-import { labelInName, shownText } from './labelInName';
+import { labelInName, labelWords, shownText } from './labelInName';
 
 // The bell renders only where the browser can push; this one can, so the doors' census counts it (T2e).
 vi.mock('../src/lib/push', () => ({
@@ -523,8 +523,8 @@ describe('the desk top bar (desk-nav Task A)', () => {
         const name = d.getAttribute('aria-label')!;
         expect(labelInName(shownText(d), name), `${JSON.stringify(shownText(d))} in ${JSON.stringify(name)}`).toBe(true);
       }
-      // The visible words start the name.
-      expect(shownText(homeDoor())).toBe('ccrc');
+      // The visible words start the name: the wordmark's caret is no word, and "ccrc" starts "ccrc, Fleet".
+      expect(labelWords(shownText(homeDoor()))).toEqual(['ccrc']);
       expect(shownText(doorNamed('Inbox, 1 waiting for you'))).toBe('Inbox 1');
     } finally {
       act(() => useFleetStore.setState({ runs: [], runsFrameSeen: false }));
@@ -588,7 +588,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
   it('every route says where you are', () => {
     stubAt(1280);
     act(() => useFleetStore.setState({ waiting: waitingView({ items: [itemView({ id: 1 })] }) }));
-    const paths = [...ROUTES.map((r) => ROUTE_PATHS[r.id] ?? r.path), '/nope'];
+    const paths = ROUTES.map((r) => ROUTE_PATHS[r.id] ?? r.path);
     expect(paths.every((p) => p !== null), 'a path for every row').toBe(true);
     for (const at of paths as string[]) {
       mount(at);
@@ -600,6 +600,11 @@ describe('the desk top bar (desk-nav Task A)', () => {
       expect(says, `${at}: a current door or the page's own heading`).toBe(true);
       cleanup();
     }
+    // A path outside the table (`unknown-path-is-the-placeholder`, ruled 2026-11-07): the desk draws the fleet's placeholder,
+    // as on `/`, and no door is current, since `topRouteOf` places it under no place. The breadcrumb was empty there too.
+    mount('/nope');
+    expect(topBar().querySelectorAll('[aria-current="page"]'), '/nope: no current door').toHaveLength(0);
+    expect(document.querySelector('main.shell-detail .shell-placeholder-copy')?.textContent, '/nope').toBe('Select a session');
   });
 
   it('the chords reach their places from a bar door', () => {
