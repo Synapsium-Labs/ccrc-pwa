@@ -13597,3 +13597,31 @@ export interface FleetHealth {
    */
   backup?: BackupHealth;
 }
+
+/** One subject of an `AttentionRow`: a session, and the run it belongs to where its lane knows one. */
+export interface AttentionSubject {
+  readonly sessionId: string;
+  readonly runId: number | null;
+}
+
+/** The lane whose attention list an `AttentionRow` came from. */
+export type AttentionLane = 'child-reclaim' | 'expiry' | 'dead-coordinator';
+
+/** ONE row of the cleanup row's attention lists (consolidation spec K1, "Consumers move"; #2366), the shape the PWA's
+ *  three coord-frame readers (`childReclaimAttentionOf`, `expiryAttentionOf`, `deadCoordinatorAttentionOf`) all
+ *  return. A PWA reading, not a wire shape: each lane's own field (`ChildReclaimAttention`, `ExpiryAttention`,
+ *  `DeadCoordinatorAttention`) stays on the frame unchanged, and its reader maps it here. Appended at the foot, so no
+ *  line cited above moves.
+ *
+ *  `kind` is the lane's kind token the line leads with, or `null` where the line leads with no word (child
+ *  reclamation's). `who` holds one entry per name the line shows: one subject each for a collapsed kept line's
+ *  members, every claimant together for the circuit breaker's. `sentence` is the SERVER's. `sentenceFirst` is the
+ *  collapsed kept line's order: its sentence states the count, and its members follow. */
+export interface AttentionRow {
+  readonly lane: AttentionLane;
+  readonly key: string;
+  readonly kind: string | null;
+  readonly who: readonly (readonly AttentionSubject[])[];
+  readonly sentence: string;
+  readonly sentenceFirst: boolean;
+}

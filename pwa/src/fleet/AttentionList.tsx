@@ -18,6 +18,9 @@
 // would move three rules and rekey the contrast gate for a file that paints
 // no ground. The shape moves, the ground stays.
 import type { ReactNode } from 'react';
+import type { AttentionLane, AttentionRow, AttentionSubject } from '../../../shared/api';
+import { expiryKindWord } from './expiryWords';
+import { deadCoordinatorKindWord } from './deadCoordinatorWords';
 
 export interface AttentionLine {
   /** React's key. The lanes key differently — a session id, a kind and its
@@ -53,4 +56,28 @@ export function AttentionList(
       ))}
     </ul>
   );
+}
+
+/** The word a row's `kind` leads its names with, by lane. Child reclamation's rows carry no kind, so it has none. */
+const KIND_WORD: Partial<Record<AttentionLane, (kind: string) => string>> = {
+  expiry: expiryKindWord,
+  'dead-coordinator': deadCoordinatorKindWord,
+};
+
+/** The one mapping from the three readers' `AttentionRow`s to lines: each `who` entry is one name, its subjects
+ *  joined by a comma and led by the kind's word. `name` says a subject; the cleanup row passes one that leads a
+ *  child's session with its run. */
+export function attentionLines(
+  rows: readonly AttentionRow[], name: (s: AttentionSubject) => string = (s) => s.sessionId,
+): AttentionLine[] {
+  return rows.map((r) => {
+    const word = r.kind === null ? undefined : KIND_WORD[r.lane]?.(r.kind);
+    const lead = word === undefined ? '' : `${word} · `;
+    return {
+      key: r.key,
+      who: r.who.map((subjects) => `${lead}${subjects.map(name).join(', ')}`),
+      sentence: r.sentence,
+      ...(r.sentenceFirst ? { sentenceFirst: true } : {}),
+    };
+  });
 }

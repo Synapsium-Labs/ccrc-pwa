@@ -7,7 +7,7 @@
 // ITS OWN TABLES, not `MARKER_WORD`'s: those words are written for the
 // coordinator pause ("dispatch would refuse"), and `coordWords.ts` says a
 // second marker needs its own table rather than a widened reuse.
-import { isMarkerState, type ChildReclaimAttention, type MarkerState } from '../../../shared/api';
+import { isMarkerState, type AttentionRow, type ChildReclaimAttention, type MarkerState } from '../../../shared/api';
 
 /** `clear` does not read "children are reclaimed when their runs close" —
  *  a claim about BEHAVIOUR the frame cannot back.
@@ -69,11 +69,10 @@ type RenderedAttention = Pick<Extract<ChildReclaimAttention, { readonly sessionI
 /** A collapsed kept line (spec §5.9): the server's sentence, which already
  *  states the count, and the children behind it. `word` is a React key and
  *  nothing else: it is never rendered and never switched on. */
-export interface RenderedKeptMany {
+interface RenderedKeptMany {
   readonly kind: 'kept-many'; readonly word: string; readonly sentence: string;
   readonly members: readonly { readonly sessionId: string; readonly runId: number }[];
 }
-export type RenderedAttentionItem = RenderedAttention | RenderedKeptMany;
 
 const isAttention = (a: unknown): a is RenderedAttention => {
   if (typeof a !== 'object' || a === null) return false;
@@ -102,23 +101,29 @@ const isKeptMany = (a: unknown): a is KeptManyWire => {
     && Array.isArray(o.members) && o.members.some(isKeptMember);
 };
 
-/** THE ONE READER of `CoordStatus.childReclaimAttention`. The coord frame is
- *  shape-checked only at FRAME level (`stores/fleet.ts`), so an absent field
- *  (an older server) reads as no items, and a malformed member is dropped on
- *  its own rather than taking the list with it. The server's order is kept:
- *  a collapsed line stays where the server put it among the single items. */
-export function childReclaimAttentionOf(coord: unknown): RenderedAttentionItem[] {
+/** THE ONE READER of `CoordStatus.childReclaimAttention`, as `AttentionRow`s.
+ *  The coord frame is shape-checked only at FRAME level (`stores/fleet.ts`),
+ *  so an absent field (an older server) reads as no rows, and a malformed
+ *  member is dropped on its own rather than taking the list with it. The
+ *  server's order is kept: a collapsed line stays where the server put it
+ *  among the single items. A single child keys by its session, a collapsed
+ *  line by its word, and neither leads with a kind word. */
+export function childReclaimAttentionOf(coord: unknown): AttentionRow[] {
   if (typeof coord !== 'object' || coord === null) return [];
   const list = (coord as { childReclaimAttention?: unknown }).childReclaimAttention;
   if (!Array.isArray(list)) return [];
-  const items: RenderedAttentionItem[] = [];
+  const rows: AttentionRow[] = [];
   for (const a of list) {
-    if (isAttention(a)) items.push(a);
-    else if (isKeptMany(a)) {
-      items.push({ kind: 'kept-many', word: a.word, sentence: a.sentence, members: a.members.filter(isKeptMember) });
+    if (isAttention(a)) {
+      rows.push({ lane: 'child-reclaim', key: a.sessionId, kind: null,
+        who: [[{ sessionId: a.sessionId, runId: a.runId }]], sentence: a.sentence, sentenceFirst: false });
+    } else if (isKeptMany(a)) {
+      rows.push({ lane: 'child-reclaim', key: `kept-many ${a.word}`, kind: null,
+        who: a.members.filter(isKeptMember).map((m) => [{ sessionId: m.sessionId, runId: m.runId }]),
+        sentence: a.sentence, sentenceFirst: true });
     }
   }
-  return items;
+  return rows;
 }
 
 /** THE ONE READER of `CoordStatus.childReclaimDoneAt` (child-reclamation wave 6,
