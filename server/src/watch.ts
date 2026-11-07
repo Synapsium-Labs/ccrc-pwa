@@ -11077,7 +11077,7 @@ class DelegationLane {
       }
     }
     for (const id of alive) {
-      const inc = pass.census.incarnations.get(id);
+      const inc = pass.census?.incarnations.get(id);              // a pass read with no census records an unread incarnation
       this.firstDead.delete(id); this.retractedDeaths.delete(id); this.lastAliveAt.set(id, { at: pass.now, incarnation: inc?.kind === 'measured' ? inc.incarnation : null });
     }
     const listed = this.listedIds();      // review 1609 F2: forgotten only on a measured absence; a listed row left unbuilt keeps both

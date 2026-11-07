@@ -153,6 +153,9 @@ Run alone at this PR's tip through `ccrc test`, each file one run, all green: `d
 `citations` 4, `topology-clean` 60, `coord-policy-rings` 19, all 24 `single-definition/*` files, all 11 `rings/*` files,
 `typecheck-tests` 12 (red on its first run only because the agent package's modules were not installed in this worktree; green
 after `npm ci` there), `GROWTH_CHECK=1` growth-check 54, and `deviation-refs` 31 and `dtbd` 1 after `git fetch origin main`.
-The pwa package's own typecheck exits 0. Growth
+The pwa package's own typecheck exits 0. The PR's first full CI run was red in one row, `hibernate-census`'s "a parent seen alive
+and then hibernated", which drives `noteSessions` with a pass that carries no census: the F5 memory read `pass.census.incarnations`
+there. It now reads an absent census as an unread incarnation; `hibernate-census` 13, `delegation-pass-timing` 90 and the lane
+suite 49 are green alone after the fix. Growth
 against the base (`67121c031`): `watch.ts` +15 / -7 (+8 net, within the brief's +20); `store.ts` +0.
 `delegation-adoption.ts` is 469 lines and `delegationAdoptStep.ts` 237.
