@@ -13,13 +13,13 @@
 //
 // D-6999: a rung-4 (`raw`) worktree rests on negative evidence (no other session's listing window overlapped the Bash
 // call that made it), so it ALWAYS wears the "inferred" chip and a chip naming that call, wherever it is drawn, and
-// nothing on the page acts on it. `inferredChip` keys on `sourceKind === 'raw'` as well as on `inferred`, so a raw row
-// whose marker went missing still says so.
+// nothing acts on it automatically: only the operator's own tap (wave 5's "Attach to…", below) does. `inferredChip`
+// keys on `sourceKind === 'raw'` as well as on `inferred`, so a raw row whose marker went missing still says so.
 //
 // Imports only `shared/api` and `lib/wire` (never `./fleetTree` or `./nestFleet`, which import from here: a cycle).
 import {
-  DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS,
-  type DelegationActivityWire, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
+  DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, delegationLeaseDispositionOf,
+  delegationLeaseExpiresAtOf, type DelegationActivityWire, type DelegationCarrierState, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
   type DelegationProjectionWire, type DelegationUnownedWire,
 } from '../../../shared/api';
 import { isRecord } from '../lib/wire';
@@ -270,3 +270,113 @@ export function delegationParts(rows: readonly { kind: 'activity' | 'lease' }[])
     ...(trees > 0 ? [{ n: trees, word: trees === 1 ? 'worktree' : 'worktrees' }] : []),
   ];
 }
+
+// THE WORKTREE CONTROLS (delegation broker wave 5, PR10). The operator keeps a worktree, attaches an inferred one to its own
+// session, or says one is not delegated work; each row reads its disposition and the date it is kept until. O5-6 (a)
+// (D-7845): these words keep W4-U10's census closed, so none says lease, adopt, retain, clean or spool, and none says
+// running. O5-8 (c) (D-7847): there are no tree doors, so an unowned row acts only through the lease the projection hid on
+// its tree, and one with none offers nothing. A row from an older server (no `disposition`, no `leaseId`) offers nothing
+// and says nothing new. No control implies the work is live or done; promotion is a run open, never a control here.
+
+/** The operator's keep (`POST /api/leases/:lease/operator-retain`). */
+export const KEEP_WORD = 'Keep worktree';
+/** The operator's attach (`POST /api/leases/:lease/resolve`, `{action: 'attach'}`): the confirm names the one choice. */
+export const ATTACH_WORD = 'Attach to…';
+/** The operator's "not delegation's" (`POST /api/leases/:lease/resolve`, `{action: 'foreign'}`): it asks first. */
+export const NOT_DELEGATED_WORD = 'Not delegated';
+
+/** A worktree's disposition, as the row says it; `ephemeral` says nothing. Keyed by every carrier state but `released`
+ *  (an unreleased worktree is never `released`), so W5-U3 holds it total. */
+export const DISPOSITION_WORD: Readonly<Record<Exclude<DelegationCarrierState, 'released'>, string | null>> = {
+  ephemeral: null, adopted: 'worktree kept', retained: 'worktree kept', transferring: 'moving to a run', promoted: 'moved to a run',
+};
+
+/** The one act a control asks for. */
+export type WorktreeAct = 'keep' | 'attach' | 'foreign';
+
+/** `disposition`'s reader on this page: the wire's one reader (`delegationLeaseDispositionOf`), so absence and a word this
+ *  build cannot name both read null, and a null offers no control. */
+export function dispositionOf(l: DelegationLeaseWire): keyof typeof DISPOSITION_WORD | null {
+  return delegationLeaseDispositionOf(l);
+}
+/** `expiresAt`'s reader on this page: the wire's one reader (`delegationLeaseExpiresAtOf`); absent or null, no hold known. */
+export function expiryOf(l: DelegationLeaseWire): string | null {
+  return delegationLeaseExpiresAtOf(l);
+}
+/** `leaseId`'s one reader: the lease the projection hid for a conflict on an unowned row's tree, or null when it hid none,
+ *  the row came from an older server, or the member is not a non-empty string. */
+export function hiddenLeaseOf(u: DelegationUnownedWire): string | null {
+  const id: unknown = u.leaseId;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+/** The lease's OWN parent, the only attach choice (re-parenting is never offered). Under R9 the row's `parentId` is the
+ *  display parent, the coordinator, and `via` is the worker whose lease it is. */
+export function leaseParentOf(l: DelegationLeaseWire): string {
+  return l.via ?? l.parentId;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+/** The UTC day and month a worktree is kept until, with the year only when it is not `now`'s year. Never "expires": the
+ *  date is when the worktree stops being held back from the disk sweep, not when it is removed. */
+const dateWord = (expiresAt: string, now: number): string | null => {
+  const t = Date.parse(expiresAt);
+  if (Number.isNaN(t)) return null;
+  const d = new Date(t);
+  const year = d.getUTCFullYear() === new Date(now).getUTCFullYear() ? '' : ` ${d.getUTCFullYear()}`;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}${year}`;
+};
+/** 'kept until 17 Nov'. */
+export function keptUntilWord(expiresAt: string, now: number): string {
+  const d = dateWord(expiresAt, now);
+  return d === null ? 'kept, until a date that could not be read' : `kept until ${d}`;
+}
+/** The note after a keep the server accepted, from its answer's `expiresAt`. */
+export function keptWord(expiresAt: string | null, now: number): string {
+  const d = expiresAt === null ? null : dateWord(expiresAt, now);
+  return d === null ? 'Worktree kept' : `Worktree kept until ${d}`;
+}
+
+/** The words a worktree row adds after its own: its disposition and, while it is held, the date it is kept until. An older
+ *  server's row (no `disposition`) adds none, and so renders as before. */
+export function dispositionParts(l: DelegationLeaseWire, now: number): readonly string[] {
+  const d = dispositionOf(l);
+  if (d === null) return [];
+  const exp = expiryOf(l);
+  const word = DISPOSITION_WORD[d];
+  return [...(word === null ? [] : [word]), ...((d === 'adopted' || d === 'retained') && exp !== null ? [keptUntilWord(exp, now)] : [])];
+}
+
+/** The controls a worktree row offers (PR10's rules): Keep while `ephemeral`, `adopted` or `retained`; Attach on an
+ *  inferred (raw) worktree in those states; Not delegated on every state but `transferring`. Nothing without a disposition. */
+export function worktreeActs(l: DelegationLeaseWire): readonly WorktreeAct[] {
+  const d = dispositionOf(l);
+  if (d === null || d === 'transferring') return [];
+  const held = d === 'ephemeral' || d === 'adopted' || d === 'retained';
+  return [...(held ? ['keep' as const] : []), ...(held && l.sourceKind === 'raw' ? ['attach' as const] : []), 'foreign'];
+}
+/** The controls an unowned row offers: only through the lease the projection hid on its tree (O5-8 (c)). */
+export function unownedActs(u: DelegationUnownedWire): readonly WorktreeAct[] {
+  return hiddenLeaseOf(u) === null ? [] : ['foreign'];
+}
+
+/** A confirm's words. */
+export interface ConfirmWords { readonly title: string; readonly consequence: string; readonly confirmLabel: string }
+/** Attach asks first and names its one choice, the worktree's own session. */
+export function attachConfirm(parentLabel: string): ConfirmWords {
+  return {
+    title: `Attach this worktree to ${parentLabel}?`,
+    consequence: `It is kept for ${parentLabel}, and held back from the disk sweep until its date. It is never moved to another session.`,
+    confirmLabel: `Attach to ${parentLabel}`,
+  };
+}
+/** Not delegated asks first: it is final for the worktree. */
+export const notDelegatedConfirm: ConfirmWords = {
+  title: 'Not delegated work?',
+  consequence: 'This worktree is not delegated work. It will no longer be shown here, and it is not held back from the disk sweep.',
+  confirmLabel: NOT_DELEGATED_WORD,
+};
+/** A request that did not come back with an answer: nothing was confirmed either way. */
+export function controlFailedWord(message: string): string {
+  return `No answer came back (${message}); check the row again before you retry`;
+}
+
