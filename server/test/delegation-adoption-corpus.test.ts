@@ -136,7 +136,7 @@ function decide(scenario: string, cp: DelegationCheckpointV1, census: readonly D
     treePresent: new Set(census.map((r) => delegationTreeKey(r.project, r.adminRecord))), censused: new Set([PROJECT]),
     audits: new Map(leases.map((l) => [l.leaseId, { ok: true, changed: AUDIT[scenario]! } as never])),
     watch: new Map(leases.map((l) => [l.leaseId, { generation: 1, terminalAt: formatDelegationInstant(at - DELEGATION_ADOPT_SETTLE_MS - 60_000), passes: 2 }])),
-    parents: new Map([[OWNER, { registry: 'present', incarnation: INC, deadSince: null, ccd: true, alive: true }]]), conflicting: new Set(),
+    parents: new Map([[OWNER, { registry: 'present', incarnation: INC, deadSince: null, ccd: true, alive: true, deathRetracted: false }]]), conflicting: new Set(),
     boxHolds: true, breaker: 'clear', marker: 'present',
   }).decisions;
 }

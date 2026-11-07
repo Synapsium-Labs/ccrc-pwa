@@ -46,12 +46,16 @@ export interface AdoptLaneMemory {
    *  line of each per lease and generation, both pruned with the lease. */
   readonly shadowLogged: Map<string, number>;
   readonly refusalLogged: Map<string, number>;
+  /** The step's passes so far (an ordinal, never a clock), and leaseId -> the pass its carrier was last read at: the reads rotate as
+   *  PR6's re-reads do (review 1604 F2), pruned with the lease. */
+  pass: number;
+  readonly lastRead: Map<string, number>;
   health: DelegationAdoptionHealth | null;
 }
 /** The health block's `adoption` member: the last pass's counts, or null when every count is zero (D-8035's rule). */
 export const adoptionHealthShown = (memory: AdoptLaneMemory): DelegationAdoptionHealth | null => delegationAdoptionHealthShown(memory.health);
 export const emptyAdoptLaneMemory = (): AdoptLaneMemory => ({ watch: new Map(), raised: new Set(), asked: [], audits: new Map(), shadowLogged: new Map(),
-  refusalLogged: new Map(), health: null });
+  refusalLogged: new Map(), pass: 0, lastRead: new Map(), health: null });
 
 export interface AdoptStepDeps {
   readonly io: Pick<FleetIO, 'readFileMeasured' | 'readdirMeasured'>;
@@ -74,8 +78,9 @@ export interface AdoptPassFacts {
   records: readonly { id: string }[];
   listedIds: ReadonlySet<string> | null;
   registryListed: boolean;
-  /** The sessions this pass measured alive. */
-  alive: ReadonlySet<string>;
+  /** The sessions this pass measured, with their status, and the parents whose counted death the lane retracted (review 1604 F7). */
+  sessions: readonly { readonly id: string; readonly status: string }[];
+  retracted: ReadonlySet<string>;
   /** The census's settled incarnations. */
   incarnations: ReadonlyMap<string, ParentIncarnation>;
   /** The lane's first-dead instants (epoch ms), as the breaker reads them. */
@@ -99,33 +104,39 @@ export async function runLeaseAudit(d: Pick<AdoptStepDeps, 'runCcd' | 'fleetStat
 /** The lane's adoption step for one pass (the caller holds a ready applier and runs it between native-removed and the carriers). */
 export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f: AdoptPassFacts): Promise<void> {
   const now = formatDelegationInstant(f.nowMs);
+  const cut = (): boolean => d.signal?.aborted === true;          // read after every await: an await can cut the pass
   const listing = await d.io.readdirMeasured(d.registryDir, undefined, d.signal);
   const switches = readSwitches(listing.ok ? listing.entries : null);
   const marker = switches[DELEGATION_ADOPT_MARKER] === 'set' ? 'present' : switches[DELEGATION_ADOPT_MARKER] === 'clear' ? 'absent' : 'unmeasured';
   const mailHeld = switches[MAIL_DISABLED_MARKER] !== 'clear';
   const fresh = new Map<string, HeldLeaseAudit>();
-  for (const ask of memory.asked.splice(0)) {
-    if (d.signal?.aborted === true) break;
+  for (const ask of [...memory.asked]) {
+    if (cut()) break;
     fresh.set(ask.leaseId, { generation: ask.generation, answer: await runLeaseAudit(d, ask.leaseId, ask.generation), at: now });
   }
+  if (cut()) return;                     // review 1604 F4: a cut pass writes no lane memory and queues nothing
+  memory.asked.length = 0;
+  const pass = (memory.pass += 1);
   const cp = d.durable.state().checkpoint as DelegationCheckpointV1;
   const conflicting = conflictingTreeKeys(cp);
   const { audits, held } = adoptionAudits({ now, checkpoint: cp, auditable: ccdCan(d.fleetState, 'leaseAudit'), held: memory.audits, fresh });
-  memory.audits = held;
   const parents = adoptionParentFacts(cp, { now, registryListed: f.registryListed, listedIds: f.listedIds, built: new Set(f.records.map((x) => x.id)),
-    alive: f.alive, incarnations: f.incarnations, firstDead: f.firstDead });
-  const input: Omit<AdoptionInput, 'carriers'> = { now, checkpoint: cp, treePresent: new Set(f.census.filter((x) => x.state === 'present').map((x) => delegationTreeKey(x.project, x.adminRecord))),
-    censused: f.censused, audits, watch: memory.watch, parents, conflicting, boxHolds: boxHoldsTrees(d.fleetState), breaker: f.breaker, marker, raised: memory.raised };
+    sessions: f.sessions, retracted: f.retracted, incarnations: f.incarnations, firstDead: f.firstDead });
+  const trees = (state: string) => new Set(f.census.filter((x) => x.state === state).map((x) => delegationTreeKey(x.project, x.adminRecord)));
+  const input: Omit<AdoptionInput, 'carriers'> = { now, checkpoint: cp, treePresent: trees('present'), treeUnread: trees('unreadable'), censused: f.censused, audits, watch: memory.watch, parents, conflicting, boxHolds: boxHoldsTrees(d.fleetState), breaker: f.breaker, marker, raised: memory.raised };
   const carriers = new Map<string, CarrierReadBack>();
-  for (const id of adoptionCarrierReads(input)) {
-    if (d.signal?.aborted === true) return;
+  for (const id of adoptionCarrierReads(input, memory.lastRead)) {
+    if (cut()) return;
     carriers.set(id, await readDelegationCarrier(d, id));
   }
+  if (cut()) return;                     // F4, after the last awaited read
+  memory.audits = held;
+  for (const id of carriers.keys()) memory.lastRead.set(id, pass);
   const r = decideAdoption({ ...input, carriers });
   memory.watch = r.watch;
   memory.raised = new Set([...memory.raised].filter((k) => r.raised.has(k)));       // a key leaves when its condition clears (F4)
   const unreleased = new Set(cp.leases.filter((l) => l.releasedAt === null).map((l) => l.leaseId));
-  for (const logged of [memory.shadowLogged, memory.refusalLogged]) for (const id of logged.keys()) if (!unreleased.has(id)) logged.delete(id);
+  for (const kept of [memory.shadowLogged, memory.refusalLogged, memory.lastRead]) for (const id of kept.keys()) if (!unreleased.has(id)) kept.delete(id);
   const leaseOf = (id: string): DelegationLeaseRow | undefined => cp.leases.find((l) => l.leaseId === id);
   const once = (logged: Map<string, number>, l: DelegationLeaseRow, line: string): void => {
     if (logged.get(l.leaseId) === l.generation) return;
@@ -133,7 +144,7 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     console.warn(line);
   };
   for (const dec of r.decisions) {
-    if (d.signal?.aborted === true) break;
+    if (cut()) break;
     const lease = 'leaseId' in dec ? leaseOf(dec.leaseId) : undefined;
     if (dec.kind === 'audit') memory.asked.push({ leaseId: dec.leaseId, generation: dec.generation });
     else if (dec.kind === 'attention') {
@@ -155,6 +166,7 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
       }
     }
   }
+  if (cut()) return;                     // F4, after the effects' awaits
   memory.health = { ...r.health, owed: queueOwedNotices({ ...d, coord: d.mail.coord }, d.durable.state().checkpoint as DelegationCheckpointV1, now, parents, r.decisions, mailHeld) };
 }
 

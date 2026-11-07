@@ -10273,6 +10273,7 @@ class DelegationLane {
   private lastAlive = new Set<string>();
   private aliveSeen = false;
   private readonly firstDead = new Map<string, number>();
+  private readonly retractedDeaths = new Set<string>();   // PR7 (review 1604 F7): a counted death a stop or archive stamp retracted
   /** Rung 2's positive meta reads (a point lookup in the parent's own transcript tree), kept for the process: a meta is read evidence,
    *  not journal evidence, so it is never durable and is read again after a restart. */
   private readonly pointMetas = new Map<string, LanePointMeta>();
@@ -10954,7 +10955,7 @@ class DelegationLane {
             await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,
               notice: (title, body, mode) => { notify(sink, { kind: 'coord', sessionId: '', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },
             }, this.adoptMemory, { nowMs: pass.now, census: flat, censused: new Set(censused), records: pass.records, listedIds: this.listedIds(), registryListed: this.registryListed,
-              alive: this.lastAlive, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
+              sessions: pass.sessions, retracted: this.retractedDeaths, incarnations: pass.census.incarnations, firstDead: this.firstDead, breaker: this.breakerNow(pass.now) });
           }
           // PR6 (Task 5.6.2): a carrier for every linked lease, behind its capability; journal first, then mark, then read back.
           const cs = durable.state();
@@ -11061,17 +11062,18 @@ class DelegationLane {
         const stopAt = stoppedBy !== null ? stoppedBy.at : archivedAt !== null ? archivedAt * 1000 : null;
         const recorded = this.firstDead.get(s.id);
         if (stopAt !== null && recorded !== undefined) {
-          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); continue; }
+          if (stopAt <= recorded + DELEGATION_CLOCK_SKEW_MS) { this.firstDead.delete(s.id); this.retractedDeaths.add(s.id); continue; }
         } else if (stopAt !== null) {
           if (stopAt <= pass.now + DELEGATION_CLOCK_SKEW_MS) continue;
         }
         // D-5242: a HIBERNATED row went down on purpose (`ccd hibernate`, journalled as deliberate) — it is asleep, not a
         // death, so it never feeds the delegation breaker, which suspends at two fresh parent deaths in its window and
         // would otherwise trip on every burst of sleeps (the sweeps put up to six down in one window).
-        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) this.firstDead.set(s.id, pass.now);
+        if ((s.hibernatedAt ?? null) === null && this.lastAlive.has(s.id) && !this.firstDead.has(s.id)) { this.firstDead.set(s.id, pass.now); this.retractedDeaths.delete(s.id); }
       }
     }
-    for (const id of alive) this.firstDead.delete(id);
+    for (const id of alive) { this.firstDead.delete(id); this.retractedDeaths.delete(id); }
+    for (const id of this.retractedDeaths) if (!pass.records.some((r) => r.id === id)) this.retractedDeaths.delete(id);   // left the registry
     for (const [id, at] of this.firstDead) if (pass.now - at > DELEGATION_DEAD_MEMORY_MS) this.firstDead.delete(id);
     this.lastAlive = alive;
     this.aliveSeen = true;

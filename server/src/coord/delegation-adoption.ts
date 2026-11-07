@@ -37,9 +37,13 @@ export const DELEGATION_ADOPTABLE_SOURCES = ['agent', 'workflow'] as const satis
 
 /** What the lane measured of a lease's parent this pass: its registry row, the incarnation it reads, since when a supervisor has been
  *  measured dead outside its restart window for two passes (the lane's `firstDead`, as reconciliation's breaker reads it), whether it
- *  is a ccd session (a registry row), and whether this pass measured its session alive. `unmeasured` and a null incarnation are never
- *  evidence. */
-export interface ParentFact { registry: 'present' | 'absent' | 'unmeasured'; incarnation: string | null; deadSince: string | null; ccd: boolean; alive: boolean }
+ *  is a ccd session (a registry row), whether this pass measured its session alive (`null`: the pass's sessions do not name it, so its
+ *  liveness is unmeasured), and whether the lane retracted a death it had counted for it (a stop or archive stamp dated at or before
+ *  it, review 1604 F7). `unmeasured`, a null incarnation and a null `alive` are never evidence. */
+export interface ParentFact {
+  registry: 'present' | 'absent' | 'unmeasured'; incarnation: string | null; deadSince: string | null; ccd: boolean; alive: boolean | null;
+  deathRetracted: boolean;
+}
 
 /** The reads one pass of the lane makes of the parents (review 1587 A7: the step passes them, this file classifies them). */
 export interface AdoptionParentReads {
@@ -50,8 +54,10 @@ export interface AdoptionParentReads {
   listedIds: ReadonlySet<string> | null;
   /** The ids whose row the registry assembled this pass (the pass's records). */
   built: ReadonlySet<string>;
-  /** The sessions this pass measured alive. */
-  alive: ReadonlySet<string>;
+  /** The sessions this pass measured, with their status (`dead`, or alive); a session they do not name is unmeasured. */
+  sessions: readonly { readonly id: string; readonly status: string }[];
+  /** The parents whose counted death the lane retracted (review 1604 F7), until they are alive again, die again or leave the registry. */
+  retracted: ReadonlySet<string>;
   /** The census's settled incarnations. */
   incarnations: ReadonlyMap<string, { readonly kind: 'measured'; readonly incarnation: string } | { readonly kind: 'unmeasured' }>;
   /** The lane's first-dead instants (epoch ms), as the breaker reads them. */
@@ -63,13 +69,15 @@ export interface AdoptionParentReads {
  *  listing did not name is absent, and no listing is unmeasured. `deadSince` is the lane's first-dead instant once a later pass reads it. */
 export function adoptionParentFacts(checkpoint: DelegationCheckpointV1, reads: AdoptionParentReads): Map<string, ParentFact> {
   const nowMs = parseDelegationInstant(reads.now), out = new Map<string, ParentFact>();
+  const status = new Map(reads.sessions.map((x) => [x.id, x.status] as const));
   for (const { parentId } of checkpoint.leases) {
     if (out.has(parentId)) continue;
     const registry = !reads.registryListed || reads.listedIds === null ? 'unmeasured'
       : reads.built.has(parentId) ? 'present' : reads.listedIds.has(parentId) ? 'unmeasured' : 'absent';
     const inc = reads.incarnations.get(parentId), dead = reads.firstDead.get(parentId);
     out.set(parentId, { registry, incarnation: inc?.kind === 'measured' ? inc.incarnation : null,
-      deadSince: dead !== undefined && dead < nowMs ? formatDelegationInstant(dead) : null, ccd: registry === 'present', alive: reads.alive.has(parentId) });
+      deadSince: dead !== undefined && dead < nowMs ? formatDelegationInstant(dead) : null, ccd: registry === 'present',
+      alive: status.has(parentId) ? status.get(parentId) !== 'dead' : null, deathRetracted: reads.retracted.has(parentId) });
   }
   return out;
 }
@@ -99,6 +107,8 @@ export interface AdoptionInput {
   carriers: ReadonlyMap<string, CarrierReadBack>;
   /** The census's `present` trees, by `delegationTreeKey`. */
   treePresent: ReadonlySet<string>;
+  /** The trees whose census record read `unreadable` (review 1604 F6): unmeasured, never absent. Absent: none. */
+  treeUnread?: ReadonlySet<string>;
   /** The projects whose census this pass is a measured success (D-7852). */
   censused: ReadonlySet<string>;
   /** The audit answers the lane is fed this pass (`adoptionAudits`), by lease id. Absent or `'not-asked'`: not measured yet. */
@@ -162,13 +172,16 @@ const order = (a: DelegationLeaseRow, b: DelegationLeaseRow): number =>
 const candidate = (cp: DelegationCheckpointV1, l: DelegationLeaseRow): boolean =>
   l.releasedAt === null && isAdoptable(l) && delegationCarrierStateOf(l, carrierRow(cp, l.leaseId)) === 'ephemeral';
 
-/** The leases whose carrier the lane reads this pass, just before its act or its shadow line (review 1587 F7): those that pass rules 1,
- *  2, rule 3's journalled `seen` and rules 4 to 6 this pass, oldest first, at most `DELEGATION_ADOPT_CARRIER_READS_PER_PASS`. The read
- *  stays at decision time (D-8034, 1546 F1); a lease over the bound waits a pass. */
-export function adoptionCarrierReads(input: Omit<AdoptionInput, 'carriers'>): string[] {
+/** The leases whose carrier the lane reads this pass, just before its act or its shadow line (review 1587 F7): those at a generation
+ *  above 0 that pass rules 1, 2, rule 3's journalled `seen` and rules 4 to 6 this pass, at most `DELEGATION_ADOPT_CARRIER_READS_PER_PASS`.
+ *  They rotate as PR6's re-reads do (`carrierReadsOf`, D-8034's order; review 1604 F2): never read first, then the oldest read, by the
+ *  lane pass `lastRead` names, and oldest lease first among equals, so every candidate is read within a few passes. The read stays at
+ *  decision time (D-8034, 1546 F1); a lease over the bound waits a pass. */
+export function adoptionCarrierReads(input: Omit<AdoptionInput, 'carriers'>, lastRead: ReadonlyMap<string, number>): string[] {
   const reads: string[] = [];
   walkAdoption(input, null, reads);
-  return reads.slice(0, DELEGATION_ADOPT_CARRIER_READS_PER_PASS);
+  return reads.map((id, i) => ({ id, i, last: lastRead.get(id) ?? -1 })).sort((a, b) => a.last - b.last || a.i - b.i)
+    .slice(0, DELEGATION_ADOPT_CARRIER_READS_PER_PASS).map((x) => x.id);
 }
 
 /** An audit answer held between passes: the generation it measured, and when it was read. */
@@ -187,7 +200,8 @@ export function adoptionAudits(input: { now: string; checkpoint: DelegationCheck
   const nowMs = parseDelegationInstant(input.now), cp = input.checkpoint;
   const audits = new Map<string, LeaseAuditAnswer | 'unsupported'>(), held = new Map<string, HeldLeaseAudit>();
   const young = (h: HeldLeaseAudit | undefined, l: DelegationLeaseRow): h is HeldLeaseAudit =>
-    h !== undefined && h.generation === l.generation && nowMs - parseDelegationInstant(h.at) <= DELEGATION_AUDIT_HOLD_MS;
+    h !== undefined && h.generation === l.generation && nowMs - parseDelegationInstant(h.at) >= 0                     // F8: a clock step back
+      && nowMs - parseDelegationInstant(h.at) <= DELEGATION_AUDIT_HOLD_MS;
   for (const l of cp.leases) {
     if (!input.auditable) { audits.set(l.leaseId, 'unsupported'); continue; }
     const fresh = input.fresh.get(l.leaseId), before = input.held.get(l.leaseId);
@@ -210,11 +224,21 @@ function terminalOf(cp: DelegationCheckpointV1, lease: DelegationLeaseRow, paren
   return parent.incarnation !== null && parent.incarnation !== lease.parentIncarnation ? first : null;
 }
 
-/** Review 1587 F2 (D-8058): the counter-evidence that drops a parent's death the lane already saw, once the dead-since memory has aged
- *  out: the parent measured alive at the lease's incarnation (its row present). An unmeasured read neither adds nor drops evidence, and a
- *  changed incarnation is evidence of its own (rule 4). An ended activity never needs keeping: it is in the journal. */
-const aliveAgain = (lease: DelegationLeaseRow, parent: ParentFact | undefined): boolean =>
-  parent !== undefined && parent.registry === 'present' && parent.alive && parent.incarnation === lease.parentIncarnation;
+/** Review 1587 F2 and 1604 F5, F7 (D-8058): the counter-evidence that drops a parent's death the lane already saw: the parent measured
+ *  alive at the lease's incarnation (its row present), or the lane's retraction of the death it had counted (a deliberate stop first
+ *  read as a crash). Asked at every rule that keeps a watch entry. A changed incarnation is evidence of its own (rule 4), and an ended
+ *  activity never needs keeping (it is in the journal), so neither is disproved here. */
+const deathDisproved = (cp: DelegationCheckpointV1, lease: DelegationLeaseRow, parent: ParentFact | undefined): boolean =>
+  !activityEnded(cp, lease) && parent !== undefined
+  && ((parent.registry === 'present' && parent.alive === true && parent.incarnation === lease.parentIncarnation) || parent.deathRetracted);
+const activityEnded = (cp: DelegationCheckpointV1, lease: DelegationLeaseRow): boolean => {
+  const activity = cp.activities.find((a) => a.activityId === lease.activityId);
+  return activity !== undefined && activity.executionState === 'ended' && activity.endedAt !== null;
+};
+/** Review 1604 F1: whether this pass MEASURED the parent: its row present with an incarnation read and its liveness read. A kept death
+ *  moves only on a measured read; any other read holds the lease's entry as it was. */
+const parentMeasured = (parent: ParentFact | undefined): boolean =>
+  parent !== undefined && parent.registry === 'present' && parent.incarnation !== null && parent.alive !== null;
 
 /** Whether an audit answer proves the tree changed: an unsupported box, a refusal and an unmeasured fact all count as changed (the
  *  safe direction: the tree is kept); only `changed: false` is unchanged. */
@@ -252,7 +276,8 @@ function walkAdoption(input: Omit<AdoptionInput, 'carriers'>, carriers: Readonly
   for (const lease of [...cp.leases].sort(order)) {
     if (lease.releasedAt !== null || !isAdoptable(lease)) continue;                                   // rule 1 (D-6999)
     const id = lease.leaseId, key = delegationTreeKey(lease.project, lease.adminRecord), prior = input.watch.get(id);
-    const keep = (): void => { if (prior !== undefined) watch.set(id, prior); };
+    const parent = input.parents.get(lease.parentId);
+    const keep = (): void => { if (prior !== undefined && !deathDisproved(cp, lease, parent)) watch.set(id, prior); };   // 1604 F5, F7
     if (delegationCarrierStateOf(lease, carrierRow(cp, id)) !== 'ephemeral') continue;               // rule 2
     if (input.conflicting.has(key)) {                                                                 // rule 2: waits for the operator
       keep();
@@ -264,17 +289,22 @@ function walkAdoption(input: Omit<AdoptionInput, 'carriers'>, carriers: Readonly
     if (lease.carrierGenerationSeen !== lease.generation) { keep(); health.waiting += 1; continue; }  // rule 3, journalled (read: below)
     if (!input.boxHolds) { keep(); health.unsupported += 1; continue; }
     const same = prior !== undefined && prior.generation === lease.generation ? prior : undefined;   // rule 4 (W5-D9: a new generation resets)
-    const parent = input.parents.get(lease.parentId);
-    const terminalAt = terminalOf(cp, lease, parent, same?.terminalAt ?? input.now)
-      ?? (same !== undefined && !aliveAgain(lease, parent) ? same.terminalAt : null);              // F2: a death seen is kept (D-8058)
+    let terminalAt = terminalOf(cp, lease, parent, same?.terminalAt ?? input.now);
+    if (terminalAt === null && same !== undefined && !deathDisproved(cp, lease, parent)) {           // F2: a death seen is kept (D-8058)
+      if (!parentMeasured(parent)) { watch.set(id, same); health.waiting += 1; continue; }         // 1604 F1: an unmeasured read holds
+      terminalAt = same.terminalAt;                                                                   // measured dead: counts the pass
+    }
     if (terminalAt === null) continue;
     const seen: AdoptWatch = { generation: lease.generation, terminalAt, passes: (same?.passes ?? 0) + 1 };
     watch.set(id, seen);
     if (nowMs - parseDelegationInstant(terminalAt) < DELEGATION_ADOPT_SETTLE_MS                       // rule 5
         || (same?.passes ?? 0) < DELEGATION_ADOPT_STABLE_PASSES) { health.waiting += 1; continue; }
     if (!input.censused.has(lease.project)) { health.uncensused += 1; continue; }                    // rule 6 (D-7852): waits
-    if (!input.treePresent.has(key)) { watch.delete(id); continue; }
-    if (carriers === null) { reads?.push(id); continue; }                                             // rule 3's read (F7): planning only
+    if (!input.treePresent.has(key)) {
+      if (input.treeUnread?.has(key) === true && same !== undefined) { watch.set(id, same); health.waiting += 1; } else watch.delete(id);   // 1604 F6
+      continue;
+    }
+    if (carriers === null) { if (lease.generation > 0) reads?.push(id); continue; }                  // rule 3's read (F7): planning only
     const rb = carriers.get(id);
     if (rb === undefined || rb.kind !== 'carrier' || rb.body.generation !== lease.generation) {       // unread, over the bound, or behind
       if (prior !== undefined) watch.set(id, prior); else watch.delete(id);
@@ -286,7 +316,7 @@ function walkAdoption(input: Omit<AdoptionInput, 'carriers'>, carriers: Readonly
       if (audits > 0) { audits -= 1; decisions.push({ kind: 'audit', leaseId: id, generation: lease.generation }); } else health.unaudited += 1;
       continue;
     }
-    if (!auditChanged(audit)) { health.unchanged += 1; watch.delete(id); continue; }
+    if (!auditChanged(audit)) { health.unchanged += 1; continue; }                                    // 1604 F6: kept, asked again after the hold
     if (input.breaker !== 'clear') { suspended ||= input.breaker === 'suspended'; health.waiting += 1; continue; }   // rule 8
     if (input.marker === 'present') {                                                                 // rule 9
       health.adopted += 1;
