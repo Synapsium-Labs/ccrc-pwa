@@ -363,6 +363,7 @@ export const REQUIRED_VERB_FLAG = {
   'ws-lease-audit': '--lease',
   'testbox-remote': '--state',
   'scope-sweep-busy': '--state',
+  'delegation-adopt': '--state',
   'project-add': '--name',
   'pane-scope-stop': '--state',
 } as const;
@@ -541,6 +542,10 @@ export const EXEC_WHITELIST = {
     // a registry-file write/unlink, and the verb stops nothing itself. ENROLLED in `REQUIRED_VERB_FLAG` above (g27 is the
     // other side).
     ['scope-sweep-busy', '--state'],
+    // The delegation lane's adoption switch (D-8112), granted on `scope-sweep-busy`'s argument exactly: `$REG/delegation-adopt`
+    // is a registry-file write/unlink, and the verb keeps or removes nothing itself; the server sends it only after its door's
+    // refusal rule (D-8113). ENROLLED in `REQUIRED_VERB_FLAG` above (g28 is the other side).
+    ['delegation-adopt', '--state'],
     // The project pool tag's writer (account pools, spec §5.4.2), granted on
     // `coord-pause`'s own argument: `$REG/pools/<project>` is a registry-file
     // write/unlink, non-destructive, and granting it widens nothing that

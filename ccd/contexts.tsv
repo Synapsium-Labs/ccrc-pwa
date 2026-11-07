@@ -524,6 +524,7 @@ cmd_reclaim_pause	C4
 cmd_testbox_remote	C2
 cmd_pane_scope_stop	C2
 cmd_scope_sweep_busy	C4
+cmd_delegation_adopt	C5
 _tmux_at	C2
 _tmux_t	C2
 cmd_attach	C2

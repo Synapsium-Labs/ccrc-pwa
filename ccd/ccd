@@ -6907,8 +6907,9 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # `$REG/.testbox-remote-live.$$.tmp` staging file (TB9, D-7411), the same
 # idiom again: the raise renames it onto the dot-FREE `$REG/testbox-remote-live`,
 # the test box switch, so only the transient copy carries a dot; `ccd scope-sweep-busy`'s
-# `$REG/.scope-sweep-busy-live.$$.tmp` (D-7994), that idiom a third time; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last four ARE candidate glob matches when
+# `$REG/.scope-sweep-busy-live.$$.tmp` (D-7994), that idiom a third time; `ccd delegation-adopt`'s
+# `$REG/.delegation-adopt.$$.tmp` (D-8112), a fourth; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last five ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
@@ -9368,6 +9369,7 @@ EOF
   echo testbox-remote   # D-7411: the test box switch's writer, behind POST /api/testbox/switch
   echo pane-scope-stop   # D-7902: the pane-scope stop's switch writer, behind POST /api/coord/pane-scope-stop
   echo scope-sweep-busy   # D-7994: the sweep's busy arm switch's writer, behind POST /api/coord/scope-sweep
+  echo delegation-adopt   # D-8112: the delegation lane's adoption switch's writer, behind POST /api/coord/delegation-adopt
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit; echo lease-mark-lock-v1   # delegation broker wave 5: the lease carrier's one writer (PR1), its read-only audit (PR2), and the mark's orphan lock (PR6, D-8037), ccd/lib/delegation-lease.sh
@@ -31141,6 +31143,31 @@ cmd_scope_sweep_busy() {   # ccd scope-sweep-busy --state on|off — raise or lo
   fi
 }
 
+cmd_delegation_adopt() {   # ccd delegation-adopt --state on|off — raise or lower the delegation lane's adoption switch
+  # (D-8112). While `$REG/delegation-adopt` exists, the server's delegation lane keeps a changed worktree whose delegated
+  # activity has terminal evidence and mails its owner; absent, it only records what it would keep (O5-7 (a)). This verb is
+  # the marker's ONE writer, reached from `POST /api/coord/delegation-adopt` (session-only, Settings › Automation) through the
+  # agent's two-token grant, after the door's refusal rule (D-8113); the lane is its one reader, by listing $REG.
+  # `cmd_scope_sweep_busy`'s shape: the raise atomic, both arms CHECKED, journalling nothing. Forbidden to every session
+  # (`FORBIDDEN_CCD_VERBS`): the switch is the operator's gate.
+  [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd delegation-adopt --state on|off"
+  local state=$2 marker tmp
+  [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"
+  [[ -d "$REG" ]] || die "no registry at $REG"
+  marker="$REG/delegation-adopt"
+  if [[ $state == on ]]; then
+    tmp="$REG/.delegation-adopt.$$.tmp"
+    { : > "$tmp" && _plat_mv_notdir "$tmp" "$marker"; } \
+      || { rm -f -- "$tmp"; die "could not raise the adoption switch — it is NOT on"; }
+    echo "on"
+  else
+    if [[ -e $marker || -L $marker ]]; then   # -L: a dangling link is lowered too, so no stale name stays
+      rm -f -- "$marker" || die "could not lower the adoption switch — it is STILL on"
+    fi
+    echo "off"
+  fi
+}
+
 # ── EVERY tmux TARGET IS EXACT (D-3525, closing D-2781 and D-2862) ──────────
 # `_tmux` answers a session's NAME — what `new-session -s` creates. A `-t`
 # argument is not a name to tmux, it is a SEARCH: the exact name, then a UNIQUE
@@ -46220,6 +46247,7 @@ case "${1:-}" in
   testbox-remote) shift; cmd_testbox_remote "$@" ;;
   pane-scope-stop) shift; cmd_pane_scope_stop "$@" ;;
   scope-sweep-busy) shift; cmd_scope_sweep_busy "$@" ;;
+  delegation-adopt) shift; cmd_delegation_adopt "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -46234,6 +46262,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

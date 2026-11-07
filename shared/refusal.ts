@@ -44,6 +44,7 @@
 import type { ClaimRefusal } from './box-token.js';
 import type { AccountAuthRefusal, AccountGateRefusal, AccountRouteRefusal, AccountWriteRefusal, ApprovalRefusal, ArchiveRefusal, CollectLaneRefusal, DigestRefusal, DoneRejectCode, MailRejectCode, QuestionDoorRefusal, RunRefuseCode, RunRouteRefuseCode, StepUpRefusal, SwapRefusal, UpdateRouteError } from './api.js';
 import { ARCHIVE_REFUSALS, LEASE_DOOR_REFUSALS, SWAP_REFUSALS, type LeaseDoorRefusal } from './api.js';
+import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptRefusal } from './delegation-adopt.js';
 import type { DispatchAbandonRefusal } from './dispatch-abandon.js';
 import type { LandingInfrastructureCode, LandingMutationCode } from './landingLine.js';
 import type { ItemMoveRefusal } from './ledgers.js';
@@ -192,7 +193,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   // The landing line's guarded entrances (wave 5f): the infrastructure words and the mutation words, one closed family.
   | LandingInfrastructureCode | LandingMutationCode
   // The lease doors (delegation broker wave 5 PR8): their words and statuses are declared once, `api.ts#LEASE_DOOR_REFUSALS`.
-  | LeaseDoorRefusal;
+  | LeaseDoorRefusal
+  // The adoption switch's door (delegation broker wave 5 PR8b, D-8113): declared once, `delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS`.
+  | DelegationAdoptRefusal;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -213,6 +216,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The lease doors (delegation broker wave 5 PR8): spread FIRST, so a word the table below already holds keeps the table's status;
   // `lease-routes.test.ts` holds every lease door word's status equal to this table's. CHOSEN, not measured, for the new words.
   ...LEASE_DOOR_REFUSALS,
+  // The adoption switch's door (D-8113): three new words, CHOSEN, each with its status in `DELEGATION_ADOPT_REFUSALS`.
+  ...DELEGATION_ADOPT_REFUSALS,
   // 400
   'bad-request': 400, 'bad-tag': 400, 'bad-kind': 400, 'bad-account-id': 400, 'bad-attachment': 400,
   'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400,

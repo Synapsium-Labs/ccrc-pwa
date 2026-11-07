@@ -31,6 +31,7 @@ import { boxHoldsTrees, runStampsOfSeries } from './delegationLeaseDoor.js';
 import { readDelegationCarrier } from './delegationCarrierMark.js';
 import type { CarrierReadBack } from './delegation-carrier.js';
 import { queueRunlessNotice } from './rundefsTx.js';
+import { adoptionKeepsOf } from './delegation-adopt-switch.js';
 import {
   adoptTerminalEvidenceAt, adoptionAudits, adoptionCarrierReads, adoptionParentFacts, buildAdoptionFeedRow, buildLeaseDigest, delegationAdoptionHealthShown,
   buildLeaseReminder, decideAdoption, leaseRecipient, owedLeaseNotices, parseLeaseAuditAnswer, type AdoptedAudit, type AdoptWatch, type AdoptionInput, type HeldLeaseAudit,
@@ -201,6 +202,7 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     logged.set(l.leaseId, l.generation);
     console.warn(line);
   };
+  const kept: Parameters<typeof adoptionKeepsOf>[0][number][] = [];   // D-8114: this pass's list, lane memory only
   for (const dec of r.decisions) {
     if (cut()) break;                    // review 1609 F4: a cut stops further effects; what already landed keeps its memory
     const lease = 'leaseId' in dec ? leaseOf(dec.leaseId) : undefined;
@@ -209,6 +211,7 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
       d.notice(dec.title, dec.body, 'push');
       memory.raised.add(dec.key);                                                      // F4: recorded only after its notice ran
     } else if (dec.kind === 'would-adopt' && lease !== undefined) {
+      kept.push({ lease, audit: audits.get(lease.leaseId) });
       once(memory.shadowLogged, lease, `ccrc-server: delegation: adoption shadow: would adopt ${lease.leaseId} (${lease.project}/${lease.adminRecord}, terminal ${r.watch.get(lease.leaseId)?.terminalAt ?? 'unknown'})`);
     } else if (dec.kind === 'adopt' && lease !== undefined) {
       const audit = audits.get(lease.leaseId);
@@ -218,6 +221,7 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
           auditEvidence: audit !== undefined && audit !== 'unsupported' && audit.ok ? audit.token : null, carrierRequired: true, resolvesThrough: null });
         if (out.kind === 'applied') {
           memory.adopted.set(lease.leaseId, { generation: out.generation, audit });
+          kept.push({ lease, audit });
           const row = buildAdoptionFeedRow(lease, dec.expiresAt, audit);
           d.notice(row.title, row.body, 'record-only');
         } else once(memory.refusalLogged, lease, `ccrc-server: delegation: adoption of ${lease.leaseId} ${out.kind === 'refused' ? `refused ${out.refusal}: ${out.detail}` : 'already applied'}`);
@@ -227,7 +231,9 @@ export async function runAdoptStep(d: AdoptStepDeps, memory: AdoptLaneMemory, f:
     }
   }
   if (cut()) return;                     // F4, after the effects' awaits: no health and no notice on a cut pass
-  memory.health = { ...r.health, owed: queueOwedNotices({ ...d, coord: d.mail.coord }, d.durable.state().checkpoint as DelegationCheckpointV1, now, parents, r.decisions, mailHeld, memory.adopted) };
+  const keeps = adoptionKeepsOf(kept);
+  memory.health = { ...r.health, owed: queueOwedNotices({ ...d, coord: d.mail.coord }, d.durable.state().checkpoint as DelegationCheckpointV1, now, parents, r.decisions, mailHeld, memory.adopted),
+    ...(keeps === null ? {} : { keeps }) };
 }
 
 /** Queues every notice owed from durable state (D-7812), each through `queueRunlessNotice`; answers how many are owed and not yet sent

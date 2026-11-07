@@ -300,6 +300,17 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // The test box switch (test box plan TB9, D-7411): `reclaim-pause`'s argument exactly. What this verb guards is
   // whether a session's tests leave the fleet host, reached from `POST /api/testbox/switch` (session-only), so a bare
   // `['testbox-remote']` — green in layer 2 and in layer 3's reachability check — is refused here.
+  // The adoption switch (D-8112): `scope-sweep-busy`'s argument exactly, reached from `POST /api/coord/delegation-adopt` (session-only).
+  it('delegation-adopt is grantable ONLY with --state (D-8112)', () => {
+    const sw = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'delegation-adopt');
+    expect(sw.length, 'exactly one delegation-adopt grant').toBe(1);
+    expect(sw[0]).toEqual(['delegation-adopt', '--state']);
+    expect(isExecAllowed('ccd', ['delegation-adopt', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['delegation-adopt'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.delegationAdopt('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.delegationAdopt('off')])).toBe(true);
+  });
+
   it('scope-sweep-busy is grantable ONLY with --state (D-7994)', () => {
     const sw = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'scope-sweep-busy');
     expect(sw.length, 'exactly one scope-sweep-busy grant').toBe(1);
@@ -587,6 +598,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     testboxRemote: ['testbox-remote', '--state', 'on'],
     paneScopeStop: ['pane-scope-stop', '--state', 'live'],
     scopeSweepBusy: ['scope-sweep-busy', '--state', 'on'],
+    delegationAdopt: ['delegation-adopt', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     projectAddClone: ['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'],

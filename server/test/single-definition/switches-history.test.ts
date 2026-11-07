@@ -865,27 +865,38 @@ describe('the pane-scope stop switch: its definer, the verb\'s one write, the ac
   });
 });
 
-// Delegation broker wave 5, PR7 (Task 5.7.1, W5-X1). `$REG/delegation-adopt` arms the delegation lane's adoption (O5-7 (a)):
-// absent, the lane only records what it would adopt. The operator touches it by hand on the fleet box after reading the
-// health's `adoption.wouldAdopt`, so no line of shell names it, its one spelling is its definer (an L0 file that reaches no
-// `node:` module), and the files that name its constant read it from a registry listing and reach no write.
-describe('delegation PR7: the adoption marker has no writer in the tree (W5-X1)', () => {
+// Delegation broker wave 5, PR7 (Task 5.7.1, W5-X1), re-pointed by PR8b (D-8112). `$REG/delegation-adopt` arms the delegation
+// lane's adoption (O5-7 (a)): absent, the lane only records what it would adopt. Since D-8112 it has EXACTLY ONE writer, the
+// `ccd delegation-adopt` verb in ccd/ccd (behind `POST /api/coord/delegation-adopt`, the operator's switch in Settings), whose two
+// lines name the marker and its staging file. The session hook and its installer name the verb only to forbid it to every session.
+// Its one TS literal spelling beside the definer is the verb's argv row; the files that name its constant read it from a registry
+// listing and reach no write.
+describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd delegation-adopt (W5-X1, D-8112)', () => {
   const NAME = 'delegation-adopt';
   const DEFINER = 'shared/switches.ts';
   const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
 
-  it('no shell line names it, and its one TS spelling is its definer', () => {
-    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
-    expect(ALL.filter((f) => stallCode(f).split('\n').some((l) => new RegExp(`['"\`]${NAME}['"\`]`).test(l))).map(rel).sort(),
-      `spelled as a literal on a code line outside ${DEFINER}`).toEqual([DEFINER]);
-    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
-      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  it('ccd/ccd names the marker on the verb\'s two lines alone; the hook and its installer name the verb only to forbid it', () => {
+    expect(holdersOf(NAME), 'a line of shell outside ccd/ccd, the hook and its installer names it — a writer in waiting')
+      .toEqual(['ccd/ccd', 'ccd/install-session-hooks.sh', 'ccd/session-hook.sh']);
+    const ccd = codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '');
+    expect(ccd.filter((l) => l.includes(`$REG/${NAME}`) || l.includes(`$REG/.${NAME}`)), 'the verb\'s lines are the only ones that name the marker')
+      .toEqual([`  marker="$REG/${NAME}"`, `    tmp="$REG/.${NAME}.$$.tmp"`]);
+    for (const f of ['ccd/install-session-hooks.sh', 'ccd/session-hook.sh']) {
+      const lines = codeLines(BASH.find((b) => rel(b) === f) ?? '').filter((l) => l.includes(NAME));
+      expect(lines.length, `${f} forbids the verb`).toBeGreaterThan(0);
+      for (const l of lines) expect(l, `${f} names it outside its forbidden-verb list`).toMatch(/ws-lease-mark.{1,8}delegation-adopt.{1,8}roll/);
+    }
   });
 
-  it('the files that name its constant are the definer and the lane\'s adopt step, and none reaches a write', () => {
+  it('its TS literal spellings are its definer and the verb\'s argv row; the files that name its constant reach no write', () => {
+    expect(ALL.filter((f) => stallCode(f).split('\n').some((l) => new RegExp(`['"\`]${NAME}['"\`]`).test(l))).map(rel).sort(),
+      `spelled as a literal on a code line outside ${DEFINER} and the argv row`).toEqual(['server/src/ccdargv.ts', DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
     const holders = ALL.filter((f) => stallCode(f).includes('DELEGATION_ADOPT_MARKER')).map(rel).sort();
-    expect(holders).toEqual(['server/src/coord/delegationAdoptStep.ts', DEFINER]);
+    expect(holders).toEqual(['server/src/coord/delegation-adopt-switch.ts', 'server/src/coord/delegationAdoptStep.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
   });
 });

@@ -91,6 +91,11 @@ export type TestboxRemoteNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)[
  *  `g27-scope-sweep-busy-without-state.ts` is the other side. */
 export type ScopeSweepBusyNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['scope-sweep-busy'], '--state'>>;
 
+/** The adoption switch (D-8112). Deleting this ENROLMENT turns `['delegation-adopt','--state']` into a bare
+ *  `['delegation-adopt']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g28-delegation-adopt-without-state.ts` is the other side. */
+export type DelegationAdoptNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['delegation-adopt'], '--state'>>;
+
 /** The project create (add-project spec 2026-11-04 §4). Deleting this ENROLMENT turns `['project-add','--name']` into a
  *  bare `['project-add']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g26-project-add-without-name.ts` is the other side. */

@@ -96,6 +96,9 @@ import { landingEjectionAsk } from './landingLine.js';
 import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { scopeSweepViewOf, type ScopeSweepView } from '../../../shared/scope-sweep.js';
+import { delegationAdoptionHealthOf } from '../../../shared/api.js';
+import type { DelegationAdoptView } from '../../../shared/delegation-adopt.js';
+import { delegationAdoptViewOf } from './delegation-adopt-switch.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
 import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
@@ -2809,6 +2812,47 @@ export function registerCoordRoutes(
       notice({ kind: 'coord', sessionId: '', title: 'scope sweep busy arm changed', runId: null,
         body: `stopping a dead session's busy scopes: ${before.busy} -> ${after.busy}; by ${actor}` },
       'record-only', { degraded: 'scope sweep busy switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/delegation-adopt` (D-8112, D-8113, D-8114): the door of Settings › Automation's card over the delegation
+   *  lane's adoption switch. The GET answers the marker from one registry listing, the two capabilities the rule reads from the fleet
+   *  box's measured `ccd caps`, what a tap of each direction would be refused with, and the lane's last pass (its counts and the
+   *  bounded list of worktrees it would keep), all decided in L1 (`delegation-adopt-switch.ts`). The POST takes `{on: boolean}` and
+   *  nothing else; it refuses with the rule's word and changes nothing, or runs `ccd delegation-adopt --state on|off` through the
+   *  agent's whitelist, the marker's one writer, and answers the view read after the verb ran. Session-gated when `CCRC_AUTH` is
+   *  armed, no box token (`coord-pause-route.test.ts`'s `SESSION_ONLY`): the operator's gate (O5-7 (a)), never a coordinator's. A
+   *  change is a record-only feed row naming the actor. No `notConfigured` arm: the verb touches no coordination row. */
+  const delegationAdoptNow = async (): Promise<DelegationAdoptView> => {
+    const read = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    const health = watcher?.currentDelegationHealth();
+    return delegationAdoptViewOf(read.ok ? read.entries : null, deps.fleetState?.ccdVerbs ?? null,
+      health === undefined ? null : delegationAdoptionHealthOf(health));
+  };
+  app.get('/api/coord/delegation-adopt', async (_req, reply) => reply.code(200).send({ ok: true, ...await delegationAdoptNow() }));
+
+  app.post('/api/coord/delegation-adopt', async (req, reply) => {
+    const body = req.body as { on?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {on: boolean} and nothing else' });
+    }
+    const before = await delegationAdoptNow();
+    const refusal = before.refused[body.on ? 'on' : 'off'];
+    if (refusal !== null) return refuseRoute(reply, refusal, { detail: `the fleet box's ccd caps: switch ${before.caps.verb}, check ${before.caps.audit}` });
+    // The skew gate at send time (`verb-gate.test.ts`), a TOCTOU re-check: the caps the rule read can change across the listing's
+    // await (an agent reconnect), so a verb gone since then is refused with the rule's own word, never sent as a usage error.
+    if (!ccdCan(deps.fleetState, 'delegationAdopt')) return refuseRoute(reply, 'fleet-switch-missing');
+    const res = await deps.runCcd(CCD_ARGV.delegationAdopt(body.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST: a verb that never ran said nothing, so its forged code is not read as its refusal.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd delegation-adopt', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    const after = await delegationAdoptNow();
+    if (before.state !== after.state && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'delegation keep switch changed', runId: null,
+        body: `keeping finished delegated worktrees: ${before.state} -> ${after.state}; by ${actor}` },
+      'record-only', { degraded: 'delegation keep switch written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...after });
   });

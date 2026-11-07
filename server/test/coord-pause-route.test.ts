@@ -300,6 +300,8 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     '/api/coord/pane-scope-stop',
     // D-7994: the switch of the sweep busy arm and its read, an operator dial, session-gated like the stall-watch door.
     '/api/coord/scope-sweep',
+    // D-8112: the adoption switch of the delegation lane and its read, a gate for the operator (O5-7 (a)), session-gated, no box token.
+    '/api/coord/delegation-adopt',
     // W3 Q3f (D-7030): the operator door of the question family (see the docstring above).
     '/api/questions/:id/answer',
     // Delegation wave 5 PR8: the lease doors of the operator (keep, attach, not delegated), acts of the PWA on a delegated worktree.

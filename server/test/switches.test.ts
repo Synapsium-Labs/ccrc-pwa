@@ -127,7 +127,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     }
   });
 
-  it('the writers are the ones the tree has or a named task adds: five route-backed ccd verbs, four settings routes, the rest by hand', () => {
+  it('the writers are the ones the tree has or a named task adds: six route-backed ccd verbs, four settings routes, the rest by hand (the sixth, delegation-adopt, D-8112)', () => {
     const writers = Object.fromEntries(rows.filter(([, r]) => r.writer !== 'hand-only').map(([k, r]) => [k, r.writer]));
     expect(writers).toEqual({
       'coordinator-paused': 'ccd coord-pause, through POST /api/coord/pause',
@@ -137,6 +137,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
       'testbox-remote-live': 'ccd testbox-remote, through POST /api/testbox/switch',
       'pane-scope-stop-live': 'ccd pane-scope-stop, through POST /api/coord/pane-scope-stop',
       'scope-sweep-busy-live': 'ccd scope-sweep-busy, through POST /api/coord/scope-sweep',
+      'delegation-adopt': 'ccd delegation-adopt, through POST /api/coord/delegation-adopt',
       'roll-idle-targets': 'POST /api/coord/roll-idle',
       'dispatch-abandon-choice': 'POST /api/coord/dispatch-abandon',
     });

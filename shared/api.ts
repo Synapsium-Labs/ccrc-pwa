@@ -12301,6 +12301,31 @@ export interface DelegationCarrierHealth {
 export interface DelegationAdoptionHealth {
   mode: 'live' | 'shadow' | 'suspended' | 'unmeasured'; adopted: number; wouldAdopt: number; waiting: number; unchanged: number;
   unaudited: number; conflicting: number; unsupported: number; uncensused: number; owed: number;
+  /**
+   * Wave 5 PR8b (D-8114): the worktrees the last pass would have kept (shadow) or kept (live), bounded. Lane memory only: written by
+   * the adoption step each pass, never journalled and never checkpointed. Absent when the pass kept none, and from an older server:
+   * absence says no list was served, never that nothing would be kept. Read it through `delegationAdoptionKeepsOf`.
+   */
+  keeps?: DelegationAdoptionKeeps;
+}
+
+/** Wave 5 PR8b (D-8114): how many worktrees one pass's list names at most; the rest are counted in `more`. */
+export const DELEGATION_ADOPTION_KEEPS_MAX = 50;
+
+/** Wave 5 PR8b (D-8114): one worktree the last pass would have kept, or kept. `changes` is what the tree's audit measured when its
+ *  answer carries it (a definite audit answer); absent when the pass kept it without one (unaudited, unmeasured or unsupported). */
+export interface DelegationAdoptionKeep {
+  project: string; worktree: string; path: string; parent: string;
+  changes?: { dirty: boolean | 'unmeasured'; aheadOfBase: number | 'unmeasured';
+    branchAheadOfBase: number | 'unmeasured' | 'no-branch' | 'branch-gone' };
+}
+/** Wave 5 PR8b (D-8114): the list, at most `DELEGATION_ADOPTION_KEEPS_MAX` items, and how many more the pass kept. */
+export interface DelegationAdoptionKeeps { items: DelegationAdoptionKeep[]; more: number }
+
+/** `keeps`' one reader: absence permits and reads as null (no list served: none kept, or an older server). */
+export function delegationAdoptionKeepsOf(health: Pick<DelegationAdoptionHealth, 'keeps'>): DelegationAdoptionKeeps | null {
+  const k = health.keeps;
+  return typeof k === 'object' && k !== null && Array.isArray(k.items) && typeof k.more === 'number' ? k : null;
 }
 
 /** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block). */
@@ -12411,7 +12436,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's

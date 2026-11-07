@@ -803,6 +803,9 @@ export const CCD_ARGV = {
   /** The busy arm's switch (D-7994), `coordPause`'s shape exactly. `ccd scope-sweep-busy` is
    *  `$REG/scope-sweep-busy-live`'s one shell writer. */
   scopeSweepBusy: (state: 'on' | 'off') => argv(['scope-sweep-busy', '--state', state]),
+  /** The delegation lane's adoption switch (D-8112), `scopeSweepBusy`'s shape exactly. `ccd delegation-adopt` is
+   *  `$REG/delegation-adopt`'s one shell writer, sent only after the door's refusal rule (`delegation-adopt-switch.ts`). */
+  delegationAdopt: (state: 'on' | 'off') => argv(['delegation-adopt', '--state', state]),
   /** The project pool tag's two writers (account pools, spec §5.4.2). TWO
    *  ENTRIES, not one builder taking `pool: string | null` — the `start`/
    *  `enable` rule above: the project-pool route picks between two words rather
@@ -1482,6 +1485,8 @@ export const CCD_CAN = {
   // D-7902: a new verb, gated as `testboxRemote` is.
   paneScopeStop: verbRow('pane-scope-stop'),
   scopeSweepBusy: verbRow('scope-sweep-busy'),
+  // D-8112: a new verb, gated as `scopeSweepBusy` is; the door asks the caps itself first, under its own rule (D-8113).
+  delegationAdopt: verbRow('delegation-adopt'),
   projectPoolSet: verbRow('project-pool'), projectPoolClear: verbRow('project-pool'),
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),

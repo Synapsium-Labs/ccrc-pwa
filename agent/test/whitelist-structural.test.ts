@@ -190,6 +190,11 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the busy arm switch verb granted without --state',
     codes: ['TS2322'],
   },
+  // THE ADOPTION SWITCH (D-8112), g14's shape: enrolled on `--state`, so the narrowed grant is a compile error.
+  'g28-delegation-adopt-without-state.ts': {
+    what: 'the adoption switch verb granted without --state',
+    codes: ['TS2322'],
+  },
   // THE LEASE CARRIER (delegation broker wave 5, PR1), g23's shape: enrolled on `--lease`, so the narrowed grant is a
   // compile error.
   'g25-ws-lease-mark-without-lease.ts': {
@@ -465,6 +470,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['scope-sweep-busy', '--state']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'scope-sweep-busy'), 'one scope-sweep-busy grant, on --state')
       .toEqual([['scope-sweep-busy', '--state']]);
+  });
+
+  it('throws on a delegation-adopt without --state, and grants exactly the one prefix (D-8112)', () => {
+    expect(() => auditExecWhitelist(withCcd([['delegation-adopt']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['delegation-adopt', '--on']])))
+      .toThrow(/only grantable with '--state'/);
+    expect(() => auditExecWhitelist(withCcd([['delegation-adopt', '--state']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'delegation-adopt'), 'one delegation-adopt grant, on --state')
+      .toEqual([['delegation-adopt', '--state']]);
   });
 
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {
