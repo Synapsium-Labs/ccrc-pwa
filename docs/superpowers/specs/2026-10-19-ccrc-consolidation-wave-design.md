@@ -1,6 +1,6 @@
 # ccrc consolidation wave: one owner per job (design)
 
-**Status:** rev 2.2 (2026-10-20): rev 2.1 with the operator's parser choice for ARCH-00 recorded (§8). Rev 2.1 (2026-10-19): rev 2 with two reviews of the W0 and W1a plans applied (§8); the rulings are unchanged. Rev 2 was **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
+**Status:** rev 2.3 (2026-11-06): rev 2.2 with the operator's architecture rulings recorded (D-8066, §8). Rev 2.2 (2026-10-20): rev 2.1 with the operator's parser choice for ARCH-00 recorded (§8). Rev 2.1 (2026-10-19): rev 2 with two reviews of the W0 and W1a plans applied (§8); the rulings are unchanged. Rev 2 was **approved by the operator 2026-10-19**, in their words: "answers locked". They answered §6's twelve decisions through the visual companion, each at its recommended option (O1 clicked explicitly), and asked for the work to proceed. Rev 2 folds the rulings in (§6, and the body where they change it) and corrects what writing the first two plans measured (log in §8). The spec defines no D-numbers; the W0 and W1a plans define theirs.
 
 **The request (operator, 2026-10-19):** "I also feel like we have a lot of separate mechanisms that try to do similar stuff, and we should do a consolidation and refactoring wave that also gets us to DDD/CLEAN/SOLID state plus consolidation of similar functionality."
 
@@ -182,7 +182,7 @@ The 08-10 six are kept and re-cut in two places: Workspace takes the whole end o
 - **Policies, not lanes.** "Sleep a long-idle session" and "sleep a finished worker" are two **idle policies** of one transition, each with its own arming marker, kill switch, cadence, per-pass cap and retry memory (§3 K1). "Reap merged", "reclaim a spent child", "expire archived", `ws-rm`, `ws-gc --prune` and `forget` are **reasons** of one `retire` transition; collecting an orphaned temp root is a different act (a quarantine move with no row). Each reason keeps its own evidence rule: a child marker plus `--child-of` agreeing, an archive epoch, witnesses, a merged PR.
 - **Writers:**
   - One L1 decider per transition: `decideSleep(facts, policy)` and `decideRetire(facts, reason)`.
-  - One L4 executor per transition, which composes the ccd verb on the coord serialiser and `KeyedQueue`, **re-measures at the act** (switches nearest the argv, registry record, store, presence; D-5428, expiry step 6, the child-reclaim generation check) and records one feed notice through the funnel (§3 K6).
+  - One L4 executor per transition. The sleep executor composes its verb on the coord serialiser and then `KeyedQueue`; the retire executor composes its verb on the session's `KeyedQueue` only (K1, D-8066). Each **re-measures at the act** (switches nearest the argv, and the rest as K1 says; D-5428, expiry step 6, the child-reclaim generation check) and records one feed notice through the funnel (§3 K6).
   - On the ccd side, shared refusal, lock and audit-token helpers (§3 K2), with each verb keeping its own tail and its act-time re-check.
 - **Facts recorded:** lifecycle journal rows (`intent`/`done`/`fail`/`refuse`) and `.reaped/<id>.json` tombstones. The ccd lock and tombstone are already shared.
 - **Bindings, read once.** "Is this workspace bound by coordination" (open runs, claims, outstanding mail, reviews) is asked by nine sites today. It becomes one store query, `bindingsOf(sessionId)`, owned by C5 and read by C4.
@@ -213,7 +213,7 @@ The 08-10 six are kept and re-cut in two places: Workspace takes the whole end o
   - Questions: one module, `coord/questions.ts`, over today's two tables (§6 O5).
   - The approval signing path (`approvalsign.ts`, `approval-verify.mjs`) is untouched. It is a security boundary with its own threat model (coordinator-first §6).
   - The egress command redactor (`coord/redact.ts`, D-5299, D-5360) is the other security boundary here. It gates what untrusted child input puts into approval rows, coordinator mail, digests and surfaces. K7 treats it as one: band 3, pinned byte for byte.
-  - The question doors stay **inside `coord/routes.ts`**, behind its one auth gate (08-10 Rejected: splitting routes.ts per resource; D-36/D-39).
+  - The question doors stay **inside `coord/routes.ts`**, behind the shared box-token gate (`checkMailToken`, `coord/token.ts`) (08-10 Rejected: splitting routes.ts per resource, re-affirmed 2026-11-06, D-8066).
 - **Channels are read models.** Push, the feed screen, the digest and catch-up project from the notices and questions. They are not routes with their own decisions. Today ccd's `notify.sh` banner reaches the server through `POST /api/notify` as a bus notice; it becomes a notice through the funnel.
 - **Ports:** `PushService`, `NotifyLog` (ring cache) and coord.db.
 
@@ -234,7 +234,7 @@ These are not contexts, because they hold no aggregate. Each is one implementati
 
 | Kernel | Home after the wave | Replaces |
 |---|---|---|
-| **Clock and schedule** | `LANE_SCHEDULE` (L0 data: name, cadence, single-flight, warn-once) plus one L4 `runLane(name, fn)` in `watch.ts`; an injected `now()` for L1. **Cadence is separate from safety intervals** (the twice-observed window, the backoff base), and a derived interval stays a declared reference to its source, never a second literal. The **throttle and single-flight** run on the monotonic clock; **verdicts keep wall-clock** (expiry's `expiresAt`, stop-done's grace from `closedAt`, hibernate's marker stamps). ccd: `_now_s` only | about 25 cadence clocks among 56 `last*` names, 12 flags; 54 raw `date +%s` in ccd [M] |
+| **Clock and schedule** | `LANE_SCHEDULE` (L0 data: name, cadence, single-flight, warn-once) plus one L4 `runLane(name, fn)` in `watch.ts`; an injected `now()` for L1. **Cadence is separate from safety intervals** (the twice-observed window, the backoff base), and a derived interval stays a declared reference to its source, never a second literal. The **throttle and single-flight** run on the monotonic clock; **verdicts keep wall-clock** (expiry's `expiresAt`, stop-done's grace from `closedAt`, hibernate's marker stamps). ccd: the supervise loop's steady-tick timing reads use `_now_s`, and raw `date +%s` is allowed elsewhere, including rare branches of tick helpers (narrowed 2026-11-06, D-8066; no code sweep) | about 25 cadence clocks among 56 `last*` names, 12 flags; 54 raw `date +%s` in ccd [M] |
 | **Change latch** | one `changeLatch(key)` helper ("warn once until it changes") | at least 4 hand-rolled latches in `watch.ts` plus `registry.ts`'s `warnOnce` |
 | **Switchboard** | `SWITCHES` (L0 data: name, marker or settings row, default, owner context, meaning) plus one reader `readSwitches(listing)`. The tick's listing feeds the **decision**; every executor calls the same reader **again at the act**, over a fresh listing, nearest the argv | ~15 marker files read per sweep, `reclaim-paused` parsed at 10 sites in 6 files, `MAIL_DISABLED_MARKER` defined twice |
 | **Redaction** | `shared/redact.mjs`, the `models.mjs` pattern: one implementation, a `.ts` re-export, callable from bash through node. It has one rule table and named **profiles** (egress `[REDACTED]`, docs `***`, history index `[redacted]`, log-line userinfo). Each profile lists its rule subset **explicitly**; no profile inherits rules by default. The egress profile is a security boundary (§3 K7) | 5 implementations |
@@ -265,7 +265,7 @@ These are not contexts, because they hold no aggregate. Each is one implementati
 | Use-case classes, a DI container, ISP over `Deps` | Not proposed. Deciders are functions and deps stay consumer-declared. |
 | Splitting `CCD_ARGV` per context | Not proposed. One flat table gains a `default` column for `ccdCan`. |
 | A `MAIL_DELIVERY_TRANSITIONS` table | `WORKSPACE_TRANSITIONS` is held to the same test: it lands only if ARCH-41's census shows its edges are refusals clients read (C4). Otherwise each verb keeps its one enforcement point. |
-| Splitting `coord/routes.ts` one file per resource (D-36/D-39) | K5's `/api/questions/:id/*` doors stay in `coord/routes.ts`, behind its one auth gate. `coord/questions.ts` holds the policy and store calls only, never a route or an auth check. |
+| Splitting `coord/routes.ts` one file per resource (re-affirmed 2026-11-06, D-8066) | K5's `/api/questions/:id/*` doors stay in `coord/routes.ts`, behind the shared box-token gate (`checkMailToken`, `coord/token.ts`). A new group of routes may have its own file if it uses that gate and joins `box-token-census.test.ts`. `coord/questions.ts` holds the policy and store calls only, never a route or an auth check. |
 
 ARCH-02b's three proposed **new** Rejected entries:
 - **runtime-sourced ccd siblings:** respected. The wave does not split `ccd/ccd` at runtime.
@@ -286,7 +286,8 @@ Each cluster gets the same five lines:
 - **One owner:**
   - `decideSleep(facts, policy)`, with policies `idle-hours` (today's hibernation) and `run-done` (today's stop-done);
   - `decideRetire(facts, reason)`, with reasons `child-spent`, `archive-expired` and `temp-orphan`;
-  - one `sleepExecutor` and one `retireExecutor` in L4. Each takes the tick's switch snapshot and listing **for the decision**, then **re-measures at the act**: it reads the switches again nearest the argv (today's expiry step 6: "an operator who raised the pause … meanwhile is obeyed now, not on the next pass"), re-reads the registry record, row, store, presence, live word and turn marker inside the coord serialiser and asks the verdict again (D-5428, D-5370, "held-at-act"), and re-checks the child-reclaim generation key. It checks `ccdCan` once and writes one notice through the funnel in the reason's mode.
+  - one `sleepExecutor` and one `retireExecutor` in L4. Each takes the tick's switch snapshot and listing **for the decision**, then **re-measures at the act**: it reads the switches again nearest the argv (today's expiry step 6: "an operator who raised the pause … meanwhile is obeyed now, not on the next pass"). A sleep act re-reads the registry record, row, store, presence, live word and turn marker inside the coord serialiser and asks the verdict again (D-5428, D-5370, "held-at-act"). A retire act re-checks the child-reclaim generation key where its reason has one. Each checks `ccdCan` once and writes one notice through the funnel in the reason's mode.
+  - **A retire act is queue-only (corrected 2026-11-06, D-8066).** It runs on the session's own `KeyedQueue` and never takes the coord serialiser: all four call sites go through `retireExecutor`, which is `queue.run`. The serialiser is the one lock every coordination write shares, and a retire act awaits ccd's audit and verb, so holding that lock would stop every write behind it. The queue keeps two lanes off one workspace, workspace holds close the main case, and ccd re-proves the token inside the reap lock. What is left: `child-spent` and `archive-expired` read the run store before the audit, not after, while `temp-orphan` re-checks its open-run hold after the audit. The ruling tickets a late store read for those two, which narrows the cases holds miss (a run naming the session as coordinator, a review, an adopted spawn that writes before its hold) and cannot close them.
   - **Per-policy rows.** Each sleep policy and each retire reason is a row with its own arming marker, kill switch, cadence, per-pass cap and retry memory. `run-done` keeps `stop-done-disabled`, 60 s, 3 acts and 6 measures per pass, and 1 h retry, and it stays live (D-5370, D-5427). `idle-hours` keeps `hibernate-live` and 5 min, and it stays shadow until Task 19 arms it. Merging the rows' code never merges their arming or their herd budget.
 - **Deleted:**
   - `stopDone.ts`'s copy of the hibernate verdict;
@@ -303,7 +304,7 @@ Each cluster gets the same five lines:
   - **Real:** the shape of the executors, the switch reads, the bindings query, the stop-done/hibernate verdict, and the feed writes.
   - **Legitimately different:** each retire reason's **evidence**, the PR ledger for a spent child, the 7-day epoch, witnesses for a temp root. These stay as per-reason policy rows and are not merged.
   - **Legitimately different:** the dead-coordinator lane acts on runs, so it moves to C5's decider set and shares only `SessionReading` and the funnel.
-  - **Legitimately different and kept:** the act-time re-measure on the server (D-5428, expiry step 6, the generation check). The tick snapshot is a pass old by the time the serialiser runs, and `reclaim-paused` is the fleet's emergency stop. The characterization pins include "a pause raised between the pass and the act holds".
+  - **Legitimately different and kept:** the act-time re-measure on the server (D-5428, expiry step 6, the generation check). The tick snapshot is a pass old by the time the act runs, and `reclaim-paused` is the fleet's emergency stop. The characterization pins include "a pause raised between the pass and the act holds".
   - The viewer rule is stated **once per transition**, as D-5242 already defines it: sleep defers on `open`, retire defers on `visible`. Expiry keeps its deliberate "No ceiling" (§6 O6 (a), ruled 2026-10-19).
 
 ### K2. A workspace's end of life, ccd side → shared helpers where the steps match; each verb keeps its tail
@@ -335,11 +336,12 @@ Each cluster gets the same five lines:
 - **Deleted:**
   - `liveStatus` (`fleet.ts` ≈:381);
   - `SessionStream.resolve`'s mirrored ladder (`sessionws.ts` ≈:724–770);
-  - `turnverdict.liveRowFor`'s one-row `assembleFleet`;
-  - `commands.ts` ≈:56 and `coord/routes.ts` ≈:4297 raw reads;
-  - `claimProbe`'s `status === 'dead'` reading;
+  - `claimProbe`'s `status === 'dead'` reading (see the rulings below);
   - `measureClaimant`'s private ladder, which becomes a fail-shut policy over a **fresh** `readSession` (three arms; doubt is never dead; hibernated counts as alive, as today);
   - PWA `coordPresence` and the 13 inline `status === 'dead'` checks.
+- **Accepted as they stand (ruled 2026-11-06, D-8066), where this list once said deleted:** `turnverdict.liveRowFor`'s one-row `assembleFleet` (the row takes its reading from `readSession`), `sessionCommands`' pane read in `commands.ts`, and `liveVersionOf`'s pane read in `coord/routes.ts`. K4 has the fourth leftover.
+- **Server reads of `status === 'dead'` (ruled 2026-11-06, D-8066).** The word means "tmux did not say live", so a tmux failure, a sleeper and a restart all read `dead`. Two of the seven in `server/src` move to the new reading, because only they get doubt wrong: `claimProbe`, and the delegation card's word (`delegation-projection.ts`), which can say `stale` when the truth is unmeasured. Five are accepted: `hibernateSleepInput`'s `paneDead`, the tick's `projects` set, `noteSessions`' two reads and `ownersOf`'s skip. A count that covers `shared/` too stops new ones.
+- **`claimProbe` under doubt (ruled 2026-11-06, D-8066, ruling D-6908).** A restarting holder and a holder whose pane tmux did not answer keep renewing, up to the 8-hour cap, instead of reading `gone`. Asleep and dead holders stay `gone`.
 - **Consumers move:**
   - fleet assembly, sessionws, turnverdict (at-act re-read becomes `readSession` on one row), claims, the reclaim door, the dead-coordinator lane and the stall lane;
   - PWA `orphanWords`, `RunRow`, `SessionScreen`, `SessionActionsSheet`, `startProgramPolicy`, `ArchiveAllPlane`, `AccountsScreen`, `groupFleet` and `spawnWords` read `session.presence`.
@@ -359,7 +361,7 @@ Each cluster gets the same five lines:
   - `stall`: an `unknown` that persists is the signal.
 - In ccd, `_ws_status` and `_idle_for_keystroke` collapse onto one `_turn_reading` that returns the same four words. Each caller keeps its own policy line, and the ARCH-24 corpus holds every column.
 - **`_swap_idle_gate` is out of this cluster.** It is the auto-swap decision gate (`ccd/ccd` ≈:19267, D-5240: "ONE GATE, TWO CALLERS", `_auto_swap_check` and `cmd_swap`'s re-run at the act) and carries swap-only policy: the narrow-pane stand-down (D-5349), the status-file `idle` check, the `SWAP_CEIL_QUIET` quiet window and the tick-diet memo. Its own comment records that an earlier "identical" claim was falsified by the merge. At most, after a behaviour-identical pin of its verdict table, it may call a shared pane-measurability primitive. Its body is not rewritten.
-- **Deleted:** the server's `turnidle.ts` and `turnverdict.ts` duplicate reads (their policies stay; `turnverdict` at the act reads fresh, per K3); the busy-to-idle edge in `finished.ts`, which reads the tick's previous `TurnReading`; and one of ccd's two non-swap predicates' bodies.
+- **Deleted:** the server's `turnidle.ts` and `turnverdict.ts` duplicate reads (their policies stay; `turnverdict` at the act reads fresh, per K3); and one of ccd's two non-swap predicates' bodies. **Accepted as it stands (ruled 2026-11-06, D-8066):** the busy-to-idle edge, which this list once placed in a `finished.ts` that does not exist. It stays in `watch.ts`'s `tick()`, gated on `finishedEvidence` (D-5233).
 - **Overlap:** 5 ccd and 6 server idle deciders.
 - **Verdict:**
   - **Real** for the reading.
@@ -433,8 +435,17 @@ Each cluster gets the same five lines:
 ### K9. Transcript readers → one TS reader, and one jq library for ccd and the doctor
 
 - **One owner:** in TS, `transcript/` as today. For bash, `ccd/lib/transcript.jq`, a jq library file holding `def prompt`, continuation and limit-banner. It is loaded with `jq -L` by `ccd` and `ccrc-doctor-checks`.
-- **The python reader's port must keep its tolerance.** `_transcript_last_turn_ts` (`ccd/ccd` ≈:23685) skips malformed lines one by one (`json.loads` in try/except), which matters because `tail -n` can cut a partial first line. It also truncates stamps to 19 characters to sidestep fractional seconds. The jq port uses `jq -R 'fromjson?'` and the same 19-character truncation before `strptime`, and its fixtures include a partial first line and a fractional timestamp. `compact-card.mjs` reads a different rule (the `compact_boundary` row) and is out of scope. Transcript path resolution happens once in ccd (`_transcript_path`) and once in TS (`resolve.ts`).
-- **Deleted:** the verbatim `def prompt` copy (`ccrc-doctor-checks` ≈:4032), `_ci_transcript_path` (≈:16243), the duplicate in `_transcript_matches` (≈:25095), and the python `_transcript_last_turn_ts` (≈:23685–23737), which becomes a jq call against the library.
+- **The python reader's port must keep its tolerance.** `_transcript_last_turn_ts` (`ccd/ccd` ≈:23685) skips malformed lines one by one (`json.loads` in try/except), which matters because `tail -n` can cut a partial first line. It also truncates stamps to 19 characters to sidestep fractional seconds. The jq port uses `jq -R 'fromjson?'` and the same 19-character truncation before `strptime`, and its fixtures include a partial first line and a fractional timestamp. `compact-card.mjs` reads a different rule (the `compact_boundary` row) and is out of scope.
+- **Transcript path resolution happens once in TS (`resolve.ts`) and in four places in bash, each kept for a reason (ruled 2026-11-06, D-8066):**
+  - `_transcript_path` answers for records that outlive the session: its answer is written into archive manifests and reap tombstones. So it checks existence, and its last rung is a newest-by-mtime scan.
+  - `_ci_addrs` runs on the tick, so it mirrors only `_transcript_path`'s first two rungs: the scan would cost a fork per tick.
+  - `_transcript_matches` is a shared building block, not a copy. It lists every copy of one uuid under one config dir, and `_transcript_path`'s scan and `cmd_swap` both call it.
+  - The doctor's own copy (`ccrc-doctor-checks`) exists because the doctor cannot call ccd's functions, so it spells the two munges itself.
+- **Deleted:** the verbatim `def prompt` copy (`ccrc-doctor-checks` ≈:4032), `_ci_transcript_path` (≈:16243), and the python `_transcript_last_turn_ts` (≈:23685–23737), which becomes a jq call against the library. `_ci_addrs` and `_transcript_matches` stay, as above.
+- **Kept, recorded (ruled 2026-11-06, D-8066):**
+  - `_operator_choice_read` stays a Python reader, as a recorded exception to this cluster's one jq library. It keeps the operator's model and effort choice across a swap and reads back what a session runs. Reopen only on a real fault or if Python leaves ccd.
+  - `_sanitize_anthropic` stays as a writer: it rewrites carried transcripts, filling empty assistant text blocks so the Anthropic API accepts the resumed history.
+  - `ccd-usage-sweep.py` also reads transcripts and stays, so zero Python readers is not the goal. A count names the allowed Python readers, and drops the limit-banner reader when its port lands.
 - **Overlap:** 5 readers and 4 resolvers. Two parity pins (`continued-in-parity`, `continued-in-successor-parity`) cover three readers today and will cover two after.
 - **Verdict:**
   - **Real** inside bash (three copies become one).
@@ -445,7 +456,7 @@ Each cluster gets the same five lines:
 
 - **One owner:** C5's `bindingOf(sessionId, generation)` in L1 over the store, and the wire field `FleetSession.run` computed once by the server. **Two queries, named:** `session.run` is the newest run naming this incarnation, in any state; `session.openRun` (or `run.state` on that summary) is the open one. `PrSheet`'s merged-note claim keeps its open-only filter as a named policy over the binding, gated on `runsFrameSeen`, so #746 cannot come back as "which of the two did you mean". The coordinator side is `childrenOf(coordinatorId)`. `Incarnation` is the one new branded value (§2.5): session id plus registry generation, so a recycled id cannot inherit a closed run.
 - **Deleted:**
-  - PWA `runForSession`'s matching loop, `PrSheet.tsx:118`'s inline open-run find (its policy stays, over `session.openRun`), `ArchiveSheet:134`'s claimedBy filter, the `RunsScreen` ≈:129/254 lookups and the client-accumulated `childRunsSeen` (`useColdRuns` ≈:175). All read `session.run` and `run.childIds`;
+  - PWA `runForSession`'s matching loop, `PrSheet.tsx:118`'s inline open-run find (its policy stays, over `session.openRun`), `ArchiveSheet:134`'s claimedBy filter, the `RunsScreen` ≈:129/254 lookups and the client-accumulated `childRunsSeen` (`useColdRuns` ≈:175). All read `session.run` and `run.childIds`, except that `childRunsSeen` reads a new server field, `RunSummary.hadChild` (D-8068): `run.childIds` holds open runs only, so the ruling of 2026-11-06 (D-8066) has the server say on a finished run that it had a child. The exit stands as delete;
   - command palette `fleetOrder`'s inline re-composition (`commands.ts` ≈:31–40), which calls `fleetTree`;
   - on the server, the ~50 equality sites route through `bindingOf`/`childrenOf` over a series. The store's twelve near-duplicate readers (`resolveCoordinator`, `resolveWorker`, `parentOfSession`, `openClaimantsOf`, `openRunsForSession`, `runsNamingSession`, `lastRunBySession` …) shrink to the two plus the queries that are genuinely different (open-only vs any, last-closed).
 - **Overlap:** 2 unnamed PWA queries that look like one rule [M]; ~50 server sites [I; W0's census defines and counts them]; #746 (its immediate fix is #762, outside this wave).
@@ -476,14 +487,20 @@ Each cluster gets the same five lines:
   - **Real** for the readers.
   - **Legitimately different:** storage. A marker file is what ccd and the hook can read with the server down, while a db settings row carries the operator's audit trail. Both stay as storage, with one table describing them.
 
-### K13. Fleet read model → one registry listing per tick, and sessionws subscribes
+### K13. Fleet read model → one selection listing per tick, and sessionws subscribes
 
-- **One owner:** the tick's `FleetReadModel`, one object that replaces `assembleFleet`'s ~12 positional caches. `GET /api/fleet`, `/ws/fleet` and every lane's **selection** reads it; destructive acts re-measure at the act (K1, K3). `SessionStream` keeps the transcript tail it owns and **subscribes** to the watcher's per-session dialog, hookstate, tasks, workflows and mail frames instead of polling them every 2 s per socket.
+- **The goal, as ruled (2026-11-06, D-8066):** at most one **selection** listing per tick, the listing that chooses which rows a lane works on. It is not a limit on every listing.
+- **One owner:** the tick's `FleetReadModel`, a registry read plus switches. `GET /api/fleet`, `/ws/fleet` and every lane's **selection** reads it; destructive acts re-measure at the act (K1, K3). `SessionStream` keeps the transcript tail it owns and **subscribes** to the watcher's per-session dialog, hookstate, tasks, workflows and mail frames instead of polling them every 2 s per socket.
 - **Deleted:**
-  - the re-listings in `sweepHookStates`, `sweepTasks`, `sweepNames`, `sweepMail`, `sweepPr` and `detectDialogs`;
+  - the re-listings in `sweepHookStates`, `sweepTasks`, `sweepNames`, `sweepPr` and `detectDialogs`;
   - `SessionStream`'s `checkDialog`/`checkTasks`/`checkHookAsk`/`checkMail` polls;
   - the double dialog frame (`watch.ts` ≈:8355/8469 over the bus and `sessionws.ts` `frame()`);
   - the 4th tasks reader.
+- **Kept, and folded (ruled 2026-11-06, D-8066):**
+  - The mail lane keeps its re-listing, which this list once marked deleted. It is the last switch read before the pass delivers, so a switch raised after the tick's listing still holds the lane (D-5864). The lane selects its recipients from the tick's model.
+  - The other lanes that list for a recorded reason keep doing so; each states it at its call site.
+  - `readLimits`' registry listing is the one with no safety reason. It folds in and reuses the tick's names, and request-time callers keep listing for themselves.
+- **Narrowed (ruled 2026-11-06, D-8066).** The speed goal is met, so what remains is shape: `assembleFleet`'s positional parameters become a named options object, with a separate output for pane ids.
 - **Overlap:** up to 7 listings per tick, 2 pollers per open session.
 - **Verdict:** **real.** Latency is unchanged: tick and socket poll are both 2 s. The bus already carries `session:<id>` frames.
 
@@ -617,7 +634,7 @@ There are six new epics in the same Linear project. Tickets continue the ARCH nu
 | | ARCH-48 wire `presence`/`deadSince` (additive); display readers move to the tick's reading (`liveStatus`, `resolve`, `claimProbe`); destructive readers (`measureClaimant`, `liveRowFor` at the act) move to a fresh `readSession` | K3 | M |
 | | ARCH-49 PWA reads `presence`; `coordPresence` and 13 inline checks go (after skins W3) | K3 | S |
 | | ARCH-50 `TurnReading` + named policies (server); ccd `_turn_reading` for `_ws_status` and `_idle_for_keystroke` only, **never `_swap_idle_gate`** (after tick-diet budget fixtures) | K4 | M + M |
-| | ARCH-51 `FleetReadModel` + one registry listing per tick | K13 | M |
+| | ARCH-51 `FleetReadModel` + one selection listing per tick | K13 | M |
 | | ARCH-52 `SessionStream` subscribes; its four polls go | K13 | M |
 | | ARCH-53 rename viewer presence (`presence.ts` → `viewer`) in TS | K3 | XS |
 | **ATTN** Attention routing | ARCH-54 `notify(event, mode)` funnel with three explicit modes; a per-writer pin of mode, order and the "no push per reap" ruling first; 15 pairs migrate one file per commit (`stopDoneSweep.ts`'s goes with ARCH-43); catch-up wire byte-compatible | K6 | M |
@@ -627,11 +644,11 @@ There are six new epics in the same Linear project. Tickets continue the ARCH nu
 | | ARCH-58 envelope↔dialog pairing server-side, additive (W3); `askLive` client pairing goes in W7 | K5 | M |
 | | ARCH-59 `notify.sh` banner becomes a funnel notice | K5/K6 | S |
 | **BIND** Run binding | ARCH-60 `Incarnation` value + `bindingOf`/`childrenOf` (after the durability investigation and #397) | K10 | M |
-| | ARCH-61 wire `session.run`, `run.childIds`; PWA matchers and `childRunsSeen` go; `fleetOrder` calls `fleetTree` | K10 | M |
+| | ARCH-61 wire `session.run`, `run.childIds`, and a field on finished runs saying the run had a child (D-8066); PWA matchers and `childRunsSeen` go; `fleetOrder` calls `fleetTree` | K10 | M |
 | | ARCH-62 server's ~50 equality sites → `bindingOf`, one file per commit; the store's twelve readers shrink | K10 | L |
 | **GRAM** Claude Code grammar | ARCH-63 one SGR stripper / prompt glyph / guard export; 4 declarations and 3 guard copies go (ARCH-24 re-scoped carries the corpus) | K8 | S |
 | | ARCH-64 PWA receives parsed facts (compaction kind, prompt flag); `COMPACTION_RE`, `showsPrompt` go | K8 | M |
-| | ARCH-65 `ccd/lib/transcript.jq`; the doctor copy, `_ci_transcript_path` and the python reader go (after #435) | K9 | M |
+| | ARCH-65 `ccd/lib/transcript.jq`; the doctor's `def prompt` copy, `_ci_transcript_path` and the python `_transcript_last_turn_ts` go (after #435); the four path finders stay, and `_operator_choice_read` stays (D-8066) | K9 | M |
 | **KERNEL** Shared kernels | ARCH-66 `shared/redact.mjs` + profiles with explicit rule subsets; TS callers move. **Band 3, native**: the egress profile's corpus pin first. The history-index profile lands only after history W2 merges, with its coordinator's ack | K7 | M |
 | | ARCH-67 ccd docs python redactor → `node redact.mjs`; one bash `log-line` function | K7 | S |
 | | ARCH-68 `LANE_SCHEDULE` + `runLane`; cadence separated from safety intervals, derivations declared; throttle and single-flight on the monotonic clock, verdicts on wall-clock | K11 | M |
@@ -715,7 +732,7 @@ That is 38 new tickets (ARCH-40 to ARCH-77) in six new epics plus two existing o
   - cadence clocks, by name (the census list): `lastTaskSweep`, `lastUsageSweep`, `lastPrSweep`, `lastCapsAt`, `lastCatalogueAt`, `lastInventoryAt`, `lastServerCapsAt`, `lastNameSweep`, `lastDivergenceSweep`, `lastChildReclaimSweep`, `lastCollectSweep`, `lastLifecycleSweep`, `lastClaimRenew`, `lastClaimLapse`, `lastStallSweep`, `lastApprovalPrune`, `lastDigestBeat`, `lastArchivedExpirySweep`, `lastAskSweep`, `lastDeadCoordinatorSweep`, `lastLedgerReconcile`, `lastMailSweep`, `lastReadinessSweep`: 23 → 0. `lastHibernateSweep` and `lastStopDoneSweep` move in W4 (25 → 0 overall);
   - safety intervals declared as references to their source cadence: 3 of 3;
   - hand-rolled change latches: ≥4 → 0 (`changeLatch`);
-  - registry listings per tick: ≤ 1, counted by an instrumented fake FleetIO;
+  - selection listings per tick: ≤ 1, counted by an instrumented fake FleetIO (D-8066: K13's kept re-listings are outside this count);
   - `verbSupported`/`capSupported` choices at call sites → one `ccdCan(row)`;
   - TS redactor rule tables: 3 → 1 module with profiles. The egress corpus pin is unchanged byte for byte. The history-index profile is deferred until history W2 merges.
 - **OBSERVATION:** `watch.ts` lines, recorded at exit.
@@ -738,7 +755,7 @@ That is 38 new tickets (ARCH-40 to ARCH-77) in six new epics plus two existing o
 
 - **Tickets:** ARCH-19 and ARCH-13a first, then ARCH-56, the server halves of -57 and -58, and -59.
 - **Exit (GATES):**
-  - the `/api/questions/:id/*` family exists in `coord/routes.ts`, behind its one auth gate;
+  - the `/api/questions/:id/*` family exists in `coord/routes.ts`, behind the shared box-token gate (`checkMailToken`, `coord/token.ts`);
   - the old doors stay as redirects (rule 4: two releases as the only reader, or a cap token), and are removed in W7's tail;
   - in-memory question maps: 2 → 0;
   - retention sweeps: 2 → 1;
@@ -1059,3 +1076,20 @@ The operator chose option (a) for ARCH-00 (#525) on 2026-10-20, replying "A" to 
 | # | Finding (short) | Checked against | Outcome | Where |
 |---|---|---|---|---|
 | R5-1 | the test scanners need a TS parser, and the server's TypeScript has no stable one | `server/package.json`: `typescript` `^7.0.2`; `typeof require('typescript').createSourceFile` in `server/` is `undefined` on `origin/main` `248cb3c85`; only `typescript/unstable/*` is exported | Applied: option (a). TypeScript 6's compiler API is the stable, documented one, has no native binaries, and is unaffected by the server's TypeScript 7 upgrade. It is installed as the dev-only alias `typescript-api` (`npm:typescript@6.0.3`, the version the PWA already resolves), pinned exactly so an install cannot drift: a new parser version needs a reviewed PR, whose scanner suites must pass. `server/test/scan/parse.ts` wraps it (syntax only) and is its one importer, so a later swap touches one file. Not taken: (b) a standalone parser package (a native binary and a second AST vocabulary); (c) `typescript/unstable/ast` (can break on any 7.x minor). Cost: about 23 MB of dev-only install; no production byte | §5.2; the W0 plan's Task C0f; `single-definition.test.ts`'s ARCH-40 describe |
+
+### rev 2.2 → rev 2.3 (2026-11-06): the operator's architecture rulings
+
+The operator ruled twelve decisions on 2026-11-06. `docs/superpowers/plans/2026-11-06-architecture-rulings.md` records each with its reason (D-8066). This rev changes what the spec says, and claims no code: the follow-ups land in other PRs. Rulings 5 and 6 change no line here. Ruling 6 leaves K6 as written, because `pushRelease`'s direct send still goes.
+
+| Ruling | Change | Where |
+|---|---|---|
+| 1 | `childRunsSeen`'s exit stands as delete, through a new server field | K10, §4 |
+| 2 | A retire act is queue-only, with the reason | C4, K1 |
+| 3 | `claimProbe` keeps renewing under doubt (D-6908) | K3 |
+| 4 | The goal is selection listings; mail keeps its re-listing; limits folds in | K13, §4, §5.4 |
+| 7 | The four bash path finders each have a recorded reason | K9, §4 |
+| 8 | The clock target narrows to the steady tick | §2.3 |
+| 9 | Two `dead` reads move; five checks and four leftovers are accepted | K3, K4 |
+| 10 | The read model narrows to an options object and a pane-id output | K13 |
+| 11 | `_operator_choice_read` is an exception and `_sanitize_anthropic` a writer that stays | K9 |
+| 12 | Lines saying "its one auth gate" name the shared gate; a new group of routes may have its own file | C6, §2.5, §5 |

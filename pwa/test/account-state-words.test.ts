@@ -59,11 +59,18 @@ describe('one state word per lane (D-5517)', () => {
     expect(stateWordFor(token(read(okAt(9 * DAY)))).source).toBe('last checked 9d ago');
   });
 
-  it('a check that could not reach the provider is Inconclusive, and an old one is Not checked', () => {
-    for (const verdict of ['unreachable', 'timeout', 'unknown']) {
+  it('a check that learned nothing is Inconclusive, says which finding it was, and an old one is Not checked', () => {
+    const sources: readonly (readonly [string, string])[] = [
+      ['unreachable', "the last check couldn't reach the provider, or got a server error back · checked 2h ago · nothing was learned about the credential; it may be fine"],
+      ['timeout', "the last check didn't get an answer in time · checked 2h ago · nothing was learned about the credential; it may be fine"],
+      // Every provider answer `classify` has no row for: nothing here may call it fine (D-8051 (16)).
+      ['unknown', "the last check got no answer ccrc can read as a pass or a refusal · checked 2h ago · don't rely on the credential until a check passes"],
+      ['a-newer-word', "the last check got no answer ccrc can read as a pass or a refusal · checked 2h ago · don't rely on the credential until a check passes"],
+    ];
+    for (const [verdict, source] of sources) {
       const a = stateWordFor(token(read({ check: { verdict, at: NOW - 2 * 3_600_000 } })));
       expect(a.word, verdict).toBe('inconclusive');
-      expect(a.source, verdict).toContain('nothing was learned about the credential');
+      expect(a.source, verdict).toBe(source);
     }
     expect(stateWordFor(token(read({ check: { verdict: 'unreachable', at: NOW - 8 * DAY } }))).word).toBe('not-checked');
   });
@@ -72,7 +79,9 @@ describe('one state word per lane (D-5517)', () => {
     expect(stateWordFor(token(read(okAt(60_000)), { authDead: true })).word).toBe('signed-out');
     const a = stateWordFor(token(read({ check: { verdict: 'auth-dead', at: NOW - 30 * DAY } })));
     expect(a.word).toBe('signed-out');
-    expect(a.source).toBe('HTTP 401 · checked 30d ago');
+    // `auth-dead` is also what "Not logged in" records, with no HTTP request made, so the source claims no 401 (D-8051 (20)).
+    expect(a.source).toBe('the provider refused its credential, or it has none · checked 30d ago');
+    expect(stateWordFor(token(read(okAt(60_000)), { authDead: true })).source).toBe('HTTP 401');
   });
 
   it('a sign-out the box records is Signed out, ahead of any 401, with the time it happened (D-7992)', () => {
@@ -313,13 +322,26 @@ describe('the Accounts card says the one word it was given (D-7718)', () => {
     expect(troubleFirst(Object.keys(words), (id) => words[id]!)).toEqual(['e', 'h', 'd', 'f', 'b', 'a', 'c', 'g']);
   });
 
+  it("an Inconclusive card says what its check found, and its source's verdict on the credential (D-8051 (16))", () => {
+    const card = (verdict: string): readonly (string | undefined)[] => {
+      const out = troubleCopy({
+        id: 'lane-b', answer: stateWordFor(token(read({ check: { verdict, at: NOW - 60_000 } }))),
+        entry: { provider: 'anthropic', kind: 'token' }, lane: undefined, usage: null, sessions: 0, now: NOW,
+      });
+      return [out?.wrong, out?.effect];
+    };
+    expect(card('unreachable')).toEqual(["The last check couldn't reach the provider, or got a server error back.", 'Nothing was learned about the credential; it may be fine.']);
+    expect(card('timeout')).toEqual(["The last check didn't get an answer in time.", 'Nothing was learned about the credential; it may be fine.']);
+    expect(card('unknown')).toEqual(["The last check got no answer ccrc can read as a pass or a refusal.", "Don't rely on the credential until a check passes."]);
+  });
+
   it('a trouble card says what is wrong, its effect and its fix, with the fleet-host command', () => {
     const now = NOW;
     const out = troubleCopy({
       id: 'lane-b', answer: stateWordFor(token(read({ check: { verdict: 'auth-dead', at: now - 2 * 3_600_000 } }))),
       entry: { provider: 'anthropic', kind: 'sign-in' }, lane: undefined, usage: usage({ wrapper: 'lane-b' }), sessions: 3, now,
     });
-    expect(out?.wrong).toBe("lane-b's sign-in was refused (HTTP 401) 2h ago.");
+    expect(out?.wrong).toBe("lane-b's sign-in was refused, or it has none (2h ago).");
     expect(out?.effect).toBe('New sessions are not placed here. 3 sessions on it will fail their next turn.');
     expect(out?.commands).toEqual(['ccrc account check --id lane-b']);
     const tok = troubleCopy({

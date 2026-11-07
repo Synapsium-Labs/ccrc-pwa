@@ -122,7 +122,7 @@ describe('leaseCoordinatorOf', () => {
     const frame = projectDelegation({
       checkpoint: { activities: [], leases: [worker], attempts: [] },
       census: { measuredAt: atMin(50), projects: new Map([[worker.project, { delegation: [] }]]), incarnations: new Map() },
-      absences: [], sessions: [{ id: 'coord-a-demo', status: 'idle' }, { id: 'lane-a-demo', status: 'idle' }], runs: closed,
+      absences: [], sessions: [{ id: 'coord-a-demo', presence: 'alive', lifecycle: 'running' }, { id: 'lane-a-demo', presence: 'alive', lifecycle: 'running' }], refused: new Set(), runs: closed,
     });
     expect(frame.leases.map((l) => [l.parentId, l.via])).toEqual([[leaseCoordinatorOf(worker, closed), 'lane-a-demo']]);
   });
@@ -262,7 +262,7 @@ describe('decideResolve', () => {
     const cp = cpOf([rawFirst, agent], [attempt()]);
     const frame = projectDelegation({
       checkpoint: cp, census: { measuredAt: Date.parse(ATTEMPT_AT), projects: new Map([[lease.project, { delegation: null }]]), incarnations: new Map() },
-      absences: [], sessions: [{ id: 'lane-a-demo', status: 'idle' }], runs: [],
+      absences: [], sessions: [{ id: 'lane-a-demo', presence: 'alive', lifecycle: 'running' }], refused: new Set(), runs: [],
     });
     const offered = frame.unowned.find((u) => u.adminRecord === lease.adminRecord)?.leaseId;
     expect(offered).toBe(agent.leaseId);

@@ -5,6 +5,7 @@
 //   Refined's set without a chrome, or a chrome drawing the esc cap ....... "one chip rail from the view, no esc"
 //   the hints line without the pointer query .............................. "…under a fine pointer only"
 //   the column a fixed `width: var(--measure-chat)` ....................... "…reads min(var(--measure-chat), 100%)"
+//   the chat prose rule moved out of the column's ≥900 block (D-8059) ..... "the prose rule sits inside the same ≥900 block family…"
 //   a sheet or an Escape binding moved into the chrome ..................... "the chrome holds no sheet and no Escape effect"
 //   the crumb typed in whenever it changes, renames or not (C12 item 2) ..... "Refined's crumb, corrected by the row…"
 import { readFileSync } from 'node:fs';
@@ -152,19 +153,47 @@ describe('the key hints under the composer', () => {
 });
 
 describe('the reading column', () => {
-  it('the transcript\'s column reads min(var(--measure-chat), 100%)', () => {
+  /** Every `@media (min-width: 900px)` block of chat.css, as its list of rules (selector list, body). The block may hold
+   *  more than the column's rule (D-8059 adds the chat prose measure and the user bubble beside it). */
+  const deskBlocks = (): { selectors: string[]; body: string }[][] => {
     const css = readFileSync(path.join(SRC, 'session', 'chat.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    const block = /@media \(min-width: 900px\) \{\s*([^{}]*)\{([^}]*)\}\s*\}/g;
-    const found = [...css.matchAll(block)].find((m) => (m[1] ?? '').split(',').map((s) => s.trim()).includes('.chat-item'));
+    const opener = '@media (min-width: 900px) {';
+    const bodies: string[] = [];
+    // A brace walk, not a regex over the block: a nested quantifier there backtracks exponentially (CodeQL js/redos).
+    for (let at = css.indexOf(opener); at >= 0; at = css.indexOf(opener, at + 1)) {
+      let depth = 1;
+      let i = at + opener.length;
+      for (; i < css.length && depth > 0; i += 1) {
+        if (css[i] === '{') depth += 1;
+        else if (css[i] === '}') depth -= 1;
+      }
+      if (depth === 0) bodies.push(css.slice(at + opener.length, i - 1));
+    }
+    return bodies.map((body) => [...body.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map((r) => ({ selectors: (r[1] ?? '').split(/,(?![^(]*\))/).map((s) => s.trim().replace(/\s+/g, ' ')), body: r[2] ?? '' })));
+  };
+  const columnBlock = () => deskBlocks().find((rules) => rules.some((r) => r.selectors.includes('.chat-item')));
+
+  it('the transcript\'s column reads min(var(--measure-chat), 100%)', () => {
+    const found = columnBlock()?.find((r) => r.selectors.includes('.chat-item'));
     expect(found, 'a ≥900 rule for .chat-item').toBeDefined();
-    const selectors = found?.[1] ?? '';
-    const body = found?.[2] ?? '';
-    const list = selectors.split(',').map((s) => s.trim());
+    const list = found?.selectors ?? [];
+    const body = found?.body ?? '';
     expect(list).toEqual(expect.arrayContaining(['.chat-item', '.composer']));
     expect(body).toMatch(/max-width:\s*min\(var\(--measure-chat\),\s*100%\)/);
     expect(body).toMatch(/margin-inline:\s*auto/);
     // A max-width, never a fixed width: at 1600 with the inspector rail the column has to yield.
     expect(body).not.toMatch(/(^|[;\s])width:\s*var\(--measure-chat\)/);
+  });
+
+  it('the prose rule sits inside the same ≥900 block family as the column rule', () => {
+    // D-8059: the chat prose measure applies where the column does, from 900 up, and never on a phone.
+    const prose = columnBlock()?.find((r) => r.selectors.some((s) => s.startsWith('.chat-item .msg-assist > :is(')));
+    expect(prose, 'the chat prose rule, in the column\'s ≥900 block').toBeDefined();
+    // The children read the registered length `.msg-assist` resolves from `--measure-chat-prose` (fix round 1, F3).
+    expect(prose?.body ?? '').toMatch(/max-width:\s*var\(--chat-prose-cap\)/);
+    const source = columnBlock()?.find((r) => r.selectors.includes('.chat-item .msg-assist'));
+    expect(source?.body ?? '', 'the length is set in the same block, from the token').toMatch(/--chat-prose-cap:\s*var\(--measure-chat-prose\)/);
   });
 });
 

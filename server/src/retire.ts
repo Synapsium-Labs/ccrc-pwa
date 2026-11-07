@@ -82,6 +82,8 @@ export const RETIRE_STEPS = {
   auditGeneration: 'audit-generation',
   /** temp-orphan, archive-expired: the switches nearest the argv. */
   switchesLast: 'switches-last',
+  /** child-spent, archive-expired: the store again, past the row's last await, in the argv's synchronous segment. */
+  storeLast: 'store-last',
   /** child-spent: `child-reclaim-disabled` at the act. */
   offSwitchLast: 'off-switch-last',
   /** temp-orphan: the marker's latch (its reader writes it; it always passes). */

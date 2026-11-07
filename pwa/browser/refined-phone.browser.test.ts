@@ -69,10 +69,10 @@ const FIXTURE: AppFixture = {
     },
     {
       type: 'runs',
-      // A three-digit Runs badge: 120 runs whose worker (`s0`) waits on the operator (T2d, D-6330).
+      // A three-digit Runs badge: 120 runs whose coordinator (`s0`) waits on the operator (T2d, D-6330; D-8049: a session binds one run, so many runs share a coordinator, not a worker).
       runs: Array.from({ length: 120 }, (_, i) => ({
         id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
-        sessionId: 's0', claimedBy: null,
+        sessionId: 's0', claimedBy: 's0',
       })),
     },
   ],

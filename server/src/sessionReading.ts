@@ -26,7 +26,7 @@
 // `unmeasurable` with the pane gone is `unknown` too, `why: 'lifecycleDoubt'`. The destructive door answers that one
 // doubt `alive` (D-1140, in `measureClaimant`'s switch on `why`): fail-shut is that caller's policy, not the reading's,
 // so a display reader of `presence` sees the doubt as a doubt.
-import { DEAD_CAUSES, lifecycleIsDead, type DeadCause, type Presence, type SessionLifecycle } from '../../shared/api.js';
+import { DEAD_CAUSES, lifecycleIsDead, unmeasuredFields, type DeadCause, type IdentityField, type Presence, type SessionLifecycle } from '../../shared/api.js';
 
 /** What the registry said about the one id: `SingleRead`'s kinds, with `found` spelled `present`. */
 export type RowFact = 'present' | 'absent' | 'unmeasurable' | 'unlistable' | 'bad-id';
@@ -167,6 +167,36 @@ function presenceOf(f: SessionFacts): Verdict {
   if (lc === null || lc === 'unmeasurable') return { presence: 'unknown', why: 'lifecycleDoubt', substrate: 'absent' };
   if (lifecycleIsDead(lc)) return { presence: 'dead', why: 'lifecycleDead', substrate: 'absent', deadCause: deadCauseOf(lc) };
   return { presence: 'alive', why: 'lifecycleAlive', substrate: 'absent' };
+}
+
+/** What one frame row says of whether its session is still there, for a reader that must tell doubt from gone. Four
+ *  words, because the two callers (`claimVerdictOf`, the delegation frame's `livenessOf`) answer each one differently.
+ *  `doubt` is a row with an identity field unmeasured (D12, whatever else it says), or one whose pane says nothing: tmux
+ *  did not answer (`unknown`), or a supervisor still beats over a gone pane (`alive` with lifecycle `restarting`, the one
+ *  lifecycle that reads alive with no pane). */
+export type RowStanding = 'here' | 'doubt' | 'asleep' | 'gone';
+
+/** The facts `rowStanding` reads, named once so its callers' row types do not spell them again. */
+export interface RowStandingFacts {
+  readonly presence?: Presence; readonly lifecycle?: SessionLifecycle | null; readonly unmeasured?: readonly IdentityField[];
+}
+
+/** D-6908, on the wire's `presence` rather than the old `status === 'dead'`, which is every pane tmux did not call live.
+ *  A row with no `presence` said nothing, and nothing said is doubt (an older row; `shared/api.ts` on `presence`).
+ *
+ *  `unknown` with lifecycle `unmeasurable` is `gone`, not doubt. It is the ladder's `lifecycleDoubt`: a stamp that will
+ *  not parse over a pane tmux proved gone. The ruling keeps exactly two cases, and a torn stamp does not clear itself, so
+ *  as doubt it would hold a claim for 8 hours. It stays what it was before D-6908. The row cannot tell that from the same
+ *  torn stamp with tmux silent, which therefore reads `gone` too, also as before. */
+export function rowStanding(row: RowStandingFacts): RowStanding {
+  if (unmeasuredFields(row).length > 0) return 'doubt';
+  switch (row.presence) {
+    case 'alive': return row.lifecycle === 'restarting' ? 'doubt' : 'here';
+    case 'asleep': return 'asleep';
+    case 'dead': return 'gone';
+    case 'unknown': return row.lifecycle === 'unmeasurable' ? 'gone' : 'doubt';
+    case undefined: return 'doubt';
+  }
 }
 
 const turnOf = (f: SessionFacts): TurnReading => {

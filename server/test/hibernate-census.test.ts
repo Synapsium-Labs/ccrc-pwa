@@ -42,10 +42,8 @@ const CENSUS: readonly Row[] = [
   // ── server ─────────────────────────────────────────────────────────────────────────────────────────────────────
   { source: 'dead-compare', file: 'server/src/coord/hibernate.ts', hits: 1, stances: ['definition'],
     why: 'the verdict itself: a dead row holds `pane`, so a sleeping row is never put to sleep again' },
-  { source: 'dead-compare', file: 'server/src/watch.ts', hits: 5, stances: ['consults', 'true-of-pane', 'held-awake'],
-    why: 'the push copy\'s active projects (a sleeper\'s pane is not running, true); `claimProbe` reads a dead row as '
-      + '`gone`, and it meets no sleeper, because the verdict\'s `claim` hold keeps a claimant awake (the `claimExpiry` '
-      + 'argument); the delegation lane\'s death memory (`noteSessions`) CONSULTS `hibernatedAt`, so a sleep never feeds '
+  { source: 'dead-compare', file: 'server/src/watch.ts', hits: 4, stances: ['consults', 'true-of-pane', 'held-awake'],
+    why: 'the push copy\'s active projects (a sleeper\'s pane is not running, true); the delegation lane\'s death memory (`noteSessions`) CONSULTS `hibernatedAt`, so a sleep never feeds '
       + 'its breaker, which suspends at two parent deaths in ten minutes; its owner census skips dead rows, and a sleeper '
       + 'has no delegation running (the `background`, `roster` and `marker-background` holds)' },
   { source: 'dead-lifecycle', file: 'server/src/watch.ts', hits: 1, stances: ['consults'],
@@ -64,10 +62,6 @@ const CENSUS: readonly Row[] = [
     why: 'that same rung: `lc === \'stopped\' && f.hibernatedAt !== null` reads asleep' },
   { source: 'tmux-verdict', file: 'server/src/sessionReading.ts', hits: 1, stances: ['consults'],
     why: '`PaneFact` mirrors the verdict\'s words; `gone` falls to the hibernated rung' },
-  { source: 'dead-compare', file: 'server/src/coord/delegation-projection.ts', hits: 1, stances: ['held-awake'],
-    why: 'the delegation frame\'s liveness reads a dead parent\'s RUNNING work as stale; it meets no sleeper with running '
-      + 'work, because the verdict\'s `background` and `marker-background` holds keep a session whose delegated work runs '
-      + 'awake, and an ended activity reads `ended` before its parent is asked' },
   { source: 'dead-compare', file: 'server/src/fleet.ts', hits: 1, stances: ['consults'],
     why: 'the frame row hands `readSession` the turn word and keeps it only while the row is not dead; a sleeping row '
       + 'reads asleep there, so it carries no turn' },
@@ -93,9 +87,9 @@ const CENSUS: readonly Row[] = [
       + '`orphan`, and `hibernate` in `DEAD_COORDINATOR_DELIBERATE_ACTS` makes it deliberate' },
   { source: 'stopped-compare', file: 'server/src/coord/collectTempRoot.ts', hits: 1, stances: ['other-meaning'],
     why: 'the collector\'s own lane state (`lane.kind === \'stopped\'`), not a session' },
-  { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 3, stances: ['held-awake'],
-    why: '`LivenessVerdict` and `claimExpiry`: a session holding a claim is never put to sleep (`claim`), and a sleeping '
-      + 'session takes none' },
+  { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 5, stances: ['held-awake'],
+    why: '`LivenessVerdict`, `claimVerdictOf` and `claimExpiry`: a session holding a claim is never put to sleep (`claim`), '
+      + 'and a sleeping session takes none; were one met, `asleep` reads `gone` (D-6908)' },
   { source: 'lifecycle-table', file: 'server/src/coord/peers.ts', hits: 2, stances: ['consults', 'true-of-pane'],
     why: '`LIFECYCLE_RUNG`: `peerDeliverable` answers a hibernated probe `yes` before the tmux rung and this table; '
       + '`ARCHIVE_CONTRADICTS`: a sleeper is not live, so it contradicts no archive stamp' },

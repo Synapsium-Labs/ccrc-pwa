@@ -10,7 +10,7 @@ import { PROVIDERS, type ConnectMethod, type ProviderRow } from '../../../shared
 import { HUES, newLaneIdProblem, newLaneLabelProblem, type Hue } from '../../../shared/roster';
 import type { AccountsConnect, AccountUsage, LaneWire, RosterWire } from '../../../shared/api';
 import { NOT_ON_THIS_FLEET_YET, PROVIDER_ROWS, type OldCredential, type SignInEndKind } from '../fleet/accountWords';
-import { AUTH_TERMINAL_STATES, type AuthStatusState } from '../../../shared/accounts';
+import { AUTH_DEVICE_CODE_METHODS, AUTH_TERMINAL_STATES, type AuthMethod, type AuthStatusState } from '../../../shared/accounts';
 
 /** The providers the door offers, in its order (spec §5: three rows, no "Other"; `compatible` stays CLI in v1): the
  *  keys of the rows' words, so the list and the rows cannot disagree. */
@@ -38,12 +38,30 @@ export const METHOD_CAP: Readonly<Record<ConnectMethod, string>> = {
 
 /** The provider and method pairs this build's sheet has steps for. Every other pair the fleet can run reads
  *  `NEEDS_APP_UPDATE` at its Continue rather than starting steps the sheet cannot finish. */
-const SHEET_RUNS: ReadonlySet<string> = new Set(['anthropic:paste', 'anthropic:setup-token', 'anthropic:login']);
+const SHEET_RUNS: ReadonlySet<string> = new Set(['anthropic:paste', 'anthropic:setup-token', 'anthropic:login', 'openai:openai-login']);
 
-/** The methods this sheet runs as a sign-in (Task A22, D-7849): an attempt on the box, its URL, and a code pasted back. */
-export type SignInMethod = 'setup-token' | 'login';
-export const isSignInMethod = (m: string | null): m is SignInMethod => m === 'setup-token' || m === 'login';
+/** The methods this sheet runs as a sign-in (Tasks A22 and A25, D-7849, D-8051): an attempt on the box and its URL, then
+ *  a code pasted back or, for the ChatGPT sign-in, a device code the operator types on the provider's page. */
+export type SignInMethod = 'setup-token' | 'login' | 'openai-login';
+export const isSignInMethod = (m: string | null): m is SignInMethod => m === 'setup-token' || m === 'login' || m === 'openai-login';
+/** The two Anthropic sign-ins, the only ones with a method switch (spec §9). */
+export type AnthropicSignIn = Exclude<SignInMethod, 'openai-login'>;
+/** Whether this method's sign-in shows a device code (spec §3.8), so it has no code field and nothing to paste. */
+export const showsDeviceCode = (m: SignInMethod): boolean => AUTH_DEVICE_CODE_METHODS.includes(m satisfies AuthMethod);
+/** Whether an attempt in this state waits on the operator. A pasted code's helper says `waiting-code`. A device sign-in
+ *  never does: it stays at `url` until the operator approves, since the box has nothing to ask for (D-8051 (4)). */
+export const waitsOnOperator = (m: SignInMethod, state: AuthStatusState | undefined): boolean =>
+  state === 'waiting-code' || (showsDeviceCode(m) && state === 'url');
 export const sheetRuns = (provider: DoorProvider, method: ConnectMethod): boolean => SHEET_RUNS.has(`${provider}:${method}`);
+/** The add's `method` field. A ChatGPT lane's add has none (spec §7.2 step 3; D-8051 (7)): `openai-login` is what its
+ *  `auth/start` runs, and `add`'s own list refuses it `bad-field`, so sending it would stop every add before the verb. */
+export const addMethodField = (m: ConnectMethod): { method?: ConnectMethod } => (m === 'openai-login' ? {} : { method: m });
+/** Whether a lane is a Codex lane ccrc owns end to end. `kind: 'codex'` also covers an OpenAI lane ccrc only records, which
+ *  has no sign-in folder and no sign-in the box can install (D-8051 (9)). An older server's row doesn't say, so it isn't. */
+export const managedCodex = (row: Pick<RosterWire, 'kind' | 'managed'> | undefined): boolean => row?.kind === 'codex' && row.managed === true;
+/** A launcher ccrc only records, under any provider or none (D-8051 (13)): Remove keeps its launcher and its credential. A
+ *  row that doesn't say is a lane ccrc runs, since `managed` is absent on all but its Codex lanes. */
+export const recordedOnly = (row: Pick<RosterWire, 'managed'> | undefined): boolean => row?.managed === false;
 
 /** One row of a choice: its value, and the reason it narrows in place (`null`: it may be chosen). */
 export interface Choice<T> { readonly value: T; readonly narrowed: string | null }
@@ -153,7 +171,7 @@ export function resumableAttempt(
   let best: { id: string; held: { attemptId: string; method: SignInMethod; expiresAt: number } } | null = null;
   for (const [id, lane] of Object.entries(lanes ?? {})) {
     const a = heldAttemptOf(lane, now);
-    if (a === null || lane.authAttempt?.state !== 'waiting-code') continue;
+    if (a === null || !waitsOnOperator(a.method, lane.authAttempt?.state)) continue;
     if (best === null || a.expiresAt < best.held.expiresAt || (a.expiresAt === best.held.expiresAt && id < best.id)) best = { id, held: a };
   }
   return best;
@@ -228,7 +246,7 @@ export function oldCredentialOf(
 
 /** The method a lane switches TO from its fold (spec §4.4, §9; Q1): a sign-in lane to the long-lived token, a token lane
  *  to the sign-in; `null` for any lane that is not an Anthropic sign-in or token lane. */
-export function switchTargetOf(entry: Pick<RosterWire, 'provider' | 'kind'> | undefined): SignInMethod | null {
+export function switchTargetOf(entry: Pick<RosterWire, 'provider' | 'kind'> | undefined): AnthropicSignIn | null {
   if (entry?.provider !== 'anthropic') return null;
   return entry.kind === 'sign-in' ? 'setup-token' : entry.kind === 'token' ? 'login' : null;
 }

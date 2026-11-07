@@ -58,13 +58,13 @@ const FIXTURE: AppFixture = {
   },
   fleetFrames: [
     { type: 'waiting', waiting: WAITING },
-    // Two-digit badges: twelve sessions wait on the operator, and twelve runs whose worker is one of them (T2d, D-6330).
+    // Two-digit badges: twelve sessions wait on the operator, and twelve runs whose coordinator is one of them (T2d, D-6330; D-8049: a session binds one run, so many runs share a coordinator, not a worker).
     { type: 'fleet', sessions: Array.from({ length: 12 }, (_, i) => fleetSession({ id: `s${i}`, project: `proj-${i % 3}`, bucket: 'attention' })) },
     {
       type: 'runs',
       runs: Array.from({ length: 12 }, (_, i) => ({
         id: i + 1, program: 'p', programTitle: 'P', wave: 1, waveOf: 1, project: 'x', homeProject: null, state: 'working', closedAt: null,
-        sessionId: 's0', claimedBy: null,
+        sessionId: 's0', claimedBy: 's0',
       })),
     },
   ],

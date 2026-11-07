@@ -227,8 +227,8 @@ describe('the PWA folds on the server\'s compaction flag, and the prompt glyph h
 // `pwa/src` file compares a run's `sessionId` or `claimedBy` with a session id, or keys a session map on one, outside
 // the named readers in `fleet/runWords.ts` (`workerOf`, `coordinatorOf`, `claimedRunsOf`, `boundOpenRun`, and `runCard`,
 // the card lookup). Inside them the by-id lookups are named and counted: `workerOf`'s one (its closed-run arm, D-7205),
-// `runCard`'s two (D-7205) and `coordinatorOf`'s one (D-7207). `childRunsSeen` stays a named reader of the `.child` mark
-// (D-7214). The guess (`runForSession`, `runBelongsTo`) is gone, and the palette's order is the fleet tree's. Read
+// `runCard`'s two (D-7205) and `coordinatorOf`'s one (D-7207). `childRunsSeen` was deleted when the server took its question
+// over (D-8068). The guess (`runForSession`, `runBelongsTo`) is gone, and the palette's order is the fleet tree's. Read
 // through W7's census (`census-w7/pwa.ts#runMatchers`, whose FIXTURE rows red a matcher and a named lookup), imported in
 // the block so the file's header imports stay as other tasks append to them. Each count may only go down.
 describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
@@ -250,15 +250,40 @@ describe('the PWA reads the run binding from the wire (C7d, D-7182)', () => {
     ]);
   });
 
-  it('childRunsSeen: 1 call, a named reader of the .child mark (D-7214), in useColdRuns; may only shrink', async () => {
-    const { runMatchers } = await import('../census-w7/pwa.js');
-    const calls = runMatchers().filter((s) => s.kind === 'childRunsSeen').map(site);
-    expect(calls.length).toBeLessThanOrEqual(1);
-    expect(calls).toEqual(['pwa/src/screens/useColdRuns.ts#useColdRuns']);
+  // D-8049: "is this id listed", asked of a run's raw id. Each row left asks where a run RENDERS or whether a row exists
+  // (a list membership before the binding is read), and says nothing about whose worker it is; a door that decides that
+  // reads `workerOf`. `inboxTarget`'s is an event's id, by the query's untyped receiver.
+  it('runMembership(): the membership checks on a run\'s raw id are these 7 and no others; may only shrink (D-8049)', async () => {
+    const { runMembership } = await import('../census-w7/pwa.js');
+    const sites = runMembership().map((s) => `${site(s)} ${s.text}`);
+    expect(sites.length).toBeLessThanOrEqual(7);
+    expect(sites.sort()).toEqual([
+      'pwa/src/fleet/fleetTree.ts#latestPerSession byId.has(r.sessionId)',
+      'pwa/src/fleet/inboxTarget.ts#inboxTarget sessionsById.has(ev.sessionId)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.claimedBy)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.claimedBy)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.claimedBy)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.sessionId)',
+      'pwa/src/fleet/nestFleet.ts#nestFleet onList(r.sessionId)',
+    ]);
   });
 
-  it('runForSession and runBelongsTo: 0 definitions in pwa/src', () => {
-    const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
+  // `runHadChild` is the field's one reader (D-8068): only a literal `true` counts, because an older server omits the key.
+  it('CONTROL: a read of hadChild outside runHadChild is seen, a destructured one too, and a comment is not', async () => {
+    const { fixture, hadChildNamesIn } = await import('../census-w7/pwa.js');
+    const src = '// run.hadChild\nexport const a = (r: R) => r.hadChild;\nexport const b = ({ hadChild }: R) => hadChild;\n';
+    expect(hadChildNamesIn(fixture(src), 'pwa/src/fixture.tsx').map((s) => s.symbol)).toEqual(['a', 'b', 'b']);
+  });
+
+  it('hadChildNames(): only runHadChild names the field in pwa/src', async () => {
+    const { HAD_CHILD_READER, hadChildNames } = await import('../census-w7/pwa.js');
+    const names = hadChildNames().map(site);
+    expect(names.length).toBeGreaterThan(0);
+    expect([...new Set(names)]).toEqual([HAD_CHILD_READER]);
+  });
+
+  it('runForSession, runBelongsTo and childRunsSeen (D-8068): 0 definitions in pwa/src', () => {
+    const defs = files().flatMap((f) => parse(f).symbols.filter((s) => ['runForSession', 'runBelongsTo', 'childRunsSeen'].includes(s.name.split('.').pop()!)).map((s) => `${f}#${s.name}`));
     expect(defs).toEqual([]);
   });
 

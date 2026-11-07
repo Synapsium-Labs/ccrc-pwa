@@ -695,9 +695,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // programme_modifications and the spec pin on programs, programme ledgers PL2), and MIGRATIONS[37]
     // (operator_items.recommended and recommendedWhy, programme ledgers PL9), and MIGRATIONS[38] (the landing
     // authority overlay, its journal cursor, the projection witness and quarantineKind, landing order wave 5f), and
-    // MIGRATIONS[39] (mail_deliveries.revivedFrom and its partial index, D-5914).
-    expect(COORD_SCHEMA_VERSION).toBe(40);
-    expect(MIGRATIONS.length).toBe(40);
+    // MIGRATIONS[39] (mail_deliveries.revivedFrom and its partial index, D-5914), and MIGRATIONS[40] (runs.hadChild,
+    // D-8068).
+    expect(COORD_SCHEMA_VERSION).toBe(41);
+    expect(MIGRATIONS.length).toBe(41);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -764,8 +765,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // MIGRATIONS[28] (feed_events.dedupe_key), up to MIGRATIONS[33] (roll_settings, D-7453) and MIGRATIONS[34] (landing_entries and landing_projects, landing order wave 5e) and MIGRATIONS[35]
     // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs)
     // and MIGRATIONS[37] (the PL9 recommendation columns) and MIGRATIONS[38] (the landing authority overlay, 5f)
-    // and MIGRATIONS[39] (mail_deliveries.revivedFrom, D-5914); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(40);
+    // and MIGRATIONS[39] (mail_deliveries.revivedFrom, D-5914)
+    // and MIGRATIONS[40] (runs.hadChild, D-8068); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(41);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

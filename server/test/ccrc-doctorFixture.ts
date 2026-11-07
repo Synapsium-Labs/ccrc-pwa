@@ -286,20 +286,26 @@ export function stubNodeModelsWeirdStatus(home: string): void {
   ].join('\n'));
 }
 
-/** tmux, answering the ONLY two argv shapes doctor sends: `-V` names the
- *  CLIENT (the binary on disk, in tmux's own `tmux 3.4` spelling), and
+/** tmux, answering the ONLY three argv shapes doctor sends: `-V` names the
+ *  CLIENT (the binary on disk, in tmux's own `tmux 3.4` spelling),
  *  `display-message -p '#{version}'` asks the RUNNING SERVER for its own —
  *  answered from `<home>/fixture-tmux-server`, which this helper seeds at the
- *  client's version so a box that says nothing about skew has none. With the
- *  file removed it fails the way a serverless box really does: an "error
+ *  client's version so a box that says nothing about skew has none — and
+ *  `list-panes -a -F '#{session_name} #{pane_pid}'` lists the panes the session
+ *  PATH is read from (D-8047), answered from `<home>/fixture-tmux-panes`. With
+ *  a file removed it fails the way a serverless box really does: an "error
  *  connecting" line on stderr, exit 1, nothing on stdout. Any other argv is a
  *  loud failure (exit 90) — a doctor that started DRIVING tmux rather than
- *  asking its versions could not pass unnoticed. */
+ *  asking could not pass unnoticed. */
 export function stubTmux(home: string): void {
   stub(home, 'tmux', [
     'if [ "$1" = "-V" ]; then echo "tmux 3.4"; exit 0; fi',
     'if [ "$1" = "display-message" ] && [ "$2" = "-p" ] && [ "$3" = "#{version}" ]; then',
     '  if [ -f "$HOME/fixture-tmux-server" ]; then IFS= read -r v < "$HOME/fixture-tmux-server"; echo "$v"; exit 0; fi',
+    '  echo "error connecting to /tmp/tmux-0/default (No such file or directory)" >&2; exit 1',
+    'fi',
+    'if [ "$1" = "list-panes" ] && [ "$2" = "-a" ] && [ "$3" = "-F" ] && [ "$4" = "#{session_name} #{pane_pid}" ]; then',
+    '  if [ -f "$HOME/fixture-tmux-panes" ]; then while IFS= read -r l; do echo "$l"; done < "$HOME/fixture-tmux-panes"; exit 0; fi',
     '  echo "error connecting to /tmp/tmux-0/default (No such file or directory)" >&2; exit 1',
     'fi',
     'echo "fixture tmux: unexpected argv: $*" >&2; exit 90',
@@ -673,6 +679,12 @@ export function stubSystemctl(home: string): void {
     + 'if [ "$1" = "--user" ] && [ "$2" = "show" ] && [ "$3" = "ccrctests.slice" ]; then\n'
     + '  f="$HOME/fixture-show-ccrctests.slice"\n'
     + '  if [ -f "$f" ]; then while IFS= read -r l; do echo "$l"; done < "$f"; fi\n'
+    + '  exit 0\n'
+    + 'fi\n'
+    // D-8047: the manager's environment, the PATH a supervised session inherits when no session is running to read.
+    // With no file the stub falls through to its loud exit 90, which every other caller of this question has always met.
+    + 'if [ "$1" = "--user" ] && [ "$2" = "show-environment" ] && [ -f "$HOME/fixture-manager-env" ]; then\n'
+    + '  while IFS= read -r l; do echo "$l"; done < "$HOME/fixture-manager-env"\n'
     + '  exit 0\n'
     + 'fi\n'
     + 'if [ "$1" = "--user" ] && [ "$2" = "list-units" ]; then\n'
@@ -1466,7 +1478,7 @@ export const CODEX_TOOLS = ['bash', 'readlink', 'cat', 'cmp', 'ps', 'awk', 'od',
  *  reds on the check's "printed no answer" FAIL. */
 export const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/litellm-config.template.yaml',
   'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs',
-  'shared/model-advance.mjs'];
+  'shared/model-advance.mjs', 'shared/model-suggest.mjs'];
 
 export function installModelsOp(home: string): void {
   for (const rel of MODELS_OP_CLOSURE) {
@@ -1740,8 +1752,11 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  RAISED BY ONE AGAIN, on every platform (D-7902): `pane-scope-stop` SKIPs - `healthy()`
  *  creates no `~/.cc-sessions`, so no session has been started there to stop (and on
  *  Darwin it SKIPs first, for the cgroups it has none of). `ccrc-doctor-pane-scope-stop.test.ts`
- *  plants the registry and the switch. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 16;
+ *  plants the registry and the switch.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (D-8047): `playwright` SKIPs - `healthy()` caches no
+ *  browser build, so there is nothing to launch. `ccrc-doctor-session-path.test.ts` plants the builds. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 17;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

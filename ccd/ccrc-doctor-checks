@@ -165,6 +165,11 @@ fi
 # Overridable for the gh knob's reason above.
 : "${CCRC_DOCTOR_DOCS_TIMEOUT:=20}"
 
+# How long `playwright` watches one browser build (D-8047). A loader failure is
+# immediate and a healthy chromium exits inside a second, so this is only the time a
+# browser that stays up is given before it counts as started and is stopped.
+: "${CCRC_DOCTOR_BROWSER_TIMEOUT:=5}"
+
 # ── the check table ───────────────────────────────────────────────────────
 # DATA. `cmd_doctor` iterates this array and calls `_check_<name>` for each
 # entry, so adding a check is one entry here, one function below, and one test
@@ -205,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
   update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
-  graphify-path
+  graphify-path playwright   # one line, as `flock timeout`: _check_playwright is at the END of this file
   build
   provenance
   fleet
@@ -753,8 +758,15 @@ _check_linger() {
 # nothing. The one-spelling rule keeps its mechanism instead of its promise:
 # `ccrc-doctor.test.ts`'s "names the same directory the wrapper library does"
 # compares the two literals and goes red on a drift.
+#
+# THE SUBJECT IS THE PATH A SESSION GETS (D-8047), never the PATH of whoever ran
+# doctor: `ccrc update` puts this directory on its own PATH, so that measurement
+# passed on a box whose sessions could not find `ccrc` at all. The loop below is the
+# case with no session to measure, a server box or a dev checkout, where the subject
+# is the operator's own shell and ~/.profile is the fix that reaches it.
 _check_path() {
   local want="$HOME/.local/bin" p rest="${PATH:-}:" i=0
+  if _dr_session_paths; then _dr_path_sessions "$want"; return $?; fi
   while [ -n "$rest" ]; do
     p="${rest%%:*}"; rest="${rest#*:}"; i=$((i + 1))
     if [ "$p" = "$want" ]; then
@@ -5378,9 +5390,39 @@ _check_graphify-path() {
     return 3
   fi
 
+  # THE PATH MEASURED IS THE ONE A SESSION GETS (D-8047), `_check_path`'s reason:
+  # doctor's own `command -v` answers for whoever ran it. A session with nothing
+  # to run is reported first; among the sessions that resolve one, the answer kept
+  # is one that differs from the engine, if any does, because that is the silent case.
   local engine="$HOME/.ccrc/graphify-venv/bin/graphify"
-  local found="" resolved="" want=""
-  found="$(command -v graphify 2>/dev/null)"
+  local found="" resolved="" want="" measured=0 lacking=0 lack_path="" i f
+  want="$(realpath "$engine" 2>/dev/null)" || want=""
+  if _dr_session_paths; then
+    measured=1
+    for i in "${!DR_SESSION_PATHS[@]}"; do
+      f="$(_dr_on_path "${DR_SESSION_PATHS[$i]}" graphify)"
+      if [ -z "$f" ]; then
+        lacking=$((lacking + DR_SESSION_COUNTS[i])); lack_path="${DR_SESSION_PATHS[$i]}"
+      elif [ -z "$found" ] || [ "$(realpath "$f" 2>/dev/null)" != "$want" ]; then
+        found="$f"
+      fi
+    done
+  else
+    found="$(command -v graphify 2>/dev/null)"
+  fi
+  if [ "$lacking" -gt 0 ]; then
+    local dir link
+    dir="$(_dr_session_bin_dir "$lack_path")" || dir="<a directory on that PATH>"
+    link="ln -s '$engine' '$dir/graphify' — $dir is already on that PATH, so this reaches every session with no restart. $DR_SESSION_NOT_THESE"
+    if [ -e "$engine" ]; then
+      _dr_fail graphify-path "$(_dr_session_who "$lacking") with nothing on PATH that answers 'graphify' — the pinned engine at $engine is reachable only by absolute path, so every bare invocation those sessions make fails ($DR_SESSION_FROM)" \
+        "as root: $link"
+    else
+      _dr_fail graphify-path "$(_dr_session_who "$lacking") with nothing on PATH that answers 'graphify', and there is no pinned engine at $engine either ($DR_SESSION_FROM)" \
+        "run: ccrc install — it builds the pinned venv; then, as root: $link"
+    fi
+    return 1
+  fi
   if [ -z "$found" ]; then
     _dr_fail graphify-path "nothing on \$PATH answers 'graphify' — the pinned engine at $engine is reachable only by absolute path, so every bare invocation a session makes fails" \
       "run: ccrc install — it links \$HOME/.local/bin/graphify at the pinned venv"
@@ -5408,7 +5450,6 @@ _check_graphify-path() {
   # SKIP. Change one side's empty handling and the other must change with it,
   # or a box neither of them could measure gets two different verdicts.
   resolved="$(realpath "$found" 2>/dev/null)" || resolved=""
-  want="$(realpath "$engine" 2>/dev/null)" || want=""
   if [ ! -e "$engine" ]; then
     _dr_fail graphify-path "\$PATH answers 'graphify' with $found, and there is no pinned engine at $engine to compare it against" \
       "run: ccrc install — it builds the pinned venv and links \$HOME/.local/bin/graphify at it"
@@ -5419,8 +5460,19 @@ _check_graphify-path() {
     return 3
   fi
   if [ "$resolved" = "$want" ]; then
-    _dr_pass graphify-path "graphify resolves to $found -> the pinned venv engine"
+    if [ "$measured" -eq 1 ]; then
+      _dr_pass graphify-path "graphify resolves to $found -> the pinned venv engine on the PATH sessions get ($DR_SESSION_FROM)"
+    else
+      _dr_pass graphify-path "graphify resolves to $found -> the pinned venv engine"
+    fi
     return 0
+  fi
+  # A session's PATH cannot be reordered from here, and `ccrc install` writes only
+  # `$HOME/.local/bin/graphify`, so a wrong answer anywhere else is repointed where it stands.
+  if [ "$measured" -eq 1 ] && [ "${found%/*}" != "$HOME/.local/bin" ]; then
+    _dr_fail graphify-path "the PATH sessions get resolves graphify to $found (-> $resolved), which is not the pinned engine at $engine — a session that types graphify runs a build this box does not pin, and its answers are indistinguishable from the right one's ($DR_SESSION_FROM)" \
+      "as root: ln -sfn '$engine' '$found' — it replaces that file with a link to the pinned engine, and sessions read it at their next call"
+    return 1
   fi
   _dr_fail graphify-path "\$PATH resolves graphify to $found (-> $resolved), which is not the pinned engine at $engine — a session that types graphify runs a build this box does not pin, and its answers are indistinguishable from the right one's" \
     "run: ccrc install — it links \$HOME/.local/bin/graphify at the venv and refuses rather than replacing a launcher it did not write; if $found is one ccrc will not touch, move it aside, or put \$HOME/.local/bin ahead of it on \$PATH"
@@ -11565,4 +11617,266 @@ _check_pane-scope-stop() {
     _dr_pass pane-scope-stop "shadow: a deliberate stop only logs the pane scope it would stop (pane-scope lines in $reg/swap.log); arm it in Settings › Automation"
   fi
   return 0
+}
+
+# ── the PATH a session really gets (D-8047) ───────────────────────────────
+# `path` and `graphify-path` ask this rather than `$PATH`, which is the PATH of
+# whoever ran doctor. Three facts decide what can be asked:
+#   - A pane gets the PATH of the tmux CLIENT that ran `new-session`, not the tmux
+#     server's. Measured on an isolated socket, tmux 3.7: two clients on two PATHs
+#     gave two panes those two PATHs, while `show-environment -g` named only the
+#     first. So the global environment is the wrong question, and sessions on one
+#     server differ: a supervised spawn carries the user manager's PATH, one started
+#     from a shell carries that shell's.
+#   - Neither the unit, nor ccd, nor a generated wrapper changes PATH, and Claude Code
+#     writes the process PATH as the last line of its shell snapshot, so ~/.bashrc
+#     edits never apply to a session's commands.
+#   - A pane's pid is the session's process (every link is an `exec`), so its
+#     environ is the PATH that session started with.
+# So: read every live session's environ, and with none to read, the manager's PATH.
+# rc 1 means nothing could be read, and each caller then measures `$PATH` as it
+# always did: a server box (no session runs there), Darwin with no readable proc
+# tree, or a box with neither. NOT READ: a lane's settings.json `env` block, which
+# Claude Code applies inside the process, so a lane that sets PATH there reads as lacking.
+DR_SESSION_NOT_THESE="\$HOME/.profile, \$HOME/.bashrc and 'ccrc install' cannot do this: a session's PATH comes from the service manager through tmux, and no login shell runs on the way"
+
+# The commands a session calls bare. A generated wrapper is not here: ccd launches
+# those by absolute path. Only what this box installed is asked about.
+CCRC_SESSION_COMMANDS=(ccrc ccd ccrc-api)
+
+_dr_environ_path() {   # <environ file> -> its PATH; rc 1 when it cannot be read or holds none
+  local kv
+  [ -r "$1" ] || return 1
+  while IFS= read -r -d '' kv; do
+    case "$kv" in PATH=*) printf '%s' "${kv#PATH=}"; return 0 ;; esac
+  done < "$1"
+  return 1
+}
+
+_dr_session_add() {   # <PATH> -> counted once per session, stored once per distinct value
+  local i
+  DR_SESSION_TOTAL=$((DR_SESSION_TOTAL + 1))
+  for i in "${!DR_SESSION_PATHS[@]}"; do
+    if [ "${DR_SESSION_PATHS[$i]}" = "$1" ]; then
+      DR_SESSION_COUNTS[i]=$((DR_SESSION_COUNTS[i] + 1)); return 0
+    fi
+  done
+  DR_SESSION_PATHS+=("$1"); DR_SESSION_COUNTS+=(1)
+}
+
+_dr_session_paths() {   # -> DR_SESSION_PATHS, DR_SESSION_COUNTS, DR_SESSION_TOTAL, DR_SESSION_LIVE, DR_SESSION_FROM; rc 1 when nothing was read
+  DR_SESSION_PATHS=(); DR_SESSION_COUNTS=(); DR_SESSION_TOTAL=0; DR_SESSION_LIVE=0; DR_SESSION_FROM=""
+  local role="" out="" name pid p="" l
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$role" = server ] && return 1
+  out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" tmux list-panes -a -F '#{session_name} #{pane_pid}' 2>/dev/null)" || out=""
+  while read -r name pid; do
+    case "$name" in cc-*) ;; *) continue ;; esac   # `_tmux`'s prefix: an operator's own tmux session is not a fleet session
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    p="$(_dr_environ_path "${CCRC_PROC_ROOT:-/proc}/$pid/environ")" || continue
+    _dr_session_add "$p"
+  done <<< "$out"
+  if [ "$DR_SESSION_TOTAL" -gt 0 ]; then
+    DR_SESSION_LIVE=1
+    if [ "$DR_SESSION_TOTAL" -eq 1 ]; then DR_SESSION_FROM="read from 1 live session's environment"
+    else DR_SESSION_FROM="read from $DR_SESSION_TOTAL live sessions' environments"; fi
+    return 0
+  fi
+  [ "${CCD_OS:-linux}" != darwin ] || return 1
+  # `_check_services`' reason for these two: without them a bare context finds no bus.
+  : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+  : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+  out="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" systemctl --user show-environment 2>/dev/null)" || return 1
+  p=""
+  while IFS= read -r l; do
+    case "$l" in PATH=*) p="${l#PATH=}"; break ;; esac
+  done <<< "$out"
+  case "$p" in ''|\$*) return 1 ;; esac   # `$'…'` is systemd's quoting of a value this cannot read as a list
+  _dr_session_add "$p"
+  DR_SESSION_FROM="read from the user manager, whose PATH a supervised session inherits; no session is running to read"
+  return 0
+}
+
+_dr_session_who() {   # <sessions lacking> -> the subject of a verdict sentence
+  if [ "$DR_SESSION_LIVE" -eq 1 ]; then printf '%s of %s live sessions run' "$1" "$DR_SESSION_TOTAL"
+  else printf 'a session started now would run'; fi
+}
+
+_dr_on_path() {   # <PATH> <command> -> where that PATH finds it; `type -P`, so one of this file's own functions cannot answer
+  ( PATH="$1"; type -P -- "$2" ) 2>/dev/null
+}
+
+# Where a remedy may put a file so that this PATH finds it: the first `.../bin` outside
+# $HOME that exists. Read from the measured PATH, never named here, because a box
+# decides that list. The first entry of a stock manager PATH is an `sbin`, hence the suffix.
+_dr_session_bin_dir() {   # <PATH> -> a directory; rc 1 when it holds none
+  local rest="$1:" p
+  while [ -n "$rest" ]; do
+    p="${rest%%:*}"; rest="${rest#*:}"
+    case "$p" in
+      "$HOME"|"$HOME"/*) continue ;;
+      /*/bin) if [ -d "$p" ]; then printf '%s' "$p"; return 0; fi ;;
+    esac
+  done
+  return 1
+}
+
+# `path`'s verdict over the measured PATHs. A session is fine with the directory on
+# PATH, or with every installed command resolving some other way, which is what the
+# remedy leaves behind: asking only for the directory would warn for ever on a box that
+# took it. The remedy writes launchers, not links: `ccd`'s body and the shim both sit
+# behind paths they derive, and an exec reaches them exactly as a bare call would.
+#
+# THAT PASS IS ABOUT THE COMMANDS IT NAMES AND NO OTHERS. The directory also holds what
+# other tools installed there, and a session without it on PATH reaches none of that, so
+# the sentence lists what was asked and counts who runs without the directory. It asks
+# only that each name resolves, not that the answer is ccrc's own file.
+_dr_path_sessions() {   # <the directory>
+  local bin="$1" i sp c bad lacking=0 without=0 dir="" cmds=() miss=() list
+  for c in "${CCRC_SESSION_COMMANDS[@]}"; do [ -x "$bin/$c" ] && cmds+=("$c"); done
+  for i in "${!DR_SESSION_PATHS[@]}"; do
+    sp="${DR_SESSION_PATHS[$i]}"
+    case ":$sp:" in *":$bin:"*) continue ;; esac
+    without=$((without + DR_SESSION_COUNTS[i]))
+    bad=0
+    [ "${#cmds[@]}" -gt 0 ] || bad=1
+    for c in "${cmds[@]}"; do
+      [ -z "$(_dr_on_path "$sp" "$c")" ] || continue
+      bad=1
+      case " ${miss[*]} " in *" $c "*) ;; *) miss+=("$c") ;; esac
+    done
+    [ "$bad" -eq 1 ] || continue
+    lacking=$((lacking + DR_SESSION_COUNTS[i]))
+    [ -n "$dir" ] || dir="$(_dr_session_bin_dir "$sp")" || dir="<a directory on that PATH>"
+  done
+  if [ "$lacking" -eq 0 ]; then
+    if [ "$without" -eq 0 ]; then
+      _dr_pass path "every session has \$HOME/.local/bin on PATH ($DR_SESSION_FROM)"
+    else
+      list="$(_dr_join "${cmds[@]}")"; list="${list//; /, }"
+      _dr_pass path "every session resolves $list ($DR_SESSION_FROM); nothing else in \$HOME/.local/bin was checked, and $(_dr_session_who "$without") without it on PATH"
+    fi
+    return 0
+  fi
+  if [ "${#miss[@]}" -eq 0 ]; then
+    _dr_warn path "$(_dr_session_who "$lacking") without \$HOME/.local/bin on PATH, and no ccrc command is installed there yet ($DR_SESSION_FROM)" \
+      "run: ccrc install — then re-run ccrc doctor, which names the commands those sessions cannot reach"
+    return 2
+  fi
+  list="$(_dr_join "${miss[@]}")"; list="${list//; /, }"
+  local verb="do not"; [ "${#miss[@]}" -gt 1 ] || verb="does not"
+  _dr_warn path "$(_dr_session_who "$lacking") without \$HOME/.local/bin on PATH, and $list $verb resolve there, so a bare call answers 'command not found' — doctor's own \$PATH cannot show this, because ccrc update adds the directory itself ($DR_SESSION_FROM)" \
+    "as root: for c in ${miss[*]}; do printf '#!/bin/sh\nexec \"%s/%s\" \"\$@\"\n' '$bin' \"\$c\" > '$dir'/\"\$c\"; chmod 755 '$dir'/\"\$c\"; done — $dir is already on that PATH, so this reaches every session with no restart. $DR_SESSION_NOT_THESE"
+  return 2
+}
+
+# ── playwright: does each cached browser build really start (D-8047) ──────
+# Sessions run browsers through Playwright, and neither the install nor any other
+# check knows they exist. Two faults surface only inside someone's run: a build the
+# loader refuses (measured on a fleet box: WebKit linked against libicudata.so.74 with
+# only .78 present), and a cache that holds other revisions than a run asks for.
+#
+# THE ONLY HONEST MEASUREMENT IS A LAUNCH, so each build is started, offline: the page
+# is about:blank, chromium and firefox are pointed at a proxy on the discard port, and
+# every launch runs with a throwaway HOME and profile. The loader's line in stderr is
+# a failure whatever the exit code, because WebKit's failure can come from a child
+# process while the parent stays up: that is why WebKit is given a page and not
+# `--no-startup-window`, which starts no child. A browser still running at the bound
+# has started, and is stopped there.
+#
+# WARN AT WORST, NEVER FAIL: `ccrc update` ends with this doctor and a FAIL there is an
+# exit 3, while a browser build is one project's concern and no reason to report a box
+# unhealthy. A test holds this arm to `_dr_warn`. Nothing here installs or deletes
+# anything. It says which revisions are cached, and cannot say which ones a run will
+# ask for: that is pinned by each project's own Playwright package.
+_dr_pw_root() {
+  if [ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && [ "$PLAYWRIGHT_BROWSERS_PATH" != 0 ]; then printf '%s' "$PLAYWRIGHT_BROWSERS_PATH"
+  elif [ "${CCD_OS:-linux}" = darwin ]; then printf '%s' "$HOME/Library/Caches/ms-playwright"
+  else printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/ms-playwright"; fi
+}
+
+_dr_pw_exe() {   # <family> <build dir> -> the file Playwright starts; rc 1 when the build holds none
+  local f d="$2"
+  case "$1" in
+    chromium) set -- "$d"/chrome-*/chrome "$d"/chrome-*/*.app/Contents/MacOS/* ;;
+    chromium_headless_shell) set -- "$d"/chrome-*/headless_shell "$d"/chrome-*/chrome-headless-shell ;;
+    firefox) set -- "$d"/firefox/firefox "$d"/firefox/*.app/Contents/MacOS/firefox ;;
+    webkit) set -- "$d"/pw_run.sh ;;
+  esac
+  for f in "$@"; do
+    if [ -f "$f" ] && [ -x "$f" ]; then printf '%s' "$f"; return 0; fi
+  done
+  return 1
+}
+
+_dr_pw_why() {   # <stderr file> -> the loader's words, rc 0; else the last line, rc 1
+  local l last=""
+  while IFS= read -r l || [ -n "$l" ]; do
+    case "$l" in
+      *"error while loading shared libraries: "*) printf '%s' "${l##*error while loading shared libraries: }"; return 0 ;;
+      *"Library not loaded: "*) printf '%s' "${l##*"Library not loaded: "}"; return 0 ;;
+    esac
+    [ -z "$l" ] || last="$l"
+  done < "$1"
+  printf '%s' "$last"
+  return 1
+}
+
+_dr_pw_launch() {   # <family> <exe> -> rc 0 started, rc 1 failed with DR_PW_WHY set, rc 2 no temp directory
+  local family="$1" exe="$2" tmp rc=0 why args=()
+  DR_PW_WHY=""
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-doctor-pw.XXXXXX" 2>/dev/null)" || return 2
+  case "$family" in
+    chromium*) args=(--headless --no-sandbox --disable-gpu --proxy-server=127.0.0.1:9 "--user-data-dir=$tmp/profile" --dump-dom about:blank) ;;
+    firefox)
+      printf 'user_pref("network.proxy.type", 1);\nuser_pref("network.proxy.%s", "127.0.0.1");\nuser_pref("network.proxy.%s_port", 9);\n' \
+        http http ssl ssl socks socks > "$tmp/user.js"
+      args=(--headless --no-remote --profile "$tmp" about:blank) ;;
+    webkit) args=(--headless about:blank) ;;
+  esac
+  HOME="$tmp" _plat_timeout "$CCRC_DOCTOR_BROWSER_TIMEOUT" "$exe" "${args[@]}" </dev/null >/dev/null 2>"$tmp/stderr" || rc=$?
+  if why="$(_dr_pw_why "$tmp/stderr")"; then
+    DR_PW_WHY="$why"; rc=1
+  elif [ "$rc" -eq 0 ] || [ "$rc" -eq 124 ]; then
+    rc=0
+  else
+    DR_PW_WHY="exited $rc${why:+: $why}"; rc=1
+  fi
+  rm -rf -- "$tmp"
+  return "$rc"
+}
+
+_check_playwright() {
+  local role="" root build name rc started=() failed=() n=0
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = server ]; then
+    _dr_skip playwright "this box records CCRC_ROLE=server, so no session runs a browser here"; return 3
+  fi
+  root="$(_dr_pw_root)"
+  for build in "$root"/*/; do
+    [ -d "$build" ] || continue
+    build="${build%/}"; name="${build##*/}"
+    case "$name" in chromium-[0-9]*|chromium_headless_shell-[0-9]*|firefox-[0-9]*|webkit-[0-9]*) ;; *) continue ;; esac
+    n=$((n + 1))
+    if [ ! -f "$build/INSTALLATION_COMPLETE" ]; then failed+=("$name: its download never finished"); continue; fi
+    local exe=""
+    exe="$(_dr_pw_exe "${name%-*}" "$build")" || { failed+=("$name: no launcher in the build"); continue; }
+    rc=0; _dr_pw_launch "${name%-*}" "$exe" || rc=$?
+    case "$rc" in
+      0) started+=("$name") ;;
+      1) failed+=("$name: $DR_PW_WHY") ;;
+      *) _dr_skip playwright "no temp directory could be made under ${TMPDIR:-/tmp}, so no build was launched"; return 3 ;;
+    esac
+  done
+  if [ "$n" -eq 0 ]; then
+    _dr_skip playwright "no Playwright browser build is cached at $root, so there is nothing to launch"; return 3
+  fi
+  local ok_list; ok_list="$(_dr_join "${started[@]}")"; ok_list="${ok_list//; /, }"
+  if [ "${#failed[@]}" -eq 0 ]; then
+    _dr_pass playwright "started all $n cached builds offline: $ok_list — a run asks for the revision its own Playwright package pins, and one not listed here is one it will not find"
+    return 0
+  fi
+  _dr_warn playwright "${#failed[@]} of $n cached browser builds cannot start: $(_dr_join "${failed[@]}")${ok_list:+; started: $ok_list}" \
+    "a run that asks for one of these fails the same way. From the project whose run needs it: npx playwright install --with-deps <browser> fetches the build that project pins and the libraries it wants (root is needed for the libraries); a library the distro has moved past needs a Playwright release built for this distro. Delete a build no run asks for from $root"
+  return 2
 }

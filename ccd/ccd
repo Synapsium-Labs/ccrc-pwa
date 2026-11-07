@@ -1512,6 +1512,19 @@ SPAWN_RESUME_SETTLE_S=2         # seconds `_spawn_start` waits, on the `resume` 
                                 # NOT an env override — same discipline, and the same reason, as
                                 # SPAWN_GATE_TRIES above: HOME is ccd's only isolation boundary and
                                 # nothing on the wire can set a shell variable.
+# THE SESSION'S PATH (D-8050): the words both launch lines in `_spawn_start` put between `exec env`'s variables and
+# the wrapper. A pane's PATH is the tmux server's, and a supervised session inherits that from the service manager,
+# which holds no `~/.local/bin`, so a bare `ccrc`, `ccd`, `ccrc-api` or `graphify` failed in a session. This is the
+# one place that can give it to them: a generated wrapper that exports PATH fails `_wrap_parse_shape`, and
+# Claude Code writes the process PATH as the last line of its shell snapshot, so `~/.bashrc` never applies.
+# LITERAL `$HOME` AND `$PATH`, expanded by the `/bin/sh` here, so it names no machine. LAST ON THE PATH, so a tool the
+# box already resolves keeps answering and the folder only adds names. The `case` is what leaves a PATH that already
+# holds the folder alone, and the `exec "$@"` leaves no process between the pane and the wrapper.
+# ONE SINGLE-QUOTED WORD FOR `/bin/sh`, NEVER A STATEMENT OF THE PANE'S OWN. The pane's shell is whatever tmux has as
+# its default, and a fish pane rejects a whole `-c` string for one `case` in it, so nothing on the line would run. It
+# has no single quote in it, and it sits after `cd '$workdir' &&`, so a workdir that cannot be entered still stops the
+# exec. `ccd-session-path.test.ts` runs both lines under each pane shell, and pins this grammar where no fish is installed.
+SESSION_PANE_PATH=$'/bin/sh -c \'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$PATH:$HOME/.local/bin"; export PATH ;; esac; exec "$@"\' ccd-session-path'
 TMUX_SERVER_LOCK_WAIT=15        # seconds a spawn waits for the right to CREATE the tmux server.
                                 # Only the boot burst ever contends: 17 supervisors start in the
                                 # same second, all see no server, and without serialisation each
@@ -9223,6 +9236,9 @@ EOF
   # `account-codex-v1` (N4; accounts plan Task A24): `ccrc account add --provider openai`, `remove`'s delete of the
   # lane's sign-in folder and `set --method openai-login` are on this box.
   echo account-codex-v1
+  # `account-openrouter-v2` (N4; accounts plan Task A26): `ccrc account add --provider openrouter` and `credential` on
+  # such a lane validate the key first, and `add` takes `--placement` and suggests the models.
+  echo account-openrouter-v2
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now
@@ -14248,7 +14264,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   unitstate=$(_ws_unit_state "$id")
 
   if [[ $mode == reclaim ]]; then
-    _ws_reclaim_fork "$id" "$defer" ""   # see "THE FLAVOUR FORK" in the RECLAIM region
+    _WS_HELD_BY_RC=''; _WS_HELD_BY_IDS=''; _ws_reclaim_fork "$id" "$defer" ""   # see "THE FLAVOUR FORK" in the RECLAIM region; R2's holding rows start unasked
   else
     _ws_reap_eval "$id" || true      # a refusal is an ANSWER, not an error
   fi
@@ -14565,7 +14581,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   if [[ $mode == reclaim ]]; then
     printf '"mode":"reclaim","childOf":%s,"generation":%s,"legacyRows":%s,"pendingRows":%s,' \
       "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-    _ws_rescue_doc
+    _ws_rescue_doc; _ws_held_by_doc
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -14573,7 +14589,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
     elif [[ "$REAP_VERDICT" == unmeasured ]]; then
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       echo "ccd: ws-audit --reclaim measured nothing: $REAP_DETAIL — retry" >&2
-      _lc_fail reclaim "$id" "" probe-unmeasured "$REAP_DETAIL" verb ws-audit; return 1
+      _lc_fail reclaim "$id" "" probe-unmeasured "$REAP_DETAIL" verb ws-audit ${_WS_HELD_BY_IDS:+meas.heldBy "$_WS_HELD_BY_IDS"}; return 1
     else
       printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
       case "$REAP_VERDICT" in
@@ -25273,7 +25289,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # that is going to abort never leaves a scope behind.
   _spawn_workdirid_pending "$id" "$workdir" || :
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv $SESSION_PANE_PATH '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -25335,7 +25351,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       fi
       _spawn_workdirid_pending "$id" "$workdir" || :
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv $SESSION_PANE_PATH '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   _panescope_record "$id"   # D-5237: the pane's scope, once per spawn, never per tick
@@ -31667,6 +31683,27 @@ _ws_workdirid_read() {   # id logical -> 0 `valid` (_WS_WDID_IDENT "<dev>:<ino>:
   _WS_WDID_STATE=valid; return 0
 }
 
+# THE HOLDING ROWS, NAMED ONCE (cleanup un-wedge R2, spec 2026-11-04 §4.2). `_ws_reclaim_workdir_shared` keeps one
+# `id<TAB>word<TAB>workspace` line in _WS_HELD_BY for each OTHER row it put in a not-asked bucket (the word is the
+# bucket's, `HELD_BY_WORD_TABLE` in shared/api.ts), reset on every call; `_WS_HELD_BY_RC` is its last answer
+# ('' = not asked since the audit began, 0, or 2) and `_WS_HELD_BY_OWN` is 1 when the child's own buckets held it too.
+# Ids only, never a value: an id that is not one plain id is kept as `?`, and the document prints it as null, which the
+# server reads as malformed. The row's `workspace` field is read here, at the moment the row is named, so the server
+# never offers to forget a workspace, or a row whose field cannot be read. The hold itself does not narrow (D6).
+_WS_HELD_BY=''; _WS_HELD_BY_RC=''; _WS_HELD_BY_OWN=0; _WS_HELD_BY_IDS=''   # _IDS: the ids, comma-joined, for `meas.heldBy`
+_ws_held_by_put() {   # word id -> appends the row's line to _WS_HELD_BY, and its id to _WS_HELD_BY_IDS
+  local ws=absent i='?'; [[ "$2" =~ ^[A-Za-z0-9._-]+$ ]] && i="$2"   # `?`: no id character, printed as null
+  if [[ "$i" != '?' ]]; then _reg_read "$i" workspace >/dev/null; case $? in 0) ws=present ;; 1) : ;; *) ws=unreadable ;; esac; else ws=unreadable; fi
+  _WS_HELD_BY+="$i"$'\t'"$1"$'\t'"$ws"$'\n'; [[ ",$_WS_HELD_BY_IDS," == *",$i,"* ]] || _WS_HELD_BY_IDS+="${_WS_HELD_BY_IDS:+,}$i"
+}
+_ws_held_by_doc() {   # -> prints `"heldBy":…,` for an audit document (and `"heldByOwn":…,` beside an array)
+  local i w s n=0; [[ -n "$_WS_HELD_BY_RC" ]] || { printf '"heldBy":null,'; return 0; }
+  printf '"heldBy":['
+  [[ "$_WS_HELD_BY_RC" != 2 ]] || while IFS=$'\t' read -r i w s; do
+    [[ -n "$w" ]] || continue; (( n++ )) && printf ','; printf '{"id":%s,"word":"%s","workspace":"%s"}' "$( [[ "$i" != '?' ]] && printf '"%s"' "$i" || echo null)" "$w" "$s"
+  done <<< "$_WS_HELD_BY"
+  printf '],"heldByOwn":%s,' "$( (( _WS_HELD_BY_OWN )) && echo true || echo false)"
+}
 _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''; _WS_RECORDED_IDS=''; _WS_RECORDED_ARCH=''
 _WS_LEGACY_ROWS=''; _WS_PENDING_ROWS=''   # THE COUNTS of `_ws_reclaim_workdir_shared` ('' = not counted)
 _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the OTHER registry rows whose
@@ -32010,6 +32047,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local -a rid=() req=()
   local _WS_IDWALK_OUT='' _WS_IDWALK_WHY=''
   _WS_SHARED_ROWS=''; _WS_NESTED_ROWS=''; _WS_THROUGH_ROWS=''; _WS_SHARED_WHY=''; _WS_RECORDED_GDIRS=''; _WS_RECORDED_IDS=''; _WS_RECORDED_ARCH=''
+  _WS_HELD_BY=''; _WS_HELD_BY_RC=2; _WS_HELD_BY_OWN=0; _WS_HELD_BY_IDS=''   # THE HOLDING ROWS (R2, above): answered 2 until a return 0 says otherwise
   # The entry field's state for this ONE call (AND WHERE EACH ROW ENTERED, above); `efst` and `efid` are the
   # CURRENT row's field state and identity, from its field read to the end of that row's pass.
   local efst="" efid="" unpend="" unfield="" unrec="" nlegacy=0 npending=0 efbt0=-1
@@ -32018,7 +32056,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   local -A efans=() efbt=() efaidx=()
   _WS_LEGACY_ROWS=""; _WS_PENDING_ROWS=""
   names=$(find -P "$REG" -mindepth 1 -maxdepth 1 -name '*.workdir' ! -name '.*' 2>/dev/null) \
-    || { _WS_SHARED_WHY="could not list $REG"; return 2; }
+    || { _WS_SHARED_WHY="could not list $REG"; _WS_HELD_BY_OWN=1; return 2; }   # unlisted: never claim the child fault-free (R2)
   if _ws_reclaim_resolve "$wd"; then
     mine="$_WS_RESOLVED"; minebasis="$_WS_RESOLVE_BASIS"
     [[ "$mine" != //[!/]* ]] \
@@ -32067,24 +32105,24 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     [[ "$o" != "$id" || -n "${3-}" ]] || continue   # the loose arm passes a third word: the entry is no session, so a row of its name is another
     w=$(_reg_read "$o" workdir); rc=$?
     (( rc == 1 )) && continue   # gone between the listing and the read
-    (( rc == 0 )) || { unread+="${unread:+, }$n"; continue; }
+    (( rc == 0 )) || { unread+="${unread:+, }$n"; _ws_held_by_put workdir-unreadable "$o"; continue; }
     # The entry field: read HERE, before any arm below can `continue` past the row (path-identity spec §4.5).
     efst=""; efid=""
     _ws_workdirid_read "$o" "$w"
     efst="$_WS_WDID_STATE"
     case "$efst" in
       valid) efid="$_WS_WDID_IDENT"; efo+=("$o"); efi+=("$efid"); efp+=("$_WS_WDID_PHYS"); efw+=("") ;;
-      pending) npending=$(( npending + 1 )); unpend+="${unpend:+, }$o" ;;
+      pending) npending=$(( npending + 1 )); unpend+="${unpend:+, }$o"; _ws_held_by_put entry-pending "$o" ;;
       legacy-*) nlegacy=$(( nlegacy + 1 )) ;;
-      *) unfield+="${unfield:+, }$o" ;;
+      *) unfield+="${unfield:+, }$o"; _ws_held_by_put entry-unmeasured "$o" ;;
     esac
     ri=${#rid[@]}; rid+=("$o")   # this row's index in the identity walk's requests and answers
-    [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
+    [[ "$w" == /* && "$w" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; _ws_held_by_put not-plain "$o"; continue; }
     # NOR ONE UNDER `/proc`, however many slashes open it: absolute in form,
     # but `/proc/self/cwd/<rel>` names each reader's own cwd, as a relative
     # spelling does (`cmd_start` refuses one), so it is unplaced exactly as a
     # relative row is — collected, and decided after the loop.
-    [[ ! "$w" =~ ^/+proc(/|$) ]] || { unproc+="${unproc:+, }$o"; continue; }
+    [[ ! "$w" =~ ^/+proc(/|$) ]] || { unproc+="${unproc:+, }$o"; _ws_held_by_put under-proc "$o"; continue; }
     req+=("P"$'\t'"$ri"$'\t'"$w")   # m1: the spelling's links, walked for one into /proc
     wr=''; rok=0; basis=''
     _ws_reclaim_resolve "$w" && wr="$_WS_RESOLVED"
@@ -32096,13 +32134,13 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
     lit=0; [[ "$w" == "$wd" || "$w" == "${wd%/}/"* ]] && lit=1
     llit=0
     for lw in ${lspell[@]+"${lspell[@]}"}; do [[ "$w" == "$lw" || "$w" == "${lw%/}/"* ]] && llit=1; done
-    (( lit || llit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; continue; }
+    (( lit || llit )) || [[ "$wr" != //[!/]* ]] || { unplaced+="${unplaced:+, }$o"; _ws_held_by_put not-plain "$o"; continue; }
     (( lit || llit )) || [[ -z "$minewhy" ]] || { unmine+="${unmine:+, }$o"; continue; }
     if (( ! lit && ! llit && ! rok )); then
       # A GONE ROW IS PLACED ONLY ON RECORDED EVIDENCE (spec §5.5): never a
       # projection, and never a row that could not be resolved at all.
       [[ "$basis" == absent-suffix ]] && _ws_reclaim_recorded "$o" "$w" \
-        || { unres+="${unres:+, }$o"; continue; }
+        || { unres+="${unres:+, }$o"; _ws_held_by_put gone-unrecorded "$o"; continue; }
       wr="$_WS_RECORDED_AT"; rok=1
       [[ -z "$_WS_RECORDED_G" ]] || _WS_RECORDED_GDIRS+="$o"$'\t'"$_WS_RECORDED_G"$'\n'
       # And the identity of the directory it entered, when its entry field is
@@ -32205,7 +32243,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
                esac ;;
           esac ;;
         "A gone"|"A un"|"P un") unwalk+="${unwalk:+, }row $o (${ha:-gone})" ;;
-        "P proc") unproc+="${unproc:+, }$o" ;;
+        "P proc") unproc+="${unproc:+, }$o"; _ws_held_by_put under-proc "$o" ;;
         "T gone"|"T un")
           if [[ "$hi" == 0 ]]; then unwalk+="${unwalk:+, }$id's own tree (${ha:-gone})"
           else unwalk+="${unwalk:+, }a leaf of $id (${ha:-gone})"; fi ;;
@@ -32316,7 +32354,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
                 done
               fi
             fi
-            (( efstand != 0 )) || unrec+="${unrec:+, }${efo[eff]}"
+            (( efstand != 0 )) || { unrec+="${unrec:+, }${efo[eff]}"; _ws_held_by_put entry-moved "${efo[eff]}"; }
           fi
         fi
       fi
@@ -32327,7 +32365,8 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
       esac
     done
   fi
-  [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
+  [[ -z "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || { _WS_HELD_BY=''; _WS_HELD_BY_IDS=''; _WS_HELD_BY_RC=0; return 0; }   # an outranking row: none is named (R2)
+  [[ -z "$unmine$unleaf$unwalk$unmount" ]] || _WS_HELD_BY_OWN=1   # the child's own buckets held it too (R2)
   [[ -z "$unmine" ]] \
     || _WS_SHARED_WHY="registry row(s) $unmine cannot be placed against this child: $id's own workdir $minewhy"
   [[ -z "$unread" ]] || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }could not read $unread"
@@ -32350,7 +32389,7 @@ _ws_reclaim_workdir_shared() {   # id workdir -> rc 0 with _WS_SHARED_ROWS = the
   [[ -z "$unrec" ]] \
     || _WS_SHARED_WHY+="${_WS_SHARED_WHY:+; and }registry row(s) $unrec entered a directory other than the one their workdir names now, and where they entered can no longer be placed, so ccd cannot place them against this child — stop each session and start it again, or purge the row once its session has ended"
   [[ -z "$_WS_SHARED_WHY" ]] || return 2
-  return 0
+  _WS_HELD_BY_RC=0; return 0
 }
 
 _WS_RECORDED_AT=''; _WS_RECORDED_G=''; _WS_MOVED_WHY=''
@@ -39066,7 +39105,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
   _alive "$id" && aliveflag=true
-  _ws_expire_fork "$id"
+  _WS_HELD_BY_RC=''; _ws_expire_fork "$id"
   workdir=$(_reg_get "$id" workdir); [[ -n "$workdir" && -d "$workdir" ]] && exists=true
   reaping=$(_reg_get "$id" reaping)
   for s in ${REAP_SENSITIVE[@]+"${REAP_SENSITIVE[@]}"}; do
@@ -39083,7 +39122,7 @@ _ws_expire_audit_contained() {   # `_ws_expire_audit`'s body, run under `_ws_rec
   printf '{"session":%s,"mode":"expire","archivedAt":%s,"expiresAt":%s,"alive":%s,"exists":%s,"reaping":%s,"sensitive":%s,"legacyRows":%s,"pendingRows":%s,' \
     "$(_json_str "$id")" "$stamp" "$expires" \
     "$aliveflag" "$exists" "$( [[ -n "$reaping" ]] && _json_str "$reaping" || echo null)" "$sens" "${_WS_LEGACY_ROWS:-null}" "${_WS_PENDING_ROWS:-null}"
-  _ws_rescue_doc
+  _ws_rescue_doc; _ws_held_by_doc
   [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
   # WHO IS IN IT (an `in-use` refusal only): pid, command and cwd, at most five.
   if [[ "$REAP_VERDICT" == in-use && ${#EXPIRE_IN_USE[@]} -gt 0 ]]; then
@@ -40705,7 +40744,7 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
   _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the audit record safely"
-  _ws_collect_reset
+  _ws_collect_reset; _WS_HELD_BY_RC=''   # R2's holding rows start unasked
   if [[ "$CCD_OS" == darwin ]]; then
     _ws_collect_unmeasured platform "the temp-root collector runs on Linux only — on this box it measures nothing and takes nothing"
     _ws_collect_audit_doc "$id"; return
@@ -40791,7 +40830,7 @@ _ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line
   printf '{"session":%s,"mode":"collect","exists":%s,"collect":{"leaf":%s,"witness":%s,"records":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s,"idleAt":%s,"unmeasured":%s},' \
     "$(_json_str "$id")" "$exists" "$(_json_str "$leaf")" "$wit" "$recs" "$newest" "$entries" \
     "$floor" "$idleat" "$probe"
-  [[ -z "$_WS_COLLECT_PHASE" ]] || printf '"resume":%s,' "$(_json_str "$_WS_COLLECT_PHASE")"
+  _ws_held_by_doc; [[ -z "$_WS_COLLECT_PHASE" ]] || printf '"resume":%s,' "$(_json_str "$_WS_COLLECT_PHASE")"
   # A leaf released after a box move (Task R4), or a record that names one, says so whatever a later rung answered;
   # the key is absent otherwise.
   [[ "${_WS_COLLECT_WITNESS-}" != moved-host ]] || printf '"witness":"moved-host",'

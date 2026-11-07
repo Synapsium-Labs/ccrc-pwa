@@ -326,7 +326,7 @@ describe('W5-R8d: a hidden conflicting agent lease is resolved as that lease, ne
       const a = await conflictOn(w, w.x);
       const cp = () => w.durable.state().checkpoint as DelegationCheckpointV1;
       const frame = projectDelegation({ checkpoint: cp(), census: { measuredAt: Date.now(), projects: new Map([['project-a', { delegation: null }]]),
-        incarnations: new Map() }, absences: [], sessions: [{ id: PARENT.id, status: 'idle' }], runs: [] });
+        incarnations: new Map() }, absences: [], sessions: [{ id: PARENT.id, presence: 'alive', lifecycle: 'running' }], refused: new Set(), runs: [] });
       expect(frame.unowned.map((u) => [u.adminRecord, u.leaseId])).toEqual([['wt-x', w.x]]);
       const target = by === 'tree' ? `tree-${delegationTreeTarget('project-a', 'wt-x')}` : w.x;
       const before = w.uuids.n;

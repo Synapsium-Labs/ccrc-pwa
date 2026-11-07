@@ -2,8 +2,8 @@
 // the lanes take it: in a steady tick the registry is listed ONCE for selection, by the tick; the lanes that chose
 // their rows from a listing of their own (tasks, names, PR, asks, and the mail lane's recipients) take the tick's.
 // What stays fresh, by name, is an ACT-time read: the mail lane's switch read (the last one before it delivers) and
-// the divergence census's late listing (read after git's records on purpose, `divergencesPass`). `assembleFleet`'s
-// own marker listing in `readLimits` is a request-time reader's, reported and not moved (its signature is W2's).
+// the divergence census's late listing (read after git's records on purpose, `divergencesPass`). `readLimits` takes the
+// tick's names (D-8069); only a request-time caller lets it list.
 // Fixture homes only.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { buildFleetReadModel } from '../src/fleetReadModel.js';
@@ -62,8 +62,8 @@ describe('a steady tick lists the registry once for selection', () => {
     await r.w.tick();
     await r.settle();
     const by = countBy(r.listings);
-    expect({ mail: by.mailPass, divergences: by.divergencesPass, limits: by.readLimits }).toEqual({ mail: 1, divergences: 1, limits: 1 });
-    expect(r.listings.length, 'one selection listing and three act-time or request-time ones').toBe(4);
+    expect({ mail: by.mailPass, divergences: by.divergencesPass, limits: by.readLimits }).toEqual({ mail: 1, divergences: 1, limits: undefined });
+    expect(r.listings.length, 'one selection listing and two act-time ones').toBe(3);
   });
 });
 

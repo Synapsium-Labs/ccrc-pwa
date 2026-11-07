@@ -24,7 +24,8 @@ describe('ws-audit --expire — the token the verb spends', () => {
     const r = expireAudit(h);
     expect(r.code, r.stderr).toBe(0);
     const doc = JSON.parse(r.stdout) as Record<string, unknown>;
-    expect(Object.keys(doc)).toEqual(['session', 'mode', 'archivedAt', 'expiresAt', 'alive', 'exists', 'reaping', 'sensitive', 'legacyRows', 'pendingRows', 'verdict', 'detail', 'token']);
+    // Cleanup un-wedge R2 (D-8000): the rows rung's holding rows, `heldBy` (and `heldByOwn` beside an array), after the counts.
+    expect(Object.keys(doc)).toEqual(['session', 'mode', 'archivedAt', 'expiresAt', 'alive', 'exists', 'reaping', 'sensitive', 'legacyRows', 'pendingRows', 'heldBy', 'heldByOwn', 'verdict', 'detail', 'token']);
     expect(doc).toMatchObject({ session: EXP_ID, mode: 'expire', archivedAt: OLD, expiresAt: OLD + WEEK, alive: false, exists: true, reaping: null, verdict: 'expirable' });
     expect(doc['token']).toBe(expireEvalOf(h).token);
   }, 60_000);

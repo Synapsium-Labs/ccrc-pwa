@@ -2,7 +2,8 @@
 // lists the registry once (`readRegistryMeasured`), builds this model from that read, and hands it to the lanes that
 // choose their rows from the registry, so a steady tick lists once for selection instead of once per lane. A lane
 // that ACTS reads again: an executor's late read, the mail lane's fail-shut switch read, the divergence census's
-// listing taken after git's records. Those stay fresh and are named in the census (`registryListingSites`).
+// listing taken after git's records. Those stay fresh and are named in the census (`registryListingSites`). "One listing
+// per tick" counts selection and the limits read (D-8069), so a tick with neither of those act lanes due lists once.
 //
 // L1, pure: no clock and no I/O. The model IS the read it was built from (its `listed` arm, `records`, `names` and
 // `refused` are that read's, the same objects), plus what the listing says of every marker switch. An unlistable

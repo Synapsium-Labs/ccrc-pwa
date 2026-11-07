@@ -1,7 +1,7 @@
 // Delegation broker wave 4, PR1 Task 1.2: the `delegation` frame, DECIDED (spec §5.8, §8.4; D-6999, D-7002, D-7023).
 //
 // THIS MODULE IS L1. It imports the shared wire, the pure model, the one newest-attempt derivation (`delegation-conflicts.ts`), the correlation
-// module's tree key, the lease's one carrier-state derivation (`delegation-lease-state.ts`, PR7), the binding's R9 decider and the divergence sweep's ccd identity of a worktree, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
+// module's tree key, the lease's one carrier-state derivation (`delegation-lease-state.ts`, PR7), the binding's R9 decider, the divergence sweep's ccd identity of a worktree and `rowStanding`, and nothing else: no filesystem, no store, no clock, no census adapter (`gitref.ts` is L3, so the census shape is
 // declared structurally below; `DelegationCensusPass` and the lane's `absences` values are assignable to it as they are). It makes no
 // durable write. The watcher (L4) gathers the inputs after a pass and broadcasts what this returns.
 //
@@ -22,7 +22,7 @@ import {
   type DelegationProjectionWire,
   type DelegationRowGroup,
   type DelegationUnownedWire,
-  type SessionStatus,
+  type FleetSession,
 } from '../../../shared/api.js';
 import {
   formatDelegationInstant,
@@ -36,12 +36,13 @@ import { conflictingTreeKeys, newestUnownedAttempts, resolvedAttemptCovered, tre
 import { claimantAt, type StampedRun } from './runBinding.js';
 import { delegationCarrierStateOf } from './delegation-lease-state.js';
 import { ccdIdForWorktree } from '../divergence.js';
+import { rowStanding, type RowStandingFacts } from '../sessionReading.js';
 
 /** How many newest closed runs the R9 mapping reads (L4 passes it to the store's narrow read). A worker whose run is older than
  *  that window falls back to its own row: the rider's store read by `sessionId` removes the bound. */
 export const DELEGATION_PROJECTION_CLOSED_RUNS = 200;
 
-export interface DelegationProjectionSession { id: string; status: SessionStatus }
+export type DelegationProjectionSession = Pick<FleetSession, 'id'> & RowStandingFacts;
 /** One run's stamp, from the narrow read `delegationRunStamps`, never the full `runs()` hydration: the binding module's
  *  `StampedRun`, declared once there (R9's decider reads it). */
 export type DelegationProjectionRun = StampedRun;
@@ -55,6 +56,8 @@ export interface DelegationProjectionInput {
   absences: readonly { project: string; adminRecord: string }[];
   /** This tick's listed registry; never a partial listing (the lane withholds the projection when the registry is unlisted). */
   sessions: readonly DelegationProjectionSession[];
+  /** The tick's refused ids (`RegistryRead.refused`): listed but never read, so a parent among them is in no `sessions` and proves nothing. */
+  refused: ReadonlySet<string>;
   /** Open runs plus the newest `DELEGATION_PROJECTION_CLOSED_RUNS` closed ones. */
   runs: readonly DelegationProjectionRun[];
 }
@@ -82,7 +85,7 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   const groupOf = (id: string): DelegationRowGroup => (sessions.has(id) ? 'parent' : 'offline-coordinator');
   const coordinatorOf = (id: string, at: string): string | null => claimantAt(input.runs, id, parseDelegationInstant(at));
   const presence = (project: string, adminRecord: string): Presence => presenceOf(census.projects, absent, project, adminRecord);
-  const liveness = (a: DelegationActivityRow): DelegationLiveness => livenessOf(a, sessions, census.incarnations);
+  const liveness = (a: DelegationActivityRow): DelegationLiveness => livenessOf(a, sessions, input.refused, census.incarnations);
 
   const unreleased = checkpoint.leases.filter((l) => l.releasedAt === null);
   const leasedTrees = new Set(unreleased.map((l) => delegationTreeKey(l.project, l.adminRecord)));
@@ -149,14 +152,23 @@ export function projectDelegation(input: DelegationProjectionInput): DelegationP
   };
 }
 
+/** The parent's row reads as `claimProbe` reads a holder (D-6908, `rowStanding`), so every parent a claim holds as doubt
+ *  is `unmeasured` here: a refused or restarting one, one tmux did not answer for, or one with an identity field unmeasured.
+ *  The reverse does not follow: the helper's own unknowns below read `unmeasured` over a parent that is here. A sleeping
+ *  parent has its own word: it is neither gone nor in doubt. */
 function livenessOf(
   a: DelegationActivityRow,
   sessions: ReadonlyMap<string, DelegationProjectionSession>,
+  refused: ReadonlySet<string>,
   incarnations: DelegationProjectionInput['census']['incarnations'],
 ): DelegationLiveness {
   if (a.executionState === 'ended') return 'ended';
+  if (refused.has(a.parentId)) return 'unmeasured';
   const parent = sessions.get(a.parentId);
-  if (!parent || parent.status === 'dead') return 'stale';
+  const standing = parent === undefined ? 'gone' : rowStanding(parent);
+  if (standing === 'gone') return 'stale';
+  if (standing === 'asleep') return 'asleep';
+  if (standing === 'doubt') return 'unmeasured';
   const inc = incarnations.get(a.parentId);
   if (a.executionState === 'unknown' || inc?.kind !== 'measured') return 'unmeasured';
   return inc.incarnation === a.parentIncarnation ? 'live' : 'stale';

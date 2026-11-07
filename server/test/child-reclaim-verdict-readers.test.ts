@@ -194,18 +194,24 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
   // when the read moves or goes.
   const PRESENTATION_READ =
     'coord/routes.ts: pinned: reclaimAttentionRunIds(watcher?.currentCoord()?.childReclaimAttention),';
+  // Cleanup un-wedge R2 (D-8000): the SECOND allowed read is the fold that composes the published frame
+  // (`withCleanupHeldBy`, L1): it drops a held child's failing item from the frame's own copy, in favour of its row's
+  // line. Like the run pages' read, it decides only what is SENT and feeds no branch that asks, licenses, orders or
+  // paces a reclaim.
+  const COMPOSE_READ = 'cleanupHeldBy.ts: childReclaimAttention: status.childReclaimAttention.filter(keepReclaim),';
+  const ALLOWED_READS = [COMPOSE_READ, PRESENTATION_READ];
   const attentionReads = (): string[] => codeHits(
     /\.childReclaimAttention\b|\[\s*['"`]childReclaimAttention['"`]\s*\]|\{[^{}\n]*\bchildReclaimAttention\b[^{}\n]*\}\s*=(?!=)/,
   );
 
   it('(e) the published coord frame’s attention list is read by nothing in server/src but the run pages’ one presentation read', () => {
     const hits = attentionReads();
-    expect(hits.filter((h) => h !== PRESENTATION_READ)).toEqual([]);
-    // Exactly one copy of the allowed read: a duplicate of the line is a second reader.
-    expect(hits.filter((h) => h === PRESENTATION_READ).length).toBeLessThanOrEqual(1);
+    expect(hits.filter((h) => !ALLOWED_READS.includes(h))).toEqual([]);
+    // Exactly one copy of each allowed read: a duplicate of the line is a second reader.
+    for (const r of ALLOWED_READS) expect(hits.filter((h) => h === r).length).toBeLessThanOrEqual(1);
   });
 
   it('(e) control: the allowed presentation read stands, once', () => {
-    expect(attentionReads()).toEqual([PRESENTATION_READ]);
+    expect(attentionReads()).toEqual(ALLOWED_READS);
   });
 });

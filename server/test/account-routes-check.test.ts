@@ -14,7 +14,7 @@ import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { actorOf, type AccountAudit, type AccountEventInput } from '../src/accounts/audit.js';
 import { localAccountOps } from '../src/accounts/ops.js';
 import { reconcilingAccountOps } from '../src/accounts/reconcile.js';
-import { routeOutcomeOf } from '../src/accounts/routes.js';
+import { checkOnRecord, checkRunOf, routeOutcomeOf } from '../src/accounts/routes.js';
 import { MAIL_TOKEN_HEADER } from '../src/coord/token.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { PtyLike } from '../src/pty.js';
@@ -45,6 +45,10 @@ esac
 exit 0
 `;
 
+/** `ccrc account check`'s answer, as the `health` op prints it. */
+const checkAnswer = (verdict: string, measuredAt: string): string =>
+  `${JSON.stringify({ ok: true, id: LANE, health: { verdict, measuredAt, detail: 'as measured', source: 'probe' }, limitsTouched: false, notes: [] })}\n`;
+
 interface Rig { app: FastifyInstance; home: string; rows: AccountEventInput[]; argv: () => string[] }
 
 let app: FastifyInstance | undefined;
@@ -62,7 +66,10 @@ async function openApp(o: { enabled?: boolean; origin?: string; caps?: string[];
   mkdirSync(path.join(home, 'stub'), { recursive: true });
   const lanes = path.join(home, '.cc-sessions', '.accounts');
   mkdirSync(lanes, { recursive: true, mode: 0o700 });
-  writeFileSync(path.join(lanes, `${LANE}.json`), JSON.stringify({ check: { verdict: 'ok', at: iso(Date.now() - 60_000) } }));
+  // The verb's answer and the lane-state file agree, as they do whenever the write took.
+  const measuredAt = iso(Date.now() - 60_000);
+  writeFileSync(path.join(lanes, `${LANE}.json`), JSON.stringify({ check: { verdict: 'ok', at: measuredAt } }));
+  writeFileSync(path.join(home, 'stub', 'check.out'), checkAnswer('ok', measuredAt));
   const rows: AccountEventInput[] = [];
   const audit = { write: (e: AccountEventInput) => { rows.push(e); return { ok: true, id: rows.length }; } } as unknown as AccountAudit;
   const inner = localAccountOps({
@@ -157,6 +164,27 @@ describe('Check, enable and disable (spec §10, §13.1)', () => {
     expect(r.rows).toEqual([expect.objectContaining({ act: 'check', laneId: LANE, outcome: 'ok', provider: 'anthropic' })]);
   });
 
+  it("a check the lane state didn't take is refused: the last one on file never reads as this one (D-8051 (17))", async () => {
+    const r = await openApp();
+    const cookie = await login(r.app);
+    // The verb measured a refusal and its write failed: exit 0, and the file still says `ok`.
+    writeFileSync(path.join(r.home, 'stub', 'check.out'), checkAnswer('auth-dead', iso(Date.now())));
+    const res = await post(r, 'check', cookie);
+    expect(res.statusCode, res.body).toBe(REFUSAL_STATUS['check-unrecorded']);
+    expect(res.json()).toEqual({ ok: false, error: 'check-unrecorded' });
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('a verb answer with no measurement to hold the file to is refused the same way', async () => {
+    const r = await openApp();
+    const cookie = await login(r.app);
+    for (const out of ['', 'not json\n', '{"ok":true,"id":"claude-a"}\n']) {
+      writeFileSync(path.join(r.home, 'stub', 'check.out'), out);
+      const res = await post(r, 'check', cookie);
+      expect(res.statusCode, out).toBe(REFUSAL_STATUS['check-unrecorded']);
+    }
+  });
+
   it('disable then enable answer the roster and the lane, and the lane reads the switch the box now holds', async () => {
     const r = await openApp();
     const cookie = await login(r.app);
@@ -232,6 +260,31 @@ describe('Check, enable and disable (spec §10, §13.1)', () => {
       expect(line).not.toContain('--force');
       expect([...ROUTES.map((s) => `account ${s} --id=${LANE}`), 'account roster']).toContain(line);
     }
+  });
+});
+
+describe('whether the file holds this run (pure, D-8051 (17))', () => {
+  const at = Date.parse('2026-11-06T12:00:00Z');
+  const run = { verdict: 'auth-dead', at };
+
+  it('reads the verb\'s measurement, and nothing off its shape', () => {
+    const exited = (stdout: string) => ({ kind: 'exited' as const, code: 0, stdout });
+    expect(checkRunOf(exited(checkAnswer('auth-dead', '2026-11-06T12:00:00Z')))).toEqual(run);
+    expect(checkRunOf(exited(`a line first\n${checkAnswer('ok', '2026-11-06T12:00:00Z')}`))).toEqual({ verdict: 'ok', at });
+    expect(checkRunOf(exited(checkAnswer('auth-dead', 'not a time')))).toBeNull();
+    expect(checkRunOf(exited('{"health":{"verdict":7,"measuredAt":"2026-11-06T12:00:00Z"}}'))).toBeNull();
+    expect(checkRunOf(exited('{"health":"auth-dead"}'))).toBeNull();
+    expect(checkRunOf(exited(''))).toBeNull();
+    expect(checkRunOf({ kind: 'timeout' })).toBeNull();
+  });
+
+  it('holds when the file says this run, or a later one; never an earlier one, another verdict at its time, or nothing', () => {
+    expect(checkOnRecord(run, { verdict: 'auth-dead', at })).toBe(true);
+    expect(checkOnRecord(run, { verdict: 'ok', at: at + 1000 }), 'a later check is newer than this one').toBe(true);
+    expect(checkOnRecord(run, { verdict: 'ok', at: at - 1000 })).toBe(false);
+    expect(checkOnRecord(run, { verdict: 'ok', at })).toBe(false);
+    expect(checkOnRecord(run, undefined)).toBe(false);
+    expect(checkOnRecord(null, { verdict: 'ok', at })).toBe(false);
   });
 });
 

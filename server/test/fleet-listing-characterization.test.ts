@@ -1,18 +1,20 @@
 // Characterization (D-5864; ARCH-51 #786; spec K13's listing half): what a steady `FleetWatcher.tick` lists, and what
 // each lane that takes its own listing today sees of a registry that changes BETWEEN two ticks. Green on the code
-// before the tick's one `FleetReadModel`. The fake `FleetIO` and its rig are `fleetListingFixture.ts`. Fixture homes
+// before the tick's one `FleetReadModel`, apart from the limits row, which D-8069 changed on purpose. The fake `FleetIO` and its rig are `fleetListingFixture.ts`. Fixture homes
 // only; no ccd, tmux or box is reached.
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
 import { ASKS_DISABLED_MARKER, MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { questionsTestView } from '../src/coord/questions.js';
+import { readLimits } from '../src/limits.js';
 import { LATER, MONO0, MONO_LATER, NOW, callerOf, countBy, primed, rig, type Rig } from './fleetListingFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('a steady tick, every throttle elapsed: the registry listings by caller (the base table)', () => {
-  it('the listings by caller: the tick, the limits read in its assembly, and the lanes that still list for themselves', async () => {
+  it('the listings by caller: the tick, and the two lanes that still list for themselves', async () => {
     const r = rig();
     r.row('demo-a', 'demo');
     const m = r.coord.insertMail({ fromId: 'demo-b', fromUuid: 'u-b', toId: 'demo-a', runId: null, kind: 'status', subject: 's', body: 'b', artifacts: [] });
@@ -23,12 +25,90 @@ describe('a steady tick, every throttle elapsed: the registry listings by caller
     await r.settle();
     const by = countBy(r.listings);
     const n = (c: string): number => by[c] ?? 0;
-    // The dialog detector and the hook-state lane take the tick's own `records` and `names`; they never list. `limits` is
-    // `readLimits`' marker listing inside `assembleFleet` (the plan counted eight by static reading and missed it).
+    // The dialog detector and the hook-state lane take the tick's own `records` and `names`; they never list. Neither does
+    // `readLimits` any more (D-8069): the tick hands it `names`. `divergences` and `mail` keep their own, each for its reason.
     expect({ tick: n('tick'), limits: n('readLimits'), tasks: n('tasksPass'), names: n('namesPass'), pr: n('prPass'),
       divergences: n('divergencesPass'), ask: n('askPass'), mail: n('mailPass') })
-      .toEqual({ tick: 1, limits: 1, tasks: 0, names: 0, pr: 0, divergences: 1, ask: 0, mail: 1 });
-    expect(r.listings.length, 'the steady tick lists four times in all').toBe(4);
+      .toEqual({ tick: 1, limits: 0, tasks: 0, names: 0, pr: 0, divergences: 1, ask: 0, mail: 1 });
+    expect(r.listings.length, 'with every throttle elapsed the tick lists three times in all').toBe(3);
+  });
+});
+
+describe('an ordinary tick, no throttle elapsed: one registry listing (D-8069)', () => {
+  it('the tick lists once and nothing else lists', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    await primed(r);
+    // The tick after priming runs every lane that is due, so the ordinary tick is the one after it.
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    await r.settle();
+    r.listings.length = 0;
+    r.at(LATER + 2_000, MONO_LATER + 2_000);
+    await r.w.tick();
+    await r.settle();
+    expect(countBy(r.listings)).toEqual({ tick: 1 });
+  });
+});
+
+describe('the limits read takes the tick\'s names; a request-time caller lists for itself (D-8069)', () => {
+  const DISABLED = 'claude-disabled';
+  const limitsRow = (r: Rig): void => {
+    mkdirSync(r.cfg.limitsDir, { recursive: true });
+    writeFileSync(path.join(r.cfg.limitsDir, 'claude.json'), JSON.stringify({ ts: Math.floor(NOW / 1000), five: 1, seven: 1 }));
+  };
+  const disabled = (r: Rig): boolean | undefined => r.w.currentLimits()?.limits['claude']?.disabled;
+  const ioOf = (r: Rig): FleetIO => (r.w as unknown as { deps: { io: FleetIO } }).deps.io;
+
+  it('a lane marker raised between two ticks is read on the next tick, and lowered again', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    limitsRow(r);
+    await primed(r);
+    expect(disabled(r)).toBe(false);
+    r.marker(DISABLED);
+    r.at(LATER, MONO_LATER);
+    await r.w.tick();
+    expect(disabled(r), 'a raised kill switch was not read').toBe(true);
+    r.unmarker(DISABLED);
+    r.at(LATER + 2_000, MONO_LATER + 2_000);
+    await r.w.tick();
+    expect(disabled(r), 'a lowered kill switch was not read').toBe(false);
+  });
+
+  it('a lane marker raised after the tick\'s listing waits for the next tick: limits read that listing, not a later one', async () => {
+    const r = rig();
+    r.row('demo-a', 'demo');
+    limitsRow(r);
+    await primed(r);
+    r.hooks.afterListing = (caller) => { if (caller === 'tick') r.marker(DISABLED); };
+    r.at(NOW + 2_000, MONO0 + 2_000);
+    await r.w.tick();
+    expect(disabled(r), 'the limits read took a listing of its own').toBe(false);
+    delete r.hooks.afterListing;
+    r.at(NOW + 4_000, MONO0 + 4_000);
+    await r.w.tick();
+    expect(disabled(r)).toBe(true);
+  });
+
+  it('a request-time read with no names lists the registry itself, and sees the marker the moment it stands', async () => {
+    const r = rig();
+    limitsRow(r);
+    r.marker(DISABLED);
+    r.at(NOW, MONO0);
+    const limits = await readLimits(ioOf(r), r.cfg);
+    expect(countBy(r.listings)).toEqual({ readLimits: 1 });
+    expect(limits['claude']?.disabled).toBe(true);
+  });
+
+  it('a read handed names lists nothing, and an unlisted marker reads as not standing', async () => {
+    const r = rig();
+    limitsRow(r);
+    r.marker(DISABLED);
+    r.at(NOW, MONO0);
+    const limits = await readLimits(ioOf(r), r.cfg, undefined, []);
+    expect(r.listings).toEqual([]);
+    expect(limits['claude']?.disabled).toBe(false);
   });
 });
 

@@ -75,6 +75,7 @@ import {
   CLIENT_DEFAULT_CONTEXT_TOKENS, MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
   effortFile, mergeSettingsEnv, modelEnvBlock, readRegular,
 } from '../shared/modelenv.mjs';
+import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
   AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
   reconcilePending, recordFailure, recordMove, resolveEffort,
@@ -1228,8 +1229,10 @@ function whitelistCheck(endpointsFile) {
  *  tier lock (`_codex_lock`), not a lane file, so it is `false` here. */
 const OPS = {
   lanes: { keys: ['file'], required: ['file'], writes: false },
+  // Accounts plan Task A26 (spec §8.5; D-5556): the roster's map for a lane that does not exist yet, so no `id`.
+  suggest: { keys: ['catalogue'], required: ['catalogue'], writes: false },
   show: { keys: ['file', 'id'], required: ['file', 'id'], writes: false },
-  init: { keys: ['file', 'id', 'probe', 'base-url'], required: ['file', 'id', 'probe'], writes: true },
+  init: { keys: ['file', 'id', 'probe', 'base-url', 'suggested'], required: ['file', 'id', 'probe'], writes: true },
   'set-class': { keys: ['file', 'id', 'class', 'model'], required: ['file', 'id', 'class', 'model'], writes: true },
   'set-subagent': { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   'set-effort': { keys: ['file', 'id', 'class', 'level'], required: ['file', 'id', 'class', 'level'], writes: true },
@@ -1947,6 +1950,16 @@ function main(argv) {
     return refuse(1, 'bad-account-id', `"${a.id}" is not an account id.`);
   }
 
+  if (opName === 'suggest') {
+    let classes = null;
+    try { classes = suggestedClasses(parseCatalogue(JSON.parse(readRegular(a.catalogue)))); } catch { classes = null; }
+    if (classes === null) {
+      return refuse(1, 'no-suggestion', `${a.catalogue} names no model for one of opus, sonnet and haiku, or is not a catalogue.`);
+    }
+    out({ ok: true, op: 'suggest', models: suggestedModelMap(classes) });
+    return 0;
+  }
+
   const r = readRoster(a.file);
   if (r.err !== undefined) return refuse(1, r.err[0], r.err[1]);
   const json = r.json;
@@ -2217,6 +2230,22 @@ function main(argv) {
     }
     const seed = JSON.parse(JSON.stringify(SEEDS[a.probe]));
     if (a['base-url'] !== undefined) seed.baseUrl = a['base-url'];
+    // `--suggested` (accounts plan Task A26; D-5556): the lane starts on the catalogue's suggested models rather than
+    // unseeded. `ccrc account add` runs it after the roster entry, on the catalogue it took the roster's map from.
+    if (a.suggested !== undefined) {
+      if (a.suggested !== 'true' || a.probe !== 'openrouter') {
+        return refuse(2, 'bad-argv', '--suggested takes only the value "true", on the openrouter probe.');
+      }
+      const classes = catalogue === null ? null : suggestedClasses(catalogue);
+      if (classes === null) {
+        return refuse(1, 'no-suggestion',
+          `account "${a.id}" has no catalogue that names a model for each of opus, sonnet and haiku, so nothing can be `
+          + 'suggested. Try again once OpenRouter answers. Nothing was written.');
+      }
+      seed.classes = classes;
+      seed.subagent = SUGGESTED_SUBAGENT_CLASS;
+      seed.discovery = [...new Set(Object.values(classes).filter((id) => id !== null))];
+    }
     try {
       registry = parseRegistry(seed, catalogue);
     } catch (e) {

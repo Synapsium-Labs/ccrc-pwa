@@ -37,7 +37,7 @@ const acct = (wrapper: string): Record<string, unknown> => ({
 const rostered = (id: string, hue: string): Record<string, unknown> => ({
   id, label: id, hue, homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'token',
 });
-const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true };
+const READY = { state: { word: 'signed-in', source: 'checked just now', at: now }, ready: true, check: { verdict: 'ok', at: now } };
 const OFF = { state: { word: 'off', source: 'Off on the fleet host' }, ready: false, notReadyReason: 'not-checked' };
 const ROSTER = [rostered('lane-a', 'cyan'), rostered('lane-b', 'violet')];
 const ACCOUNTS = {

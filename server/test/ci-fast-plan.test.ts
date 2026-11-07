@@ -80,7 +80,7 @@ describe('fastSelection: the related tests, every guard suite, and the hook suit
     expect(sel.related).toBe(2);
   });
 
-  it('runs every session-hook suite when ccd/ccd, ccd/session-hook.sh or shared/api.ts changed, and only then', () => {
+  it('runs every session-hook suite when ccd/ccd, a ccd/lib/*.sh, ccd/session-hook.sh or shared/api.ts changed, and only then', () => {
     expect(SESSION_HOOK_TRIGGERS).toEqual(['ccd/ccd', 'ccd/session-hook.sh', 'shared/api.ts']);
     for (const trigger of SESSION_HOOK_TRIGGERS) {
       const sel = fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: ['docs/x.md', trigger] });
@@ -88,7 +88,16 @@ describe('fastSelection: the related tests, every guard suite, and the hook suit
       expect(sel.files, trigger).toContain('server/test/session-hook.test.ts');
       expect(sel.files, trigger).toContain('server/test/session-hook-account-deny.test.ts');
     }
-    expect(fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: ['ccd/ccd-lib.sh'] }).hook).toBe(false);
+    const libraries = readdirSync(path.join(ROOT, 'ccd/lib')).filter((n) => n.endsWith('.sh')).map((n) => `ccd/lib/${n}`);
+    expect(libraries.length).toBeGreaterThan(0);
+    for (const lib of [...libraries, 'ccd/lib/a-new-library.sh']) {
+      const sel = fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: ['docs/x.md', lib] });
+      expect(sel.hook, lib).toBe(true);
+      expect(sel.files, lib).toContain('server/test/session-hook.test.ts');
+    }
+    for (const other of ['ccd/ccd-lib.sh', 'ccd/lib/transcript.jq', 'ccd/lib/carry-dedupe.py', 'ccd/lib/nested/x.sh', 'xccd/lib/a.sh']) {
+      expect(fastSelection({ live: LIVE, related: [], guards: GUARDS, changed: [other] }).hook, other).toBe(false);
+    }
   });
 
   it('adds the map\'s untraced selection that is live, and counts it apart from vitest\'s', () => {

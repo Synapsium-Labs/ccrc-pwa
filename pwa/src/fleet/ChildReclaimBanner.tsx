@@ -16,7 +16,8 @@
 //     banner); anything else goes to the ordinary toast.
 //
 // The attention list is a REPORT, not a tap: no button, no link, no remedy
-// offered. Rule 4 says the human does not tend sub-workspaces; this tells them
+// offered (the held-rows list below it is the one exception: each line carries
+// one control whose tap only opens a confirm). Rule 4 says the human does not tend sub-workspaces; this tells them
 // what is costing disk, and asks nothing. The sentences are the SERVER's — the
 // PWA renders them and maps no token. A collapsed line names its children after
 // the server's sentence; the PWA counts nothing itself. The two item shapes are
@@ -29,6 +30,7 @@ import {
 import { useMarkerToggle } from './useMarkerToggle';
 import { programmeWave, type ChildRunContext } from './runWords';
 import { AttentionList } from './AttentionList';
+import { HeldByRows } from './HeldByRows';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api } from '../lib/api';
@@ -102,6 +104,8 @@ export function ChildReclaimBanner({
             sentence: a.sentence,
           }))}
       />
+      {/* Cleanup un-wedge R2: the registry rows holding the cleanup, above the expiry lane's list, each line with its one confirmed control. */}
+      <HeldByRows coord={coord} />
       {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
           lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
       <ExpiryAttention coord={coord} />

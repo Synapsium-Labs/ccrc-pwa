@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
-  ACCOUNT_CAPS, AT_PROVIDER_KINDS, AT_PROVIDER_PAGES, AT_PROVIDER_STATES, LANE_NOT_READY_REASONS, REGISTRY_ID_MAX_CHARS, isSessionIdShape,
+  ACCOUNT_CAPS, ACCOUNT_CODEX_AUTH_FATES, AT_PROVIDER_KINDS, AT_PROVIDER_PAGES, AT_PROVIDER_STATES, LANE_NOT_READY_REASONS, REGISTRY_ID_MAX_CHARS, isSessionIdShape,
   type AccountAddAnswer, type AccountCheckAnswer, type AccountCredentialAnswer, type AccountOutcome,
   type AccountRemoveAnswer, type AccountRemoveCheckAnswer, type AccountSub, type AccountSwitchAnswer, type AtProviderKind,
   type AtProviderRow, type LaneWire, type RosterWire,
@@ -190,6 +190,24 @@ export function routeOutcomeOf(r: AccountOpResult): RouteOutcome {
   }
 }
 
+/** What one `check` run measured, off the verb's own answer (`health`), or null for an answer that doesn't say. Pure. */
+export function checkRunOf(r: AccountOpResult): { verdict: string; at: number } | null {
+  if (r.kind !== 'exited') return null;
+  const health = answerOf(r.stdout)?.['health'];
+  if (typeof health !== 'object' || health === null) return null;
+  const { verdict, measuredAt } = health as Record<string, unknown>;
+  const at = typeof measuredAt === 'string' ? Date.parse(measuredAt) : Number.NaN;
+  return typeof verdict === 'string' && Number.isFinite(at) ? { verdict, at } : null;
+}
+
+/** Whether the lane-state file holds a run: its measurement, or a later one. The verb's write is best-effort, so a full
+ *  disk leaves exit 0 over a file that still says the last check, and that check must not read as this one (D-8051 (17)).
+ *  Pure. */
+export function checkOnRecord(run: { verdict: string; at: number } | null, check: LaneWire['check']): boolean {
+  if (run === null || check === undefined) return false;
+  return check.at > run.at || (check.at === run.at && check.verdict === run.verdict);
+}
+
 export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDeps): void {
   const act = (sub: LaneRouteSub) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     // The gate first: before the id is read, before the fleet is asked. It sets `no-store` on every answer.
@@ -199,7 +217,8 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     if (typeof id !== 'string' || !ACCOUNT_ID_RE.test(id)) return refuseRoute(reply, 'bad-account-id');
     const lane = deps.laneOf(id);
     if (lane === null) return refuseRoute(reply, 'not-found');
-    const outcome = routeOutcomeOf(await deps.ops.run(sub, id, {}));
+    const ran = await deps.ops.run(sub, id, {});
+    const outcome = routeOutcomeOf(ran);
     deps.audit?.write({
       act: sub, laneId: id, provider: lane.provider,
       ...(outcome.kind === 'ok' ? { outcome: 'ok' } : { outcome: outcome.audit, code: outcome.word }),
@@ -209,7 +228,10 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     const v = await deps.view(id);
     // The roster lost the lane between the act and the read (a removal raced it): say so rather than answer a lane.
     if (v.lane === null) return refuseRoute(reply, 'not-found');
-    if (sub === 'check') return { ok: true, lane: v.lane } satisfies AccountCheckAnswer;
+    if (sub === 'check') {
+      if (!checkOnRecord(checkRunOf(ran), v.lane.check)) return refuseRoute(reply, 'check-unrecorded');
+      return { ok: true, lane: v.lane } satisfies AccountCheckAnswer;
+    }
     return { ok: true, roster: v.roster, lane: v.lane } satisfies AccountSwitchAnswer;
   };
   app.post('/api/accounts/:id/check', act('check'));
@@ -500,7 +522,8 @@ function registerAccountWriteRoutes(app: FastifyInstance, deps: AccountRouteDeps
     const b = bodyOf(req);
     const mode = b?.['mode'];
     const shapeOk = b !== null && (
-      (mode === 'remove' && onlyKeys(b, ['mode', 'confirmId']) && typeof b['confirmId'] === 'string')
+      (mode === 'remove' && onlyKeys(b, ['mode', 'confirmId', 'codexAuth']) && typeof b['confirmId'] === 'string'
+        && (b['codexAuth'] === undefined || oneOf(ACCOUNT_CODEX_AUTH_FATES, b['codexAuth'])))
       || ((mode === 'discard' || mode === 'check') && onlyKeys(b, ['mode'])));
     if (!shapeOk) return refuseRoute(reply, 'bad-request');
 
@@ -531,7 +554,12 @@ function registerAccountWriteRoutes(app: FastifyInstance, deps: AccountRouteDeps
           ? { sessions: verdict.sessions } : {});
       }
     }
-    const r = await deps.ops.run('remove', id, { mode: act });
+    // The sheet's Codex line (D-8051 (3)): each answer is the verb's own flag, and a body without it is the verb's default.
+    const codexAuth = mode === 'remove' ? b['codexAuth'] : undefined;
+    const r = await deps.ops.run('remove', id, {
+      mode: act,
+      ...(codexAuth === 'keep' ? { keepCodexAuth: 'true' } : codexAuth === 'delete' ? { deleteCodexAuth: 'true' } : {}),
+    });
     const ran = routeOutcomeOf(r);
     const ledger = ran.kind === 'ok' && r.kind === 'exited' ? removedLedgerOf(r.stdout) : null;
     if (ledger === null) {

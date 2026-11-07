@@ -330,8 +330,8 @@ export interface RosterKindWire {
   provider?: ProviderId;
   kind?: RosterKind;
   telemetry?: AccountDef['telemetry'];
-  /** Rides OpenAI lanes only: true for a lane ccrc owns end to end (`exec.kind: 'codex'`), false for an
-   *  `external` OpenAI launcher ccrc only records. Absent on every other provider. */
+  /** True for a Codex lane ccrc owns end to end (`exec.kind: 'codex'`), false for an `external` launcher ccrc only
+   *  records, under any provider or none (D-8051 (13)). Absent on every other lane, and from an older server. */
   managed?: boolean;
 }
 
@@ -347,15 +347,16 @@ export interface RosterKindWire {
 export function rosterKindOf(entry: Pick<AccountDef, 'exec' | 'telemetry'>): RosterKindWire {
   const { exec } = entry;
   const provider: ProviderId | undefined = exec.kind === 'upstream' ? 'anthropic' : exec.provider;
-  if (provider === undefined) return { telemetry: entry.telemetry };
+  const managed = exec.kind === 'codex' ? { managed: true } : exec.kind === 'external' ? { managed: false } : {};
+  if (provider === undefined) return { telemetry: entry.telemetry, ...managed };
   switch (provider) {
     case 'anthropic':
-      return { provider, kind: exec.secretsFile !== undefined ? 'token' : 'sign-in', telemetry: entry.telemetry };
+      return { provider, kind: exec.secretsFile !== undefined ? 'token' : 'sign-in', telemetry: entry.telemetry, ...managed };
     case 'openai':
-      return { provider, kind: 'codex', telemetry: entry.telemetry, managed: exec.kind === 'codex' };
+      return { provider, kind: 'codex', telemetry: entry.telemetry, ...managed };
     case 'openrouter':
     case 'compatible':
-      return { provider, kind: 'key', telemetry: entry.telemetry };
+      return { provider, kind: 'key', telemetry: entry.telemetry, ...managed };
     default:
       // A fifth provider in `PROVIDERS` is a compile error here before it is a lane with no kind.
       return provider satisfies never;

@@ -644,6 +644,45 @@ describe('the tick strands rather than crossing (§5.5.4 steps 3-4, ruling 6)', 
       .toBe('claude-b');
   });
 
+  describe('an overflow OpenRouter lane is the same last resort, and its sessions bill the key (D-8023 (16))', () => {
+    // What `add --placement overflow` writes, measured here because the README says it and the lane spends money:
+    // `homeAble: false` keeps it out of placement and nothing more, and no statusline ever gives it a limits file, so
+    // `_avail` reads it as free for as long as it is enabled.
+    const OPENROUTER_LANE = 'lane-d';
+    const plantLane = (): void => {
+      seedAccountsSh(h.home, {
+        ...POOLED_TEST_ROSTER,
+        accounts: [...POOLED_TEST_ROSTER.accounts, {
+          id: OPENROUTER_LANE, label: 'lane·d', configDirSuffix: `.claude-${OPENROUTER_LANE}`,
+          exec: { kind: 'generated', provider: 'openrouter', secretsFile: `.cc-secrets/${OPENROUTER_LANE}-openrouter.env` },
+          homeAble: false, hue: 'amber', telemetry: 'openrouter',
+        }],
+      });
+      install(OPENROUTER_LANE);
+    };
+    const pinned = (): void => {
+      seed(); plantNotify(); tagPool('demo', 'pool-b');
+      writeLimits('claude-b', 99, 99);
+      writeLimits('claude-d', 99, 99);
+      plantLane();
+    };
+
+    it('enabled, the tick dispatches a blocked session onto it with no operator act', () => {
+      pinned();
+      tick(BLOCKED_REAL_DISPATCH);
+      expect(h.calls().join('\n')).toMatch(new RegExp(`exec '[^']*/ccd' swap '${ID}' '${OPENROUTER_LANE}'`));
+    });
+
+    it('disabled, it is out of the rotation and the session strands', () => {
+      pinned();
+      disable(OPENROUTER_LANE);
+      tick(BLOCKED);
+      expect(h.calls().join('\n'), 'nothing is placeable').not.toContain('dispatch');
+      expect(h.reg(ID, 'stranded')).not.toContain(OPENROUTER_LANE);
+      expect(h.reg(ID, 'stranded')).toMatch(/^\d{10} /);
+    });
+  });
+
   it('STRANDS when the untagged lane is at its ceiling too, naming it in the reason', () => {
     // The contrast that proves the case above measures the RULING and not merely
     // "some destination existed". Identical fixture, one number changed: the

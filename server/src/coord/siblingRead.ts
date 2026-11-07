@@ -36,6 +36,15 @@ function splitRead(
   return { ok: true, open: blocking.length, blocking, stale: split.stale };
 }
 
+/** What the registry said of each claimant one read placed, by claimant id. */
+export type ChildClaimants = ReadonlyMap<string, ClaimantState>;
+
+/** A sibling read with the claimants it placed beside it, for the one later read that may not wait for the registry
+ *  (`childSiblingsAtAct`). */
+export type ChildSiblingsPlaced =
+  | (Extract<ChildReclaimSiblingsRead, { ok: true }> & { readonly claimants: ChildClaimants })
+  | Extract<ChildReclaimSiblingsRead, { ok: false }>;
+
 /**
  * THE ONE READ of a child's open sibling runs (D-6923): the open runs naming the session,
  * split by `splitSiblings` into the ones that keep the child (`open`, `blocking`) and the stale ones it ignores. The
@@ -50,6 +59,17 @@ function splitRead(
 export async function readChildSiblings(
   deps: SiblingReadDeps, sessionId: string, nowMs: number,
 ): Promise<ChildReclaimSiblingsRead> {
+  const placed = await readChildSiblingsPlaced(deps, sessionId, nowMs);
+  if (!placed.ok) return placed;
+  const { claimants: _claimants, ...read } = placed;
+  return read;
+}
+
+/** `readChildSiblings`, keeping the claimants it placed: the retire row's `store` step, whose read `childSiblingsAtAct`
+ *  repeats at the act. */
+export async function readChildSiblingsPlaced(
+  deps: SiblingReadDeps, sessionId: string, nowMs: number,
+): Promise<ChildSiblingsPlaced> {
   const read = siblingFacts(deps.coord, sessionId);
   if (!read.ok) return read;
   const states = new Map<string, ClaimantState>();
@@ -58,7 +78,25 @@ export async function readChildSiblings(
     const who = f.claimedBy;
     states.set(who, await readSessionRecord(deps.io, deps.cfg, who).then(claimantStateOfRead, (): ClaimantState => 'unmeasured'));
   }
-  return splitRead(read, (who) => states.get(who) ?? 'unmeasured', nowMs);
+  const split = splitRead(read, (who) => states.get(who) ?? 'unmeasured', nowMs);
+  return split.ok ? { ...split, claimants: states } : split;
+}
+
+/**
+ * The same read AT THE ACT, SYNCHRONOUS (D-8091): the store's half again, nearest the argv, over the claimants
+ * an earlier read of this pass placed. `readChildSiblings` waits on the registry once per claimant, so a store read
+ * taken before those waits is not a read at the act, and it cannot stand in the argv's synchronous segment; only the
+ * store half can. A claimant `claimants` does not hold was never measured, so it is `unmeasured` and its run keeps the
+ * child: this read can only keep more than the earlier one, never less, apart from a run that closed. What it gives up
+ * is a fresh answer about a claimant it does hold (a run proved stale before the audit, whose claimant came back during
+ * it, stays stale here).
+ */
+export function childSiblingsAtAct(
+  coord: WatcherCoordPort, sessionId: string, nowMs: number, claimants: ChildClaimants,
+): ChildReclaimSiblingsRead {
+  const read = siblingFacts(coord, sessionId);
+  if (!read.ok) return read;
+  return splitRead(read, (who) => claimants.get(who) ?? 'unmeasured', nowMs);
 }
 
 /**

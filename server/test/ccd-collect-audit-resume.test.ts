@@ -34,7 +34,8 @@ describe.skipIf(!LINUX)('the phases, read off the disk', () => {
     plantOwn(ident);
     const a = collectAudit(h, { pre: NO_WALK });
     expect(a.code, a.stderr).toBe(0);
-    expect(Object.keys(a.doc!)).toEqual(['session', 'mode', 'exists', 'collect', 'resume', 'verdict', 'detail', 'token']);
+    // Cleanup un-wedge R2 (D-8000): the rows rung's holding rows after `collect` (`null` when the rung was not reached).
+    expect(Object.keys(a.doc!)).toEqual(['session', 'mode', 'exists', 'collect', 'heldBy', 'resume', 'verdict', 'detail', 'token']);
     expect(a.doc).toMatchObject({ resume: 'unmoved', verdict: 'collectable', exists: true });
     expect(collectOf(a)).toMatchObject({ records: [recName()], newestCtimeNs: null, entries: null, idleAt: null });
     expect(walked(h), 'a resume never walks the tree').toBe(false);

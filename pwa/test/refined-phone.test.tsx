@@ -13,6 +13,7 @@ import path from 'node:path';
 import { INSTRUMENT, REFINED, toast } from '@ccrc/ui';
 import type { AccountUsage, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
+import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
 import { lanesByFree } from '../src/fleet/laneOrder';
@@ -123,16 +124,17 @@ describe("Refined's phone header (W2 Task S5)", () => {
 
   it("a badged door's name carries its count (the bottom bar's, since PL10)", () => {
     // Only what waits on the operator is counted (T2d, D-6330): two sessions ask, and one run's worker is one of them.
-    const sessions = [
+    const run = (id: number, sessionId: string): RunSummary =>
+      ({ id, program: 'p', state: 'working', closedAt: null, sessionId, claimedBy: 'calm' }) as unknown as RunSummary;
+    const runs = [run(1, 'ask-a'), run(2, 'calm')];
+    const sessions = withRunBinding([
       fleetSession({ id: 'ask-a', bucket: 'attention' }),
       fleetSession({ id: 'ask-b', bucket: 'attention' }),
       fleetSession({ id: 'calm', bucket: 'idle' }),
-    ];
-    const run = (id: number, sessionId: string): RunSummary =>
-      ({ id, program: 'p', state: 'working', closedAt: null, sessionId, claimedBy: 'calm' }) as unknown as RunSummary;
+    ], runs);
     atWidth(390);
     render(<App />);
-    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs: [run(1, 'ask-a'), run(2, 'calm')], runsFrameSeen: true }));
+    act(() => useFleetStore.setState({ conn: 'open', sessions, fleetFrameSeen: true, runs, runsFrameSeen: true }));
     const h = phoneBar();
     expect(within(h).getByRole('button', { name: 'Inbox, 2 waiting for you' })).toHaveAttribute('data-command', 'go-inbox');
     expect(within(h).getByRole('button', { name: 'Runs, 1 needs you' })).toHaveAttribute('data-command', 'go-runs');

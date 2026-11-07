@@ -270,7 +270,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // refuses to act on now (the lock held, the last placeable lane, a verb's own refusal: the request was well formed),
   // and 502 for an outcome the server could not learn, the status `fleetFailed` answers for a fleet that did not
   // answer, because the box may have acted and the cure is the re-read, never the caller's retry.
-  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'outcome-unknown': 502,
+  'lane-busy': 409, 'last-enabled-home': 409, 'lane-act-refused': 409, 'outcome-unknown': 502, 'check-unrecorded': 502,
   // The write routes (accounts plan Task A17, D-7739): CHOSEN, not measured — new words, on the lane routes' rule. 400
   // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
   // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry

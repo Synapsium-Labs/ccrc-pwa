@@ -11,6 +11,11 @@
 //
 // THE RE-AUTH SHEET (A38, D-7872) runs the same attempt on an existing lane, with the same method it already has.
 //
+// THE CHATGPT SIGN-IN (A25, D-8051; spec §7.2) is the same attempt with no code to send: the status answer brings a
+// device code beside the URL, the operator types it on the provider's page, and the helper's `done` says they approved.
+// The URL and the code are one fact, read from one answer: an answer that brings a URL without a code clears the code,
+// so the card shows the pair the server accepted together or nothing.
+//
 // RESUME (A23, D-7871 (2)): a sheet opened for an attempt the server already holds for this session (the app-level
 // banner's Continue) adopts it by its id and method, with no start, and the poll brings back its URL.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
@@ -20,14 +25,14 @@ import { ApiError, api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import { Button } from '@ccrc/ui';
 import {
-  CANCEL_SIGN_IN, CODE_NOTICE, KEEP_IT, SIGN_OUT_RESTART, SIGN_IN_END, SIGN_IN_LEDGER, cancelRefused, signInFailed, signInOffline, signInStartRefusal,
-  type SignInEndKind,
+  CANCEL_SIGN_IN, CODE_NOTICE, KEEP_IT, SIGN_OUT_RESTART, SIGN_IN_END, SIGN_IN_LEDGER, cancelRefused, chatgptEnd, signInFailed, signInLedger, signInOffline,
+  signInStartRefusal, type SignInEndKind,
 } from '../fleet/accountWords';
 import { CodeField } from './CodeField';
 import { ConfirmItsYou } from './ConfirmItsYou';
 import { FrameFoot } from './FrameFoot';
-import { Countdown, RunFrame, UrlCard, type LedgerLine } from './RunFrame';
-import { readStatus, readStatusRefusal, type SignInMethod, type SignInReading } from './connectFlow';
+import { Countdown, RunFrame, UrlCard, UserCodeWell, type LedgerLine } from './RunFrame';
+import { readStatus, readStatusRefusal, showsDeviceCode, type SignInMethod, type SignInReading } from './connectFlow';
 import { StepUpFor } from './RemoveSheet';
 import type { StepUp, StepUpDeps } from './useStepUp';
 
@@ -46,8 +51,13 @@ export interface Attempt {
   readonly state: AuthStatusState | null;
   readonly url: string | null;
   readonly host: string | null;
+  /** The device code the server accepted beside the URL (`null` for a method that has none). */
+  readonly userCode: string | null;
   readonly codeSent: boolean;
 }
+
+/** Whether the attempt has what its card shows: the URL, and a device sign-in's code with it. */
+const cardReady = (a: Attempt): boolean => a.url !== null && a.host !== null && (!showsDeviceCode(a.method) || a.userCode !== null);
 
 /** An attempt the server already holds for this session (`LaneWire.authAttempt` with `mine`, D-7871 (1)). */
 export interface HeldAttempt {
@@ -85,8 +95,9 @@ export interface SignInHost {
   /** The live region: a step change (polite) and a terminal state (an alert). */
   readonly status: (text: string) => void;
   readonly alert: (text: string) => void;
-  /** The sentence a terminal state says: what did not happen, from its kind. */
-  readonly endText: (kind: SignInEndKind, failure?: string) => string;
+  /** The sentence a terminal state says: what did not happen, from its kind. `expiresAt` is the attempt's last-known
+   *  deadline, for the sentence that names it. */
+  readonly endText: (kind: SignInEndKind, failure?: string, expiresAt?: number) => string;
   /** The sentence a start refused with a word says: A22's `signInStartRefusal` by default; the re-auth sheet adds that
    *  the old credential is untouched (Task A38, D-7872). */
   readonly startRefusal?: (word: string, reason: string | undefined) => string;
@@ -140,9 +151,9 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     setCodeNotice(null);
     alert(text);
   };
-  const endOf = (k: SignInEndKind, failure?: string): string => host.endText(k, failure);
-  const refusedStart = (word: string, reason: string | undefined): string =>
-    (host.startRefusal ?? ((w, r) => signInStartRefusal(id, w, r)))(word, reason);
+  const endOf = (k: SignInEndKind, failure?: string, expiresAt?: number): string => host.endText(k, failure, expiresAt);
+  const refusedStart = (word: string, reason: string | undefined, m: SignInMethod): string =>
+    (host.startRefusal ?? ((w, r) => signInStartRefusal(id, w, r, m)))(word, reason);
 
   /** `auth/start` (spec §6.2 step 4), once. `runAct` is a mounted gate's (Start again), which shows the step itself on a
    *  `step-up-required`; the start right after the add is sent plainly, its step-up just taken. */
@@ -152,8 +163,9 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     setEndNotice(null);
     setCodeNotice(null);
     host.onStart?.();
-    write(SIGN_IN_LEDGER.starting);
-    status(SIGN_IN_LEDGER.starting);
+    const { starting } = signInLedger(m);
+    write(starting);
+    status(starting);
     const got: { a: AccountAuthStartAnswer | null } = { a: null };
     let failure: unknown = null;
     let outcome: 'done' | 'step-up' = 'done';
@@ -164,8 +176,8 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     }
     if (!live.current) return;
     const fresh = (attemptId: string, expiresAt: number): Attempt =>
-      ({ attemptId, method: m, expiresAt, state: null, url: null, host: null, codeSent: false });
-    if (outcome === 'step-up') { setLapsed(true); finish(refusedStart('step-up-required', undefined)); return; }
+      ({ attemptId, method: m, expiresAt, state: null, url: null, host: null, userCode: null, codeSent: false });
+    if (outcome === 'step-up') { setLapsed(true); finish(refusedStart('step-up-required', undefined, m)); return; }
     if (got.a !== null) {
       setLapsed(false);
       setCodeKey((k) => k + 1);
@@ -186,7 +198,7 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     }
     if (word === undefined || word === 'outcome-unknown') { finish(endOf('unknown')); return; }
     if (word === 'step-up-required') setLapsed(true);
-    finish(refusedStart(word, fieldOf(failure, 'reason')));
+    finish(refusedStart(word, fieldOf(failure, 'reason'), m));
   };
 
   /** An attempt the server already holds for this session (D-7871 (2)): adopted as it is, with no start. Its state and
@@ -196,19 +208,20 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     setEndNotice(null);
     setCodeNotice(null);
     setCodeKey((k) => k + 1);
-    putAtt({ attemptId: h.attemptId, method: h.method, expiresAt: h.expiresAt, state: null, url: null, host: null, codeSent: false });
+    putAtt({ attemptId: h.attemptId, method: h.method, expiresAt: h.expiresAt, state: null, url: null, host: null, userCode: null, codeSent: false });
   };
 
   /** One reading of the attempt: still live (the ledger and the cards follow the state), done, or ended. */
   const apply = (a: Attempt, r: SignInReading, next: Attempt): void => {
     if (r.kind === 'done') { putAtt(null); host.onDone(next); return; }
-    if (r.kind === 'end') { finish(endOf(r.end, r.failure)); return; }
-    const before = a.url !== null;
+    if (r.kind === 'end') { finish(endOf(r.end, r.failure, next.expiresAt)); return; }
+    const before = cardReady(a);
     putAtt(next);
-    // The URL arrived: the sheet now waits on the operator (the amber pulse), and says so once.
-    if (!before && next.url !== null && !next.codeSent) {
-      settle(SIGN_IN_LEDGER.waiting);
-      status(SIGN_IN_LEDGER.waiting);
+    // The card arrived: the sheet now waits on the operator (the amber pulse), and says so once.
+    if (!before && cardReady(next) && !next.codeSent) {
+      const { waiting } = signInLedger(next.method);
+      settle(waiting);
+      status(waiting);
     }
   };
 
@@ -222,10 +235,13 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     }
     const ans = o.raw as AccountAuthStatusAnswer;
     if (typeof ans !== 'object' || ans === null || typeof ans.state !== 'string') return;
-    const url = typeof ans.url === 'string' && typeof ans.host === 'string' ? ans.url : a.url;
-    const hostName = typeof ans.url === 'string' && typeof ans.host === 'string' ? ans.host : a.host;
+    const fresh = typeof ans.url === 'string' && typeof ans.host === 'string';
+    const url = fresh ? ans.url as string : a.url;
+    const hostName = fresh ? ans.host as string : a.host;
+    // Read with the URL, never kept past it: the pair is the one the server accepted in this answer.
+    const userCode = fresh ? (typeof ans.userCode === 'string' ? ans.userCode : null) : a.userCode;
     const next: Attempt = {
-      ...a, state: ans.state, url, host: hostName, expiresAt: typeof ans.expiresAt === 'number' ? ans.expiresAt : a.expiresAt,
+      ...a, state: ans.state, url, host: hostName, userCode, expiresAt: typeof ans.expiresAt === 'number' ? ans.expiresAt : a.expiresAt,
     };
     apply(a, readStatus(ans.state, a.codeSent, typeof ans.failure === 'string' ? ans.failure : undefined), next);
   };
@@ -233,7 +249,7 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
   /** The deadline passed with the attempt still live (spec §6.2's Expired, at `expiresAt`). */
   const onExpired = (): void => {
     const a = attRef.current;
-    if (a !== null && Date.now() >= a.expiresAt) finish(endOf('expired'));
+    if (a !== null && Date.now() >= a.expiresAt) finish(endOf('expired', undefined, a.expiresAt));
   };
 
   /**
@@ -262,7 +278,7 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
       if (word === undefined || word === 'outcome-unknown') { setCodeNotice(CODE_NOTICE.unknown); return; }
       if (word === 'code-already-sent') return;
       if (word === 'node-changed') { finish(endOf('node-changed')); return; }
-      if (word === 'no-auth-attempt') { finish(endOf(Date.now() >= a.expiresAt ? 'expired' : 'lost')); return; }
+      if (word === 'no-auth-attempt') { finish(endOf(Date.now() >= a.expiresAt ? 'expired' : 'lost', undefined, a.expiresAt)); return; }
       // Nothing was sent: a fresh field for the next paste.
       putAtt({ ...attRef.current, codeSent: false });
       settle(SIGN_IN_LEDGER.waiting);
@@ -283,7 +299,7 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
     } catch (e) {
       if (!live.current) return;
       const word = wordOf(e);
-      if (word === 'no-auth-attempt') finish(endOf(Date.now() >= a.expiresAt ? 'expired' : 'lost'));
+      if (word === 'no-auth-attempt') finish(endOf(Date.now() >= a.expiresAt ? 'expired' : 'lost', undefined, a.expiresAt));
       else setCodeNotice(cancelRefused(word));
     } finally {
       if (live.current) setCancelling(false);
@@ -297,8 +313,10 @@ export function useSignInAttempt(host: SignInHost): SignInAttempt {
 }
 
 /** The connect sheet's terminal sentences (A22): a new lane that "exists and is off". */
-export const newLaneEnd = (id: string) => (k: SignInEndKind, failure?: string): string =>
-  (k === 'failed' ? signInFailed(failure) : SIGN_IN_END[k](id));
+export const newLaneEnd = (id: string, method: string | null = null) => (k: SignInEndKind, failure?: string, expiresAt?: number): string => {
+  if (method === 'openai-login') return chatgptEnd(id, k, failure, expiresAt);
+  return k === 'failed' ? signInFailed(failure) : SIGN_IN_END[k](id);
+};
 
 /** The poll of a live attempt and its deadline: mounted only while the attempt is live and the screen is online, so a
  *  closed sheet, an ended attempt or an offline screen reads nothing. */
@@ -325,7 +343,9 @@ export function SignInLive({ s, att, id, client, blocked, ledger }: {
   s: SignInAttempt; att: Attempt; id: string; client: SignInRoutes; blocked: boolean; ledger: readonly LedgerLine[];
 }): ReactNode {
   const codeNoticeId = useId();
-  const waiting = att.url !== null && !att.codeSent;
+  const device = showsDeviceCode(att.method);
+  const ready = cardReady(att);
+  const waiting = ready && !att.codeSent;
   return (
     <RunFrame lines={ledger} live waiting={waiting && !blocked}>
       {!blocked && <AuthWatch id={id} client={client} expiresAt={att.expiresAt} onOutcome={s.onStatus} onExpired={s.onExpired} />}
@@ -333,8 +353,9 @@ export function SignInLive({ s, att, id, client, blocked, ledger }: {
         <p className="acct-offline" data-sign-in-offline="true">{signInOffline(att.expiresAt)}</p>
       ) : (
         <>
-          {att.url !== null && att.host !== null && !att.codeSent && <UrlCard url={att.url} host={att.host} method={att.method} />}
-          {att.url !== null && (
+          {waiting && <UrlCard url={att.url!} host={att.host!} method={att.method} />}
+          {device && waiting && <UserCodeWell code={att.userCode!} />}
+          {!device && att.url !== null && (
             <CodeField key={s.codeKey} onSend={(c) => { void s.sendCode(c); }} disabled={att.codeSent}
               describedBy={s.codeNotice !== null ? codeNoticeId : undefined} />
           )}

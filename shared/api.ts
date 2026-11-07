@@ -328,8 +328,8 @@ export interface FleetSession {
    *  bump. */
   lastEnd: LastEnd | null;
   /** D-5242 (`hibernate-long-idle-sessions`): when `ccd hibernate` put this session to sleep, epoch MS, from
-   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep, and on a
-   *  malformed marker. ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
+   *  `$REG/<id>.hibernated` (read only when the registry listing names it). Null when it is not asleep. A listed marker
+   *  that gives no time carries the stop stamp's time instead, and null with no readable stop stamp (D-8067). ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
   /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
@@ -4357,6 +4357,40 @@ export interface DeadCoordinatorAttention {
   readonly at: number;
 }
 
+/** The words ccd's rows rung names a holding row with (cleanup un-wedge R2, spec 2026-11-04 §4.2): one per bucket of
+ *  `_ws_reclaim_workdir_shared` that is another row's fault, in the spec's table order, which is also the order a row
+ *  named with two words is listed under (the first). `bucket` is that bucket's name in `ccd/ccd`, for the reader of
+ *  either side. The child's own buckets are not another row's fault and have no word. */
+export const HELD_BY_WORD_TABLE = {
+  'gone-unrecorded': { bucket: 'unres' },
+  'not-plain': { bucket: 'unplaced' },
+  'under-proc': { bucket: 'unproc' },
+  'workdir-unreadable': { bucket: 'unread' },
+  'entry-pending': { bucket: 'unpend' },
+  'entry-unmeasured': { bucket: 'unfield' },
+  'entry-moved': { bucket: 'unrec' },
+} as const;
+export type HeldByWord = keyof typeof HELD_BY_WORD_TABLE;
+export const HELD_BY_WORDS = Object.keys(HELD_BY_WORD_TABLE) as HeldByWord[];
+
+/** What a holding row's one control does when the operator taps it and confirms (R2, the operator's ruling of
+ *  2026-11-06): `forget` removes a dead non-workspace row through the existing forget door, and `recheck` changes
+ *  nothing and reads the line again. Decided by the server (`cleanupHeldByAct`, L1), never by the console. */
+export type CleanupHeldByAct = 'forget' | 'recheck';
+const CLEANUP_HELD_BY_ACT_MAP: Record<CleanupHeldByAct, true> = { forget: true, recheck: true };
+export const CLEANUP_HELD_BY_ACTS = Object.keys(CLEANUP_HELD_BY_ACT_MAP) as CleanupHeldByAct[];
+
+/** One registry row that holds the cleanup (R2): its id, ccd's word for why, the server's sentence (what to do about
+ *  it), how many children, archived rows and temp roots it holds per lane, and what its control does. One item per
+ *  row, however many lanes and subjects it holds. */
+export interface CleanupHeldByItem {
+  readonly rowId: string;
+  readonly word: HeldByWord;
+  readonly sentence: string;
+  readonly holds: { readonly reclaim: number; readonly expire: number; readonly collect: number };
+  readonly act: CleanupHeldByAct;
+}
+
 /** The three markers the coordination lane is governed by, read together
  *  because they come from one listing: `coordinator-paused` (spec §4.2 — the
  *  one file that stops a program mid-flight), `mail-disabled` (the injection
@@ -4398,6 +4432,10 @@ export interface CoordStatus {
    *  server omits it, and the PWA's one reader (`paneScopeStopMarker`, `pwa/src/fleet/paneScopeStopWords.ts`) reads
    *  absence as a server that does not offer the switch. */
   paneScopeStop?: MarkerState;
+  /** Cleanup un-wedge R2: the registry rows that hold the cleanup, one item per row (`cleanupHeldBy`, L1). OPTIONAL
+   *  on the wire: an older server omits it, and the PWA's one reader (`heldByRowsOf`,
+   *  `pwa/src/fleet/heldByRowsWords.ts`) reads absence as no items. */
+  cleanupHeldBy?: readonly CleanupHeldByItem[];
 }
 
 /** A `/`-command the composer can autocomplete. `insert` is what gets typed
@@ -6952,6 +6990,27 @@ export interface RunSummary {
    */
   reviewCap: ReviewCapStatus | null;
 
+  /**
+   * D-8068: this run held a child workspace. Its dispatch asked ccd for one and a session was bound, or a later wave was
+   * bound to a session an earlier run minted. The fact outlives the child: it is what says a finished row with no chip
+   * may still be waiting for one, after the child's registry row is gone and after a reload.
+   *
+   * `childIds` cannot answer this (it names only OPEN runs with a bound worker), and neither can `childReclaim`, whose
+   * `null` is also the race's own answer. The workspace's `.child` mark names only the minting run; this names every run
+   * the child served, the hand-over wave's row included.
+   *
+   * A ROW STORED BEFORE THE FIELD reads through migration 41's backfill, never as a flat false. The answer can be true
+   * for a run with no marked child (a row older than child marks, or a recycled name's later row), and on a live row
+   * for one whose failed attempt kept its mark and then bound a session that is no child. Each costs one spare archive
+   * read per reclaim end and nothing else. Nothing refuses, renders or reclaims on it.
+   *
+   * Written and read on the server alone: the fleet box sends no new frame, so a fleet on another version is no concern
+   * of this field. ADDITIVE; `FLEET_PROTO` is not bumped. REQUIRED here for `health`'s reason (`hydrateRun` returns a
+   * literal). Read it ONLY through `runHadChild` (`pwa/src/fleet/runWords.ts`), because an older server omits it and a
+   * `RunSummary` is cast, never revived: absent reads as false, which leaves the chip triggers and no more.
+   */
+  hadChild: boolean;
+
   /** The ids of the open runs this run's COORDINATOR (`claimedBy`) has working for it, each bound to the incarnation of
    *  the worker it was opened for: `childrenOf` (`server/src/coord/runBinding.ts`), asked once per frame. The same list
    *  rides every run of that coordinator, so a reader holding one run needs no second lookup. Read it ONLY through
@@ -8705,6 +8764,10 @@ export interface LifecycleMeas {
    *  box move, its witness naming a device this host does not have (`_ws_collect_moved_host`). Null: an ordinary
    *  collection, an older ccd, or another act. */
   readonly witness: string | null;
+  /** A `reclaim` row's holding rows (cleanup un-wedge R2): on `ws-audit --reclaim`'s `probe-unmeasured` line, the ids of
+   *  the registry rows that hold the child, comma-joined (`?` for one whose id ccd does not print). Null: no row held it,
+   *  an older ccd, or another act. */
+  readonly heldBy: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -8730,6 +8793,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   childRun: true,
   startpoint: true,
   witness: true,
+  heldBy: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -11868,10 +11932,12 @@ export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[numb
  *  measures the helper itself (delegation visibility, spec §1), so no reader draws one as "running" or "recent".
  *  `live`: its end is not recorded and its parent is live in the incarnation that started it; execution is NOT
  *  confirmed. `stale`: its end is not recorded, and its parent is gone, dead or in another incarnation (its stop was
- *  not seen). `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, or its parent's
- *  incarnation was not measured. */
-export type DelegationLiveness = 'live' | 'stale' | 'ended' | 'unmeasured';
-const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, ended: true, unmeasured: true };
+ *  not seen). `asleep`: its end is not recorded and its parent is hibernated (D-6908), so nothing is gone and nothing
+ *  is measured. `ended`: its terminal evidence was seen. `unmeasured`: its execution state is `unknown`, its parent's
+ *  incarnation was not measured, or its parent is in doubt (restarting, tmux did not answer, or an identity field
+ *  unmeasured; D-6908). ADDITIVE: an older PWA reads a word it has never heard of as `unmeasured`. */
+export type DelegationLiveness = 'live' | 'stale' | 'asleep' | 'ended' | 'unmeasured';
+const DELEGATION_LIVENESS_MAP: Record<DelegationLiveness, true> = { live: true, stale: true, asleep: true, ended: true, unmeasured: true };
 export const DELEGATION_LIVENESS: readonly DelegationLiveness[] = Object.keys(DELEGATION_LIVENESS_MAP) as DelegationLiveness[];
 export function isDelegationLiveness(v: unknown): v is DelegationLiveness {
   return typeof v === 'string' && (DELEGATION_LIVENESS as readonly string[]).includes(v);
@@ -12862,7 +12928,7 @@ export type LaneNotReadyReason = (typeof LANE_NOT_READY_REASONS)[number];
 /** The cap words `ccd caps` advertises for the account subs (N4; spec §13): `account-v2` is the first wave's write
  *  subs, advertised by the box task that ships them (A16); each later wave appends its own word (`account-auth-v1`, A22's
  *  sign-in sheet, D-7849). Accounts plan Task A12 reads `account-v2` for `connect.accountOps`. */
-export const ACCOUNT_CAPS = ['account-v2', 'account-auth-v1'] as const;
+export const ACCOUNT_CAPS = ['account-v2', 'account-auth-v1', 'account-codex-v1'] as const;
 export type AccountCap = (typeof ACCOUNT_CAPS)[number];
 
 /** `GET /api/accounts`'s `connect` (spec §12.6, §13.1; D-5511), what the screen needs to offer an act and why it cannot: whether the fleet can run the account subs
@@ -13281,8 +13347,8 @@ export interface FleetHealth {
  *  `lane-act-refused`   the verb refused for a reason of its own (409); its code rides `verbCode` when it is a word,
  *                       never its sentence.
  *  `outcome-unknown`    the act outran its bound or its answer was lost (502): the box may have acted, so the server
- *                       reconciled and the screen re-reads; it is never retried on its own (D-5518). */
-export const ACCOUNT_ROUTE_REFUSALS = ['lane-busy', 'last-enabled-home', 'lane-act-refused', 'outcome-unknown'] as const;
+ *                       reconciled and the screen re-reads; it is never retried on its own (D-5518). `check-unrecorded`: a check ran and the lane state doesn't hold it (502, D-8051 (17)). */
+export const ACCOUNT_ROUTE_REFUSALS = ['lane-busy', 'last-enabled-home', 'lane-act-refused', 'outcome-unknown', 'check-unrecorded'] as const;
 export type AccountRouteRefusal = (typeof ACCOUNT_ROUTE_REFUSALS)[number];
 
 /** `POST /api/accounts/:id/check`'s 200 (spec §13.1): the lane as the server reads it after the check and its seed. */
@@ -13370,9 +13436,14 @@ export interface AccountCredentialAnswer {
  *  characters, carried to the verb on stdin because it names a person) and the lane's placement. */
 export interface AccountSetBody { stated?: string; placement?: 'overflow' | 'full' }
 
+/** What a remove does with a Codex lane's sign-in folder (spec §11 step 4; D-8051 (3)): the sheet's line, on by default. */
+export type AccountCodexAuthFate = 'delete' | 'keep';
+const ACCOUNT_CODEX_AUTH_FATE_MAP: Record<AccountCodexAuthFate, true> = { delete: true, keep: true };
+export const ACCOUNT_CODEX_AUTH_FATES: readonly AccountCodexAuthFate[] = Object.keys(ACCOUNT_CODEX_AUTH_FATE_MAP) as AccountCodexAuthFate[];
+
 /** `POST /api/accounts/:id/remove`'s body (spec §11): `remove` with the typed id, `discard` (no typed confirm), or
  *  `check`, the pre-check, which changes nothing. */
-export type AccountRemoveBody = { mode: 'remove'; confirmId: string } | { mode: 'discard' } | { mode: 'check' };
+export type AccountRemoveBody = { mode: 'remove'; confirmId: string; codexAuth?: AccountCodexAuthFate } | { mode: 'discard' } | { mode: 'check' };
 
 /** The credential kinds the removal ledger and the revoke checklist name (spec §11.3), each with its state at the
  *  provider and the page that revokes it, as words the sheet maps to its link: the box never answers a URL. A sign-in's
@@ -13428,6 +13499,11 @@ export interface AccountRevokeAckBody { laneId: string; kind: AtProviderKind }
  *  Sign in, so it is `ACCOUNT_CAPS`' second word (D-7849 (1)) and `connect.caps` offers it, and the Anthropic sheet
  *  opens on Mint, the first method of the provider table it does not narrow. */
 export const ACCOUNT_AUTH_CAP = 'account-auth-v1';
+/** The cap word of the ChatGPT lane (accounts plan Tasks A24 and A25, D-8051 (1)): `ccd caps` answers it once the box can
+ *  add a Codex lane, and it is `ACCOUNT_CAPS`' third word now the sheet that runs its sign-in has shipped. `connect.caps`
+ *  still holds it back while `AUTH_URL_HOSTS['openai-login']` is empty, because the start route would refuse that sign-in
+ *  (`accountsConnect`): no sheet may add a lane that it cannot then sign in. */
+export const ACCOUNT_CODEX_CAP = 'account-codex-v1';
 
 /** The words the sign-in routes (`server/src/accounts/routes.ts`) answer of their own, each with its one status in
  *  `REFUSAL_STATUS` (D-7793). The verb's own codes of the same spelling cross as these words, never as its sentence.

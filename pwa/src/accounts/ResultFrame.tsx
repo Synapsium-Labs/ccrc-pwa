@@ -5,15 +5,16 @@ import type { LaneWire } from '../../../shared/api';
 import { FrameFoot } from './FrameFoot';
 import {
   LEAVE_IT_OFF, SAVE_STATED, STATED_LABEL, STATED_NOTE, STATED_PROBLEM, WRONG_ACCOUNT, checkLatency, STATE_LAMPS, TURN_IT_ON,
-  identityLine, notReadyWords,
+  chatgptSignedInLine, identityLine, notReadyWords,
 } from '../fleet/accountWords';
 import type { SignInMethod } from './connectFlow';
 
 /** The sign-in methods' part of the result (accounts plan Task A22, D-7849; spec §6.2 step 10, §6.3). */
 export interface ResultSignIn {
   readonly method: SignInMethod;
-  /** "Sign this lane out and start again", drawn by the host, which holds its step-up. */
-  readonly wrongAccount: ReactNode;
+  /** "Sign this lane out and start again", drawn by the host, which holds its step-up. Absent for a ChatGPT lane, which
+   *  has no sign-out act: the verb refuses `not-a-sign-in-lane`, and Sign in again replaces its sign-in (D-8051 (5)). */
+  readonly wrongAccount?: ReactNode;
   /** Mint only: save the stated account (`set {stated}`). */
   readonly onStated?: (text: string) => void;
   readonly statedBusy?: boolean;
@@ -88,7 +89,10 @@ export function StatedField({ onSave, busy, notice, blocked, initial = '' }: {
 export function ResultFrame(p: ResultFrameProps): ReactNode {
   const word = (p.lane?.state.word ?? 'not-checked') as AccountStateWord;
   const lamp = STATE_LAMPS[word] ?? STATE_LAMPS['not-checked'];
-  const identity = p.lane === null ? null : identityLine(p.lane, word, p.nowSec);
+  // A Codex lane has no identity to read back (spec §3.4): it says how it is signed in, unless one was stated. That
+  // reads the check, since this frame's word is Off until Turn it on.
+  const identity = p.lane === null ? null
+    : identityLine(p.lane, word, p.nowSec) ?? (p.signIn?.method === 'openai-login' ? chatgptSignedInLine(p.lane) : null);
   const unchecked = p.lane === null;
   // Why Turn it on is held: the box's not-ready reason, or, with no lane read, the check's refusal (or the box's word
   // for a lane never checked, should no sentence have been left).
@@ -105,13 +109,14 @@ export function ResultFrame(p: ResultFrameProps): ReactNode {
         <StatedField onSave={p.signIn.onStated} busy={p.signIn.statedBusy ?? false} notice={p.signIn.statedNotice ?? null} blocked={p.blocked} />
       )}
       {/* Before the lane is turned on only: signing an on lane out would fail its sessions' next turn. */}
-      {p.signIn !== undefined && !p.on && (
+      {p.signIn?.wrongAccount !== undefined && !p.on && (
         <div className="acct-wrong-account">
           <span className="acct-result-line">{WRONG_ACCOUNT}</span>
           {p.signIn.wrongAccount}
         </div>
       )}
-      {p.latencyMs !== null && <p className="acct-result-line">{checkLatency(p.latencyMs)}</p>}
+      {/* "Checked: one test reply": a check that did not pass got none, and the ledger says what it found. */}
+      {p.latencyMs !== null && p.lane?.check?.verdict === 'ok' && <p className="acct-result-line">{checkLatency(p.latencyMs)}</p>}
       {/* With no lane read, the notice IS the held reason, drawn once beneath the primary. */}
       {p.notice !== null && !unchecked && <p className="acct-notice">{p.notice}</p>}
       {p.on ? (

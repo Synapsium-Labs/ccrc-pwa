@@ -36,13 +36,13 @@ const seed = (home: string, id: string): void => {
 
 const CLEAR_PANES = ['scrollback\n❯ \n', 'scrollback\n❯ /clear\n', 'scrollback\n❯ \n'];
 
-function makeRunner(home: string, creates: string): { run: Runner; calls: string[][] } {
+function makeRunner(home: string, creates: string, atWsAdd: () => void = () => {}): { run: Runner; calls: string[][] } {
   const calls: string[][] = [];
   let capIdx = 0;
   const run: Runner = async (_cmd, args) => {
     calls.push(args);
     const verb = args[0] ?? '';
-    if (verb === 'ws-add') { seed(home, creates); return { ran: true, code: 0, stdout: '', stderr: '' }; }
+    if (verb === 'ws-add') { atWsAdd(); seed(home, creates); return { ran: true, code: 0, stdout: '', stderr: '' }; }
     if (verb === 'capture-pane') {
       const p = CLEAR_PANES[Math.min(capIdx, CLEAR_PANES.length - 1)]!;
       capIdx++;
@@ -83,7 +83,9 @@ const harness = (cfg: HarnessCfg) => {
     seed(home, cfg.sessionId);
     coord.setSession(opened.id, cfg.sessionId);
   }
-  const { run, calls } = makeRunner(home, 'demo-quiet-mesa');
+  const hadChildColumn = (): unknown => coord.db.prepare('SELECT hadChild FROM runs WHERE id = ?').get(opened.id);
+  const columnAtWsAdd: unknown[] = [];
+  const { run, calls } = makeRunner(home, 'demo-quiet-mesa', () => { columnAtWsAdd.push(hadChildColumn()); });
   const base = testDeps(home, run);
   const deps: DispatchRunDeps = {
     ...base, coord,
@@ -91,7 +93,7 @@ const harness = (cfg: HarnessCfg) => {
     configDir: (w: string) => configDirFor(base.cfg, w), turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
   };
   return {
-    runId: opened.id, calls,
+    runId: opened.id, calls, hadChildColumn, columnAtWsAdd,
     // An EMPTY route is a passed route (D-6794): these rows are about `--child`, not the run kind's default row.
     dispatch: (route: unknown = {}, slug?: unknown) => dispatchRun(deps, opened.id, 'go', undefined, route, slug),
     wsAdds: (): string[][] => calls.filter((c) => c[0] === 'ws-add'),
@@ -108,6 +110,21 @@ describe('dispatch marks the workspace it mints as a child of the run (spec §5.
       ['ws-add', '--no-rc', '--child', String(h.runId), PROJECT, '--surface', 'agent', '--actor', `run:${h.runId} dispatch`],
     ]);
     expect(h.events()).not.toContain(OMITTED);
+  });
+
+  it('with child-argv-v1: the run records it had a child BEFORE ws-add runs (D-8068)', async () => {
+    const h = harness({ ccdVerbs: WITH_CHILD });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    expect(h.columnAtWsAdd).toEqual([{ hadChild: 1 }]);
+  });
+
+  it('without the token, or on the resume arm, dispatch records no child: nothing asked ccd for one (D-8068)', async () => {
+    const without = harness({ ccdVerbs: WITHOUT_CHILD });
+    expect(await without.dispatch()).toMatchObject({ ok: true });
+    expect(without.hadChildColumn()).toEqual({ hadChild: 0 });
+    const resumed = harness({ ccdVerbs: WITH_CHILD, sessionId: 'demo-held-reef' });
+    expect(await resumed.dispatch()).toMatchObject({ ok: true });
+    expect(resumed.hadChildColumn()).toEqual({ hadChild: 0 });
   });
 
   it('with --route too: the two declarations of WHAT the spawn is lead, then how it RUNS', async () => {

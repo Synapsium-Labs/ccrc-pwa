@@ -127,7 +127,8 @@ export const RUN_READERS: ReadonlySet<string> = new Set(['workerOf', 'coordinato
  *  - `lookup`: a `.get(…)` call (any receiver) whose one argument is a member expression ending in `.sessionId` or
  *    `.claimedBy`, the run-to-session map lookup where #746's recycled-id hazard lives (7 on the base); a `get` keyed on a
  *    session's own `id` is not one;
- *  - `runForSession` and `childRunsSeen`: each call of the two named readers (7 and 1 on the base);
+ *  - `runForSession`: each call of the named reader (7 on the base). `childRunsSeen` was counted beside it until the
+ *    server took its question over (D-8068);
  *  - `named`: a comparison or lookup inside one of `RUN_READERS` in `RUN_READER_FILE` (D-7182, D-7205, D-7207, C7d).
  *  KNOWN WIDTH: the receiver of a lookup is not typed, so a `.get(ev.sessionId)` on a non-run event would count (none
  *  on the base); a comparison through a renamed local is not seen. */
@@ -141,11 +142,31 @@ export function runMatchersIn(p: ParsedFile, file: string): W7Site[] {
   }
   for (const c of p.calls) {
     if (c.name === 'get' && c.callee.endsWith('.get') && c.args.length === 1 && c.args[0]!.kind === 'other' && RUN_KEY.test(c.args[0]!.text)) out.push(callSite(p, file, c, named(c.start) ? 'named' : 'lookup'));
-    else if (c.name === 'runForSession' || c.name === 'childRunsSeen') out.push(callSite(p, file, c, c.name));
+    else if (c.name === 'runForSession') out.push(callSite(p, file, c, c.name));
   }
   return out.sort((a, b) => a.line - b.line);
 }
 export const runMatchers = (): W7Site[] => overPwa(runMatchersIn);
+
+/** "Is this run's session listed", asked of a run's raw `sessionId` or `claimedBy` (D-8049): a `.has(…)` call whose one
+ *  argument ends in one of them, and a call of a closure bound in the same file that does so through its parameter
+ *  (`const waits = (id) => asking.has(id); waits(r.sessionId)`, which `runMatchers` passes over: its lookup reads the
+ *  call's own argument). A recycled worker id answers these exactly as a bound one does (#746), so a door that decides
+ *  something about a run's worker reads `workerOf`, not this. Kind `has` or `closure`; the may-only-shrink pin is
+ *  `rings/pwa-one-owner.test.ts`'s run-binding block.
+ *  KNOWN WIDTH: the closure must be a `const` in the same file whose text has `.has(`; one imported, or one that reaches
+ *  the set through a further call, is not seen. The receiver is not typed, so `.has(ev.sessionId)` on an event counts. */
+export function runMembershipIn(p: ParsedFile, file: string): W7Site[] {
+  const out: W7Site[] = [];
+  const closures = new Set(p.bindings.filter((b) => /=>/.test(b.init) && /\.has\(/.test(b.init)).map((b) => b.name));
+  for (const c of p.calls) {
+    if (c.args.length !== 1 || c.args[0]!.kind !== 'other' || !RUN_KEY.test(c.args[0]!.text)) continue;
+    if (c.name === 'has' && c.callee.endsWith('.has')) out.push(callSite(p, file, c, 'has'));
+    else if (closures.has(c.callee)) out.push(callSite(p, file, c, 'closure'));
+  }
+  return out.sort((a, b) => a.line - b.line);
+}
+export const runMembership = (): W7Site[] => overPwa(runMembershipIn);
 
 // ─── 4. hand-written request polls (ARCH-30's remainder, C7b and C7m) ──────────────────────────────────────────────
 
@@ -577,6 +598,20 @@ export const oldAnswerDoorPaths = (): W7Site[] =>
   [...overPwa(oldAnswerDoorPathsIn), ...oldAnswerDoorPathsIn(parseSource(readFileSync(path.join(REPO, PUSH_SW), 'utf8'), PUSH_SW), PUSH_SW)];
 
 // ─── C7p. the retired operator answer doors (D-7194, D-7540) ────────────────────────────────────────────────────────
+
+/** The one reader of `RunSummary.hadChild` (D-8068), as `file#symbol`. The wire is cast, never revived, and an older server
+ *  omits the key, so a second reader that took it as a boolean would answer differently from this one on some row. */
+export const HAD_CHILD_READER = 'pwa/src/fleet/runWords.ts#runHadChild';
+
+/** Every name `hadChild` in the PWA's sources: a property read, a type member or a destructured binding. KNOWN WIDTH: a
+ *  computed `run['hadChild']` is not seen, and a comment is not code. */
+export function hadChildNamesIn(p: ParsedFile, file: string): W7Site[] {
+  return identifierReferences(p.text, file, new Set(['hadChild'])).map((r) => {
+    const hit = lineOffset(p.text, r.line, 'hadChild');
+    return { file, symbol: enclosingSymbol(p, hit), line: r.line, text: r.context.slice(0, 140), kind: '' };
+  });
+}
+export const hadChildNames = (): W7Site[] => overPwa(hadChildNamesIn);
 
 /** The four old operator answer doors W3 Q3f's family replaced, which W7 C7p's server half retires after its PWA half
  *  (D-7540). `/dialog/tab` is not one: it answers nothing and stays a session door. */

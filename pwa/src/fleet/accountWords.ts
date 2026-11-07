@@ -6,12 +6,15 @@
 // and word, which words lift as trouble cards and in what order, the roll-up subtitle, the two age lines, the identity
 // line, and each trouble card's three sentences and its command.
 import {
-  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, WINDOW_LIMITED_PCT, kindCodeOf, sourceAt, stateWordFor,
+  ACCOUNT_STATE_WORDS, CREDIT_EXPIRING_FRACTION, NOTHING_LEARNED, WINDOW_LIMITED_PCT, checkFinding, kindCodeOf, sourceAt, stateWordFor,
   type AccountStateAnswer, type AccountStateWord,
 } from '../../../shared/accounts';
 import { SWAP_REFUSALS, type AccountsConnect, type AccountUsage, type LaneNotReadyReason, type LaneWire, type RosterWire } from '../../../shared/api';
 import type { RouteRefusal } from '../../../shared/refusal';
 import { formatAge, formatReset } from './formatReset';
+
+/** A clause as a sentence of its own: the state word's source and the ledger say the same finding. */
+const sentence = (clause: string): string => `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
 
 /** The lamp: a glyph and its word, never a glyph alone (spec §4.1; identity core). One row per state word, in the
  *  words' own precedence, so a new word is a compile error here before it is a lamp with no name. */
@@ -208,7 +211,9 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         : keyLane ? `key was refused by ${entry?.provider === 'openrouter' ? 'OpenRouter' : 'its provider'}`
           : 'sign-in was refused';
       return {
-        wrong: `${id}'s ${what} (HTTP 401)${ago}.`,
+        // Only the marker is a measured 401: a check of `auth-dead` may have made no request at all (D-8051 (20)).
+        wrong: answer.source === 'HTTP 401' ? `${id}'s ${what} (HTTP 401)${ago}.`
+          : `${id}'s ${what}, or it has none${ago === '' ? '' : ` (${ago.trim()})`}.`,
         effect: `New sessions are not placed here.${sessions > 0 ? ` ${sessionsOn(sessions)} will fail their next turn.` : ''}`,
         lead: credentialLane
           ? 'Replace its credential on the fleet host, then check it again:'
@@ -264,22 +269,26 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
         move: null,
       };
     }
-    case 'inconclusive':
-      return answer.source === 'lane state unreadable'
-        ? {
+    case 'inconclusive': {
+      if (answer.source === 'lane state unreadable') {
+        return {
           wrong: `${id}'s lane state could not be read.`,
           effect: 'Nothing here says whether the credential works; it may be fine.',
           lead: 'Check it again on the fleet host, which writes the lane state anew:',
           commands: [fixCommands.check(id)],
           move: null,
-        }
-        : {
-          wrong: "The last check couldn't reach the provider.",
-          effect: 'Nothing was learned about the credential; it may be fine.',
-          lead: 'Check it again on the fleet host:',
-          commands: [fixCommands.check(id)],
-          move: null,
         };
+      }
+      // The source's first clause is what the check found, and its last what that means for the credential.
+      const [found = answer.source, , credential = NOTHING_LEARNED] = answer.source.split(' · ');
+      return {
+        wrong: sentence(found),
+        effect: sentence(credential),
+        lead: 'Check it again on the fleet host:',
+        commands: [fixCommands.check(id)],
+        move: null,
+      };
+    }
     default:
       return null;
   }
@@ -437,6 +446,7 @@ export const FRAME_SAID = {
   provider: 'Choose a provider',
   name: 'Name the lane',
   method: 'Choose how the lane gets its credential',
+  chatgpt: 'Add the lane and sign in with ChatGPT',
   adopt: "Using what's there: paste the token",
 } as const;
 /** The add was refused `step-up-required`: the stamp lapsed between the step and the act (spec §3.2). */
@@ -450,21 +460,40 @@ export const LEDGER = {
   added: (id: string): string => `✓ ${id} created · off`,
   found: (id: string): string => `✓ ${id} found on the fleet host · off`,
   checking: (id: string): string => `… checking ${id}: one test reply`,
+  /** A Codex lane's check (spec §7.2 step 7): its probe also starts the lane's gateway, and the step says so. */
+  checkingCodex: (id: string): string => `… checking ${id}: one test reply, which starts this lane's gateway`,
   checked: '✓ Checked: one test reply · first-run setup verified',
   enabling: (id: string): string => `… turning ${id} on`,
   on: '✓ On · new sessions can land here. Swap rotation includes it within a minute.',
   reading: "… reading the fleet host's accounts again",
 } as const;
 
+/** What a check found, in the words after "The check did not pass:". `checkFinding` holds every verdict but a refusal. */
+function checkFound(verdict: string | undefined): string {
+  if (verdict === undefined) return `the fleet host recorded no result. ${sentence(NOTHING_LEARNED)}`;
+  if (verdict === 'auth-dead') return `${STATE_LAMPS['signed-out'].word.toLowerCase()}. The provider refused this lane's credential, or it has none.`;
+  const { found, credential } = checkFinding(verdict);
+  return `it ${found}. ${sentence(credential)}`;
+}
+/** An answered check's ledger line (D-8051 (12)). The check route answers 200 with the lane whatever the probe found, so
+ *  a resolved call is not a pass: only a verdict of `ok` says Checked, and a lane with no verdict says so. "First-run
+ *  setup verified" is for a lane that is ready: the verb exits 0 when the probe passes and its seed refuses, and three of
+ *  the four sheets have nothing beneath this line to correct it (D-8051 (18)). */
+export function checkedLine(lane: Pick<LaneWire, 'check' | 'ready' | 'notReadyReason'>): string {
+  const verdict = lane.check?.verdict;
+  if (verdict !== 'ok') return `The check did not pass: ${checkFound(verdict)}`;
+  return lane.ready ? LEDGER.checked : `✓ Checked: one test reply. ${notReadyWords(lane.notReadyReason)}`;
+}
+
 /** Outcome unknown (spec §6.2's terminal states): the add's answer never came. */
 export const OUTCOME_UNKNOWN = "The fleet host didn't answer in time. The lane may exist; checking…";
 /** The re-read found no such lane: nothing was added, and nothing is sent again on its own. */
-export const notFoundAfterUnknown = (id: string): string =>
-  `${id} isn't on the fleet host: nothing was added. Paste the token again to try again.`;
+export const notFoundAfterUnknown = (id: string, signIn = false): string =>
+  `${id} isn't on the fleet host: nothing was added. ${signIn ? 'Add it again to try again.' : 'Paste the token again to try again.'}`;
 /** The re-read after an outcome unknown did not land either, so no roster was reconciled: the sheet claims nothing
  *  about the lane, sends nothing again, and offers only a fresh read (D-7740 (5)). */
-export const stillUnknownAfterUnknown = (id: string): string =>
-  `The fleet host's accounts couldn't be read either, so whether ${id} was added is still unknown. Nothing was sent again. Read again before pasting the token.`;
+export const stillUnknownAfterUnknown = (id: string, signIn = false): string =>
+  `The fleet host's accounts couldn't be read either, so whether ${id} was added is still unknown. Nothing was sent again. Read again before ${signIn ? 'adding it again' : 'pasting the token'}.`;
 /** The one act that state offers: read the roster again (never the add). */
 export const READ_AGAIN = 'Read again';
 
@@ -474,7 +503,7 @@ type AddRefusalWord = Extract<RouteRefusal,
   'key-rejected' | 'token-unverified' | 'key-charset' | 'duplicate-id' | 'lane-busy' | 'auth-in-progress'
   | 'unsupported' | 'insecure-origin' | 'auth-off' | 'unauthenticated' | 'unavailable' | 'bad-account-id'>;
 const ADD_REFUSAL_TEXT: Readonly<Record<AddRefusalWord, { frame: AddRefusalFrame; text: (id: string) => string }>> = {
-  'key-rejected': { frame: 'method', text: () => 'That token was refused (HTTP 401). Nothing was saved.' },
+  'key-rejected': { frame: 'method', text: () => 'That token was refused. Nothing was saved.' },
   'token-unverified': { frame: 'method', text: () => "Anthropic didn't answer: nothing was saved. Try again." },
   'key-charset': {
     frame: 'method',
@@ -491,11 +520,20 @@ const ADD_REFUSAL_TEXT: Readonly<Record<AddRefusalWord, { frame: AddRefusalFrame
   unavailable: { frame: 'method', text: () => "The fleet host couldn't run it: nothing was added." },
 };
 
+/** The Codex arm's own refusals of an add (spec §7.2 step 3; A24), which cross as `lane-act-refused` with the verb's code
+ *  beside it. None of them wrote anything. */
+const CODEX_ADD_REFUSAL: Readonly<Record<string, string>> = {
+  'codex-runtime-absent': "This fleet host has no Codex runtime, so a ChatGPT lane has nothing to run on. Nothing was added. Run `ccgpt-runtime build` on the fleet host, then add it again.",
+  'no-free-port': "No two free ports were found for this lane's gateway. Nothing was added.",
+  'authdir-occupied': "This lane's new sign-in folder already exists on the fleet host. Nothing was added. Add it again for a fresh folder.",
+};
+
 /** An add's refusal, from its code alone: where the sheet goes back to and what it says. `null` for the answers the
  *  sheet handles as states of their own (`config-dir-exists`, `lane-exists`, `step-up-required`, `outcome-unknown`, and
  *  a request that never completed). */
-export function addRefusal(id: string, word: string | undefined): { frame: AddRefusalFrame; text: string } | null {
+export function addRefusal(id: string, word: string | undefined, verbCode?: string): { frame: AddRefusalFrame; text: string } | null {
   if (word === undefined) return null;
+  if (verbCode !== undefined && Object.hasOwn(CODEX_ADD_REFUSAL, verbCode)) return { frame: 'method', text: CODEX_ADD_REFUSAL[verbCode]! };
   if (Object.hasOwn(ADD_REFUSAL_TEXT, word)) {
     const r = ADD_REFUSAL_TEXT[word as AddRefusalWord];
     return { frame: r.frame, text: r.text(id) };
@@ -518,12 +556,13 @@ export const checkLatency = (ms: number): string => `Checked: one test reply in 
  *  literal branch on a code). `field` reads one more word off the body (`reason`, `verbCode`), already held to a word. */
 type LaneRefusalWord = Extract<RouteRefusal,
   'not-ready' | 'last-enabled-home' | 'lane-busy' | 'outcome-unknown' | 'not-found' | 'unsupported' | 'insecure-origin'
-  | 'unavailable' | 'lane-act-refused'>;
+  | 'unavailable' | 'lane-act-refused' | 'check-unrecorded'>;
 const LANE_REFUSAL_TEXT: Readonly<Record<LaneRefusalWord, (id: string, what: string, field: (k: string) => string | undefined) => string>> = {
   'not-ready': (_id, _what, field) => notReadyWords(field('reason') as LaneNotReadyReason | undefined),
   'last-enabled-home': (id) => `${id} is the only lane that can take new sessions. Turn another on first.`,
   'lane-busy': (id) => `${id} is busy with another account change. Try again in a moment.`,
   'outcome-unknown': (id, what) => `The fleet host didn't answer in time, so whether ${id} was ${what} is unknown. The screen reads it again.`,
+  'check-unrecorded': (id) => `The check ran, but its result couldn't be read back from the fleet host, so what this screen shows for ${id} is out of date. Run it on the fleet host to see the result: ${fixCommands.check(id)}`,
   'not-found': (id) => `${id} is no longer on this box's roster.`,
   'unsupported': () => 'The fleet host needs an update before lanes can be switched or checked here.',
   'insecure-origin': () => "Accounts can't be changed over plain HTTP.",
@@ -632,6 +671,11 @@ export function removeCheckLine(c: {
   ].join(' · ');
 }
 
+/** The Codex lane's line in Remove (spec §11 step 4, G20): on by default, and what its answer means when it is off. The
+ *  second says only what the box guarantees, since this lane may be signed out or hold no sign-in at all. */
+export const CODEX_FOLDER_LINE = "Delete this lane's ChatGPT sign-in folder";
+export const CODEX_FOLDER_KEPT = 'The folder stays on the fleet host, and whatever sign-in it holds is not deleted.';
+
 /** The destructive button's words: it recounts as sessions move (spec §11.2). */
 export function removeButtonLabel(id: string, still: number): string {
   return still > 0 ? `Remove ${id} · ${plural(still, 'session')} still on it` : `Remove ${id}`;
@@ -663,8 +707,26 @@ export const READ_IT_AGAIN = 'Read again';
 export const READING_LANE = (id: string): string => `Reading ${id} on the fleet host…`;
 /** The typed-id confirm (spec §11.5): it must equal the id exactly. */
 export const typedConfirmLabel = (id: string): string => `Type ${id} to confirm`;
-export const removeConsequence = (id: string): string =>
-  `Removing ${id} deletes its credential on the fleet host and everything that runs it. Its config folder and transcripts stay.`;
+/** What Remove deletes. A managed Codex lane's credential is its sign-in folder, so its sentence follows that lane's line
+ *  and never says the credential goes: turned off, the verb keeps the folder. Turned on, the verb still keeps one that is
+ *  outside ccrc's home, that another lane reaches, or whose fate it can't read, so the sentence says "if". A lane ccrc only
+ *  records (`recorded`, D-8051 (13)) has its own: the verb keeps that lane's launcher, any secrets file it names and its
+ *  settings env, and runs no sign-out, so all it takes is the roster row, the records beside it and ccrc's own hooks and
+ *  skills (D-8051 (15)). The last sentence says "if": the verb keeps a secrets file off the path ccrc expects (D-8051 (19)). */
+export const removeConsequence = (id: string, codexFolder?: 'delete' | 'keep' | 'recorded'): string => {
+  if (codexFolder === 'recorded') {
+    return `Removing ${id} takes it off the fleet host's roster, removes ccrc's state records for it, and takes ccrc's own hooks and skills out of its config folder. `
+      + 'Its launcher, whatever credential that launcher uses, the rest of its config folder and its transcripts stay: ccrc only records this lane.';
+  }
+  if (codexFolder === 'keep') {
+    return `Removing ${id} deletes everything that runs it on the fleet host. Its ChatGPT sign-in folder, config folder and transcripts stay.`;
+  }
+  if (codexFolder === 'delete') {
+    return `Removing ${id} deletes everything that runs it on the fleet host, and its ChatGPT sign-in folder if that's safe to delete. `
+      + 'Its config folder and transcripts stay.';
+  }
+  return `Removing ${id} deletes everything that runs it on the fleet host, and its credential if that's safe to delete. Its config folder and transcripts stay.`;
+};
 /** Discard (spec §11.5): one tap with step-up, for a never-enabled lane with no sessions. */
 export const DISCARD_LANE = 'Discard this lane';
 export const discardLine = (id: string): string =>
@@ -743,7 +805,8 @@ export function atProviderWords(kind: string, state: string, keyHint: string | u
     case 'openrouter-key':
       return {
         lead: 'The key still works at OpenRouter and can still spend credit. Delete it at',
-        tail: keyHint === undefined ? '.' : ` (it's the key named after this lane, ${keyHint}).`,
+        // By its ending, the one thing the box knows of it: a pasted key was named at OpenRouter by whoever made it.
+        tail: keyHint === undefined ? '.' : ` (it's the key ending in ${keyHint.slice(keyHint.indexOf('…'))}).`,
       };
     case 'codex':
       return { lead: 'The ChatGPT sign-in stays authorised. Remove it at', tail: '.' };
@@ -789,7 +852,7 @@ type ReplaceRefusalWord = Extract<RouteRefusal,
 /** What a refused replacement leaves, by what the app may say of the old token. */
 const replaceLeft = (id: string, old: OldCredential): string => oldCredentialLine(id, old, `${id} keeps its old token.`);
 const REPLACE_REFUSAL_TEXT: Readonly<Record<ReplaceRefusalWord, (id: string, old: OldCredential) => string>> = {
-  'key-rejected': (id, old) => `That token was refused (HTTP 401). ${replaceLeft(id, old)}`,
+  'key-rejected': (id, old) => `That token was refused. ${replaceLeft(id, old)}`,
   'token-unverified': (id, old) =>
     `Anthropic didn't answer, so nothing was saved. ${oldCredentialLine(id, old, `${id} keeps its old token.`, `${id} is as it was.`)} Try again.`,
   'key-charset': (id, old) => `That isn't a token: it holds a line break or a control character, or is too long. ${replaceLeft(id, old)}`,
@@ -876,17 +939,44 @@ export const SIGN_IN_LEDGER = {
     (removed ? `✓ ${id} signed out on this box` : `✓ ${id} had no sign-in on this box to remove`),
 } as const;
 
+/** The sign-in's words for one method: the Codex sign-in is a device code, so its ledger, its URL card and its endings
+ *  say what that flow does (spec §7.2; D-8051), and never name claude.ai or a code to paste. */
+export type SignInWordMethod = 'login' | 'setup-token' | 'openai-login';
+
+/** The ledger lines that differ by method: the start, the wait on the operator, and the line `done` leaves. */
+export const signInLedger = (method: SignInWordMethod): { starting: string; waiting: string; done: string } => (method === 'openai-login'
+  ? { starting: '… starting ChatGPT sign-in', waiting: '… waiting for you to approve', done: '✓ signed in' }
+  : { starting: SIGN_IN_LEDGER.starting, waiting: SIGN_IN_LEDGER.waiting, done: method === 'login' ? SIGN_IN_LEDGER.signedIn : SIGN_IN_LEDGER.minted });
+/** The check's running line (spec §7.2 step 7). */
+export const checkingLine = (id: string, method: string | null): string =>
+  (method === 'openai-login' ? LEDGER.checkingCodex(id) : LEDGER.checking(id));
+
 /** The URL card (spec §6.2 step 5, §6.3, §12.4). */
 export const OPEN_TO_SIGN_IN = 'Open claude.ai to sign in';
+/** The ChatGPT device-code card (spec §7.2 step 5). The method frame's one line stands where a radio would (step 1). */
+export const OPEN_CHATGPT = 'Open the ChatGPT sign-in page';
+export const CHATGPT_MODELS = 'Models: luna, terra and sol from your ChatGPT plan.';
+export const DEVICE_CODE_LABEL = 'The sign-in code';
+export const DEVICE_CODE_NOTE = "Type this code on the page. Don't share it.";
+export const COPY_CODE = 'Copy';
+/** A Codex lane's result line (spec §3.4): ccrc reads no identity from its sign-in, so none is shown unless one is stated. */
+export const CHATGPT_SIGNED_IN = 'Signed in with ChatGPT';
+/** That line, where the lane proves it. It reads the check, never the word: a new lane is off, and `stateWordFor` answers
+ *  Off first for a disabled lane whatever its check found (D-8051 (8)). Anything else the lane says of its sign-in beats
+ *  the check: a sign-out, no sign-in on the box, or the 401 that makes its word Signed out. */
+export const chatgptSignedInLine = (lane: LaneWire): string | null =>
+  (lane.check?.verdict === 'ok' && lane.signedOutAt === undefined && lane.credential !== 'none' && lane.state.word !== 'signed-out'
+    ? CHATGPT_SIGNED_IN : null);
 export const OPEN_LINK = 'Open';
 export const COPY_LINK = 'Copy link';
 export const COPIED = 'Copied';
 /** Which account approves is the browser's claude.ai session (spec §6.3, §12.4): a private tab chooses another. */
-export const privateTabLine = (method: 'login' | 'setup-token'): string => (method === 'login'
+export const privateTabLine = (method: SignInWordMethod): string => (method !== 'setup-token'
   ? 'Paste it into a private tab to sign in as a different account.'
   : 'Paste it into a private tab to choose the account.');
 export const SIGN_IN_WITH = 'Sign in with the account this lane should use.';
 export const COME_BACK = 'Come back here to paste the code.';
+export const COME_BACK_APPROVED = "Come back here once you've approved it.";
 export const WHAT_THIS_GRANTS = 'What this grants';
 /** The scope Remote Control rides, marked in the disclosure (09-05 §12.6). */
 export const REMOTE_CONTROL_SCOPE = 'user:sessions:claude_code';
@@ -912,9 +1002,28 @@ export const SIGN_IN_END: { readonly [K in Exclude<SignInEndKind, 'failed'>]: (i
   lost: (id) => `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. The lane is still there, off. Start the sign-in again.`,
   'node-changed': () => 'The fleet host answering now is not the one the sign-in started on, so it was stopped. Nothing was signed in.',
 };
+/** A plain word the helper gave, in brackets, or nothing. */
+const failureWord = (failure: string | undefined): string => (failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : '');
+/** The ChatGPT sign-in's endings where A22's would be false (spec §7.2): a device sign-in has no code to refuse, its link
+ *  is not claude.ai's, and its expiry reads the code's own time. The runtime's failure line is never quoted: `failure`
+ *  is a plain word or nothing. */
+const chatgptExpired = (expiresAt: number | undefined): string =>
+  (expiresAt === undefined ? 'The sign-in code expired.' : `The sign-in code expired at ${clockHM(expiresAt)}.`);
+const CHATGPT_UNTRUSTED = "The sign-in link or code on the fleet host didn't look like ChatGPT's, so neither is shown.";
+const chatgptStopped = (failure: string | undefined): string => `The ChatGPT sign-in stopped on the fleet host${failureWord(failure)}.`;
+/** The connect sheet's endings for a new ChatGPT lane. */
+export function chatgptEnd(id: string, kind: SignInEndKind, failure: string | undefined, expiresAt: number | undefined): string {
+  switch (kind) {
+    case 'expired': return `${chatgptExpired(expiresAt)} Nothing was signed in. The lane is still there, off.`;
+    case 'untrusted': return `${CHATGPT_UNTRUSTED} Nothing was signed in. Start again, or check the fleet host.`;
+    case 'failed': case 'code-refused': return `${chatgptStopped(failure)} Nothing was signed in. The lane is still there, off.`;
+    default: return SIGN_IN_END[kind](id);
+  }
+}
+
 /** The helper ended the attempt `failed` before any code was sent: its word when it gave a plain one. */
 export const signInFailed = (failure: string | undefined): string =>
-  `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. Nothing was signed in. The lane is still there, off.`;
+  `The sign-in stopped on the fleet host before a code was sent${failureWord(failure)}. Nothing was signed in. The lane is still there, off.`;
 
 type SignInStartWord = Extract<RouteRefusal,
   'auth-in-progress' | 'auth-unsupported-here' | 'method-unmeasured' | 'step-up-required' | 'lane-busy' | 'unmeasured'
@@ -936,8 +1045,10 @@ const SIGN_IN_START_TEXT: Readonly<Record<SignInStartWord, (id: string, reason: 
 };
 /** A start refused with a word (spec §13.1's `auth/start` refusals), from the code alone. `reason` is the body's
  *  `reason` (`auth-unsupported-here`), printed only when it is a plain word. */
-export function signInStartRefusal(id: string, word: string, reason: string | undefined): string {
+export function signInStartRefusal(id: string, word: string, reason: string | undefined, method?: SignInWordMethod): string {
   const r = reason !== undefined && CODE_RE.test(reason) ? reason : undefined;
+  // A ChatGPT lane has no token to paste in its place.
+  if (word === 'auth-unsupported-here' && method === 'openai-login') return `This fleet host can't run a sign-in${r !== undefined ? ` (${r})` : ''}. Nothing was started.`;
   if (Object.hasOwn(SIGN_IN_START_TEXT, word)) return SIGN_IN_START_TEXT[word as SignInStartWord](id, r);
   return CODE_RE.test(word) ? `The fleet host refused (${word}): the sign-in was not started.` : 'The fleet host refused: the sign-in was not started.';
 }
@@ -1003,11 +1114,12 @@ export const KEEP_IT = 'Keep it';
 /** The minutes left of an attempt, as the banner says them: whole minutes, rounded up, at least one while it is live. */
 export const minutesLeft = (expiresAt: number, now: number): number => Math.max(1, Math.ceil((expiresAt - now) / 60_000));
 /** The app-level resume banner (spec §6.2): on any route, for an attempt this session started that waits for its code. */
-export const resumeBannerText = (id: string, minutes: number): string =>
-  `A sign-in for ${id} is waiting for its code · ${minutes} min left`;
+export const resumeBannerText = (id: string, minutes: number, method?: SignInWordMethod): string =>
+  `A sign-in for ${id} is waiting for ${method === 'openai-login' ? 'you to approve it' : 'its code'} · ${minutes} min left`;
 export const CONTINUE = 'Continue';
 /** The lane card's line for the same attempt, beside Continue and Cancel. */
 export const RESUME_CARD_LINE = 'A sign-in is waiting for its code';
+export const RESUME_CARD_LINE_APPROVE = 'A sign-in is waiting for you to approve it';
 
 /** The fold's and the trouble card's switch acts (spec §4.2, §4.4, §9; Q1). */
 export const SWITCH_TO_TOKEN = 'Switch to a long-lived token';
@@ -1097,39 +1209,43 @@ export const PASTE_INSTEAD = 'Paste a token instead';
 export const MINT_INSTEAD = 'Mint a new token instead';
 
 /** What a re-auth replaces, by the method it runs: a sign-in for `login`, a token for `setup-token`. */
-const credOf = (method: 'login' | 'setup-token'): 'sign-in' | 'token' => (method === 'login' ? 'sign-in' : 'token');
+const credOf = (method: SignInWordMethod): 'sign-in' | 'token' => (method === 'setup-token' ? 'token' : 'sign-in');
 
 /** The sheet's title and eyebrow, by the method it runs. */
-export const reauthTitle = (id: string, method: 'login' | 'setup-token'): { title: string; eyebrow: string } => (method === 'login'
+export const reauthTitle = (id: string, method: SignInWordMethod): { title: string; eyebrow: string } => (method !== 'setup-token'
   ? { title: `Sign ${id} in again`, eyebrow: 'sign in again' }
   : { title: `Replace ${id}'s token`, eyebrow: 'mint a new token' });
 
 /** What happens, said before anything runs: the old credential stays until the new one passes (A20). That the lane keeps
  *  it is said only when `oldCredentialOf` says `kept` (D-7872 (10)); on a lane known to have none (`signed-out`) it says
  *  the lane is signed out, and everywhere else the neutral words, true either way. */
-export const reauthIntro = (id: string, method: 'login' | 'setup-token', old: OldCredential): string => {
+export const reauthIntro = (id: string, method: SignInWordMethod, old: OldCredential): string => {
   if (old !== 'kept') {
-    const line = old === 'signed-out' ? laneSignedOut(id) : noCheckedCredential(id, credOf(method));
-    return method === 'login'
+    const line = old === 'signed-out' ? signedOutLine(id, method) : noCheckedCredential(id, credOf(method));
+    return method !== 'setup-token'
       ? `A new sign-in runs on the fleet host and is checked before it is installed. ${line}`
       : `A new long-lived token is minted on the fleet host and checked before it is installed. ${line}`;
   }
-  return method === 'login'
+  return method !== 'setup-token'
     ? `A new sign-in runs on the fleet host and is checked before it replaces the old one. Until it passes, ${id} keeps the sign-in it has.`
     : `A new long-lived token is minted on the fleet host and checked before it replaces the old one. Until it passes, ${id} keeps the token it has.`;
 };
 
 /** The confirm frame's primary. */
-export const reauthStart = (method: 'login' | 'setup-token'): string => (method === 'login' ? SWITCH_START.login : MINT_NEW_TOKEN);
+export const reauthStart = (method: SignInWordMethod): string => (method !== 'setup-token' ? SWITCH_START.login : MINT_NEW_TOKEN);
 
 /** The sentence every refused, cancelled or expired attempt ends with. */
-export const credentialUntouched = (id: string, method: 'login' | 'setup-token'): string =>
+export const credentialUntouched = (id: string, method: SignInWordMethod): string =>
   `Nothing changed: ${id} keeps its old ${credOf(method)}.`;
 
 /** The sentence they end with instead on a lane known to have no credential (D-7872 (2), (10), D-7992): one the sheet
  *  itself just signed out with N5's sign-out, or one the lane says has none. It runs nothing until a new one goes in. */
 export const laneSignedOut = (id: string): string =>
   `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in or a token again.`;
+/** The same, for the method the sheet runs: a ChatGPT lane has no token to fall back on. */
+const signedOutLine = (id: string, method: SignInWordMethod): string => (method === 'openai-login'
+  ? `${id} is signed out on the fleet host, so its sessions fail until it has a sign-in again.`
+  : laneSignedOut(id));
 
 /** THE NEUTRAL WORDS (D-7872 (10), the operator's option-1 ruling of 2026-11-03): where the lane cannot be taken at its
  *  word (`oldCredentialOf`: the provider refused it, or a sign-out has not been read back) or says nothing (a box too old
@@ -1140,15 +1256,23 @@ export const NOTHING_INSTALLED = 'Nothing was installed.';
 
 /** The closing sentence of an attempt that installed nothing, by what the app may say of the old credential: `kept`'s
  *  own sentence, the lane signed out, or the neutral one. */
-export const oldCredentialLine = (id: string, old: OldCredential, kept: string, unsure: string = NOTHING_INSTALLED): string =>
-  (old === 'kept' ? kept : old === 'signed-out' ? laneSignedOut(id) : unsure);
+export const oldCredentialLine = (id: string, old: OldCredential, kept: string, unsure: string = NOTHING_INSTALLED, signedOut = laneSignedOut(id)): string =>
+  (old === 'kept' ? kept : old === 'signed-out' ? signedOut : unsure);
 
 /** A re-auth's terminal states (spec §9: "A refused, cancelled or expired attempt says the old credential is
  *  untouched"), each from its code. `lost` is the one state that cannot say so: whether the attempt finished is unknown.
  *  `old` is `oldCredentialOf`'s answer (D-7872 (10)): the untouched sentence only on `kept`, the lane signed out on
  *  `signed-out`, and "Nothing was installed." otherwise. */
-export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: SignInEndKind, failure: string | undefined, old: OldCredential): string {
-  const untouched = oldCredentialLine(id, old, credentialUntouched(id, method));
+export function reauthEnd(
+  id: string, method: SignInWordMethod, kind: SignInEndKind, failure: string | undefined, old: OldCredential, expiresAt?: number,
+): string {
+  const out = signedOutLine(id, method);
+  const untouched = oldCredentialLine(id, old, credentialUntouched(id, method), NOTHING_INSTALLED, out);
+  if (method === 'openai-login') {
+    if (kind === 'expired') return `${chatgptExpired(expiresAt)} ${untouched}`;
+    if (kind === 'untrusted') return `${CHATGPT_UNTRUSTED} ${untouched}`;
+    if (kind === 'failed' || kind === 'code-refused') return `${chatgptStopped(failure)} ${untouched}`;
+  }
   switch (kind) {
     case 'expired': return `The sign-in timed out. ${untouched}`;
     case 'code-refused':
@@ -1157,7 +1281,7 @@ export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: Sig
       return `The sign-in link on the fleet host didn't look like claude.ai, so it isn't shown. ${untouched}`;
     case 'cancelled': return `Cancelled. ${untouched}`;
     case 'unknown':
-      return `The fleet host didn't answer in time, so whether a new sign-in started for ${id} is unknown. ${oldCredentialLine(id, old, `Its old ${credOf(method)} was not replaced here.`, 'Nothing was installed here.')} Start again.`;
+      return `The fleet host didn't answer in time, so whether a new sign-in started for ${id} is unknown. ${oldCredentialLine(id, old, `Its old ${credOf(method)} was not replaced here.`, 'Nothing was installed here.', out)} Start again.`;
     case 'lost':
       return `The server no longer holds the sign-in for ${id}, so whether it finished is unknown. ${old === 'kept'
         ? 'Check the lane to see which credential works.'
@@ -1167,25 +1291,28 @@ export function reauthEnd(id: string, method: 'login' | 'setup-token', kind: Sig
     case 'node-changed':
       return `The fleet host answering now is not the one the sign-in started on, so it was stopped. ${untouched}`;
     case 'failed':
-      return `The sign-in stopped on the fleet host before a code was sent${failure !== undefined && CODE_RE.test(failure) ? ` (${failure})` : ''}. ${untouched}`;
+      return `The sign-in stopped on the fleet host before a code was sent${failureWord(failure)}. ${untouched}`;
   }
 }
 
 /** A start refused with a word: A22's sentence, then what `old` allows of the old credential (D-7872 (10)). `not-found`
  *  says the first alone: the lane has left the roster and a removal signs it out, so it has no old credential to speak
  *  of, as A19's `not-found` has none. */
-export const reauthStartRefusal = (id: string, method: 'login' | 'setup-token', word: string, reason: string | undefined, old: OldCredential): string => {
-  const refused = signInStartRefusal(id, word, reason);
-  return word === 'not-found' ? refused : `${refused} ${oldCredentialLine(id, old, credentialUntouched(id, method))}`;
+export const reauthStartRefusal = (id: string, method: SignInWordMethod, word: string, reason: string | undefined, old: OldCredential): string => {
+  const refused = signInStartRefusal(id, word, reason, method);
+  return word === 'not-found' ? refused : `${refused} ${oldCredentialLine(id, old, credentialUntouched(id, method), NOTHING_INSTALLED, signedOutLine(id, method))}`;
 };
 
 /** The run frame's line once the helper says `done` (A20 installed it after its own check of the new credential). */
-export const reauthInstalled = (method: 'login' | 'setup-token'): string => (method === 'login'
+export const reauthInstalled = (method: SignInWordMethod): string => (method !== 'setup-token'
   ? '✓ New sign-in checked and installed on the fleet host'
   : '✓ New token minted, checked and installed on the fleet host');
 
-/** The live sessions after it (spec §9): a token is read at a session's start, a sign-in at its next request. */
-export const reauthRestartLead = (n: number, method: 'login' | 'setup-token', old: OldCredential): string => (method === 'setup-token'
+/** The live sessions after it (spec §9): a token is read at a session's start, a sign-in at its next request, and a
+ *  Codex lane's gateway reloads its sign-in itself, so its sessions need no restart. */
+export const reauthRestartLead = (n: number, method: SignInWordMethod, old: OldCredential): string => (method === 'openai-login'
+  ? `This lane's gateway reloads the new sign-in itself, so ${plural(n, 'session')} on it ${n === 1 ? "doesn't" : "don't"} need a restart. Restart one if it's stuck on the old error.`
+  : method === 'setup-token'
   ? (old === 'kept'
     ? `${plural(n, 'session')} on this lane ${n === 1 ? 'keeps' : 'keep'} the old credential until ${n === 1 ? 'it restarts' : 'they restart'}.`
     : startedBefore(n))

@@ -87,7 +87,7 @@ const run = (id: number, claimedBy: string, sessionId: string | null, project: s
   openedAt: NOW - 60 * MIN, dispatchStartedAt: null, dispatchedAt: NOW - 50 * MIN, closedAt: null, handoffCommit: null,
   items: { done: 0, total: 0 }, unreadMail: 0,
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
-            briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null,
+            briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false,
   ...over,
 });
 

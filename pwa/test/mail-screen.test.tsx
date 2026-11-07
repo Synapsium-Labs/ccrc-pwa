@@ -651,7 +651,7 @@ describe('the review cap door on the cap\'s record', () => {
     dispatchedAt: 2, closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
               briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-    childReclaim: null, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null }, ...over,
+    childReclaim: null, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null }, hadChild: false, ...over,
   });
   const notice = (over: Partial<NotifyEvent> = {}): NotifyEvent =>
     e({ seq: 9, kind: 'run', sessionId: '', runId: 12, title: 'Review cap reached on run 12', body: 'Lift the cap…', ...over });

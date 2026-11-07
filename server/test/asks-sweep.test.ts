@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
-import { FleetWatcher } from '../src/watch.js';
+import { DELEGATION_PASS_SLOW_PREFIX, FleetWatcher } from '../src/watch.js';
 import { questionsTestView } from '../src/coord/questions.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -343,8 +343,9 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(okAsk(f.coord.askById(askId))!.state).toBe('released');      // untouched, not rewritten
     // Silent: distinguishes this branch from the exhaustiveness fallback
-    // ('held'/'unknown'), which warns.
-    expect(warn).not.toHaveBeenCalled();
+    // ('held'/'unknown'), which warns. The clock jump above can land inside a
+    // delegation pass, which then logs itself slow; that line is not this sweep's.
+    expect(warn.mock.calls.filter(([m]) => !String(m).startsWith(DELEGATION_PASS_SLOW_PREFIX))).toEqual([]);
   });
 
   // RULING F9, branch 3: the row itself is gone — a lost coord.db. Its loss

@@ -32,6 +32,7 @@ import { liveStateReaderOver, readLiveState, readLiveStateMeasured } from './liv
 import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { finishedAfter } from './coord/finished.js';
+import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
@@ -131,7 +132,8 @@ import {
   type DeepReadonly, type DelegationAttemptRow, type DelegationBucketCursor, type DelegationCensusRecord, type DelegationCheckpointV1,
   type DelegationObservationInterval, type DelegationRecoveryState,
 } from './coord/delegation-model.js';
-import { claimExpiry, type LivenessProbe } from './coord/claims.js';
+import { claimExpiry, claimVerdictOf, type LivenessProbe } from './coord/claims.js';
+import { rowStanding, type RowStandingFacts } from './sessionReading.js';
 import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
@@ -160,7 +162,7 @@ import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/run
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
-import { notify, noticeSink } from './notice.js';
+import { notify, noticeSink, notifyPushOnly } from './notice.js';
 import { runDriftPass } from './coord/driftLane.js';
 import { deriveBranch } from './naming.js';
 import { TranscriptResolver } from './transcript/resolve.js';
@@ -1803,7 +1805,9 @@ export class FleetWatcher {
    * mark exists to stop, and a missed one is still shown by the fleet's update line and the settings screen.
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
-   * `pushOne` is about a session and this is about the fleet. A server-role process only: the push
+   * `pushOne` is about a session and this is about the fleet. So it goes through `notifyPushOnly`, the funnel's
+   * send-only door: being in the funnel gates nothing here, and this mark is the only once-only guard the push has.
+   * A server-role process only: the push
    * subscriptions are this box's disk (`push.ts`'s header), and the notify mode is the fleet row's alone.
    * With no push service (no VAPID keys — `index.ts` builds `push` only then) it decides and marks NOTHING:
    * a mark with no sender would answer `pushed` for a push nobody sent and use the tag up for good, so a
@@ -1852,10 +1856,7 @@ export class FleetWatcher {
     const copy = releasePushCopy(n, summary);
     const payload: PushPayload = { title: copy.title, body: copy.body, tag: copy.tag, url: copy.url };
     const tag = n.tag;
-    const sending = sender.notify(payload);
-    void sending.catch((e: unknown) => {
-      console.warn(`ccrc-server: update: the release push for ${tag} did not send (${e instanceof Error ? e.message : String(e)}) — it is not retried; the fleet's update line and the settings screen still show the release`);
-    });
+    notifyPushOnly({ push: sender }, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
     return { did: 'pushed', tag, payload };
   }
 
@@ -1982,9 +1983,9 @@ export class FleetWatcher {
   private delegationClosing: Promise<void> | null = null;
   /** One pass of the delegation lane. PUBLIC for the reason `sweepNames` is: `tick()` dispatches it with `void`, so a test that awaits
    *  `tick()` has not awaited it. A no-op without a coordination database, inside the census cadence, or while a pass is running. */
-  sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[]): Promise<void> {
+  sweepDelegation(sessions: readonly LaneSession[], records: readonly LaneRecord[], refused: ReadonlySet<string> = new Set()): Promise<void> {
     if (this.delegationClosing !== null) return Promise.resolve();
-    const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions); })
+    const run = this.delegationLane().sweep(sessions, records).then((ran) => { if (ran) this.emitDelegation(sessions, refused); })
       .finally(() => { this.delegationSweeps.delete(run); });
     this.delegationSweeps.add(run);
     return run;
@@ -1998,14 +1999,14 @@ export class FleetWatcher {
   /** After a pass that ran: project, and broadcast on a CHANGE of content (`asOf` excluded, so an unchanged projection is not
    *  re-sent each minute). A refused or throwing runs read skips the frame and leaves the last one standing (`emitRuns`, D-2545).
    *  A null projection after a frame WITHDRAWS it, once: a lane that cannot project must not leave old liveness on screen. */
-  private emitDelegation(sessions: readonly LaneSession[]): void {
+  private emitDelegation(sessions: readonly LaneSession[], refused: ReadonlySet<string>): void {
     const coord = this.deps.coord;
     if (!coord) return;
     let wire: DelegationProjectionWire | null;
     try {
       const read = coord.delegationRunStamps(DELEGATION_PROJECTION_CLOSED_RUNS);
       if (!read.ok) { console.warn(`ccrc-server: the delegation frame skipped a pass: runs refused (${read.detail})`); return; }
-      wire = this.delegationLane().projection(sessions, read.runs);
+      wire = this.delegationLane().projection(sessions, read.runs, refused);
     } catch (err) { console.warn(`ccrc-server: the delegation frame skipped a pass (${err instanceof Error ? err.message : String(err)})`); return; }
     if (wire === null) { this.withdrawDelegation(); return; }
     const json = JSON.stringify({ ...wire, asOf: '' });
@@ -2522,8 +2523,8 @@ export class FleetWatcher {
       // readRegistry() field is its own agent-WS round trip. Some lanes still list
       // the registry themselves on purpose, each for its own reason recorded at
       // its call site, among others: sweepDivergences, the mail lane's `mailPass`,
-      // the temp-root collector, sweepOrphanTrees, the snapshot re-check, and
-      // `readLimits` inside `assembleFleet`, every listed tick. The lifecycle mirror
+      // the temp-root collector, sweepOrphanTrees and the snapshot re-check. `readLimits`
+      // takes this listing's names (D-8069). The lifecycle mirror
       // lists none of the registry's rows: it reads its own `$REG/.lifecycle/`.
       //
       // `readRegistryMeasured`, not `readRegistry` (blocking review findings
@@ -2747,7 +2748,7 @@ export class FleetWatcher {
         clearTimeout(timer);
       }
       const panePids = new Map<string, number | null>();
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg));   // read once a tick: published by `currentLimits`, handed to assembleFleet
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
       const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
@@ -2917,7 +2918,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the DELEGATION lane (wave 3, Task 13) is a sibling at the census's own cadence, on this tick's
       // `sessions` and registry rows. It reads spool buckets over the agent link, so awaiting it would put the dialog detector and the
       // busy->idle push behind a slow remote read; it is single-flight and has its own budget (`DelegationLane`).
-      void this.sweepDelegation(sessions, records).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepDelegation(sessions, records, registryRead.refused).catch(() => { /* one bad sweep must not kill the poll */ });
       this.primed = true;
       if (this.deps.cfg.fleetMode === 'remote' && this.deps.fleetState?.connected) {
         // `connected` alone is not "this read was complete"; the snapshot decision and its rationale live in
@@ -3040,7 +3041,7 @@ export class FleetWatcher {
     // the PWA's reader gives it, whether the server restarted or predates the
     // field. Still no I/O and no `node:sqlite`: it is an in-memory field.
     const doneAt = this.currentChildReclaimDoneAt();
-    const status: CoordStatus = doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt };
+    const status: CoordStatus = withCleanupHeldBy(doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt }, { reclaim: this.childReclaimSweepState, expire: this.archivedExpiryState, collect: this.collectState }, this.lastFleet);
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;
@@ -6354,9 +6355,12 @@ export class FleetWatcher {
    * hard cap still fells it — and is checked BEFORE the absent test, which
    * would answer `gone` (slug `tick-lanes-hold-a-refused-id`). A holder with
    * no listed row at all still reads `gone`.
+   *
+   * A listed row reads through `rowStanding` (D-6908), the delegation card's reader too: a holder with an identity
+   * field unmeasured, restarting, or one tmux did not answer for, is doubt; asleep and dead holders are `gone`.
    */
   private claimProbe(
-    sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+    sessions: readonly ClaimProbeRow[],
     refused: ReadonlySet<string>,
   ): LivenessProbe {
     const byId = new Map(sessions.map((s) => [s.id, s]));
@@ -6365,8 +6369,7 @@ export class FleetWatcher {
         if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
         const s = byId.get(id);
         if (s === undefined) return 'gone';                 // the fleet no longer lists it
-        if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
-        return s.status === 'dead' ? 'gone' : 'running';
+        return claimVerdictOf(rowStanding(s));              // doubt reads as HELD (D12)
       },
     };
   }
@@ -6390,7 +6393,7 @@ export class FleetWatcher {
    * lapse lane below keeps the honest verdict, which is where "doubt is not
    * death" does its other half of the work.
    */
-  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
+  renewClaims(sessions: readonly ClaimProbeRow[], refused: ReadonlySet<string>): void {
     this.runLaneSync('claimRenew', () => {
       const now = Date.now();
       const store = this.deps.coord;
@@ -6408,7 +6411,7 @@ export class FleetWatcher {
    *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
    *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
    *  `lapseClaimRow` lapses, never deletes. */
-  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
+  lapseClaims(sessions: readonly ClaimProbeRow[], refused: ReadonlySet<string>): void {
     this.runLaneSync('claimLapse', () => {
       const now = Date.now();
       const store = this.deps.coord;
@@ -9864,7 +9867,9 @@ export interface DelegationLaneStall {
 /** `hibernatedAt` optional (D-5242): absent reads as not asleep, the old behaviour, so a caller that never knew the field
  *  is unchanged; the tick hands the assembled rows, which always carry it. `stoppedBy` and `archivedAt` are optional for the same
  *  reason: absent reads as no stop evidence (D-5433). */
-type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>>;
+/** What the claim sweeps read of a frame row: `Pick` is deliberate, so a test need not fabricate a whole `FleetSession`. */
+type ClaimProbeRow = Pick<FleetSession, 'id' | 'unmeasured'> & RowStandingFacts;
+type LaneSession = Pick<FleetSession, 'id' | 'project' | 'status'> & Partial<Pick<FleetSession, 'hibernatedAt' | 'stoppedBy' | 'archivedAt'>> & RowStandingFacts;
 type LaneRecord = Pick<SessionRecord, 'id' | 'project' | 'child'> & Partial<Pick<SessionRecord, 'workdir'>>;   // PR6: workdirs key a standing refusal
 type DelegationVerdictCounts = { unresolved: number; conflicting: number; unmeasured: number };
 
@@ -10742,12 +10747,12 @@ class DelegationLane {
    *  (a measured absence needs two successful censuses). Not stored; never a durable write. It projects the census the last pass
    *  read (`passCensus`), never a second read: a census read is a pass's own (`delegation-sweep-clock.test.ts` counts them). */
   private passCensus: DelegationCensusPass | null = null;
-  projection(sessions: readonly DelegationProjectionSession[], runs: readonly DelegationProjectionRun[]): DelegationProjectionWire | null {
+  projection(sessions: readonly DelegationProjectionSession[], runs: readonly DelegationProjectionRun[], refused: ReadonlySet<string>): DelegationProjectionWire | null {
     const census = this.passCensus;
     if (this.durable === null || census === null || !this.registryListed || !this.reconciled || this.reconciliations < 2) return null;
     const state = this.durable.state();
     if (state.phase !== 'ready') return null;
-    return projectDelegation({ checkpoint: state.checkpoint, census, absences: [...this.absences.values()], sessions, runs });
+    return projectDelegation({ checkpoint: state.checkpoint, census, absences: [...this.absences.values()], sessions, refused, runs });
   }
 
   // ── a pass ────────────────────────────────────────────────────────────────────────────────────────────────────────────

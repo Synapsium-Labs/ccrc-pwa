@@ -614,7 +614,7 @@ describe('(c) every SKIN_TOKENS member has a :root default in tokens.css', () =>
     // `--measure-chat` moved into the ≥1600 block only: a phone would read
     // the property unset.
     const tree = replaceOnce(plantedTree(), TOKENS_CSS,
-      '  --measure-chat:  780px;         /* the transcript\'s reading column (820 at ≥1600) */\n', '');
+      '  --measure-chat:  1200px;        /* the transcript\'s column at a desk (spec 2026-11-06 R2) */\n', '');
     expect(defaults(tree, REAL)).toEqual([
       'tokens.css: --measure-chat is a SKIN_TOKENS member with no default in the top-level :root block']);
   });

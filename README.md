@@ -602,7 +602,7 @@ under "Attention, notifications and answering" below.
 `SKIP` when there is nothing to measure — every WARN and FAIL followed by its `remedy:`, then one
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
-`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111),
+`skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), `playwright`,
 `timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
@@ -623,7 +623,8 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `transcripts` | every registry row's uuid against its transcript, read by the one `continued-in` rule `ccd` and the server share: a WARN names the sessions reading a transcript Claude Code has superseded (a supervised one clears on its next supervise tick; a stopped or archived one is followed when it is next resumed) and, apart, a session whose marker names a successor never written (it clears at that job's first line, or at the first prompt the session answers on its own transcript; the row's wrapper is named, because `<wrapper> agents` lists only that account's jobs); rows it could not measure (at neither direct spelling, unreadable, or a registry row it cannot read) are counted apart inside the PASS, never claimed clean; a FAIL when `~/.cc-sessions` is not a readable, searchable directory |
 | `transcript_work` | work kept inside Claude Code's transcript folders: every roster config dir's `projects/<slug>/` entries, and each session directory's, that are not the shapes Claude Code writes (a `<uuid>.jsonl` transcript, a `<uuid>/` session directory, `memory`; inside a session directory `subagents/`, `tool-results/`, `workflows/`), counted and sized as `du -sb` sizes them; a WARN over 1 GiB in all or 256 MiB in one entry names the five largest, and a walk past its 20 s bound, or one that cannot read a directory, is unmeasured, never a PASS. It deletes nothing. `GET /api/fleet/health`'s `disk.transcriptWork` carries the agent's count of the same tree, shown in Settings › Automation (D-7898) |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
-| `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
+| `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` resolving to that engine on the `PATH` sessions get (read from each live session's environment, else the user manager's; `path` asks the same of `ccrc`, `ccd` and `ccrc-api`) |
+| `playwright` | every cached Playwright browser build, really launched offline with a throwaway profile: a build the loader refuses or one left incomplete is a WARN naming it, never a FAIL. SKIP with nothing cached or on a server box |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
 | `test-slice`, `testbox` | the test slice's live memory, limits and heavy-run queue; the test box as the server decided it: its state and its switch, named separately, the box's queue depth and the tool versions that differ ("The test box", below) |
@@ -1922,7 +1923,8 @@ phrase as JSON. There is no PWA surface for it in this build: run it on the box 
 ccrc account roster                        # the roster, as JSON
 ccrc account candidates                    # launchers in ~/.local/bin that look like accounts and are not rostered
 ccrc account add --id <id> --provider <anthropic|openai|openrouter|compatible> --label <text> --hue <hue> \
-    [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--credential -] [--adopt]
+    [--suffix .claude-<id>] [--method <m>] [--base-url <url>] [--models <json>] [--placement overflow|full] \
+    [--credential -] [--adopt]
 ccrc account declare --id <id> --label <text> --hue <hue> [--provider <p>] [--base-url <url>] [--suffix <s>]
 ccrc account check --id <id>               # is this lane's credential alive? (may spend one minimal turn), then the seed
 ccrc account seed --id <id>                # the first-run seed on its own: onboarding, theme, trust flags; no turn
@@ -1934,8 +1936,8 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
     [--keep-codex-auth | --delete-codex-auth]
 ```
 
-- **`add`** creates a ccrc-written lane (`exec.kind: "generated"`, `homeAble: true`, `telemetry: "anthropic"`)
-  in a fixed order: the credential (token lanes only), the `-disabled` marker, the roster entry, then the
+- **`add`** creates a ccrc-written lane (`exec.kind: "generated"`, `homeAble: true`, `telemetry: "anthropic"`; an
+  OpenRouter lane is `telemetry: "openrouter"` and a compatible lane `"none"`) in a fixed order: the credential (token lanes only), the `-disabled` marker, the roster entry, then the
   converge — `accounts.sh`, the wrapper, and the config dir `$HOME/<suffix>` (default `.claude-<id>`, or
   `.<id>` for an id that already starts `claude-`; it must start `.claude`, the only place the agent may read) with, for a key lane, an endpoint and model `env` block
   in its `settings.json`, then the session-hook and skill installers run against that one home. Nothing after
@@ -1946,7 +1948,20 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   setup-token`, or piped in at once with `--credential -` — and also takes `login` — no key file; the credential
   is the `.credentials.json` Claude Code writes in the config dir — or `paste`, a token piped in. `openrouter` and `compatible` are key lanes, the key kept in
   `~/.cc-secrets/<id>-<provider>.env`; `compatible` requires `--base-url`, and `openrouter` defaults to its own
-  endpoint. `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
+  endpoint. An `openrouter` key is validated before anything is written, by `add` and `credential` alike: the byte
+  check, then `GET https://openrouter.ai/api/v1/key` with `curl -H @-`, the bearer header on stdin as one line. A 401
+  refuses `key-rejected`, a key whose `is_management_key` or `is_provisioning_key` is true `wrong-key-kind`, and anything
+  else `key-unverified`, so the answer has to prove the key's kind: `is_management_key` false, and `is_provisioning_key`,
+  the deprecated name, false or absent. The refusal says which it was: an answer that proved nothing names its HTTP
+  status, and only no answer at all says to try again. A box that cannot read the answer refuses `no-answer`. There is no "save anyway". The lane state keeps the key hint, how the key came, its label,
+  limit, reset and credit, a new key's facts replacing the old key's whole, and `check` reads the credit again. The
+  Accounts card draws the hint, the validation's age and the credit's state words. `--placement overflow` (the default) writes `homeAble:
+  false`: placement never picks the lane and it is no session's default home, but once enabled it is in the auto-swap
+  rotation as an overflow lane, the last resort above, so a limited session can land on it with no operator act and bill
+  the key. `ccrc account disable` keeps it out. `full` writes `homeAble: true`; no other provider takes the flag. Without `--models`, `add` reads the public catalogue first and takes the newest
+  `anthropic/claude-<class>-<version>` of each class, refusing `catalogue-unreachable` with nothing written when the
+  catalogue cannot be read or names none for opus, sonnet or haiku; after the converge it writes the class registry from
+  the same catalogue (`ccrc models <id> init openrouter --suggested`). `--models` is a key lane's four-alias map — `opus`, `sonnet`, `haiku` and `subagent`, all four
   required, and refused on an `anthropic` lane. `add` refuses a `selectable` list: add the account first, then
   put `selectable` on its `exec.models` in `~/.ccrc/accounts.json` and run `ccrc install`.
 - **`add --provider openai`** makes a ChatGPT lane instead, the `codex` roster row (below): `exec.kind: "codex"`,
@@ -1960,6 +1975,11 @@ ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-slee
   already names, so the first ChatGPT lane on a box takes that step. After the converge it runs `ccrc models <id> init codex`, and says in `operator-steps` that
   the next `ccrc install` or `ccrc update` enables `ccrc-codex-usage@<id>.timer`. The next step is `auth-start --method
   openai-login`, then `check` and `enable`.
+  **The PWA runs the same steps** from Add account › OpenAI, with the sign-in page's link, its host and the device code on
+  one card, and Sign in again on the lane's fold. Until a box run measures the sign-in's host, `AUTH_URL_HOSTS` has none
+  for `openai-login` and `auth/start` refuses `method-unmeasured`, so `connect.caps` holds back `account-codex-v1`: the
+  row reads "Not available on this fleet yet" and no sheet adds a lane it can't sign in. Adding the measured host and
+  the code's shape to `shared/accounts.ts` opens it.
 - **A credential only ever arrives on a pipe.** `--credential -` is the only spelling — a literal would sit in
   world-readable argv — and a terminal on stdin is refused rather than prompted:
   `ccrc account add … --credential - < keyfile`. A `login` lane takes no `--credential`. The whole of stdin is
@@ -2074,7 +2094,7 @@ subagent model, and a context-window key (below; set from `<id>.windows.json`) �
 a registry the lane's settings disagree with.
 
 ```bash
-ccrc models <id> init <codex|openrouter|compatible> [--base-url <url>]   # seed a registry
+ccrc models <id> init <codex|openrouter|compatible> [--base-url <url> | --suggested]   # seed a registry; --suggested is openrouter's, from its catalogue
 ccrc models <id> show [--json]             # classes, subagent class, catalogue, context window, settings drift
 ccrc models <id> set-class <haiku|sonnet|opus|fable> <modelId|none>
 ccrc models <id> set-subagent <haiku|sonnet>
@@ -4668,6 +4688,19 @@ writes a fresh field, or purge the row once its session has ended. The next recl
 weakens until then: a gone row's recorded identity still names the old host's device, so the check that holds a child
 when a checkout inside it is that row's moved tree matches no checkout; git's record of the tree still holds it.
 
+A session's PATH is not yours, so check the bare commands under it after a move. A box's own `~/.local/bin` is usually
+not on it: a pane gets the PATH of whatever ran `tmux new-session`, for a supervised session the service manager's, and a
+root-owned link in a system directory on the old box can hide that until the box changes. On the fleet box, take the PATH
+of one live session (its pane's pid from `tmux list-panes -a -F '#{session_name} #{pane_pid}'`) and try each command:
+
+```sh
+sp=$(tr '\0' '\n' < /proc/<pane-pid>/environ | sed -n 's/^PATH=//p')
+for c in ccrc ccd ccrc-api graphify; do PATH="$sp" command -v "$c" || echo "MISSING: $c"; done
+```
+
+`ccrc doctor` asks the same question of every live session (`path`, `graphify-path`) and prints the root step that fixes
+what is missing. `ccrc update`'s own PATH holds `~/.local/bin`, so a green update alone never proved this before D-8047.
+
 **The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
 removal refused it, or a human verb left it — is taken back by
@@ -6815,7 +6848,14 @@ typecheck through `ccrc test`. The session hook reads every Bash call that could
 --classify-shell`, the wrapper's own classifier (prefixes such as `setsid`, `sudo -u`, `flock`, `xargs` and systemd-run's
 flags, and `eval`/`script -c`/`watch` strings, read through), and denies a test or typecheck under a `systemd-run` of
 its own on every session (`ccrc test -- systemd-run … <test>` included) and, on a fleet box (Linux, a registered
-session), a heavy run in command position outside `ccrc test`. The scope is good faith (D-7298): the sessions are
+session), a heavy run in command position outside `ccrc test`. A heredoc body is text, not commands, when the classifier
+can read the whole line and every command on it is one that does not run the body, so a pull request body that mentions
+`npm run typecheck` is not a test run. A body fed to a shell or `ssh`, piped on to one, or written to a file a shell then
+runs is still read as commands, and so is every body on a line the classifier cannot read, or on which it finds a command
+it does not know; an assignment before a command does not hide a shell from that reading, except a quoted substitution nested in another quoted substitution, which main misses too; `npx bash` is a shell, so a
+test program stands beside a body only by name, and with no `$` or script shell on its line; an unquoted heredoc's live
+`$(…)` or backquote is a command bash really runs. The name is trusted, not what it resolves to, and a reader on the list
+can still run code by its own means, such as `awk`'s `system()` or `node -e` (D-8052). The scope is good faith (D-7298): the sessions are
 cooperative, so the classifier catches the spellings a well-behaved session writes by accident, and the cgroup caps
 already on the box (the session slice's `CPUQuota` and memory caps) are the backstop. Deliberately obfuscated
 spellings are accepted and out of scope: a systemd-run inside a command substitution, `prlimit`/`unshare`/`cgexec`
@@ -7796,7 +7836,7 @@ every changed path vitest cannot follow (a ccd script, Python, a JSON or SQL fix
 whole tree or the diff (the censuses, single-definition, deviation-refs, growth-check, ownership, the rings,
 ccd-contexts, dtbd, the tests-inclusive typecheck, the oss metadata, the pin suites, and every test that runs
 `git ls-files`, `git diff` or `git merge-base` itself), and the session-hook suites when `ccd/ccd`,
-`ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
+a `ccd/lib/*.sh`, `ccd/session-hook.sh` or `shared/api.ts` changed — `.github/ci/fast-plan.mjs` — and the agent and pwa tests the change can reach
 (`.github/ci/reach.mjs`). The browser suite, `node-floor`, the perf legs and the macOS legs do not run on it. The four
 required checks report on what ran. A head branch under `train/`, the `full-ci` label, or a change to shared
 infrastructure (under `.github/` or `server/scripts/`, a `package.json` or lockfile, a `vitest.*config.*`, a
