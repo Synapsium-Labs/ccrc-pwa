@@ -35,7 +35,8 @@ lane step (`delegationAdoptStep.ts`) and `watch.ts` gather and act.
 - **F3, answers held at once.** Inside the audit loop, each answer that comes back on an uncut pass and that `adoptionAudits`
   holds (a definite one) is held at once and its ask dropped from `asked`. One it does not hold keeps its ask once: an ask
   answered non-definite on two passes is dropped (fix round 1, F4 (a); fix round 2, F3), and since PR7c so is one cut inside
-  its own await on two passes (review 1630 F1, `pr7c.md`). After a cut nothing more is written but that mark (PR7c).
+  its own await on two passes with no answer between (review 1630 F1, `pr7c.md`). That mark is written before the await, and a
+  second cut inside the same await removes the ask (PR7c); nothing else is written after a cut.
 - **F4, the cut after every awaited read.** The step reads the cut after the registry listing, after each audit and after each
   carrier read. `asked` is cleared and `pass` counted only below the last awaited read. What a cut writes, at each point:
   - inside the listing, or before the first audit answers: nothing;
@@ -312,10 +313,11 @@ findings, every one in the safe direction. Departures: D-8092 amended in place a
   `alive` while its `status` is `dead` (`restarting`), then a pass that runs the step reads it dead; the kept death is dropped
   and the new death starts its own settle (`terminalEvidenceAt` at the step's first read). Mutant REVIEW-F1a-status (record by
   `status !== 'dead'` again) reds it.
-- **F3, one cut only.** A non-definite answer keeps its ask once (`keptOnce`); the next pass that answers it non-definite again
+- **F3, kept once.** A non-definite answer keeps its ask once (`keptOnce`); the next pass that answers it non-definite again
   drops it, as the first round did (the rule counts answered passes, not cut ones: review 1630 F2, under "Measured, not
-  departures"). Row: two consecutive cut passes with the same non-definite answers, then a pass
-  that asks only the two asks the cuts never answered and reaches the decider. Mutant FR2-F3-everycut (keep through every cut).
+  departures"). Row: two consecutive cut passes with the same non-definite answers, then a pass that, since PR7c, asks one ask
+  (the fourth, which the cuts never reached; the third, cut inside its own audit twice, is dropped too, review 1630 F1), is still
+  armed to cut at a third audit, and reaches the decider. Mutant FR2-F3-everycut (keep through every cut).
 - **F4, the memory's bound (text).** The comment above `watch.ts`'s evidence memory and "Measured, not departures" say what
   bounds it.
 - **F5, text and labels.** Fix round 1's F1 (a) and (c) and the settle's start sit under "Measured, not departures" beside (b);
@@ -330,7 +332,7 @@ Run on this round's base (`b15b99837`'s `delegationAdoptStep.ts`) with this roun
 
 | Ruling | Row (`delegation-adoption-lane.test.ts` unless named) | On the base |
 |---|---|---|
-| F3 | "review 1627 F3: a non-definite answer keeps its ask through one cut only" | red: after the second cut all four asks are kept |
+| F3 | "review 1627 F3: a non-definite answer keeps its ask once" | red: after the second cut all four asks are kept |
 | F2 | "review 1622 F1: presence alive while its status is dead (restarting), then dead (review 1627 F2)" | green: the code was already as ruled, and the row is its missing guard; red under REVIEW-F1a-status |
 | F5 | L1 "owedLeaseNotices: every adopted lease at its generation", on fix round 1's base (`258f036a0`'s `delegation-adoption.ts`) | red, measured this round: `expected undefined to be 'changed'` |
 
@@ -343,13 +345,13 @@ answered ask dropped). Rows are named by quoted title (lane unless named; "R1F1:
 | Mutant | The mutation | Red rows |
 |---|---|---|
 | REVIEW-F1a-status | record a last-alive pass by `status !== 'dead'` again | "R1F1: presence alive while its status is dead (restarting), then dead" |
-| FR2-F3-everycut | a non-definite answer keeps its ask through every cut | "review 1627 F3: a non-definite answer keeps its ask through one cut only" |
+| FR2-F3-everycut | a non-definite answer keeps its ask through every cut | "review 1627 F3: a non-definite answer keeps its ask once" |
 | FR2-F5-death | a later death erases the retraction, read or not | "R1F1: a retraction, then alive at a new incarnation on a pass whose step never decides, then dead" |
 | FR1-F1-slot | one last-alive slot per parent again | "R1F1: alive at the lease's incarnation, then alive at a new one" |
 | FR1-F1-read | forget whether or not the step read it | "R1F1: alive at the lease's incarnation, then measured absent", "R1F1: a retraction, then measured absent", "R1F1: a retraction, then alive at a new incarnation …" |
 | FR1-F1-alive | a living pass erases the retraction | "R1F1: a retraction, then alive at a new incarnation …" |
 | FR1-F2 | `adoptionAlive` ignores `unmeasured` | L1 "F1: liveness is the row's presence"; "review 1622 F2: a row with an unmeasured identity field" |
-| FR1-F4a | every answered ask dropped | "review 1622 F4 (a): a cut after answers that are not definite", "review 1627 F3: a non-definite answer keeps its ask through one cut only" |
+| FR1-F4a | every answered ask dropped | "review 1622 F4 (a): a cut after answers that are not definite", "review 1627 F3: a non-definite answer keeps its ask once" |
 | FR1-F5-adopted | a cut in the effects loop forgets the adopted audit | "F4: a pass cut inside the effects loop" |
 | FR1-F5-match | the audit word at any generation | L1 "owedLeaseNotices: every adopted lease at its generation" |
 | PR7b-F4-read (X-cut132) | no cut check after a carrier read | "F4: a pass cut inside its carrier read" |

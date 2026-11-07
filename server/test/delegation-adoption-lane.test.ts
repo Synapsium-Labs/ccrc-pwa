@@ -43,6 +43,8 @@ interface World {
   onRead?: (file: string) => void; onList?: (dir: string) => void;
   /** Review 1604 F4: run inside the recording `ws-lease-audit`, before it answers. */
   onAudit?: () => void;
+  /** Review 1634 F1: while set, the recording `ws-lease-audit` answers only once it settles (an audit that outlives its pass). */
+  holdAudit?: Promise<unknown>;
   /** Review 1587 F1: ids the registry's listing names whose row it could not assemble (no record, no session). */
   unbuilt: string[];
 }
@@ -92,6 +94,7 @@ function world(opts: { caps?: string[] | null } = {}): World {
       return ok(`${JSON.stringify({ ok: true, answer: 'written', lease: f.lease, generation: Number(f.generation), state: f.state })}\n`);
     }
     if (argv[0] === 'ws-lease-audit') made.onAudit?.();
+    if (argv[0] === 'ws-lease-audit' && made.holdAudit !== undefined) await made.holdAudit;
     if (argv[0] === 'ws-lease-audit') return ok(`${JSON.stringify({ ...made.audit, lease: f.lease, generation: Number(f.generation) })}\n`);
     throw new Error(`unexpected ccd ${argv.join(' ')}`);
   };
@@ -849,7 +852,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(audits(w).slice(before).map((a) => a[2]).sort(), 'the next pass asks all four').toEqual([...ids].sort());
   }, ROW_MS);
 
-  it('review 1627 F3: a non-definite answer keeps its ask through one cut only: cut again, the ask is dropped, and the next pass reaches the decider without asking it', async () => {
+  it('review 1627 F3: a non-definite answer keeps its ask once: answered non-definite on a second pass, the ask is dropped, and the next pass reaches the decider without asking it', async () => {
     const { w, durable, lease } = await leased();
     w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
     const { trees, ids } = await more(durable, lease, 3);
@@ -881,6 +884,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     const { trees, ids } = await more(durable, lease, 3);
     for (let n = 0; n < 20 && laneOf(w).adoptMemory.asked.length < 4; n += 1) await pass(w, at(n), trees);
     expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: all four asked in one pass').toEqual([...ids].sort());
+    const order = laneOf(w).adoptMemory.asked.map((a) => a.leaseId);              // the order the audits run in
     const t5 = { ...WTX, adminRecord: 'wt-5', canonicalPath: '/w/demo/.claude/worktrees/wt-5' }, all = [...trees, t5];
     const made = await durable.createLease({ activityId: lease.activityId, parentId: OWNER, parentIncarnation: INC, project: 'demo', adminRecord: t5.adminRecord,
       canonicalPath: t5.canonicalPath, creationBase: null, sourceKind: 'agent', correlationJournalIds: [], firstObservedAt: lease.firstObservedAt });
@@ -900,7 +904,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     await slowPass();
     expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: the first cut inside an audit keeps every ask').toEqual([...ids].sort());
     await slowPass();
-    expect(laneOf(w).adoptMemory.asked, 'the second cut inside the same audit drops its ask').toHaveLength(3);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId), 'the second cut inside the same audit drops that ask, the first, and only it (review 1634 F7)').toEqual(order.slice(1));
     for (let k = 2; k < 8; k += 1) await slowPass();
     expect(laneOf(w).adoptMemory.pass, 'CONTROL: no cut pass reached the decider').toBe(steps);
     expect(leaseOf(durable, fifth).generation, 'CONTROL: nor PR6\'s carrier step').toBe(0);
@@ -911,7 +915,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect(laneOf(w).adoptMemory.asked.length, 'the decider asks again: a dropped ask is only asked again later').toBeGreaterThan(0);
   }, ROW_MS);
 
-  it('review 1630 F1, CONTROL: a fast audit keeps its ask as today: an answer on an uncut await clears its cut mark, so a later cut inside it marks it again', async () => {
+  it('review 1630 F1: an answer on an uncut await clears an ask\'s cut mark, so a later cut inside it marks it again and keeps it (a fast audit keeps its ask as today, review 1634 F7)', async () => {
     const { w, durable, lease } = await leased();
     w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
     const { trees, ids } = await more(durable, lease, 3);
@@ -925,11 +929,43 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
       await Promise.allSettled(late);
       w.onAudit = undefined;
     };
+    const markOf = (id: string): true | undefined => (laneOf(w).adoptMemory.asked as { leaseId: string; cutInside?: true }[]).find((a) => a.leaseId === id)?.cutInside;
     await cutAt(at(30), 1);                                                         // slow once: the first ask is marked
+    expect(markOf(first), 'the first cut inside its audit marks it').toBe(true);
     await cutAt(at(31), 2);                                                         // fast now: it answers, and the pass is cut at the second
+    expect(markOf(first), 'the answer on an uncut await cleared the mark').toBeUndefined();
     await cutAt(at(32), 1);                                                         // slow again: a first cut after an answer, not a second
-    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId), 'the first ask is kept, marked again').toContain(first);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId), 'the first ask is kept').toContain(first);
+    expect(markOf(first), 'marked again').toBe(true);
     expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'and so is every other').toEqual([...ids].sort());
+  }, ROW_MS);
+
+  it('review 1634 F1: overlapping passes, each starting while the cut pass\'s audit is still out: the cut is seen when it happens, so the first decider pass is the ninth (2 x 4 + 1)', async () => {
+    const { w, durable, lease } = await leased();
+    w.audit = { ok: false, refusal: 'unmeasured', detail: 'fixture: the tree could not be measured' };
+    const { trees, ids } = await more(durable, lease, 3);
+    for (let n = 0; n < 20 && laneOf(w).adoptMemory.asked.length < 4; n += 1) await pass(w, at(n), trees);
+    expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId).sort(), 'CONTROL: all four asked in one pass').toEqual([...ids].sort());
+    const order = laneOf(w).adoptMemory.asked.map((a) => a.leaseId);
+    const steps = laneOf(w).adoptMemory.pass;
+    let release = (): void => undefined;
+    w.holdAudit = new Promise<void>((r) => { release = r; });                     // every audit outlives its pass until the row ends
+    const late: Promise<unknown>[] = [];
+    w.onAudit = () => { late.push(...cutNow(w)); };
+    const settle = (): Promise<void> => new Promise((r) => { setImmediate(r); });  // the microtasks after the cut, never the held audit
+    let k = 0;
+    try {
+      for (; k < 12 && laneOf(w).adoptMemory.pass === steps; k += 1) {
+        await pass(w, at(30 + k), trees);                                          // the harness never waits for the late audit
+        await settle();
+        if (k === 1) expect(laneOf(w).adoptMemory.asked.map((a) => a.leaseId), 'the second cut drops the first ask at the cut, its audit still out').toEqual(order.slice(1));
+      }
+    } finally {
+      w.onAudit = undefined;
+      release();
+      await Promise.allSettled(late);
+    }
+    expect(k, 'the first decider pass is the ninth').toBe(9);
   }, ROW_MS);
 
   it('F6 (a): a census record that reads unreadable holds the entry, counted waiting; read again, it adopts on the first pass', async () => {
