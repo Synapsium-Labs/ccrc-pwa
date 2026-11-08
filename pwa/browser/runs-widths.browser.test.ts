@@ -60,12 +60,14 @@ const FIXTURE: AppFixture = {
   ],
 };
 
+let dist: string;
 let server: DistServer | undefined;
 let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  server = await serveDist(sharedDist());
+  dist = sharedDist();
+  server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
 
