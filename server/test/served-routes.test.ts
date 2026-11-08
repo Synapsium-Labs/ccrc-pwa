@@ -55,7 +55,7 @@ async function get(url: string): Promise<{ status: number; body: Record<string, 
 
 /** A fleet row's keys, as the route sends them today (a field added later is an additive change this list takes). */
 const FLEET_ROW_KEYS = [
-  'archivedAt', 'archivedBytes', 'ask', 'askSummary', 'background', 'boardProject', 'branch', 'bucket', 'bucketSince',
+  'archivedAt', 'archivedBytes', 'ask', 'askSummary', 'background', 'boardProject', 'branch', 'browserMcp', 'bucket', 'bucketSince',
   'child', 'ctxPct', 'deadSince', 'dialogPending', 'effort', 'graphGateDenials', 'graphQueries', 'held', 'hibernatedAt',
   'home', 'hookState', 'id', 'lastEnd', 'lifecycle', 'limits', 'model', 'name', 'openRun', 'paneCols', 'pr', 'presence',
   'project', 'releasedFrom', 'role', 'route', 'run', 'spawnState', 'started', 'status', 'statusUnmeasured',

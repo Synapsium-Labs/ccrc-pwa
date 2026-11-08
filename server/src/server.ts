@@ -2513,7 +2513,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // D-8121: the `browser` field needs `browser-route-v1` (an older ccd refuses it by name). It is applied at the
     // session's next spawn, never live: `--apply` types nothing for it.
     if (routeForBrowserCap(parsed.route, capSupported(deps.fleetState, BROWSER_ROUTE_CAP)).dropped) {
-      return reply.code(501).send({ ok: false, error: 'unsupported' });
+      return refuseRoute(reply, 'unsupported');
     }
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
@@ -2883,7 +2883,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     // D-8121: an older ccd refuses `browser` by name, so the operator hears 501 rather than a spawn that fails.
     if (routeForBrowserCap(fields, capSupported(deps.fleetState, BROWSER_ROUTE_CAP)).dropped) {
-      return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
+      return { reply: refuseRoute(reply, 'unsupported') };
     }
     return { reply: null, route: fields };
   };

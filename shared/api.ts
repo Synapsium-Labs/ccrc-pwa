@@ -3129,7 +3129,8 @@ const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[
   return { count, kinds: kinds as string[] };
 };
 
-/** D-8121: `FleetSession.browserMcp` off raw JSON. Absent, null or a word outside the three → null. */
+/** D-8121: a PRESENT `FleetSession.browserMcp` off raw JSON (the caller keeps an absent key absent). Null or a word
+ *  outside the three → null. */
 const reviveBrowserMcp = (o: RawObj, k: string): BrowserMcpApplied | null => {
   const v = o[k];
   return typeof v === 'string' && (BROWSER_MCP_APPLIED as readonly string[]).includes(v) ? v as BrowserMcpApplied : null;
@@ -3405,8 +3406,10 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // D-5242. Absent → null: an older snapshot or server predates the field, and a session it did not know was
       // asleep reads as the stopped row it showed then.
       hibernatedAt: optNum(o, 'hibernatedAt'),
-      // D-8121. Absent or malformed → null: a display line, it gates nothing (`reviveLastEnd`'s rule).
-      browserMcp: reviveBrowserMcp(o, 'browserMcp'),
+      // D-8121: optional on the type, so `run`'s form below: an absent key stays absent (a snapshot or server from
+      // before the field said nothing), and a present one this build cannot read revives as null (a display line, it
+      // gates nothing).
+      ...(o['browserMcp'] === undefined ? {} : { browserMcp: reviveBrowserMcp(o, 'browserMcp') }),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside

@@ -114,6 +114,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "background": null,
           "boardProject": "lane-a-archived-a",
           "branch": null,
+          "browserMcp": null,
           "bucket": "archived",
           "bucketSince": 1700000000000,
           "child": {
@@ -173,6 +174,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "background": null,
           "boardProject": "lane-a-crashed-a",
           "branch": null,
+          "browserMcp": null,
           "bucket": "dead",
           "bucketSince": null,
           "child": {
@@ -232,6 +234,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "background": null,
           "boardProject": "lane-a-project-a",
           "branch": null,
+          "browserMcp": null,
           "bucket": "working",
           "bucketSince": null,
           "child": {
@@ -291,6 +294,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "background": null,
           "boardProject": "lane-a-project-b",
           "branch": "ws/demo",
+          "browserMcp": null,
           "bucket": "idle",
           "bucketSince": null,
           "child": {
@@ -350,6 +354,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "background": null,
           "boardProject": "lane-a-stopped-a",
           "branch": null,
+          "browserMcp": null,
           "bucket": "dead",
           "bucketSince": null,
           "child": {
@@ -413,6 +418,7 @@ describe('FleetWatcher.tick characterization (console speed S1, Step 0)', () => 
           "background": null,
           "boardProject": "lane-a-stopped-b",
           "branch": null,
+          "browserMcp": null,
           "bucket": "dead",
           "bucketSince": null,
           "child": {
