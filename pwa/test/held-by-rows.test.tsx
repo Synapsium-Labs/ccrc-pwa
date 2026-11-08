@@ -200,6 +200,9 @@ describe('the held-rows list', () => {
     expect(screen.queryByText(CLEANUP_HELD_BY_RECHECKED)).toBeNull();
   });
 
+  // Review 1590 N-h: a changed accessible name already fails the exact-name query above the `labelInName` line, so
+  // that line guards the other mutation: the VISIBLE text changed and the name left as it was (mutants Nh-forget-text
+  // and Nh-recheck-text, Task C15).
   it('each button keeps its visible words as one run in its name, for a multi-word id (D-7897)', () => {
     render(<HeldByRows sessions={DEAD} coord={frame([held({ rowId: 'acct-a-demo' }), held({ rowId: 'acct-b-demo', act: 'recheck' })])} />);
     const forget = screen.getByRole('button', { name: 'Forget row acct-a-demo…' });
