@@ -237,6 +237,28 @@ describe('the states', () => {
     expect(await screen.findByText('Waits on a reviewer.')).toBeInTheDocument();
   });
 
+  it('a server without the record route still offers the session, from the run read it does have', async () => {
+    const r = run({ sessionId: 'worker-a' } as Partial<RunSummary>);
+    reads(r);
+    vi.spyOn(api, 'runRecord').mockRejectedValue(new ApiError(404, { error: 'not-found' }));
+    render(<RunDetailScreen id={410} store={mk()} />);
+    expect(await screen.findByRole('link', { name: 'Open the session' })).toBeInTheDocument();
+    expect(screen.getByRole('alert').textContent).toBe('Could not load this run. Try again.');
+  });
+
+  it('a run that leaves the live frame is read again, so the page shows its close', async () => {
+    const r = run({ state: 'working' } as Partial<RunSummary>);
+    const rd = reads(r);
+    const store = mk();
+    act(() => { store.setState({ runs: [r], runsFrameSeen: true }); });
+    render(<RunDetailScreen id={410} store={store} />);
+    await screen.findByText('Programme A');
+    expect(rd.record).toHaveBeenCalledTimes(1);
+    rd.record.mockImplementation(async () => record(run({ state: 'done' } as Partial<RunSummary>)));
+    act(() => { store.setState({ runs: [] }); });
+    await vi.waitFor(() => expect(rd.record).toHaveBeenCalledTimes(2));
+  });
+
   it('Could not load this run. Try again. on ApiTimeout', async () => {
     reads(run());
     const rec = vi.spyOn(api, 'runRecord').mockRejectedValueOnce(new ApiTimeout('/api/runs/410/record', 20_000));

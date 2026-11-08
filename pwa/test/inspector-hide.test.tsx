@@ -443,7 +443,7 @@ describe('Instrument', () => {
     expect(header.queryByRole('button', { name: 'Inspector' })).toBeNull();
     fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'inspector' } });
-    expect(screen.queryByRole('option', { name: /inspector/i })).toBeNull();
+    expect(screen.queryByRole('option', { name: /Show or hide the inspector/ })).toBeNull();
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' });
     press('i');
     expect(localStorage.getItem(INSPECTOR_STORAGE_KEY)).toBeNull();

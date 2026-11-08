@@ -46,7 +46,9 @@
 /* The broad column: the board and the run beside it, about 40 and 60 percent (Task 9a, spec §8.1). */
 @container runs (min-width: 1240px) {
   .runs-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--sp-4); align-items: start; }
-  .runs-detail-pane { position: sticky; top: var(--head-h); max-height: calc(100dvh - var(--head-h)); overflow-y: auto; padding: var(--sp-3) var(--gutter) var(--sp-4) 0; }
+  /* No sticky and no inner scroll: `.shell-detail` is the one scroller (under the top bar, above the status bar), so a pane pinned
+     to `100dvh` would hang its lower edge below the visible area. The pane flows with the list and its trail's end is reachable. */
+  .runs-detail-pane { padding: var(--sp-3) var(--gutter) var(--sp-4) 0; }
 }
 
 .rd-head > p.rd-wait a.rd-wait-link { display: inline-flex; align-items: center; min-height: var(--tap-min); text-decoration: underline; text-underline-offset: 2px; }

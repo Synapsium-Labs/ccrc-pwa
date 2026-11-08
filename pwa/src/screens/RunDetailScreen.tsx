@@ -10,14 +10,15 @@
 //
 // THE HEADER IS A SUPERSET OF THE ROW: every element `RunRow` draws is drawn here from the same readers, so a card, a row and
 // this page cannot disagree about a run (D-5545).
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, PageScaffold, Section, TextLink, cn, useNow } from '@ccrc/ui';
 import {
   graphReadCount, unmeasuredFields,
   type FleetSession, type RunRecordAnswer, type RunSpend, type RunSummary,
 } from '../../../shared/api';
-import { api, ApiError } from '../lib/api';
+import { api } from '../lib/api';
+import { refusalText } from '../lib/refusalWords';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { inAppClick } from '../fleet/settingsText';
 import { openExternal } from '../lib/markdown';
@@ -65,18 +66,20 @@ const readSignals = (id: number) => api.runSignals(id);
 
 /** Only the server's own `unknown-run` answer means the run does not exist. An older server answers an unmatched `/api` path with
  *  404 `not-found`, which is a missing route and reads as a failed load. */
+const UNKNOWN_RUN_CODE: Readonly<Record<'unknown-run', string>> = { 'unknown-run': 'unknown' };
 function isUnknownRun(e: unknown): boolean {
-  if (!(e instanceof ApiError) || e.status !== 404) return false;
-  const body = e.body;
-  return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'unknown-run';
+  return refusalText(e, UNKNOWN_RUN_CODE) !== null;
 }
 
 function useRecord(id: number): { state: Record_; retry: () => void } {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<Record_>({ kind: 'loading' });
+  const lastId = useRef<number | null>(null);
   useEffect(() => {
     let live = true;
-    setState({ kind: 'loading' });
+    // A re-read of the same run (`retry`) keeps the page drawn until the answer lands; a new run starts from loading.
+    if (lastId.current !== id) setState({ kind: 'loading' });
+    lastId.current = id;
     api.runRecord(id).then(
       (answer) => { if (live) setState({ kind: 'ok', answer }); },
       (e: unknown) => { if (live) setState(isUnknownRun(e) ? { kind: 'missing' } : { kind: 'failed' }); },
@@ -258,10 +261,19 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const sessions = store((s) => s.sessions);
   const frameSeen = store((s) => s.fleetFrameSeen);
   const liveRuns = store((s) => s.runs);
+  const runsFrameSeen = store((s) => s.runsFrameSeen);
   const recordRun = state.kind === 'ok' ? state.answer.run : null;
   // The live runs frame wins for an open run, so a page beside the board cannot disagree with its row (D-5545); a closed run
   // is not in the frame and keeps the record's.
   const run = recordRun === null ? null : liveRuns.find((r) => r.id === recordRun.id) ?? recordRun;
+  // The frame carries open runs only: a run that was in it and has left it has closed (or been abandoned), and the record read
+  // on mount still says what it was then, so it is read again (D-5545).
+  const wasLive = useRef(false);
+  useEffect(() => {
+    const inFrame = recordRun !== null && liveRuns.some((r) => r.id === recordRun.id);
+    if (inFrame) wasLive.current = true;
+    else if (wasLive.current && runsFrameSeen) { wasLive.current = false; retry(); }
+  }, [liveRuns, recordRun, runsFrameSeen, retry]);
   const now = useNow(run !== null && anyDispatchPending([run]) ? 1_000 : 30_000);
   const side = useSide(id, readRun);
   const items = useSide(id, readItems);
@@ -282,10 +294,19 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
     );
   }
   if (state.kind === 'failed' || run === null) {
+    // An older server has no `/record` route, but it answers `/api/runs/:id`: the header and the way to the session come
+    // from that read, so a row's tap is never a dead end.
+    const basic = side?.run;
     return (
       <Frame pane={pane} title={title} q={q}>
         <p role="alert" className="rd-note">{RUN_PAGE_WORDS.failed}</p>
         <Button variant="primary" onClick={retry}>{RUN_PAGE_WORDS.retry}</Button>
+        {basic !== undefined && (
+          <>
+            <Header run={liveRuns.find((r) => r.id === basic.id) ?? basic} worker={null} nowMs={now} />
+            <Controls run={basic} coordinatorOpenable={false} onLift={() => undefined} />
+          </>
+        )}
       </Frame>
     );
   }
