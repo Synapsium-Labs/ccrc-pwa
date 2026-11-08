@@ -189,7 +189,7 @@ describe('a refused choice says why and is disabled (D-8113)', () => {
 
   it('nothing refused: no refusal line and both choices open', () => {
     owned(view());
-    expect(screen.queryByText(/is not available now/)).toBeNull();
+    expect(screen.queryByText(/is not available/)).toBeNull();
     expect(radio(T.on).disabled).toBe(false);
     expect(radio(T.off).disabled).toBe(false);
   });
@@ -234,6 +234,19 @@ describe('the list of worktrees (D-8114)', () => {
     expect(second).not.toHaveTextContent(T.noChanges);
   });
 
+  it('a malformed list item, with no earlier view: the list is dropped as the shared reader drops it, and the switch stays drawn (review 1693 F1)', async () => {
+    const bad = { ...view(), adoption: { ...health(), keeps: { items: [{ project: 1 }], more: 0 } } };
+    expect(asDelegationAdoptView(bad)).toEqual(view({ adoption: health() }));
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(bad as unknown as DelegationAdoptView);
+    render(<Polled />);
+    await waitFor(() => expect(radio(T.off).checked).toBe(true));
+    expect(radio(T.on)).toBeInTheDocument();
+    expect(screen.getByText(delegationAdoptCountsLine(health()))).toBeInTheDocument();
+    expect(screen.getByText(T.noList)).toBeInTheDocument();
+    expect(screen.queryByText(T.unread)).toBeNull();
+    expect(screen.queryByRole('listitem')).toBeNull();
+  });
+
   it('an item is project, worktree, parent and changes, with no path (review 1665 N10): the reader reads it whole and nothing shows a path', async () => {
     expect(Object.keys(TWO[1]!).sort()).toEqual(['changes', 'parent', 'project', 'worktree']);
     expect(asDelegationAdoptView(view())).toEqual(view());
@@ -241,6 +254,24 @@ describe('the list of worktrees (D-8114)', () => {
     render(<Polled />);
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
     for (const li of screen.getAllByRole('listitem')) expect(li).not.toHaveAttribute('title');
+  });
+
+  it('an item that still carries a path (the shared reader passes it through): shown nowhere, no title, no key (review 1693 F2)', () => {
+    const SAME = '/work/project-a/worktrees/shared-path';
+    const withPath = (k: DelegationAdoptionKeep): DelegationAdoptionKeep => ({ ...k, path: SAME } as DelegationAdoptionKeep);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const read = asDelegationAdoptView({ ...view(), adoption: health({ keeps: { items: TWO.map(withPath), more: 0 } }) });
+    expect(read).not.toBeNull();
+    owned(read!);
+    const items = screen.getAllByRole('listitem');
+    expect(items).toHaveLength(2);
+    for (const li of items) {
+      expect(li).not.toHaveAttribute('title');
+      expect(li.textContent).not.toContain(SAME);
+    }
+    expect(document.body.innerHTML).not.toContain(SAME);
+    // Two items with one path: a list keyed on the path would warn of a duplicate key.
+    expect(errors.mock.calls.map((c) => String(c[0])).filter((m) => /same key/i.test(m))).toEqual([]);
   });
 
   it('the changes read in words: uncommitted yes, no or unread; commits; the branch\'s three odd states', () => {
@@ -295,7 +326,7 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     await waitFor(() => expect(radio(T.off).checked).toBe(true));
     fireEvent.click(radio(T.on));
     const sheet = await screen.findByRole('dialog');
-    const c = delegationAdoptConfirm({ items: TWO, more: 0 });
+    const c = delegationAdoptConfirm(health({ keeps: { items: TWO, more: 0 } }));
     expect(within(sheet).getByText(c.title)).toBeInTheDocument();
     for (const line of c.consequence) expect(within(sheet).getByText(line)).toBeInTheDocument();
     expect(sheet.textContent).toContain('2 worktrees');
@@ -304,18 +335,57 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(radio(T.off).checked, 'the tap is not shown as landed').toBe(true);
   });
 
-  it('the count is the items plus the ones more', () => {
-    const c = delegationAdoptConfirm({ items: TWO, more: 5 });
-    expect(c.consequence.join(' ')).toContain('7 worktrees');
-    expect(delegationAdoptConfirm({ items: [TWO[0]!], more: 0 }).consequence.join(' ')).toMatch(/1 worktree\b/);
-    expect(delegationAdoptConfirm({ items: [], more: 0 }).consequence.join(' ')).toMatch(/0 worktrees|no worktree/i);
+  // Review 1693 F8 (ruled): the sheet names the counts line's would-keep figure, list or no list, and says it cannot tell only
+  // when the lane has counted nothing; with more than it lists, it says how many are listed and how many are not.
+  const said = (a: DelegationAdoptionHealth | null): string => delegationAdoptConfirm(a).consequence.join(' ');
+  it('would keep 0 with no list served: the sheet says 0, as the counts line does, and never that it cannot tell (F8)', () => {
+    const a = health({ wouldAdopt: 0 });
+    expect(said(a)).toMatch(/This would keep 0 worktrees\b/);
+    expect(delegationAdoptCountsLine(a)).toContain('would keep 0');
+    expect(said(a)).not.toContain(T.confirmCannotCount);
   });
 
-  it('without a list the sheet says it cannot tell how many, and still names the mail', () => {
+  it('a served list: the figure is the last pass\'s would-keep count, and no "listed" sentence while nothing is left off (F8)', () => {
+    expect(said(health({ wouldAdopt: 2, keeps: { items: TWO, more: 0 } }))).toMatch(/This would keep 2 worktrees\b/);
+    expect(said(health({ wouldAdopt: 1, keeps: { items: [TWO[0]!], more: 0 } }))).toMatch(/This would keep 1 worktree\b/);
+    expect(said(health({ wouldAdopt: 9, keeps: { items: TWO, more: 0 } }))).toMatch(/This would keep 9 worktrees\b/);
+    expect(said(health({ wouldAdopt: 2, keeps: { items: TWO, more: 0 } }))).not.toMatch(/listed on this card/);
+  });
+
+  it('more above 0: the sheet says how many are listed on this card and how many are not, never "the ones listed" (F8)', () => {
+    const s7 = said(health({ wouldAdopt: 7, keeps: { items: TWO, more: 5 } }));
+    expect(s7).toMatch(/This would keep 7 worktrees\b/);
+    expect(s7).toContain('2 are listed on this card and 5 are not');
+    expect(s7).not.toMatch(/the ones listed/);
+    expect(said(health({ wouldAdopt: 2, keeps: { items: [TWO[0]!], more: 1 } }))).toContain('1 is listed on this card and 1 is not');
+  });
+
+  it('adoption null: the sheet says it cannot tell how many, and still names the mail (F8)', () => {
     const c = delegationAdoptConfirm(null);
     expect(c.consequence.join(' ')).toContain(T.confirmCannotCount);
     expect(c.consequence.join(' ')).toMatch(/mail/i);
     expect(c.consequence.join(' ')).not.toMatch(/\d+ worktrees?/);
+  });
+
+  it('the card\'s own sheet, would keep 0 and no list: it opens saying 0 worktrees (F8)', async () => {
+    owned(view({ adoption: health({ wouldAdopt: 0 }) }));
+    fireEvent.click(radio(T.on));
+    const sheet = await screen.findByRole('dialog');
+    expect(sheet.textContent).toMatch(/This would keep 0 worktrees/);
+  });
+
+  it('the sheet is open, a newer view refuses on, the operator confirms: nothing is sent, the sheet closes, the refusal shows (review 1693 F3)', async () => {
+    const set = vi.spyOn(api, 'setDelegationAdopt').mockResolvedValue(view({ state: 'set' }));
+    const { show } = owned(view());
+    fireEvent.click(radio(T.on));
+    const sheet = await screen.findByRole('dialog');
+    show(view({ refused: { on: 'sign-in-unarmed', off: null } }));
+    fireEvent.click(within(sheet).getByRole('button', { name: T.confirmLabel }));
+    await flush();
+    expect(set).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByText(delegationAdoptRefusedLine(T.on, 'sign-in-unarmed'))).toBeInTheDocument();
+    expect(radio(T.off).checked).toBe(true);
   });
 
   it('Cancel sends nothing and leaves the card as it was', async () => {
@@ -328,6 +398,28 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(set).not.toHaveBeenCalled();
     expect(radio(T.off).checked).toBe(true);
     expect(group()).not.toBeDisabled();
+  });
+
+  it('after the confirm and the settle, the focus is on the checked answer, never BODY (review 1693 F4)', async () => {
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(view());
+    vi.spyOn(api, 'setDelegationAdopt').mockResolvedValue(view({ state: 'set' }));
+    render(<Polled />);
+    await waitFor(() => expect(radio(T.off).checked).toBe(true));
+    await tapOnAndConfirm();
+    await waitFor(() => expect(radio(T.on).checked).toBe(true));
+    await flush();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(radio(T.on));
+  });
+
+  it('after the confirm and a refused write, the focus is inside the card, never BODY (review 1693 F4)', async () => {
+    vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(409, { ok: false, error: 'fleet-audit-missing' }));
+    owned(view());
+    await tapOnAndConfirm();
+    await flush();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(REFUSAL['fleet-audit-missing']));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(radio(T.off));
   });
 
   it('confirming sends {on:true} once and the reply is what the card then shows', async () => {
@@ -481,10 +573,12 @@ describe('delegationAdoptWords: the wire guard and the radio', () => {
       null, {}, { ...view(), state: 'on' }, { ...view(), caps: { verb: 'yes', audit: 'present' } }, { ...view(), caps: null },
       { ...view(), refused: { on: 'nope', off: null } }, { ...view(), refused: { on: null } },
       { ...view(), adoption: { mode: 'weird' } }, { ...view(), adoption: 3 },
-      { ...view(), adoption: { ...health(), keeps: { items: [{ project: 1 }], more: 0 } } },
-      { ...view(), adoption: { ...health(), keeps: { items: [], more: 'x' } } },
     ];
     for (const bad of bads) expect(asDelegationAdoptView(bad)).toBeNull();
+    // A list `keeps`' one reader refuses is dropped, never the view (review 1693 F1).
+    for (const keeps of [{ items: [{ project: 1 }], more: 0 }, { items: [], more: 'x' }, 'x']) {
+      expect(asDelegationAdoptView({ ...view(), adoption: { ...health(), keeps } }), JSON.stringify(keeps)).toEqual(view({ adoption: health() }));
+    }
   });
   it('only a measured marker checks a radio', () => {
     expect(delegationAdoptChecked(view({ state: 'set' }))).toBe('on');
@@ -527,12 +621,13 @@ describe('WORDS CENSUS (W4-U10, D-7845): the card says keep, kept and the change
       delegationAdoptFailure(new ApiError(502, { ok: false, error: 'fleetFailed', stderr: 's' })),
       delegationAdoptKeepLine(keep()), ...changes.map((c) => delegationAdoptKeepChanges(c)),
       delegationAdoptKeepsMore(1), delegationAdoptKeepsMore(9),
-      delegationAdoptConfirm(null), delegationAdoptConfirm({ items: TWO, more: 0 }), delegationAdoptConfirm({ items: [TWO[0]!], more: 4 }),
+      delegationAdoptConfirm(null), delegationAdoptConfirm(health()), delegationAdoptConfirm(health({ keeps: { items: TWO, more: 0 } })),
+      delegationAdoptConfirm(health({ wouldAdopt: 5, keeps: { items: [TWO[0]!], more: 4 } })),
     ]);
     expect(all.length).toBeGreaterThan(40);
     for (const s of all) {
       expect(s, s).not.toMatch(/lease|adopt|retain|clean|spool/i);
-      expect(s, s).not.toMatch(/running|\bactive\b|recent/i);
+      expect(s, s).not.toMatch(/running|\bactive\b|recent|\bnow\b/i);
     }
   });
 

@@ -1556,14 +1556,21 @@ describe('delegation wave 5 PR8b: the adoption switch vocabulary is declared onc
     expect(readFileSync(path.join(ccrcRoot, 'shared', 'refusal.ts'), 'utf8')).toMatch(/^\s*\.\.\.DELEGATION_ADOPT_REFUSALS,$/m);
   });
 
-  it('on\'s own refusal word has one table, DELEGATION_ADOPT_ON_ONLY, and its union and guard are derived from it (PR8c, review 1665 N6)', async () => {
+  it('on\'s own refusal word has one table, DELEGATION_ADOPT_ON_ONLY, and its union and guard are derived from it (PR8c, review 1665 N6, review 1693 F7)', async () => {
     const decl = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
     expect(decl(/^\s*(?:export\s+)?(?:const|let|var)\s+DELEGATION_ADOPT_ON_ONLY\b/m)).toEqual(['shared/delegation-adopt.ts']);
     expect(decl(/^\s*(?:export\s+)?type\s+DelegationAdoptOnRefusal\b\s*=/m)).toEqual(['shared/delegation-adopt.ts']);
     expect(decl(/^\s*export\s+function\s+isDelegationAdoptOnRefusal\b/m)).toEqual(['shared/delegation-adopt.ts']);
     const src = readFileSync(path.join(ccrcRoot, 'shared', 'delegation-adopt.ts'), 'utf8');
     expect(src).toMatch(/^export type DelegationAdoptOnRefusal = DelegationAdoptRefusal \| keyof typeof DELEGATION_ADOPT_ON_ONLY;$/m);
+    // The guard reads the table too (review 1693 F7): its body asks the table and spells none of its words by hand.
+    const guard = /^export function isDelegationAdoptOnRefusal\b[^\n]*\n([\s\S]*?)^\}$/m.exec(src)?.[1] ?? '';
+    expect(guard).toMatch(/Object\.hasOwn\(DELEGATION_ADOPT_ON_ONLY, v\)/);
     const { isDelegationAdoptOnRefusal, isDelegationAdoptRefusal } = await import('../../../shared/delegation-adopt.js');
+    const table = /^const DELEGATION_ADOPT_ON_ONLY = \{([^}]*)\} as const;$/m.exec(src)?.[1] ?? '';
+    const words = [...table.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    expect(words).toEqual(['sign-in-unarmed']);
+    for (const w of words) expect(guard, `the guard spells ${w} by hand`).not.toContain(w);
     expect(isDelegationAdoptOnRefusal('sign-in-unarmed')).toBe(true);
     expect(isDelegationAdoptRefusal('sign-in-unarmed')).toBe(false);
   });

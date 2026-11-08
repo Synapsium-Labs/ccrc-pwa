@@ -36,6 +36,7 @@ import {
 import type { DelegationAdoptPoll } from './useDelegationAdoptView';
 
 const T = DELEGATION_ADOPT_TEXT;
+const RADIO_NAME = 'settings-delegation-adopt';
 
 export function DelegationAdoptSection({ poll }: { poll: DelegationAdoptPoll }): ReactNode {
   const { view, failure } = poll;
@@ -87,8 +88,28 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
 
   useEffect(() => clearTimer, []);
 
+  // After a tap, once its write settles (or a refusal closed the sheet), the focus comes back into the card (review 1693 F4):
+  // to the checked answer when it can be chosen, otherwise to the card's status lines. The sheet's own give-back targets the
+  // radio that opened it, which is disabled while the write is in flight, so without this the focus falls to the page.
+  const refocus = useRef(false);
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!refocus.current || asked !== null || confirming) return;
+    refocus.current = false;
+    const checked = document.querySelector<HTMLInputElement>(`input[name="${RADIO_NAME}"]:checked`);
+    (checked !== null && !checked.disabled ? checked : statusRef.current)?.focus({ preventScroll: true });
+  }, [asked, confirming]);
+
   const choose = (choice: DelegationAdoptChoice): void => {
     if (asked !== null) return;   // the disabled fieldset stops a finger; this stops a second call
+    // The view the card shows now, not the one the sheet opened over (review 1693 F3): a choice it refuses sends nothing, the
+    // sheet closes and the refusal line stays on screen.
+    if (view.refused[choice] !== null) {
+      refocus.current = true;
+      setConfirming(false);
+      return;
+    }
+    refocus.current = true;
     line.clear();
     spokenOf.current = null;
     setAsked(choice);
@@ -134,8 +155,9 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
   };
 
   // Keep goes through the sheet; Do not keep goes out at once.
-  // A choice the door would refuse, or any choice while one waits, is disabled; this stops a change event that comes round
-  // the disabled radio, so a second tap neither opens a second sheet nor sends a second write.
+  // A choice the door would refuse, or any choice while one waits, is disabled as a radio; this stops a change event that comes
+  // round the disabled radio, so a second tap neither opens a second sheet nor sends a second write. A sheet already open when a
+  // newer view refuses `on` is stopped in `choose`, which reads the current view.
   const pick = (choice: DelegationAdoptChoice): void => {
     if (view.refused[choice] !== null || asked !== null || confirming) return;
     if (choice === 'on') setConfirming(true);
@@ -144,7 +166,7 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
 
   const { adoption, refused } = view;
   const keeps = adoption === null ? null : delegationAdoptionKeepsOf(adoption);
-  const sheet = delegationAdoptConfirm(keeps);
+  const sheet = delegationAdoptConfirm(adoption);
   const onId = `${refusalId}-on`;
   const offId = `${refusalId}-off`;
 
@@ -158,7 +180,7 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
       <p className={SETTINGS_NOW_CLASS.note}>{delegationAdoptCapLine('audit', view.caps.audit)}</p>
       <NotedRadioSet<DelegationAdoptChoice>
         legend={T.legend}
-        name="settings-delegation-adopt"
+        name={RADIO_NAME}
         value={reading}
         disabled={asked !== null || confirming}
         onPick={pick}
@@ -169,8 +191,10 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
       />
       {refused.on !== null && <p id={onId} className={SETTINGS_AMBER_NOTE}>{delegationAdoptRefusedLine(T.on, refused.on)}</p>}
       {refused.off !== null && <p id={offId} className={SETTINGS_AMBER_NOTE}>{delegationAdoptRefusedLine(T.off, refused.off)}</p>}
-      {asked !== null && <p className="settings-note" role="status">{T.asked}</p>}
-      <ResultLine line={line.line} />
+      <div ref={statusRef} tabIndex={-1}>
+        {asked !== null && <p className="settings-note" role="status">{T.asked}</p>}
+        <ResultLine line={line.line} />
+      </div>
       {adoption !== null && (
         keeps === null ? (
           <p className="settings-note">{T.noList}</p>
