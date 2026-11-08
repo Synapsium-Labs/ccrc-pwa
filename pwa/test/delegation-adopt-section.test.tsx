@@ -8,7 +8,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ReactNode } from 'react';
 import type { DelegationAdoptionHealth, DelegationAdoptionKeep } from '../../shared/api';
 import { DELEGATION_ADOPTION_KEEPS_MAX } from '../../shared/api';
-import { DELEGATION_ADOPT_REFUSALS, type DelegationAdoptView } from '../../shared/delegation-adopt';
+import {
+  DELEGATION_ADOPT_REFUSALS, isDelegationAdoptOnRefusal, isDelegationAdoptRefusal, type DelegationAdoptView,
+} from '../../shared/delegation-adopt';
 import { DelegationAdoptSection } from '../src/fleet/DelegationAdoptSection';
 import { COLLECT_SECTION_TEXT } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
@@ -190,6 +192,25 @@ describe('a refused choice says why and is disabled (D-8113)', () => {
     expect(screen.queryByText(/is not available now/)).toBeNull();
     expect(radio(T.on).disabled).toBe(false);
     expect(radio(T.off).disabled).toBe(false);
+  });
+
+  it('on refused with sign-in-unarmed (review 1665 N6): a dark server\'s view reads whole and the card shows the refusal in its own words', async () => {
+    const dark = view({ refused: { on: 'sign-in-unarmed', off: null } });
+    expect(asDelegationAdoptView(dark)).toEqual(dark);
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(dark);
+    render(<Polled />);
+    await waitFor(() => expect(screen.getByText(delegationAdoptRefusedLine(T.on, 'sign-in-unarmed'))).toBeInTheDocument());
+    expect(REFUSAL['sign-in-unarmed']).toMatch(/sign-in/i);
+    expect(radio(T.on).disabled).toBe(true);
+    expect(radio(T.off).disabled).toBe(false);
+    expect(radio(T.off).checked).toBe(true);
+  });
+
+  it('sign-in-unarmed is on\'s word only: off refused with it is no view at all, and each guard keeps its own words', () => {
+    expect(asDelegationAdoptView({ ...view(), refused: { on: null, off: 'sign-in-unarmed' } })).toBeNull();
+    for (const w of [...Object.keys(DELEGATION_ADOPT_REFUSALS), 'sign-in-unarmed']) expect(isDelegationAdoptOnRefusal(w), w).toBe(true);
+    for (const w of ['nope', '', null, 403, 'confirm-required']) expect(isDelegationAdoptOnRefusal(w), String(w)).toBe(false);
+    expect(isDelegationAdoptRefusal('sign-in-unarmed')).toBe(false);
   });
 
   it('each refusal word has its own sentence', () => {
@@ -419,6 +440,15 @@ describe('a refused write says why, in the card\'s own words (D-8113)', () => {
     expect(group()).not.toBeDisabled();
   });
 
+  it('a sign-in-unarmed reply (403) to on shows the card\'s own sentence, not the ccd write reader\'s (review 1665 N6)', async () => {
+    vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(403, { ok: false, error: 'sign-in-unarmed' }));
+    owned(view());
+    await tapOnAndConfirm();
+    await flush();
+    expect(screen.getByRole('status')).toHaveTextContent(REFUSAL['sign-in-unarmed']);
+    expect(delegationAdoptFailure(new ApiError(403, { ok: false, error: 'sign-in-unarmed' })).tone).toBe('refusal');
+  });
+
   it('a bad-request or ccd failure falls back to the ccd write reader\'s refusal line', async () => {
     vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(502, { ok: false, error: 'fleetFailed', stderr: 'verb died' }));
     owned(view());
@@ -510,7 +540,8 @@ describe('WORDS CENSUS (W4-U10, D-7845): the card says keep, kept and the change
     for (const word of Object.values(T)) expect(word).not.toMatch(/-live|-paused|\/|~|\$REG|--state|ccd /);
   });
 
-  it('the refusal table is total over the door\'s words', () => {
-    expect(Object.keys(REFUSAL).sort()).toEqual(Object.keys(DELEGATION_ADOPT_REFUSALS).sort());
+  it('the refusal table is total over the door\'s words and on\'s own sign-in-unarmed (review 1665 N6)', () => {
+    expect(Object.keys(REFUSAL).sort()).toEqual([...Object.keys(DELEGATION_ADOPT_REFUSALS), 'sign-in-unarmed'].sort());
+    for (const w of Object.keys(REFUSAL)) expect(isDelegationAdoptOnRefusal(w), w).toBe(true);
   });
 });

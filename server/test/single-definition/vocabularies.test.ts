@@ -1555,4 +1555,16 @@ describe('delegation wave 5 PR8b: the adoption switch vocabulary is declared onc
     expect(DELEGATION_ADOPT_CAPS).toEqual(['present', 'absent', 'unmeasured']);
     expect(readFileSync(path.join(ccrcRoot, 'shared', 'refusal.ts'), 'utf8')).toMatch(/^\s*\.\.\.DELEGATION_ADOPT_REFUSALS,$/m);
   });
+
+  it('on\'s own refusal word has one table, DELEGATION_ADOPT_ON_ONLY, and its union and guard are derived from it (PR8c, review 1665 N6)', async () => {
+    const decl = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(decl(/^\s*(?:export\s+)?(?:const|let|var)\s+DELEGATION_ADOPT_ON_ONLY\b/m)).toEqual(['shared/delegation-adopt.ts']);
+    expect(decl(/^\s*(?:export\s+)?type\s+DelegationAdoptOnRefusal\b\s*=/m)).toEqual(['shared/delegation-adopt.ts']);
+    expect(decl(/^\s*export\s+function\s+isDelegationAdoptOnRefusal\b/m)).toEqual(['shared/delegation-adopt.ts']);
+    const src = readFileSync(path.join(ccrcRoot, 'shared', 'delegation-adopt.ts'), 'utf8');
+    expect(src).toMatch(/^export type DelegationAdoptOnRefusal = DelegationAdoptRefusal \| keyof typeof DELEGATION_ADOPT_ON_ONLY;$/m);
+    const { isDelegationAdoptOnRefusal, isDelegationAdoptRefusal } = await import('../../../shared/delegation-adopt.js');
+    expect(isDelegationAdoptOnRefusal('sign-in-unarmed')).toBe(true);
+    expect(isDelegationAdoptRefusal('sign-in-unarmed')).toBe(false);
+  });
 });

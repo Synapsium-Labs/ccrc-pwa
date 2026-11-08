@@ -26,10 +26,18 @@ export type DelegationAdoptRefusal = keyof typeof DELEGATION_ADOPT_REFUSALS;
 export function isDelegationAdoptRefusal(v: unknown): v is DelegationAdoptRefusal {
   return typeof v === 'string' && Object.hasOwn(DELEGATION_ADOPT_REFUSALS, v);
 }
+// `on`'s own refusal word beside the door's three: one table, so the union and its guard below are derived from it, as
+// `DELEGATION_ADOPT_REFUSALS`' are. Its status is not here: `sign-in-unarmed` is the collect-lane door's word, 403 in `REFUSAL_STATUS`.
+const DELEGATION_ADOPT_ON_ONLY = { 'sign-in-unarmed': true } as const;
 /** What a tap of `on` can be refused with (D-8113, review 1659 F2): the three words above, and the collect-lane door's own
  *  `sign-in-unarmed` (403, already in `REFUSAL_STATUS`), when sign-in is dark or the caller holds no session. `off` is never refused
  *  for it. */
-export type DelegationAdoptOnRefusal = DelegationAdoptRefusal | 'sign-in-unarmed';
+export type DelegationAdoptOnRefusal = DelegationAdoptRefusal | keyof typeof DELEGATION_ADOPT_ON_ONLY;
+/** `refused.on`'s runtime guard, for the Settings card's wire reader (D-8114, review 1665 N6): the door's three words or `on`'s own.
+ *  `refused.off` keeps `isDelegationAdoptRefusal`, so a `sign-in-unarmed` there is no view. */
+export function isDelegationAdoptOnRefusal(v: unknown): v is DelegationAdoptOnRefusal {
+  return isDelegationAdoptRefusal(v) || (typeof v === 'string' && Object.hasOwn(DELEGATION_ADOPT_ON_ONLY, v));
+}
 
 /** What `GET /api/coord/delegation-adopt` answers, and what its POST answers after the verb ran.
  *  `state`: the marker, as one registry listing reads it (`unmeasurable` is never read as off). `caps`: the two capabilities the

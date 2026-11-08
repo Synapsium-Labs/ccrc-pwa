@@ -7,7 +7,8 @@
 // now: `delegation-adopt-section.test.tsx` collects them all and holds the census.
 import { isMarkerState, type DelegationAdoptionHealth, type DelegationAdoptionKeep, type DelegationAdoptionKeeps } from '../../../shared/api';
 import {
-  DELEGATION_ADOPT_CAPS, isDelegationAdoptRefusal, type DelegationAdoptCap, type DelegationAdoptRefusal, type DelegationAdoptView,
+  DELEGATION_ADOPT_CAPS, isDelegationAdoptOnRefusal, isDelegationAdoptRefusal, type DelegationAdoptCap, type DelegationAdoptOnRefusal,
+  type DelegationAdoptView,
 } from '../../../shared/delegation-adopt';
 import { ApiError } from '../lib/apiError';
 import { isCount, isRecord } from '../lib/wire';
@@ -44,13 +45,15 @@ export const DELEGATION_ADOPT_TEXT = {
   ...VERB_WRITE_TEXT,
 } as const;
 
-/** The three refusal words of the door, each in the operator's words; keyed by the L0 type, so a new word is a compile error
- *  here until it has a sentence. The server's own detail names its internals and is never shown. */
-export const DELEGATION_ADOPT_REFUSAL_TEXT: Readonly<Record<DelegationAdoptRefusal, string>> = {
+/** The door's refusal words, each in the operator's words: its three, and `on`'s own `sign-in-unarmed` (review 1665 N6); keyed by
+ *  the L0 type, so a new word is a compile error here until it has a sentence. The server's own detail names its internals and is
+ *  never shown. */
+export const DELEGATION_ADOPT_REFUSAL_TEXT: Readonly<Record<DelegationAdoptOnRefusal, string>> = {
   'fleet-caps-unmeasured': 'The fleet box did not report what it can do, so nothing can be changed now. Try again shortly.',
   'fleet-switch-missing': 'The fleet box has no switch for this yet, so it cannot be changed until its ccrc is updated.',
   'fleet-audit-missing': 'The fleet box cannot check whether a worktree changed, so it would keep every finished worktree. '
     + 'Update the fleet box first.',
+  'sign-in-unarmed': 'Turning this on needs sign-in to be armed on this server, and you to be signed in. Nothing was changed.',
 };
 
 const MODE_LINE: Readonly<Record<DelegationAdoptionHealth['mode'], string>> = {
@@ -105,9 +108,10 @@ export function asDelegationAdoptView(raw: unknown): DelegationAdoptView | null 
   if (!isMarkerState(state) || !isRecord(caps) || !isRecord(refused)) return null;
   if (!CAPS.includes(caps.verb) || !CAPS.includes(caps.audit)) return null;
   const { on, off } = refused;
-  const refusalOf = (v: unknown): DelegationAdoptRefusal | null | undefined => (v === null ? null : isDelegationAdoptRefusal(v) ? v : undefined);
-  const refusedOn = refusalOf(on);
-  const refusedOff = refusalOf(off);
+  // `on` reads the door's three words and its own `sign-in-unarmed`; `off` the three only (review 1665 N6).
+  const refusalOf = <W>(v: unknown, is: (x: unknown) => x is W): W | null | undefined => (v === null ? null : is(v) ? v : undefined);
+  const refusedOn = refusalOf(on, isDelegationAdoptOnRefusal);
+  const refusedOff = refusalOf(off, isDelegationAdoptRefusal);
   if (refusedOn === undefined || refusedOff === undefined) return null;
   const health = adoption === null || adoption === undefined ? null : asHealth(adoption);
   if (health === null && adoption !== null && adoption !== undefined) return null;
@@ -149,7 +153,7 @@ export function delegationAdoptCapLine(which: 'verb' | 'audit', cap: DelegationA
 }
 
 /** Why a choice cannot be made now: the choice's label and the refusal's sentence. */
-export function delegationAdoptRefusedLine(label: string, word: DelegationAdoptRefusal): string {
+export function delegationAdoptRefusedLine(label: string, word: DelegationAdoptOnRefusal): string {
   return `${label} is not available now. ${DELEGATION_ADOPT_REFUSAL_TEXT[word]}`;
 }
 
@@ -192,10 +196,11 @@ export function delegationAdoptConfirm(keeps: DelegationAdoptionKeeps | null): {
   return { title: T.confirmTitle, consequence: [count, T.confirmMail], confirmLabel: T.confirmLabel };
 }
 
-/** A write's rejection, as its line: the door's own three words in the card's sentences, anything else as the ccd write
- *  reader says it (`verbWriteFailure`: a refusal moved nothing, anything else proves nothing about the write). */
+/** A write's rejection, as its line: the door's own words (its three and `on`'s `sign-in-unarmed`) in the card's sentences,
+ *  anything else as the ccd write reader says it (`verbWriteFailure`: a refusal moved nothing, anything else proves nothing about
+ *  the write). */
 export function delegationAdoptFailure(err: unknown): { text: string; tone: 'refusal' | 'answer' } {
-  if (err instanceof ApiError && isRecord(err.body) && isDelegationAdoptRefusal(err.body.error)) {
+  if (err instanceof ApiError && isRecord(err.body) && isDelegationAdoptOnRefusal(err.body.error)) {
     return { text: DELEGATION_ADOPT_REFUSAL_TEXT[err.body.error], tone: 'refusal' };
   }
   return verbWriteFailure(err);
