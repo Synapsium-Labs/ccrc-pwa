@@ -125,6 +125,27 @@ describe('GET /api/accounts', () => {
     expect(projected).toEqual({ wrapper: 'claude-a', score: 5 });
   });
 
+  // D-8120: the statusline writer marks an Anthropic lane with no 5h window, and
+  // the route carries that marker to the PWA (which shows "No 5-hour limit") and
+  // ranks the lane on its week; a lane that reports its 5h window keeps today's shape.
+  it('carries an Anthropic lane\'s no-5h-window marker, and projects on its week', async () => {
+    const t = now();
+    const fresh = (five: number, seven: number) =>
+      ({ five, seven, ts: t - 60, fiveResetAt: t + 9000, sevenResetAt: t + 400000 });
+    const home = seedLimits({
+      claude: fresh(80, 40), 'claude-a': fresh(50, 50), 'claude-d': fresh(85, 45),
+      'claude-b': { five: null, seven: 7, ts: t - 60, fiveResetAt: t - 259200, sevenResetAt: t + 400000,
+                    fiveAbsentSince: t - 259200, fiveWindowMinutes: 0 },
+    });
+
+    const payload = await getPayload(home);
+    const byWrapper = Object.fromEntries(payload.accounts.map((a) => [a.wrapper, a]));
+    expect(byWrapper['claude-b']).toMatchObject({ five: null, seven: 7, fiveWindowMinutes: 0, fiveRolledOver: false });
+    expect(byWrapper['claude-a']).not.toHaveProperty('fiveWindowMinutes');
+    expect(byWrapper['claude-b']).not.toHaveProperty('fiveAbsentSince');
+    expect(payload.projected).toEqual({ wrapper: 'claude-b', score: 7 });
+  });
+
   it('projects an exhausted account rather than hiding it', async () => {
     // ccd's rule has no availability filter, so a pinned fleet still gets an
     // answer — and that answer is exactly what the affordance has to show.

@@ -373,3 +373,44 @@ describe('the rc-6 degrade is stamped at the MOVE, not at the decision', () => {
     expect(swapLogOrEmpty()).not.toMatch(/dispatch |degrade /);
   });
 });
+
+// D-8120: an Anthropic lane whose plan has no 5h window. The statusline writer
+// marks its row `fiveWindowMinutes: 0` once a whole window of readings carried no
+// 5h figure; `_limit_score` reads that marker and ranks the lane on its weekly
+// figure alone. Without the marker the same row is unmeasured and ranks last.
+describe('D-8120: a lane with no 5h window swaps on its weekly figure alone', () => {
+  const fiveLess = (w: string, seven: number, marked = true): void => {
+    fs.mkdirSync(path.join(h.home, '.cc-limits'), { recursive: true });
+    const since = now() - (marked ? 259_200 : 3600);
+    fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify({
+      five: null, seven, ts: now(), fiveResetAt: marked ? since : null, sevenResetAt: now() + 400_000,
+      fiveAbsentSince: since, ...(marked ? { fiveWindowMinutes: 0 } : {}),
+    }));
+  };
+
+  it('a marked lane with a quiet week is the swap target over a busier two-window lane', () => {
+    limits('claude', 99, 99); limits('claude-a', 40, 40); fiveLess('claude-b', 12); limits('claude-d', 50, 50);
+    seedRow('claude');
+    expect(target('claude')).toBe('claude-b rc=0');
+  });
+
+  it('the same row WITHOUT the marker is unmeasured and ranks last, as today', () => {
+    limits('claude', 99, 99); limits('claude-a', 40, 40); fiveLess('claude-b', 12, false); limits('claude-d', 50, 50);
+    seedRow('claude');
+    expect(target('claude')).toBe('claude-a rc=0');
+  });
+
+  it('a marked lane at the weekly ceiling is refused like any blocked lane', () => {
+    limits('claude', 99, 99); limits('claude-a', 40, 40); fiveLess('claude-b', 99); limits('claude-d', 50, 50);
+    seedRow('claude');
+    expect(target('claude')).toBe('claude-a rc=0');
+  });
+
+  it('a session on a marked home stays while its week has room, and leaves only on weekly pressure', () => {
+    fiveLess('claude', 30); limits('claude-a', 40, 40); limits('claude-b', 50, 50); limits('claude-d', 60, 60);
+    seedRow('claude');
+    expect(target('claude')).toBe('rc=0');
+    fiveLess('claude', 99);
+    expect(target('claude')).toBe('claude-a rc=0');
+  });
+});

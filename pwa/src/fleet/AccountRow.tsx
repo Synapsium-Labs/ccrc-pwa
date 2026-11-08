@@ -17,6 +17,7 @@ import type { RosterWire } from '../../../shared/api';
 import { Chip, ListRow, Meter, limitBand } from '@ccrc/ui';
 import { accountHue, accountLabel, SIGN_IN_EXPIRED } from '../lib/accounts';
 import { condemned, type AccountFacts } from './accountPicker';
+import { fiveHourWords, NO_FIVE_HOUR } from './accountWords';
 import { windowReading } from './laneWords';
 import { PoolTag } from './PoolTag';
 import './fleet.css';
@@ -61,6 +62,10 @@ function Gauge({ label, value, rolledOver, off = false }: {
     </span>
   );
 }
+
+/** The roster's kind for a wrapper, `undefined` for one the roster does not have. */
+const accountKind = (roster: readonly RosterWire[], wrapper: string): string | undefined =>
+  roster.find((r) => r.id === wrapper)?.kind;
 
 /** A tappable account row: chip (label + hue), limit gauges, chevron.
  *  Shared by SwapSheet (targets) and NewSessionSheet (step 1) — ONE row
@@ -150,7 +155,17 @@ export function AccountRow({
           <span className="acct-unknown">limits unknown</span>
         ) : (
           <>
-            <Gauge label="5h" value={facts.five} rolledOver={facts.fiveRolledOver === true} off={off} />
+            {/* A lane whose row carries the writer's no-5h-window marker (D-8120) says so in the Accounts card's own
+                words, rather than an empty "—" gauge that reads as "not measured". `fiveHourWords` decides; only its
+                NO_FIVE_HOUR answer is taken, so a Codex lane keeps the gauge this row has always drawn for it. */}
+            {fiveHourWords(accountKind(roster, wrapper), facts) === NO_FIVE_HOUR ? (
+              <span className="acct-gauge" data-five="none">
+                <span>5h</span>
+                <span className="acct-gauge-none">{NO_FIVE_HOUR}</span>
+              </span>
+            ) : (
+              <Gauge label="5h" value={facts.five} rolledOver={facts.fiveRolledOver === true} off={off} />
+            )}
             <Gauge label="7d" value={facts.seven} rolledOver={facts.sevenRolledOver === true} off={off} />
           </>
         )}

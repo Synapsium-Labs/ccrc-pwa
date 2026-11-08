@@ -559,6 +559,12 @@
 .acct-gauge-pct {
   text-align: right;
 }
+/* A lane with no 5-hour window (D-8120): the words take the track and the
+   percentage columns, right-aligned like the percentage they stand in for. */
+.acct-gauge-none {
+  grid-column: 2 / -1;
+  text-align: right;
+}
 .acct-unknown {
   font: var(--weight-regular) var(--fs-2xs) / var(--lh-normal) var(--family-mono);
   color: var(--ink-tertiary);

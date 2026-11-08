@@ -19022,7 +19022,10 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH
   # as `fiveWindowMinutes` so the two cases stop looking alike in the row (both
   # are `five: null`). When the 5h window does not exist, the weekly figure is
   # not half the truth — it is the WHOLE truth, and max() over the one window
-  # that exists is a real score, not a lower bound.
+  # that exists is a real score, not a lower bound. Anthropic plans with no 5h
+  # window carry the same marker (D-8120): statusline-command.sh states it once
+  # a whole 5h window of that account's readings carried no 5h figure, so this
+  # function reads the fact and never re-derives it from a single null.
   #
   # Read the marker RAW, not through `_limit_field`: it is the row's SHAPE, not a
   # measurement, so the rollover and age rules must not touch it.

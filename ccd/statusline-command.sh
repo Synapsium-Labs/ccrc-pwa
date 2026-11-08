@@ -340,11 +340,62 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
     # renders landing together truncated and wrote the same file at once.
     acct_tmp="$HOME/.cc-limits/.$acct_id.$$.tmp"
     acct_five_reset="${five_reset:-null}"
-    if [ -z "${five_int:-}" ] && [ "$acct_five_reset" = null ] && [ -f "$acct_row" ]; then
-      acct_five_reset=$(jq -r 'if (.fiveResetAt | type) == "number" then .fiveResetAt else "null" end' "$acct_row" 2>/dev/null) || acct_five_reset=null
+    # NO 5H WINDOW ON THIS ACCOUNT (D-8120) — stated HERE, once, and read by
+    # everyone else. Some Anthropic plans have no 5-hour window, and their
+    # payloads carry `seven_day` alone, render after render. One null cannot
+    # tell that apart from "this render's payload did not report it": a lane
+    # was measured going five-less within two hours of hitting its 5h limit. So
+    # the fact is an OBSERVATION over time, and this writer is the only party
+    # that sees every reading land:
+    #
+    #   `fiveAbsentSince` — when the row's run of five-less readings began: kept
+    #   from the row while it is already five-less (seeded, for a row written
+    #   before this key existed, from its kept `fiveResetAt`, the end of the
+    #   last 5h window anyone reported), and `now` when this reading starts the
+    #   run.
+    #   `fiveWindowMinutes: 0` — written once that run is a whole 5h window old.
+    #
+    # A payload that names a 5h window at all (a figure, or a `resets_at` on
+    # its own) is evidence the window exists, and writes neither key: the row
+    # goes straight back to today's shape and today's pair rule. The anchor
+    # cannot start inside a live window, because the verdict above drops every
+    # five-less payload while a 5h figure is in force (`fiveLive`) — so a lane
+    # that hit its 5h limit is marked no earlier than its reset plus 5h.
+    #
+    # `fiveWindowMinutes: 0` is the marker every scorer already reads as "this
+    # plan has no 5h window; the weekly figure is the whole score" (`measured()`
+    # in server/src/limits.ts, `_limit_score` in ccd, the PWA's swap picker) —
+    # ccgpt-usage states it for Codex the same way. No reader re-derives it.
+    #
+    # ONE read of the row for both facts a five-less reading needs from it —
+    # the kept `fiveResetAt` and the run start — so a render reads the row no
+    # more often than it did before the marker existed. The `jq` prints the
+    # two on one line, `<fiveResetAt> <extra keys>`; an unparseable row keeps
+    # no reset and starts a fresh run, exactly as the two reads did apart.
+    acct_five_extra=""
+    if [ -z "${five_int:-}" ] && [ "$acct_five_reset" = null ]; then
+      acct_five_extra=",\"fiveAbsentSince\":$acct_now"
+      if [ -f "$acct_row" ]; then
+        acct_five_pair=$(jq -Rsr --argjson now "$acct_now" '
+          def epoch: if type == "number" and . >= 0 then floor else null end;
+          def fiveAbsentSince($row; $now):
+            if ($row | type) == "object" and $row.five == null
+            then ($row.fiveAbsentSince | epoch) // ($row.fiveResetAt | epoch) // $now
+            else $now end;
+          (try fromjson catch null) as $row
+          | (if ($row | type) == "object" and ($row.fiveResetAt | type) == "number"
+             then ($row.fiveResetAt | tojson) else "null" end) as $reset
+          | fiveAbsentSince($row; $now) as $since
+          | "\($reset) ,\"fiveAbsentSince\":\($since)"
+            + (if $now - $since >= 18000 then ",\"fiveWindowMinutes\":0" else "" end)' "$acct_row" 2>/dev/null) || acct_five_pair=""
+        if [[ "$acct_five_pair" =~ ^([^\ ]+)\ (,\"fiveAbsentSince\":[0-9]+(,\"fiveWindowMinutes\":0)?)$ ]]; then
+          acct_five_reset="${BASH_REMATCH[1]}"
+          acct_five_extra="${BASH_REMATCH[2]}"
+        fi
+      fi
     fi
-    printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s}\n' \
-      "${five_int:-null}" "${seven_int:-0}" "$acct_now" "${acct_five_reset:-null}" "${seven_reset:-null}" \
+    printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s%s}\n' \
+      "${five_int:-null}" "${seven_int:-0}" "$acct_now" "${acct_five_reset:-null}" "${seven_reset:-null}" "$acct_five_extra" \
       > "$acct_tmp" && mv -f "$acct_tmp" "$acct_row" || rm -f "$acct_tmp" 2>/dev/null
   fi
 fi

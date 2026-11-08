@@ -371,6 +371,33 @@ describe('D-6181: cmd_swap records the pin’s expiry beside it', () => {
     expect(e.at).toBeLessThanOrEqual(epoch() + DAY);
   });
 
+  // D-8120: a home with NO 5h window keeps the reset of the last 5h window anyone
+  // reported (days old) beside `five: null`. That reset belongs to no figure, so
+  // it never sets a pin's expiry: the pin ends at the weekly reset or the TTL.
+  const fiveLessHome = (seven: number, sevenResetAt: number): void => {
+    const since = epoch() - 3 * DAY;
+    limits('claude', { five: null as unknown as number, seven, fiveResetAt: since, sevenResetAt,
+                       fiveAbsentSince: since, fiveWindowMinutes: 0 });
+  };
+
+  it('D-8120: on a home with no 5h window blocked on its week, the expiry is the weekly reset', () => {
+    seed('claude');
+    const reset = epoch() + 3 * 3600;
+    fiveLessHome(99, reset);
+    h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
+    expect(expiry()).toEqual({ at: reset, why: 'reset' });
+  });
+
+  it('D-8120: on a home with no 5h window and room in its week, the expiry is the TTL, never a 5h reset', () => {
+    seed('claude');
+    fiveLessHome(40, epoch() + 5 * DAY);
+    const before = epoch();
+    h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
+    const e = expiry()!;
+    expect(e.why).toBe('ttl');
+    expect(e.at).toBeGreaterThanOrEqual(before + DAY);
+  });
+
   it('a pin written by the new cmd_swap is held by the base _swap_pinned and survives the base _swap_pin_tick', () => {
     seed('claude');
     h.sh(`${SWAP_STUBS_6181} cmd_swap ${ID} claude-a`);
