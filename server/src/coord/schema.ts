@@ -2303,6 +2303,20 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE gone_since (personId TEXT NOT NULL PRIMARY KEY, firstGoneAt INTEGER NOT NULL, lastGoneAt INTEGER NOT NULL);
   `,
+  // ── 46: user_version 45 -> 46 ─────────────────────────────────────────────
+  // The close-order list's index (D-8071; spec 2026-11-04 §11.4, A30): `GET /api/runs/find` pages terminal runs by
+  // `closedAt` descending, then id, and a partial index on `closedAt` for runs that have one lets that order walk the
+  // index instead of sorting the archive. The query repeats the index's predicate (`closedAt IS NOT NULL`) so the
+  // planner may use it.
+  //
+  // AN INDEX AND NOTHING ELSE: an older build opening a file at `user_version 46` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), never names the index, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR
+  // and before merge (it must print 45 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX runs_by_closed_at ON runs(closedAt DESC, id DESC) WHERE closedAt IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

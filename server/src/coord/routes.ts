@@ -29,6 +29,7 @@ import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
+import { parseRunFind } from './runFind.js';
 import { withVerdicts } from './runWire.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
@@ -542,6 +543,9 @@ export interface CoordRoutesHandle {
  *  limiter reads no `req.ip`, like `auth/ratelimit.ts`); it runs on `preHandler`, after the
  *  route's own auth `onRequest` hook, so an unauthenticated call never spends it. */
 export const RUN_SPEND_RATE_LIMIT = { max: 600, timeWindow: '1 minute' } as const;
+
+/** Budget for `GET /api/runs/find` (D-8071, spec §11.4): 120 a minute, one constant-keyed bucket, like the one above. */
+export const RUN_FIND_RATE_LIMIT = { max: 120, timeWindow: '1 minute' } as const;
 
 /** The refusal the test box's read and sync answer a caller with neither a session nor the box token (D-7554). */
 const TESTBOX_UNAUTHENTICATED = { ok: false, error: 'unauthenticated', detail: `takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})` } as const;
@@ -3001,6 +3005,23 @@ export function registerCoordRoutes(
     }
     const summaries: RunSummary[] = read.runs.map(toRunSummary);
     return { runs: stampVerdicts(composeChildReclaim(summaries)) };
+  });
+
+  /** D-8071 (spec 2026-11-04 §11.4): `GET /api/runs/find`, the lookup and the close-order list in one slim read.
+   *  SESSION ONLY: it is not in the gate's box-token exemptions, so the gate's own `onRequest` refuses a caller with no
+   *  session before this runs. It reads stored columns alone (no agent link, no hydrate). Registered before
+   *  `/api/runs/:id`'s siblings are looked up, though find's static segment wins the match whatever the order. */
+  app.get('/api/runs/find', {
+    config: { rateLimit: RUN_FIND_RATE_LIMIT },
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
+      return reply.send(err);
+    },
+  }, async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const parsed = parseRunFind(req.query as Record<string, unknown>);
+    if (parsed === null) return refuseRoute(reply, 'bad-request');
+    return deps.coord.findRuns(parsed);
   });
 
   /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,

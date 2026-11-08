@@ -6887,6 +6887,51 @@ export type RunWaitsOn = 'worker' | 'reviewer' | 'coordinator' | 'merge-queue' |
 export const RUN_WAITS_ON: readonly RunWaitsOn[] = ['worker', 'reviewer', 'coordinator', 'merge-queue', 'nobody'];
 export const isRunWaitsOn = (v: unknown): v is RunWaitsOn => typeof v === 'string' && (RUN_WAITS_ON as readonly string[]).includes(v);
 
+/** `GET /api/runs/find`'s query (D-8071, spec 2026-11-04 §11.4). Every field optional on the wire. */
+export interface RunFindQuery {
+  q?: string;
+  scope?: 'open' | 'closed' | 'all';
+  closedBy?: string;
+  closedSince?: number;
+  program?: string;
+  limit?: number;
+  beforeAt?: number;
+  beforeId?: number;
+}
+
+/** One slim run row of `find`: stored columns only, no hydrate, no tally, no spend (D-8071, §11.4). `claimedBy` keeps
+ *  Resume reachable from a hit. */
+export interface RunHit {
+  id: number;
+  program: string;
+  programTitle: string;
+  runTitle: string | null;
+  wave: number;
+  waveOf: number | null;
+  kind: RunKind;
+  reviews: number | null;
+  state: RunState;
+  project: string;
+  workspace: string | null;
+  branch: string | null;
+  claimedBy: string | null;
+  openedAt: number;
+  closedAt: number | null;
+  closedBy: RunClosedBy | null;
+  closeDetail: string | null;
+}
+
+/** `GET /api/runs/find`'s answer (D-8071, §11.4). `exact` is the run whose id is `q`, whatever the filters; `runs` is
+ *  open runs (first page only) then closed runs by `closedAt` descending; `reviewsOf` is the runs that review run `q`;
+ *  `next` is the cursor for the next page of closed runs, or null. */
+export interface RunFindAnswer {
+  ok: true;
+  exact: RunHit | null;
+  runs: RunHit[];
+  reviewsOf: RunHit[];
+  next: { beforeAt: number; beforeId: number } | null;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
