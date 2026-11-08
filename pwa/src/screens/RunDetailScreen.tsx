@@ -22,7 +22,7 @@ import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { inAppClick } from '../fleet/settingsText';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
-import { coordinatorPresence } from '../fleet/presence';
+import { coordinatorPresence, type CoordinatorPresence } from '../fleet/presence';
 import { closeLeadLine, coordinatorWord, noRunLine, RUN_PAGE_WORDS, runFacts, runWhen } from '../fleet/runDetailWords';
 import { runSpendLine } from '../fleet/runSpendWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
@@ -180,7 +180,9 @@ function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
                 <dt>{f.label}</dt>
                 <dd>
                   {f.parts.map((p, i) => p.href === undefined ? <span key={i}>{p.text}</span> : (
-                    <TextLink key={i} href={p.href} onClick={inAppClick(p.href)}>{p.text}</TextLink>
+                    p.external === true
+                      ? <TextLink key={i} href={p.href} target="_blank" rel="noopener noreferrer">{p.text}</TextLink>
+                      : <TextLink key={i} href={p.href} onClick={inAppClick(p.href)}>{p.text}</TextLink>
                   ))}
                 </dd>
               </div>
@@ -190,6 +192,14 @@ function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
       ))}
     </>
   );
+}
+
+/** The Who facts' coordinator word: the server's verdict first (spec §8.4, A46/A60), `coordinatorPresence` only when the
+ *  verdict is absent. A claimant with no fleet row (an old closed run) reads gone when the server says so. */
+function coordinatorFactWord(gone: boolean | undefined, presence: CoordinatorPresence): string | null {
+  if (gone === true) return coordinatorWord('dead');
+  if (gone === false) return presence === 'dead' ? null : coordinatorWord(presence);
+  return coordinatorWord(presence);
 }
 
 export function RunDetailScreen({ id, store = useFleetStore }: { id: number; store?: FleetStore }): ReactNode {
@@ -237,7 +247,7 @@ export function RunDetailScreen({ id, store = useFleetStore }: { id: number; sto
   const lead = closeLeadLine(run);
   const groups = runFacts({
     run, reviewedBy: state.answer.reviewedBy, fmt: runWhen, programmeHref, specHref, runHref: (n) => runPath(n),
-    coordinator: coordinatorWord(presence), worker: worker === null ? null : coordinatorWord(coordinatorPresence(worker.id, worker, frameSeen)),
+    coordinator: coordinatorFactWord(run.coordinatorGone, presence), worker: worker === null ? null : coordinatorWord(coordinatorPresence(worker.id, worker, frameSeen)),
     pr: pr !== null && pr.number !== null ? { text: `#${pr.number}`, href: pr.url !== null && /^https:\/\//.test(pr.url) ? pr.url : null } : null,
     ...(items === undefined ? {} : { items }),
     ...(signals === undefined ? {} : { signals: signals.signals.signals }),

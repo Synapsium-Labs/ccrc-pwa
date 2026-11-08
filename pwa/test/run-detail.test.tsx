@@ -167,6 +167,39 @@ describe('the header and the facts', () => {
   });
 });
 
+describe('the Who and Pull requests facts', () => {
+  it('a claimant with no fleet row reads gone when the server says coordinatorGone', async () => {
+    const r = run({ state: 'done', closedAt: T0 + 5000, closedBy: 'coordinator', claimedBy: 'lane-a-project-a', coordinatorGone: true });
+    reads(r);
+    await open(r);
+    await screen.findByText('Items done');
+    expect(within(document.querySelector('[data-fact="coordinator"]') as HTMLElement).getByText('gone')).toBeInTheDocument();
+  });
+
+  it('an absent verdict falls back to the presence reading: not reported when the claimant is unlisted', async () => {
+    const r = run({ state: 'done', closedAt: T0 + 5000, closedBy: 'coordinator', claimedBy: 'lane-a-project-a' });
+    reads(r);
+    await open(r);
+    await screen.findByText('Items done');
+    expect(within(document.querySelector('[data-fact="coordinator"]') as HTMLElement).getByText('not reported')).toBeInTheDocument();
+  });
+
+  it('the Pull requests link opens the pull request in a new tab and never navigates in-app', async () => {
+    const r = run({ state: 'done', closedAt: T0 + 5000, closedBy: 'coordinator', sessionId: 'worker-a' });
+    reads(r);
+    const store = mk();
+    act(() => { store.setState({ sessions: [{ id: 'worker-a', pr: { number: 12, url: 'https://example.test/o/r/pull/12' } }] as never, fleetFrameSeen: true }); });
+    const push = vi.spyOn(history, 'pushState');
+    render(<RunDetailScreen id={410} store={store} />);
+    const link = await screen.findByRole('link', { name: '#12' });
+    expect(link).toHaveAttribute('href', 'https://example.test/o/r/pull/12');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    fireEvent.click(link);
+    expect(push).not.toHaveBeenCalled();
+  });
+});
+
 describe('the states', () => {
   it('There is no run 9999.', async () => {
     reads(run());
