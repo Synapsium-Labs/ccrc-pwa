@@ -6582,6 +6582,8 @@ export type MailGate =
   | 'same-sweep' | 'in-flight' | 'cooldown'
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
+  // D-8122: asleep, and its wake waits on the node's memory gate (pressure at the gate level, or headroom under the floor)
+  | 'wake-pressure'
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
   | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable'
   // D-5840 (D-5838): an `enter-ignored` PARK whose recipient's box still holds what it
@@ -6597,7 +6599,7 @@ export type MailGate =
 const MAIL_GATE_MAP: Record<MailGate, true> = {
   'same-sweep': true, 'in-flight': true, cooldown: true,
   'registry-absent': true, 'registry-unmeasurable': true,
-  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true, 'wake-pressure': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
   'stash-failed': true, 'stash-occupied': true,

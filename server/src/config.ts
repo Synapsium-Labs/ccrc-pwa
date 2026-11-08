@@ -12,6 +12,9 @@ import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import { backupStaleHoursOf } from '../../shared/backup.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
+import {
+  WAKE_GATE_DEFAULT, WAKE_HEADROOM_MIN_GIB_DEFAULT, WAKE_HEADROOM_MIN_GIB_MAX, WAKE_PRESSURE_GATES, type WakeGateConfig, type WakePressureGate,
+} from './coord/wakeBudget.js';
 
 export type FleetMode = 'local' | 'remote';
 
@@ -217,6 +220,10 @@ export interface CcrcConfig {
    *  (24), `CCRC_DEPS_SHED_PARKED_AFTER_HOURS` (unset: a parked run never sheds) and `CCRC_DEPS_SHED_PER_PASS` (1).
    *  `depsShedConfigOf` reads them. */
   depsShed: DepsShedConfig;
+  /** D-8122: the automatic wakes' memory gate, box settings with neutral defaults: `CCRC_WAKE_PRESSURE_GATE`
+   *  (warn|critical|off, default warn) and `CCRC_WAKE_HEADROOM_MIN_GIB` (default `CLAUDE_HEADROOM_GATE_BYTES`, 3).
+   *  `wakeGateConfigOf` reads them. */
+  wakeGate: WakeGateConfig;
   /** D-7319: `CCRC_DISPATCH_ABANDON_MS`, how old a `planned` run's dispatch stamp must be, with no session bound,
    *  before the server abandons it (`coord/abandonDeadDispatch.ts`). A safe integer at or above `SPAWN_STALL_MS` (the
    *  console's own stalled threshold, itself at or above the `ws-add` ceiling), else `DISPATCH_ABANDON_DEFAULT_MS`; a
@@ -435,6 +442,24 @@ export function depsShedConfigOf(env: NodeJS.ProcessEnv): DepsShedConfig {
   };
 }
 
+/** The wake gate's two settings from the environment (D-8122). An absent or empty value is the default and silent; any
+ *  other value that is not one of the setting's own says so once and reads as the default. */
+export function wakeGateConfigOf(env: NodeJS.ProcessEnv): WakeGateConfig {
+  const rawGate = env['CCRC_WAKE_PRESSURE_GATE'];
+  let pressure: WakePressureGate = WAKE_GATE_DEFAULT.pressure;
+  if (rawGate !== undefined && rawGate !== '') {
+    if ((WAKE_PRESSURE_GATES as readonly string[]).includes(rawGate)) pressure = rawGate as WakePressureGate;
+    else console.warn(`ccrc-server: CCRC_WAKE_PRESSURE_GATE=${JSON.stringify(rawGate.slice(0, 40))} is not one of ${WAKE_PRESSURE_GATES.join('|')}; it reads as ${pressure} (the default).`);
+  }
+  const rawMin = env['CCRC_WAKE_HEADROOM_MIN_GIB'];
+  let gib = WAKE_HEADROOM_MIN_GIB_DEFAULT;
+  if (rawMin !== undefined && rawMin !== '') {
+    if (/^(0|[1-9][0-9]{0,3})$/.test(rawMin) && Number(rawMin) <= WAKE_HEADROOM_MIN_GIB_MAX) gib = Number(rawMin);
+    else console.warn(`ccrc-server: CCRC_WAKE_HEADROOM_MIN_GIB=${JSON.stringify(rawMin.slice(0, 40))} is not a whole number from 0 to ${WAKE_HEADROOM_MIN_GIB_MAX}; it reads as ${gib} (the default).`);
+  }
+  return { pressure, headroomMinBytes: gib * 2 ** 30 };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
   // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
@@ -552,6 +577,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     releaseApiUrl: releaseApiUrl || DEFAULT_RELEASE_API_URL,
     updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
     depsShed: depsShedConfigOf(env),
+    wakeGate: wakeGateConfigOf(env),
     dispatchAbandonMs,
     backupStaleHours: backupStaleHoursOf(env.CCRC_BACKUP_STALE_HOURS),
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the

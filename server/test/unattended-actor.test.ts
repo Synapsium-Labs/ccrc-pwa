@@ -471,7 +471,9 @@ describe('the hibernation lanes name themselves (D-5242, D-5427)', () => {
   it('the mail lane\'s wake is the watcher\'s ONE automatic `ccd ensure`, inside the hibernated rung', () => {
     const w = src('watch.ts');
     expect((w.match(/CCD_ARGV\.ensure\(/g) ?? []).length).toBe(1);
-    expect(w).toMatch(/gated\(d, 'hibernated'\);[\s\S]{0,400}this\.admitWake\('auto', d\.toId\)\) \{\n\s+const res = await this\.deps\.runCcd\(CCD_ARGV\.ensure\(d\.toId\)\);/);
+    // D-8122: the budget's verdict (with the memory gate inside it) is asked first, so the gate the row names can say
+    // `wake-pressure`; the ensure still runs only on an admitted automatic wake.
+    expect(w).toMatch(/this\.wakeVerdict\('auto', d\.toId\)[\s\S]{0,200}gated\(d, [^;]*'hibernated'\);\n\s+if \(wv\?\.admit === true\) \{\n\s+const res = await this\.deps\.runCcd\(CCD_ARGV\.ensure\(d\.toId\)\);/);
   });
 
   it('the automatic roll declares `sweep:roll` on its ONE act, through the same act site (D-7452, D-7458)', async () => {

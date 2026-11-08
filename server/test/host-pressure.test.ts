@@ -88,6 +88,18 @@ describe('the lane on a scripted io and clock (#1170)', () => {
     return { lane, tick: (ms: number) => { now += ms; }, asks: () => asks };
   }
 
+  it('D-8122: the lane keeps the reading\'s headroom and hands the wake gate the fresh level beside it', async () => {
+    const r = rig([{ ok: true, psi: psi(12), headroomBytes: 5 * 2 ** 30 }, { ok: true, psi: psi(0) }]);
+    expect(r.lane.memoryReading(), 'no reading yet: unmeasured').toEqual({ level: 'unmeasured', headroomBytes: null });
+    await r.lane.sweep();
+    expect(r.lane.memoryReading()).toEqual({ level: 'warn', headroomBytes: 5 * 2 ** 30 });
+    r.tick(PRESSURE_SWEEP_MS);
+    await r.lane.sweep();
+    expect(r.lane.memoryReading(), 'an agent that sent no headroom: null, never room').toEqual({ level: 'ok', headroomBytes: null });
+    r.tick(PRESSURE_EVIDENCE_MS + 1);
+    expect(r.lane.memoryReading(), 'too old to say anything').toEqual({ level: 'unmeasured', headroomBytes: null });
+  });
+
   it('absent before the first ask; a reading lands; a later unanswered ask turns a high reading into host-pressure', async () => {
     const r = rig([{ ok: true, psi: psi(60) }, { ok: false, reason: 'unanswered' }]);
     expect(r.lane.block(true)).toBeNull();

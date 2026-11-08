@@ -5,9 +5,9 @@
 //    throws (unmeasured on the server), never a zero. No case reads the real /proc.
 import { describe, it, expect, afterEach } from 'vitest';
 import type { RunningAgent } from '../src/server.js';
-import { measurePressure, PRESSURE_FILES } from '../src/pressure.js';
+import { HEADROOM_FILES, SESSION_SLICE_DIR, measureHeadroom, measurePressure, PRESSURE_FILES } from '../src/pressure.js';
 import { PRESSURE_OP, type AgentReady } from '../../shared/agent-protocol.js';
-import { parsePressureText, readHostPsi } from '../../shared/pressure.js';
+import { parsePressureText, readHeadroomBytes, readHostPsi } from '../../shared/pressure.js';
 import { makeFixture, boot, TestClient } from './helpers.js';
 
 const MEM = 'some avg10=71.20 avg60=55.03 avg300=20.11 total=912345\nfull avg10=64.50 avg60=51.00 avg300=18.00 total=812345\n';
@@ -79,7 +79,9 @@ describe('the pressure op on the wire', () => {
     const r = await res(c, 7);
     expect(r.ok).toBe(true);
     expect(readHostPsi(r)).toEqual(measurePressure(files()));
-    expect(f.reads.sort()).toEqual([PRESSURE_FILES.io, PRESSURE_FILES.memory]);
+    // D-8122: the headroom's two fixed reads beside the PSI; none answers here, so the field is null, never a zero.
+    expect(f.reads.sort()).toEqual([HEADROOM_FILES.meminfo, HEADROOM_FILES.selfCgroup, PRESSURE_FILES.io, PRESSURE_FILES.memory].sort());
+    expect(r['headroomBytes']).toBeNull();
   });
 
   it('a request with any field is a bad request, and nothing is read', async () => {
@@ -98,5 +100,47 @@ describe('the pressure op on the wire', () => {
     await c.hello();
     c.send({ t: 'req', id: 12, op: 'pressure' });
     expect(await res(c, 12)).toMatchObject({ ok: false });
+  });
+});
+
+// D-8122: the session slice's headroom. The slice is FOUND beside an ancestor of this process's cgroup, never built.
+describe('measureHeadroom (D-8122)', () => {
+  const GiB = 2 ** 30;
+  const OWN = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccrc-agent.service\n';
+  const SLICE = `${HEADROOM_FILES.cgroupRoot}/user.slice/user-1000.slice/user@1000.service/app.slice/${SESSION_SLICE_DIR}`;
+  const meminfo = (kb: number): string => `MemTotal:       64000000 kB\nMemAvailable:   ${kb} kB\n`;
+  const tree = (o: { max?: string; current?: string; availKb?: number | null; own?: string } = {}) => files({
+    [HEADROOM_FILES.selfCgroup]: o.own ?? OWN,
+    ...(o.availKb === null ? {} : { [HEADROOM_FILES.meminfo]: meminfo(o.availKb ?? 20 * 1024 * 1024) }),
+    ...(o.max === undefined ? {} : { [`${SLICE}/memory.max`]: `${o.max}\n` }),
+    ...(o.current === undefined ? {} : { [`${SLICE}/memory.current`]: `${o.current}\n` }),
+  });
+
+  it('a capped slice: memory.max minus memory.current, no more than MemAvailable', () => {
+    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(20 * GiB) }))).toBe(4 * GiB);
+    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(2 * GiB), availKb: 5 * 1024 * 1024 }))).toBe(5 * GiB);
+    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(25 * GiB) })), 'over the cap is no room, not negative').toBe(0);
+  });
+
+  it('an uncapped slice (max) is MemAvailable alone', () => {
+    expect(measureHeadroom(tree({ max: 'max', current: String(GiB), availKb: 7 * 1024 * 1024 }))).toBe(7 * GiB);
+  });
+
+  it('no slice on this box (no systemd user manager, no cgroup v2) is MemAvailable alone', () => {
+    expect(measureHeadroom(tree({ availKb: 6 * 1024 * 1024 }))).toBe(6 * GiB);
+    expect(measureHeadroom(tree({ own: '12:memory:/legacy\n', availKb: 6 * 1024 * 1024 }))).toBe(6 * GiB);
+  });
+
+  it('anything unreadable is null, never room', () => {
+    expect(measureHeadroom(tree({ availKb: null }))).toBeNull();
+    expect(measureHeadroom(tree({ max: 'garbage', current: '1' }))).toBeNull();
+    expect(measureHeadroom(tree({ max: String(GiB) }))).toBeNull();
+    expect(measureHeadroom(files())).toBeNull();
+  });
+
+  it('the server\'s one reader takes a whole byte count and nothing else', () => {
+    expect(readHeadroomBytes({ headroomBytes: 5 })).toBe(5);
+    for (const v of [undefined, null, -1, 1.5, '5']) expect(readHeadroomBytes({ headroomBytes: v })).toBeNull();
+    expect(readHeadroomBytes(null)).toBeNull();
   });
 });

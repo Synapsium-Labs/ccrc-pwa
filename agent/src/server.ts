@@ -45,7 +45,7 @@ import {
 } from '../../shared/agent-protocol.js';
 import { inFlightReport, isReleaseTag, isRequestKind, type InFlightReport } from '../../shared/api.js';
 import { measureDisk, type DiskSeams } from './disk.js';
-import { measurePressure, type PressureSeams } from './pressure.js';
+import { measureHeadroom, measurePressure, type PressureSeams } from './pressure.js';
 import { measureBackup, type BackupSeams } from './backup.js';
 import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testboxOp.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
@@ -710,7 +710,8 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'pressure': {
       // #1170. No argument (`validateReq` refuses a frame that carries one); two fixed kernel files. A file that cannot
       // be read or parsed throws into the envelope's `.catch`, an error the server reads as unmeasured, never as calm.
-      send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams) }));
+      // D-8122: the session slice's headroom beside it, `null` when unreadable (never a throw: the PSI stands alone).
+      send(ws, ok(req.id, { ...measurePressure(ctx.pressureSeams), headroomBytes: measureHeadroom(ctx.pressureSeams) }));
       return;
     }
     case 'backup': {
