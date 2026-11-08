@@ -188,7 +188,8 @@ export type DispatchOutcome =
       /** `intent-held`'s own fields, PRESENT exactly on that code: the key and the other programme's run that holds it. */
       key?: string; holder?: { runId: number; program: string };
       /** WHICH project the measured party belongs to — `project-mismatch`'s
-       *  own field, and the only refusal on this union that carries a string.
+       *  own field, one of two string fields on this union (`key` is
+       *  `intent-held`'s).
        *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
        *  that differs from the run's — never `record.project`, whose
        *  `registry.ts` collapsing read (`project ?? id`) would arrive as the

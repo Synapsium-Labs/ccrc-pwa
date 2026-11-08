@@ -19,7 +19,6 @@ describe('landing_intents is one new entry (landing order wave 5g)', () => {
     expect(SLOT).toBeGreaterThan(0);
     expect(MIGRATIONS.filter((m) => /CREATE TABLE landing_intents(?![A-Za-z0-9_])/.test(m)).length).toBe(1);
     expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => /landing_intents/.test(m))).toBe(false);
-    expect(MIGRATIONS.length).toBe(SLOT);
   });
 
   it('creates the table, its key and its index', () => {

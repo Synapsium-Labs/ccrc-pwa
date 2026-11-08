@@ -78,7 +78,7 @@ export interface RequestFacts {
   read: RunReadResult;
   /** UNKNOWN off the wire: the route's JSON parse gives these no shape. */
   brief: unknown; items: unknown; route: unknown; slug: unknown;
-  /** UNKNOWN off the wire. Absent and `[]` both mean no landing intents (wave 5g, D-8084). */
+  /** UNKNOWN off the wire. Absent and `[]` both mean no landing intents (wave 5g, D-8081). */
   intents: unknown;
   /** The landing intents held in a project for these keys: a synchronous thunk over `coord.db` (the step stays
    *  synchronous from the row read to its answer), called only for a non-empty key list that passed every earlier gate. */
@@ -95,7 +95,7 @@ export interface RequestPlan {
   /** D-6794: the fields came from the run kind's default row, because the caller passed no route. */
   routeDefaulted: boolean;
   childSlug: string | null;
-  /** The parsed landing intent keys, deduplicated; `[]` when the dispatch named none. */
+  /** The parsed landing intent keys, distinct; `[]` when the dispatch named none. */
   intentKeys: readonly string[];
   hold: Extract<HoldReasonVerdict, { ok: true }>;
 }
@@ -166,6 +166,9 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   }
   // Landing order wave 5g (D-8084, D-8085): the keys this dispatch will hold. The grammar is read here, with the other
   // body fields; the held check is the LAST gate of the step, below, over the parsed keys and never the raw array.
+  // The guarantee that two programmes never both hold one key rests on the route's `coordMutex`, which serialises
+  // this check and the write in `CoordStore.dispatchRun`; a caller of `dispatchRun` outside that mutex would open a
+  // check-then-write gap.
   const parsedIntents = parseLandingIntents(intents);
   if (!parsedIntents.ok) return refused({ ok: false, kind: 'bad-request', detail: parsedIntents.detail });
   const intentKeys = parsedIntents.keys;
