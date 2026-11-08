@@ -44,7 +44,10 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
      `pressure-unmeasured` or `headroom-unmeasured` with "fail open", once per `WAKE_GATE_LINE_MS`.
    - Asked wakes (the operator's ensure, a dispatch resuming a worker) never read the gate.
 2. **Headroom from the agent.** The `pressure` op's reply carries `headroomBytes` (`measureHeadroom`,
-   agent/src/pressure.ts): the session slice's `memory.max` minus `memory.current`, no more than `MemAvailable`;
+   agent/src/pressure.ts): the session slice's `memory.max` minus its `memory.stat` `anon`, no more than
+   `MemAvailable`. `memory.current` is never read: it counts the page cache charged to the slice, which sits near the
+   cap on a busy fleet and would refuse every automatic wake on a healthy box (the 2026-10-16 plan's stop rule and
+   `ccd`'s `_mem_headroom` read `anon` for the same reason);
    `MemAvailable` alone when `memory.max` reads `max` or no slice is found. The slice is found beside an ancestor of
    the agent's own cgroup, never built from a user id. An older agent sends no field, which reads as unmeasured.
 3. **The update sweep batches.** `_upd_sweep` and `SWEEP_CMD` list the units once, keep the KillMode preflight over
@@ -108,3 +111,21 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
   cases that pin the named restart (`UNIT_RESTART`) are Linux-only too. Both must run on Linux CI before merge.
 - `deploy.sh` reads the settings only when the box's login shell is bash and ccrc's reader is installed; otherwise it
   uses the defaults.
+- The headroom is the session slice's alone (`memory.max` minus its own `anon`). A tighter ancestor (the user tree's
+  cap) is not read, as `ccd`'s `_mem_headroom` reads it; PSI covers that case, but a slice with room under a full
+  user tree admits on headroom.
+- During a link stall the wake gate fails open after `PRESSURE_EVIDENCE_MS` (5 minutes): `memoryReadingOf` uses the
+  `evidence()` freshness rule, so when the agent stops answering in a thrash (`pressureLink` `host-pressure`) the last
+  reading ages out and automatic wakes are admitted with only a `pressure-unmeasured` note. This is the spec's
+  fail-open wording; the `ccd` act would likely fail over a dead link anyway. Keeping the refusal while the link is
+  unanswered and its last fresh reading was at the gate level is deferred.
+- `SWEEP_CMD` verifies, after each batch, only the chunk's units that the `--state=active` relist shows. A chunk unit
+  reading `activating` or `failed` after its restart is neither verified nor named until the final `--state=failed`
+  warning, and one stuck in `activating` is never named. `_upd_sweep` verifies such units through its crash listing
+  (D-3984). The single-definition pin covers batching, reads, defaults and order, not this verify difference.
+- On a box that can never measure pressure (a macOS local install, pressure `unsupported`), the wake gate journals a
+  `pressure-unmeasured ... fail open` line every `WAKE_GATE_LINE_MS` for as long as it runs. It is accurate but noise;
+  staying quiet on `unsupported` (as opposed to stale) is deferred.
+- A held automatic update's `AUTO_PRESSURE_HELD_DETAIL` stays on its row after pressure eases, until the next dispatch
+  writes a new detail. If that row is then refused for an unrelated reason, the old `held: ... critical` text can
+  show in the update view after the pressure is gone.

@@ -109,17 +109,26 @@ describe('measureHeadroom (D-8122)', () => {
   const OWN = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccrc-agent.service\n';
   const SLICE = `${HEADROOM_FILES.cgroupRoot}/user.slice/user-1000.slice/user@1000.service/app.slice/${SESSION_SLICE_DIR}`;
   const meminfo = (kb: number): string => `MemTotal:       64000000 kB\nMemAvailable:   ${kb} kB\n`;
-  const tree = (o: { max?: string; current?: string; availKb?: number | null; own?: string } = {}) => files({
+  const tree = (o: { max?: string; anon?: string; stat?: string; current?: string; availKb?: number | null; own?: string } = {}) => files({
     [HEADROOM_FILES.selfCgroup]: o.own ?? OWN,
     ...(o.availKb === null ? {} : { [HEADROOM_FILES.meminfo]: meminfo(o.availKb ?? 20 * 1024 * 1024) }),
     ...(o.max === undefined ? {} : { [`${SLICE}/memory.max`]: `${o.max}\n` }),
     ...(o.current === undefined ? {} : { [`${SLICE}/memory.current`]: `${o.current}\n` }),
+    ...(o.anon === undefined ? {} : { [`${SLICE}/memory.stat`]: `anon ${o.anon}\nfile 7\nkernel 3\n` }),
+    ...(o.stat === undefined ? {} : { [`${SLICE}/memory.stat`]: o.stat }),
   });
 
-  it('a capped slice: memory.max minus memory.current, no more than MemAvailable', () => {
-    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(20 * GiB) }))).toBe(4 * GiB);
-    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(2 * GiB), availKb: 5 * 1024 * 1024 }))).toBe(5 * GiB);
-    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(25 * GiB) })), 'over the cap is no room, not negative').toBe(0);
+  it('a capped slice: memory.max minus memory.stat anon, no more than MemAvailable', () => {
+    expect(measureHeadroom(tree({ max: String(24 * GiB), anon: String(20 * GiB) }))).toBe(4 * GiB);
+    expect(measureHeadroom(tree({ max: String(24 * GiB), anon: String(2 * GiB), availKb: 5 * 1024 * 1024 }))).toBe(5 * GiB);
+    expect(measureHeadroom(tree({ max: String(24 * GiB), anon: String(25 * GiB) })), 'over the cap is no room, not negative').toBe(0);
+  });
+
+  it('page cache is not used memory: memory.current near the cap, anon low, is room', () => {
+    // A busy fleet's slice at its cap with mostly page cache the kernel can drop: room above the 3 GiB floor.
+    const r = measureHeadroom(tree({ max: String(24 * GiB), current: String(23.5 * GiB), anon: String(6 * GiB) }));
+    expect(r).toBe(18 * GiB);
+    expect(r! >= 3 * GiB, 'above the default headroom floor').toBe(true);
   });
 
   it('an uncapped slice (max) is MemAvailable alone', () => {
@@ -133,8 +142,10 @@ describe('measureHeadroom (D-8122)', () => {
 
   it('anything unreadable is null, never room', () => {
     expect(measureHeadroom(tree({ availKb: null }))).toBeNull();
-    expect(measureHeadroom(tree({ max: 'garbage', current: '1' }))).toBeNull();
+    expect(measureHeadroom(tree({ max: 'garbage', anon: '1' }))).toBeNull();
     expect(measureHeadroom(tree({ max: String(GiB) }))).toBeNull();
+    expect(measureHeadroom(tree({ max: String(24 * GiB), current: String(GiB) })), 'no memory.stat').toBeNull();
+    expect(measureHeadroom(tree({ max: String(24 * GiB), stat: 'file 1\nanon_thp 0\n' })), 'no anon line').toBeNull();
     expect(measureHeadroom(files())).toBeNull();
   });
 

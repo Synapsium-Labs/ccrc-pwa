@@ -31,10 +31,14 @@ export function measurePressure(given: Partial<PressureSeams> = {}): PressureOpR
 // The server's memory gate for automatic wakes reads this beside the PSI: how much the session slice can still take.
 // The slice is FOUND, never built: its directory (`SESSION_SLICE_DIR`, the cgroup name systemd gives the session
 // template's slice) is looked for beside each ancestor of this process's own cgroup, nearest first, so the path is
-// whatever this box's user manager made it. With the slice found: `memory.max` minus `memory.current`, no more than the
-// host's `MemAvailable` (a cap above the box's own memory is not room); `memory.max` reading `max` (no cap) is
-// `MemAvailable` alone. With no slice (no systemd, no cgroup v2, a box with no session ever started) it is
-// `MemAvailable` alone too. Anything unreadable is `null`, which the server reads as unmeasured (it admits, and says so).
+// whatever this box's user manager made it. With the slice found: `memory.max` minus the slice's `memory.stat` `anon`,
+// no more than the host's `MemAvailable` (a cap above the box's own memory is not room). `memory.current` is never
+// read: it counts the file page cache charged to the slice, which the kernel reclaims before it fails a charge, so a
+// fleet of sessions reading git trees and node_modules would read near the cap on a box with plenty of memory and hold
+// every automatic wake. `anon` is the rule the 2026-10-16 plan's stop rule and `ccd`'s `_mem_headroom` already use.
+// `memory.max` reading `max` (no cap) is `MemAvailable` alone. With no slice (no systemd, no cgroup v2, a box with no
+// session ever started) it is `MemAvailable` alone too. Anything unreadable is `null`, which the server reads as
+// unmeasured (it admits, and says so).
 
 /** The session slice's cgroup directory name (`app-claude\x2dsession.slice`, with the backslash systemd writes). */
 export const SESSION_SLICE_DIR = 'app-claude\\x2dsession.slice';
@@ -70,11 +74,13 @@ export function measureHeadroom(given: Partial<PressureSeams> = {}): number | nu
   const avail = memAvailable(read);
   const slice = findSlice(read);
   if (slice === null) return avail;
-  let max: string; let cur: number | null;
-  try { max = read(`${slice}/memory.max`).trim(); cur = nonNeg(read(`${slice}/memory.current`).trim()); } catch { return null; }
+  let max: string; let stat: string;
+  try { max = read(`${slice}/memory.max`).trim(); } catch { return null; }
   if (max === 'max') return avail;
+  try { stat = read(`${slice}/memory.stat`); } catch { return null; }
   const cap = nonNeg(max);
-  if (cap === null || cur === null) return null;
-  const room = Math.max(0, cap - cur);
+  const anon = /^anon ([0-9]{1,19})$/m.exec(stat);
+  if (cap === null || anon === null) return null;
+  const room = Math.max(0, cap - Number(anon[1]));
   return avail === null ? room : Math.min(room, avail);
 }
