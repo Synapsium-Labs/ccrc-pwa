@@ -25,6 +25,7 @@ import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
 import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
 import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
 import { isAutoRollKebab } from '../src/coord/rollTarget.js';
+import { isWakeGateKebab } from '../src/coord/wakeBudget.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -1079,8 +1080,13 @@ describe('the rejection table is total, in both directions', () => {
         // THE RUN STUCK VERDICT (D-8071): `coord/runStuck.ts` names a run's stuck reason and its cause as literals. A word
         // decides a run's `stuck` stamp on the wire, never a `refused` or `reject.code`. Admitted through the exported guards,
         // derived from `STUCK_REASONS`, `STUCK_CAUSES` and `RUN_WAITS_ON`, never NOT_CODES.
-        || isStuckReason(tok) || isStuckCause(tok) || isRunWaitsOn(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal or run stuck word`).toBe(true);
+        || isStuckReason(tok) || isStuckCause(tok) || isRunWaitsOn(tok)
+        // THE WAKE MEMORY GATE (D-8122): `coord/wakeBudget.ts` names the gate's refusals and its fail-open notes as
+        // literals (`'pressure-warn'`, `'headroom-unmeasured'`). A refusal is journalled as `memory-gate:<word>` where the
+        // lane journals its skips, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `WAKE_MEMORY_REFUSALS` and `WAKE_MEMORY_NOTES`, never NOT_CODES.
+        || isWakeGateKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word or wake-gate word`).toBe(true);
     }
   });
 });

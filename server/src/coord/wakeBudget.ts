@@ -62,9 +62,19 @@ export const WAKE_GATE_DEFAULT: WakeGateConfig = { pressure: WAKE_PRESSURE_GATE_
 export interface WakeMemoryReading { readonly level: PressureLevel; readonly headroomBytes: number | null }
 
 /** Why the gate refused: the level it met, or a headroom below the floor. */
-export type WakeMemoryRefusal = 'pressure-warn' | 'pressure-critical' | 'headroom-low';
+const WAKE_MEMORY_REFUSAL_MAP = { 'pressure-warn': true, 'pressure-critical': true, 'headroom-low': true } as const;
+export type WakeMemoryRefusal = keyof typeof WAKE_MEMORY_REFUSAL_MAP;
+export const WAKE_MEMORY_REFUSALS: readonly WakeMemoryRefusal[] = Object.keys(WAKE_MEMORY_REFUSAL_MAP) as WakeMemoryRefusal[];
 /** Why the gate admitted without a reading (fail open). */
-export type WakeMemoryNote = 'pressure-unmeasured' | 'headroom-unmeasured';
+const WAKE_MEMORY_NOTE_MAP = { 'pressure-unmeasured': true, 'headroom-unmeasured': true } as const;
+export type WakeMemoryNote = keyof typeof WAKE_MEMORY_NOTE_MAP;
+export const WAKE_MEMORY_NOTES: readonly WakeMemoryNote[] = Object.keys(WAKE_MEMORY_NOTE_MAP) as WakeMemoryNote[];
+
+/** Every kebab word this file spells as a literal (the gate's refusals and its fail-open notes), for
+ *  `mail-routes.test.ts`'s census of `server/src/coord`: none is a mail rejection or a route refusal — a refusal is
+ *  journalled as `memory-gate:<word>` and a note rides the fail-open line. Derived, never re-spelled. */
+const WAKE_GATE_KEBABS: ReadonlySet<string> = new Set<string>([...WAKE_MEMORY_REFUSALS, ...WAKE_MEMORY_NOTES]);
+export function isWakeGateKebab(token: string): boolean { return WAKE_GATE_KEBABS.has(token); }
 
 export type WakeMemoryVerdict =
   | { readonly admit: true; readonly notes: readonly WakeMemoryNote[] }
