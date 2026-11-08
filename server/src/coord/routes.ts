@@ -2816,7 +2816,7 @@ export function registerCoordRoutes(
     return reply.code(200).send({ ok: true, ...after });
   });
 
-  /** `GET`/`POST /api/coord/delegation-adopt` (D-8112, D-8113, D-8114): the door of Settings › Automation's card over the delegation
+  /** `GET`/`POST /api/coord/delegation-adopt` (D-8112, D-8113, D-8114): the operator's door over the delegation
    *  lane's adoption switch. The GET answers the marker from one registry listing, the two capabilities the rule reads from the fleet
    *  box's measured `ccd caps`, what a tap of each direction would be refused with, and the lane's last pass (its counts and the
    *  bounded list of worktrees it would keep), all decided in L1 (`delegation-adopt-switch.ts`). The POST takes `{on: boolean}` and

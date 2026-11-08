@@ -106,8 +106,8 @@ export const SCOPE_SWEEP_LIVE_MARKER = 'scope-sweep-live';
  *  the process list. Its one writer is `ccd scope-sweep-busy`, behind `POST /api/coord/scope-sweep` (D-7994). */
 export const SCOPE_SWEEP_BUSY_LIVE_MARKER = 'scope-sweep-busy-live';
 /** `$REG/delegation-adopt`: arms the delegation lane's adoption (spec §5.6). Absent, the lane only records what it would adopt
- *  (O5-7 (a)). Its one writer is `ccd delegation-adopt`, behind `POST /api/coord/delegation-adopt` (D-8112): the operator's switch
- *  in Settings › Automation, after reading what the lane would keep on that card (D-8114) and past the door's refusal rule (D-8113). */
+ *  (O5-7 (a)). Its one writer is `ccd delegation-adopt`, behind `POST /api/coord/delegation-adopt` (D-8112): the operator's switch,
+ *  past the door's refusal rule (D-8113); the door's GET serves what the lane would keep (D-8114). */
 export const DELEGATION_ADOPT_MARKER = 'delegation-adopt';
 
 /** The spec's bounded contexts (consolidation spec 2026-10-19 §2), the `owner` of a row. */

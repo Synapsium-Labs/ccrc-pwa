@@ -31146,7 +31146,7 @@ cmd_scope_sweep_busy() {   # ccd scope-sweep-busy --state on|off — raise or lo
 cmd_delegation_adopt() {   # ccd delegation-adopt --state on|off — raise or lower the delegation lane's adoption switch
   # (D-8112). While `$REG/delegation-adopt` exists, the server's delegation lane keeps a changed worktree whose delegated
   # activity has terminal evidence and mails its owner; absent, it only records what it would keep (O5-7 (a)). This verb is
-  # the marker's ONE writer, reached from `POST /api/coord/delegation-adopt` (session-only, Settings › Automation) through the
+  # the marker's ONE writer, reached from `POST /api/coord/delegation-adopt` (session-only, the operator's door) through the
   # agent's two-token grant, after the door's refusal rule (D-8113); the lane is its one reader, by listing $REG.
   # `cmd_scope_sweep_busy`'s shape: the raise atomic, both arms CHECKED, journalling nothing. Forbidden to every session
   # (`FORBIDDEN_CCD_VERBS`): the switch is the operator's gate.

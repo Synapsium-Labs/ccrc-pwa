@@ -1077,7 +1077,7 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
 });
 
 // Delegation broker wave 5 PR8b (D-8114): the list of worktrees the last pass would keep, or kept, rides the health's `adoption` as lane
-// memory (written by the step each pass, never journalled or checkpointed), so the Settings card can show what turning it on would do.
+// memory (written by the step each pass, never journalled or checkpointed), so the operator can read what turning it on would do.
 describe('PR8b: the last pass names the worktrees it would keep, or kept (D-8114)', () => {
   it('shadow: the pass that would keep names the worktree, its parent and what the audit measured; nothing is journalled for it', async () => {
     const { w, durable, lease } = await leased();

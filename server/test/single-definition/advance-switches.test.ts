@@ -332,7 +332,7 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
   });
 
   // Delegation broker wave 5, PR7 (Task 5.7.1, W5-X2), re-pointed by PR8b (D-8112): the adoption marker has ONE writer in the
-  // tree, ccd's `delegation-adopt` verb, reached only through `POST /api/coord/delegation-adopt` (the operator's switch in Settings).
+  // tree, ccd's `delegation-adopt` verb, reached only through `POST /api/coord/delegation-adopt` (the operator's session-gated switch).
   // No other file in server/src, shared, ccd, agent/src or deploy writes it.
   it('delegation-adopt: one writer, ccd\'s delegation-adopt verb (W5-X2, D-8112)', () => {
     expect(SWITCHES['delegation-adopt'].writer).toBe('ccd delegation-adopt, through POST /api/coord/delegation-adopt');

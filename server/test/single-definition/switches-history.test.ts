@@ -867,7 +867,7 @@ describe('the pane-scope stop switch: its definer, the verb\'s one write, the ac
 
 // Delegation broker wave 5, PR7 (Task 5.7.1, W5-X1), re-pointed by PR8b (D-8112). `$REG/delegation-adopt` arms the delegation
 // lane's adoption (O5-7 (a)): absent, the lane only records what it would adopt. Since D-8112 it has EXACTLY ONE writer, the
-// `ccd delegation-adopt` verb in ccd/ccd (behind `POST /api/coord/delegation-adopt`, the operator's switch in Settings), whose two
+// `ccd delegation-adopt` verb in ccd/ccd (behind `POST /api/coord/delegation-adopt`, the operator's session-gated switch), whose two
 // lines name the marker and its staging file. The session hook and its installer name the verb only to forbid it to every session.
 // Its TS literal spellings beside the definer are the verb's argv row and its agent grant; the files that name its constant read it from a registry
 // listing and reach no write.
