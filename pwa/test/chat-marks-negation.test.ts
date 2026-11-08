@@ -299,6 +299,21 @@ describe('a negator or "?" in another text node of the same block counts (review
     expect(pluginStatuses(src)).toEqual([status]);
   });
 
+  // Review 1601 F3 (desktop-polish Task C14, D-8110): code, link text and raw html are not prose for the "?" rule; a
+  // name in link text is a name; a `<br>` is a line break.
+  it.each<[string, string, { text: string; tone: string }[]]>([
+    ['a "?" in inline code ends no sentence', 'CI green, adds the `?` operator.', [{ text: 'green', tone: 'ok' }]],
+    ['a "?" in link text ends no sentence', 'CI green [why?](http://example.com/x)', [{ text: 'green', tone: 'ok' }]],
+    ['a "?" in raw html ends no sentence', 'CI green <!-- really? --> today.', [{ text: 'green', tone: 'ok' }]],
+    ['a name in link text is a name', '[run 0](http://example.com/x) and CI passed', [{ text: 'passed', tone: 'ok' }]],
+    ['a name under emphasis in link text is a name', '[**run 0**](http://example.com/x) and CI passed', [{ text: 'passed', tone: 'ok' }]],
+    ['a name in a reference link\'s text is a name', '[run 0][r] and CI passed\n\n[r]: http://example.com/x', [{ text: 'passed', tone: 'ok' }]],
+    ['a <br> is a line break', 'No<br>CI green', [{ text: 'green', tone: 'ok' }]],
+    ['a <br> in a table cell is a line break', '| a |\n|---|\n| No<br/>CI green |', [{ text: 'green', tone: 'ok' }]],
+  ])('%s', (_name, src, statuses) => {
+    expect(pluginStatuses(src)).toEqual(statuses);
+  });
+
   it('the context is the block\'s: a negator in another paragraph does not count', () => {
     expect(pluginStatuses('No **flakes**\n\nCI green.')).toEqual([{ text: 'green', tone: 'ok' }]);
   });

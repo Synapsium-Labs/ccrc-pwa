@@ -24,8 +24,10 @@
 // negator back to the start of a label's clause, or a `?` ending its sentence, counts from a neighbouring node:
 // "**No** tests failed." and "Has #651 merged into `main`?" give no label. The block's nodes are asked in document
 // order, so the scan is one pass. The context never makes or moves a name or a label; only `chatMarks.ts` reads it.
+// Inline code, link text and raw html hold no sentence end, a name in link text is a name there too, and a `<br>` is a
+// line break (review 1601 F3; desktop-polish Task C14, D-8110).
 import {
-  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, statusTone, type LeadKind, type MarkRun,
+  LabelScan, MARK_ATTR, leadKind, leadingStatus, markRuns, nameSpans, statusTone, type LeadKind, type MarkRun, type Span,
 } from './chatMarks';
 
 interface MdNode {
@@ -53,25 +55,45 @@ const span = (value: string, props: Record<string, string>): MdNode => ({
 /** The blocks whose inline text is one run of prose for S3's label check. */
 const BLOCKS: ReadonlySet<string> = new Set(['paragraph', 'heading', 'tableCell']);
 
+/** Raw html that is a line break: `<br>`, `<br/>`, `<br />`. */
+const BREAK_HTML = /^<br\s*\/?>$/i;
+
 /** `markRuns`' runs of each plain text node the walk will reach below `block`, with the block as their context: its
- *  text as written (inline code included, a hard break as a line break), scanned once, in document order. */
+ *  text as written (inline code included, a hard break or a `<br>` as a line break), scanned once, in document order.
+ *  Inline code, link text and raw html are not prose for the `?` rule (the scan's quiet stretches), and a name in link
+ *  text is registered as a name, in order with the names `markRuns` registers (review 1601 F3). */
 function blockRuns(block: MdNode, into: Map<MdNode, readonly MarkRun[]>): void {
   let flat = '';
   const at: { node: MdNode; offset: number }[] = [];
-  const stack: { node: MdNode; walked: boolean }[] = [{ node: block, walked: true }];
+  const quiet: Span[] = [];
+  const linkNames: Span[] = [];
+  const stack: { node: MdNode; walked: boolean; link: boolean }[] = [{ node: block, walked: true, link: false }];
   while (stack.length > 0) {
-    const { node: n, walked } = stack.pop()!;
-    const value = n.type === 'break' ? '\n' : n.value;
+    const { node: n, walked, link } = stack.pop()!;
+    const lineBreak = n.type === 'break' || (n.type === 'html' && BREAK_HTML.test((n.value ?? '').trim()));
+    const value = lineBreak ? '\n' : n.value;
     if (typeof value === 'string') {
-      if (walked && n.type === 'text' && n.data?.hName === undefined) at.push({ node: n, offset: flat.length });
+      const from = flat.length;
+      if (walked && n.type === 'text' && n.data?.hName === undefined) at.push({ node: n, offset: from });
+      if (!lineBreak && (!walked || n.type === 'inlineCode' || n.type === 'html')) {
+        quiet.push({ start: from, end: from + value.length });
+      }
+      if (link && n.type === 'text') for (const s of nameSpans(value)) linkNames.push({ start: from + s.start, end: from + s.end });
       flat += value;
     }
     const c = n.children;
     const below = walked && !SKIP.has(n.type);
-    if (c) for (let i = c.length - 1; i >= 0; i -= 1) stack.push({ node: c[i]!, walked: below });
+    const inLink = link || n.type === 'link' || n.type === 'linkReference';
+    if (c) for (let i = c.length - 1; i >= 0; i -= 1) stack.push({ node: c[i]!, walked: below, link: inLink });
   }
-  const scan = new LabelScan(flat);
-  for (const { node, offset } of at) into.set(node, markRuns(node.value ?? '', { scan, offset }));
+  const scan = new LabelScan(flat, quiet);
+  let next = 0;
+  for (const { node, offset } of at) {
+    for (; next < linkNames.length && linkNames[next]!.start < offset; next += 1) {
+      scan.name(linkNames[next]!.start, linkNames[next]!.end);
+    }
+    into.set(node, markRuns(node.value ?? '', { scan, offset }));
+  }
 }
 
 /** The text of `node` and everything below it, as written (inline code included), by an explicit stack. */

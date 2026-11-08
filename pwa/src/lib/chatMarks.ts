@@ -196,7 +196,15 @@ const isSpace = (c: string): boolean => c !== '' && /\s/.test(c);
  *  inside a `(` or `[` that opens after the label is the aside's own, not the label's ("#651 merged (why?) and
  *  shipped."), and an aside left open hides every end after it. A line break ends every aside. One pass forward to find
  *  the marks and one back to answer every offset, so a block of many labels costs one pass. */
-function sentenceQuestions(text: string): Uint8Array {
+function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
+  // Text that is not prose (inline code, link text, raw html; review 1601 F3) holds no mark: it reads as letters.
+  let text = '';
+  let from = 0;
+  for (const q of quiet) {
+    text += prose.slice(from, q.start) + 'a'.repeat(q.end - q.start);
+    from = q.end;
+  }
+  text += prose.slice(from);
   const n = text.length;
   /** Per offset: 0 nothing, 1 an end, 2 a question's end, 3 an opening bracket, 4 a closing one, 5 one that also
    *  ends the sentence around it, 6 a line break. */
@@ -272,8 +280,8 @@ const isNegator = (word: string): boolean => {
   return parts.length === 2 && ZERO_WORDS.includes(count!) && w.charAt(count!.length) === '/' && /^\p{N}+$/u.test(total!);
 };
 
-/** Where a recognised name stands, in the scanned text's offsets. */
-interface Span {
+/** A stretch of the scanned text, by offsets: where a recognised name stands, or text that is not prose. */
+export interface Span {
   readonly start: number;
   readonly end: number;
 }
@@ -293,9 +301,13 @@ export class LabelScan {
   private questions: Uint8Array | undefined;
   private lastStart = 0;
   private readonly text: string;
+  private readonly quiet: readonly Span[];
 
-  constructor(text: string) {
+  /** `quiet`: the stretches, in order, that are not prose (inline code, link text, raw html), which hold no sentence
+   *  end; a negator in them still counts ("`0` tests failed"). */
+  constructor(text: string, quiet: readonly Span[] = []) {
     this.text = text;
+    this.quiet = quiet;
   }
 
   /** A recognised name at `start`..`end`: its own words are not negators (`run 0`, `#0`). */
@@ -323,7 +335,7 @@ export class LabelScan {
     }
     if (this.negatorAt >= this.clauseFrom) return true;
     if (stickyAt(ZERO_COUNT_AFTER, this.text, end) !== null) return true;
-    this.questions ??= sentenceQuestions(this.text);
+    this.questions ??= sentenceQuestions(this.text, this.quiet);
     return this.questions[end] === 1;
   }
 
@@ -390,6 +402,23 @@ export function markRuns(text: string, context?: LabelContext): readonly MarkRun
   }
   plainUpTo(text.length);
   return runs;
+}
+
+/** Where `text`'s recognised names stand, in order: the names `markRuns` would mark, for text the plugin draws no marks
+ *  in (link text), so that the block's scan knows a name's own words are not negators (review 1601 F3). */
+export function nameSpans(text: string): Span[] {
+  const out: Span[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const name = wordBefore(text, i) ? null : nameAt(text, i);
+    if (name === null) {
+      i += 1;
+      continue;
+    }
+    out.push({ start: i, end: name.end });
+    i = name.end;
+  }
+  return out;
 }
 
 /** The mark when `text` is exactly one name and nothing else (R13: a whole inline code span); else `null`. */
