@@ -6851,10 +6851,21 @@ export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | 
 /** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
 export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
 
+/** A programme's name from its slug (D-8071): hyphens read as spaces and the first letter capital, so `programme-a` is
+ *  `Programme a`. The name a programme row takes when an open sends no `programmeTitle`, and the one migration 43 sets. */
+export const programmeNameFromSlug = (slug: string): string => {
+  const words = slug.replace(/-/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
   programTitle: string;
+  /** The title this run was opened with (D-8071, migration 43), or null for a run opened before it. OPTIONAL on the
+   *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
+   *  `FLEET_PROTO` is not bumped. */
+  runTitle?: string | null;
   wave: number;
   waveOf: number | null;
   project: string;

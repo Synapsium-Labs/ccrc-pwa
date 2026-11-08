@@ -1555,6 +1555,7 @@ export function registerCoordRoutes(
       wave: open.wave, waveOf: open.waveOf, claimedBy,
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
+      ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
       coordProject, unattributed: open.unattributed });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({

@@ -2236,6 +2236,30 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX landing_intents_by_key ON landing_intents(project, key);
   `,
+  // ── 43: user_version 42 -> 43 ─────────────────────────────────────────────
+  // A run keeps the title it was opened with (D-8071; spec 2026-11-04 §11.1, F6, A8). `runs.title` is that title. Its ONE
+  // writer is `CoordStore.openRun`, at INSERT. NULL is "this run has no title of its own", which every run before this
+  // entry is, bar the one below. `programs.title` stops being the last open's title: both `ON CONFLICT(slug)` arms
+  // leave it alone, so it is written once, when the programme row is created.
+  //
+  // THE COPY: each programme's current title goes to its NEWEST run (the highest id), then `programs.title` becomes the
+  // slug as words, the spelling `programmeNameFromSlug` (`shared/api.ts`) gives. Earlier runs keep NULL and read the
+  // programme's name. The restore statement `run-titles.test.ts` pins sets each `programs.title` from its newest titled
+  // run, and Rollback names it.
+  //
+  // ONE NULLABLE COLUMN AND ONE REWRITE OF `programs.title`: an older build opening a file at `user_version 43` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and still writes `programs.title` on
+  // each open, which is its old reading. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 42 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN title TEXT;
+  UPDATE runs SET title = (SELECT p.title FROM programs p WHERE p.slug = runs.program)
+    WHERE id IN (SELECT MAX(id) FROM runs GROUP BY program);
+  UPDATE programs SET title = upper(substr(replace(slug, '-', ' '), 1, 1)) || substr(replace(slug, '-', ' '), 2)
+    WHERE slug IN (SELECT program FROM runs);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

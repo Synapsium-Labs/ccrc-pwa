@@ -162,7 +162,7 @@ import {
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
-} from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+} from '../../../shared/api.js'; import { programmeNameFromSlug } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
@@ -974,6 +974,7 @@ interface RunRowDb {
   sessionBornFor: string | null;
   unattributed: number;
   hadChild: number;
+  runTitle: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -994,7 +995,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -1839,9 +1840,12 @@ export class CoordStore {
   openRun(input: {
     program: string; title: string; project: string;
     wave: number; waveOf: number | null; claimedBy: string;
+    /** The title a NEW programme row takes (D-8071). Used on the row's first insert only; absent, the slug as words.
+     *  `title` above is this RUN's own and is stored on the run. */
+    programmeTitle?: string;
     /** The project whose repository holds this programme's ledger (design §3
      *  F2). Written on the programme row's FIRST insert ONLY — the `ON
-     *  CONFLICT` arm below updates `title` and nothing else — so a later open
+     *  CONFLICT` arm below does nothing — so a later open
      *  can never silently re-home a programme. Backfilling a stored NULL is
      *  `setProgramHome`'s job, deliberately a second, narrower write.
      *  OPTIONAL: during the legacy generation an open carries none, and the
@@ -1946,18 +1950,18 @@ export class CoordStore {
         const now = Date.now();
         this.db.prepare(
           'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
-        ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
+          'ON CONFLICT(slug) DO NOTHING',
+        ).run(input.program, input.programmeTitle ?? programmeNameFromSlug(input.program), now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
-          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0,
+          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0, input.title,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -4748,7 +4752,7 @@ export class CoordStore {
    * The writer `programs.state` had none of, outside `openRun`'s hardcoded
    * `'active'` at first open (fix, found in a later Task 3 review — D-26):
    * the two `INSERT … ON CONFLICT(slug) DO UPDATE` sites (`openRun`,
-   * `reconstruct`) both only ever touch `title` in their conflict arm, so a
+   * `reconstruct`) both only ever touched `title` in their conflict arm (D-8071: now neither writes it), so a
    * program could never be retired. That silently disarmed
    * `soleActiveCoordinator()` the moment a SECOND program existed — its
    * "single active program" guard reads `ambiguous` (`active.length !== 1`)
@@ -5041,6 +5045,8 @@ export class CoordStore {
       // Migration 41 (D-8068). The column says a child was asked for or inherited, and the session says one was bound:
       // a spawn that never bound, or a spent run `clearSession` emptied, held no child and has no chip to wait for.
       hadChild: row.hadChild === 1 && row.sessionId !== null,
+      // Migration 43 (D-8071): the title the run was opened with, null for a run opened before it.
+      runTitle: row.runTitle,
     };
   }
 
@@ -7249,7 +7255,7 @@ export class CoordStore {
       const now = Date.now();
       this.db.prepare(
         'INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?) ' +
-        'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
+        'ON CONFLICT(slug) DO NOTHING',
       ).run(input.ledger.slug, input.ledger.title, now, 'active');
 
       const doneWaves = input.ledger.waves.filter((w) => w.handoffCommit !== null);

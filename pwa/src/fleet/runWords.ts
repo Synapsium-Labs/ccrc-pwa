@@ -903,7 +903,7 @@ export interface ChildOfRunLabel {
  *  display name when the fleet carries it. `fleetTree.ts`'s `coordinationOf`
  *  builds it; the default says nothing is known. */
 export interface ChildRunContext {
-  readonly run: { program: string; programTitle: string; wave: number; waveOf: number | null; kind?: RunKind } | null;
+  readonly run: { program: string; programTitle: string; runTitle?: string | null; wave: number; waveOf: number | null; kind?: RunKind } | null;
   readonly coordinator: string | null;
 }
 
@@ -940,13 +940,13 @@ export const programmeTitle = (
   return program;
 };
 
-/** A ledger row's name (D-6170, spec §5 W0): the programme's title and the
- *  wave in words — `Programme A · wave 3 of 5`, or `Programme A · review of
+/** A ledger row's name (D-6170, spec §5 W0; D-8071): the run's own title when it has one, else the programme's title,
+ *  and the wave in words — `Programme A · wave 3 of 5`, or `Programme A · review of
  *  wave 5` on a review run, the review said once by `programmeWaveTail`. Never
  *  a workspace, a branch or a run number: those stay in the row's title and the
  *  controls' accessible names (D-5589). */
 export const runRowName = (run: NonNullable<ChildRunContext['run']>): string =>
-  `${programmeTitle(run.program, [run])}${programmeWaveTail(run)}`;
+  `${typeof run.runTitle === 'string' && run.runTitle.trim() !== '' ? run.runTitle : programmeTitle(run.program, [run])}${programmeWaveTail(run)}`;
 
 /** The plain-language sentence for a row an active run names (the label's and
  *  the run-board door's title). `reclaimed` adds the lifecycle clause, true only
