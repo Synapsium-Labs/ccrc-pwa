@@ -1184,6 +1184,15 @@ cd ~/ccrc/agent && npm ci && npm run build \
   #
   # A LISTING THAT FAILS REFUSES THE SWEEP (wave 16, R10c(3); D-5143), as `ccrc update`'s sweep refuses (D-3599): the
   # loop below would otherwise see only the template probe, and try-restart would run over units nobody listed.
+  #
+  # THE BATCHES (D-8122), as `ccrc update`'s `_upd_sweep` restarts them: the units the listing shows running are
+  # restarted CCRC_SWEEP_BATCH at a time (default 5), each batch verified before the next, and between batches the
+  # sweep waits while /proc/pressure/memory `full avg10` is at or above the CCRC_WAKE_PRESSURE_GATE level (warn 10,
+  # critical 50, off none), for at most CCRC_SWEEP_PRESSURE_WAIT_S over the sweep (default 300), then goes on with a
+  # warning. The three are read on the box through ccrc's own reader (`~/.local/libexec/ccrc/ccrc-settings.sh`, bash only)
+  # and checked by its `_mg_ok`, the check `ccrc settings` and `_upd_sweep_knobs` use; a box without it, or a login shell
+  # that is not bash, uses the defaults. A batch is a space-separated string, handed to try-restart through
+  # `$(printf ... $chunk)`: a command substitution is split by every POSIX shell and by zsh, where a bare `$chunk` is not. A unit FAILED before the sweep is in no batch and is warned about after the last.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && { listing=$(systemctl --user list-units "claude-session@*" --plain --no-legend) \
          || { echo "deploy: FAILED — systemctl --user list-units claude-session@* failed, so the supervisors to be checked could not be listed. REFUSING to sweep." >&2; exit 1; }; } \
@@ -1193,11 +1202,37 @@ cd ~/ccrc/agent && npm ci && npm run build \
            || { echo "deploy: FAILED — $u resolves to ${km:-no answer from systemd}, and the sweep needs KillMode=process. systemds default is control-group, and whenever the tmux server placement falls back to a bare create — no systemd-run, no D-Bus, or a scope name not yet collected — every session on this box is a child of ONE tmux server sitting in a claude-session@ cgroup, so try-restart would kill the lot. A drop-in under ~/.config/systemd/user/claude-session@.service.d/ can set this without the base unit changing a byte. REFUSING to sweep." >&2; exit 1; }; \
        done \
     && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
-    && systemctl --user try-restart "claude-session@*" \
+    && batch=5 && waitmax=300 && gate=10 \
+    && if [ -n "${BASH_VERSION:-}" ] && [ -r ~/.local/libexec/ccrc/ccrc-settings.sh ] && . ~/.local/libexec/ccrc/ccrc-settings.sh && type _mg_ok >/dev/null 2>&1; then \
+         if ! _ccrc_knob CCRC_SWEEP_BATCH 5; then echo "deploy: warning: $KNOB_WHY — restarting 5 at a time" >&2; \
+         elif _mg_ok CCRC_SWEEP_BATCH "$KNOB"; then batch=$KNOB; \
+         else echo "deploy: warning: CCRC_SWEEP_BATCH must be $(_mg_says CCRC_SWEEP_BATCH) (from $KNOB_FROM) — restarting 5 at a time" >&2; fi; \
+         if ! _ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300; then echo "deploy: warning: $KNOB_WHY — waiting at most 300s on memory pressure" >&2; \
+         elif _mg_ok CCRC_SWEEP_PRESSURE_WAIT_S "$KNOB"; then waitmax=$KNOB; \
+         else echo "deploy: warning: CCRC_SWEEP_PRESSURE_WAIT_S must be $(_mg_says CCRC_SWEEP_PRESSURE_WAIT_S) (from $KNOB_FROM) — waiting at most 300s on memory pressure" >&2; fi; \
+         if ! _ccrc_knob CCRC_WAKE_PRESSURE_GATE warn; then echo "deploy: warning: $KNOB_WHY — waiting on the warn level" >&2; \
+         elif _mg_ok CCRC_WAKE_PRESSURE_GATE "$KNOB"; then case "$KNOB" in critical) gate=50 ;; off) gate="" ;; esac; \
+         else echo "deploy: warning: CCRC_WAKE_PRESSURE_GATE must be $(_mg_says CCRC_WAKE_PRESSURE_GATE) (from $KNOB_FROM) — waiting on the warn level" >&2; fi; \
+       fi \
+    && set -- $(printf "%s\n" "$listing" | awk "\$3 == \"active\" || \$3 == \"activating\" || \$3 == \"reloading\" {print \$1}") \
+    && waited=0 && n=0 \
+    && while [ $# -gt 0 ]; do \
+         chunk=""; i=0; while [ $# -gt 0 ] && [ $i -lt $batch ]; do chunk="$chunk $1"; shift; i=$((i + 1)); done; \
+         if [ $n -gt 0 ] && [ -n "$gate" ] && [ -r /proc/pressure/memory ]; then \
+           while awk -v t="$gate" "\$1 == \"full\" { split(\$2, a, \"=\"); f = 1; exit !(a[2] + 0 >= t + 0) } END { if (!f) exit 1 }" /proc/pressure/memory; do \
+             if [ $waited -ge $waitmax ]; then echo "deploy: warning: memory pressure (full avg10) is still at or above $gate% after ${waited}s (CCRC_SWEEP_PRESSURE_WAIT_S) — restarting the remaining batches without waiting" >&2; gate=""; break; fi; \
+             [ $waited -gt 0 ] || echo "deploy: memory pressure (full avg10) is at or above $gate% — waiting before the next batch, at most ${waitmax}s over the sweep" >&2; \
+             sleep 5; waited=$((waited + 5)); \
+           done; \
+         fi; \
+         systemctl --user try-restart $(printf "%s\n" $chunk) \
+           || { echo "deploy: FAILED — systemctl --user try-restart failed for the batch:$chunk. The supervisors state is now mixed; read: systemctl --user list-units claude-session@*" >&2; exit 1; }; \
+         for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk "{print \$1}"); do \
+           case " $chunk " in *" $u "*) bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1 ;; esac; done; \
+         n=$((n + 1)); \
+       done \
     && for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk "{print \$1}"); do \
-         echo "deploy: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2; done \
-    && for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk "{print \$1}"); do \
-         bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1; done'
+         echo "deploy: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2; done'
   "${SSH[@]}" "$BOX" "$SWEEP_CMD"
   # The box's own statement of what it now runs, compared to what this run
   # shipped. `ccd version` reads ~/.ccrc/build.json (stamp_build, above);

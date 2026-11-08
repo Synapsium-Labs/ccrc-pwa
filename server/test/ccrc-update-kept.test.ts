@@ -31,7 +31,7 @@ import {
   runUpdate,
   freshUpdateBox,
   plantKillModeDropIn,
-  UNIT_LINES,
+  UNIT_LINES, UNIT_RESTART,
   homeSnapshot,
   treeDigest,
   localUrls,
@@ -554,7 +554,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     if (process.platform === 'linux') {
       const c = calls(home);
       const gate = c.indexOf('--user is-active ccrc.service');
-      const restartAt = c.indexOf('--user try-restart claude-session@*');
+      const restartAt = c.indexOf(UNIT_RESTART);
       expect(gate, c.join('\n')).toBeGreaterThan(-1);
       expect(restartAt, 'a rollback by flip must end in the supervisor sweep').toBeGreaterThan(gate);
       for (const u of ['alpha', 'beta']) {
@@ -633,7 +633,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     });
     expect(phasesOf(home)).toEqual(['installing', 'checking', 'restarting', 'restarting', 'done']);
     if (process.platform === 'linux') {
-      expect(calls(home), 'a moved box is swept, exit 3 or not').toContain('--user try-restart claude-session@*');
+      expect(calls(home), 'a moved box is swept, exit 3 or not').toContain(UNIT_RESTART);
     }
     // The control: the same box under a passing doctor.
     const ok = flipBox('ccrc-rollback-flip-doctor0-');
@@ -882,7 +882,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(lastReport(home)).toMatchObject({ phase: 'done', detail: 'rolled back by flip to v1.0.0', from: 'rollback' });
     if (process.platform === 'linux') {
       const c = calls(home);
-      const restartAt = c.indexOf('--user try-restart claude-session@*');
+      const restartAt = c.indexOf(UNIT_RESTART);
       expect(restartAt, 'a rollback by flip must end in the supervisor sweep').toBeGreaterThan(c.indexOf('--user is-active ccrc.service'));
     }
   }, 60_000);

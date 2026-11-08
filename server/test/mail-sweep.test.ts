@@ -3643,6 +3643,50 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
     }
   });
 
+  // D-8122: the memory gate. Pressure at the gate level holds the automatic wake (the delivery names `wake-pressure`,
+  // stays queued, attempts untouched); the operator's own ensure is not gated.
+  const plantPressure = (w: unknown, full: number, headroomBytes: number | null): void => {
+    const r = { avg10: full, avg60: full };
+    (w as { pressureLane: { state: unknown } }).pressureLane.state = {
+      last: { at: Date.now(), psi: { memory: { some: r, full: r }, io: { some: r, full: r } }, headroomBytes }, unansweredAt: null, inflightSince: null,
+    };
+  };
+
+  it('D-8122: pressure at the gate level holds the mail lane\'s wake: no ensure, gated wake-pressure, still queued', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    advance(PAST_SWEEP_MS);
+    plantPressure(w, 15, 16 * 2 ** 30);
+    await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([]);
+    expect(deliveryRow(coord, id)).toMatchObject({ state: 'queued', lastGate: 'wake-pressure', attempts: 0 });
+    plantPressure(w, 0, 16 * 2 ** 30);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls), 'the next pass, calm, wakes it').toEqual([ID]);
+    expect(deliveryRow(coord, id).lastGate).toBe('hibernated');
+  });
+
+  it('D-8122: the operator\'s ensure is not gated by pressure', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w, deps } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    plantPressure(w, 90, 0);
+    const app = await buildServer(deps, new Bus(), w);
+    try {
+      const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/ensure`, payload: {} });
+      expect(res.statusCode).toBe(200);
+      expect(ensures(c.calls)).toEqual([ID]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('an operator\'s ensure is never refused for the budget, however full the window', async () => {
     const h = harness({ hasSession: false });
     const coord = store(h.home);

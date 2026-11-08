@@ -936,8 +936,11 @@ export interface PressureReq { t: 'req'; id: number; op: 'pressure' }
 /** The op's name, and the word an agent that answers it lists in `ready.ops`. */
 export const PRESSURE_OP = 'pressure';
 
-/** The `pressure` op's reply: exactly what the decider takes, in this one type. */
-export type PressureOpReply = HostPsi;
+/** The `pressure` op's reply: exactly what the decider takes, in this one type. D-8122 adds `headroomBytes`, the session
+ *  slice's memory headroom (`memory.max` minus `memory.current`, no more than `MemAvailable`; `MemAvailable` alone when
+ *  the slice has no `memory.max`), or `null` when it could not be read. ADDITIVE: an older agent sends no field, which
+ *  the server reads as `null` (unmeasured), never as room. */
+export type PressureOpReply = HostPsi & { headroomBytes?: number | null };
 import type { HostPsi } from './pressure.js';
 
 // ── the `testbox` and `testbox-tools-sync` ops (test box plan TB9, D-7411; spec 2026-10-28 §2.7, §2.10) ─────────────

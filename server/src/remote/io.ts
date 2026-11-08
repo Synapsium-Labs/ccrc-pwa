@@ -3,7 +3,7 @@ import {
   readTestboxToolsSyncReply, type TailData, type TailReset,
 } from '../../../shared/agent-protocol.js';
 import { readDiskMeasured } from '../../../shared/disk.js';
-import { readHostPsi } from '../../../shared/pressure.js';
+import { readHeadroomBytes, readHostPsi } from '../../../shared/pressure.js';
 import { readBackupRead } from '../../../shared/backup.js';
 import type { FleetIO, MeasuredDirectoryRead, ReadFailure } from '../io.js';
 import type { FleetClient } from './client.js';
@@ -285,8 +285,10 @@ export function createIo(client: FleetClient): FleetIO {
     async pressureMeasured() {
       if (!(client.state.agentOps ?? []).includes(PRESSURE_OP)) return { ok: false, reason: 'unsupported' };
       try {
-        const psi = readHostPsi(await client.request({ t: 'req', op: PRESSURE_OP }));
-        return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi };
+        const reply = await client.request({ t: 'req', op: PRESSURE_OP });
+        const psi = readHostPsi(reply);
+        // D-8122: the slice's headroom rides beside the PSI; an older agent's reply has none, which reads as null.
+        return psi === null ? { ok: false, reason: 'unanswered' } : { ok: true, psi, headroomBytes: readHeadroomBytes(reply) };
       } catch {
         return { ok: false, reason: 'unanswered' };
       }

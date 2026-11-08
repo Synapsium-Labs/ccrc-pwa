@@ -68,6 +68,7 @@ export const BOX_SETTING_FAMILY_TEXT: Readonly<Record<BoxSettingFamily | 'other'
   'usage-sweep': 'Usage sweep',
   'carry-copies': 'Carry copies',
   'browser-tools': 'Browser tools',
+  'memory-gate': 'Memory gate',
   other: 'Other settings',
 };
 

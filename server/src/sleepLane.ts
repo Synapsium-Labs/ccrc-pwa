@@ -6,7 +6,7 @@ import type { SessionRecord } from './registry.js';
 import type { CoordStore } from './coord/store.js';
 import type { TurnVerdict } from './coord/archiveDoor.js';
 import { notify, type NoticeRecord } from './notice.js';
-import type { WakeAdmission } from './coord/wakeBudget.js';
+import type { WakeAdmission, WakeRefused } from './coord/wakeBudget.js';
 import { ccdEnding, type CcdResult } from './lifecycle.js';
 import { CCD_ARGV, HIBERNATE_HOLD_OK_CAP, HIBERNATE_ROLL_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -88,10 +88,11 @@ export interface SleepActPort<Row> {
   /** At the act (D-7047): the registry listed again, for the lane's switches; null when it cannot be listed. */
   readonly listing: () => Promise<readonly string[] | null>;
   /** A lane that wakes what it put to sleep (`then: 'wake'`, the automatic roll, D-7452): the fleet-wide wake budget
-   *  (`FleetWatcher.admitWakeRefundable`), asked before the hibernate; null or absent holds the act. The admission is
+   *  (`FleetWatcher.admitWakeRefundable`), asked before the hibernate; null or absent holds the act, and so does a
+   *  `refused` answer, the memory gate's (D-8122), whose word is the skip's detail. The admission is
    *  given back (`refund`, D-7542) when the act woke nothing: ccd refused it, the call failed before anything stopped,
    *  the pane would not die, or the wake failed and ccd put the row back to sleep. */
-  readonly admitWake?: (id: string) => WakeAdmission | null;
+  readonly admitWake?: (id: string) => WakeAdmission | WakeRefused | null;
 }
 
 /** A verdict as the executor reads it: each lane's own verdict type (`StopDoneVerdict`, `HibernateVerdict`) is one. */
@@ -437,8 +438,10 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
     const b = await check();
     // D-7452: a lane that wakes what it sleeps is an automatic wake, asked of the budget before anything stops.
     if (!b.go || !wake) return b;
-    admission = port.admitWake?.(id) ?? null;
-    if (admission === null) return { go: false, r: { kind: 'skipped', detail: 'wake-budget', by: 'wake-budget' } };
+    const a = port.admitWake?.(id) ?? null;
+    // D-8122: the memory gate's refusal carries its own word; the window's stays `wake-budget`. Neither is held off.
+    if (a === null || 'refused' in a) return { go: false, r: { kind: 'skipped', detail: a?.refused ?? 'wake-budget', by: 'wake-budget' } };
+    admission = a;
     return b;
   };
   // D-7552: a `wake` lane's row held at the act is held off, as a refused one is, so it leaves the population a while.

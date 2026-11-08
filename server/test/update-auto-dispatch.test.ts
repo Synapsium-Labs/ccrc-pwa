@@ -32,7 +32,7 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { RESOLVE_DETAIL, autoGateBlockers } from '../src/update/resolve.js';
 import { resolveAndProject } from '../src/update/project.js';
 import { DETACH_CAP, ROLLBACK_CAP } from '../src/update/dispatch.js';
-import { runDispatch, type ConvergeDeps, type DispatchRunResult } from '../src/update/converge.js';
+import { AUTO_PRESSURE_HELD_DETAIL, runDispatch, type ConvergeDeps, type DispatchRunResult } from '../src/update/converge.js';
 import { spawnFromRunner } from './updateSpawnFake.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -447,5 +447,70 @@ describe('the move audit row through FleetWatcher.dispatchNow (wave 8 item A, D-
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toContain('recordFeedEvent failed');
     coord.db.close();
+  });
+});
+
+// D-8122: an AUTOMATIC move is held off a fleet host whose memory pressure reads critical, with a held reason the
+// update view shows (the row's detail); one the operator asked for is never held, and warn holds nothing.
+describe('auto moves wait out a critical memory pressure (D-8122)', () => {
+  const withPressure = (b: Box, level: 'ok' | 'warn' | 'critical' | 'unmeasured'): ConvergeDeps => ({ ...deps(b), hostPressure: () => level });
+
+  it('critical: no op, no lease, and the row says why', async () => {
+    const b = box();
+    measure(b, fleetNode({ caps: GATED }));
+    await intend(b, FLEET_SCOPE, { auto: 'channel' });
+    const r = await runDispatch(withPressure(b, 'critical'), NOW) as Ran;
+    expect(r.plan.move).toBeNull();
+    expect(r.plan.held).toEqual([{ nodeId: FLEET_ID, detail: AUTO_PRESSURE_HELD_DETAIL }]);
+    expect(r.outcome).toBeNull();
+    expect(b.sent).toEqual([]);
+    expect(b.store.node(FLEET_ID)).toMatchObject({ updateState: 'idle', updateDetail: AUTO_PRESSURE_HELD_DETAIL });
+    const eased = await runDispatch(withPressure(b, 'ok'), NOW + 60_000) as Ran;
+    expect(eased.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+    expect(b.sent).toEqual([{ tag: 'v0.0.10', kind: 'update' }]);
+  });
+
+  it('warn and unmeasured hold nothing', async () => {
+    for (const level of ['warn', 'unmeasured'] as const) {
+      const b = box();
+      measure(b, fleetNode({ caps: GATED }));
+      await intend(b, FLEET_SCOPE, { auto: 'channel' });
+      expect((await runDispatch(withPressure(b, level), NOW) as Ran).outcome, level).toMatchObject({ result: 'accepted' });
+    }
+  });
+
+  // Review fix: the hold lives inside the plan, so the fleet node's held AUTO move (first in compareDispatchOrder)
+  // never stands in front of an operator's request for a node that sorts after it.
+  it('a held fleet auto move does not block a request for the server node behind it', async () => {
+    const b = box();
+    measure(b, fleetNode({ caps: GATED }));
+    measure(b, serverNode({ caps: GATED }));
+    await intend(b, FLEET_SCOPE, { auto: 'channel' });
+    expect(b.store.requestNode(SERVER_ID, 'v0.0.10', 'update', NOW)).toMatchObject({ ok: true });
+    const r = await runDispatch(withPressure(b, 'critical'), NOW) as Ran;
+    expect(r.plan.held).toEqual([{ nodeId: FLEET_ID, detail: AUTO_PRESSURE_HELD_DETAIL }]);
+    expect(r.plan.move).toMatchObject({ nodeId: SERVER_ID, source: 'request' });
+    expect(r.outcome).toMatchObject({ nodeId: SERVER_ID, result: 'accepted' });
+    expect(b.spawned).toHaveLength(1);
+    expect(b.sent).toEqual([]);
+    expect(b.store.node(FLEET_ID)).toMatchObject({ updateState: 'idle', updateDetail: AUTO_PRESSURE_HELD_DETAIL });
+  });
+
+  it('an automatic move to a linked node that is not the fleet box is not held by the fleet box\'s pressure', async () => {
+    const b = box();
+    measure(b, fleetNode({ caps: GATED, role: 'server' }));
+    await intend(b, FLEET_SCOPE, { auto: 'channel' });
+    const r = await runDispatch(withPressure(b, 'critical'), NOW) as Ran;
+    expect(r.plan.held).toEqual([]);
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
+  });
+
+  it('a requested move is never held, critical or not', async () => {
+    const b = box();
+    measure(b, fleetNode({ caps: GATED }));
+    expect(b.store.requestNode(FLEET_ID, 'v0.0.10', 'update', NOW)).toMatchObject({ ok: true });
+    const r = await runDispatch(withPressure(b, 'critical'), NOW) as Ran;
+    expect(r.plan.move).toMatchObject({ source: 'request' });
+    expect(r.outcome).toMatchObject({ nodeId: FLEET_ID, result: 'accepted' });
   });
 });

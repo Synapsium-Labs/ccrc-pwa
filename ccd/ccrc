@@ -1393,8 +1393,19 @@ _timer_period_s() {   # <timer-file>
   fi
 }
 
+# ── _psi_avg10 <file> <some|full> — one PSI file's avg10 (D-7876, D-8122) ──
+# The one parser of a /proc/pressure/<resource> file: prints the `avg10` of the
+# named line (percent), rc 1 when the file is unreadable or has no such line.
+# `_psi_over` reads `some` through it, and the update sweep's pacing
+# (`_upd_sweep_over`) reads memory's `full` through it.
+_psi_avg10() {   # <file> <some|full> -> the line's avg10 on stdout; rc 1 when there is none
+  local v
+  v=$(awk -v w="$2" '$1 == w { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$1" 2>/dev/null)
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
 # ── _psi_over <max> <knob> — the host's pressure above <max> (D-7876) ─────
-# The one reader of the host's pressure, moved here from `ccrc test` (its heavy
+# The one reader of the host's pressure for holding work back, moved here from `ccrc test` (its heavy
 # queue's `_tpressure`) so the graph sweep, which sources this body, reads it the
 # same way: PSI `some avg10` (percent) of memory, then cpu, from
 # `$CCRC_PROC_ROOT/pressure/` (default /proc, a fixture root in the suites). rc 0
@@ -1407,8 +1418,7 @@ _psi_over() {   # <max> <knob> -> 0 while memory or cpu pressure is above <max>;
   PRESSURE_SAID=""
   for r in memory cpu; do
     [ -r "$root/pressure/$r" ] || continue
-    v=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$root/pressure/$r" 2>/dev/null)
-    [ -n "$v" ] || continue
+    v=$(_psi_avg10 "$root/pressure/$r" some) || continue
     if awk -v v="$v" -v m="$max" 'BEGIN { exit !(v + 0 > m + 0) }'; then PRESSURE_SAID="host $r pressure (avg10) is $v, above $knob=$max"; return 0; fi
   done
   return 1
@@ -22027,7 +22037,7 @@ _upd_rerun_hint() {
 # read the last four names too (wave 29, D-6981; D-7500), through ccd/lib/ccrc-settings.sh, which `node deploy/gen-settings-lib.mjs`
 # regenerates after any edit to this line, to `_ccrc_knob`, to the `_box_*` model or to a check the library carries.
 # ccd's spawn reads CCRC_BROWSER_MCP_DEFAULT and CCRC_BROWSER_MCP_SERVERS through that same library (D-8121).
-CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_GRAPH_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_CARRY_COPY_WARN_BYTES CCRC_BROWSER_MCP_DEFAULT CCRC_BROWSER_MCP_SERVERS)
+CCRC_SETTINGS=(CCRC_BACKUP_KEEP CCRC_BACKUP_DATA_KEEP CCRC_VERSIONS_KEEP CCRC_UPDATE_HEALTH_S CCRC_UPDATE_DEADLINE_MS CCRC_RELEASE_BASE_URL CCRC_MODELS_ADVANCE_BUDGET_S CCRC_SESSION_SLICE_MEMORY_MAX CCRC_SESSION_SLICE_SWAP_MAX CCRC_TEST_SLICE_MEMORY_MAX CCRC_TEST_SLICE_SWAP_MAX CCRC_TEST_SLICE_CPU_WEIGHT CCRC_TEST_SLICE_CPU_QUOTA CCRC_TEST_SLICE_IO_WEIGHT CCRC_TEST_HEAVY_SLOTS CCRC_TEST_WIDE_FILES CCRC_TEST_PRESSURE_MAX CCRC_GRAPH_STORE CCRC_GRAPH_SOURCE_REF CCRC_GRAPH_REPOS_EXCLUDE CCRC_GRAPH_REFRESH_SECS CCRC_GRAPH_FETCH_SECS CCRC_GRAPH_FULL_REBUILD_SECS CCRC_GRAPH_INCREMENTAL_MAX_FILES CCRC_GRAPH_FULL_FAIL_MAX CCRC_GRAPH_FAIL_BACKOFF_SECS CCRC_GRAPH_BUDGET CCRC_GRAPH_BUILD_TIMEOUT CCRC_GRAPH_SLOT_WAIT_SECS CCRC_GRAPH_BUILD_NICE CCRC_GRAPH_MAX_WORKERS CCRC_GRAPH_MAX_SHRINK_PCT CCRC_GRAPH_KEEP_BUILDS CCRC_GRAPH_BUILD_GRACE_SECS CCRC_GRAPH_MIGRATE_BUDGET CCRC_GRAPH_HOOKSTATE_FRESH_SECS CCRC_GRAPH_GATE_MAX_DIFF_PCT CCRC_GRAPH_GATE_MAX_DENIALS CCRC_GRAPH_CARD_DIFF_LIST_MAX CCRC_GRAPH_PRESSURE_MAX CCRC_KEEPALIVE_MODEL CCRC_KEEPALIVE_PROMPT CCRC_KEEPALIVE_FRESH CCRC_USAGE_SWEEP_DAYS CCRC_TESTBOX_URL CCRC_TESTBOX_TOKEN_FILE CCRC_TESTBOX_GIT_URL_BASE CCRC_TESTBOX_GIT_KEY CCRC_TESTBOX_UNTRACKED_FILE_MAX CCRC_TESTBOX_SNAPSHOT_MAX CCRC_TESTBOX_STATUS_DEADLINE CCRC_TESTBOX_RECONNECT_DEADLINE CCRC_TESTBOX_LOST_RUN CCRC_TESTBOX_QUEUE_LIMIT CCRC_TESTBOX_QUEUE_WAIT CCRC_TESTBOX_BUDGET CCRC_TESTBOX_DENY_GLOBS CCRC_TESTBOX_POLL CCRC_TESTBOX_FALLBACK_INSTALL CCRC_TESTBOX_TIMES CCRC_TESTBOX_RUNS CCRC_TESTBOX_WORKERS CCRC_TESTBOX_RUN_TMPDIR CCRC_TESTBOX_RUN_MEMORY_MAX CCRC_TESTBOX_RUN_SWAP_MAX CCRC_TESTBOX_RUN_CPU_QUOTA CCRC_TESTBOX_ROOT CCRC_TESTBOX_REPOS CCRC_TESTBOX_FETCH_EVERY CCRC_TESTBOX_RETENTION CCRC_TESTBOX_PRISTINE_KEEP CCRC_TESTBOX_PRISTINE_RETRY CCRC_TESTBOX_REPORT_MAX CCRC_TESTBOX_TOOLS_DIR CCRC_TESTBOX_OS_MIRROR CCRC_TESTBOX_EGRESS_ALLOW CCRC_TESTBOX_PUSH_USER CCRC_TESTBOX_ENV_FORWARD CCRC_TESTBOX_RUN_USER_PREFIX CCRC_TESTBOX_REGISTRY_PROXY CCRC_TESTBOX_REGISTRY_UPSTREAM CCRC_TESTBOX_TMPFS CCRC_TESTBOX_LOG_TAIL CCRC_TESTBOX_SESSION_RUNS CCRC_TESTBOX_SERVICE_USER CCRC_TESTBOX_LISTEN CCRC_TESTBOX_SERVICE_TOKEN_FILE CCRC_TESTBOX_UNIT_MAX CCRC_CARRY_COPY_WARN_BYTES CCRC_BROWSER_MCP_DEFAULT CCRC_BROWSER_MCP_SERVERS CCRC_WAKE_PRESSURE_GATE CCRC_WAKE_HEADROOM_MIN_GIB CCRC_SWEEP_BATCH CCRC_SWEEP_PRESSURE_WAIT_S)
 # key:class:family:roles:applies (spec 5.1, D12, D16). class value|origin|is-set (the spec's `presence`, D12)|omit; roles a comma list of CCRC_ROLE
 # words, or none; applies run|update. Mirrored in shared/api.ts's BOX_SETTING_TABLE, held equal by box-settings-table.test.ts.
 # shellcheck disable=SC2054  # covers the whole array (shellcheck 0.11.0 reports one SC2054 per array, at the line of the array's opener, not at its first row, and a directive on a row inside it hides nothing): each element is one table row, and the commas inside a row are its roles, not separators
@@ -22123,6 +22133,10 @@ BOX_SETTINGS_TABLE=(
   CCRC_CARRY_COPY_WARN_BYTES:value:carry-copies:fleet,both:run
   CCRC_BROWSER_MCP_DEFAULT:value:browser-tools:fleet,both:run
   CCRC_BROWSER_MCP_SERVERS:is-set:browser-tools:fleet,both:run
+  CCRC_WAKE_PRESSURE_GATE:value:memory-gate:fleet,server,both:run
+  CCRC_WAKE_HEADROOM_MIN_GIB:value:memory-gate:server,both:run
+  CCRC_SWEEP_BATCH:value:memory-gate:fleet,both:run
+  CCRC_SWEEP_PRESSURE_WAIT_S:value:memory-gate:fleet,both:run
 )
 # key:word,word (D-7914): the fixed words a setting's check admits beside the value shape. Mirrored in shared/api.ts's
 # BOX_SETTING_VALUE_WORDS and held equal, both ways, to it and to _tb_shape's word arms by box-settings-table.test.ts.
@@ -22131,6 +22145,7 @@ BOX_SETTING_VALUE_WORDS=(
   CCRC_TESTBOX_LOST_RUN:local,fail
   CCRC_TESTBOX_FALLBACK_INSTALL:install,refuse
   CCRC_BROWSER_MCP_DEFAULT:on,off
+  CCRC_WAKE_PRESSURE_GATE:warn,critical,off
 )
 # `_set_spec <KEY>` sets SET_CLASS, SET_FAMILY, SET_ROLES and SET_APPLIES from the table; rc 1 for a name it does not hold.
 _set_spec() {
@@ -25525,6 +25540,69 @@ _upd_sweep_set_down() {
   done
   UPD_SWEEP_WORD="$word"
 }
+# ── the sweep's batches and its pressure wait (D-8122) ──────────────────────────────────────────────────────────────
+# `_upd_sweep_knobs` sets SWB_BATCH (CCRC_SWEEP_BATCH, default 5), SWB_WAIT_S (CCRC_SWEEP_PRESSURE_WAIT_S, default 300)
+# and SWB_GATE_PCT (CCRC_WAKE_PRESSURE_GATE: warn is 10, critical 50, off empty) through `_ccrc_knob`. A value it
+# cannot use keeps its default and says so on stderr; an update never stops over its pacing. The two levels are
+# shared/pressure.ts's PSI_WARN_FULL_PCT and PSI_CRITICAL_FULL_PCT, held equal by the single-definition pin.
+SWB_POLL_S=5   # how often the wait between batches reads the pressure again
+_upd_sweep_knobs() {
+  SWB_BATCH=5; SWB_WAIT_S=300; SWB_GATE_PCT=10
+  if ! _ccrc_knob CCRC_SWEEP_BATCH 5; then echo "update: warning: $KNOB_WHY — the sweep restarts 5 supervisors at a time" >&2
+  elif _mg_ok CCRC_SWEEP_BATCH "$KNOB"; then SWB_BATCH="$KNOB"
+  else echo "update: warning: CCRC_SWEEP_BATCH must be $(_mg_says CCRC_SWEEP_BATCH) (from $KNOB_FROM) — the sweep restarts 5 supervisors at a time" >&2; fi
+  if ! _ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300; then echo "update: warning: $KNOB_WHY — the sweep waits at most 300s on memory pressure" >&2
+  elif _mg_ok CCRC_SWEEP_PRESSURE_WAIT_S "$KNOB"; then SWB_WAIT_S="$KNOB"
+  else echo "update: warning: CCRC_SWEEP_PRESSURE_WAIT_S must be $(_mg_says CCRC_SWEEP_PRESSURE_WAIT_S) (from $KNOB_FROM) — the sweep waits at most 300s on memory pressure" >&2; fi
+  if ! _ccrc_knob CCRC_WAKE_PRESSURE_GATE warn; then echo "update: warning: $KNOB_WHY — the sweep waits on the warn level" >&2
+  elif _mg_ok CCRC_WAKE_PRESSURE_GATE "$KNOB"; then
+    case "$KNOB" in
+      warn) SWB_GATE_PCT=10 ;;
+      critical) SWB_GATE_PCT=50 ;;
+      off) SWB_GATE_PCT="" ;;
+    esac
+  else echo "update: warning: CCRC_WAKE_PRESSURE_GATE must be $(_mg_says CCRC_WAKE_PRESSURE_GATE) (from $KNOB_FROM) — the sweep waits on the warn level" >&2; fi
+  return 0
+}
+# `_upd_sweep_over <pct> <file>` — rc 0 while the file's `full avg10` is at or above <pct>; rc 1 below it, rc 2 when the
+# file has no such line. It parses through `_psi_avg10`, the one PSI parser; it is not `_psi_over` because it asks a
+# different question: memory only, the `full` line (every task stalled, the level shared/pressure.ts's
+# PSI_WARN_FULL_PCT and PSI_CRITICAL_FULL_PCT name), and at-or-above, where `_psi_over` asks memory or cpu `some` above a
+# knob's maximum.
+_upd_sweep_over() {
+  local v
+  v=$(_psi_avg10 "$2" full) || return 2
+  awk -v v="$v" -v t="$1" 'BEGIN { exit !(v + 0 >= t + 0) }'
+}
+_upd_sweep_sleep() { sleep "$1"; }   # THE SEAM: a test counts the wait instead of waiting it
+# `_upd_sweep_pace` — between two batches: while memory pressure is at the gate level, wait SWB_POLL_S and read it
+# again, for at most SWB_WAIT_S over the whole sweep (SWB_WAITED, the caller's). Past that bound it warns once and never
+# waits again, so an update never hangs. No pressure file (macOS, an older kernel) or the gate `off` is no wait.
+_upd_sweep_pace() {
+  local f="${CCRC_PROC_ROOT:-/proc}/pressure/memory" said=0
+  [ -n "$SWB_GATE_PCT" ] && [ "$SWB_GAVE_UP" = 0 ] && [ -r "$f" ] || return 0
+  while _upd_sweep_over "$SWB_GATE_PCT" "$f"; do
+    if [ "$SWB_WAITED" -ge "$SWB_WAIT_S" ]; then
+      echo "update: warning: sweep: memory pressure (full avg10) is still at or above ${SWB_GATE_PCT}% after ${SWB_WAITED}s of waiting (CCRC_SWEEP_PRESSURE_WAIT_S) — the next batches are restarted without waiting, so the update does not hang (D-8122)" >&2
+      SWB_GAVE_UP=1
+      return 0
+    fi
+    [ "$said" = 1 ] || echo "update: sweep: memory pressure (full avg10) is at or above ${SWB_GATE_PCT}% — waiting before the next batch, at most ${SWB_WAIT_S}s over the sweep (D-8122)" >&2
+    said=1
+    _upd_sweep_sleep "$SWB_POLL_S"
+    SWB_WAITED=$((SWB_WAITED + SWB_POLL_S))
+  done
+  return 0
+}
+# `_upd_sweep_of_batch <unit>` — rc 0 when the unit is the current batch's (`chunk`, the caller's), or, in the last
+# batch, in no batch at all (`todo`): a unit try-restart never acts on is judged once, with the last batch.
+_upd_sweep_of_batch() {
+  local x
+  for x in ${chunk[@]+"${chunk[@]}"}; do [ "$x" = "$1" ] && return 0; done
+  [ "$((cs + SWB_BATCH))" -ge "${#todo[@]}" ] || return 1
+  for x in ${todo[@]+"${todo[@]}"}; do [ "$x" = "$1" ] && return 1; done
+  return 0
+}
 _upd_sweep() {
   UPD_SWEEP_WORD=""   # wave 17, D-5314: set at each return below, and by `_upd_sweep_die` (`died: sweep`, D-5315)
   local -a down=()    # Darwin: the start-limit units the sweep skipped (Linux records `prior` itself)
@@ -25670,176 +25748,217 @@ _upd_sweep() {
       return 0
     fi
   done
-  # fix round 1 item 7 (review 196 F8): the argv-order pin is
-  # `ccrc-update-fetch.test.ts`'s "with KillMode=process resolving per unit, the
-  # sweep runs: preflight, try-restart, the failed warn query, the active
-  # verify query — in that argv order" case — cited by title, since its line
-  # range moves.
-  systemctl --user try-restart "claude-session@*" \
-    || _upd_sweep_die "systemctl --user try-restart claude-session@* failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
-  # try-restart is a no-op on a failed unit (its own man page), so a
-  # pre-existing failed session was neither restarted nor verified — not this
-  # update's doing, must not fail it, must not be silent either. A unit in
-  # `before` that reads failed here WAS restarted: it is the verify's below
-  # (D-3984), or item G's line when that cannot run, so it gets neither this
-  # line nor a place in `failed` (wave 16, D-5135; item 3 of 2026-10-06 01:29).
-  for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
-    fin=0; for fb in ${before[@]+"${before[@]}"}; do [ "$fb" = "$u" ] && { fin=1; break; }; done
-    [ "$fin" -eq 0 ] || continue
-    echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
-    failed+=("$u")
-  done
-  # THE VERIFY — ONE SHARED WINDOW, BY CONCURRENT PER-UNIT CALLS, RE-CHECKED ONCE (wave 11, R12; D-3972, D-3983,
-  # D-3984). Each restarted supervisor is held to verify-service.sh out of the tree `~/ccrc` names AT CALL TIME,
-  # resolved here and never cached: that protects the move INTO a release (it runs the OLD sweep with the NEW script),
-  # and it is why a rollback pairs THIS sweep with an OLDER script. So every call passes ONE unit — an older script
-  # reads only `$1` and would verify the first of a list and pass the rest unverified (the R12 critic's B2).
-  # The calls run CONCURRENTLY, in chunks of at most CCRC_SWEEP_VERIFY_JOBS (default 128; one chunk, one window), from
-  # a launcher subshell whose failed fork cannot end this run. EVERY unit is verified, a failure included; each one's
-  # output is replayed in listing order. A unit whose first call failed crash-like — a non-zero or unrecorded rc, and
-  # no `stopped on purpose:` line — gets ONE more call, alone, in the foreground, after its batch, and fails only if
-  # that fails too (the operator's ruling of 2026-10-05 13:58): a pane that died and came back inside the hot minute
-  # after the restart is not a crashed build. A unit that was active before try-restart and reads `activating` or
-  # `failed` after it is verified too (D-3984); one that reads `inactive` keeps item G's warning below. With no scratch
-  # directory, the calls are the old loop's: one at a time, in the foreground. No die sits inside a job, a pipeline or
-  # `$(…)` (I8). `--state=active` here and NOT above: handing verify-service.sh a unit try-restart never touched is
-  # deploy.sh's final-review finding 6.
+  # THE BATCHES (D-8122). The units try-restart acts on (the listing's `active`, `activating` and `reloading` rows) are
+  # restarted CCRC_SWEEP_BATCH at a time, in listing order, never with the glob: each batch is listed, verified and
+  # re-checked by the same rules as before (wave 11, D-3972, D-3983, D-3984) before the next is touched, and a batch
+  # that fails its verify stops the sweep, so a build whose supervisors do not stay up is never rolled across the
+  # fleet. Between batches the sweep waits while memory pressure is at the gate level (`_upd_sweep_pace`), bounded by
+  # CCRC_SWEEP_PRESSURE_WAIT_S over the whole sweep. The KillMode preflight above has already covered the full listing.
+  # The argv-order pin is `ccrc-update-fetch.test.ts`'s "with KillMode=process resolving per unit, the sweep runs:
+  # preflight, try-restart, the failed warn query, the active verify query — in that argv order" case (one batch),
+  # cited by title; the 30-unit fixture in `ccrc-sweep-batches.test.ts` pins the batches.
+  local -a todo=() chunk=() units=() missing=() crash=() unrec=() ncfail=()
+  for u in $(printf '%s\n' "$listing" | awk '$3 == "active" || $3 == "activating" || $3 == "reloading" {print $1}'); do todo+=("$u"); done
+  _upd_sweep_knobs
   local verify="$BOX_TREE_DIR/deploy/verify-service.sh"
-  local after_listing arc=0
-  after_listing="$(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend)" || arc=$?
-  # fix round 1 item 1 (D-3599): the same unmeasured-listing hazard, on the
-  # verify side — an unmeasured verify listing verifies nothing, so when
-  # something WAS restarted (`before` non-empty) the per-unit "not active
-  # after it" warnings and the success line below must not fire over a set
-  # nobody actually re-listed. When `before` was measured empty, nothing that
-  # was running was restarted, so this fork is skipped and the zero line
-  # below prints exactly as it does today.
-  if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
-    echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
-    echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
-    UPD_SWEEP_WORD="unverified: relist"   # R10k, D-5315
-    return 0
-  fi
-  local -a units=() missing=() crash=() unrec=() ncfail=()
+  local after_listing arc=0 cs=0 i0=0 nb vtried=0 left
   local vdir="" vjobs="${CCRC_SWEEP_VERIFY_JOBS:-128}" i j k r lrc d o cu _cl cw _cs _cd clist crc=0 m inb cb kc=0 mn=0 rfail="" lpid="" ltrap=""
   [[ "$vjobs" =~ ^[123456789][0123456789]{0,3}$ ]] || vjobs=128
-  # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
-  # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
-  # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
-  for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
-    pin=0; for pb in ${prior[@]+"${prior[@]}"}; do [ "$pb" = "$u" ] && { pin=1; break; }; done
-    if [ "$pin" -eq 1 ]; then pback+=("$u"); else units+=("$u"); fi
-  done
-  if [ -f "$verify" ]; then
-    for cb in ${before[@]+"${before[@]}"}; do
-      inb=0; for u in ${units[@]+"${units[@]}"}; do [ "$u" = "$cb" ] && { inb=1; break; }; done
-      [ "$inb" -eq 1 ] || missing+=("$cb")
-    done
-    if [ "${#missing[@]}" -gt 0 ]; then
-      clist="$(systemctl --user list-units "claude-session@*" --state=activating,failed --plain --no-legend)" || crc=$?
-      if [ "$crc" -ne 0 ]; then
-        echo "update: warning: the crash listing was not measured (systemctl --user list-units \"claude-session@*\" --state=activating,failed --plain --no-legend failed, rc $crc), so a crash-looping supervisor among the units missing from the active listing is only warned about below — none of them is verified or claimed healthy" >&2
-      else
-        while read -r cu _cl cw _cs _cd; do
-          [ -n "$cu" ] || continue
-          for m in "${missing[@]}"; do
-            if [ "$m" = "$cu" ]; then
-              units+=("$cu")
-              echo "update: sweep: $cu was active before try-restart and reads '$cw' after it — it is verified with the rest (wave 11, D-3984)" >&2
-              break
-            fi
-          done
-        done <<< "$clist"
-      fi
+  nb=$(( (${#todo[@]} + SWB_BATCH - 1) / SWB_BATCH ))
+  SWB_WAITED=0; SWB_GAVE_UP=0
+  while :; do
+    chunk=(${todo[@]+"${todo[@]:cs:SWB_BATCH}"})
+    [ "$cs" -eq 0 ] || _upd_sweep_pace
+    if [ "${#chunk[@]}" -gt 0 ]; then
+      [ "$nb" -le 1 ] || echo "update: sweep: batch $((cs / SWB_BATCH + 1)) of $nb: restarting ${#chunk[@]} supervisor(s) (CCRC_SWEEP_BATCH is $SWB_BATCH; D-8122)" >&2
+      systemctl --user try-restart "${chunk[@]}" \
+        || _upd_sweep_die "systemctl --user try-restart ${chunk[*]} failed — the supervisors' state is now mixed; read: systemctl --user list-units 'claude-session@*'"
     fi
-  fi
-  if [ -f "$verify" ] && [ "${#units[@]}" -gt 0 ]; then
-    # A SIGKILLed sweep leaves its dir (nothing runs on SIGKILL): remove every one whose recorded owner is gone (D-3972 g).
-    for d in "${TMPDIR:-/tmp}"/ccrc-sweep.*; do
-      { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
-      o=""; [ -f "$d/owner" ] && IFS= read -r o < "$d/owner"
-      case "$o" in ''|*[!0-9]*) continue ;; esac
-      kill -0 "$o" 2>/dev/null && continue
-      rm -rf -- "$d"
-    done
-    if vdir="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-sweep.XXXXXX" 2>/dev/null)" && [ -d "$vdir" ] && printf '%s\n' "$$" >"$vdir/owner" 2>/dev/null; then
-      _exit_add "_upd_sweep_stop $(printf '%q' "$vdir"); _upd_sweep_kill $(printf '%q' "$vdir"); rm -rf -- $(printf '%q' "$vdir")"
-    else
-      [ -z "$vdir" ] || rm -rf -- "$vdir"
-      vdir=""
-      echo "update: warning: no scratch directory for the verify (mktemp -d under ${TMPDIR:-/tmp} failed) — the supervisors are verified one at a time, as before wave 11" >&2
-    fi
-    i=0
-    while [ "$i" -lt "${#units[@]}" ]; do
-      crash=(); unrec=()
-      if [ -n "$vdir" ]; then
-        j=$((i + vjobs)); [ "$j" -le "${#units[@]}" ] || j=${#units[@]}
-        # A Ctrl-C ABORTS (wave 11, D-3988; D-141: an operator's Ctrl-C must abort, `cmd_passwd`'s header). `set -m` puts
-        # every job in a group of its own, so an INT never reaches a job, and a shell runs its own trap only after its
-        # foreground child returns: a `kill -INT` of this shell alone waited out the whole batch and the run went on to
-        # SWEEP_OK (measured). So the launcher runs in the background and this shell WAITS on it, which a trapped signal
-        # interrupts at once. The handler stops the launcher AND WAITS for it (bounded: `_upd_sweep_stop`), so that every
-        # job it forked has a pid on file, then RE-RAISES on this shell (`exit 130` would not read as an INT death to our
-        # caller): the exit chain TERMs each unrecorded job, once, and removes the scratch dir. The caller's own INT trap
-        # is saved and put back (one of the caller's that does not exit would otherwise swallow the INT: measured).
-        # `lpid` is reset per batch, so a handler never signals a previous batch's launcher; the handler writes it to
-        # `launcher.proc` itself, so an INT between the launch and the sweep's own write still stops the launcher.
-        lrc=0; lpid=""; ltrap="$(trap -p INT)"; rm -f "$vdir/looped" "$vdir/stop"
-        trap 'trap - INT; if [ -n "$lpid" ]; then echo "$lpid" >"$vdir/launcher.proc"; _upd_sweep_stop "$vdir"; : >"$vdir/launcher.proc"; fi; kill -INT "$BASHPID"' INT
-        ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" &
-        lpid=$!; printf '%s\n' "$lpid" >"$vdir/launcher.proc"
-        wait "$lpid" || lrc=$?
-        lpid=""; : >"$vdir/launcher.proc"
-        eval "${ltrap:-trap - INT}"
-        if [ "$lrc" -ne 0 ]; then
-          _upd_sweep_kill "$vdir"
-          echo "update: warning: the verify launcher exited $lrc — each unit of this batch with no recorded result is verified alone, in the foreground" >&2
-          _upd_sweep_replay "$vdir/launch.err" 2
-        fi
-        for ((k = i; k < j; k++)); do
-          : >"$vdir/$k.done"   # this job's chunk is read: no later kill signals it (verify L1)
-          r=""; [ -f "$vdir/$k.rc" ] && IFS= read -r r < "$vdir/$k.rc"
-          _upd_sweep_replay "$vdir/$k.out" 1; _upd_sweep_replay "$vdir/$k.err" 2
-          case "$r" in
-            0) ;;
-            ''|*[!0-9]*) unrec+=("$k") ;;
-            *) if _upd_sweep_spo "$vdir/$k.out"; then ncfail+=("${units[k]}"); else crash+=("$k"); fi ;;
-          esac
-        done
-        # A unit with no recorded result (its launcher failed, or its rc could not be written) gets its FIRST verify
-        # here, alone, in the foreground; a crash-like failure of it is re-checked by the same rule as any other (13:58).
-        for k in ${unrec[@]+"${unrec[@]}"}; do
-          echo "update: sweep: ${units[k]} recorded no result; verifying it alone, in the foreground — this is its first verify (wave 11, D-3983)" >&2
-          r=0; bash "$verify" "${units[k]}" || r=$?
-          [ "$r" -eq 0 ] || crash+=("$k")
-        done
-      else
-        j=$((i + 1))
-        r=0; bash "$verify" "${units[i]}" || r=$?
-        [ "$r" -eq 0 ] || crash+=("$i")
-      fi
-      # THE RE-CHECK, which STOPS AT THE FIRST THAT FAILS (13:58, Reading 17): re-checks run one at a time in the
-      # foreground, so a crash-looping fleet fails after one of them, never after N; a re-check that passes goes on.
-      for k in ${crash[@]+"${crash[@]}"}; do
-        kc=$((kc + 1))
-        if [ -n "$rfail" ]; then
-          mn=$((mn + 1))
-          echo "update: sweep: re-check: ${units[k]} failed its first verify and is not re-checked — a re-check already failed, so this update fails (wave 11, D-3983)" >&2
-          continue
-        fi
-        echo "update: sweep: re-check: ${units[k]} — its first verify did not pass; verifying it once more, alone (wave 11, D-3983)" >&2
-        r=0; bash "$verify" "${units[k]}" || r=$?
-        if [ "$r" -eq 0 ]; then
-          echo "update: sweep: re-check: ${units[k]} passed its re-check — counted as a transient failure, not fatal" >&2
-        else
-          rfail="${units[k]}"
-          echo "update: sweep: re-check: ${units[k]} failed its re-check too — read: systemctl --user status ${units[k]}" >&2
-        fi
+    # try-restart is a no-op on a failed unit (its own man page), so a
+    # pre-existing failed session was neither restarted nor verified — not this
+    # update's doing, must not fail it, must not be silent either. A unit in
+    # `before` that reads failed here WAS restarted: it is the verify's below
+    # (D-3984), or item G's line when that cannot run, so it gets neither this
+    # line nor a place in `failed` (wave 16, D-5135; item 3 of 2026-10-06 01:29).
+    # D-8122: asked once, after the first batch: a unit FAILED before the sweep is in no batch, and one a later batch
+    # restarts that then fails is in `before`, so it is the verify's either way.
+    if [ "$cs" -eq 0 ]; then
+      for u in $(systemctl --user list-units "claude-session@*" --state=failed --plain --no-legend | awk '{print $1}'); do
+        fin=0; for fb in ${before[@]+"${before[@]}"}; do [ "$fb" = "$u" ] && { fin=1; break; }; done
+        [ "$fin" -eq 0 ] || continue
+        echo "update: warning: $u is FAILED — try-restart skipped it and this sweep did not verify it. On the box: systemctl --user reset-failed $u, then ccd start the session" >&2
+        failed+=("$u")
       done
-      i=$j
+    fi
+    # THE VERIFY — ONE SHARED WINDOW, BY CONCURRENT PER-UNIT CALLS, RE-CHECKED ONCE (wave 11, R12; D-3972, D-3983,
+    # D-3984). Each restarted supervisor is held to verify-service.sh out of the tree `~/ccrc` names AT CALL TIME,
+    # resolved here and never cached: that protects the move INTO a release (it runs the OLD sweep with the NEW script),
+    # and it is why a rollback pairs THIS sweep with an OLDER script. So every call passes ONE unit — an older script
+    # reads only `$1` and would verify the first of a list and pass the rest unverified (the R12 critic's B2).
+    # The calls run CONCURRENTLY, in chunks of at most CCRC_SWEEP_VERIFY_JOBS (default 128; one chunk, one window), from
+    # a launcher subshell whose failed fork cannot end this run. EVERY unit is verified, a failure included; each one's
+    # output is replayed in listing order. A unit whose first call failed crash-like — a non-zero or unrecorded rc, and
+    # no `stopped on purpose:` line — gets ONE more call, alone, in the foreground, after its batch, and fails only if
+    # that fails too (the operator's ruling of 2026-10-05 13:58): a pane that died and came back inside the hot minute
+    # after the restart is not a crashed build. A unit that was active before try-restart and reads `activating` or
+    # `failed` after it is verified too (D-3984); one that reads `inactive` keeps item G's warning below. With no scratch
+    # directory, the calls are the old loop's: one at a time, in the foreground. No die sits inside a job, a pipeline or
+    # `$(…)` (I8). `--state=active` here and NOT above: handing verify-service.sh a unit try-restart never touched is
+    # deploy.sh's final-review finding 6.
+    arc=0
+    after_listing="$(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend)" || arc=$?
+    # fix round 1 item 1 (D-3599): the same unmeasured-listing hazard, on the
+    # verify side — an unmeasured verify listing verifies nothing, so when
+    # something WAS restarted (`before` non-empty) the per-unit "not active
+    # after it" warnings and the success line below must not fire over a set
+    # nobody actually re-listed. When `before` was measured empty, nothing that
+    # was running was restarted, so this fork is skipped and the zero line
+    # below prints exactly as it does today.
+    if [ "$arc" -ne 0 ] && [ "${#before[@]}" -gt 0 ]; then
+      echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
+      # D-8122: a later batch is never restarted over a listing nobody read.
+      [ "$((cs + ${#chunk[@]}))" -ge "${#todo[@]}" ] || echo "update: warning: sweep: $((${#todo[@]} - cs - ${#chunk[@]})) supervisor(s) in later batches were not restarted and keep running the PREVIOUS ccd (D-8122)" >&2
+      # D-8122: "every … was restarted" is true only of a sweep that was one batch; past that, say how many were.
+      if [ "$cs" -eq 0 ] && [ "${#chunk[@]}" -ge "${#todo[@]}" ]; then
+        echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+      else
+        echo "update: DEGRADED: $((cs + ${#chunk[@]})) of ${#todo[@]} live claude-session@ supervisors were restarted ($((${#todo[@]} - cs - ${#chunk[@]})) were not, and keep running the PREVIOUS ccd); the last batch of ${#chunk[@]} was not verified by this sweep, the $cs before it were (D-8122)."
+      fi
+      UPD_SWEEP_WORD="unverified: relist"   # R10k, D-5315
+      return 0
+    fi
+    i0=${#units[@]}
+    # A unit the pre-restart listing showed `activating` or `failed` is never verified, even when this listing shows it
+    # active (wave 16, D-5136; one absent from that listing, or shown in any other state, is still verified). Type=simple
+    # reads `active` the moment try-restart forks it, so a crash-looping one is usually here: it goes to `pback`, named below.
+    for u in $(printf '%s\n' "$after_listing" | awk '{print $1}'); do
+      _upd_sweep_of_batch "$u" || continue   # D-8122: this batch's units; the last batch also takes every unit in none
+      pin=0; for pb in ${prior[@]+"${prior[@]}"}; do [ "$pb" = "$u" ] && { pin=1; break; }; done
+      if [ "$pin" -eq 1 ]; then pback+=("$u"); else units+=("$u"); fi
     done
-    [ -z "$vdir" ] || rm -rf -- "$vdir"
-  fi
+    if [ -f "$verify" ]; then
+      missing=()
+      for cb in ${before[@]+"${before[@]}"}; do
+        _upd_sweep_of_batch "$cb" || continue
+        inb=0; for u in ${units[@]+"${units[@]}"}; do [ "$u" = "$cb" ] && { inb=1; break; }; done
+        [ "$inb" -eq 1 ] || missing+=("$cb")
+      done
+      if [ "${#missing[@]}" -gt 0 ]; then
+        crc=0; clist="$(systemctl --user list-units "claude-session@*" --state=activating,failed --plain --no-legend)" || crc=$?
+        if [ "$crc" -ne 0 ]; then
+          echo "update: warning: the crash listing was not measured (systemctl --user list-units \"claude-session@*\" --state=activating,failed --plain --no-legend failed, rc $crc), so a crash-looping supervisor among the units missing from the active listing is only warned about below — none of them is verified or claimed healthy" >&2
+        else
+          while read -r cu _cl cw _cs _cd; do
+            [ -n "$cu" ] || continue
+            for m in "${missing[@]}"; do
+              if [ "$m" = "$cu" ]; then
+                units+=("$cu")
+                echo "update: sweep: $cu was active before try-restart and reads '$cw' after it — it is verified with the rest (wave 11, D-3984)" >&2
+                break
+              fi
+            done
+          done <<< "$clist"
+        fi
+      fi
+    fi
+    if [ -f "$verify" ] && [ "${#units[@]}" -gt "$i0" ] && [ "$vtried" = 0 ]; then
+      vtried=1
+      # A SIGKILLed sweep leaves its dir (nothing runs on SIGKILL): remove every one whose recorded owner is gone (D-3972 g).
+      for d in "${TMPDIR:-/tmp}"/ccrc-sweep.*; do
+        { [ -d "$d" ] && [ ! -L "$d" ]; } || continue
+        o=""; [ -f "$d/owner" ] && IFS= read -r o < "$d/owner"
+        case "$o" in ''|*[!0-9]*) continue ;; esac
+        kill -0 "$o" 2>/dev/null && continue
+        rm -rf -- "$d"
+      done
+      if vdir="$(mktemp -d "${TMPDIR:-/tmp}/ccrc-sweep.XXXXXX" 2>/dev/null)" && [ -d "$vdir" ] && printf '%s\n' "$$" >"$vdir/owner" 2>/dev/null; then
+        _exit_add "_upd_sweep_stop $(printf '%q' "$vdir"); _upd_sweep_kill $(printf '%q' "$vdir"); rm -rf -- $(printf '%q' "$vdir")"
+      else
+        [ -z "$vdir" ] || rm -rf -- "$vdir"
+        vdir=""
+        echo "update: warning: no scratch directory for the verify (mktemp -d under ${TMPDIR:-/tmp} failed) — the supervisors are verified one at a time, as before wave 11" >&2
+      fi
+    fi
+    if [ -f "$verify" ] && [ "${#units[@]}" -gt "$i0" ]; then
+      i=$i0
+      while [ "$i" -lt "${#units[@]}" ]; do
+        crash=(); unrec=()
+        if [ -n "$vdir" ]; then
+          j=$((i + vjobs)); [ "$j" -le "${#units[@]}" ] || j=${#units[@]}
+          # A Ctrl-C ABORTS (wave 11, D-3988; D-141: an operator's Ctrl-C must abort, `cmd_passwd`'s header). `set -m` puts
+          # every job in a group of its own, so an INT never reaches a job, and a shell runs its own trap only after its
+          # foreground child returns: a `kill -INT` of this shell alone waited out the whole batch and the run went on to
+          # SWEEP_OK (measured). So the launcher runs in the background and this shell WAITS on it, which a trapped signal
+          # interrupts at once. The handler stops the launcher AND WAITS for it (bounded: `_upd_sweep_stop`), so that every
+          # job it forked has a pid on file, then RE-RAISES on this shell (`exit 130` would not read as an INT death to our
+          # caller): the exit chain TERMs each unrecorded job, once, and removes the scratch dir. The caller's own INT trap
+          # is saved and put back (one of the caller's that does not exit would otherwise swallow the INT: measured).
+          # `lpid` is reset per batch, so a handler never signals a previous batch's launcher; the handler writes it to
+          # `launcher.proc` itself, so an INT between the launch and the sweep's own write still stops the launcher.
+          lrc=0; lpid=""; ltrap="$(trap -p INT)"; rm -f "$vdir/looped" "$vdir/stop"
+          trap 'trap - INT; if [ -n "$lpid" ]; then echo "$lpid" >"$vdir/launcher.proc"; _upd_sweep_stop "$vdir"; : >"$vdir/launcher.proc"; fi; kill -INT "$BASHPID"' INT
+          ( _upd_sweep_launch "$vdir" "$verify" "$i" "$j" ) 2>"$vdir/launch.err" &
+          lpid=$!; printf '%s\n' "$lpid" >"$vdir/launcher.proc"
+          wait "$lpid" || lrc=$?
+          lpid=""; : >"$vdir/launcher.proc"
+          eval "${ltrap:-trap - INT}"
+          if [ "$lrc" -ne 0 ]; then
+            _upd_sweep_kill "$vdir"
+            echo "update: warning: the verify launcher exited $lrc — each unit of this batch with no recorded result is verified alone, in the foreground" >&2
+            _upd_sweep_replay "$vdir/launch.err" 2
+          fi
+          for ((k = i; k < j; k++)); do
+            : >"$vdir/$k.done"   # this job's chunk is read: no later kill signals it (verify L1)
+            r=""; [ -f "$vdir/$k.rc" ] && IFS= read -r r < "$vdir/$k.rc"
+            _upd_sweep_replay "$vdir/$k.out" 1; _upd_sweep_replay "$vdir/$k.err" 2
+            case "$r" in
+              0) ;;
+              ''|*[!0-9]*) unrec+=("$k") ;;
+              *) if _upd_sweep_spo "$vdir/$k.out"; then ncfail+=("${units[k]}"); else crash+=("$k"); fi ;;
+            esac
+          done
+          # A unit with no recorded result (its launcher failed, or its rc could not be written) gets its FIRST verify
+          # here, alone, in the foreground; a crash-like failure of it is re-checked by the same rule as any other (13:58).
+          for k in ${unrec[@]+"${unrec[@]}"}; do
+            echo "update: sweep: ${units[k]} recorded no result; verifying it alone, in the foreground — this is its first verify (wave 11, D-3983)" >&2
+            r=0; bash "$verify" "${units[k]}" || r=$?
+            [ "$r" -eq 0 ] || crash+=("$k")
+          done
+        else
+          j=$((i + 1))
+          r=0; bash "$verify" "${units[i]}" || r=$?
+          [ "$r" -eq 0 ] || crash+=("$i")
+        fi
+        # THE RE-CHECK, which STOPS AT THE FIRST THAT FAILS (13:58, Reading 17): re-checks run one at a time in the
+        # foreground, so a crash-looping fleet fails after one of them, never after N; a re-check that passes goes on.
+        for k in ${crash[@]+"${crash[@]}"}; do
+          kc=$((kc + 1))
+          if [ -n "$rfail" ]; then
+            mn=$((mn + 1))
+            echo "update: sweep: re-check: ${units[k]} failed its first verify and is not re-checked — a re-check already failed, so this update fails (wave 11, D-3983)" >&2
+            continue
+          fi
+          echo "update: sweep: re-check: ${units[k]} — its first verify did not pass; verifying it once more, alone (wave 11, D-3983)" >&2
+          r=0; bash "$verify" "${units[k]}" || r=$?
+          if [ "$r" -eq 0 ]; then
+            echo "update: sweep: re-check: ${units[k]} passed its re-check — counted as a transient failure, not fatal" >&2
+          else
+            rfail="${units[k]}"
+            echo "update: sweep: re-check: ${units[k]} failed its re-check too — read: systemctl --user status ${units[k]}" >&2
+          fi
+        done
+        i=$j
+      done
+    fi
+    cs=$((cs + SWB_BATCH))
+    [ "$cs" -lt "${#todo[@]}" ] || break
+    if [ -n "$rfail" ] || [ "${#ncfail[@]}" -gt 0 ]; then
+      left=$(( ${#todo[@]} - cs ))
+      echo "update: warning: sweep: a batch did not verify, so the next $left supervisor(s) were not restarted and keep running the PREVIOUS ccd (D-8122)" >&2
+      break
+    fi
+  done
+  [ -z "$vdir" ] || rm -rf -- "$vdir"
   after=(${units[@]+"${units[@]}"})
   # Wave 8 item G: a claim that "every … now runs the ccd this update
   # installed" is false for a unit that WAS active before try-restart and is
@@ -25849,6 +25968,9 @@ _upd_sweep() {
   local b a seen
   for b in ${before[@]+"${before[@]}"}; do
     seen=0
+    # D-8122: a unit in a batch the sweep stopped before was never restarted; the warning above names those.
+    for a in ${todo[@]+"${todo[@]:cs}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
+    [ "$seen" -eq 0 ] || continue
     for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
     [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
   done
@@ -26620,6 +26742,7 @@ _set_says() {
     usage-sweep) _usage_days_says ;;
     carry-copies) _carry_warn_bytes_says ;;
     browser-tools) case "$1" in CCRC_BROWSER_MCP_DEFAULT) _browser_mcp_default_says ;; *) _browser_mcp_servers_says ;; esac ;;
+    memory-gate) _mg_says "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -26656,6 +26779,7 @@ _set_check() {
         CCRC_BROWSER_MCP_DEFAULT) _browser_mcp_default_ok "$v" ;;
         *) _browser_mcp_servers_ok "$v" ;;
       esac ;;
+    memory-gate) _mg_ok "$k" "$v" ;;
     updates)
       [ "$k" != CCRC_RELEASE_BASE_URL ] || return 0
       # One subshell: the mask first (a path that cannot exist stands in for ccrc.env, so the resolver judges the given value alone, D-7920), then the key's
@@ -26781,6 +26905,10 @@ _set_reads() {
   _ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file; _set_got CCRC_CARRY_COPY_WARN_BYTES $?
   _ccrc_knob CCRC_BROWSER_MCP_DEFAULT off file; _set_got CCRC_BROWSER_MCP_DEFAULT $?
   _ccrc_knob CCRC_BROWSER_MCP_SERVERS "$(_browser_mcp_servers_default)" file; _set_got CCRC_BROWSER_MCP_SERVERS $?
+  _ccrc_knob CCRC_WAKE_PRESSURE_GATE warn file; _set_got CCRC_WAKE_PRESSURE_GATE $?
+  _ccrc_knob CCRC_WAKE_HEADROOM_MIN_GIB 3 file; _set_got CCRC_WAKE_HEADROOM_MIN_GIB $?
+  _ccrc_knob CCRC_SWEEP_BATCH 5 file; _set_got CCRC_SWEEP_BATCH $?
+  _ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300 file; _set_got CCRC_SWEEP_PRESSURE_WAIT_S $?
 }
 
 cmd_settings() {
@@ -29439,6 +29567,28 @@ _browser_mcp_servers_ok() {
 }
 _browser_mcp_servers_says() {
   printf '%s' 'a comma-separated list of MCP server names (letters, digits and . _ @ : -)'
+}
+# The memory gate's four settings (D-8122): the automatic wakes' gate, which the server reads from its own environment
+# (server/src/config.ts `wakeGateConfigOf`, the same words and bounds), and the update sweep's pacing, which
+# `_upd_sweep` reads through `_upd_sweep_knobs`. `_mg_ok <KEY> <value>` is each one's shape (rc 0 or 1); `_mg_says
+# <KEY>` its words.
+_mg_ok() {
+  case "$1" in
+    CCRC_WAKE_PRESSURE_GATE) case "$2" in warn|critical|off) return 0 ;; *) return 1 ;; esac ;;
+    CCRC_WAKE_HEADROOM_MIN_GIB) [[ "$2" =~ ^(0|[123456789][0123456789]{0,3})$ ]] && [ "$2" -le 1024 ] ;;
+    CCRC_SWEEP_BATCH) [[ "$2" =~ ^[123456789][0123456789]{0,2}$ ]] ;;
+    CCRC_SWEEP_PRESSURE_WAIT_S) [[ "$2" =~ ^(0|[123456789][0123456789]{0,3})$ ]] && [ "$2" -le 3600 ] ;;
+    *) return 1 ;;
+  esac
+}
+_mg_says() {
+  case "$1" in
+    CCRC_WAKE_PRESSURE_GATE) printf '%s' 'warn, critical or off' ;;
+    CCRC_WAKE_HEADROOM_MIN_GIB) printf '%s' 'a whole number of GiB from 0 to 1024' ;;
+    CCRC_SWEEP_BATCH) printf '%s' 'a whole number from 1 to 999' ;;
+    CCRC_SWEEP_PRESSURE_WAIT_S) printf '%s' 'a whole number of seconds from 0 to 3600' ;;
+    *) return 1 ;;
+  esac
 }
 _usage_test_paragraph() {
   printf '\n%s' \

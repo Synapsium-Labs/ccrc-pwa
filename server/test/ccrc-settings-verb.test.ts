@@ -22,6 +22,7 @@ import { stubFn } from './ccdStub.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 import { BOX_SETTINGS_SHOWN, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SPECS } from '../../shared/api.js';
 import { NODE_FILE_CAP_BYTES } from '../src/update/inventory.js';
+import { CLAUDE_HEADROOM_GATE_BYTES } from '../../shared/claudeVersion.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -238,9 +239,9 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     return r.stdout.split('\n').filter(Boolean).map((l) => l.split(US) as [string, string]);
   };
 
-  it('V4: every key _set_says has words for (the 60) is written refused, with its words and its source, and the sample is nowhere', () => {
+  it('V4: every key _set_says has words for (the 64) is written refused, with its words and its source, and the sample is nowhere', () => {
     const keys = WITH_WORDS();
-    expect(keys).toHaveLength(60);
+    expect(keys).toHaveLength(64);
     const sample = (k: string, i: number): string => REFUSED_SAMPLE[k] ?? `zz-refused-${i}`;
     const home = boxWith('ccrc-sv-v4-', keys.map(([k], i) => `${k}=${sample(k, i)}\n`).join(''));
     // The sample is a refused one, in this fixture, for every key: a sample a check accepts fails here, loudly.
@@ -258,7 +259,7 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     const needles = keys.flatMap(([k], i) => [...sample(k, i).split(/[\t/]/), sample(k, i)]).filter((t) => t.length >= 4);
     if (!MAC) {
       refusedRows(d, keys);
-      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(60);
+      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(64);
       expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
       for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
     } else {
@@ -904,12 +905,12 @@ describe('ccrc settings: the human form keeps its three formats (V8, review F4)'
     const r = settings(home, [], { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: '120' });
     expect(r.code, r.stderr).toBe(0);
     const lines = r.stdout.split('\n').filter(Boolean);
-    expect(lines.slice(0, 63).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
+    expect(lines.slice(0, 67).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
     expect(lines[0]).toBe('CCRC_BACKUP_KEEP               not shown  (environment, refused): a whole number from 0 to 9999');
     expect(lines[3]).toBe('CCRC_UPDATE_HEALTH_S           120  (environment, ok)');
-    expect(lines[63]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
-    expect(lines[64]).toMatch(/^backups: /);
-    expect(lines[65]).toMatch(/^disk: /);
+    expect(lines[67]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
+    expect(lines[68]).toMatch(/^backups: /);
+    expect(lines[69]).toMatch(/^disk: /);
     expect(existsSync(join(home, '.ccrc', 'box-settings.json')), 'the human form writes nothing').toBe(false);
   });
 });
@@ -1043,7 +1044,7 @@ describe('ccrc settings --write: the file', () => {
     if (got !== 'LAST-GOOD') {
       const doc = JSON.parse(got) as { v: number; settings: unknown[] };
       expect(doc.v).toBe(2);
-      expect(doc.settings).toHaveLength(61);
+      expect(doc.settings).toHaveLength(67);
     }
   }, 60_000);
 });
@@ -1137,8 +1138,23 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
       /_ccrc_knob CCRC_KEEPALIVE_FRESH 1800 file;/, /_ccrc_knob CCRC_KEEPALIVE_MODEL haiku file;/, /_ccrc_knob CCRC_KEEPALIVE_PROMPT "Reply with the single word: ok" file;/,
       /_ccrc_knob CCRC_USAGE_SWEEP_DAYS 7 file;/, /_ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file;/, /_graph_knobs file\)/,
       /_ccrc_knob CCRC_BROWSER_MCP_DEFAULT off file;/, /_ccrc_knob CCRC_BROWSER_MCP_SERVERS "\$\(_browser_mcp_servers_default\)" file;/,
+      // D-8122: the memory gate's four, at the defaults the server (`wakeGateConfigOf`) and the sweep (`_upd_sweep_knobs`) use.
+      /_ccrc_knob CCRC_WAKE_PRESSURE_GATE warn file;/, /_ccrc_knob CCRC_WAKE_HEADROOM_MIN_GIB 3 file;/, /_ccrc_knob CCRC_SWEEP_BATCH 5 file;/,
+      /_ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300 file;/,
     ]) expect(reads, String(re)).toMatch(re);
-    expect(reads.match(/_ccrc_knob /g), 'ten direct reads (D-8121 added the two browser reads); the two line readers are the owners\' own').toHaveLength(10);
+    expect(reads.match(/_ccrc_knob /g), 'fourteen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four); the two line readers are the owners\' own').toHaveLength(14);
+  });
+
+  // D-8122: the headroom floor's default is CLAUDE_HEADROOM_GATE_BYTES (the server's WAKE_HEADROOM_MIN_GIB_DEFAULT is
+  // derived from it); the console's default (ccrc's bash read) and the docs' default are held to it, not to a literal.
+  it('V9: CCRC_WAKE_HEADROOM_MIN_GIB\'s default is CLAUDE_HEADROOM_GATE_BYTES in GiB, in ccrc, the README and ccrc.env.example', () => {
+    const gib = CLAUDE_HEADROOM_GATE_BYTES / 2 ** 30;
+    expect(Number.isInteger(gib), 'the gate is a whole number of GiB').toBe(true);
+    expect(bodyOf('_set_reads')).toContain(`_ccrc_knob CCRC_WAKE_HEADROOM_MIN_GIB ${gib} file;`);
+    const readme = readFileSync(join(path.dirname(CCRC), '..', 'README.md'), 'utf8');
+    expect(readme).toContain(`| \`CCRC_WAKE_HEADROOM_MIN_GIB\` | server | Whole GiB, default ${gib} (spec decision 6)`);
+    const example = readFileSync(join(path.dirname(CCRC), '..', 'deploy', 'ccrc.env.example'), 'utf8');
+    expect(example).toContain(`MemAvailable). Default ${gib},\n# spec decision 6's figure`);
   });
 
   it('V9: cmd_settings and its _set_ helpers never name the warning arrays, _tb_load, _gr_knobs or `_slice_limit ` with a space', () => {

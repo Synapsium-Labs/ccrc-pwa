@@ -312,6 +312,7 @@ const familyKeys = (f: string): BoxSettingName[] =>
 const FAMILY_WORDS: Readonly<Record<string, string>> = {
   updates: 'Backups and updates', 'session-slice': 'Session slice', 'test-runs': 'Test runs', graph: 'Graph', testbox: 'Test box',
   keepalive: 'Keepalive', 'usage-sweep': 'Usage sweep', 'carry-copies': 'Carry copies', 'browser-tools': 'Browser tools',
+  'memory-gate': 'Memory gate',
 };
 const plural = (n: number): string => (n === 1 ? '1 setting' : `${n} settings`);
 const summaries = (el: HTMLElement): string[] => [...el.querySelectorAll('.box-settings-family > summary')].map((x) => x.textContent ?? '');
@@ -320,26 +321,27 @@ const rowOf = (el: HTMLElement, k: string): HTMLElement => within(el).getByText(
 const REFUSED_WHY = BOX_SETTING_REFUSAL_WORDS[0];
 
 describe('Box settings card: what the library calls a fold (characterization, two nodes)', () => {
-  it('C3: two fleet-role nodes with every family folded hold 2 + 2 x 9 groups (D-8121 added Browser tools)', () => {
+  it('C3: two fleet-role nodes with every family folded hold 2 + 2 x 10 groups (D-8121 added Browser tools, D-8122 Memory gate)', () => {
     renderCard([fleet(ok(v2doc())), { ...fleet(ok(v2doc()), 'second'), nodeId: OTHER_ID }]);
-    expect(screen.getAllByRole('group')).toHaveLength(2 + 2 * 9);
+    expect(screen.getAllByRole('group')).toHaveLength(2 + 2 * 10);
   });
 });
 
 describe('Box settings card: families (D17)', () => {
-  it('F1: families from the L0 table, in BOX_SETTING_FAMILIES order, all closed, 63 rows', () => {
+  it('F1: families from the L0 table, in BOX_SETTING_FAMILIES order, all closed, 67 rows', () => {
     const { container } = renderCard([fleet(ok(v2doc()))]);
     const expected = [
       'Backups and updates: 7 settings, none set', 'Session slice: 2 settings, none set', 'Test runs: 8 settings, none set',
       'Graph: 23 settings, none set', 'Keepalive: 3 settings, none set', 'Usage sweep: 1 setting, none set',
       'Test box: 16 settings, none set', 'Carry copies: 1 setting, none set', 'Browser tools: 2 settings, none set',
+      'Memory gate: 4 settings, none set',
     ];
     const derived = BOX_SETTING_FAMILIES.map((f) => `${FAMILY_WORDS[f]}: ${plural(familyKeys(f).length)}, none set`);
     expect(derived).toEqual(expected);
     expect(summaries(block('fleet'))).toEqual(expected);
     for (const d of container.querySelectorAll<HTMLDetailsElement>('details')) expect(d.open).toBe(false);
     expect(container.querySelectorAll('.box-settings-row')).toHaveLength(v2Rows().length);
-    expect(v2Rows()).toHaveLength(63);
+    expect(v2Rows()).toHaveLength(67);
   });
 
   it('F2: a row sits in its table family', () => {
@@ -468,8 +470,16 @@ describe('Box settings card: a server-role node (D21)', () => {
     for (const role of ['fleet', 'both', null] as Array<NodeRole | null>) {
       cleanup();
       const { container } = renderCard([{ ...fleet(ok(v2doc())), role }]);
-      expect(container.querySelectorAll('.box-settings-family'), String(role)).toHaveLength(9);
-      expect(container.textContent).not.toContain(BOX_SETTINGS_NOT_USED_TEXT);
+      expect(container.querySelectorAll('.box-settings-family'), String(role)).toHaveLength(10);
+      // D-8122: CCRC_WAKE_HEADROOM_MIN_GIB is the one shown key a fleet node does not read (the server's wake gate does),
+      // so on a fleet-only node its row, and only its row, says so; the role column decides that, never the key.
+      const notUsed = [...container.querySelectorAll('.box-settings-row')]
+        .filter((r) => r.querySelector('dd.box-settings-value')?.textContent === BOX_SETTINGS_NOT_USED_TEXT)
+        .map((r) => (Object.keys(BOX_SETTING_SPECS) as BoxSettingName[]).find((k) => r.textContent?.includes(k)));
+      const want = role === 'fleet'
+        ? (Object.keys(BOX_SETTING_SPECS) as BoxSettingName[]).filter((k) => BOX_SETTING_SPECS[k].cls !== 'omit' && !BOX_SETTING_SPECS[k].roles.includes('fleet'))
+        : [];
+      expect(notUsed, String(role)).toEqual(want);
     }
     cleanup();
     renderCard([server(ok(v2doc()))]);
@@ -545,7 +555,7 @@ describe('Box settings card: version 2 on the console (5.3, 5.4)', () => {
     const row = rowOf(block('fleet'), 'CCRC_ZZ_NEW');
     expect(row).toHaveTextContent(BOX_SETTING_SOURCE_TEXT.file);
     expect(row.textContent).not.toContain('7');
-    expect(summaries(block('fleet'))).toHaveLength(10);
+    expect(summaries(block('fleet'))).toHaveLength(11);
   });
 
   it('A1: the card holds no act, with summaries present', () => {

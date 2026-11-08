@@ -91,6 +91,14 @@ export function readHostPsi(x: unknown): HostPsi | null {
   return memory === null || io === null ? null : { memory, io };
 }
 
+/** THE ONE READER of the reply's `headroomBytes` (D-8122): a non-negative safe integer, else `null` (absent from an
+ *  older agent, `null`, or malformed alike: UNKNOWN, never room). */
+export function readHeadroomBytes(x: unknown): number | null {
+  if (!isObj(x)) return null;
+  const v = x['headroomBytes'];
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
+}
+
 /** The worst `full` share across both resources and both windows: the one figure the level and the link read. */
 export function worstFull(psi: HostPsi): number {
   return Math.max(psi.memory.full.avg10, psi.memory.full.avg60, psi.io.full.avg10, psi.io.full.avg60);

@@ -43,7 +43,7 @@ const refused = (stderr: string): CcdResult => ({ ok: false, stdout: '', stderr,
 
 interface Fake {
   deps: RollSweepDeps; coord: CoordStore; lines: string[]; calls: string[][]; wakes: string[]; refunds: string[];
-  set: { targets: ClaudeRollTargets | null; word: string; age: number; hibernate: (id: string) => CcdResult; wake: boolean };
+  set: { targets: ClaudeRollTargets | null; word: string; age: number; hibernate: (id: string) => CcdResult; wake: boolean | string };
 }
 function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: readonly string[] } = {}): Fake {
   const coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-roll-'), '.ccrc', 'coord.db')));
@@ -63,7 +63,11 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
     queueRun: <T>(_id: string, fn: () => Promise<T>) => fn(),
     rowAtAct: async (r: SessionRecord) => ({ ok: true as const, row: r.id === CHILD ? childRow(r.id) : row(r.id) }),
     listing: async () => [],
-    admitWake: (id: string) => { wakes.push(id); return set.wake ? { refund: () => { refunds.push(id); } } : null; },
+    admitWake: (id: string) => {
+      wakes.push(id);
+      if (typeof set.wake === 'string') return { refused: set.wake };
+      return set.wake ? { refund: () => { refunds.push(id); } } : null;
+    },
   } as unknown as RollActPort;
   const deps: RollSweepDeps = {
     coord: withBindingsOf({
@@ -181,6 +185,18 @@ describe('rollPass: what is rolled (D-7452)', () => {
     f.set.wake = false;
     expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'wake-budget' }]);
     expect(f.calls).toEqual([]);
+  });
+
+  it('D-8122: the memory gate\'s refusal rolls nothing, journals its own word, and is not held off', async () => {
+    const f = fake();
+    f.set.wake = 'memory-gate:pressure-warn';
+    const m = mem();
+    expect(await pass(f, [row(COORD)], [], m)).toEqual([{ id: COORD, kind: 'skipped', reason: 'memory-gate:pressure-warn' }]);
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toContain(`ccrc-server: roll-skip ${COORD}: memory-gate:pressure-warn`);
+    expect(m.heldUntil.has(COORD), 'never parked: the next pass asks again').toBe(false);
+    f.set.wake = true;
+    expect(await pass(f, [row(COORD)], [], m)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
   });
 
   it('a wake that fails (ccd exit 4, roll-wake-failed) leaves the coordinator hibernated and says so', async () => {

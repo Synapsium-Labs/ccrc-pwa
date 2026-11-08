@@ -246,7 +246,9 @@ import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, ty
 import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
-import { wakeAdmit, wakeRefund, type WakeAdmission, type WakeKind } from './coord/wakeBudget.js';
+import {
+  WAKE_GATE_DEFAULT, WAKE_GATE_LINE_MS, wakeAdmit, wakeMemoryGate, wakeRefund, wakeRefusalWord, type WakeAdmission, type WakeKind, type WakeMemoryRefusal, type WakeRefused,
+} from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import { rollPass, type RollSweepMemory } from './rollLane.js';
@@ -1257,6 +1259,8 @@ export class FleetWatcher {
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
+  /** D-8122: when each wake-gate word was last journalled (`wakeGateLine`). In memory: a restart says it once more. */
+  private readonly wakeGateLinesAt = new Map<string, number>();
   /** Delivery ids whose `mail-gate-busy-shadow` "would deliver" line has been
    *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
    *  operator checks each line against the session's transcript for 48 h, so
@@ -1647,6 +1651,8 @@ export class FleetWatcher {
       runLocal: updateRunner ?? null,
       onAccepted: () => this.triggerInventory(),
       recordMove: (r) => { this.recordMoveFeed(r); },
+      // D-8122: the update hold reads `FleetHealth.psi`'s own level (the banner's), not the wake gate's memory level.
+      hostPressure: () => this.pressureLane.block(true)?.level ?? null,
     }, Date.now());
   }
 
@@ -2215,14 +2221,40 @@ export class FleetWatcher {
    * rule is `wakeAdmit` (L1); this is the one list it is applied to.
    */
   admitWake(kind: WakeKind, id: string): boolean {
-    return this.admitWakeAt(kind, id, Date.now());
+    return this.wakeVerdictAt(kind, id, Date.now()).admit;
   }
 
-  private admitWakeAt(kind: WakeKind, id: string, now: number): boolean {
+  /** `admitWake` with the reason a refusal had (D-8122): `wake-budget` for the window, the memory gate's word for the
+   *  gate. The mail lane reads it to name the gate on the delivery. */
+  wakeVerdict(kind: WakeKind, id: string): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
+    return this.wakeVerdictAt(kind, id, Date.now());
+  }
+
+  /** D-8122: the memory gate first (an `auto` wake only; nothing is recorded when it refuses), then the window. */
+  private wakeVerdictAt(kind: WakeKind, id: string, now: number): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
+    if (kind === 'auto') {
+      const cfg = (this.deps.cfg as Partial<typeof this.deps.cfg>).wakeGate ?? WAKE_GATE_DEFAULT;
+      const g = wakeMemoryGate(this.pressureLane.memoryReading(), cfg);
+      if (!g.admit) {
+        this.wakeGateLine(`refused:${g.refused}`, now, `ccrc-server: wake gate: an automatic wake of ${id} waits for a later pass (${wakeRefusalWord(g.refused)}; D-8122)`);
+        return { admit: false, refused: g.refused };
+      }
+      for (const n of g.notes) {
+        this.wakeGateLine(n, now, `ccrc-server: wake gate: ${n}: the node sent no ${n === 'pressure-unmeasured' ? 'fresh pressure reading' : 'headroom reading'}, so the automatic wake of ${id} is admitted (fail open; D-8122)`);
+      }
+    }
     const r = wakeAdmit(this.wakeRecent, now, kind);
     this.wakeRecent = r.recent;
     if (r.admit) this.lastWakeAt.set(id, now);
-    return r.admit;
+    return { admit: r.admit, refused: r.admit ? null : 'wake-budget' };
+  }
+
+  /** One wake-gate journal line per word per `WAKE_GATE_LINE_MS`, so a held fleet says so without a line per pass. */
+  private wakeGateLine(word: string, now: number, line: string): void {
+    const at = this.wakeGateLinesAt.get(word);
+    if (at !== undefined && now - at < WAKE_GATE_LINE_MS) return;
+    this.wakeGateLinesAt.set(word, now);
+    console.warn(line);
   }
 
   /**
@@ -2231,10 +2263,11 @@ export class FleetWatcher {
    * takes this admission back out of the window and puts the session's last wake back as it stood, so a roll ccd
    * refused, or whose wake failed, neither eats `WAKE_BURST` nor delays the mail lane's wake of that session.
    */
-  admitWakeRefundable(id: string): WakeAdmission | null {
+  admitWakeRefundable(id: string): WakeAdmission | WakeRefused | null {
     const now = Date.now();
     const before = this.lastWakeAt.get(id);
-    if (!this.admitWakeAt('auto', id, now)) return null;
+    const v = this.wakeVerdictAt('auto', id, now);
+    if (!v.admit) return v.refused === 'wake-budget' || v.refused === null ? null : { refused: wakeRefusalWord(v.refused) };
     let spent = true;
     return {
       refund: () => {
@@ -8028,9 +8061,12 @@ export class FleetWatcher {
           // 60 s); `due` is ordered oldest first, so the budget goes to the oldest deliveries. A delivery the budget or
           // the floor defers stays outstanding under the same gate and is looked at again next sweep. `mail-disabled`
           // returns before this loop, so it never wakes anything. A kickoff is system mail and wakes through here.
-          gated(d, 'hibernated');
+          // D-8122: the memory gate is asked inside the budget's admission; a delivery it holds names `wake-pressure`,
+          // not `hibernated`, so the operator sees why the sleeper was not woken. Either way it stays outstanding.
           const lastWake = this.lastWakeAt.get(d.toId);
-          if ((lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS) && this.admitWake('auto', d.toId)) {
+          const wv = lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS ? this.wakeVerdict('auto', d.toId) : null;
+          if (wv !== null && wv.refused !== null && wv.refused !== 'wake-budget') gated(d, 'wake-pressure'); else gated(d, 'hibernated');
+          if (wv?.admit === true) {
             const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));
             if (!res.ok) console.warn(`ccrc-server: mail: waking hibernated ${d.toId} failed (${res.stderr.trim() || 'no stderr'}) — its mail stays queued`);
           }
