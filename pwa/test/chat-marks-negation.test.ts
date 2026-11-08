@@ -200,6 +200,7 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     ['On Node 0.10 tests passed', { text: 'passed', tone: 'ok' }],
     ['0.0.1 tests passed', { text: 'passed', tone: 'ok' }],
     ['the no-op build passed', { text: 'passed', tone: 'ok' }],
+    // Known gap, outside item 1: "not-yet" still keeps a green label (review 1689 F5).
     ['not-yet CI green', { text: 'green', tone: 'ok' }],
     ['tests passed: 0.5% of the time', { text: 'passed', tone: 'ok' }],
     ['tests passed: none skipped', { text: 'passed', tone: 'ok' }],
