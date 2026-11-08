@@ -63,7 +63,7 @@ export function RunFindBox({ value, onChange }: { value: string; onChange: (text
 }
 
 /** One result: "Run 410 · Programme A · wave 2", then the state word and its line. */
-function ResultRow({ run, q }: { run: FoundRun; q: string }): ReactNode {
+function ResultRow({ run, q, openId }: { run: FoundRun; q: string; openId: number | null }): ReactNode {
   const href = runPath(run.id, q);
   const word = closeWords(run) ?? runStateWord(run as RunSummary);
   const closed = isRunClosed(run);
@@ -72,7 +72,7 @@ function ResultRow({ run, q }: { run: FoundRun; q: string }): ReactNode {
     : [run.project, run.workspace].filter((t): t is string => typeof t === 'string' && t !== '').join(' · ');
   return (
     <li className="rf-row">
-      <a className="rf-link" href={href} onClick={inAppClick(href)}>
+      <a className="rf-link" href={href} aria-current={run.id === openId ? 'true' : undefined} onClick={inAppClick(href)}>
         <span className="rf-name">{`Run ${run.id} · ${runRowName(run)}`}</span>
         <span className="rf-state">{word}</span>
         {line !== '' && <span className="rf-line">{line}</span>}
@@ -82,24 +82,24 @@ function ResultRow({ run, q }: { run: FoundRun; q: string }): ReactNode {
 }
 
 /** The results in place of the board: the exact hit, open runs, closed runs, then the runs that review the number. */
-export function RunFindResults({ q, store = useFleetStore }: { q: string; store?: FleetStore }): ReactNode {
+export function RunFindResults({ q, store = useFleetStore, openId = null }: { q: string; store?: FleetStore; openId?: number | null }): ReactNode {
   const { exact, open, closed, reviewsOf, failed, searching } = useRunFind(q, store);
   const number = parseRunNumber(q);
   const none = exact === null && open.length === 0 && closed.length === 0 && reviewsOf.length === 0;
   return (
     <div className="rf-results" role="region" aria-label="Search results">
       {failed && <EmptyState data-state="error" role="status">{RUN_FIND_WORDS.failed}</EmptyState>}
-      {exact !== null && <ul className="rf-list"><ResultRow run={exact} q={q.trim()} /></ul>}
+      {exact !== null && <ul className="rf-list"><ResultRow run={exact} q={q.trim()} openId={openId} /></ul>}
       {(open.length > 0 || closed.length > 0) && (
         <ul className="rf-list">
-          {open.map((r) => <ResultRow key={r.id} run={r} q={q.trim()} />)}
-          {closed.map((r) => <ResultRow key={r.id} run={r} q={q.trim()} />)}
+          {open.map((r) => <ResultRow key={r.id} run={r} q={q.trim()} openId={openId} />)}
+          {closed.map((r) => <ResultRow key={r.id} run={r} q={q.trim()} openId={openId} />)}
         </ul>
       )}
       {number !== null && reviewsOf.length > 0 && (
         <section aria-label={RUN_FIND_WORDS.reviewsHead(number)}>
           <h2 className="rf-head">{RUN_FIND_WORDS.reviewsHead(number)}</h2>
-          <ul className="rf-list">{reviewsOf.map((r) => <ResultRow key={r.id} run={r} q={q.trim()} />)}</ul>
+          <ul className="rf-list">{reviewsOf.map((r) => <ResultRow key={r.id} run={r} q={q.trim()} openId={openId} />)}</ul>
         </section>
       )}
       {none && !searching && !failed && (

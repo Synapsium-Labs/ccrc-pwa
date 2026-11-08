@@ -9,7 +9,7 @@
 .rf-link { display: grid; gap: 0; min-height: var(--tap-min); padding: var(--sp-2) 0; color: var(--ink-primary); text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
 .rf-name { font-size: var(--fs-base); }
 .rf-state, .rf-line { font-size: var(--fs-meta); color: var(--ink-secondary); }
-@media (min-width: 900px) {
+@container runs (min-width: 640px) {
   .rf-link { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); column-gap: var(--sp-3); }
   .rf-line { grid-column: 1 / -1; }
 }

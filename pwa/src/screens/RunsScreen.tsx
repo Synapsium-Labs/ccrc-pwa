@@ -72,6 +72,8 @@ const ARCHIVE_PAGE = 50;
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
+import { RunDetailScreen } from './RunDetailScreen';
+import { useMeasuredColumn } from './runColumn';
 import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
 import { useColdRuns, type PagedLoader } from './useColdRuns';
 
@@ -134,10 +136,48 @@ function boardPane(): HTMLElement | null {
   return null;
 }
 
-export function RunsScreen({
+/** The pane's words when no run is open (spec §8.4). */
+const SELECT_RUN = 'Select a run to see it here.';
+
+/** The board's props: the store, the two injected reads, and the run open beside it, if any. */
+interface BoardProps {
+  store?: FleetStore;
+  loadRuns?: PagedLoader;
+  loadCaps?: () => Promise<CoordCapsView>;
+  /** The run open in the broad pane, or null: its row is marked current and a search keeps it open. */
+  openId?: number | null;
+}
+
+/** The runs screen, and the one place the column's layout is decided (Task 9a, spec §8.1): `/runs` and `/runs/<id>` both land
+ *  here. A broad column draws the board and the run side by side; narrower, `/runs` is the board and `/runs/<id>` is the
+ *  run's own page with its way back. The board stays mounted when a run opens in the pane, so its folds and scroll stay. */
+export function RunsScreen(props: BoardProps): ReactNode {
+  const { openId = null, store = useFleetStore } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  const measured = useMeasuredColumn(ref);
+  const column = measured ?? 'narrow';
+  let body: ReactNode = null;
+  if (measured === null) body = null;
+  else if (column === 'broad') {
+    body = (
+      <div className="runs-split">
+        <div className="runs-list-pane"><RunsBoard {...props} /></div>
+        <div className="runs-detail-pane">
+          {openId === null
+            ? <p className="rd-note" role="status">{SELECT_RUN}</p>
+            : <RunDetailScreen key={openId} id={openId} store={store} pane />}
+        </div>
+      </div>
+    );
+  } else body = openId !== null ? <RunDetailScreen key={openId} id={openId} store={store} /> : <RunsBoard {...props} />;
+  return <div ref={ref} className="runs-column" data-column={column}>{body}</div>;
+}
+
+function RunsBoard({
   store = useFleetStore,
   loadRuns = loadColdRunsPage,
   loadCaps = loadCapsDefault,
+  openId = null,
 }: {
   store?: FleetStore;
   loadRuns?: PagedLoader;
@@ -149,6 +189,7 @@ export function RunsScreen({
    *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
    *  guard worth keeping exactly as strict as it was. */
   loadCaps?: () => Promise<CoordCapsView>;
+  openId?: number | null;
 }): ReactNode {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -286,7 +327,9 @@ export function RunsScreen({
     if (text.trim() !== '' && findText.trim() === '') scrollWas.current = readBoardScroll();
     setFindText(text);
     const t = text.trim();
-    navigate(t === '' ? '/runs' : `/runs?${new URLSearchParams({ q: t })}`, { replace: true });
+    // A run open in the pane stays open under the search: the query rides the run's own URL.
+    const base = openId === null ? '/runs' : runPath(openId);
+    navigate(t === '' ? base : `${base}?${new URLSearchParams({ q: t })}`, { replace: true });
   };
   const finding = findText.trim() !== '';
   const wasFinding = useRef(finding);
@@ -434,6 +477,7 @@ export function RunsScreen({
       programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
+      current={run.id === openId}
     />
   );
 
@@ -490,7 +534,7 @@ export function RunsScreen({
           closed run never waits; renders nothing when no run does. */}
       <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
 
-      {finding ? <RunFindResults q={findText} store={store} /> : (<>
+      {finding ? <RunFindResults q={findText} store={store} openId={openId} /> : (<>
       {!noSignalYet && <RunInfoLines runs={active} />}
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not

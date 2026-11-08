@@ -54,6 +54,7 @@ export const RunRow = memo(function RunRow({
   programHasOpenRun,
   onAbandon,
   onResume,
+  current = false,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -89,6 +90,8 @@ export const RunRow = memo(function RunRow({
   onAbandon: (run: RunSummary) => void;
   /** Opens the ResumeSheet for this row (spec §7.3). */
   onResume: (run: RunSummary) => void;
+  /** This run is the one open in the broad pane (spec §8.4): the row says so to a screen reader and to the eye. */
+  current?: boolean;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -353,7 +356,7 @@ export const RunRow = memo(function RunRow({
   const rowTitle = where === null ? `run ${run.id}` : `run ${run.id} · ${where}`;
   return (
     <li className="run-row" title={rowTitle}>
-      <button type="button" className="run-open" onClick={() => navigate(runPath(run.id))}>
+      <button type="button" className="run-open" aria-current={current ? 'true' : undefined} onClick={() => navigate(runPath(run.id))}>
         {body}
       </button>
       {resumeButton}

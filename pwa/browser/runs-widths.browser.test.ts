@@ -2,6 +2,8 @@
 // in a real Chrome over the production build: 360, 390, 1280, 1470 and 1920 wide, both skins, both themes. jsdom cannot lay a row
 // out, so what a row FITS is measured here: no sideways page scroll, no row wider than its box, the wait line inside its row,
 // every open door at the tap floor, a tap on a row landing on `/runs/<id>`, and a phone reaching a run by its number.
+// MEASURED (Task 9a, spec §19): the column at 1470 is 1117px in Refined and 1130px in Instrument, so medium in both; at 1920 it
+// is 1120px (medium) in Refined and 1500px (broad) in Instrument.
 // This file sets the width matrix up once; later waves add their rows to `MATRIX`'s cases. Names are neutral.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/runs-widths.browser.test.ts
@@ -34,12 +36,13 @@ const run = (id: number, over: Record<string, unknown> = {}): object => ({
 });
 
 const RUNS = [
-  run(1501),
+  run(1501, { branch: `ws/${'long-branch-name-'.repeat(8)}end` }),
   run(1502, { sessionId: null, state: 'planned', dispatchedAt: null, waitsOn: 'coordinator' }),
   run(1503, { sessionId: null, state: 'planned', dispatchedAt: null, blockedBy: 1012 }),
   run(1504, { state: 'awaiting-review', waitsOn: 'coordinator', lastMoveAt: NOW - 2 * DAY }),
   run(1505, { state: 'working', waitsOn: 'worker', lastMoveAt: NOW - 9 * DAY }),
   run(1527, { program: 'prog-b', programTitle: 'Programme B' }),
+  run(1506, { program: 'prog-c', programTitle: 'Prog C', wave: 1, waveOf: 1, workspace: 'w6', branch: null }),
 ];
 
 const FIXTURE: AppFixture = {
@@ -48,6 +51,10 @@ const FIXTURE: AppFixture = {
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a', repo: { state: 'named', slug: 'owner-a/repo-a' } }] },
     '/api/runs': { runs: RUNS, nextBefore: null }, '/api/claims': [],
     // The run page the number lands on reads these four; a real server answers each in this shape.
+    '/api/runs/1501/record': { ok: true, run: RUNS[0], events: [], reviewedBy: [], olderEvents: 0 },
+    '/api/runs/1501': { ok: true, run: RUNS[0], spend: { measured: false, reason: 'no-sweep' } },
+    '/api/runs/1501/items': { ok: true, items: [] },
+    '/api/runs/1501/signals': { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } },
     '/api/runs/1527/record': { ok: true, run: RUNS[5], events: [], reviewedBy: [], olderEvents: 0 },
     '/api/runs/1527': { ok: true, run: RUNS[5], spend: { measured: false, reason: 'no-sweep' } },
     '/api/runs/1527/items': { ok: true, items: [] },
@@ -187,3 +194,84 @@ describe('a phone reaches a run by number', () => {
     }
   });
 });
+
+/** The column the width and skin should give (Task 9a, spec §8.1): the skin's `--page-max-wide` caps Refined's column. */
+const columnAt = (width: number, skin: string): string => {
+  if (width < 640) return 'narrow';
+  if (width === 1920 && skin === INSTRUMENT) return 'broad';
+  return 'medium';
+};
+
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`the runs column, ${skin} ${theme} at ${width}px`, () => {
+        const want = columnAt(width, skin);
+
+        it(`the column is ${want}, the pane sits at about 40 and 60 percent when broad, and the search box is placed for it`, async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            const column = await page.locator('.runs-column').getAttribute('data-column');
+            const colWidth = await page.locator('.runs-column').evaluate((el) => el.clientWidth);
+            console.info(`runs column at ${width} ${skin} ${theme}: ${column} (${colWidth}px)`);
+            expect(column).toBe(want);
+            const box = await page.locator('.rf-box').evaluate((el) => {
+              const cs = getComputedStyle(el);
+              const pane = el.closest('.runs-list-pane')?.getBoundingClientRect() ?? null;
+              return { position: cs.position, top: el.getBoundingClientRect().top, paneTop: pane?.top ?? null };
+            });
+            if (want === 'broad') {
+              expect(box.position).toBe('static');
+              expect(box.top - box.paneTop!, 'the search box tops the list pane, under its own header').toBeLessThanOrEqual(80);
+              await page.locator('.run-row[title^="run 1501"] .run-open').click();
+              await page.locator('.runs-detail-pane .rd-head').waitFor({ timeout: 20_000 });
+              const w = await page.evaluate(() => ({
+                list: document.querySelector('.runs-list-pane')!.getBoundingClientRect().width,
+                pane: document.querySelector('.runs-detail-pane')!.getBoundingClientRect().width,
+              }));
+              const share = w.list / (w.list + w.pane);
+              expect(share, 'the list is about 40 percent').toBeGreaterThan(0.35);
+              expect(share).toBeLessThan(0.45);
+            } else {
+              expect(box.position, 'the search box is sticky under the header').toBe('sticky');
+            }
+            expect(errors).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+
+        it('a row runs on one line with its control at the right where the text fits; facts stack when narrow and sit in two columns from medium; a long branch wraps', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            if (want !== 'narrow') {
+              const line = await page.locator('.run-row[title^="run 1506"]').evaluate((li) => {
+                const open = li.querySelector('.run-open')!.getBoundingClientRect();
+                const abandon = li.querySelector('.run-abandon')!.getBoundingClientRect();
+                return { openTop: open.top, openBottom: open.bottom, mid: (abandon.top + abandon.bottom) / 2, abandonLeft: abandon.left, openRight: open.right };
+              });
+              expect(line.mid, 'a short row keeps its control on its one line').toBeGreaterThanOrEqual(line.openTop);
+              expect(line.mid).toBeLessThanOrEqual(line.openBottom);
+              expect(line.abandonLeft, 'the control sits at the right').toBeGreaterThanOrEqual(line.openRight - 1);
+            }
+            await page.locator('.run-row[title^="run 1501"] .run-open').click();
+            await page.locator('.rd-facts').first().waitFor({ timeout: 20_000 });
+            const m = await page.evaluate(() => {
+              const fact = document.querySelector<HTMLElement>('.rd-fact')!;
+              const dt = fact.querySelector('dt')!.getBoundingClientRect();
+              const dd = fact.querySelector('dd')!.getBoundingClientRect();
+              const wide = [...document.querySelectorAll<HTMLElement>('.rd-fact dd')].filter((d) => d.scrollWidth > d.clientWidth + 1).length;
+              return { sameLine: Math.abs(dt.top - dd.top) < 6, wide, page: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+            });
+            expect(m.sameLine, want === 'narrow' ? 'label over value' : 'label beside value').toBe(want !== 'narrow');
+            expect(m.wide, 'no fact runs past its box').toBe(0);
+            expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}

@@ -45,7 +45,6 @@ const DigestScreen = lazyScreen(() => import('./screens/DigestScreen').then((m) 
 const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
 const ReaderLab = lazyScreen(() => import('./screens/ReaderLab').then((m) => m.ReaderLab));
 const RunsScreen = lazyScreen(() => import('./screens/RunsScreen').then((m) => m.RunsScreen));
-const RunDetailScreen = lazyScreen(() => import('./screens/RunDetailScreen').then((m) => m.RunDetailScreen));
 const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
 const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
 import { ProgrammeScreen } from './ledgers/ProgrammeScreen';
@@ -180,9 +179,10 @@ export function App(): ReactNode {
   ) : route === 'runs' ? loading(
     <RunsScreen />
   ) : route === 'run' ? loading(
-    // Keyed by the number: one run's reads never show under another's page. The row's `accepts` kept the grammar to a
-    // canonical positive safe integer, so `Number` is exact.
-    <RunDetailScreen key={at!.param} id={Number(at!.param)} />
+    // The runs screen again, with the run open: a broad column draws it in the pane beside the board, a narrower one as
+    // the run's page. Same element in the same place as `/runs`, so the board stays mounted when a row opens. The row's
+    // `accepts` kept the grammar to a canonical positive safe integer, so `Number` is exact.
+    <RunsScreen openId={Number(at!.param)} />
   ) : settings ? loading(
     <SettingsScreen />
   ) : route === 'digest' ? loading(

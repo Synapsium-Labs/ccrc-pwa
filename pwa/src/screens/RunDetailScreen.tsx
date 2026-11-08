@@ -230,7 +230,14 @@ function coordinatorFactWord(gone: boolean | undefined, presence: CoordinatorPre
   return coordinatorWord(presence);
 }
 
-export function RunDetailScreen({ id, store = useFleetStore }: { id: number; store?: FleetStore }): ReactNode {
+/** The run's frame: the page scaffold with its way-back strip, or, in the broad pane, a plain region with neither strip nor Back
+ *  (spec §8.4: the list beside it is the way back). */
+function Frame({ pane, title, q, children }: { pane: boolean; title: string; q: string | null; children: ReactNode }): ReactNode {
+  if (pane) return <section className="rd-pane" aria-label={title}><h2 className="rd-pane-title">{title}</h2>{children}</section>;
+  return <PageScaffold title={title}><Strip q={q} />{children}</PageScaffold>;
+}
+
+export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { id: number; store?: FleetStore; pane?: boolean }): ReactNode {
   const { search } = useLocation();
   const q = runQueryOf(search);
   const { state, retry } = useRecord(id);
@@ -243,27 +250,24 @@ export function RunDetailScreen({ id, store = useFleetStore }: { id: number; sto
   const specHref = useSpecHref(run);
   const [liftOpen, setLiftOpen] = useState(false);
   const title = `Run ${id}`;
-  const strip = <Strip q={q} />;
   if (state.kind === 'loading') {
-    return <PageScaffold title={title}>{strip}<p role="status" className="rd-note">Loading…</p></PageScaffold>;
+    return <Frame pane={pane} title={title} q={q}><p role="status" className="rd-note">Loading…</p></Frame>;
   }
   if (state.kind === 'missing') {
     return (
-      <PageScaffold title={title}>
-        {strip}
+      <Frame pane={pane} title={title} q={q}>
         <p className="rd-note">{noRunLine(id)}</p>
         {/* A link that stands alone is a control: `GHOST_ANCHOR`, the button's tap floor, never a bare TextLink. */}
-        <a className={cn(GHOST_ANCHOR, 'rd-board')} href="/runs" onClick={inAppClick('/runs')}>{RUN_PAGE_WORDS.toBoard}</a>
-      </PageScaffold>
+        {!pane && <a className={cn(GHOST_ANCHOR, 'rd-board')} href="/runs" onClick={inAppClick('/runs')}>{RUN_PAGE_WORDS.toBoard}</a>}
+      </Frame>
     );
   }
   if (state.kind === 'failed' || run === null) {
     return (
-      <PageScaffold title={title}>
-        {strip}
+      <Frame pane={pane} title={title} q={q}>
         <p role="alert" className="rd-note">{RUN_PAGE_WORDS.failed}</p>
         <Button variant="primary" onClick={retry}>{RUN_PAGE_WORDS.retry}</Button>
-      </PageScaffold>
+      </Frame>
     );
   }
   const byId = new Map(sessions.map((s) => [s.id, s] as const));
@@ -284,14 +288,13 @@ export function RunDetailScreen({ id, store = useFleetStore }: { id: number; sto
     ...(spend === undefined ? {} : { spend }),
   });
   return (
-    <PageScaffold title={title}>
-      {strip}
+    <Frame pane={pane} title={title} q={q}>
       <Header run={run} worker={worker} nowMs={Date.now()} />
       {lead !== null && <p className="rd-close">{lead}</p>}
       <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} />
       <Facts groups={groups} />
       <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
       <LiftCapSheet run={liftOpen ? run : null} onClose={() => setLiftOpen(false)} onDone={retry} />
-    </PageScaffold>
+    </Frame>
   );
 }
