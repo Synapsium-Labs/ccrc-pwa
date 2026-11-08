@@ -1,11 +1,12 @@
 // Landing order wave 5g (Task 2, D-8083 to D-8086): a dispatch names its landing intents, and another programme's
 // hold on one refuses it. Through the route, with the fixture `ccd` recording its calls; each case on a fresh fixture.
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { DISPATCH_SPAWN_POLL_MS } from '../src/coord/routes.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
@@ -130,5 +131,73 @@ describe('a dispatch names its landing intents', () => {
     const body = res.json() as { error: string; detail: string };
     expect(body.error).toBe('bad-request');
     expect(body.detail.startsWith('intents:')).toBe(true);
+    // D-8085: a grammar refusal is answered before any fleet act, writes no row and leaves the run planned.
+    expect(f.calls).toHaveLength(0);
+    expect(f.state(a)).toBe('planned');
+    expect(f.rowCount(a)).toBe(0);
+  });
+});
+
+// Review 1654 F2: the route re-runs the whole decision once after `worker-starting`, so the held read runs again and
+// a key taken during the wait refuses the re-run, after the first pass's `ensure` already started the bound pane.
+describe('the worker-starting re-run repeats the held check', () => {
+  it('a key another programme takes during the wait answers 409 intent-held; the run stays planned, no hold, no row', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const home = mkTmp('ccrc-intents-restart-');
+      const id = 'project-a-bound1';
+      const pane = 5151;
+      seed(home, id, 'project-a');
+      rmSync(path.join(home, '.cc-sessions', `${id}.child`)); // a bound worker with no child marker
+      const reg = path.join(home, '.cc-sessions');
+      writeFileSync(path.join(reg, `${id}.hookstate.json`), JSON.stringify({
+        v: 1, state: 'done', sessionId: `u-${id}`, updatedAt: Date.now() - 30_000, event: 'Stop' }));
+      const calls: string[][] = [];
+      let ensures = 0;
+      const run: Runner = async (_cmd, args) => {
+        calls.push(args);
+        if (args[0] === 'ensure') {
+          const first = ++ensures === 1;
+          return { ran: true as const, code: 0, stdout: first ? `ensured ${id}\n` : `alive: ${id}\n`, stderr: '' };
+        }
+        if (args[0] === 'list-panes') return { ran: true as const, code: 0, stdout: `${pane}\n`, stderr: '' };
+        return { ran: true as const, code: 0, stdout: '', stderr: '' };
+      };
+      const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const app = await buildServer({ ...testDeps(home, run), mailToken: TOKEN, coord });
+      live = app;
+      const o = coord.openRun({ program: 'prog-a', title: 't', project: 'project-a', wave: 2, waveOf: 3, claimedBy: 'coord-a' });
+      if (!('id' in o)) throw new Error('fixture openRun refused');
+      coord.setSession(o.id, id);
+      let res: Awaited<ReturnType<typeof app.inject>> | undefined;
+      // `inject` is lazy until it is awaited or `then`-ed: start it now.
+      const p = Promise.resolve(app.inject({ method: 'POST', url: `/api/runs/${o.id}/dispatch`,
+        headers: { 'x-ccrc-mail-token': TOKEN }, payload: { brief: 'go', intents: ['#123'] } })).then((r) => { res = r; });
+      // First pass: ensure started the pane, no live file yet, so the route parks on its poll timer.
+      for (const until = Date.now() + 8000; Date.now() < until && vi.getTimerCount() === 0;) await new Promise<void>((r) => { setImmediate(r); });
+      expect(vi.getTimerCount(), JSON.stringify(calls) + (res?.body ?? 'pending')).toBeGreaterThan(0);
+      expect(ensures).toBe(1);
+      // During the wait: programme B's run takes the key through the real store path, and the pane comes up idle.
+      const b = coord.openRun({ program: 'prog-b', title: 't', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'coord-b' });
+      if (!('id' in b)) throw new Error('fixture openRun refused');
+      expect(coord.dispatchRun({ runId: b.id, sessionId: 'ws-b', workspace: null, branch: null, resumed: false,
+        clearedAt: null, items: [], intents: ['#123'] }).ok).toBe(true);
+      mkdirSync(path.join(home, '.claude', 'sessions'), { recursive: true });
+      writeFileSync(path.join(home, '.claude', 'sessions', `${pane}.json`),
+        JSON.stringify({ pid: pane, sessionId: `u-${id}`, status: 'idle', statusUpdatedAt: Date.now() - 60_000 }));
+      for (let i = 0; i < 200 && res === undefined; i++) {
+        await vi.advanceTimersByTimeAsync(DISPATCH_SPAWN_POLL_MS);
+        await new Promise<void>((r) => { setImmediate(r); });
+      }
+      await p;
+      expect(res?.statusCode, res?.body).toBe(409);
+      expect(res?.json()).toEqual({ ok: false, refused: 'intent-held', key: '#123', holder: { runId: b.id, program: 'prog-b' } });
+      expect(ensures).toBe(1);
+      expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(0);
+      expect((coord.db.prepare('SELECT state FROM runs WHERE id = ?').get(o.id) as { state: string }).state).toBe('planned');
+      expect((coord.db.prepare('SELECT COUNT(*) AS n FROM landing_intents WHERE runId = ?').get(o.id) as { n: number }).n).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

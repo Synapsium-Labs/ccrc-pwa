@@ -4961,7 +4961,10 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    `MAIL_BODY_MAX_BYTES` less the prefix's own length. The body may name
    landing intents (`intents`, at most 8 keys, each `#<n>` or `D-<n>`), and a
    key another programme's open run in the project holds answers **409**
-   `intent-held` with the key and that run (`holder`), before any fleet act.
+   `intent-held` with the key and that run (`holder`), before any fleet act of
+   this request, except on the `worker-starting` re-run, where the first pass
+   may already have started or woken the bound worker's pane; the run stays
+   `planned` and no hold or row is written.
 3. The coordinator watches mail and `pr-state` the way an operator would —
    `GET /api/runs` and the `runs` frame on `/ws/fleet` carry state and
    work-item tallies, nothing new to poll — and marks the run `working` once

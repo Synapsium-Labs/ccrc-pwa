@@ -411,9 +411,12 @@ not after.
      and `landing.entry.baseSha` equals the base you sent. If it reads
      anything else, the line recorded no
      base: send no mail, and report it to the operator with the run's state
-     as the advance answered it: `working` after `ok`, still `merging` after
-     a refusal, and unknown after an uncertain answer, which you then read
-     with `runs list`. The second ejection of one entry is not refused: where
+     as the advance answered it: `working` after `ok`; after a refusal, the
+     state the answer names (its `from`), which is still `merging` only when
+     the refusal came before any move; and when the answer names no state or
+     was uncertain (the 503 `run-unreadable`, an `unknown-run` after the
+     commit, a transport failure), read `runs list` for the run's state
+     before reporting. The second ejection of one entry is not refused: where
      the entry you read counts one ejection already, the advance still answers
      `ok` and the server raises one notice to the operator, so name the second
      ejection in your turn's text and send the round as usual. The worker's
