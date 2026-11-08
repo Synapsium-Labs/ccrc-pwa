@@ -186,10 +186,11 @@ describe('GET /api/runs/find (spec §11.4)', () => {
     const home = mkTmp('ccrc-run-find-auth-');
     const base = testDeps(home);
     const c = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-    const deps = { ...base, coord: c, cfg: { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: 'localhost', origin: 'http://localhost:7788' } };
+    // A REAL box token, so the 401 is the session-only gate refusing it, not a wrong value.
+    const deps = { ...base, coord: c, mailToken: 'tok', cfg: { ...base.cfg, authEnabled: true, cookieSecure: false, rpId: 'localhost', origin: 'http://localhost:7788' } };
     const bus = new Bus();
     app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
-    const res = await app.inject({ method: 'GET', url: '/api/runs/find', headers: { 'x-ccrc-mail-token': deps.mailToken ?? 'x' } });
+    const res = await app.inject({ method: 'GET', url: '/api/runs/find', headers: { 'x-ccrc-mail-token': 'tok' } });
     expect(res.statusCode).toBe(401);
   });
 

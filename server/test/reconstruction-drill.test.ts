@@ -294,6 +294,14 @@ describe('the reconstruction drill', () => {
                                          // `.child` mark names only the minting run, and a reclaimed child has
                                          // none. So a DB loss reads every rebuilt row false, and those rows get
                                          // the chip triggers alone: a label refreshes later, nothing else.
+      'closedBy', 'closeDetail',         // D-8071: migration 44's close columns, written at close beside
+                                         // `closedAt` (above, same class). No artifact records who closed a
+                                         // run or why, so a DB loss rebuilds every row with both null, which
+                                         // `closeWords` reads as a close nobody attributed.
+      'runTitle',                        // D-8071: migration 43's column, the title the open sent. The drill
+                                         // rebuilds no title: the ledger's wave row carries the wave's words,
+                                         // but nothing ties them to what the open sent, so a rebuilt row reads
+                                         // null, the shape of a run opened before the column.
       'work item ids and their blockedBy DAG',
       'per-item doneFingerprint',
       'mail bodies and their delivery/ack state',
@@ -335,6 +343,8 @@ describe('the reconstruction drill', () => {
       childIds: true,
       lastMoveAt: true,
       hadChild: true,
+      runTitle: true, closedBy: true, closeDetail: true,
+      stuck: true, waitsOn: true, blockedBy: true, coordinatorGone: true,
     };
     // Bumped 22 -> 24: `kind`/`reviews` (design 2026-09-14 §5.1, task 3).
     // Bumped 24 -> 25: `childReclaim` (child-reclamation wave 5). It is NOT in
@@ -356,13 +366,18 @@ describe('the reconstruction drill', () => {
     // Bumped 27 -> 28: `lastMoveAt` (D-7334). NOT in UNRECOVERABLE, `childIds`' reason: nothing stores it, the runs frame
     // derives it on every tick (`withLastMoves`, `coord/runWire.ts`) from the run's events and mail.
     // Bumped 28 -> 29: `hadChild` (D-8068), named in UNRECOVERABLE above.
-    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(29);
+    // Bumped 29 -> 36 (D-8071): `runTitle`, `closedBy` and `closeDetail`, named in UNRECOVERABLE above; and the stuck
+    // verdict's `stuck`, `waitsOn`, `blockedBy` and `coordinatorGone`. Those four are NOT in UNRECOVERABLE, `childIds`'
+    // reason: nothing stores them on the run, the verdict's pass derives them from the runs and the fleet's readings
+    // (`coord/runStuckPass.ts`). What a DB loss does cost them is `gone_since`'s anchors, so a gone owner's `since`
+    // restarts at the first pass after the rebuild: the later, more patient direction.
+    expect(Object.keys(RUN_SUMMARY_KEYS).length).toBe(36);
 
     const r = reconstruct(fx);
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(19);
+    expect(UNRECOVERABLE.length).toBe(22);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

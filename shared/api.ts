@@ -6900,26 +6900,15 @@ export interface RunFindQuery {
 }
 
 /** One slim run row of `find`: stored columns only, no hydrate, no tally, no spend (D-8071, §11.4). `claimedBy` keeps
- *  Resume reachable from a hit. */
-export interface RunHit {
-  id: number;
-  program: string;
-  programTitle: string;
+ *  Resume reachable from a hit. The stored columns are `RunSummary`'s own fields, picked rather than restated, so the
+ *  two cannot drift; the close fields and the title are REQUIRED here, where `RunSummary` carries them optional. */
+export type RunHit = Pick<RunSummary,
+  'id' | 'program' | 'programTitle' | 'wave' | 'waveOf' | 'kind' | 'reviews' | 'state' | 'project' | 'workspace'
+  | 'branch' | 'claimedBy' | 'openedAt' | 'closedAt'> & {
   runTitle: string | null;
-  wave: number;
-  waveOf: number | null;
-  kind: RunKind;
-  reviews: number | null;
-  state: RunState;
-  project: string;
-  workspace: string | null;
-  branch: string | null;
-  claimedBy: string | null;
-  openedAt: number;
-  closedAt: number | null;
   closedBy: RunClosedBy | null;
   closeDetail: string | null;
-}
+};
 
 /** `GET /api/runs/find`'s answer (D-8071, §11.4). `exact` is the run whose id is `q`, whatever the filters; `runs` is
  *  open runs (first page only) then closed runs by `closedAt` descending; `reviewsOf` is the runs that review run `q`;
