@@ -42,7 +42,8 @@ const checked = (verdict: string, ago: number): { verdict: string; at: number } 
 const ACCOUNTS = {
   accounts: [
     acct('lane-a'),
-    acct('lane-b', { authDead: true }),
+    // lane-b's plan has no 5-hour window (D-8120): the writer's marker is on its row, so its 5h row is words.
+    acct('lane-b', { authDead: true, five: null, fiveResetAt: nowSec - 259_200, fiveWindowMinutes: 0 }),
     acct('lane-c', { five: 100, fiveResetAt: nowSec + 72 * 60 }),
     acct('lane-d', { disabled: true }),
     acct('lane-e', { five: null, seven: 40 }),
@@ -114,6 +115,7 @@ interface Measured {
   readonly pageMax: number;
   readonly metersSideBySide: boolean;
   readonly weeklyOnly: boolean;
+  readonly noFiveHour: { shown: boolean; clipped: boolean; meters: number; otherLanes: string[] };
   readonly rollUp: string | null;
   readonly skin: string | null;
   readonly theme: string;
@@ -172,6 +174,16 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
             pageMax: parseFloat(getComputedStyle(document.querySelector('[data-page-body]')!).maxWidth),
             metersSideBySide: meters.length === 2 && Math.abs(rect(meters[0]!).top - rect(meters[1]!).top) < 2,
             weeklyOnly: card('lane-e').textContent!.includes('weekly window only'),
+            noFiveHour: (() => {
+              const words = card('lane-b').querySelector<HTMLElement>("[data-five='none'] .acct-weekly-only");
+              return {
+                shown: words !== null && words.textContent === 'No 5-hour limit' && rect(words).width > 0,
+                clipped: words !== null && words.scrollWidth > words.clientWidth + 1,
+                meters: card('lane-b').querySelectorAll('.acct-meter').length,
+                otherLanes: cards.filter((c) => c.dataset['lane'] !== 'lane-b' && c.textContent!.includes('No 5-hour limit'))
+                  .map((c) => c.dataset['lane']!),
+              };
+            })(),
             rollUp: document.querySelector('.accounts-rollup')?.textContent ?? null,
             skin: document.documentElement.getAttribute('data-skin'),
             theme: document.documentElement.getAttribute('data-theme') ?? 'phosphor',
@@ -213,6 +225,8 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
         expect(m.headWraps, 'every head line 1 stays one line').toEqual([]);
         expect(m.rails, 'the rail on the Signed-out card only').toEqual(['lane-b']);
         expect(m.weeklyOnly).toBe(true);
+        expect(m.noFiveHour, 'a lane with no 5h window says so, whole, in place of its 5h meter (D-8120)')
+          .toEqual({ shown: true, clipped: false, meters: 1, otherLanes: [] });
         expect(m.clippedFields, 'every command shows whole').toEqual([]);
         expect(m.untitledTruncations, 'every truncation carries its whole value in title').toEqual([]);
         expect(m.headOverlaps, 'nothing on a head line 1 overlaps').toEqual([]);

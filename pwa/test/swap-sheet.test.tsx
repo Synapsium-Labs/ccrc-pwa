@@ -268,6 +268,15 @@ describe('leastLoaded — a lane with no 5h window', () => {
     expect(leastLoaded(rows, ['gpt', 'gpt7'])).toBe('gpt7');
   });
 
+  it('ranks an Anthropic lane the statusline writer marked as having no 5h window on its week (D-8120)', () => {
+    const rows = [
+      acct({ wrapper: 'claude', five: 40, seven: 40 }),
+      acct({ wrapper: 'claude-a', five: null, seven: 9, fiveResetAt: 1, fiveWindowMinutes: 0 }),
+      acct({ wrapper: 'claude-b', five: null, seven: 3 }),   // one unreported 5h: still unknown, never the emptiest
+    ];
+    expect(leastLoaded(rows, ['claude', 'claude-a', 'claude-b'])).toBe('claude-a');
+  });
+
   it('does not rank one whose only applicable window is unknown', () => {
     const rows = [acct({ wrapper: 'gpt', five: null, seven: null, fiveWindowMinutes: 0 })];
     expect(leastLoaded(rows, ['gpt'])).toBe(null);

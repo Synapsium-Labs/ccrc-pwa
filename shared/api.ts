@@ -3983,8 +3983,12 @@ export interface AccountUsage {
   /** Width of the 5h window in minutes, from the producer. `0` means the plan
    *  HAS NO 5h window — a different fact from "unmeasured", though both read as
    *  `five: null`. ADDITIVE and OPTIONAL: only a producer that knows the width
-   *  states it, so every Anthropic row keeps exactly the shape it has today, and
-   *  an older client that has never heard of the key is unaffected. */
+   *  states it, so a row that reports its 5h window keeps exactly the shape it
+   *  has today, and an older client that has never heard of the key is
+   *  unaffected. Codex lanes carry it from the backend; an Anthropic lane carries
+   *  it once the statusline writer has seen a whole 5h window of its readings
+   *  with no 5h figure (D-8120), and the Accounts screen then says "No 5-hour
+   *  limit" in place of the 5h meter. */
   fiveWindowMinutes?: number;
   sevenRolledOver: boolean;     // the 7d window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
   disabled: boolean;            // ccd's kill-switch for this lane is on

@@ -34,8 +34,14 @@ export interface AccountLimits {
    *  in the row. `measured()` needs the difference: with no 5h window the weekly
    *  figure is not half the truth, it is the whole of it, so the row ranks.
    *
+   *  ANTHROPIC ROWS CARRY IT TOO (D-8120), stated by `ccd/statusline-command.sh`
+   *  — the one writer that sees every reading land — once a whole 5h window of an
+   *  account's readings carried a weekly figure and no 5h one. That writer is the
+   *  fact's only owner; this reader, ccd and the PWA read the marker and never
+   *  re-derive it from a single `five: null`.
+   *
    *  OPTIONAL, AND ABSENT MEANS APPLICABLE. Only a producer that KNOWS the width
-   *  states it; every Anthropic row omits it, and so does ccd's own 429 exclusion
+   *  states it; an Anthropic row that reports a 5h window omits it, and so does ccd's own 429 exclusion
    *  row (`{"five":100,"seven":0,"ts":N}`) — which must keep scoring 100 rather
    *  than collapsing to `seven` = 0, the emptiest account on the fleet. The key is
    *  therefore emitted only when the raw row carried it, so a row that says

@@ -61,7 +61,7 @@ import { heldAttemptOf, isPastAdding, managedCodex, resumeSheetFor, switchTarget
 import { wordOf, type HeldAttempt } from '../accounts/useSignInAttempt';
 import { AccountMeterRow } from '../fleet/AccountMeterRow';
 import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
-import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, REMOVE_ACT, REPLACE_TOKEN, rollUp, SIGN_IN_AGAIN, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
+import { cardLines, connectBlock, DOOR_NARROWED, doorNarrowing, fiveHourWords, identityLine, isTrouble, kindChipWords, laneAnswerOf, notReadyWords, offAlso, offlineRefusal, REMOVE_ACT, REPLACE_TOKEN, rollUp, SIGN_IN_AGAIN, troubleCopy, troubleFirst, WEEKLY_ONLY } from '../fleet/accountWords';
 import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, RESUME_CARD_LINE_APPROVE, SWITCH_TO_SIGN_IN, SWITCH_TO_TOKEN, cancelRefused } from '../fleet/accountWords';
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
@@ -495,8 +495,9 @@ export function AccountsScreen(): ReactNode {
           const trouble = isTrouble(answer.word)
             ? troubleCopy({ id: wrapper, answer, entry, lane: laneWire, usage: a, sessions: onAccount.length, now })
             : null;
-          // A Codex lane has no 5-hour window: its absent 5h says so rather than "—" (spec §4.1).
-          const weeklyOnly = entry?.kind === 'codex' && (a?.five ?? null) === null;
+          // A lane with no 5-hour window says so rather than "—": a Codex lane by its kind (spec §4.1), an Anthropic
+          // lane by the row's own marker (D-8120).
+          const noFiveWords = fiveHourWords(entry?.kind, a);
           // The kill switch (spec §10): as the last answer has it, or as an ack set it until the next answer lands. An
           // off lane that is not ready says why it cannot be turned on; an on lane can always be switched off.
           const switchOn = acts.acked[wrapper] ?? answer.word !== 'off';
@@ -595,10 +596,10 @@ export function AccountsScreen(): ReactNode {
                   stay separate facts (D-5098). It replaced a row-level
                   fleet.css override. */}
               <div className="acct-rows">
-                {weeklyOnly ? (
-                  <div className="acct-row">
+                {noFiveWords !== null ? (
+                  <div className="acct-row" data-five={noFiveWords === WEEKLY_ONLY ? 'weekly-only' : 'none'}>
                     <span className="acct-win">5h</span>
-                    <span className="acct-weekly-only">{WEEKLY_ONLY}</span>
+                    <span className="acct-weekly-only">{noFiveWords}</span>
                   </div>
                 ) : (
                   <AccountMeterRow label="5h" pct={a?.five ?? null} resetAt={a?.fiveResetAt ?? null} nowSec={nowSec} rolledOver={a?.fiveRolledOver ?? false} off={off} />

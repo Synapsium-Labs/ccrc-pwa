@@ -731,3 +731,133 @@ describe('statusline-command.sh keeps the account row monotonic within a window 
     expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
   });
 });
+
+// D-8120: SOME ANTHROPIC PLANS HAVE NO 5-HOUR WINDOW, and this writer is the one
+// party that sees every reading land, so it is the one that states the fact on
+// the row (`fiveWindowMinutes: 0`, the marker every scorer already reads). One
+// five-less payload is not enough to say it: a lane was measured going five-less
+// within two hours of hitting its 5h limit. So the row carries when its run of
+// five-less readings began (`fiveAbsentSince`) and the marker once that run is
+// a whole 5h window old.
+describe('statusline-command.sh states "no 5h window on this account" only after a whole window of five-less readings (D-8120)', () => {
+  const sevenReset = 1_800_600_000;
+  type Row = Record<string, number | null>;
+
+  it('a first five-less reading starts the run and does NOT mark the row', () => {
+    const home = seed('ccrc-statusline-fl-first-');
+    const before = nowS();
+    expect(runUsage(home, weeklyOnlyPayload(15, sevenReset)).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Row;
+    expect(row).toMatchObject({ five: null, seven: 15, fiveResetAt: null });
+    expect(row['fiveAbsentSince']).toBeGreaterThanOrEqual(before);
+    expect(row).not.toHaveProperty('fiveWindowMinutes');
+  });
+
+  it('a run younger than 5h keeps its start and stays unmarked', () => {
+    const home = seed('ccrc-statusline-fl-young-');
+    const since = nowS() - 3600;
+    seedRow(home, { five: null, seven: 15, ts: nowS() - 60, fiveResetAt: null, sevenResetAt: sevenReset, fiveAbsentSince: since });
+    expect(runUsage(home, weeklyOnlyPayload(16, sevenReset)).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Row;
+    expect(row).toMatchObject({ five: null, seven: 16, fiveAbsentSince: since });
+    expect(row).not.toHaveProperty('fiveWindowMinutes');
+  });
+
+  it('a run a whole 5h window old marks the row: fiveWindowMinutes 0', () => {
+    const home = seed('ccrc-statusline-fl-marked-');
+    const since = nowS() - 18_001;
+    seedRow(home, { five: null, seven: 15, ts: nowS() - 60, fiveResetAt: null, sevenResetAt: sevenReset, fiveAbsentSince: since });
+    expect(runUsage(home, weeklyOnlyPayload(16, sevenReset)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: null, seven: 16, fiveAbsentSince: since, fiveWindowMinutes: 0 });
+  });
+
+  // The live shape on the day this was written: five null, `fiveResetAt` days in
+  // the past, no `fiveAbsentSince` yet. The kept reset is the end of the last 5h
+  // window anyone reported, so the run is measured from there and the row is
+  // marked on its next render.
+  it('a row written before the key existed is seeded from its kept fiveResetAt', () => {
+    const home = seed('ccrc-statusline-fl-seed-');
+    const lastWindow = nowS() - 3 * 86_400;
+    seedRow(home, { five: null, seven: 6, ts: nowS() - 60, fiveResetAt: lastWindow, sevenResetAt: sevenReset });
+    expect(runUsage(home, weeklyOnlyPayload(6, sevenReset)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({
+      five: null, seven: 6, fiveResetAt: lastWindow, fiveAbsentSince: lastWindow, fiveWindowMinutes: 0,
+    });
+  });
+
+  it('a start that is not an epoch falls back to the kept fiveResetAt', () => {
+    const home = seed('ccrc-statusline-fl-badsince-');
+    const lastWindow = nowS() - 7200;
+    seedRow(home, { five: null, seven: 6, ts: nowS() - 60, fiveResetAt: lastWindow, sevenResetAt: sevenReset, fiveAbsentSince: 'soon' as unknown as number });
+    expect(runUsage(home, weeklyOnlyPayload(6, sevenReset)).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Row;
+    expect(row).toMatchObject({ fiveAbsentSince: lastWindow });
+    expect(row).not.toHaveProperty('fiveWindowMinutes');
+  });
+
+  // THE CASE THE TICKET NAMES: a lane that hit its 5h limit under two hours ago.
+  // While its reset is ahead the verdict drops every five-less payload, so
+  // nothing is published at all; once the reset passes, the first five-less
+  // publish STARTS the run (the row still held a figure), so the earliest mark
+  // is the reset plus a whole window.
+  it('a lane that hit its 5h limit under 2h ago is not marked: its reset is still ahead', () => {
+    const home = seed('ccrc-statusline-fl-hit-');
+    const row = { five: 100, seven: 40, ts: nowS() - 7000, fiveResetAt: nowS() + 11_000, sevenResetAt: sevenReset };
+    seedRow(home, row);
+    expect(runUsage(home, weeklyOnlyPayload(41, sevenReset)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual(row);
+  });
+
+  it('…and once that reset has passed, the first five-less publish starts a NEW run instead of reusing the reset', () => {
+    const home = seed('ccrc-statusline-fl-justreset-');
+    const reset = nowS() - 30;
+    seedRow(home, { five: 100, seven: 40, ts: nowS() - 60, fiveResetAt: reset, sevenResetAt: sevenReset });
+    const before = nowS();
+    expect(runUsage(home, weeklyOnlyPayload(41, sevenReset)).code).toBe(0);
+    const out = limitsRow(home, 'zeta') as Row;
+    expect(out).toMatchObject({ five: null, seven: 41, fiveResetAt: reset });
+    expect(out['fiveAbsentSince']).toBeGreaterThanOrEqual(before);
+    expect(out).not.toHaveProperty('fiveWindowMinutes');
+  });
+
+  it('a payload carrying a 5h figure puts the row back in exactly today\'s shape', () => {
+    const home = seed('ccrc-statusline-fl-back-');
+    seedRow(home, { five: null, seven: 15, ts: 1, fiveResetAt: null, sevenResetAt: sevenReset, fiveAbsentSince: 1, fiveWindowMinutes: 0 });
+    expect(runUsage(home, limitsPayload(20, 15)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual({
+      five: 20, seven: 15, ts: expect.any(Number), fiveResetAt: 1_800_000_000, sevenResetAt: sevenReset,
+    });
+  });
+
+  it('a payload that names a 5h window with no figure is evidence the window exists: no run, no mark', () => {
+    const home = seed('ccrc-statusline-fl-named-');
+    seedRow(home, { five: null, seven: 15, ts: 1, fiveResetAt: 2, sevenResetAt: sevenReset, fiveAbsentSince: 1, fiveWindowMinutes: 0 });
+    const payload = JSON.stringify({
+      model: { display_name: 'Opus 5' },
+      workspace: { current_dir: '/nonexistent-for-this-test' },
+      rate_limits: { five_hour: { resets_at: 1_800_000_000 }, seven_day: { used_percentage: 16, resets_at: sevenReset } },
+    });
+    expect(runUsage(home, payload).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Row;
+    expect(row).toMatchObject({ five: null, seven: 16, fiveResetAt: 1_800_000_000 });
+    expect(row).not.toHaveProperty('fiveAbsentSince');
+    expect(row).not.toHaveProperty('fiveWindowMinutes');
+  });
+
+  it('an unparseable row starts a fresh run rather than writing nothing', () => {
+    const home = seed('ccrc-statusline-fl-junk-');
+    mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-limits', 'zeta.json'), 'not json at all\n');
+    const before = nowS();
+    expect(runUsage(home, weeklyOnlyPayload(15, sevenReset)).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Row;
+    expect(row['fiveAbsentSince']).toBeGreaterThanOrEqual(before);
+    expect(row).not.toHaveProperty('fiveWindowMinutes');
+  });
+
+  it('an account the roster does not measure still gets no row, marker or not', () => {
+    const home = seed('ccrc-statusline-fl-gpt-');
+    expect(runUsage(home, weeklyOnlyPayload(15, sevenReset), { cfgDir: path.join(home, '.gpt-cfg') }).code).toBe(0);
+    expect(limitsRow(home, 'gpt')).toBeNull();
+  });
+});
