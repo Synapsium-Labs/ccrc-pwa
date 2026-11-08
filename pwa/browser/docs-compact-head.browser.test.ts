@@ -521,6 +521,67 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 120_000);
 
+  // Fix round 1, F1: the states whose actions are widest. A modified draft opened in a ref view shows GitHub's may-differ
+  // marker and Open committed version; a committed leaf served from a local branch ahead of origin shows the marker
+  // alone. Whatever the actions take, the page's own name stays visible and at least a tap wide, and every action
+  // stays inside the head (on a second line when the row cannot hold them beside the crumbs' floor).
+  const DRAFT_DEEP = treeOk({
+    entries: [entry(SECTION, DEEP, { committed: { kind: 'file', blob: BLOB, size: SIZE }, draft: draftOf('modified') })],
+    drafts: holder(),
+  });
+  const AHEAD_DEEP = ((): ReturnType<typeof treeOk> => {
+    const base = treeOk({ entries: [entry(SECTION, DEEP, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
+    return {
+      ...base,
+      ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ahead: 2, behind: 0 } },
+    };
+  })();
+  const WIDE_STATES = [
+    ['a modified draft', DRAFT_DEEP, 'main', '.docs-head-bar .docs-actions a[aria-label="Open committed version"]'],
+    ['a local ref ahead of origin', AHEAD_DEEP, 'lane-a', '.docs-head-bar .docs-actions .docs-action-note'],
+  ] as const;
+  const WIDE_CASES = WIDE_STATES.flatMap(([what, tree, ref, ready]) =>
+    [INSTRUMENT, REFINED].flatMap((skin) => ([[600, 960], [768, 1024], [1280, 800]] as const).map(([w, h]) => [what, skin, w, h, tree, ref, ready] as const)));
+
+  it.each(WIDE_CASES)("%s, %s, %i x %i under a mouse: the page's name stays visible and a tap wide, and every action stays in the head (F1)", async (what, skin, width, height, tree, ref, ready) => {
+    const app = await openView({ width, height, skin, pointer: 'fine' }, tree, DEEP);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${DEEP}?ref=${ref}`, { waitUntil: 'load' });
+      await app.page.waitForFunction((sel) => document.querySelector(sel) !== null, ready, { timeout: 30_000 });
+      const got = await app.page.evaluate(async () => {
+        await document.fonts.ready;
+        const r = (e: Element | null): DOMRect | null => e?.getBoundingClientRect() ?? null;
+        const head = r(document.querySelector('.docs-head.docs-full'));
+        const nav = r(document.querySelector('.docs-full .docs-crumbs'));
+        const here = document.querySelector('.docs-full .docs-crumb-here');
+        const h = r(here);
+        const seen = h === null || nav === null ? 0 : Math.max(0, Math.min(h.right, nav.right) - Math.max(h.left, nav.left));
+        const actions = [...document.querySelectorAll('.docs-full .docs-actions > *')].map((e) => {
+          const b = e.getBoundingClientRect();
+          return { cls: e.className, left: b.left, right: b.right, top: b.top, bottom: b.bottom };
+        });
+        return {
+          head, hereText: here?.textContent ?? '', hereW: h?.width ?? 0, seen, actions,
+          rowH: r(document.querySelector('.docs-full > .docs-head-bar'))?.height ?? 0,
+          scrollW: document.documentElement.scrollWidth, innerW: innerWidth,
+        };
+      });
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} wide-${ref} ${JSON.stringify({ seen: got.seen, rowH: got.rowH, actions: got.actions.length })}`);
+      expect(got.hereText, `${what}: the page's name`).toBe(NAME);
+      expect(got.seen, `${what}: the visible width of the page's name`).toBeGreaterThanOrEqual(TAP);
+      expect(got.actions.length).toBeGreaterThan(0);
+      for (const a of got.actions) {
+        expect(a.left, `${a.cls} inside the head`).toBeGreaterThanOrEqual(got.head!.left - 0.5);
+        expect(a.right, `${a.cls} inside the head`).toBeLessThanOrEqual(got.head!.right + 0.5);
+        expect(a.top, `${a.cls} inside the head`).toBeGreaterThanOrEqual(got.head!.top - 0.5);
+        expect(a.bottom, `${a.cls} inside the head`).toBeLessThanOrEqual(got.head!.bottom + 0.5);
+      }
+      expect(got.scrollW, 'no sideways scroll').toBeLessThanOrEqual(got.innerW);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
   it.each([
     [1280, 800],
     [915, 412],

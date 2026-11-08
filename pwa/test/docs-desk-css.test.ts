@@ -26,24 +26,34 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(declValue(ruleIn(docsCss, '.docs-full'), 'gap')).toBe('var(--sp-1)');
   });
 
-  it('the row is a docs-head container and does not wrap', () => {
+  it('the row is a docs-head container, and wraps the actions onto a second line rather than clip the crumbs (fix round 1, F1)', () => {
     const row = ruleIn(docsCss, ROW);
     expect(declValue(row, 'container')).toBe('docs-head / inline-size');
-    expect(declValue(row, 'flex-wrap')).toBe('nowrap');
+    expect(declValue(row, 'flex-wrap')).toBe('wrap');
   });
 
   it('the row\'s controls draw the focus ring inside their boxes: the row clips its crumbs', () => {
     expect(declValue(ruleIn(docsCss, `${ROW} :focus-visible`), 'outline-offset')).toBe('-2px');
   });
 
-  it('the crumbs take the room the actions leave, on one line, the middle crumbs giving way before the page\'s own', () => {
+  it('the crumbs have a real floor: three crumbs at a tap each is their basis, so the row breaks before they go under it (F1)', () => {
     const crumbs = ruleIn(docsCss, '.docs-full .docs-crumbs');
-    expect(declValue(crumbs, 'flex')).toBe('1 1 0');
+    const floor = 'calc(3*(var(--tap-min)+1ch+var(--sp-1))+1ch+2*var(--sp-1))';
+    expect(declValue(crumbs, 'flex')?.replace(/\s+/g, ''), 'grow from the floor, never shrink under it on a shared line').toBe(`11${floor}`);
+    // The floor is the basis, not a minimum: a short path takes no more room than its words (max-content).
+    expect(declValue(crumbs, 'max-width')).toBe('max-content');
     expect(declValue(crumbs, 'min-width')).toBe('0');
-    expect(declValue(ruleIn(docsCss, '.docs-full .docs-crumbs ol'), 'flex-wrap')).toBe('nowrap');
+    expect(declValue(crumbs, 'overflow')).toBe('hidden');
+  });
+
+  it('the crumbs are one line; the middle ones give way before the page\'s own, and what is left is clipped at the start, never the page\'s name (F1)', () => {
+    const ol = ruleIn(docsCss, '.docs-full .docs-crumbs ol');
+    expect(declValue(ol, 'flex-wrap')).toBe('nowrap');
+    expect(declValue(ol, 'justify-content')).toBe('flex-end');
     const middle = ruleIn(docsCss, '.docs-full .docs-crumbs li');
     const last = ruleIn(docsCss, '.docs-full .docs-crumbs li:last-child');
-    expect(declValue(middle, 'min-width')?.replace(/\s+/g, ''), 'a middle crumb keeps a tap beside its separator').toBe('calc(var(--tap-min)+1ch+var(--sp-1))');
+    expect(declValue(middle, 'min-width')?.replace(/\s+/g, ''), 'a crumb keeps a tap beside its separator').toBe('calc(var(--tap-min)+1ch+var(--sp-1))');
+    expect(declValue(last, 'min-width')?.replace(/\s+/g, ''), 'the page\'s own name keeps a tap and one more character').toBe('calc(var(--tap-min)+2ch+var(--sp-1))');
     expect(shrinkOf(last)).toBe(1);
     expect(shrinkOf(middle), 'the middle crumbs shrink first').toBeGreaterThan(shrinkOf(last));
     for (const sel of ['.docs-full .docs-crumb', '.docs-full .docs-crumb-here']) {
@@ -54,11 +64,19 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     }
   });
 
-  it('the actions sit on the row\'s one line, each an icon beside its words', () => {
+  it('the actions sit at the row\'s end, each an icon beside its words; wider than a line of their own, they wrap among themselves, never past the head (F1)', () => {
     const actions = ruleIn(docsCss, '.docs-full .docs-actions');
-    expect(declValue(actions, 'flex-wrap')).toBe('nowrap');
+    expect(declValue(actions, 'flex-wrap')).toBe('wrap');
+    expect(declValue(actions, 'margin-inline-start')).toBe('auto');
+    expect(declValue(actions, 'flex')).toBe('0 1 auto');
+    expect(declValue(actions, 'min-width')).toBe('0');
     expect(declValue(ruleIn(docsCss, '.docs-full .docs-action'), 'white-space')).toBe('nowrap');
     expect(declValue(ruleIn(docsCss, '.docs-full .docs-action'), 'gap')).toBe('var(--sp-1)');
+  });
+
+  it('GitHub\'s may-differ note in the row is a marker: it never shrinks, and its words are not drawn (F1)', () => {
+    const mark = ruleIn(docsCss, '.docs-full .docs-actions > .docs-action-note');
+    expect(declValue(mark, 'flex')).toBe('none');
   });
 
   it('the action words hide only under the docs-head container query', () => {

@@ -61,6 +61,16 @@ const rowOrder = (): string[] => [...row().children].map((c) => c.className.spli
 /** A ref view of a leaf with a modified draft in the main checkout: it opens the draft and offers the committed version. */
 const DRAFT_TREE = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
 
+/** A committed leaf served from a local branch two commits ahead of origin: GitHub's copy may differ, and nothing else
+ *  in the row changes (fix round 1, F1's note-only state). */
+function aheadTree(): ReturnType<typeof treeOk> {
+  const base = treeOk();
+  return {
+    ...base,
+    ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ahead: 2, behind: 0 } },
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -161,12 +171,36 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     expect(labelInName(shownText(exp), exp.getAttribute('aria-label') ?? '')).toBe(true);
   });
 
-  it('Open committed version, when offered, sits in the row with its words', async () => {
+  it('Open committed version, when offered, sits in the row: an icon beside its words, named as before (F1)', async () => {
     atWidth(1280);
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(DRAFT_TREE) }));
     const link = await within(await waitFor(() => row())).findByRole('link', { name: DOCS_HEAD_TEXT.openCommitted });
     expect(link.closest('.docs-actions')?.parentElement).toBe(row());
     expect(shownText(link)).toBe(DOCS_HEAD_TEXT.openCommitted);
+    expect(link.getAttribute('aria-label')).toBe(DOCS_HEAD_TEXT.openCommitted);
+    expect(link.querySelector('.docs-action-words')?.textContent, 'its words hide under the container query').toBe(DOCS_HEAD_TEXT.openCommitted);
+    expect(link.querySelector('svg[aria-hidden="true"]'), 'its icon').not.toBeNull();
+  });
+
+  it.each([
+    ['a local ref ahead of origin', '/docs/demo/specs/a.md?ref=lane-a', aheadTree()],
+    ['a modified draft', '/docs/demo/specs/a.md?ref=main', DRAFT_TREE],
+  ])("on %s, GitHub's may-differ note is a marker: its words in its title and the link's description, read by a screen reader (F1)", async (_what, url, tree) => {
+    atWidth(1280);
+    open(url, fakeLoaders({ tree: okTree(tree) }));
+    const gh = await within(await waitFor(() => row())).findByRole('link', { name: DOCS_HEAD_TEXT.github });
+    const note = await waitFor(() => {
+      const n = row().querySelector<HTMLElement>('.docs-action-note');
+      if (n === null) throw new Error('no note');
+      return n;
+    });
+    expect(note.getAttribute('title')).toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+    expect(note.querySelector('.sr-only')?.textContent, 'its words, for a screen reader').toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+    expect(shownText(note), 'only the marker is drawn').toBe('≠');
+    expect(note.querySelector('[aria-hidden="true"]')?.textContent).toBe('≠');
+    const described = gh.getAttribute('aria-describedby');
+    expect(described).toBe(note.id);
+    expect(document.getElementById(described ?? '')).toBe(note);
   });
 
   it.each([

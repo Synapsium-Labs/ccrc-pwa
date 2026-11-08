@@ -15,13 +15,19 @@ import { CLASS_GLYPH, FOLDER_GLYPH, SECTION_LABEL, docsPathKind, leafName, listD
 
 /** An in-app link to a Docs page: a real `href` (a modifier or middle click opens a new tab), and a plain left click
  *  navigates in place with a history entry. */
-export function DocsPageLink(p: { readonly href: string; readonly className?: string; readonly children: ReactNode }): ReactNode {
+export function DocsPageLink(p: {
+  readonly href: string; readonly className?: string; readonly children: ReactNode;
+  /** The link's full words where it may be drawn shortened (a crumb, desk-nav Part B); absent: none. */
+  readonly title?: string;
+  /** The link's name where its visible words may hide (the desk head's row, desk-nav Part B); absent: its text. */
+  readonly label?: string;
+}): ReactNode {
   const onClick = (e: MouseEvent<HTMLAnchorElement>): void => {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     navigate(p.href);
   };
-  return <a href={p.href} className={p.className} onClick={onClick}>{p.children}</a>;
+  return <a href={p.href} className={p.className} title={p.title} aria-label={p.label} onClick={onClick}>{p.children}</a>;
 }
 
 /** One `.docs-row` button (spec 4.4: one `<button>` per row); a tap navigates with a history entry. */

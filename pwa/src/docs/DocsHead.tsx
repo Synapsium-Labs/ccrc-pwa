@@ -503,33 +503,40 @@ function TruthLine(p: {
 
 /** An action's face in the full head's row (desk-nav Part B, D-8101): its icon, then its words in `.docs-action-words`,
  *  which docs.css hides under the `docs-head` container query; the control's name is set beside it, so it is kept. */
-function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download'; readonly words: string }): ReactNode {
+function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'file-text'; readonly words: string }): ReactNode {
   return <><Icon name={p.icon} size={16} /><span className="docs-action-words">{p.words}</span></>;
 }
 
 /** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
  *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
- *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub"; the note keeps its full
- *  words in its `title`, since the row may cut it. */
+ *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub". There the note is a
+ *  marker (`≠`) that takes no room from the crumbs (fix round 1, F1): its words are its `title`, a screen reader's
+ *  text inside it, and the link's accessible description. */
 function GithubAction(p: {
   readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
 }): ReactNode {
+  const noteId = useId();
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
   if (!link.ok) {
     return <span className="docs-action-off">{fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] })}</span>;
   }
   const row = p.row === true;
+  const noted = link.note === 'may-differ' || p.showsDraft;
   return (
     <>
       <a
         className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}
-        aria-label={row ? DOCS_HEAD_TEXT.github : undefined}
+        aria-label={row ? DOCS_HEAD_TEXT.github : undefined} aria-describedby={row && noted ? noteId : undefined}
       >
         {row ? <RowFace icon="folder-code" words={DOCS_HEAD_TEXT.githubShort} /> : DOCS_HEAD_TEXT.github}
       </a>
-      {(link.note === 'may-differ' || p.showsDraft) && (
-        <span className="docs-action-note" title={row ? DOCS_HEAD_TEXT.githubMayDiffer : undefined}>{DOCS_HEAD_TEXT.githubMayDiffer}</span>
-      )}
+      {noted && (row
+        ? (
+          <span id={noteId} className="docs-action-note" title={DOCS_HEAD_TEXT.githubMayDiffer}>
+            <span aria-hidden="true">≠</span><span className="sr-only">{DOCS_HEAD_TEXT.githubMayDiffer}</span>
+          </span>
+        )
+        : <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>)}
     </>
   );
 }
@@ -630,7 +637,7 @@ function ShareAction(p: {
  *  version, offered iff `entryView(...).offersCommitted` on a leaf not already at `view=committed`. Open committed
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
  *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. The full head draws them in its
- *  row (desk-nav Part B, D-8101): GitHub, Share and Export an icon beside their words, Open committed version its words. */
+ *  row (desk-nav Part B, D-8101): GitHub, Share, Export and Open committed version each an icon beside its words. */
 function Actions(p: ActionInputs): ReactNode {
   const { page, tree, file } = p;
   const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
@@ -647,7 +654,11 @@ function Actions(p: ActionInputs): ReactNode {
           readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} row
         />
       )}
-      {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
+      {committedHref !== null && (
+        <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted}>
+          <RowFace icon="file-text" words={DOCS_HEAD_TEXT.openCommitted} />
+        </DocsPageLink>
+      )}
     </div>
   );
 }
