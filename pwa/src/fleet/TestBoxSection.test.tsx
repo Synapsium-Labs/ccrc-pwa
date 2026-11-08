@@ -123,6 +123,27 @@ describe('spec §2.7 width table, row by row (D-7412)', () => {
   });
 });
 
+describe('no test box set up: the state line says why, at every width', () => {
+  it.each(['phone', 'laptop', 'wide'] as const)('%s: the note sits under the state, inside the state line, and an On switch is said to wait', (band) => {
+    atBand(band);
+    render(<TestBoxSection poll={poll({ ...STATES.off, switch: 'on' })} />);
+    expect(card().getAttribute('data-band')).toBe(band);
+    const line = q('[data-testbox="state-line"]')!;
+    const note = q('[data-testbox="off-note"]', line)!;
+    expect(note.textContent).toBe(`${T.offNote} ${T.offSwitchOn}`);
+    expect(q('[data-testbox="state"]', line)!.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // No box: no sync button, no cells, no tables beside the note.
+    expect(screen.queryByRole('button', { name: T.sync })).toBeNull();
+    expect(q('[data-testbox="cells"]')).toBeNull();
+  });
+
+  it('with the switch off, only the first sentence', () => {
+    atBand('laptop');
+    render(<TestBoxSection poll={poll({ ...STATES.off, switch: 'off' })} />);
+    expect(q('[data-testbox="off-note"]')!.textContent).toBe(T.offNote);
+  });
+});
+
 describe('every state, once with the switch on and once with it off (D-7444)', () => {
   const cases = (Object.keys(TESTBOX_STATE_MAP) as TestboxState[]).flatMap((s) => (['on', 'off'] as const).map((sw) => ({ s, sw })));
   it.each(cases)('$s with the switch $sw: the state reads the same, only the switch moves', ({ s, sw }) => {
@@ -131,6 +152,7 @@ describe('every state, once with the switch on and once with it off (D-7444)', (
     const state = q('[data-testbox="state"]')!;
     expect(state.textContent).toBe(T.state(STATES[s].summary));
     expect(state.getAttribute('data-state')).toBe(s);
+    expect(q('[data-testbox="off-note"]') !== null, 'the off note is drawn for off alone').toBe(s === 'off');
     expect(screen.getByRole('radio', { name: T.on })).toHaveProperty('checked', sw === 'on');
     expect(screen.getByRole('radio', { name: T.off })).toHaveProperty('checked', sw === 'off');
   });

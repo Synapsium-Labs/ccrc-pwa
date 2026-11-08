@@ -169,8 +169,7 @@ const seedSession = (home: string, id: string, extra: Record<string, string> = {
 const dead = new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' }));
 const assemble = (home: string, coord?: CoordStore): Promise<FleetSession[]> => assembleFleet(
   localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-  undefined, undefined, undefined, undefined, undefined, undefined, coord,
-);
+  { coord });
 
 describe('assembleFleet carries run and openRun', () => {
   it('a recycled name: the row reads the new occupant\'s run, never the stale one (#746)', async () => {

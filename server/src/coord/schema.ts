@@ -2210,6 +2210,32 @@ export const MIGRATIONS: readonly string[] = [
   UPDATE runs SET hadChild = 1
     WHERE hadChild = 0 AND sessionId IN (SELECT m.sessionId FROM runs m WHERE m.hadChild = 1);
   `,
+  // ── 42: user_version 41 -> 42 ─────────────────────────────────────────────
+  // A dispatch's landing intents (landing order wave 5g, D-8080 to D-8086; spec 2026-09-23 §5.5): the pull requests or
+  // deviations a run said, at dispatch, it will land. One row per (run, key): `key` is `#<pr>` or `D-<n>` (the grammar
+  // is `shared/landingIntents.ts`'s, not this table's), `project` the run's project, `takenAt` the run's `dispatchedAt`.
+  // `setBy` is NULL with ONE meaning: the run had no claimant when it dispatched. Its ONE writer is
+  // `CoordStore.dispatchRun`, inside the dispatch's own transaction and after the transition is allowed; its ONE reader
+  // is `CoordStore.heldLandingIntents`. A hold ends when its run is terminal, and nothing writes that end: the read
+  // excludes terminal runs, so no row is ever updated or deleted.
+  //
+  // ONE NEW TABLE AND ONE INDEX, NOTHING ELSE: an older build opening a file at `user_version 42` takes rule 3 (it
+  // warns, reads as-is and migrates nothing) and never names the table, so it neither writes nor honours an intent.
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 41 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_intents (
+    runId   INTEGER NOT NULL REFERENCES runs(id),
+    project TEXT    NOT NULL,
+    key     TEXT    NOT NULL,
+    setBy   TEXT,
+    takenAt INTEGER NOT NULL,
+    PRIMARY KEY (runId, key)
+  );
+  CREATE INDEX landing_intents_by_key ON landing_intents(project, key);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -461,9 +461,9 @@ describe('Build 7 nouns', () => {
 
     // Task 2: the two places that age a landing on the server go through the same rule. `assembleFleet` drops an entry past
     // its window, and `sweepRadar` re-ages the kept map; neither writes its own comparison.
-    it('fleet.ts (assembleFleet) and watch.ts (the lane\'s re-age) call freshWithin( too', () => {
+    it('fleet.ts (assembleFleetWithPanePids) and watch.ts (the lane\'s re-age) call freshWithin( too', () => {
       const code = (file: string, symbol: string): string => stallCodeText(sourceOfSymbol(path.join(ccrcRoot, file), symbol));
-      expect(code('server/src/fleet.ts', 'assembleFleet'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
+      expect(code('server/src/fleet.ts', 'assembleFleetWithPanePids'), 'fleet.ts').toMatch(/\bfreshWithin\(\s*landing\.at,\s*RADAR_PROBE_FRESH_S,/);
       expect(code('server/src/watch.ts', 'FleetWatcher.sweepRadar'), 'watch.ts').toMatch(/\bfreshWithin\(\s*l\.at,\s*RADAR_PROBE_FRESH_S,/);
     });
   });

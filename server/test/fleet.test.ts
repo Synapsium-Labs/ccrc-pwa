@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { assembleFleet, hookAskSummary, idHomeWrapper } from '../src/fleet.js';
+import { assembleFleet, assembleFleetWithPanePids, fleetNow, hookAskSummary, idHomeWrapper } from '../src/fleet.js';
 import { liveStateReaderOver } from '../src/livestate.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
@@ -299,7 +299,7 @@ describe('branch precedence', () => {
       ['demo-quiet-mesa', { branch: 'feat/actually-here', ultracode: false, workflowActive: false }],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, sl);
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, { statuslines: sl });
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.branch).toBe('feat/actually-here');
   });
 
@@ -312,7 +312,7 @@ describe('branch precedence', () => {
     new Map<string, string | null>([['demo-quiet-mesa', branch]]);
   const withHead = (run: Runner, home: string, heads: Map<string, string | null>, sl?: Map<string, Statusline>) =>
     assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000,
-      undefined, sl, undefined, undefined, undefined, undefined, undefined, undefined, heads);
+      { statuslines: sl, headBranches: heads });
 
   it('uses the worktree\'s measured HEAD when the pane gave no full branch', async () => {
     const { home, run } = setup();
@@ -342,7 +342,7 @@ describe('branch precedence', () => {
       ['demo-quiet-mesa', { model: 'Opus 5.5', ultracode: false, workflowActive: false, boxCols }],
     ]);
     const assemble = (m?: Map<string, Statusline>) =>
-      assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, m);
+      assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, { statuslines: m });
     const row = async (m?: Map<string, Statusline>) => (await assemble(m)).find((s) => s.id === 'demo-quiet-mesa')!;
     expect((await row(sl(150))).paneCols).toBe(150);
     expect((await row(sl(60))).paneCols).toBe(60);
@@ -408,7 +408,7 @@ describe('ctxPct on the wire (D-2011)', () => {
       ['demo-quiet-mesa', { ultracode: false, workflowActive: false, ctxPct: 82 }],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, sl);
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, { statuslines: sl });
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(82);
   });
 
@@ -418,15 +418,15 @@ describe('ctxPct on the wire (D-2011)', () => {
       ['demo-quiet-mesa', { ultracode: false, workflowActive: false, ctxPct: 0 }],
     ]);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, sl);
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, { statuslines: sl });
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(0);
   });
 
   it('carries the usage sidecar reading onto the session, and null when none was read (routing slice 0)', async () => {
     const { home, run } = setup();
     const reading = { ts: 1_800_000_000, model: 'claude-opus-5', class: 'opus' as const, effort: 'high', ctxPct: 12, cost: 1.25, stale: false };
-    const withUsage = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      new Map([['demo-quiet-mesa', reading]]));
+    const withUsage = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000,
+      { usageReadings: new Map([['demo-quiet-mesa', reading]]) });
     expect(withUsage.find((s) => s.id === 'demo-quiet-mesa')?.usage).toEqual(reading);
     const without = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000);
     expect(without.find((s) => s.id === 'demo-quiet-mesa')?.usage).toBeNull();
@@ -461,7 +461,7 @@ describe('a running Workflow reads busy over an idle pid.json', () => {
     const sl = new Map<string, Statusline>([
       ['claude-a-project-f', { model: 'Opus 5.5', ultracode: false, workflowActive }],
     ]);
-    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), undefined, undefined, sl);
+    const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), fleetNow(), { statuslines: sl });
     return fleet.find((s) => s.id === 'claude-a-project-f')!.status;
   };
 
@@ -600,7 +600,7 @@ describe('PR state on the wire', () => {
     }]]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO),
-      undefined, undefined, undefined, undefined, live);
+      fleetNow(), { prStates: live });
     expect(fleet.find((x) => x.id === 'demo-quiet-basin')!.pr!.phase).toBe('merged');
   });
 
@@ -771,8 +771,7 @@ describe('hook state on the wire', () => {
     ]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, hookStates,
-    );
+      { hookStates });
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.hookState).toBe('waiting');
     expect(s.askSummary).toBe('Choose');
@@ -806,8 +805,7 @@ describe('hook state on the wire', () => {
     ]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, hookStates,
-    );
+      { hookStates });
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.graphQueries).toBe(0);
   });
@@ -825,8 +823,7 @@ describe('hook state on the wire', () => {
     ]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, hookStates,
-    );
+      { hookStates });
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.graphGateDenials).toBe(0);
   });
@@ -844,8 +841,7 @@ describe('hook state on the wire', () => {
     ]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, hookStates,
-    );
+      { hookStates });
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.graphQueries).toBe(4);
     expect(s.graphGateDenials).toBeNull();
@@ -874,8 +870,7 @@ describe('hook state on the wire', () => {
     seedSession(home, 'claude-demo', 'claude');
     const pending = new Set(['claude-demo']);
     const fleet = await assembleFleet(
-      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000, pending,
-    );
+      localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000, { pendingDialogs: pending });
     expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(true);
   });
 
@@ -886,8 +881,7 @@ describe('hook state on the wire', () => {
     const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'waiting' })]]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, hookStates,
-    );
+      { hookStates });
     const s = fleet.find((x) => x.id === 'claude-demo')!;
     expect(s.dialogPending).toBe(true);
     // The tmux stub always fails `has-session`, so this session is dead —
@@ -902,8 +896,7 @@ describe('hook state on the wire', () => {
     const hookStates = new Map<string, HookState>([['claude-demo', mkHookState({ state: 'working' })]]);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(async () => ({ ran: true, code: 1, stdout: '', stderr: '' })), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, hookStates,
-    );
+      { hookStates });
     expect(fleet.find((x) => x.id === 'claude-demo')!.dialogPending).toBe(false);
   });
 
@@ -926,8 +919,7 @@ describe('hook state on the wire', () => {
     const withoutHook = await assembleFleet(localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000);
     const hookStates = new Map<string, HookState>([['claude-a-project-f', mkHookState({ state: 'done' })]]);
     const withHook = await assembleFleet(
-      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, hookStates,
-    );
+      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, { hookStates });
     // `waiting` is the state most likely to tempt a status-derivation bug
     // specifically — it is also the value dialogPending's OR-rule reads, so a
     // fix or refactor near that line reaching one line too far (promoting an
@@ -936,8 +928,7 @@ describe('hook state on the wire', () => {
     // it shares no vocabulary with anything status-adjacent.
     const waitingHookStates = new Map<string, HookState>([['claude-a-project-f', mkHookState({ state: 'waiting' })]]);
     const withWaitingHook = await assembleFleet(
-      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, undefined, undefined, undefined, undefined, waitingHookStates,
-    );
+      localIO, cfg, new Tmux(run), liveStateReaderOver(localIO), 1784600000, { hookStates: waitingHookStates });
 
     const before = withoutHook.find((x) => x.id === 'claude-a-project-f')!;
     const after = withHook.find((x) => x.id === 'claude-a-project-f')!;
@@ -982,8 +973,7 @@ describe('the ask chip (Task 19)', () => {
     });
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
   });
 
@@ -999,8 +989,7 @@ describe('the ask chip (Task 19)', () => {
     expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true); // held -> answering
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
   });
 
@@ -1021,8 +1010,7 @@ describe('the ask chip (Task 19)', () => {
     coord.settleAsk(id, 'coord-1', 'a', NOW_MS - 60_000); // answering -> answered, 1 min ago
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' });
   });
 
@@ -1043,8 +1031,7 @@ describe('the ask chip (Task 19)', () => {
     coord.settleAsk(id, 'coord-1', 'a', NOW_MS - 40 * 60_000);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
@@ -1066,8 +1053,7 @@ describe('the ask chip (Task 19)', () => {
     });
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     return fleet.find((x) => x.id === 'claude-demo')!.ask;
   };
 
@@ -1102,8 +1088,7 @@ describe('the ask chip (Task 19)', () => {
     expect(coord.takeAskForAnswer(id, 1000).ok).toBe(true);   // held -> answering, and stranded there
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
@@ -1129,8 +1114,7 @@ describe('the ask chip (Task 19)', () => {
     coord.settleAsk(id, ASK_OPERATOR_PRINCIPAL, 'a', NOW_MS - 60_000);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     // `parentId` is still carried — it is who MAY have answered, and the chip
     // has always named it — but `answeredBy` is who DID, and they differ here.
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask)
@@ -1155,8 +1139,7 @@ describe('the ask chip (Task 19)', () => {
       .run(NOW_MS - 60_000, id);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask)
       .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
   });
@@ -1173,8 +1156,7 @@ describe('the ask chip (Task 19)', () => {
     expect(coord.releaseAsk(id, 2000)).toBe(true); // held -> released
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
@@ -1190,8 +1172,7 @@ describe('the ask chip (Task 19)', () => {
     expect(coord.declineAsk(id, 2000)).toBe(true); // held -> declined
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
@@ -1207,8 +1188,7 @@ describe('the ask chip (Task 19)', () => {
     expect(coord.staleAsk('d', 'claude-demo', 2000)).toBe(true); // held -> stale
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
@@ -1218,8 +1198,7 @@ describe('the ask chip (Task 19)', () => {
     seedSession(home, 'claude-demo', 'claude');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, mkCoord(),
-    );
+      { coord: mkCoord() });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
   });
 
@@ -1258,8 +1237,7 @@ describe('the ask chip (Task 19)', () => {
     coord.db.close();
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'claude-demo')!.ask).toBeNull();
     expect(warnSpy.mock.calls.some(([line]) => String(line).includes('currentAsksFor'))).toBe(true);
     warnSpy.mockRestore();
@@ -1281,8 +1259,7 @@ describe('the ask chip (Task 19)', () => {
     coord.db.close();
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet).toHaveLength(3);
     expect(fleet.every((x) => x.ask === null)).toBe(true);
     expect(warnSpy.mock.calls.filter(([line]) => String(line).includes('currentAsksFor')).length).toBe(1);
@@ -1320,8 +1297,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(opened.id, 'demo-worker');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('project-n');
   });
 
@@ -1344,8 +1320,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(second.id, 'demo-worker');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('new-coordinator');
   });
 
@@ -1378,8 +1353,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(sessionRun.id, 'demo-worker3');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     // The CORRECT key is `r.id`. Handing `boardPlacement` `sessionId: r.project`
     // instead would find the foreign session's stamp — which is deliberately
     // keyed under this project's NAME — and place the row on
@@ -1400,8 +1374,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(run.id, 'demo-worker4');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker4')!.boardProject).toBe('demo-worker4-project');
   });
 
@@ -1422,8 +1395,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(run.id, 'someone-else');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker5')!.boardProject).toBe('demo-worker5-project');
   });
 
@@ -1448,8 +1420,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     expect(coord.advance(run.id, 'failed', 'test-close').ok).toBe(true);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBe('closed-wave-coordinator');
   });
 
@@ -1488,8 +1459,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(unstampedRun.id, 'demo-worker8');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker8')!.boardProject).toBe('real-coordinator');
   });
 
@@ -1524,8 +1494,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(sameRepo.id, 'ccrc-pwa-worker');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'ct-worker')!.boardProject).toBe('ccrc-pwa');
   });
 
@@ -1555,8 +1524,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(mid.id, 'mid-session');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     // 'mid-project' if `claimedBy` is lost anywhere on the way to the walk.
     expect(fleet.find((x) => x.id === 'chain-worker')!.boardProject).toBe('root-project');
   });
@@ -1584,8 +1552,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     coord.bindSession(unrelated.id, 'project-n-worker');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'ct-worker2')!.boardProject).toBe('project-n');
   });
 
@@ -1597,8 +1564,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     vi.spyOn(coord, 'coordPlacementStamps').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'closed for the test' });
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker5')!.boardProject).toBeNull();
   });
 
@@ -1610,8 +1576,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     vi.spyOn(coord, 'coordPlacementStamps').mockImplementation(() => { throw new Error('lock race'); });
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBeNull();
   });
 
@@ -1623,8 +1588,7 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     seedSession(home, 'demo-worker7', 'claude', { project: 'demo-worker7-project' });
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, mkCoord(),
-    );
+      { coord: mkCoord() });
     expect(fleet.find((x) => x.id === 'demo-worker7')!.boardProject).toBe('demo-worker7-project');
   });
 });
@@ -1701,8 +1665,8 @@ describe('hookAskSummary', () => {
   });
 });
 
-describe('assembleFleet hands back the pane pids it read (worker stall watch wave 2, M6)', () => {
-  // `tick()` passes this map on to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second
+describe('assembleFleetWithPanePids hands back the pane pids it read (worker stall watch wave 2, M6)', () => {
+  // `tick()` passes its `panePids` on to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second
   // time. One harness: an alive row and a dead one, `fleet.test.ts`'s first case's shape.
   const pidsFor = async (listPanes: { ran: true, code: number; stdout: string }): Promise<Map<string, number | null>> => {
     const home = mkTmp('ccrc-fleet-pids-');
@@ -1714,13 +1678,12 @@ describe('assembleFleet hands back the pane pids it read (worker stall watch wav
       if (args[0] === 'list-panes') return { ran: true, code: listPanes.code, stdout: listPanes.stdout, stderr: '' };
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
-    const pids = new Map<string, number | null>();
-    await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), 1784600000,
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, pids);
-    return pids;
+    const { panePids } = await assembleFleetWithPanePids(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run),
+      liveStateReaderOver(localIO), 1784600000);
+    return panePids;
   };
 
-  it('fills the map with the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
+  it('returns the pid of every ALIVE row, and gives a row whose pane is not alive no entry', async () => {
     expect([...await pidsFor({ ran: true, code: 0, stdout: '40613\n' })]).toEqual([['claude-a-project-f', 40613]]);
   });
 
@@ -1761,7 +1724,7 @@ describe('FleetSession.background (D-5231)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), HOOK_AT / 1000,
-      undefined, undefined, undefined, undefined, new Map([[ID, hs]]));
+      { hookStates: new Map([[ID, hs]]) });
     return fleet.find((x) => x.id === ID)!;
   };
 
@@ -1926,7 +1889,7 @@ describe('a compaction keeps bucketSince (D-5239)', () => {
       return { ran: true, code: 0, stdout: '', stderr: '' };
     };
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), liveStateReaderOver(localIO), Math.floor(Date.now() / 1000),
-      undefined, undefined, undefined, undefined, new Map([[ID, raw.state]]));
+      { hookStates: new Map([[ID, raw.state]]) });
     const r = fleet.find((x) => x.id === ID)!;
     expect(r.bucket).toBe('done');
     expect(r.bucketSince).toBe(T0);
@@ -1961,8 +1924,7 @@ describe('the quiet "with coordinator" state (D-5296)', () => {
     seedSession(home, 'project-a-calm-mesa', 'claude');
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), tmux, liveStateReaderOver(localIO), nowS,
-      undefined, undefined, undefined, undefined, hookStates, undefined, coord,
-    );
+      { hookStates, coord });
     return (id: string) => fleet.find((x) => x.id === id)!;
   };
 

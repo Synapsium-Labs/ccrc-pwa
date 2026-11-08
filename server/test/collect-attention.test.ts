@@ -502,7 +502,7 @@ describe('the merge: reclaim over collector over leaf-kept, with second clauses 
 describe('every collector shape renders through the PWA’s one reader, with no PWA edit', () => {
   it('a per-id item, a collapsed line and a box-wide line; an unmeasured listing with no measured id included', async () => {
     const words = await import(path.join(ROOT, 'pwa/src/fleet/childReclaimWords.ts')) as {
-      childReclaimAttentionOf: (coord: unknown) => unknown[] };
+      childReclaimAttentionOf: (coord: unknown) => { sentence: string }[] };
     const seven = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f', 'demo-g'];
     const crowd = items(Object.fromEntries(seven.map((id) => [id,
       view({ leaf: `/h/tmp-root/${id}`, deferral: { word: 'in-use', detail: 'pid 7', since: NOW } })])),
@@ -510,7 +510,8 @@ describe('every collector shape renders through the PWA’s one reader, with no 
     const lone = items({}, { unmeasured: [{ listing: 'tmproots', kind: 'unmeasured', why: 'a symbolic link' }] });
     for (const list of [childReclaimAttentionWithLeaves([], [], crowd), childReclaimAttentionWithLeaves([], [], lone)]) {
       expect(list.length).toBeGreaterThan(0);
-      expect(words.childReclaimAttentionOf({ childReclaimAttention: list })).toEqual(list);
+      expect(words.childReclaimAttentionOf({ childReclaimAttention: list }).map((r) => r.sentence))
+        .toEqual(list.map((a) => a.sentence));
     }
   });
 });

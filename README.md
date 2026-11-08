@@ -3413,7 +3413,7 @@ session's state is known"), an update halt (each halting node with its own **Ack
 socket reconnecting, a dismissible swap notice and — on an armed box with no passkey — *Passphrase only —
 add a passkey*. `Runs · N active` opens `/runs`, beside the **Class**
 chooser (next section), in Refined at every width and in Instrument below 900. At Instrument's desk the column
-draws no runs line (the rail holds the Runs door), and the chooser sits on the list's status/project toggle row in
+draws no runs line (the top bar holds the Runs door), and the chooser sits on the list's status/project toggle row in
 project mode. A **Hot files** strip appears only while some session holds a file claim (read-only;
 "Fleet coordination" says what a claim is).
 
@@ -4958,7 +4958,13 @@ and `/:id/close`, with `/:id/items` and `/:id/route` beside them — one run row
    `WORKER_KICKOFF_PREFIX + brief` — the sentence naming the `ccrc-worker`
    skill, then the coordinator's prose — and the byte cap is measured on that
    composed body, so the ceiling a brief actually has is
-   `MAIL_BODY_MAX_BYTES` less the prefix's own length.
+   `MAIL_BODY_MAX_BYTES` less the prefix's own length. The body may name
+   landing intents (`intents`, at most 8 keys, each `#<n>` or `D-<n>`), and a
+   key another programme's open run in the project holds answers **409**
+   `intent-held` with the key and that run (`holder`), before any fleet act of
+   this request, except on the `worker-starting` re-run, where the first pass
+   may already have started or woken the bound worker's pane; the run stays
+   `planned` and no hold or row is written.
 3. The coordinator watches mail and `pr-state` the way an operator would —
    `GET /api/runs` and the `runs` frame on `/ws/fleet` carry state and
    work-item tallies, nothing new to poll — and marks the run `working` once

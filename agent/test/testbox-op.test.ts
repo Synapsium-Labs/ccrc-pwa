@@ -11,7 +11,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import path from 'node:path';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import type { RunningAgent } from '../src/server.js';
-import { KNOBS_ARGV, PROBES, SHOW_ENV_ARGV, measureTestbox, parseShowEnvironment, syncTestboxTools, versionOf } from '../src/testboxOp.js';
+import { KNOBS_ARGV, PROBES, SHOW_ENV_ARGV, measureTestbox, parseShowEnvironment, syncTestboxTools, userBusEnv, versionOf } from '../src/testboxOp.js';
+import { boundedExec } from '../src/testbox/exec.js';
 import {
   TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, readTestboxOpReply, readTestboxToolsSyncReply, type AgentReady,
 } from '../../shared/agent-protocol.js';
@@ -216,6 +217,27 @@ describe('measureTestbox: the fixed spawns (D-7427, D-7430)', () => {
     await measureTestbox(w.home, seams(w));
     expect(SHOW_ENV_ARGV).toEqual(['--user', 'show-environment']);
     expect(w.calls().filter((l) => l.startsWith('systemctl'))).toEqual(['systemctl --user show-environment']);
+  });
+
+  it('the user manager\'s environment is asked over the user bus; no other spawn carries it', async () => {
+    const w = world();
+    const envs: { file: string; env: Readonly<Record<string, string>> }[] = [];
+    const bus = { XDG_RUNTIME_DIR: '/run/user/1234', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1234/bus' };
+    const r = await measureTestbox(w.home, {
+      ...seams(w), userBus: bus,
+      exec: (env, ms) => (file, args) => { envs.push({ file: path.basename(file), env }); return boundedExec(env, ms)(file, args); },
+    });
+    expect(r.host.tools).toEqual(MEASURED);
+    expect(envs.find((e) => e.file === 'systemctl')?.env).toEqual({ ...bus, HOME: w.home, PATH: w.agentPath, LANG: 'C' });
+    for (const e of envs.filter((x) => x.file !== 'systemctl')) expect(Object.keys(e.env).sort(), e.file).toEqual(['HOME', 'LANG', 'PATH']);
+  });
+
+  it('userBusEnv keeps the agent\'s own bus, else derives both from the uid as ccd does', () => {
+    expect(userBusEnv({}, 1000)).toEqual({ XDG_RUNTIME_DIR: '/run/user/1000', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' });
+    expect(userBusEnv({ XDG_RUNTIME_DIR: '/rt' }, 1000)).toEqual({ XDG_RUNTIME_DIR: '/rt', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/rt/bus' });
+    expect(userBusEnv({ XDG_RUNTIME_DIR: '/rt', DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=x' }, 1000))
+      .toEqual({ XDG_RUNTIME_DIR: '/rt', DBUS_SESSION_BUS_ADDRESS: 'unix:abstract=x' });
+    expect(userBusEnv({}, null)).toEqual({});
   });
 
   it('the settings are read through the fixed argv `ccrc test --testbox-knobs host`, from the home\'s launcher', async () => {

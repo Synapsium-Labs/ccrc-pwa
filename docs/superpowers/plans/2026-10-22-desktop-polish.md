@@ -3103,6 +3103,63 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **As accepted (review 1291, 2026-10-30, at f16e3c7a2).** The question region stays always a Tab stop (F10's first form), named in the PR body with its cost. Two wording residuals in `ask-surface.browser.test.ts` are left for the next change that touches that file: the F8(b) rewrite left the sentence at ~l.259-260 unfinished ("… an eighty-line question so that / the longest question"), and `openAndMeasure`'s docstring (~l.130-132) still gives the retired fold reason. The explicit `tabIndex` is pinned in Chrome by the R102 and R115 Tab cells and in jsdom by the named-Tab-stop case; for an overflowing question in a second engine it is the known F6 limit.
 
+### Task C14: the chat and desk-nav follow-up sweep: grammar, cold-runs pins, desk-bar pins and stale wording (D-8110) — now
+
+**Routing:** band 1. **Needs:** chat reading (M, W, C, L and W2) and desk-nav Task A (#2429) have merged; they have. Step 0 measures the live claims, and an item whose file is held waits or asks for consent. It touches no file Task C15 touches.
+
+**Why.** The final reviews of the chat-reading tasks and of desk-nav Task A left findings that were not owed in their own PRs. This task lands them together, one commit per item. The coordinator's carried list names each finding's file, line, defect and fix direction, re-anchored on `main` at 67db632c2.
+
+**Items.**
+| # | From | Where | What |
+|---|---|---|---|
+| 1 | review 1601 F1, F2 | `pwa/src/lib/chatMarks.ts` (`NEGATION_TOKEN`, `ZERO_COUNT_AFTER`) | Widen the zero-count grammar as the report directs: a joined zero count ("0/12 tests passed", "0-0", "0.0", "No/none") and the spaced forms (": 0 / 12", ": 0 out of 12", ": 0%", ": 0 of twelve", ": 0 (of 12)", ": 0 — all good") carry no green or red label. Every row already pinned keeps its answer (0.5%, v0.0.1003, docs/no.md). Red first, one row per phrase. |
+| 2 | review 1592 F5 | `pwa/src/lib/chatMarks.ts` (`SENTENCE_END`) | A closer-aware sentence end. It is taken only if all eight shapes in the report hold, and the two shapes the report's regex regressed ("#651 merged (really?) yes.", "(why?) and shipped.") hold too. If no grammar meets all ten, the grammar stays, and the ten shapes are pinned as they answer today, with the gap named in the note. |
+| 3 | review 1601 F3 | `pwa/src/lib/remarkChatMarks.ts` (the block flatten) | Code, link text and raw html are exempt from the `?` rule; a name inside link text is registered; `<br>` reads as a break. One plugin row each, red first. |
+| 4 | review 1601 F4, F5, F6 | `pwa/test/chat-marks-negation.test.ts`, `chatMarks.ts` | One plugin row for each of mutants (a) to (e), and one table for (g); (f) follows item 3; (i) gets a 50k-against-200k scaling pin. The timing case parses outside the timed region. The `LabelScan` comment says names are registered in order. |
+| 5 | review 1606 F1 | `pwa/src/lib/markdown.tsx` (the `a` arm) | The arm reads `InsideLinkContext` and returns its children bare inside a link, as the `img` arm does. Red first on an autolink inside link text. |
+| 6 | review 1606 F2 to F6 | `pwa/src/screens/useColdRuns.ts`, `pwa/src/lib/useArrival.ts` and their tests | F2: an older read that lands after a newer settled failure does not set the state back to `ok`. F3 to F6: the swap-frame case, G22 extended, commits watched from mount, and one Accounts case that hides and unhides a lane under one `?lane=`. Each with its mutant. |
+| 7 | review 1586 A4 | `pwa/src/fleet/runWords.ts` (`runNotLoadedLine`) | The line gains one plain sentence naming **Show older** and where it sits, the end of Finished. The words are pinned. |
+| 8 | reviews 1589 F1 to F5, 1603 F3 | `pwa/src/session/chat.css`, `ui/README.md`, `pwa/test/ui-package-boundary.test.ts`, `pwa/browser/chat-width.browser.test.ts`, `pwa/test/chat-width.test.ts` | F1: the token must be a plain length, said once in chat.css and once in `ui/README.md`. F2: the census entry keeps its selector, and a sentence names `contrast.test.ts` as what enforces colour. F3 and 1603 F3: the false comments. F4: the attachments share the bubble's cap, `min(70%, prose)`, and that is the rule. The test name and comment that say "never wider than the bubble" say "the same cap as the bubble". No layout change. F5: the "resolved once" comment is hedged. |
+| 9 | review 1646 A1 | `pwa/browser/lazy-screens.browser.test.tsx` (`drawn`) | For /runs, `drawn()` waits for `.caps-input`, so the snapshot cannot race the caps dial. |
+| 10 | review 1646 A3, A5, A6, A7 | `pwa/test/instrument-shell.test.tsx`, `pwa/browser/instrument-bar.browser.test.ts`, `pwa/browser/ask-inline.browser.test.ts`, `pwa/browser/slowFirst.ts` | A3: one pin each, with a mutant, for `.ins-door-count`'s `pointer-events: none`, the `.ins-doors` flex rules, Settings current on bare `/settings`, and chord `g r`. A5: the comment names the top bar. A6: the alias is `DESK_DOORS`. A7: `FILE_MS` is refreshed from CI's own timings. |
+| 11 | review 1646 A4 | `pwa/src/skins/instrument/TopBar.tsx`, `ui/src/primitives/door.tsx` | Measure the wordmark's left inset against the lanes row's left edge at 1280 and 1920, in both palettes. If it is more than 2 px, a null glyph renders no glyph span, with a pin. Otherwise record the measurement and change nothing. |
+| 12 | review 1643 F5 | `pwa/src/fleet/navBadges.ts` (`badgePrint`) and the label-in-name cases | No contract change. At a count of 100 or more the pill prints "99+" and the name carries the real count, by design, in all three skins. A comment at `badgePrint` says so, and the label-in-name cases pin it: at such counts the check reads the word, not the pill. |
+| 13 | reviews 1603 F1, F4, F5 and 1646 A2 | `docs/superpowers/specs/2026-11-06-chat-reading-design.md` (R2 and §2.1); this task's note | The spec records R2 as amended by item 57: Refined 90ch and Instrument 100ch, and the bubble cap `min(70%, prose)`. The corrections to the W2 and desk-nav Task A notes go in this task's own note, `c14.md`, and no existing note is edited (as D-7282). |
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read each report and the coordinator's carried list, re-anchor every item on `main`, and drop any item a later merge fixed, saying so. Measure the live claims.
+- [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
+- [ ] **Step 2: Verify.** Run each touched suite once, the pwa typecheck, contrast-check, the whole pwa unit suite and the whole browser suite once, and `deviation-refs`.
+
+- **D-8110** - `chat-and-desk-nav-follow-up-sweep`: Task C14, issued on 2026-11-07. The findings that the final reviews of chat reading (1586, 1589, 1592, 1601, 1603, 1606) and desk-nav Task A (1643, 1646) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
+
+**Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. Nothing else changes behaviour. **Rollback.** A plain revert, item by item.
+
+### Task C15: the held-by follow-up sweep: one leaf module, Forget's presence check, and the held-by words (D-8111) — now
+
+**Routing:** band 1. **Needs:** cleanup R2 (#2390) has merged; it has. Step 0 measures the live claims. It touches no file Task C14 touches. `ccd/ccd` is generated, so a change to it is made in its source and restamped, and `GROWTH_CHECK` runs armed.
+
+**Why.** Cleanup R2's reviews (1580, 1585, 1590) carried a layering fix, two small guards and the wording of the held-by rows to a later sweep.
+
+**Items.**
+| # | From | Where | What |
+|---|---|---|---|
+| 1 | review 1585 (the leaf module), review 1590 I2 and Ng | `server/src/cleanupHeldBy.ts`, `server/src/archivedExpiry.ts`, a new L1 module | `heldByOf`, `heldByRowsOf` and the `HeldBy*` types move to one leaf L1 module that imports only L0, so the two files no longer import each other. Import pins red first. The server's `heldByRowsOf` is renamed, so the name is not shared with `pwa/src/fleet/heldByRowsWords.ts`. `archivedExpiry.ts`'s header says what it imports. |
+| 2 | review 1580 F9 | `pwa/src/fleet/HeldByRows.tsx` | Forget is offered only on the presence check the session sheet uses (dead, and not asleep). Red first. |
+| 3 | review 1580 F12 | `ccd` `cmd_forget` | The workspace field is read with `_reg_read`, and rc 2 refuses. A ccd case, red first, on a fixture HOME only. |
+| 4 | review 1590 F1 | `server/src/cleanupHeldBy.ts`, `pwa/src/fleet/heldByRowsWords.ts` (`HELD_PACE`) | Both copies add "longer when many items are held". The parity test holds. |
+| 5 | review 1590 N-a to N-e and N-h | the held-by words, `STANDING_REMEDY`, `RECHECK_TAIL` and `pwa/test/held-by-rows.test.tsx` | As the report directs, one commit each. Each pinned sentence changes with its pin. The `labelInName` mutant becomes "visible text changed, name left". |
+| 6 | review 1590 N-f | this task's note | The three R2 departures' acceptance (fix round 2, ruling 9) and the superseded sentences are recorded in `c15.md`. `r2.md` is not edited. |
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read each report and the coordinator's carried list, re-anchor every item on `main`, and drop any item a later merge fixed. Measure the live claims.
+- [ ] **Step 1: One commit per item**, red first, mutants run.
+- [ ] **Step 2: Verify.** The touched server suites, `rings`, `single-definition`, the ccd suites for `forget`, the pwa held-by tests, both typechecks and `deviation-refs`, through `ccrc test`, one at a time.
+
+- **D-8111** - `held-by-follow-up-sweep`: Task C15, issued on 2026-11-07. The findings that cleanup R2's reviews (1580, 1585, 1590) carried to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+
+**Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

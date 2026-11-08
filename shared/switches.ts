@@ -82,8 +82,9 @@ export const LANDING_CHECKS_LIVE_MARKER = 'landing-checks-live';
 export const DRIFT_PUSH_LIVE_MARKER = 'drift-push-live';
 
 /** `$REG/child-reclaim-disabled` (ARCH-77, #812): child reclaim's own off switch. Absent, child reclaim runs as it does
- *  today. Stood, it is meant to stop the child-spent reason alone, where `reclaim-paused` also stops expiry, collect and
- *  the coordinator reclaim. Touched only by hand: no writer in the tree. Its reader is `server/src/coord/childReclaimDisabled.ts`. */
+ *  today. Stood, it stops the child-spent reason alone (the sweep and the close hand-off queue none, and the executor
+ *  refuses at decide and at the act), where `reclaim-paused` also stops expiry, collect and the coordinator reclaim.
+ *  Touched only by hand: no writer in the tree. Its reader is `server/src/coord/childReclaimDisabled.ts`. */
 export const CHILD_RECLAIM_DISABLED_MARKER = 'child-reclaim-disabled';
 
 /** `$REG/testbox-remote-live` (D-7404; test box spec 2026-10-28 §2.7): the test box's remote switch. Absent, every

@@ -4,7 +4,7 @@
 // cleanup switch), but they are two populations with two vocabularies, and child reclamation's run chip must never
 // see an expiry. The sentence is the SERVER's — the pid, the command and the path of a process that keeps a row among
 // them — and the PWA renders it and maps nothing.
-import type { ExpiryAttention } from '../../../shared/api';
+import type { AttentionRow, ExpiryAttention } from '../../../shared/api';
 
 /** What the row says before the server's sentence, by kind. A kind from a newer server reads as `reported`. */
 export const EXPIRY_KIND_WORD: Readonly<Record<ExpiryAttention['kind'], string>> = {
@@ -30,10 +30,13 @@ const isExpiry = (a: unknown): a is RenderedExpiry => {
   return typeof o.sessionId === 'string' && typeof o.kind === 'string' && typeof o.sentence === 'string';
 };
 
-/** THE ONE READER of `CoordStatus.expiryAttention`. An absent field (an older server) reads as no items, and a
- *  malformed member is dropped on its own rather than taking the list with it. */
-export function expiryAttentionOf(coord: unknown): RenderedExpiry[] {
+/** THE ONE READER of `CoordStatus.expiryAttention`, as `AttentionRow`s keyed by session. An absent field (an older
+ *  server) reads as no rows, and a malformed member is dropped on its own rather than taking the list with it. */
+export function expiryAttentionOf(coord: unknown): AttentionRow[] {
   if (typeof coord !== 'object' || coord === null) return [];
   const list = (coord as { expiryAttention?: unknown }).expiryAttention;
-  return Array.isArray(list) ? list.filter(isExpiry) : [];
+  return Array.isArray(list) ? list.filter(isExpiry).map((a) => ({
+    lane: 'expiry', key: a.sessionId, kind: a.kind,
+    who: [[{ sessionId: a.sessionId, runId: null }]], sentence: a.sentence, sentenceFirst: false,
+  })) : [];
 }

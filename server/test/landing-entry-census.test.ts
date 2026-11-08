@@ -61,6 +61,13 @@ describe('the landing line has one writer (landing order wave 5e, D-7614)', () =
     expect(outside[0]!.source.replace(/\s+/g, ' ')).toMatch(/VALUES \(\?, \?, \?, \?, \?, NULL, 'pinned', \?, \?\)/);
   });
 
+  it('every write of landing_intents is an INSERT inside dispatchRun, the one writer (5g)', () => {
+    const all = allWrites(/^landing_intents$/);
+    expect(all.length).toBeGreaterThanOrEqual(1);
+    expect(all.filter((q) => !inSymbol('CoordStore.dispatchRun')(q)).map((q) => `${q.verb} ${q.file}:${q.text}`)).toEqual([]);
+    expect(all.map((q) => q.verb)).toEqual(['INSERT']);
+  });
+
   it('quarantineKind has one writer, advanceLanding: the quarantine UPDATE marks it and the verified re-pin clears it (5f Task 3)', () => {
     const marks = writes(/\bquarantineKind\b/i);
     expect(marks.map((q) => q.verb), 'the quarantine UPDATE and the re-pin UPDATE').toEqual(['UPDATE', 'UPDATE']);

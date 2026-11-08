@@ -64,6 +64,9 @@ export const isArchivedRow = (s: { readonly bucket: SessionBucket }): boolean =>
  *  lines warning about. */
 export type IdentityField = 'uuid' | 'wrapper' | 'workdir';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const IDENTITY_FIELD_MAP: Record<IdentityField, true> = { uuid: true, wrapper: true, workdir: true };
+
 /** Whether a registry row is a CHILD (spec §4, §5.1). Three answers, never two: an unreadable or malformed
  *  marker is neither "a child" nor "not a child", and callers act on it in OPPOSITE directions — a bind
  *  REFUSES, a reclaim DEFERS. */
@@ -912,6 +915,10 @@ export function paneWidth(s: { paneCols?: number | null }): number | null {
  *  `subject` is the row label, `activeForm` the present-participle line the
  *  spinner wears while the task runs ("Building claude_spend_reader…"). */
 export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const TASK_STATUS_MAP: Record<TaskStatus, true> = { pending: true, in_progress: true, completed: true };
+export const TASK_STATUSES: readonly TaskStatus[] = Object.keys(TASK_STATUS_MAP) as TaskStatus[];
 
 export interface TaskItem {
   id: string;            // numeric string — Claude Code's own file name / task number
@@ -2413,6 +2420,10 @@ export function foldSkillStates(states: readonly SkillState[]): SkillState {
 /** What one precondition contributes to the aggregate. */
 export type PreconditionCell = 'ok' | 'blocked' | 'unknown';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const PRECONDITION_CELL_MAP: Record<PreconditionCell, true> = { ok: true, blocked: true, unknown: true };
+export const PRECONDITION_CELLS: readonly PreconditionCell[] = Object.keys(PRECONDITION_CELL_MAP) as PreconditionCell[];
+
 /**
  * THE per-precondition predicate, once (fix round 1, minor 5).
  *
@@ -3124,7 +3135,7 @@ const reviveLastEnd = (o: RawObj, k: string): LastEnd | null => {
   return { at, cause: isRestartCause(cause) ? cause : 'unknown' };
 };
 
-const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
+const IDENTITY_FIELDS: readonly string[] = Object.keys(IDENTITY_FIELD_MAP);
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
  *  purpose: absent degrades to `[]`, not to `null` (`optSubagents`'s own
@@ -3208,6 +3219,11 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
  *  member that means "the server could not name ccd's rc". Either way the
  *  rest of the snapshot survives, and a non-string still rejects. */
 export type UnnamedSpawnWord = 'unrecognised' | 'keep';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const UNNAMED_SPAWN_WORD_MAP: Record<UnnamedSpawnWord, true> = { unrecognised: true, keep: true };
+export const UNNAMED_SPAWN_WORDS: readonly UnnamedSpawnWord[] =
+  Object.keys(UNNAMED_SPAWN_WORD_MAP) as UnnamedSpawnWord[];
 
 /** One persisted session in today's shape, or null if it cannot be one. */
 /** A `Presence` word, read from a persisted row (`reviveFleetSession`, D-7208). */
@@ -3775,6 +3791,10 @@ export interface FleetHealth {
  * sentence it is reading.
  */
 export type BuildAgreement = 'agreed' | 'skewed' | 'unknown';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const BUILD_AGREEMENT_MAP: Record<BuildAgreement, true> = { agreed: true, skewed: true, unknown: true };
+export const BUILD_AGREEMENTS: readonly BuildAgreement[] = Object.keys(BUILD_AGREEMENT_MAP) as BuildAgreement[];
 
 /* ---------------------------------------------------------------------------
  * The lifecycle JOURNAL's MIRROR — build 9's provenance record, server side.
@@ -4462,6 +4482,13 @@ export interface SlashCommand {
  *  whose whole text is `IDLE_COMPACT_NUDGE_PROMPT`, shown as a pill so the
  *  operator sees why a turn started. */
 export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact' | 'idle-compact-nudge';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const SYSTEM_ORIGIN_MAP: Record<SystemOrigin, true> = {
+  'resume-prompt': true, 'no-response': true, limit: true, 'idle-compact': true, 'idle-compact-nudge': true,
+};
+export const SYSTEM_ORIGINS: readonly SystemOrigin[] = Object.keys(SYSTEM_ORIGIN_MAP) as SystemOrigin[];
+
 /** `stale-task-strip` (D-5372): a task list whose newest file is older than
  *  this is a plan left open, not running work — the strip says "N open" and
  *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
@@ -5597,6 +5624,11 @@ export interface ProgramKickoffResumeInput { runId: unknown; wave: unknown }
  *  which errors an operator sees with nothing red. */
 export type ProgramKickoffField = 'slug' | 'title' | 'resume';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const PROGRAM_KICKOFF_FIELD_MAP: Record<ProgramKickoffField, true> = { slug: true, title: true, resume: true };
+export const PROGRAM_KICKOFF_FIELDS: readonly ProgramKickoffField[] =
+  Object.keys(PROGRAM_KICKOFF_FIELD_MAP) as ProgramKickoffField[];
+
 export type ProgramKickoffVerdict =
   | { ok: true; slug: string; title: string; body: string; bytes: number;
       resume?: ProgramKickoffResume }
@@ -6471,7 +6503,8 @@ export type RunRefuseCode =
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
   | 'cap-review-rounds'   // D-6795: a fourth review run for one work run
-  | 'ejection-not-merging';   // D-7619: an ejection body on a run not at merging
+  | 'ejection-not-merging'   // D-7619: an ejection body on a run not at merging
+  | 'intent-held';   // D-8085: another programme's run holds a landing intent this dispatch names
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6482,7 +6515,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
-  'cap-review-rounds': true, 'ejection-not-merging': true,
+  'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -11292,6 +11325,12 @@ export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice {
  *  the hand transition, or neither. Only a live lane is armed by anything. */
 export type CollectArmedBy = 'settings' | 'legacy-marker' | 'both' | 'neither';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const COLLECT_ARMED_BY_MAP: Record<CollectArmedBy, true> = {
+  settings: true, 'legacy-marker': true, both: true, neither: true,
+};
+export const COLLECT_ARMED_BY_WORDS: readonly CollectArmedBy[] = Object.keys(COLLECT_ARMED_BY_MAP) as CollectArmedBy[];
+
 /** `POST /api/coord/collect-lane`'s body (§5.6). `confirm`, when present, is the key of 8 lowercase hex characters
  *  that a 409 answered with. The route refuses any other key, and any other shape of `confirm`, with a 400. */
 export interface CollectLaneRequest { readonly choice: CollectLaneChoice; readonly confirm?: string }
@@ -12791,6 +12830,10 @@ export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 /** Which table a digest line came from, and so which id space `id` is in. */
 export type DigestRowKind = 'ask' | 'approval';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DIGEST_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true };
+export const DIGEST_ROW_KINDS: readonly DigestRowKind[] = Object.keys(DIGEST_ROW_KIND_MAP) as DigestRowKind[];
+
 /** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
  *  row stored: `text` is the question, or the command's first `DIGEST_COMMAND_CHARS` characters. */
 export interface DigestLine {
@@ -13017,6 +13060,11 @@ export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
 /** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
  *  on a loopback host, or anything else. */
 export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const ACCOUNT_ORIGIN_CLASS_MAP: Record<AccountOriginClass, true> = { https: true, loopback: true, insecure: true };
+export const ACCOUNT_ORIGIN_CLASSES: readonly AccountOriginClass[] =
+  Object.keys(ACCOUNT_ORIGIN_CLASS_MAP) as AccountOriginClass[];
 
 /** One credential shape (D-5513, plan Task A10): a bare regular-expression source, with no flags and no boundary, so
  *  each reader adds its own (`server/src/accounts/mask.ts` for every egress of session-derived text,
@@ -13628,4 +13676,34 @@ export interface FleetHealth {
    * alone; absent reads as UNKNOWN, never as a healthy backup and never as an alarm.
    */
   backup?: BackupHealth;
+}
+
+/** One subject of an `AttentionRow`: a session, and the run it belongs to where its lane knows one. */
+export interface AttentionSubject {
+  readonly sessionId: string;
+  readonly runId: number | null;
+}
+
+/** The lane whose attention list an `AttentionRow` came from. */
+export type AttentionLane = 'child-reclaim' | 'expiry' | 'dead-coordinator';
+const ATTENTION_LANE_MAP: Record<AttentionLane, true> = { 'child-reclaim': true, expiry: true, 'dead-coordinator': true };
+export const ATTENTION_LANES: readonly AttentionLane[] = Object.keys(ATTENTION_LANE_MAP) as AttentionLane[];
+
+/** ONE row of the cleanup row's attention lists (consolidation spec K1, "Consumers move"; #2366), the shape the PWA's
+ *  three coord-frame readers (`childReclaimAttentionOf`, `expiryAttentionOf`, `deadCoordinatorAttentionOf`) all
+ *  return. A PWA reading, not a wire shape: each lane's own field (`ChildReclaimAttention`, `ExpiryAttention`,
+ *  `DeadCoordinatorAttention`) stays on the frame unchanged, and its reader maps it here. Appended at the foot, so no
+ *  line cited above moves.
+ *
+ *  `kind` is the lane's kind token the line leads with, or `null` where the line leads with no word (child
+ *  reclamation's). `who` holds one entry per name the line shows: one subject each for a collapsed kept line's
+ *  members, every claimant together for the circuit breaker's. `sentence` is the SERVER's. `sentenceFirst` is the
+ *  collapsed kept line's order: its sentence states the count, and its members follow. */
+export interface AttentionRow {
+  readonly lane: AttentionLane;
+  readonly key: string;
+  readonly kind: string | null;
+  readonly who: readonly (readonly AttentionSubject[])[];
+  readonly sentence: string;
+  readonly sentenceFirst: boolean;
 }
