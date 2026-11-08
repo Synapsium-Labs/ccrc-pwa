@@ -10,6 +10,7 @@ import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
   type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type RunsPageAnswer, type SessionRun } from '../../../shared/api';
 import { formatAge } from './formatReset';
+import { closeWords } from './closeWords';
 
 export const RUN_WORD: Record<RunState, string> = {
   planned: 'planned',
@@ -43,6 +44,11 @@ export const RUN_GLYPH: Record<RunState, string> = {
  *  1, task 5, finding 2). Route every lookup through this first. */
 export const runState = (run: { state: RunState }): RunState =>
   isRunState(run.state) ? run.state : 'unknown';
+
+/** THE ONE STATE WORD a run's row draws (D-8071; spec §11.3, A16). A closed run's words come from `closeWords` first, so
+ *  an abandoned run never reads "failed"; otherwise `RUN_WORD`. Task 4 adds its "stuck" and "reviewed" arms. */
+export const runStateWord = (run: RunSummary): string =>
+  closeWords(run) ?? RUN_WORD[runState(run)];
 
 /** Tolerant read of `RunSummary.items`, same idiom as `unmeasuredFields`
  *  (`shared/api.ts`) for the identical reason: the parameter type says

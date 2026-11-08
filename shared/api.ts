@@ -6858,6 +6858,10 @@ export const programmeNameFromSlug = (slug: string): string => {
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
 
+/** Who closed a run (D-8071, migration 44): the three words `run_events.causedBy` carries for a close. */
+export type RunClosedBy = 'coordinator' | 'operator' | 'sweep';
+export const isRunClosedBy = (v: unknown): v is RunClosedBy => v === 'coordinator' || v === 'operator' || v === 'sweep';
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -6866,6 +6870,13 @@ export interface RunSummary {
    *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
    *  `FLEET_PROTO` is not bumped. */
   runTitle?: string | null;
+  /** Who closed the run, from `runs.closedBy` (D-8071, migration 44), or null for a run closed by a session id or before
+   *  the column. OPTIONAL on the wire: an older server omits it. Read it ONLY through `closeWords`
+   *  (`pwa/src/fleet/closeWords.ts`). ADDITIVE; `FLEET_PROTO` is not bumped. */
+  closedBy?: RunClosedBy | null;
+  /** Why it was closed, from `runs.closeDetail` (redacted), or null. OPTIONAL on the wire; read ONLY through
+   *  `closeWords`. ADDITIVE. */
+  closeDetail?: string | null;
   wave: number;
   waveOf: number | null;
   project: string;

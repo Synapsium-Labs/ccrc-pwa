@@ -2260,6 +2260,31 @@ export const MIGRATIONS: readonly string[] = [
   UPDATE programs SET title = upper(substr(replace(slug, '-', ' '), 1, 1)) || substr(replace(slug, '-', ' '), 2)
     WHERE slug IN (SELECT program FROM runs);
   `,
+  // ── 44: user_version 43 -> 44 ─────────────────────────────────────────────
+  // Who closed a run, and why (D-8071; spec 2026-11-04 §9.3, §11.2, A17, A30). `runs.closedBy` is one of the three words
+  // `run_events.causedBy` carries for a close ('coordinator', 'operator', 'sweep'), and `runs.closeDetail` is that row's
+  // `detail`. Their ONE writer is `CoordStore.advanceInner`, in the statement that writes `closedAt`, so they cannot
+  // differ from the terminal `run_events` row it writes beside them. A `causedBy` outside the three words (a session id)
+  // stores no `closedBy`, and the run reads as it did before.
+  //
+  // THE FILL: each terminal run takes both columns from its newest terminal `run_events` row. A run with no such row, and
+  // a row whose `causedBy` is not one of the three words, stays NULL.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 44` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the columns, and its closes store NULL, which reads "as today". Every earlier
+  // entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 43 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closedBy TEXT;
+  ALTER TABLE runs ADD COLUMN closeDetail TEXT;
+  UPDATE runs SET
+    closedBy = (SELECT e.causedBy FROM run_events e WHERE e.runId = runs.id AND e.toState IN ('done', 'failed')
+                  AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1),
+    closeDetail = (SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.toState IN ('done', 'failed')
+                  AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1)
+    WHERE state IN ('done', 'failed');
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

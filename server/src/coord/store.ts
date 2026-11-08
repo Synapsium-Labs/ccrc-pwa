@@ -140,7 +140,7 @@ import {
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, isRunClosedBy, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
   TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskMintReleaseReason, type AskReleaseReason, type AskState,
@@ -975,6 +975,8 @@ interface RunRowDb {
   unattributed: number;
   hadChild: number;
   runTitle: string | null;
+  closedBy: string | null;
+  closeDetail: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -995,7 +997,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -2794,10 +2796,15 @@ export class CoordStore {
       return { ok: false as const, error: 'bad-transition' as const, from, to };
     }
     const now = Date.now();
+    // D-8071: the close columns ride the statement that writes `closedAt`. A `causedBy` outside the three words stores
+    // no `closedBy`, and the detail is stored whenever the run ends.
+    const closer = isRunClosedBy(causedBy) ? causedBy : null;
     this.db.prepare(
-      `UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedAt END ` +
+      `UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedAt END, ` +
+      `closedBy = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedBy END, ` +
+      `closeDetail = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closeDetail END ` +
       'WHERE id = ?',
-    ).run(to, to, now, runId);
+    ).run(to, to, now, to, closer, to, detail ?? null, runId);
     this.db.prepare(
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
@@ -3055,6 +3062,9 @@ export class CoordStore {
      *  only while the run's `claimedBy` still equals it, read INSIDE this transaction; otherwise `claimant-changed`
      *  and nothing is written. The dead-coordinator lane passes the crashed id; every other caller passes nothing. */
     expectClaimedBy?: string;
+    /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
+     *  `abandon:<reason>`; every other caller passes nothing. */
+    detail?: string;
   }): AdvanceResult {
     return tx(this.db, () => {
       if (input.expectClaimedBy !== undefined) {
@@ -3078,7 +3088,7 @@ export class CoordStore {
         const closingAdv = this.advanceInner(input.runId, 'closing', input.causedBy);
         if (!closingAdv.ok) return closingAdv;
       }
-      const finalAdv = this.advanceInner(input.runId, input.finalState, input.causedBy);
+      const finalAdv = this.advanceInner(input.runId, input.finalState, input.causedBy, input.detail);
       if (!finalAdv.ok) return finalAdv;
       // Only a SHAPE-VALID handoff commit is ever written (fix — review
       // findings 6/18): the caller (the close route) runs the same 40-hex
@@ -5047,6 +5057,10 @@ export class CoordStore {
       hadChild: row.hadChild === 1 && row.sessionId !== null,
       // Migration 43 (D-8071): the title the run was opened with, null for a run opened before it.
       runTitle: row.runTitle,
+      // Migration 44 (D-8071): who closed the run and why, from the columns `advanceInner` writes beside `closedAt`. A
+      // stored word outside the three is no `closedBy`; the detail is the redacted form.
+      closedBy: isRunClosedBy(row.closedBy) ? row.closedBy : null,
+      closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
     };
   }
 
