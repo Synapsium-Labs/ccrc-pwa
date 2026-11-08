@@ -2415,7 +2415,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
     expect(body, 'the executable runs-open example has no one-line JSON body').not.toBeNull();
     const keys = [...body![1]!.matchAll(/"([A-Za-z]+)":/g)].map((m) => m[1]!).sort();
     expect(keys).toEqual([
-      'claimedBy', 'homeProject', 'program', 'project', 'title', 'wave', 'waveOf',
+      'claimedBy', 'homeProject', 'program', 'programmeTitle', 'project', 'title', 'wave', 'waveOf',
     ]);
     expect(body![1], 'the executable body omits the immutable programme home')
       .toContain('"homeProject":"<home project>"');
@@ -2430,6 +2430,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
       const executable = blocks[0]!
         .replace(/<slug>/g, 'fixture-program')
         .replace(/<title>/g, 'Fixture title')
+        .replace(/<the programme's name[^>]*>/g, 'Fixture Programme')
         .replace(/<project>/g, 'consumer-project')
         .replace(/<home project>/g, 'home-project')
         .replace(/<M or null>/g, '3');
@@ -2439,7 +2440,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
       const [argv, json] = readFileSync(calls, 'utf8').split('\n', 2);
       expect(argv).toBe('runs open --json -');
       expect(JSON.parse(json!)).toEqual({
-        program: 'fixture-program', title: 'Fixture title', project: 'consumer-project',
+        program: 'fixture-program', title: 'Fixture title', programmeTitle: 'Fixture Programme', project: 'consumer-project',
         homeProject: 'home-project', wave: 1, waveOf: 3, claimedBy: 'coordinator-id',
       });
     } finally {
@@ -4315,5 +4316,13 @@ describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R
     expect(sentences, 'exactly one sentence names spawn-adopted').toHaveLength(1);
     expect(sentences[0]).toMatch(/wave-lifecycle\.md/);
     expect(sentences[0]).toMatch(/not/);
+  });
+  it('sends programmeTitle on both wave-1 open examples, so a new programme is named in words (D-8071)', () => {
+    const opens = [skill, refs('wave-lifecycle.md')].map((text) =>
+      text.split('\n').filter((l) => l.includes('"program":"<slug>"') && l.includes('"wave":1,')));
+    for (const lines of opens) {
+      expect(lines.length).toBeGreaterThan(0);
+      for (const l of lines) expect(l).toContain('"programmeTitle":');
+    }
   });
 });
