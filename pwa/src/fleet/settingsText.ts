@@ -22,7 +22,6 @@ import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { PANE_SCOPE_STOP_TEXT } from './paneScopeStopWords';
 import { SCOPE_SWEEP_TEXT } from './scopeSweepWords';
-import { DELEGATION_ADOPT_TEXT } from './delegationAdoptWords';
 import { DISPATCH_ABANDON_TEXT } from '../../../shared/dispatch-abandon';
 import { RADIO_FIELDSET, RADIO_LEGEND, Radio, toast } from '@ccrc/ui';
 
@@ -330,11 +329,6 @@ export const SETTINGS_CARDS = {
     /** D-7994: the sweep's two switches, after Stop leftovers, which hands the sweep whatever a deliberate stop leaves. */
     scopeSweep: {
       scope: SETTINGS_SCOPE.fleet, title: SCOPE_SWEEP_TEXT.title, purpose: SCOPE_SWEEP_TEXT.purpose,
-    },
-    /** D-8114: the delegation lane's keep switch, after Leftover processes, the other card about what happens to a finished
-     *  session's leftovers. */
-    delegationAdopt: {
-      scope: SETTINGS_SCOPE.fleet, title: DELEGATION_ADOPT_TEXT.title, purpose: DELEGATION_ADOPT_TEXT.purpose,
     },
     /** D-7860: the fleet box's backup, a quiet line; the card before Test box, which stays the section's last. */
     backup: {
