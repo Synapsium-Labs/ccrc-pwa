@@ -1498,7 +1498,7 @@ describe('R93: the sentence above the field, and the field does not move (D-6326
     });
   }
 
-  // The sentence's wrap. 900 is the narrowest desk pane (Instrument adds its rail from 900 up). The sentence is one line at 100
+  // The sentence's wrap. 900 is the narrowest desk pane (Instrument draws its top bar of doors from 900 up). The sentence is one line at 100
   // percent in both skins, so its font token (`--fs-sm`, px) is doubled to force it onto two lines (200 percent is text zoom's WCAG ceiling; at 300 percent the sentence takes two or three lines of 39px text and squeezes the card to a 19 to 61px body, which no placement of the sentence changes): scaling the root
   // font size moves nothing here, because the app's sizes are px tokens. The line count is recorded, and the same assertions hold.
   for (const skin of [REFINED, INSTRUMENT]) for (const zoom of [100, 200]) {
