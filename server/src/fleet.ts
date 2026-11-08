@@ -157,9 +157,9 @@ const ASK_ANSWERED_CHIP_WINDOW_MS = 30 * 60_000;
  * F2(b) — the ruling). The `held` bound is the one this function went a
  * wave without, on the premise that "a held ask is live by definition":
  * true only within one process lifetime and only while `staleAsk` can still
- * reach the row, and a restart mid-hold breaks both (`heldAsks` is never
- * rehydrated, and `dialogIds` is stamped before the notify gate, so no
- * re-mint ever clears it). See `ASK_HELD_CHIP_MAX_MS`'s own docstring for
+ * reach the row, and a restart mid-hold broke both (the hold was not yet
+ * re-seeded from the rows, D-5925 came later, and `dialogIds` is stamped
+ * before the notify gate, so no re-mint cleared it). See `ASK_HELD_CHIP_MAX_MS`'s own docstring for
  * why the ceiling is derived from the lane's two windows rather than picked.
  */
 function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
