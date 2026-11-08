@@ -70,7 +70,7 @@
 import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import { BareRow, Button, CountBadge } from '@ccrc/ui';
-import type { FleetSession } from '../../../../shared/api';
+import type { FleetSession, RunSummary } from '../../../../shared/api';
 import { BucketBar } from '../../fleet/BucketBar';
 import { ClassChooser } from '../../fleet/ClassChooser';
 import { FleetCards } from '../../fleet/FleetCards';
@@ -84,7 +84,7 @@ import type { ProgHue } from '../../fleet/programmeBoxes';
 import { boundOpenRun, isRunClosed } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
-import { OPEN_RUNS, openSession } from '../../fleet/openers';
+import { openRunAt, openSession } from '../../fleet/openers';
 import {
   statusGroupLabel, statusView, statusViewTotal, type BoxClock, type StatusBox, type StatusGroupId, type StatusViewGroup,
 } from '../../fleet/statusGroups';
@@ -136,6 +136,12 @@ const foldKey = (id: StatusGroupId): string => `status::${id}`;
 
 /** The view reads no rollup window, so its clock waits on no session. */
 const NO_SESSIONS: readonly FleetSession[] = [];
+
+/** The hold cell's door: the page of the run the session is bound to, or none where the board holds no such run. */
+function openRunDoor(runs: readonly RunSummary[], s: FleetSession): (() => void) | null {
+  const bound = boundOpenRun(runs, s);
+  return bound === null ? null : openRunAt(bound.id);
+}
 
 export function FleetTable(): ReactNode {
   const [mode, setMode] = useState<GroupMode>(loadGroupMode);
@@ -259,7 +265,7 @@ function StatusTable({ selectedId, phoneTab, onTab }: {
           onActions={onActions}
           roster={roster}
           projectPool={chrome.projects.poolFor(s.project)}
-          onOpenRun={boundOpenRun(runs, s) === null ? null : OPEN_RUNS}
+          onOpenRun={openRunDoor(runs, s)}
           workingOn={workingOn(s, cards)}
           childRun={childRunContext(s, runs, lookup)}
           coordinator={orphan?.presence ?? null}

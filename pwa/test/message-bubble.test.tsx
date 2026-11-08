@@ -370,7 +370,7 @@ describe('linkify links names in the operator\'s own text (chat reading Task L)'
     const out = html('is #651 merged? see https://example.com/x and run 1527', ctx);
     expect(out).toContain('<a href="https://github.com/owner-a/repo-a/issues/651" target="_blank" rel="noopener noreferrer">#651</a>');
     expect(out).toContain('<a href="https://example.com/x" target="_blank" rel="noopener noreferrer">https://example.com/x</a>');
-    expect(out).toContain('<a href="/runs?run=1527">run 1527</a>');
+    expect(out).toContain('<a href="/runs/1527">run 1527</a>');
   });
 
   it('linkify with no context is today\'s output', () => {

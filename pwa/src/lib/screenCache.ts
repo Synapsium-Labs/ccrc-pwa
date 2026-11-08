@@ -64,3 +64,7 @@ export const settingsKey = (name: SettingsCacheName): string => `settings:${name
  *  gives the same key, and the screen reads it as `null`), kept apart from every named day: the default answer is for
  *  whichever day the server picks, so a correction forgets it by the day its answer names (`DigestScreen`). */
 export const digestKey = (day: string | null): string => (day === null ? 'digest:' : `digest:${day}`);
+
+/** The key of the runs board's place (the runs rebuild, D-8072): its Finished fold and its scroll, kept so a return from a run
+ *  finds the board as it was left. */
+export const runsBoardKey = 'runs:board';

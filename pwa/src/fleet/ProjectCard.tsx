@@ -47,7 +47,7 @@ import {
 import { ProgrammeBox } from './ProgrammeBox';
 import { SessionLine, WorksOnChip } from './SessionLine';
 import { sameCardProps } from './lineProps';
-import { OPEN_RUNS } from './openers';
+import { openRunAt } from './openers';
 import { sessionLabel } from './sessionLabel';
 import { WorkLine } from './WorkLine';
 import {
@@ -513,13 +513,12 @@ function ProjectCardView({
   // exactly the inert cell it always did for
   // that, so a hand hold and a hold outliving its run both read as text.
   //
-  // `/runs` unfocused, because there is no per-run route to focus
-  // (`ArchiveConflictSheet`'s own note names that as the first of the three
-  // things such a link would need). The board groups by programme and the cell
-  // names the programme, so the operator lands looking at the right group.
-  // `OPEN_RUNS`, one module constant (C9), so a memo'd line is handed the same door on every render.
-  const openRunFor = (session: FleetSession): (() => void) | null =>
-    boundOpenRun(runs, session) === null ? null : OPEN_RUNS;
+  // The door opens the run's page, `/runs/<id>` (the runs rebuild, D-8072). `openRunAt` keeps one function per run, so a
+  // memo'd line is handed the same door on every render.
+  const openRunFor = (session: FleetSession): (() => void) | null => {
+    const bound = boundOpenRun(runs, session);
+    return bound === null ? null : openRunAt(bound.id);
+  };
 
   // The orphaned worker's marker and every ruling about when it stays silent:
   // `orphanWords.ts`. Bound here to this card's own runs, project and LIVE

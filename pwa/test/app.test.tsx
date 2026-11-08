@@ -387,6 +387,8 @@ describe('ROUTES and the ladder, both ways', () => {
     '/settings/security', '/settings/bogus', '/settings/a/b', '/settings/measure-highlighting',
     // The reader lab (the reader lab plan, Task 10).
     '/settings/reader-lab',
+    // One run's page (the runs rebuild, D-8072): a canonical number, its slash form, and the addresses that are no run page.
+    '/runs/410', '/runs/410/', '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 
@@ -395,6 +397,7 @@ describe('ROUTES and the ladder, both ways', () => {
   const OUTSIDE = new Set([
     '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
     '/programmes', '/programmes/a/b', '/programmesx', '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz', '/settings/a/b',
+    '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
   ]);
 
   it('every ROUTES row is reached by a probe, and every probe renders what the table says', () => {

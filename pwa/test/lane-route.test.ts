@@ -40,17 +40,17 @@ describe('the lane query on the accounts route', () => {
   });
 });
 
-// Chat reading Task L (D-8062, R10): a run named in chat opens the board at its row, a query on the existing `runs` route, as
-// the lane query is on `accounts`.
-describe('the run query on the runs route', () => {
-  it('runsRunHref builds /runs?run=1527', () => {
+// Chat reading Task L (D-8062, R10) opened the board at `/runs?run=<id>`; the runs rebuild (D-8072, A50) sends a name in chat to
+// the run's page, and `?run=` stays only to be read from old chat text.
+describe('the run link and the legacy run query', () => {
+  it('runsRunHref builds /runs/1527 (the run page, A50)', () => {
     expect(RUNS_RUN_QUERY).toBe('run');
-    expect(runsRunHref(1527)).toBe('/runs?run=1527');
-    expect(matchRoute(split(runsRunHref(1527)).path)?.route.id).toBe('runs');
+    expect(runsRunHref(1527)).toBe('/runs/1527');
+    expect(matchRoute(split(runsRunHref(1527)).path)?.route.id).toBe('run');
   });
 
   it('runParam reads it', () => {
-    expect(runParam(split(runsRunHref(1527)).search)).toBe(1527);
+    expect(runParam(split('/runs?run=1527').search)).toBe(1527);
     expect(runParam('run=12')).toBe(12);
     expect(runParam('?lane=x&run=7')).toBe(7);
   });

@@ -1,8 +1,8 @@
 // Names in chat open their objects (chat reading Task L, D-8062; spec 2026-11-06 section 4), in a real Chrome over the
 // production build, at 1280 and 390 in Refined. One assistant message names a run, an item, a document and a PR. Following
-// `run 1527` lands on the runs board with that run's row marked and in view; `item 340` opens the item; the document path
+// `run 1527` opens that run's page (`/runs/1527`); `item 340` opens the item; the document path
 // opens the Docs reader at the session's branch (`?ref=ws/one`); `#651` opens a new page with no opener. The jsdom suites
-// (test/chat-links.test.tsx, chat-refs.test.ts, runs-arrival.test.tsx) pin the markup and the decisions; this file holds the
+// (test/chat-links.test.tsx, chat-refs.test.ts, runs-open.test.tsx) pin the markup and the decisions; this file holds the
 // whole path through the shell's router, its pane reset and a real popup. Names are neutral: the repository is public.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/chat-links.browser.test.ts
@@ -59,7 +59,12 @@ const FIXTURE: AppFixture = {
       roots: ['/w'],
       projects: [{ name: 'project-a', workdir: '/w/project-a', repo: { state: 'named', slug: 'owner-a/repo-a' } }],
     },
-    '/api/runs': { runs: [], nextBefore: null }, '/api/claims': [], '/api/waiting': { ok: true, waiting: WAITING },
+    '/api/runs': { runs: [], nextBefore: null }, '/api/claims': [],
+    // The run's page (`/runs/1527`) reads these five; a real server answers each in this shape.
+    '/api/runs/1527/record': { ok: true, run: RUNS[24], events: [], reviewedBy: [], olderEvents: 0 },
+    '/api/runs/1527': { ok: true, run: RUNS[24], spend: { measured: false, reason: 'no-sweep' } },
+    '/api/runs/1527/items': { ok: true, items: [] },
+    '/api/runs/1527/signals': { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } }, '/api/waiting': { ok: true, waiting: WAITING },
     // The board's caps dial reads this; an empty answer would stop the board.
     '/api/coord/caps': { ok: true, caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 }, updatedAt: null },
   },
@@ -132,26 +137,17 @@ const here = (page: Page): Promise<string> => page.evaluate(() => location.pathn
 
 for (const width of [1280, 390]) {
   describe(`names in chat open their objects, Refined at ${width}px (D-8062)`, () => {
-    it('run 1527 lands on the board with its row marked and in view', async () => {
+    it('run 1527 opens the run\'s page', async () => {
       const { ctx, page, errors } = await openChat(width);
       try {
         const a = link(page, 'run 1527');
         await a.scrollIntoViewIfNeeded();
         await a.click();
-        await page.locator('.run-row[data-arrived="true"]').waitFor({ timeout: 20_000 });
-        expect(await here(page)).toBe('/runs?run=1527');
-        const row = await page.evaluate(() => {
-          const el = document.querySelector<HTMLElement>('.run-row[data-arrived="true"]')!;
-          const r = el.getBoundingClientRect();
-          return {
-            title: el.title, focused: document.activeElement === el, top: r.top, bottom: r.bottom, vh: innerHeight,
-            marked: document.querySelectorAll('[data-arrived]').length,
-          };
-        });
-        expect(row.title.startsWith('run 1527 '), row.title).toBe(true);
-        expect(row.focused, 'the arrived row has focus').toBe(true);
-        expect(row.marked, 'one row is marked').toBe(1);
-        expect(row.top >= 0 && row.bottom <= row.vh, `the row is in view: ${row.top}..${row.bottom} of ${row.vh}`).toBe(true);
+        await page.waitForFunction(() => location.pathname === '/runs/1527', undefined, { timeout: 20_000 });
+        // The page of one run, not the board: the board's rows and its search box are not drawn.
+        await page.getByRole('heading', { name: /Run 1527/ }).first().waitFor({ timeout: 20_000 });
+        expect(await page.locator('.run-row').count()).toBe(0);
+        expect(await here(page)).toBe('/runs/1527');
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
@@ -190,7 +186,7 @@ for (const width of [1280, 390]) {
     it('a held small run and a cleared item link through the ids the console holds', async () => {
       const { ctx, page, errors } = await openHeld(width);
       try {
-        expect(await link(page, 'run 12').getAttribute('href')).toBe('/runs?run=12');
+        expect(await link(page, 'run 12').getAttribute('href')).toBe('/runs/12');
         const a = link(page, 'item 41');
         expect(await a.getAttribute('href')).toBe('/waiting/41');
         await a.scrollIntoViewIfNeeded();

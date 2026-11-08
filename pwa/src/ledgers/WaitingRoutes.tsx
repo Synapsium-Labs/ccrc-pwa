@@ -191,15 +191,15 @@ function useShownList(visit: string | null): ItemList | null {
   return shown !== null && shown.visit === visit ? shown.list : null;
 }
 
-/** The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with the list's
+/** The way-back strip's button, shared by an item's page and a run's (`RunDetailScreen`). The item's way back to the list it was opened from, AT EVERY WIDTH (plan PL9; spec §2, D23): labelled with the list's
  *  name, and not the shell's back chevron, which a desk hides because the column beside the pane is the way out of a screen. A
  *  phone has no such column, and on a desk the column holds the list's rows but not its page (the filter's rail and summary),
  *  so this is the way to that page, with the filter it was opened under (PL11, D-7986). An item opened from its programme's
  *  Goals page goes back to that page instead, named by its programme (`backWay`, review 1537 F2). */
-function ListBack({ way, ref }: { way: { to: string; name: string }; ref?: Ref<HTMLButtonElement> }): ReactNode {
+export function WayBack({ to, label, ref }: { to: string; label: string; ref?: Ref<HTMLButtonElement> }): ReactNode {
   return (
-    <Button ref={ref} variant="ghost" size="fit" className="wi-back" aria-label={backLabel(way.name)} onClick={() => navigate(way.to)}>
-      <span aria-hidden="true">‹</span><span className="wi-back-name">{way.name}</span>
+    <Button ref={ref} variant="ghost" size="fit" className="wi-back" aria-label={backLabel(label)} onClick={() => navigate(to)}>
+      <span aria-hidden="true">‹</span><span className="wi-back-name">{label}</span>
     </Button>
   );
 }
@@ -241,7 +241,7 @@ function ItemNav({ id, back, place, left, title }: {
   };
   return (
     <nav className="wi-nav" aria-label={BETWEEN_ITEMS_LABEL}>
-      <ListBack way={back} ref={backRef} />
+      <WayBack to={back.to} label={back.name} ref={backRef} />
       <span className="sr-only" role="status">{positionWords(place, title)}</span>
       {place !== null && (
         <span className="wi-steps-nav">

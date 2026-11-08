@@ -271,9 +271,13 @@ const CONTROLS: Record<string, string> = {
     'SELECTOR .insp-routing-row button. The inspector\'s model and effort chips (W2 Task S8, D-5474): the header\'s '
     + '`metaChipTone()` doors, which the rail has the room to raise to the floor the header\'s chips are ruled under.',
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
+  'screens/RunFind.tsx <a> rf-link': 'TOKEN. A search result (the runs rebuild, D-8072): the whole result row is the link, `--tap-min` tall in run-find.css.',
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
   'screens/RunRow.tsx <button> run-resume': 'TOKEN. The resume door.',
+  'screens/RunDetailScreen.tsx <a> rd-wait-link': 'TOKEN. The link a planned run behind a stuck run draws in the header (the runs rebuild, D-8072): `.rd-wait-link` declares the floor.',
+  'screens/RunRow.tsx <a> run-wait': 'TOKEN. The link a planned run behind a stuck run draws (the runs rebuild, D-8072): `.run-row a.run-wait` declares the floor.',
+  'screens/RunsScreen.tsx <a> runs-info-link': 'TOKEN. The board\'s information line, when it names one run (D-8072): `.runs-info .runs-info-link` declares the floor.',
   'session/ChatList.tsx <button> jump-latest': 'TOKEN. The jump-to-latest affordance.',
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',
@@ -341,6 +345,11 @@ const CONTROLS: Record<string, string> = {
     'VARIANT buttonVariants. The Goals page\'s "N waiting on you" link to the one Waiting on you list, filtered to the '
     + 'programme (desktop-polish PL11, D-7986): `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this '
     + 'census checks. An anchor, not a button, because it navigates; it stands alone, so it is no in-sentence TextLink.',
+  'screens/RunDetailScreen.tsx <a> (computed)':
+    'VARIANT buttonVariants. The run page\'s stand-alone links (the runs rebuild, D-8072): "Back to Runs" under "There is '
+    + 'no run N.", and the controls "Open the session" and "Open the coordinator": `GHOST_ANCHOR`, the ghost button on an '
+    + 'anchor, whose `min-h-tap` this census checks. Anchors, not buttons, because they navigate; each stands alone, so '
+    + 'none is an in-sentence TextLink.',
   'lib/markdown.tsx <a> (none)':
     'INLINE. Links inside a sentence: react-markdown\'s `a` mapping, which moved '
     + 'here with the rest of chat\'s component map (native Docs reader W4), '

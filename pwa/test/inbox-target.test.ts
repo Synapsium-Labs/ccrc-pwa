@@ -35,7 +35,7 @@ describe('inboxTarget', () => {
   });
 
   it('a session gone from the fleet with a run opens the board', () => {
-    expect(inboxTarget(ev({ kind: 'run', sessionId: 'ws-gone', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs' });
+    expect(inboxTarget(ev({ kind: 'run', sessionId: 'ws-gone', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs/7' });
   });
 
   it('a session gone with no run is none, session gone', () => {
@@ -55,11 +55,11 @@ describe('inboxTarget', () => {
       expect(inboxTarget(ev({ kind, sessionId: '', runId: null }), blankKeyed, runs(7))).toEqual({ kind: 'none', why: 'no target' });
     }
     // About no session but about a run the board shows: the board.
-    expect(inboxTarget(ev({ kind: 'run', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs' });
+    expect(inboxTarget(ev({ kind: 'run', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs/7' });
   });
 
   it('a drift push (kind coord, no session, a run) opens the run board', () => {
-    expect(inboxTarget(ev({ kind: 'coord', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs' });
+    expect(inboxTarget(ev({ kind: 'coord', sessionId: '', runId: 7 }), sessions(LISTED), runs(7))).toEqual({ kind: 'runs', path: '/runs/7' });
   });
 
   it('the run is read through eventRunId', () => {
@@ -108,7 +108,7 @@ describe('inboxTarget', () => {
       const listed = inboxTarget(rec, sessions(LISTED), runs(7));
       const gone = inboxTarget(rec, sessions(), runs(7));
       expect(listed, kind).toEqual(session ? { kind: 'session', path: '/s/ws-a' } : { kind: 'none', why: 'no target' });
-      expect(gone, kind).toEqual(run ? { kind: 'runs', path: '/runs' } : { kind: 'none', why: session ? 'session gone' : 'no target' });
+      expect(gone, kind).toEqual(run ? { kind: 'runs', path: '/runs/7' } : { kind: 'none', why: session ? 'session gone' : 'no target' });
     }
   });
 

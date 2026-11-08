@@ -76,7 +76,7 @@ it("the run number survives in Abandon's and Resume's accessible names and the r
       sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
     });
   });
-  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Resume run 3' })).toBeInTheDocument();
   const row = container.querySelector<HTMLElement>('li.run-row')!;
@@ -115,8 +115,6 @@ function Harness({
  *  assertions here are about which routes the board calls. `never` keeps the
  *  control unrendered, which is what these tests want it to be. */
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
-/** A held spend read: the board's default would send GET /api/runs/:id through the global fetch. */
-const NO_SPEND = (): Promise<import('../../shared/api').RunSpend> => new Promise(() => {});
 
 describe('AbandonSheet — the copy and the refusals', () => {
   it('names the run AND its workspace in the confirm line', () => {
@@ -392,7 +390,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
       { status: 200, headers: { 'content-type': 'application/json' } },
     ));
     vi.stubGlobal('fetch', fetchImpl);
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 
     // Task 13, spec §4.4: `RunsScreen` also mounts `StartProgramSheet` now. Since C8 (D-6440) its
     // `useProjectedHome(open)` only reads the fleet store, which this test never connects, so no sheet
@@ -443,7 +441,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     // child mark, and the board finds the run's worker through its binding.
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: withRunBinding(sessions, [run()]), fleetFrameSeen: true }); });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
     expect(await screen.findByText(expected)).toBeInTheDocument();
   });
@@ -458,7 +456,7 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     expect('run' in s || 'openRun' in s).toBe(false);
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true, sessions: [s], fleetFrameSeen: true }); });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })));
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     fireEvent.click(screen.getByRole('button', { name: /abandon run 3/i }));
     expect(await screen.findByText(UNKNOWN)).toBeInTheDocument();
   });
@@ -470,22 +468,21 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
   it('the run row never nests a button inside a button', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     for (const btn of container.querySelectorAll('button')) {
       expect(btn.querySelector('button')).toBeNull();
     }
   });
 
-  it('an inert row (no session) still offers abandon — that is the wedge it exists for', () => {
+  it('a row with no session still offers abandon — that is the wedge it exists for', () => {
     const store = makeStore();
     act(() => {
       store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
-    // No session to open — .run-open is absent — but the release valve
-    // (an ambiguous-dispatch wedge is exactly a `planned` run with no
-    // session) is still there.
-    expect(screen.queryByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toBeNull();
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    // No session to open, yet the row opens the run's page (A9), and the release valve (an ambiguous-dispatch wedge is
+    // exactly a `planned` run with no session) is still there.
+    expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
   });
 });

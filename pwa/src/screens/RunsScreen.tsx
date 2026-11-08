@@ -32,12 +32,12 @@
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type RunSpend, type RunSummary } from '../../../shared/api';
+import { type CoordCapsView, type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
-  programmeTitle, runNotLoadedLine, runsByProgram, waveLabel, coordinatorOf, workerOf,
+  programmeTitle, runState, runsByProgram, waveLabel, coordinatorOf, workerOf,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
@@ -48,9 +48,10 @@ import { CapsControl } from '../fleet/CapsControl';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
-import { useLocation } from '../lib/router';
-import { runParam } from '../lib/routes';
-import { useArrival } from '../lib/useArrival';
+import { inAppClick } from '../fleet/settingsText';
+import { navigate, useLocation } from '../lib/router';
+import { runParam, runPath, runQueryOf } from '../lib/routes';
+import { peek, put, runsBoardKey } from '../lib/screenCache';
 import { backToFleet } from '../command/door';
 import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -61,8 +62,6 @@ import '../fleet/fleet.css';
  *  render, so the control's own effect does not re-fire on every parent
  *  re-render. */
 const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
-/** D-6799: one run's spend. Module-level so its identity is stable across renders. */
-const loadSpendDefault = (id: number): Promise<RunSpend> => api.run(id).then((r) => r.spend);
 /** The board's archive reader (console speed S2): the paged `GET /api/runs?closed=1&limit=&before=`. Module-level, so its
  *  identity is stable across renders (`useColdRuns.ts#loadColdRuns`'s reason). The Inbox and Mail keep the unpaged
  *  `loadColdRuns`. */
@@ -73,14 +72,112 @@ const ARCHIVE_PAGE = 50;
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
+import { RunDetailScreen } from './RunDetailScreen';
+import { useMeasuredColumn } from './runColumn';
+import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
 import { useColdRuns, type PagedLoader } from './useColdRuns';
 
 
-export function RunsScreen({
+/** The board's scroll place: the nearest scrolling ancestor of the search box (the desktop pane), else the document. */
+function readBoardScroll(): { scroller: HTMLElement | null; top: number } {
+  for (let el = document.getElementById(RUN_FIND_ID)?.parentElement ?? null; el !== null; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return { scroller: el, top: el.scrollTop };
+  }
+  return { scroller: null, top: window.scrollY };
+}
+
+/** The board's words for no open run, and for a read that ran out of time (§8.2). */
+const NO_RUNS_OPEN = 'No runs open.';
+const COULD_NOT_LOAD = 'Could not load runs. Try again.';
+
+/** The board's information lines (§8.2 item 5, n2, A62): a run no act can move is told, with no control and no count. An
+ *  `unknown` run is in a state a newer server wrote; a run at `closing` is finished by the lane that put it there. One run
+ *  links its page; several are a count. */
+function RunInfoLines({ runs }: { runs: readonly RunSummary[] }): ReactNode {
+  const lines: { key: string; runs: RunSummary[]; one: string; many: string }[] = [
+    { key: 'unreadable', runs: runs.filter((r) => runState(r) === 'unknown'),
+      one: '1 run is in a state this server cannot read.', many: 'runs are in a state this server cannot read.' },
+    { key: 'closing', runs: runs.filter((r) => runState(r) === 'closing'),
+      one: '1 run is already closing.', many: 'runs are already closing.' },
+  ];
+  const told = lines.filter((l) => l.runs.length > 0);
+  if (told.length === 0) return null;
+  return (
+    <>
+      {told.map((l) => (
+        <p key={l.key} className="runs-info" data-info={l.key}>
+          {l.runs.length === 1
+            ? <a className="runs-info-link" href={runPath(l.runs[0]!.id)} onClick={inAppClick(runPath(l.runs[0]!.id))}>{l.one}</a>
+            : `${l.runs.length} ${l.many}`}
+        </p>
+      ))}
+    </>
+  );
+}
+
+/** The scroll place the board keeps for a return from a run: how far, and whether a pane held it (the desktop) or the document
+ *  did (the phone). */
+interface KeptBoard { readonly fold: number; readonly top: number; readonly pane: boolean }
+
+function keptBoard(): KeptBoard | null {
+  const raw = peek(runsBoardKey)?.raw;
+  if (typeof raw !== 'object' || raw === null) return null;
+  const { fold, top, pane } = raw as Partial<KeptBoard>;
+  return typeof fold === 'number' && typeof top === 'number' && typeof pane === 'boolean' ? { fold, top, pane } : null;
+}
+
+/** The nearest ancestor of the search box that scrolls by style, whether or not it has anything to scroll yet. */
+function boardPane(): HTMLElement | null {
+  for (let el = document.getElementById(RUN_FIND_ID)?.parentElement ?? null; el !== null; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return el;
+  }
+  return null;
+}
+
+/** The pane's words when no run is open (spec §8.4). */
+const SELECT_RUN = 'Select a run to see it here.';
+
+/** The board's props: the store, the two injected reads, and the run open beside it, if any. */
+interface BoardProps {
+  store?: FleetStore;
+  loadRuns?: PagedLoader;
+  loadCaps?: () => Promise<CoordCapsView>;
+  /** The run open in the broad pane, or null: its row is marked current and a search keeps it open. */
+  openId?: number | null;
+}
+
+/** The runs screen, and the one place the column's layout is decided (Task 9a, spec §8.1): `/runs` and `/runs/<id>` both land
+ *  here. A broad column draws the board and the run side by side; narrower, `/runs` is the board and `/runs/<id>` is the
+ *  run's own page with its way back. The board stays mounted when a run opens in the pane, so its folds and scroll stay. */
+export function RunsScreen(props: BoardProps): ReactNode {
+  const { openId = null, store = useFleetStore } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  const measured = useMeasuredColumn(ref);
+  const column = measured ?? 'narrow';
+  let body: ReactNode = null;
+  if (measured === null) body = null;
+  else if (column === 'broad') {
+    body = (
+      <div className="runs-split">
+        <div className="runs-list-pane"><RunsBoard {...props} /></div>
+        <div className="runs-detail-pane">
+          {openId === null
+            ? <p className="rd-note" role="status">{SELECT_RUN}</p>
+            : <RunDetailScreen key={openId} id={openId} store={store} pane />}
+        </div>
+      </div>
+    );
+  } else body = openId !== null ? <RunDetailScreen key={openId} id={openId} store={store} /> : <RunsBoard {...props} />;
+  return <div ref={ref} className="runs-column" data-column={column}>{body}</div>;
+}
+
+function RunsBoard({
   store = useFleetStore,
   loadRuns = loadColdRunsPage,
   loadCaps = loadCapsDefault,
-  loadSpend = loadSpendDefault,
+  openId = null,
 }: {
   store?: FleetStore;
   loadRuns?: PagedLoader;
@@ -92,8 +189,7 @@ export function RunsScreen({
    *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
    *  guard worth keeping exactly as strict as it was. */
   loadCaps?: () => Promise<CoordCapsView>;
-  /** Each row's spend read (D-6799), injected like `loadCaps`. */
-  loadSpend?: (id: number) => Promise<RunSpend>;
+  openId?: number | null;
 }): ReactNode {
   const live = store((s) => s.runs);
   const runsFrameSeen = store((s) => s.runsFrameSeen);
@@ -123,7 +219,7 @@ export function RunsScreen({
   // The archive read — the only carrier of a finished run — with its race
   // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
   // none of which rendered anything.
-  const { cold, state: coldState, reading: coldReading, reload: loadCold, loadOlder, hasOlder } =
+  const { cold, state: coldState, timedOut, reload: loadCold, loadOlder, hasOlder } =
     useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
@@ -204,12 +300,62 @@ export function RunsScreen({
   const finished = useMemo(() => (cold ?? [])
     .filter((r) => isRunClosed(r))
     .sort((a, b) => (runClosedAt(b) ?? 0) - (runClosedAt(a) ?? 0)), [cold]);
-  const [foldAt, setFoldAt] = useState(FINISHED_FOLD);
-  // The run `/runs?run=<id>` names (chat reading Task L, D-8062). A finished one past the fold is unfolded to, so its row
-  // mounts and the arrival can reach it.
-  const runId = runParam(useLocation().search);
-  const runAtFinished = runId === null ? -1 : finished.findIndex((r) => r.id === runId);
-  const shownFinished = Math.max(foldAt, runAtFinished + 1);
+  // The fold is kept across a visit to a run (C2, the runs rebuild D-8072): a return finds Finished as it was left.
+  const [foldAt, setFoldAt] = useState(() => Math.max(FINISHED_FOLD, keptBoard()?.fold ?? FINISHED_FOLD));
+  const foldKept = useRef(foldAt);
+  foldKept.current = foldAt;
+  // `/runs?run=<id>` is old chat text (chat reading Task L, D-8062). The board replaces it with the run's page, so Back skips it
+  // and `?run=` never meets `?q=` (A50); no arrival has to find a row folded under a Stuck head.
+  const search = useLocation().search;
+  const runId = runParam(search);
+  useEffect(() => {
+    if (runId !== null) navigate(runPath(runId), { replace: true });
+  }, [runId]);
+  // The search (spec §8.3): `?q=` holds the query, so Back and a reload keep it. Typing replaces the entry rather than pushing
+  // one, and a change of `?q=` from outside (Back) is read back into the box.
+  const heldQuery = runQueryOf(search);
+  const [findText, setFindText] = useState(heldQuery ?? '');
+  useEffect(() => {
+    const held = heldQuery ?? '';
+    setFindText((t) => (t.trim() === held ? t : held));
+  }, [heldQuery]);
+  // Clearing the query restores the board with its folds (they live in this component) and the place it was scrolled to. The
+  // place is read in `typeFind`, before the swap: once the short results page has rendered the browser has already clamped it.
+  // The phone scrolls the document and the desktop a pane, so the scroller is found from the box.
+  const scrollWas = useRef<{ scroller: HTMLElement | null; top: number } | null>(null);
+  const typeFind = (text: string): void => {
+    if (text.trim() !== '' && findText.trim() === '') scrollWas.current = readBoardScroll();
+    setFindText(text);
+    const t = text.trim();
+    // A run open in the pane stays open under the search: the query rides the run's own URL.
+    const base = openId === null ? '/runs' : runPath(openId);
+    navigate(t === '' ? base : `${base}?${new URLSearchParams({ q: t })}`, { replace: true });
+  };
+  const finding = findText.trim() !== '';
+  const wasFinding = useRef(finding);
+  useEffect(() => {
+    if (!finding && wasFinding.current && scrollWas.current !== null) {
+      const { scroller, top } = scrollWas.current;
+      if (scroller !== null) scroller.scrollTop = top;
+      else window.scrollTo(0, top);
+    }
+    wasFinding.current = finding;
+  }, [finding]);
+  // `/` focuses the box, outside a text field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      const box = document.getElementById(RUN_FIND_ID);
+      if (box === null) return;
+      e.preventDefault();
+      box.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const shownFinished = foldAt;
   const finishedHead = useRef<HTMLParagraphElement>(null);
   const focusHeadNext = useRef(false);
   const showMoreFinished = (): void => {
@@ -289,21 +435,31 @@ export function RunsScreen({
   // above already refuses to do for the "never asked yet" case. Read below
   // for the second half: active rows present, finished's own read failed.
   const coldFailed = coldState === 'error';
+  // A read that ran out of time (C1's `ApiTimeout`) says so and offers to read again (§8.2); any other failure keeps the
+  // sentence it always had.
+  const failedLine: ReactNode = timedOut ? (
+    <>
+      {COULD_NOT_LOAD}{' '}
+      <Button variant="ghost" size="fit" onClick={() => { void loadCold(); }}>Try again</Button>
+    </>
+  ) : 'Could not reach the server — runs may exist that are not shown.';
 
-  // The arrival at `?run=<id>` (chat reading Task L, D-8062), on the accounts screen's mechanism (`useArrival`): the run's row
-  // exists once a group that holds it is drawn. When neither the live frame nor the archive pages read so far hold it, the
-  // board says so, but only once both have answered (`runsFrameSeen`, and the archive read `ok` with no re-read on its way):
-  // before that it says nothing. One rule (review 1597, fix round 2 ruling 2): a followed run arrives once per value of `?run=`,
-  // so the board holds the record while the row is missing (`hold`, always) and only a change of key clears it; and the line
-  // waits for a re-read issued after the row left the frame, because `useColdRuns` raises `reading` in the render that sees
-  // a run leave. A run that closes under its own page so keeps its one arrival and its mark, whatever the archive held.
-  const rowRefs = useRef(new Map<number, HTMLElement>());
-  const rowRef = useCallback((id: number, el: HTMLLIElement | null): void => {
-    if (el === null) rowRefs.current.delete(id); else rowRefs.current.set(id, el);
+  // The place is kept as the board unmounts and restored once it has rows to scroll (C2). A layout cleanup runs before the
+  // DOM leaves, so the box is still there to find the scroller from.
+  useLayoutEffect(() => () => {
+    const at = readBoardScroll();
+    put(runsBoardKey, { fold: foldKept.current, top: at.top, pane: at.scroller !== null }, Date.now());
   }, []);
-  const runRowExists = runId !== null && !noSignalYet && (runAtFinished >= 0 || active.some((r) => r.id === runId));
-  const arrivedRun = useArrival(runId, runRowExists, rowRefs.current, true);
-  const runNotLoaded = runId !== null && !runRowExists && runsFrameSeen && coldState === 'ok' && !coldReading;
+  const placeRestored = useRef(false);
+  useEffect(() => {
+    if (noSignalYet || placeRestored.current) return;
+    placeRestored.current = true;
+    const kept = keptBoard();
+    if (kept === null || kept.top <= 0 || runId !== null || finding) return;
+    const pane = kept.pane ? boardPane() : null;
+    if (pane !== null) pane.scrollTop = kept.top; else window.scrollTo(0, kept.top);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noSignalYet]);
 
   // A finished row reads `finishedClock(now)`, not the 1 s tick (D-6442): its
   // readouts are minute-grained, and a steady `nowMs` is what lets its `memo` hold.
@@ -321,9 +477,7 @@ export function RunsScreen({
       programHasOpenRun={programsOpen.has(run.program)}
       onAbandon={setAbandonTarget}
       onResume={setResumeTarget}
-      loadSpend={loadSpend}
-      arrived={arrivedRun === run.id}
-      rowRef={rowRef}
+      current={run.id === openId}
     />
   );
 
@@ -335,6 +489,8 @@ export function RunsScreen({
       title="Runs"
       back={backToFleet('runs-back')}
     >
+
+      <RunFindBox value={findText} onChange={typeFind} />
 
       {/* Review finding 26: `runs`/`runsFrameSeen` are sticky across a socket
           loss (`stores/fleet.ts`, "sticky until replaced") — without this,
@@ -378,18 +534,15 @@ export function RunsScreen({
           closed run never waits; renders nothing when no run does. */}
       <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
 
-      {/* Chat reading Task L (D-8062): a run named by `?run=` that the board has not loaded, said once both sources answered. */}
-      {runNotLoaded && <EmptyState data-state="ok" role="status">{runNotLoadedLine(runId)}</EmptyState>}
-
+      {finding ? <RunFindResults q={findText} store={store} openId={openId} /> : (<>
+      {!noSignalYet && <RunInfoLines runs={active} />}
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
         // "no runs" — it is "no answer". `coldState === 'error'` only after
         // the cold read has actually failed; until then this is the ordinary
         // in-flight window every mount passes through.
         <EmptyState data-state={coldState === 'error' ? 'error' : 'loading'}>
-          {coldState === 'error'
-            ? 'Could not reach the server — runs may exist that are not shown.'
-            : 'Loading…'}
+          {coldState === 'error' ? failedLine : 'Loading…'}
         </EmptyState>
       ) : !hasAny ? (
         // I6: `noSignalYet` above only covers the "nothing has answered at
@@ -400,14 +553,14 @@ export function RunsScreen({
         // read", which must say so rather than claim the program's whole
         // history is empty.
         coldFailed ? (
-          <EmptyState data-state="error">
-            Could not reach the server — runs may exist that are not shown.
-          </EmptyState>
+          <EmptyState data-state="error">{failedLine}</EmptyState>
         ) : (
-          <EmptyState data-state="ok">No runs. A program starts when a coordinator opens one.</EmptyState>
+          <EmptyState data-state="ok">{NO_RUNS_OPEN}</EmptyState>
         )
       ) : (
         <>
+          {/* With finished runs only, the board still says nothing is open (§8.2), above the Finished fold. */}
+          {active.length === 0 && <EmptyState data-state="ok">{NO_RUNS_OPEN}</EmptyState>}
           {runsByProgram(active).map(({ program, runs: list }) => {
             // The program's OWN wave is the furthest one any of its rows has
             // reached, never `list[0]`'s own — `runsByProgram` orders each
@@ -457,7 +610,7 @@ export function RunsScreen({
               {/* Two failures, two lines, each its own fact (fix round 2, F3, F4): a failed re-read (a remount's background
                   read included) says newer closes may be missing, beside the stored rows (Step 6); a failed "Show older"
                   says older ones did not load. Both failed, both show. */}
-              {coldFailed && <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState>}
+              {coldFailed && <EmptyState data-state="error">{timedOut ? failedLine : FINISHED_UNREAD}</EmptyState>}
               {hasOlder && shownFinished >= finished.length && olderFailed && (
                 <EmptyState data-state="error">Could not load older runs.</EmptyState>
               )}
@@ -473,11 +626,13 @@ export function RunsScreen({
             // finished", which the board has no standing to claim.
             <div className="runs-group" role="group" aria-label="finished, unknown">
               <p className="runs-group-head"><span className="runs-program">Finished</span></p>
-              <EmptyState data-state="error">{FINISHED_UNREAD}</EmptyState>
+              <EmptyState data-state="error">{timedOut ? failedLine : FINISHED_UNREAD}</EmptyState>
             </div>
           ) : null}
         </>
       )}
+
+      </>)}
 
       {/* Task 12, spec §4.3: `onDone` re-runs the screen's own `loadCold()`
           (Step 5) so an abandoned run moves into Finished — the live frame's

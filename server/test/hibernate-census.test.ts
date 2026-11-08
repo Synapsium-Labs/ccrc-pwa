@@ -174,6 +174,11 @@ const CENSUS: readonly Row[] = [
     why: 'the Resume button reads `coordinatorPresence` (D-7181), which answers a sleeper `hibernated`, never `dead`' },
   { source: 'presence-reader', file: 'pwa/src/screens/RunRow.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
     why: 'that read: the server\'s `asleep`, spelled `hibernated`, opens no Resume door' },
+  { source: 'dead-compare', file: 'pwa/src/screens/RunDetailScreen.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the run page\'s Who facts (`coordinatorFactWord`) take the server\'s `coordinatorGone` first and fall back to '
+      + '`coordinatorPresence` (D-7181), which answers a sleeper `hibernated`, never `dead`' },
+  { source: 'presence-reader', file: 'pwa/src/screens/RunDetailScreen.tsx', hits: 2, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'those reads, for the coordinator and the worker: the server\'s `asleep`, spelled `hibernated`, reads as asleep, never gone' },
   { source: 'stopped-compare', file: 'pwa/src/fleet/lifecycleWords.ts', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/sessionFacts.ts',
     why: '`lifecycleQualifier` words a stopped row "stopped by …"; `sessionFacts`, its one reader (D-5545), skips it '
       + 'on a sleeper and reads `hibernated · 6h`' },
