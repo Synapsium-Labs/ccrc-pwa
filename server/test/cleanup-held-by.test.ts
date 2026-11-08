@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { HELD_BY_WORDS } from '../../shared/api.js';
 import type { ChildReclaimAttention, CoordStatus, ExpiryAttention, HeldByWord } from '../../shared/api.js';
 import {
-  HELD_BY_ABSENT, cleanupHeldBy, cleanupHeldByAct, heldByOf, heldOnlyByListed, withCleanupHeldBy,
+  HELD_BY_ABSENT, cleanupHeldBy, cleanupHeldByAct, heldByOf, heldByRowsOf, heldOnlyByListed, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
 import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/cleanupHeldBy.js';
 import type { ExpiryReport } from '../src/archivedExpiry.js';
@@ -57,6 +57,19 @@ describe('heldByOf', () => {
     expect(heldByOf({ heldBy: base })).toMatchObject({ kind: 'rows', own: true });
     expect(heldByOf({ heldBy: base, heldByOwn: 'no' })).toMatchObject({ kind: 'rows', own: true });
     expect(heldByOf({ heldBy: base, heldByOwn: false })).toMatchObject({ kind: 'rows', own: false });
+  });
+});
+
+// Task C15 (D-8111), characterization before the leaf-module move: what a lane parser spreads onto its read.
+describe('the spread a lane parser takes', () => {
+  it('names heldBy only for a document that names rows, and is empty for every other read', () => {
+    const doc = { heldBy: [{ id: 'row-a', word: 'gone-unrecorded', workspace: 'absent' }], heldByOwn: false };
+    expect(heldByRowsOf(doc)).toEqual({ heldBy: rows([row('row-a')], false) });
+    for (const other of [{}, null, [], { heldBy: null }, { heldBy: [] }, { heldBy: 'row-a' }, { heldBy: [{ id: 'a b', word: 'gone-unrecorded' }] }]) {
+      const out = heldByRowsOf(other);
+      expect(out).toEqual({});
+      expect(Object.keys(out)).toEqual([]);
+    }
   });
 });
 
