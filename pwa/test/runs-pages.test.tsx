@@ -225,6 +225,29 @@ describe('the run archive in pages', () => {
     // The late older page was dropped as stale: nothing failed, and the next tap asks again.
     expect(screen.queryByText('Could not load older runs.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Show older' })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    expect(f.read, 'the re-read kept the cursor that reaches the older rows').toHaveBeenLastCalledWith(expect.objectContaining({ beforeId: 71 }));
+  });
+
+  it('Show older, then a run closes: the older rows stay and the cursor still reaches the rest', async () => {
+    const a = archive(range(120, 1), [130]);
+    const f = finder(range(120, 1));
+    const store = makeStore();
+    store.setState({ runs: [run(130)], runsFrameSeen: true });
+    const { container } = render(<RunsScreen store={store} loadRuns={a.load} loadFinished={f.read} loadCaps={NO_CAPS} />);
+    await flush();
+    unfold();
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    await flush();
+    unfold();
+    const rows = (): number => container.querySelectorAll('[role="group"][aria-label^="finished"] .runs-list > li').length;
+    expect(rows()).toBe(100);
+    act(() => { store.setState({ runs: [] }); });                   // a run closes: Finished is read again
+    await flush();
+    unfold();
+    expect(rows(), 'the older page the operator loaded stays').toBe(100);
+    fireEvent.click(screen.getByRole('button', { name: 'Show older' }));
+    expect(f.read).toHaveBeenLastCalledWith(expect.objectContaining({ beforeId: 21 }));
   });
 
   it('a good re-read leaves the older page\'s failure line; only the next good tap clears it (fix round 2, F3)', async () => {

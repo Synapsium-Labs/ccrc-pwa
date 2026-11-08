@@ -78,6 +78,8 @@ export function useRunList(
   const asking = useRef<Promise<RunListOlder> | null>(null);
   const nextRef = useRef(next);
   nextRef.current = next;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const queryRef = useRef(query);
   queryRef.current = query;
   const readRef = useRef(read);
@@ -90,8 +92,20 @@ export function useRunList(
     try {
       const a = await readRef.current({ ...queryRef.current, limit: RUN_LIST_PAGE });
       if (mine !== issued.current) return;
-      setRows(a.runs.map(runOfHit));
-      setNext(a.next);
+      const fresh = a.runs.map(runOfHit);
+      const held = rowsRef.current ?? [];
+      const last = fresh[fresh.length - 1];
+      // A re-read of page one never throws away the older pages the operator loaded: what sorts below the fresh page's last
+      // row is kept (the cursor that reaches it with it), and everything at or above it is the fresh page's. With no cursor
+      // in the answer nothing older remains.
+      const kept = a.next === null || last === undefined ? [] : held.filter((r) => byClose(last, r) < 0);
+      const ids = new Set(fresh.map((r) => r.id));
+      const merged = [...fresh, ...kept.filter((r) => !ids.has(r.id))];
+      const reach = kept.length === 0 ? a.next : nextRef.current;
+      rowsRef.current = merged;
+      nextRef.current = reach;
+      setRows(merged);
+      setNext(reach);
       setState('ok');
     } catch (err) {
       if (mine !== issued.current) return;
@@ -113,6 +127,8 @@ export function useRunList(
 
   // A new question starts over; the first render of a key reads.
   useEffect(() => {
+    rowsRef.current = null;
+    nextRef.current = null;
     setRows(null);
     setNext(null);
     setState('loading');
