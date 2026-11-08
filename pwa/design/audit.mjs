@@ -1038,6 +1038,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
   },
+  '.rd-trail-time, .rd-trail-by, .rd-trail-older': {
+    under: ['var(--bg-page)'],
+    why: "the run page's trail (RunTrail, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
   '.rd-fact dd': {
     under: ['var(--bg-page)'],
     why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",

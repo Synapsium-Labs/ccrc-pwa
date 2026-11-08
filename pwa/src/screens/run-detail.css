@@ -21,3 +21,14 @@
   .rd-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2) var(--sp-4); }
   .rd-fact { grid-template-columns: minmax(6rem, 9rem) minmax(0, 1fr); gap: var(--sp-2); }
 }
+/* Controls under the header wrap; each keeps the button's tap floor. The trail sits last, one row per event: on a phone the
+   time, words and who stack; from a laptop's width they sit in three columns. Nothing is ellipsised. */
+.rd-controls { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0 0 var(--sp-3); }
+.rd-trail { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.rd-trail-row { display: grid; gap: 0; min-width: 0; overflow-wrap: anywhere; }
+.rd-trail-time, .rd-trail-by, .rd-trail-older { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.rd-trail-older { margin: var(--sp-2) 0 0; }
+@media (min-width: 900px) {
+  .rd-trail-row { grid-template-columns: minmax(8rem, 10rem) minmax(0, 1fr) minmax(5rem, 9rem); gap: var(--sp-2); }
+  .rd-trail-row[data-folded] { grid-template-columns: minmax(0, 1fr) minmax(5rem, 9rem); }
+}

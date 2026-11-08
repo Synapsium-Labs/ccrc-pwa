@@ -140,7 +140,7 @@ describe('the header and the facts', () => {
     await open(r);
     await screen.findByText('Items done');
     const groups = [...document.querySelectorAll('[data-group]')].map((g) => g.getAttribute('data-group'));
-    expect(groups).toEqual(['belongs', 'who', 'when', 'work']);
+    expect(groups).toEqual(['belongs', 'who', 'when', 'work', 'trail']);
     const keys = [...document.querySelectorAll('[data-fact]')].map((f) => f.getAttribute('data-fact'));
     expect(keys).toEqual(['programme', 'wave', 'project', 'coordinator', 'opened', 'dispatched', 'lastMove', 'closed', 'workspace', 'branch', 'items', 'spend']);
   });
@@ -251,5 +251,116 @@ describe('the way back', () => {
     expect(back.textContent).toBe('‹Runs');
     fireEvent.click(back);
     expect(location.pathname).toBe('/runs');
+  });
+});
+
+describe('the controls and the trail (Task 7a)', () => {
+  const withSessions = (r: RunSummary, ids: string[]) => {
+    const store = mk();
+    act(() => { store.setState({ sessions: ids.map((id) => ({ id })) as never, fleetFrameSeen: true }); });
+    reads(r);
+    render(<RunDetailScreen id={r.id} store={store} />);
+    return store;
+  };
+  const event = (over: Partial<RunRecordAnswer['events'][number]> = {}) =>
+    ({ at: T0, from: 'planned', to: 'dispatched', by: 'coordinator', detail: null, ...over }) as RunRecordAnswer['events'][number];
+
+  it('Open the session shows when a session exists or existed and can be opened', async () => {
+    withSessions(run({ sessionId: 'worker-a' } as Partial<RunSummary>), ['worker-a']);
+    expect(await screen.findByRole('link', { name: 'Open the session' })).toHaveAttribute('href', '/s/worker-a');
+  });
+
+  it('a closed run whose session is gone from the fleet still offers its session', async () => {
+    withSessions(run({ sessionId: 'worker-b', state: 'done', closedAt: T0 + 1000 } as Partial<RunSummary>), []);
+    expect(await screen.findByRole('link', { name: 'Open the session' })).toHaveAttribute('href', '/s/worker-b');
+  });
+
+  it('no session, no control', async () => {
+    reads(run({ sessionId: null, claimedBy: null } as Partial<RunSummary>));
+    await open(run());
+    expect(screen.queryByRole('link', { name: 'Open the session' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open the coordinator' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Lift cap' })).toBeNull();
+  });
+
+  it('Open the coordinator shows when the claimant has a session', async () => {
+    withSessions(run({ claimedBy: 'coord-a' } as Partial<RunSummary>), ['coord-a']);
+    expect(await screen.findByRole('link', { name: 'Open the coordinator' })).toHaveAttribute('href', '/s/coord-a');
+    cleanup();
+    withSessions(run({ claimedBy: 'coord-b' } as Partial<RunSummary>), []);
+    await screen.findByRole('heading', { level: 1, name: 'Run 410' });
+    expect(screen.queryByRole('link', { name: 'Open the coordinator' })).toBeNull();
+  });
+
+  it('Lift cap shows when the run\'s review cap is waiting and opens LiftCapSheet', async () => {
+    const ask = vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
+    reads(run({ reviewCap: { rounds: 3, cap: 3, askedAt: T0, liftedAt: null } } as Partial<RunSummary>));
+    await open(run());
+    fireEvent.click(await screen.findByRole('button', { name: 'Lift cap' }));
+    expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();
+    expect(ask).toHaveBeenCalledWith(410);
+  });
+
+  it('Lift cap stays away for a lifted cap and an older server\'s run', async () => {
+    reads(run({ reviewCap: { rounds: 3, cap: 3, askedAt: T0, liftedAt: T0 + 1 } } as Partial<RunSummary>));
+    await open(run());
+    expect(screen.queryByRole('button', { name: 'Lift cap' })).toBeNull();
+  });
+
+  it('each control is one tap to its place', async () => {
+    const store = withSessions(run({ sessionId: 'worker-a', claimedBy: 'coord-a' } as Partial<RunSummary>), ['worker-a', 'coord-a']);
+    expect(store).toBeDefined();
+    fireEvent.click(await screen.findByRole('link', { name: 'Open the coordinator' }));
+    expect(location.pathname).toBe('/s/coord-a');
+    fireEvent.click(screen.getByRole('link', { name: 'Open the session' }));
+    expect(location.pathname).toBe('/s/worker-a');
+  });
+
+  it('the trail lists every event newest first, as time, words and who', async () => {
+    const r = run();
+    reads(r, { record: async () => record(r, { events: [
+      event({ at: T0 + 3_600_000, from: 'working', to: 'done', by: 'operator', detail: 'abandon:overtaken' }),
+      event({ at: T0, by: 'session' }),
+    ] }) });
+    await open(r);
+    const rows = within(document.querySelector('[data-group="trail"]') as HTMLElement).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toBe(`${runWhen(T0 + 3_600_000)}working to done: abandon:overtakenyou`);
+    expect(rows[1]?.textContent).toBe(`${runWhen(T0)}planned to dispatcheda session`);
+  });
+
+  it('a span of stall checks is one line, and older events are counted', async () => {
+    const r = run();
+    reads(r, { record: async () => record(r, {
+      events: [event({ from: 'working', to: 'working', by: 'sweep', folded: { count: 6, untilAt: T0 + 2 * 86_400_000 } })],
+      olderEvents: 12,
+    }) });
+    await open(r);
+    expect(screen.getByText('6 stall checks, 2 to 4 Nov')).toBeInTheDocument();
+    expect(screen.getByText('12 older events not shown.')).toBeInTheDocument();
+  });
+
+  it('the trail sits last at every width', async () => {
+    const r = run();
+    reads(r, { record: async () => record(r, { events: [event()] }) });
+    await open(r);
+    const sections = Array.from(document.querySelectorAll('[data-group]'));
+    expect(sections[sections.length - 1]?.getAttribute('data-group')).toBe('trail');
+    expect(document.querySelector('[data-group="trail"]')?.nextElementSibling?.getAttribute('data-group') ?? null).toBeNull();
+  });
+
+  it('the detail shows through the redaction profile as stored', async () => {
+    const r = run();
+    reads(r, { record: async () => record(r, { events: [event({ detail: 'token=[redacted]' })] }) });
+    await open(r);
+    expect(screen.getByText(/planned to dispatched: token=\[redacted\]/)).toBeInTheDocument();
+  });
+
+  it('a closed run still shows its trail', async () => {
+    const r = run({ state: 'done', closedAt: T0 + 5000, closedBy: 'operator' });
+    reads(r, { record: async () => record(r, { events: [event({ from: 'working', to: 'done', by: 'operator' })] }) });
+    await open(r);
+    expect(screen.getByText('working to done')).toBeInTheDocument();
+    expect(screen.getByText('you')).toBeInTheDocument();
   });
 });

@@ -34,7 +34,10 @@ import {
 } from '../fleet/runWords';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
 import { WayBack } from '../ledgers/WaitingRoutes';
-import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath } from '../lib/routes';
+import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { capWaiting } from '../fleet/reviewCapWords';
+import { RunTrail } from './RunTrail';
+import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
 import { useLocation } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './run-detail.css';
@@ -170,6 +173,30 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
   );
 }
 
+/** The controls under the header (spec §8.4, §9.4): each one tap to its place. Abandon joins them with its sheet and Resume
+ *  with its picker, in later tasks. */
+function Controls({ run, coordinatorOpenable, onLift }: { run: RunSummary; coordinatorOpenable: boolean; onLift: () => void }): ReactNode {
+  const session = run.sessionId;
+  const coordinator = run.claimedBy;
+  const lift = capWaiting(run) === 'waiting';
+  if (session === null && !(coordinatorOpenable && coordinator !== null) && !lift) return null;
+  return (
+    <p className="rd-controls">
+      {session !== null && (
+        <a className={cn(GHOST_ANCHOR, 'rd-control')} href={sessionPath(session)} onClick={inAppClick(sessionPath(session))}>
+          {RUN_PAGE_WORDS.openSession}
+        </a>
+      )}
+      {coordinatorOpenable && coordinator !== null && (
+        <a className={cn(GHOST_ANCHOR, 'rd-control')} href={sessionPath(coordinator)} onClick={inAppClick(sessionPath(coordinator))}>
+          {RUN_PAGE_WORDS.openCoordinator}
+        </a>
+      )}
+      {lift && <Button variant="ghost" className="rd-control" onClick={onLift}>{RUN_PAGE_WORDS.liftCap}</Button>}
+    </p>
+  );
+}
+
 function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
   return (
     <>
@@ -214,6 +241,7 @@ export function RunDetailScreen({ id, store = useFleetStore }: { id: number; sto
   const items = useSide(id, readItems);
   const signals = useSide(id, readSignals);
   const specHref = useSpecHref(run);
+  const [liftOpen, setLiftOpen] = useState(false);
   const title = `Run ${id}`;
   const strip = <Strip q={q} />;
   if (state.kind === 'loading') {
@@ -260,7 +288,10 @@ export function RunDetailScreen({ id, store = useFleetStore }: { id: number; sto
       {strip}
       <Header run={run} worker={worker} nowMs={Date.now()} />
       {lead !== null && <p className="rd-close">{lead}</p>}
+      <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} />
       <Facts groups={groups} />
+      <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
+      <LiftCapSheet run={liftOpen ? run : null} onClose={() => setLiftOpen(false)} onDone={retry} />
     </PageScaffold>
   );
 }

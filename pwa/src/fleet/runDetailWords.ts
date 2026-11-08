@@ -16,6 +16,9 @@ export const RUN_PAGE_WORDS = {
   stripSearch: 'Search results',
   /** The strip's own name for a screen reader. */
   stripLabel: 'Where you came from',
+  openSession: 'Open the session',
+  openCoordinator: 'Open the coordinator',
+  liftCap: 'Lift cap',
   /** The link back to the board under "There is no run N.". */
   toBoard: 'Back to Runs',
 } as const;

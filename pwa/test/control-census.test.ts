@@ -342,9 +342,10 @@ const CONTROLS: Record<string, string> = {
     + 'programme (desktop-polish PL11, D-7986): `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this '
     + 'census checks. An anchor, not a button, because it navigates; it stands alone, so it is no in-sentence TextLink.',
   'screens/RunDetailScreen.tsx <a> (computed)':
-    'VARIANT buttonVariants. The run page\'s "Back to Runs" link under "There is no run N." (the runs rebuild, D-8072): '
-    + '`GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks. An anchor, not a button, '
-    + 'because it navigates; it stands alone, so it is no in-sentence TextLink.',
+    'VARIANT buttonVariants. The run page\'s stand-alone links (the runs rebuild, D-8072): "Back to Runs" under "There is '
+    + 'no run N.", and the controls "Open the session" and "Open the coordinator": `GHOST_ANCHOR`, the ghost button on an '
+    + 'anchor, whose `min-h-tap` this census checks. Anchors, not buttons, because they navigate; each stands alone, so '
+    + 'none is an in-sentence TextLink.',
   'lib/markdown.tsx <a> (none)':
     'INLINE. Links inside a sentence: react-markdown\'s `a` mapping, which moved '
     + 'here with the rest of chat\'s component map (native Docs reader W4), '
