@@ -1,4 +1,4 @@
-// D-8114 (delegation broker wave 5 PR8b): Settings › Automation › "Worktrees left behind", the operator's switch for the
+// D-8114 (delegation broker wave 5 PR8c): Settings › Automation › "Worktrees left behind", the operator's switch for the
 // delegation lane's keep: whether the server holds a changed worktree that a finished delegated agent or workflow left behind
 // back from the disk sweep, and mails its owner. Its read is the Settings frame's (`SettingsDataProvider`,
 // `useDelegationAdoptView`), handed in as `poll`; it is mounted after Leftover processes. It ships in shadow; nothing here

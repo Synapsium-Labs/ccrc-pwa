@@ -1,4 +1,4 @@
-// D-8114 (delegation broker wave 5 PR8b): the Settings card "Worktrees left behind", its pure half: the card's words, the wire
+// D-8114 (delegation broker wave 5 PR8c): the Settings card "Worktrees left behind", its pure half: the card's words, the wire
 // guard for the switch's view, the radio it checks, the lines for the lane's last pass, and the confirm's words.
 // `DelegationAdoptSection.tsx` has no words of its own.
 //

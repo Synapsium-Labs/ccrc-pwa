@@ -1,4 +1,4 @@
-// D-8114 (delegation broker wave 5 PR8b): Settings › Automation › "Worktrees left behind". The card reads the lane's
+// D-8114 (delegation broker wave 5 PR8c): Settings › Automation › "Worktrees left behind". The card reads the lane's
 // keep switch through its own hook (as the Settings frame hands it one) and writes `{on}`; every case spies
 // `api.delegationAdopt` and `api.setDelegationAdopt`, or hands the card a poll of its own, and renders the card alone.
 // Every word is `DELEGATION_ADOPT_TEXT` (or one of its functions), read by name. Turning the switch ON asks first, in a
