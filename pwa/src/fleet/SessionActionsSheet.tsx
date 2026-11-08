@@ -23,7 +23,7 @@ import { navigate } from '../lib/router';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
-import { paneGone, presenceOf } from './presence';
+import { forgetOffered, paneGone } from './presence';
 import { hibernatedSince } from './hibernated';
 import { substrateFaultText, substrateFaultTitle } from './substrateWords';
 import { SwapSheet } from './SwapSheet';
@@ -462,8 +462,10 @@ export function SessionActionsSheet({
               word (`presenceOf`, OA-C15 (a), D-7181), and a doubted row
               (`unknown`) hides the door; a sleeper (the server's `asleep`,
               and any row `hibernatedSince` reads asleep) offers Wake
-              instead (ccd forget refuses it, D-5423). */}
-          {session.workspace === null && presenceOf(session) === 'dead' && !asleep && (
+              instead (ccd forget refuses it, D-5423). The rule is
+              `forgetOffered`'s, written once (Task C15, D-8111): the
+              held-rows list offers its Forget on the same check. */}
+          {forgetOffered(session) && (
             <Button variant="ghost" className="sess-sheet-remove"
                     disabled={fault !== null} title={faultTitle}
                     onClick={() => setForgetConfirmOpen(true)}>

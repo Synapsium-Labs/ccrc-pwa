@@ -1,6 +1,7 @@
 // THE EXPIRY LANE'S DECISIONS (workspace lifecycle spec 2026-09-24 §5.3 "The lane", wave 3b). L1: pure, clock-free
 // (the clock is an argument), `fs`-free and fastify-free — `childReclaimSweep.ts`'s shape, beside it and sharing
-// nothing with it. It imports L0 alone. `watch.ts`'s `sweepArchivedExpiry` (L4) GATHERS the evidence and APPLIES
+// nothing with it. It imports L0, and the held-by reader from the leaf `heldByRead.ts` (L1, which imports L0 alone;
+// Task C15, D-8111). `watch.ts`'s `sweepArchivedExpiry` (L4) GATHERS the evidence and APPLIES
 // these verdicts; `coord/expireArchived.ts` (the one executor) reads the box's two documents through the parsers
 // here. Nothing in this file reads a file, a row or a clock.
 //
@@ -21,7 +22,7 @@ import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../sh
 import {
   isWorkspacePostActWord, isWorkspaceRefusal, type WorkspacePostActWord, type WorkspaceRefusal,
 } from '../../shared/workspaceTransitions.js';
-import { heldByRowsOf, type HeldByRead } from './cleanupHeldBy.js';
+import { heldByFieldOf, type HeldByRead } from './heldByRead.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes
@@ -179,7 +180,7 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
   if (v.mode !== 'expire') return { kind: 'unreadable', detail: 'ws-audit answered without "mode":"expire"' };
   if (!ok) {
     return { kind: 'unreadable', detail: `ws-audit --expire measured nothing: ${typeof v.detail === 'string' ? v.detail : ''}`,
-      ...heldByRowsOf(v) };
+      ...heldByFieldOf(v) };
   }
   const sensitive = Array.isArray(v.sensitive) ? v.sensitive.length : 0;
   const inUse = Array.isArray(v.inUse) ? v.inUse.flatMap((u): ExpireInUse[] => (isRecord(u)

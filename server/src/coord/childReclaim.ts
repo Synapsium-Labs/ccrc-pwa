@@ -38,7 +38,7 @@ import {
   CHILD_RECLAIM_DISABLED_UNREAD_SENTENCE, childReclaimDisabledOf, childReclaimDisabledRead, childReclaimDisabledSentence,
 } from './childReclaimDisabled.js';
 import { childSiblingsAtAct, readChildSiblings, readChildSiblingsPlaced, type ChildSiblingsPlaced } from './siblingRead.js';
-import { heldByRowsOf, type HeldByRead } from '../cleanupHeldBy.js';
+import { heldByFieldOf, type HeldByRead } from '../heldByRead.js';
 import { KeptReasonLimiter, keptReasonBody, keptReasonOf } from './keptReason.js';
 import { notRanSentence } from '../unmeasured.js';
 import { recordNestedRescueShadow } from './nestedRescueShadow.js';
@@ -901,7 +901,7 @@ export function parseChildReclaimAuditFailed(sessionId: string, stdout: string, 
     return { kind: 'unreadable', detail };
   }
   return { kind: 'unmeasured', resume: typeof v.resume === 'string' && v.resume !== '' ? 'resumable' : 'not-resumable', detail,
-    ...heldByRowsOf(v) };
+    ...heldByFieldOf(v) };
 }
 
 /** The exact stderr shape ccd's own `die` calls print for the SIX single-line

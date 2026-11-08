@@ -56,6 +56,7 @@ export function ChildReclaimBanner({
   runs?: readonly (NonNullable<ChildRunContext['run']> & { id: number })[];
 }): ReactNode {
   const coord = store((s) => s.coord);
+  const sessions = store((s) => s.sessions);
   const liveRuns = store((s) => s.runs);
   const known = runs ?? liveRuns;
   const who = (runId: number, sessionId: string): string => {
@@ -94,7 +95,7 @@ export function ChildReclaimBanner({
         lines={attentionLines(attention, (s) => (s.runId === null ? s.sessionId : who(s.runId, s.sessionId)))}
       />
       {/* Cleanup un-wedge R2: the registry rows holding the cleanup, above the expiry lane's list, each line with its one confirmed control. */}
-      <HeldByRows coord={coord} />
+      <HeldByRows coord={coord} sessions={sessions} />
       {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
           lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
       <ExpiryAttention coord={coord} />
