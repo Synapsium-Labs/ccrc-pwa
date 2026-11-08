@@ -704,8 +704,11 @@ button.metachip:active {
    component is `<Prose>`; the app still owns the react-markdown component
    map (lib/markdown.tsx, where CodeBlock and ChatMarkdown live now),
    because WHICH element a token becomes is this app's business and how it
-   LOOKS is the design system's. The plain-text rule below is the one app
-   rule since that names `msg-assist`, and only to place its own element. */
+   LOOKS is the design system's. Since the move three app rules name
+   `msg-assist`, with two concerns, each to place or size, never to colour: the plain-text rule
+   below, for its own element, and the reading column's measure (THE READING
+   COLUMN, D-8059), which sets one registered length on `.msg-assist` and
+   caps its prose children's width with it. */
 
 /* PLAIN TEXT — a message chat did not format (lib/markdown.tsx's MsgPlain: the pre-scan refused it, or the worker
    path answered something other than a tree). Inside an assistant turn it sits in prose's `pre` well
@@ -1963,12 +1966,21 @@ button.metachip:active {
    100ch Instrument), from the column's left edge; code, tables, tool cards and
    images take the full column. The user's bubble sits at the column's right
    edge, at most 70% of it and never wider than the prose beside it, and its
-   attachments take the same cap. Below 900 none of this applies: the shared
-   `--measure-prose` and the 85% bubble hold.
-   The measure is resolved ONCE, on `.msg-assist`: `ch` resolves in each
-   element's own font, so a heading capped at `90ch` would run past the
-   paragraphs. `--chat-prose-cap` is a registered length, so it computes to px
-   where it is set and the children inherit that one length. */
+   attachments take the same cap, `min(70%, prose)`: that shared cap is the
+   rule. The two are equal at the cap; a short turn's bubble shrink-wraps
+   under it, and its attachments may then be wider than the bubble (review
+   1589 F4). Below 900 none of this applies: the shared `--measure-prose` and
+   the 85% bubble hold.
+   The prose children's measure is resolved once, on `.msg-assist`: `ch`
+   resolves in each element's own font, so a heading capped at `90ch` would
+   run past the paragraphs. `--chat-prose-cap` is a registered length, so it
+   computes to px where it is set and the children inherit that one length.
+   The bubble's and the attachments' caps resolve `ch` in their own font; they
+   match the prose's because all three read `--fs-base` and `--family-ui`
+   today (review 1589 F5). `--measure-chat-prose` must be a plain length (90ch,
+   900px): a percentage, `none`, `auto` or a calc with a percentage is no
+   `<length>`, so the registered property falls back to its initial 0px and
+   every prose child collapses (review 1589 F1). */
 @property --chat-prose-cap {
   syntax: '<length>';
   inherits: true;

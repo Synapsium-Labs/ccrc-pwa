@@ -280,7 +280,7 @@ const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
 const { ROUTES } = await import('../src/lib/routes');
-const { DESK_DOORS: RAIL_ITEMS, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
+const { DESK_DOORS, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
 const { ShellFrame } = await import('../src/skins/frame');
@@ -365,7 +365,9 @@ afterEach(() => {
 describe('the desk doors, characterized', () => {
   /** The desk's place doors, in order. */
   const deskDoors = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('header.shell-accounts .ins-door:not(.ins-home)')];
-  const PATHS = ['/', '/runs', '/settings/updates', '/docs/project-a/specs/a.md', `/s/${S.id}`, '/waiting/1'] as const;
+  // `/settings` is the bare path: Settings is the current door there as on `/settings/updates` (desk-nav Task A review 1646 A3;
+  // desktop-polish Task C14, D-8110).
+  const PATHS = ['/', '/runs', '/settings', '/settings/updates', '/docs/project-a/specs/a.md', `/s/${S.id}`, '/waiting/1'] as const;
 
   /** `S` and two more sessions waiting on the operator, the two bound to open runs, and one open item, so Waiting on you,
    *  Inbox and Runs all count. */
@@ -399,7 +401,7 @@ describe('the desk doors, characterized', () => {
   it('which door is current', () => {
     stubAt(1280);
     const want: Record<(typeof PATHS)[number], string | null> = {
-      '/': null, '/runs': 'go-runs', '/settings/updates': 'go-settings', '/docs/project-a/specs/a.md': 'go-docs',
+      '/': null, '/runs': 'go-runs', '/settings': 'go-settings', '/settings/updates': 'go-settings', '/docs/project-a/specs/a.md': 'go-docs',
       [`/s/${S.id}`]: null, '/waiting/1': 'go-waiting',
     };
     for (const at of PATHS) {
@@ -456,7 +458,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     expect([...nav.children].map((c) => c.getAttribute('data-command')))
       .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
     // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
-    expect(RAIL_ITEMS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
+    expect(DESK_DOORS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
     expect(within(nav).queryByRole('button', { name: /activity/i })).toBeNull();
     expect(nav.textContent).not.toMatch(/activity/i);
     expect(within(nav).getAllByRole('button').filter((b) => b.hasAttribute('disabled'))).toEqual([]);
@@ -573,6 +575,21 @@ describe('the desk top bar (desk-nav Task A)', () => {
     }
   });
 
+  // Review 1643 F5 (desktop-polish Task C14, D-8110): no contract change. At 100 or more the pill prints "99+" and the name
+  // carries the real count, by design (`badgePrint`), so label in name is read on the door's word, not on its pill.
+  it('at a count of 100 or more the pill prints 99+, the name the real count, and the word is in the name', () => {
+    stubAt(1280);
+    const items = Array.from({ length: 120 }, (_, i) => itemView({ id: i + 1 }));
+    act(() => useFleetStore.setState({ fleetFrameSeen: true, waiting: waitingView({ items }) }));
+    mount('/');
+    // 120 open items and the suite's own asking session: a three-digit count, whatever it is exactly.
+    const d = within(topBar()).getByRole('button', { name: /^Waiting on you, 1\d\d waiting on you$/ });
+    const name = d.getAttribute('aria-label')!;
+    expect(d.querySelector('.ins-door-count')).toHaveTextContent(/^99\+$/);
+    expect(labelInName(d.querySelector('.ins-door-word')!.textContent!, name)).toBe(true);
+    expect(labelInName(shownText(d), name), 'the pill is read out of the check, by design').toBe(false);
+  });
+
   it('the current door\'s underline is 2px of --accent on its bottom edge', () => {
     const rule = declsOf(".ins-door[aria-current='page']::after");
     expect(rule).toMatch(/content:\s*''/);
@@ -655,7 +672,8 @@ describe('the desk top bar (desk-nav Task A)', () => {
     stubAt(1280);
     mount('/runs');
     const runsDoor = placeDoors().find((d) => d.getAttribute('data-command') === 'go-runs')!;
-    for (const [key, where] of [['i', '/mail'], ['a', '/accounts'], ['s', '/settings'], ['f', '/']] as const) {
+    // `r` runs last, from `/`, so it moves the page: from `/runs` itself `g r` would change nothing (review 1646 A3; Task C14, D-8110).
+    for (const [key, where] of [['i', '/mail'], ['a', '/accounts'], ['s', '/settings'], ['f', '/'], ['r', '/runs']] as const) {
       act(() => { runsDoor.focus(); });
       expect(document.activeElement, key).toBe(runsDoor);
       fireEvent.keyDown(runsDoor, { key: 'g' });
@@ -707,6 +725,19 @@ describe('the desk top bar (desk-nav Task A)', () => {
     expect(rule).toMatch(/background:\s*var\(--bg-raised\)/);
     expect(rule).toMatch(/color:\s*var\(--ink-primary\)/);
     expect(rule).toMatch(/z-index:\s*var\(--z-header\)/);
+  });
+
+  // Review 1646 A3 (desktop-polish Task C14, D-8110): the doors' line is a flex row at its own width, and a count pill takes no clicks.
+  it("the doors' line is a flex row that keeps its own width and centres its doors", () => {
+    const rule = declsOf('.ins-doors');
+    expect(rule).toMatch(/display:\s*flex\s*(;|$)/);
+    expect(rule).toMatch(/flex:\s*none\s*(;|$)/);
+    expect(rule).toMatch(/align-items:\s*center\s*(;|$)/);
+    expect(rule).toMatch(/gap:\s*var\(--sp-1\)\s*(;|$)/);
+  });
+
+  it("a door's count pill takes no clicks of its own", () => {
+    expect(declsOf('.ins-door-count')).toMatch(/pointer-events:\s*none\s*(;|$)/);
   });
 
   it("a door's tip shows on hover and on focus-visible, below it, and the bar is no clip box", () => {

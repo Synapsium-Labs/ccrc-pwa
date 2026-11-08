@@ -100,7 +100,10 @@ const drawn = async (page: Page): Promise<void> => {
   // The Suspense line (`app.tsx`) by its own selector: a screen may say "Loading…" of its own data.
   return pane.querySelector('p.shell-placeholder-copy[role="status"]') === null
     && !/This screen could not be (shown|loaded)\./.test(pane.textContent ?? '')
-    && pane.querySelector('button, h1, h2') !== null;
+    && pane.querySelector('button, h1, h2') !== null
+    // /runs: the caps dial draws nothing until `coordCaps()` resolves (`CapsControl.tsx`), so the snapshot waits for its
+    // number field (desk-nav Task A review 1646 A1; desktop-polish Task C14, D-8110). Every other route waits as before.
+    && (location.pathname !== '/runs' || pane.querySelector('.caps-input') !== null);
     }, undefined, { timeout: 30_000 });
   } catch (err) {
     const pane = await page.evaluate(() => document.querySelector('.shell-detail')?.outerHTML.slice(0, 600) ?? 'no pane');

@@ -175,9 +175,11 @@ const LAYOUT_PROPS = new Set([
  *  census reds as stale.
  *
  *  It was EMPTY for a wave — every entry had named its own fix and each had
- *  been taken — and the three below are not a regression of that. They are a
- *  decision with a measurement behind it, recorded where the stale half can
- *  red on it if the decision is ever reversed.
+ *  been taken — and the four below are not a regression of that. The three
+ *  keycap entries are a decision with a measurement behind it, recorded where
+ *  the stale half can red on it if the decision is ever reversed; the fourth
+ *  sets a length, not an appearance, and is recorded because the census keys
+ *  on a selector (its own comment says why).
  *
  *    - the two chat-banner entries called themselves an UNDO of the banner's
  *      own `color` and were measured to be undoing nothing — Button's ghost
@@ -218,7 +220,11 @@ const APPEARANCE_CENSUS: Record<string, string> = {
   // resolved from `--measure-chat-prose` on the chat's own `.msg-assist` so its
   // prose children (headings included) inherit one px measure instead of each
   // resolving `ch` in its own font. It cannot live in prose.css: that sheet is
-  // shared with the Docs reader, whose `--measure-prose` must not change.
+  // shared with the Docs reader, whose `--measure-prose` must not change. The
+  // census keys on the selector, so this entry exempts the whole rule; that the
+  // rule sets no colour is enforced by `contrast.test.ts` ("the uncovered
+  // census"), which reds on a colour added to it, and border and type are kept
+  // out of it by review (review 1589 F2; desktop-polish Task C14, D-8110).
   'chat.css .chat-item .msg-assist':
     "the chat's prose measure, resolved once into a registered length; no colour, "
     + 'border or type, and the Docs reader keeps prose.css as it is.',

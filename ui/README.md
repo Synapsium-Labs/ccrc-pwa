@@ -92,7 +92,9 @@ and the contrast gate measures each palette once, for both skins.
   `--*-section` set, `--gutter`, `--row-h`, `--pad-card`, `--gap-section`,
   `--page-max`, `--page-max-wide`, `--measure-chat`, and `--measure-chat-prose`:
   the chat's prose measure inside the `--measure-chat` column from 900px up,
-  D-8059). Each one chooses a step
+  D-8059; it must be a plain length, such as `90ch`, because chat.css reads it
+  into a registered `<length>` and a percentage or a keyword there collapses
+  the chat's prose to 0px). Each one chooses a step
   from a scale, so it adds no new size. `theme.css` maps them as `text-md`
   (the 14px scale step), `text-ui`, `text-prose`, `text-meta`, `text-title`
   (the page title, `--fs-page`) and `text-section`, and as the spacing keys

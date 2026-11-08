@@ -3760,8 +3760,8 @@ button.proj-card-pool::before {
    (Refined's row under the bar at a desk, Instrument's status bar, one row under Refined's phone header and in
    Instrument's fleet column). News, not a fault, and not a band: it takes the room of a word. In the bar form
    (`status`) `flex: none` and `nowrap` keep the line on one line, never shrunk or clipped, whatever sits beside it;
-   the `row` form below spans its column and lets its stale words wrap on a phone. The empty glyph
-   span `Door` always draws is hidden, the idiom of `.ref-tab` (refined.css). */
+   the `row` form below spans its column and lets its stale words wrap on a phone. Its door has no glyph, and `Door`
+   draws no glyph span for a null glyph (desktop-polish Task C14, D-8110), so nothing stands before its word. */
 .update-indicator {
   display: inline-flex;
   flex: none;
@@ -3772,9 +3772,6 @@ button.proj-card-pool::before {
 .update-indicator-door {
   color: var(--accent);
   font-size: var(--fs-meta);
-}
-.update-indicator-door > [aria-hidden='true']:empty {
-  display: none;
 }
 /* The stale words (wave 19, R24(b)) follow the version in the tertiary ink the fleet's other quiet text wears. */
 .update-indicator-stale {

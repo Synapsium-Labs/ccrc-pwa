@@ -227,6 +227,29 @@ describe('a name inside a link draws that link alone (chat reading Task L, D-806
     expect(open).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer');
   });
 
+  // Review 1606 F1 (desktop-polish Task C14, D-8110): a link the parser itself makes inside a link's text (an angle-bracket
+  // autolink, a mailto autolink, a footnote reference) draws as text, so the outer link is the one anchor and one click.
+  it.each([
+    ['[<https://example.com/a> x](https://example.com/v)', 'https://example.com/a x'],
+    ['[a <mailto:x@example.com> b](https://example.com/v)', 'a mailto:x@example.com b'],
+    ['[see[^1]](https://example.com/v)\n\n[^1]: a note', 'see1'],
+  ])('%s draws one anchor and one window.open', (md, text) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { container } = assistant(`See ${md}`);
+    expect(container.querySelectorAll('.msg-assist a a')).toHaveLength(0);
+    const outer = anchors(container).filter((a) => a.getAttribute('href') === 'https://example.com/v');
+    expect(outer).toHaveLength(1);
+    expect(outer[0]!.textContent).toBe(text);
+    fireEvent.click(outer[0]!.firstChild!);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith('https://example.com/v', '_blank', 'noopener,noreferrer');
+  });
+
+  it('the same autolink outside a link keeps its own anchor', () => {
+    const { container } = assistant('See <https://example.com/a> now.');
+    expect(anchors(container).map((a) => a.getAttribute('href'))).toEqual(['https://example.com/a']);
+  });
+
   it('the same image outside a link keeps its own tap-to-open anchor', () => {
     const { container } = assistant('See ![run 1527](https://example.com/y.png) now.');
     const all = anchors(container);

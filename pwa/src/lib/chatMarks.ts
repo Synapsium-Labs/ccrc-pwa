@@ -185,20 +185,103 @@ function statusAfter(text: string, at: number): { start: number; end: number; to
   return tone === null ? null : { start: next.end - next.word.length, end: next.end, tone };
 }
 
-/** Where a sentence ends: `.`, `!` or `?` followed by a space or the text's end, or a line break. */
-const SENTENCE_END = /[.!?](?=\s|$)|\n/g;
+/** What may follow a sentence's last mark before the space: closing brackets and quotes (`?)`, `?"`). */
+const CLOSERS = ')]"\'\u2019\u201D';
+const isSpace = (c: string): boolean => c !== '' && /\s/.test(c);
+
+/** For each offset of `text`, whether the sentence that a label ending there belongs to ends in `?` (review 1592 F5).
+ *  A sentence ends at a run of `.`, `!` and `?`, with any closers after it, followed by a space or the text's end; at a
+ *  `)` or `]` followed by a space and a capital letter ("(#651 merged) Is it out?"); at a spaced dash; or at a line
+ *  break. It is a question when its run holds a `?` ("Is #651 merged?!", "(Has #651 merged?)"). Brackets nest: an end
+ *  inside a `(` or `[` that opens after the label is the aside's own, not the label's ("#651 merged (why?) and
+ *  shipped."); an aside left open does not hide a following question. A line break ends every aside. One pass forward to find
+ *  the marks and one back to answer every offset, so a block of many labels costs one pass. */
+function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
+  // Text that is not prose (inline code, link text, raw html; review 1601 F3) holds no mark: it reads as letters.
+  let text = '';
+  let from = 0;
+  for (const q of quiet) {
+    text += prose.slice(from, q.start) + 'a'.repeat(q.end - q.start);
+    from = q.end;
+  }
+  text += prose.slice(from);
+  const n = text.length;
+  /** Per offset: 0 nothing, 1 an end, 2 a question's end, 3 an opening bracket, 4 a closing one, 5 one that also
+   *  ends the sentence around it, 6 a line break. */
+  const mark = new Uint8Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const c = text.charAt(i);
+    if (c === '\n') mark[i] = 6;
+    else if (c === '(' || c === '[') mark[i] = 3;
+    else if (c === ')' || c === ']') {
+      let k = i + 1;
+      while (k < n && isSpace(text.charAt(k))) k += 1;
+      mark[i] = /\p{Lu}/u.test(text.charAt(k)) ? 5 : 4;
+    } else if (c === '.' || c === '!' || c === '?') {
+      let j = i;
+      while (j < n && '.!?'.includes(text.charAt(j))) j += 1;
+      let k = j;
+      while (k < n && CLOSERS.includes(text.charAt(k))) k += 1;
+      if (k === n || isSpace(text.charAt(k))) mark[i] = text.slice(i, j).includes('?') ? 2 : 1;
+      i = j - 1;
+    } else if ((c === '\u2014' || c === '\u2013') && isSpace(text.charAt(i - 1)) && isSpace(text.charAt(i + 1))) {
+      mark[i] = 1;
+    }
+  }
+  const asks = new Uint8Array(n + 1);
+  const after: number[] = [];
+  let ask = 0;
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const m = mark[i]!;
+    if (m === 1 || m === 2) ask = m === 2 ? 1 : 0;
+    else if (m === 6) { after.length = 0; ask = 0; }
+    else if (m === 4 || m === 5) { if (m === 5) ask = 0; after.push(ask); }
+    else if (m === 3) ask = after.length ? after.pop()! : ask;
+    asks[i] = ask;
+  }
+  return asks;
+}
 /** One step of the negator scan: a clause end (group 1: `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the
  *  text's end, or a line break), or a whole word, digits included, with any `.`, `-` or `/` joining it to more word
  *  characters (`10`, `v0.0.1003`, `no-op`, `docs/no.md` are each one word; review 1592 F3). */
 const NEGATION_TOKEN = /([.!?;,:](?=\s|$)|\n)|[\p{L}\p{M}\p{N}_]+(?:[.\-/][\p{L}\p{M}\p{N}_]+)*/gu;
-/** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N", "/N" or
- *  the clause's end ("passed: 0 of 12", "failed: none."; review 1592 F2). */
-const ZERO_COUNT_AFTER = /\s*:\s*(?:0|zero|none)(?:\s+of\s+\p{N}|\/\p{N}|(?=[^\S\n]*(?:[.!?;,:](?=\s|$)|\n|$)))/iuy;
+/** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2). */
+const NUMBER_WORDS = [
+  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen',
+  'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty',
+  'seventy', 'eighty', 'ninety', 'hundred', 'thousand',
+];
+/** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N" or
+ *  "out of N" (N in digits or a number word), "(of N)", "/N" with or without spaces, `%`, a dash clause, or the clause's
+ *  end ("passed: 0 of 12", "failed: none.", "passed: 0 / 12", "failed: 0 — all good"; reviews 1592 F2 and 1601 F2). */
+const ZERO_COUNT_AFTER = new RegExp(
+  '\\s*:\\s*(?:0|zero|none)(?:'
+    + `\\s+(?:out\\s+)?of\\s+(?:\\p{N}|${NUMBER_WORDS.join('|')})`
+    + '|[^\\S\\n]*\\(\\s*(?:out\\s+)?of\\s+\\p{N}'
+    + '|[^\\S\\n]*\\/[^\\S\\n]*\\p{N}'
+    + '|%'
+    + '|(?=[^\\S\\n]*(?:[.!?;,:](?=\\s|$)|\\n|$)|[^\\S\\n]*[\u2014\u2013]|[^\\S\\n]+-[^\\S\\n]))',
+  'iuy',
+);
 
-const isNegator = (word: string): boolean => STATUS_NEGATORS.includes(word.toLowerCase());
+/** The zero words a joined zero count over a total starts with ("0/12"; review 1601 F1). */
+const ZERO_WORDS: readonly string[] = ['0', 'zero', 'none'];
+/** Whether one scanned word is a negator: one of `STATUS_NEGATORS`, or a joined token that is a zero count, its parts
+ *  all negators ("0-0", "0.0", "no/none") or a zero word over a number ("0/12", "Zero/12"). Any other joined token is
+ *  one word that is not a negator, so `0.5%`, `v0.0.1003`, `docs/no.md` and `no-op` keep their labels (review 1592 F3;
+ *  review 1601 F1). */
+const isNegator = (word: string): boolean => {
+  const w = word.toLowerCase();
+  if (STATUS_NEGATORS.includes(w)) return true;
+  const parts = w.split(/[.\-/]/);
+  if (parts.length < 2) return false;
+  if (parts.every((p) => STATUS_NEGATORS.includes(p))) return true;
+  const [count, total] = parts;
+  return parts.length === 2 && ZERO_WORDS.includes(count!) && w.charAt(count!.length) === '/' && /^\p{N}+$/u.test(total!);
+};
 
-/** Where a recognised name stands, in the scanned text's offsets. */
-interface Span {
+/** A stretch of the scanned text, by offsets: where a recognised name stands, or text that is not prose. */
+export interface Span {
   readonly start: number;
   readonly end: number;
 }
@@ -206,8 +289,10 @@ interface Span {
 /** S3's withholding over one text (c-s3-negation): a text node's own, or, through the plugin, the flattened text of its
  *  whole block, so a negator or a `?` in a neighbouring text node counts (review 1592 F4). It reads, for each label,
  *  only the label's clause before it and its sentence after it. Labels are asked in order, so the scan only moves
- *  forward: one pass over the text, however many labels and text nodes it holds (review 1592 F1). A label asked
- *  before the last one restarts the scan, so the answer never depends on the order, only the cost does. */
+ *  forward: one pass over the text, however many labels and text nodes it holds (review 1592 F1). Names are
+ *  registered in order, as the plugin and `markRuns` find them; labels may be asked in any order. A label asked before
+ *  the last one restarts the scan, so for names registered in order the answer never depends on the order in which
+ *  labels are asked, only the cost does (review 1601 F5). */
 export class LabelScan {
   private readonly names: Span[] = [];
   private tokens = new RegExp(NEGATION_TOKEN.source, NEGATION_TOKEN.flags);
@@ -215,12 +300,16 @@ export class LabelScan {
   private skip = 0;
   private clauseFrom = 0;
   private negatorAt = -1;
-  private sentenceEnd: RegExpExecArray | null | undefined;
+  private questions: Uint8Array | undefined;
   private lastStart = 0;
   private readonly text: string;
+  private readonly quiet: readonly Span[];
 
-  constructor(text: string) {
+  /** `quiet`: the stretches, in order, that are not prose (inline code, link text, raw html), which hold no sentence
+   *  end; a negator in them still counts ("`0` tests failed"). */
+  constructor(text: string, quiet: readonly Span[] = []) {
     this.text = text;
+    this.quiet = quiet;
   }
 
   /** A recognised name at `start`..`end`: its own words are not negators (`run 0`, `#0`). */
@@ -248,12 +337,8 @@ export class LabelScan {
     }
     if (this.negatorAt >= this.clauseFrom) return true;
     if (stickyAt(ZERO_COUNT_AFTER, this.text, end) !== null) return true;
-    let close = this.sentenceEnd;
-    if (close === undefined || (close !== null && close.index < end)) {
-      SENTENCE_END.lastIndex = end;
-      close = this.sentenceEnd = SENTENCE_END.exec(this.text);
-    }
-    return close !== null && close[0] === '?';
+    this.questions ??= sentenceQuestions(this.text, this.quiet);
+    return this.questions[end] === 1;
   }
 
   private restart(): void {
@@ -263,7 +348,6 @@ export class LabelScan {
     this.skip = 0;
     this.clauseFrom = 0;
     this.negatorAt = -1;
-    this.sentenceEnd = undefined;
   }
 }
 
@@ -320,6 +404,23 @@ export function markRuns(text: string, context?: LabelContext): readonly MarkRun
   }
   plainUpTo(text.length);
   return runs;
+}
+
+/** Where `text`'s recognised names stand, in order: the names `markRuns` would mark, for text the plugin draws no marks
+ *  in (link text), so that the block's scan knows a name's own words are not negators (review 1601 F3). */
+export function nameSpans(text: string): Span[] {
+  const out: Span[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const name = wordBefore(text, i) ? null : nameAt(text, i);
+    if (name === null) {
+      i += 1;
+      continue;
+    }
+    out.push({ start: i, end: name.end });
+    i = name.end;
+  }
+  return out;
 }
 
 /** The mark when `text` is exactly one name and nothing else (R13: a whole inline code span); else `null`. */

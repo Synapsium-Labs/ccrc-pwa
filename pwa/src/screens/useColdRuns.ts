@@ -162,10 +162,15 @@ export function useColdRuns(
   // mark, so a rejection from a read older than an applied one cannot set
   // `error` over the newer answer. A rejection does NOT advance the mark: it
   // carries no reading to be newer than, so a newer success still wins over an
-  // older error in either arrival order, and an older success still lands after
-  // a newer failure (the freshest answer there is).
+  // older error in either arrival order, and an older success still lands its rows
+  // after a newer failure (the freshest answer there is), though not its `ok` (below).
+  //
+  // The newest SETTLED failure holds `state` at `error` and owns `timedOut` (reviews 1606 F2 and 1689 F1; Task C14, D-8110).
+  // An older success still lands its ROWS, but clears neither failure signal; an older failure cannot replace `timedOut`.
+  // Only a success newer than that failure clears both signals. `failed` is the newest sequence that settled as a failure.
   const issued = useRef(0);
   const applied = useRef(0);
+  const failed = useRef(0);
   const loadCold = (): Promise<void> => {
     const seq = ++issued.current;
     setReading(true);
@@ -194,14 +199,18 @@ export function useColdRuns(
           store.getState().setRunPages({ ...next, at: Date.now() });
           setCold(next.runs);
         }
-        setColdState('ok');
-        setTimedOut(false);
+        if (seq > failed.current) {
+          setColdState('ok');
+          setTimedOut(false);
+        }
       })
-      // A failed read changes only `state`: the rows, and the stored pages, stay (never a fold to empty).
+      // A failed read changes its failure signals: the rows, and the stored pages, stay (never a fold to empty).
       .catch((e: unknown) => {
         if (!aliveRef.current || seq <= applied.current) return;
+        const newest = seq >= failed.current;
+        failed.current = Math.max(failed.current, seq);
         setColdState('error');
-        setTimedOut(e instanceof ApiTimeout);
+        if (newest) setTimedOut(e instanceof ApiTimeout);
       })
       .finally(settled);
   };

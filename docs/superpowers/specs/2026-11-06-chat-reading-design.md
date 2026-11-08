@@ -52,14 +52,15 @@ flowchart LR
   f1S --> f1PR["Prose: at most the chat prose measure,<br/>from the left edge"]
   f1S --> f1W["Code, tables, tool cards, images:<br/>the full column"]
   f1S --> f1B["Strips, inline ask, composer:<br/>the full column"]
-  f1S --> f1U["User bubble: right edge,<br/>at most 70% of the column"]
+  f1S --> f1U["User bubble: right edge,<br/>at most 70% of the column<br/>and never wider than the prose"]
 ```
 *Figure 1. How the desk layout is decided. The skin sets the cap and the prose measure; everything except prose takes the column.*
 
 | Value | Refined (today, then proposed) | Instrument (today, then proposed) |
 |---|---|---|
 | `--measure-chat`, the column | 780 px (820 px from 1600) → **1200 px** | 860 px → **100%**: the log takes the pane |
-| Chat prose measure (new length role `--measure-chat-prose`) | 72ch (shared `--measure-prose`) → **76ch** at 15 px, about 680 px | 72ch → **88ch** at 14 px, about 740 px |
+| Chat prose measure (new length role `--measure-chat-prose`) | 72ch (shared `--measure-prose`) → **90ch**, about 895 px (first agreed as 76ch; R2 amended, item 57) | 72ch → **100ch**, about 995 px (first agreed as 88ch; R2 amended, item 57) |
+| User bubble and its attachments | 85% of the row → **`min(70%, prose)`**: at most 70% of the column, never wider than the prose measure; the attachments take the same cap | The same |
 | Code, tables, tool cards | Capped by the 780 to 820 px column | The full column |
 | Phones (below 900 px) | Unchanged | Unchanged |
 
@@ -68,6 +69,9 @@ Notes for the planner:
 - The column keeps `min(var(--measure-chat), 100%)`, so with the inspector rail open it still yields to the pane.
 - The inline ask keeps its rule of being 2 × `--sp-4` narrower than the column, so it lines up with the cards.
 - Footing: the px figures for ch are judgement (Geist's "0" at about 0.6 em). The plan's width task measures them in the browser at 1280, 1600 and 2560 px.
+
+> [!NOTE]
+> **R2 amended (item 57, 2026-11-06).** The operator chose wider prose after Task W measured the first values: "Wider: Refined about 895 px (90 characters), Instrument about 995 px (100)". The prose measure is 90ch in Refined and 100ch in Instrument, and the user's bubble is capped at `min(70%, prose)`, which its attachments share (Task W fix round 1). The table above shows the amended values; the first ones, 76ch and 88ch, stay named in it. This note and R2 record the change (desktop-polish Task C14, D-8110).
 
 ### 2.2 The alternative: widen the centred column
 
@@ -209,7 +213,7 @@ The operator approved the recommendations on 2026-11-06 in the words "Chat desig
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
 | R1 | Desk layout | Wide column with prose at a measure; widen the centred column | Wide column, prose measured and left-aligned: it uses the pane and keeps lines readable. The operator, 2026-11-06 | Agreed |
-| R2 | Column caps | Per skin; one value | Refined 1200 px, Instrument the pane (a log skin); prose 76ch and 88ch | Agreed |
+| R2 | Column caps | Per skin; one value | Refined 1200 px, Instrument the pane (a log skin); prose 90ch and 100ch, and the user's bubble at most `min(70%, prose)` (amended by item 57, 2026-11-06; first agreed as 76ch and 88ch) | Agreed |
 | R3 | Prose measure token | Change `--measure-prose`; new chat role | New role `--measure-chat-prose`, so the Docs reader keeps 72ch | Agreed |
 | R4 | Where hue goes | Everywhere useful; four places only | Lead-ins, status labels, names, action-list markers; body ink unchanged | Agreed |
 | R5 | Informational lead-ins | NOTE blue; bold ink only | NOTE blue for informational lead-ins, amber for action lead-ins, so every block has an anchor. The operator, 2026-11-06 | Agreed |

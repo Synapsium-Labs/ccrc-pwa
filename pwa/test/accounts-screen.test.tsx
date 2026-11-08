@@ -581,6 +581,28 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     expect(document.activeElement).toBe(rowOf('claude'));
   });
 
+  // Chat reading Task L review 1606 F6 (desktop-polish Task C14, D-8110): this screen does not hold an arrival across a missing row.
+  // A lane removed from the roster and usage while `?lane=` stays open, then restored under the same value, arrives again:
+  // one scroll for each stay of the lane. The runs board's old arrival, unlike this Accounts case, was superseded by #2478.
+  it('a lane hidden and then restored under the same ?lane= arrives again, once for each stay', async () => {
+    stubAccounts(twoLanes);
+    navigate('/accounts?lane=claude9');
+    const scroll = spyScroll();
+    render(<AccountsScreen />);
+    await screen.findByText('team·alt');
+    await act(async () => {});
+    expect(scroll.calls).toHaveLength(1);
+    stubAccounts([twoLanes[0]!], null, TEST_ROSTER.filter((a) => a.id !== 'claude9'));
+    expect(screen.queryByText('team·alt')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-arrived]')).toBeNull();
+    expect(scroll.calls).toHaveLength(1);
+    stubAccounts(twoLanes);
+    await screen.findByText('team·alt');
+    await act(async () => {});
+    expect(scroll.calls).toEqual([rowOf('claude9'), rowOf('claude9')]);
+    expect(rowOf('claude9')).toHaveAttribute('data-arrived', 'true');
+  });
+
   it('the arrived row keeps a mark under forced colours, where the accent edge (a box-shadow) is dropped', () => {
     const forced = atBlock(fleetCss, '@media (forced-colors: active)');
     // Both states: arrived, and arrived while focused (the `:focus` outline reset is more specific than the first).

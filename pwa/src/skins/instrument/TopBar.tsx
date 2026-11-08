@@ -108,6 +108,8 @@ export function TopBar(): ReactNode {
       <div className="ins-topbar">
         <nav aria-label="Primary" className="ins-doors">
           <Door
+            // No glyph, so no glyph span and no gap before the wordmark: its word starts at `.ins-home`'s own padding,
+            // 4px in from the lanes row's left edge, not 9 (review 1646 A4; desktop-polish Task C14, D-8110).
             glyph={null}
             className="ins-door ins-home"
             aria-label={HOME_DOOR_NAME}
