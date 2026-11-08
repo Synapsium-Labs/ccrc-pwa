@@ -149,7 +149,8 @@
    icon and its name. GitHub's may-differ note is a marker (`≠`) whose words are its `title`, a screen reader's text and
    the link's description, so it takes no room from the crumbs. On a line of their own, if the actions are still wider
    than the row (a draft at 600: GitHub, Share, Export and Open committed version with their words), they wrap among
-   themselves rather than run past the head.
+   themselves rather than run past the head; GitHub's refusal, the one long sentence among them, is cut with an
+   ellipsis there, its whole words in its `title`. Every crumb carries its whole name in its `title` too.
    THE QUERY'S WIDTH, measured in Chrome (docs-compact-head.browser.test.ts): back (44) and the row's two 4 px gaps, the
    crumbs at their floor when folded (the `…` button and two crumbs at a tap and a separator each, about 164), and the
    widest actions with their words (GitHub, Share and "Export (plain view)", 313) come to about 529, so the words hide
@@ -179,6 +180,7 @@
 .docs-full .docs-actions { flex: 0 1 auto; min-width: 0; margin-inline-start: auto; flex-wrap: wrap; }
 .docs-full .docs-actions > * { flex: none; }
 .docs-full .docs-actions > .docs-action-note { flex: none; }
+.docs-full .docs-actions > .docs-action-off { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docs-full .docs-action { gap: var(--sp-1); white-space: nowrap; }
 /* An action drawn as an icon beside its words reads as a button and drops the link underline; one drawn as text alone
    keeps it. A disabled Share or Export (waiting for the leaf) is dimmed as the compact bar dims it, never recoloured

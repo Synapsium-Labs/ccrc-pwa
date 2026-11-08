@@ -257,6 +257,29 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     expect(fullHeadFormFor(true)).toBe('stacked');
   });
 
+  it('every crumb that can shorten carries its whole name in its title, the page\'s own included (F5)', async () => {
+    atWidth(1280);
+    const tree = treeOk({ entries: [entry('specs', 'd/x.md')] });
+    open('/docs/demo/specs/d/x.md', fakeLoaders({ tree: okTree(tree) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const crumbs = [...row().querySelectorAll<HTMLElement>('.docs-crumb, .docs-crumb-here')];
+    expect(crumbs.map((c) => c.textContent)).toEqual(['Docs', 'demo', 'specs', 'd', 'x.md']);
+    expect(crumbs.map((c) => c.getAttribute('title'))).toEqual(crumbs.map((c) => c.textContent));
+  });
+
+  it('GitHub\'s refusal in the row carries its whole words in its title, since the row may cut it (F5)', async () => {
+    atWidth(1280);
+    const tree = { ...treeOk(), github: { state: 'named' as const, slug: 'not a slug' } };
+    open('/docs/demo/specs/a.md', fakeLoaders({ tree: okTree(tree) }));
+    const off = await waitFor(() => {
+      const el = row().querySelector<HTMLElement>('.docs-actions > .docs-action-off');
+      if (el === null) throw new Error('no refusal');
+      return el;
+    });
+    expect(off.textContent).toMatch(/^View on GitHub: /);
+    expect(off.getAttribute('title')).toBe(off.textContent);
+  });
+
   it('every fact the truth line says, it still says: the ref, the commit, copy commit, how the ref was chosen and the chip', async () => {
     atWidth(1280);
     open('/docs/demo/specs/a.md', fakeLoaders());

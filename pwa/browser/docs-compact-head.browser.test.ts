@@ -621,9 +621,12 @@ describe('the desk head (desk-nav Part B)', () => {
       ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ahead: 2, behind: 0 } },
     };
   })();
+  /** GitHub's longest refusal (a repository name that cannot be linked), fix round 1, F5. */
+  const REFUSED_DEEP = { ...DEEP_TREE, github: { state: 'named' as const, slug: 'not a slug' } };
   const WIDE_STATES = [
     ['a modified draft', DRAFT_DEEP, 'main', '.docs-head-bar .docs-actions a[aria-label="Open committed version"]'],
     ['a local ref ahead of origin', AHEAD_DEEP, 'lane-a', '.docs-head-bar .docs-actions .docs-action-note'],
+    ["GitHub's refusal", REFUSED_DEEP, 'main', '.docs-head-bar .docs-actions .docs-action-off'],
   ] as const;
   const WIDE_CASES = WIDE_STATES.flatMap(([what, tree, ref, ready]) =>
     [INSTRUMENT, REFINED].flatMap((skin) => ([[600, 960], [768, 1024], [1280, 800]] as const).map(([w, h]) => [what, skin, w, h, tree, ref, ready] as const)));

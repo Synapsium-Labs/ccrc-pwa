@@ -88,6 +88,15 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(undecorated).toEqual(['.docs-full .docs-action:has(> .docs-action-words)']);
   });
 
+  it('GitHub\'s refusal in the row shortens with an ellipsis, so it never runs past the row (F5)', () => {
+    const off = ruleIn(docsCss, '.docs-full .docs-actions > .docs-action-off');
+    expect(declValue(off, 'flex')).toBe('0 1 auto');
+    expect(declValue(off, 'min-width')).toBe('0');
+    expect(declValue(off, 'overflow')).toBe('hidden');
+    expect(declValue(off, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(off, 'white-space')).toBe('nowrap');
+  });
+
   it('GitHub\'s may-differ note in the row is a marker: it never shrinks, and its words are not drawn (F1)', () => {
     const mark = ruleIn(docsCss, '.docs-full .docs-actions > .docs-action-note');
     expect(declValue(mark, 'flex')).toBe('none');

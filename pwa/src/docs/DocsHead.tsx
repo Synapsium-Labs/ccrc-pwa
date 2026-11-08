@@ -412,7 +412,7 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: bo
           <li key={c.href}>
             {i === shown.length - 1
               ? <span className="docs-crumb-here" aria-current="page" title={c.label}>{c.label}</span>
-              : <DocsPageLink className="docs-crumb" href={c.href}>{c.label}</DocsPageLink>}
+              : <DocsPageLink className="docs-crumb" href={c.href} title={c.label}>{c.label}</DocsPageLink>}
           </li>
         ))}
       </ol>
@@ -530,10 +530,12 @@ function GithubAction(p: {
 }): ReactNode {
   const noteId = useId();
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
-  if (!link.ok) {
-    return <span className="docs-action-off">{fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] })}</span>;
-  }
   const row = p.row === true;
+  if (!link.ok) {
+    // The row may cut the refusal to an ellipsis (fix round 1, F5), so there its title carries the whole sentence.
+    const off = fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] });
+    return <span className="docs-action-off" title={row ? off : undefined}>{off}</span>;
+  }
   const noted = link.note === 'may-differ' || p.showsDraft;
   return (
     <>
