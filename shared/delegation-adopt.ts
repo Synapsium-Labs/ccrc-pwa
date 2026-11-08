@@ -11,6 +11,8 @@ const DELEGATION_ADOPT_CAP_MAP = { present: true, absent: true, unmeasured: true
 /** What the fleet box's measured `ccd caps` says of one capability the door reads: listed, not listed, or not read at all. A list
  *  that did not read is never folded into "not listed" (D-8113). */
 export type DelegationAdoptCap = keyof typeof DELEGATION_ADOPT_CAP_MAP;
+/** Every word of `DelegationAdoptCap`, derived from its table, for the Settings card's wire guard (D-8114). */
+export const DELEGATION_ADOPT_CAPS: readonly DelegationAdoptCap[] = Object.keys(DELEGATION_ADOPT_CAP_MAP) as DelegationAdoptCap[];
 
 /** The door's refusal words, each with its ONE status (D-8113), spread into `shared/refusal.ts`'s `REFUSAL_STATUS`.
  *  `fleet-caps-unmeasured`: the fleet box's `ccd caps` did not read, so neither capability is known (503, try later).
