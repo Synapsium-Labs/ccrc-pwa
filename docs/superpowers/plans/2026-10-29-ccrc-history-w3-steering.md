@@ -13,7 +13,7 @@
 >
 > What still gates W3 under that route:
 > - **acceptance of this plan**, through independent review, before any implementation;
-> - **the focused spike of spec §7.5** (Task 1). It measures output headroom, compliance, compaction duration and echo overhead. It gates relying on steering and arming it (CP-62, CP-63), not the start of any seven-day study. Its headroom half is the spec's gate, not a bar, and it keeps both prerequisites on each backend: no truncated summary **and** `summary_unclosed` not raised, both read from stored leaves (Task 1D). How that gate is read is open and the operator's: the evidence for a truncated summary (O17), what "not raised" compares with (O19), how spans the text cannot test enter it (O20), and which spans and which producer it reads (O21). Under every option, missing or contaminated evidence never meets it and is never read as 0;
+> - **the focused spike of spec §7.5** (Task 1). It measures output headroom, compliance, compaction duration and echo overhead. It gates relying on steering and arming it (CP-62, CP-63), not the start of any seven-day study. Its headroom half is the spec's gate, not a bar, and it keeps both prerequisites on each backend: no truncated summary **and** `summary_unclosed` not raised, both read from stored leaves (Task 1D). How that gate is read is open and the operator's: the evidence for a truncated summary (O17), what "not raised" compares with (O19), how spans the text cannot test enter it (O20), which spans and which producer it reads (O21), and which contamination leaves it unmet (O22). Under every option, evidence classed missing (an unmeasured word, Task 1D) or contaminated (as O22 classes it) never meets it and is never read as 0. A span whose text cannot decide a prerequisite is O20's;
 > - **the operator's per-backend compliance bars and arming.** An unarmed session keeps its native leaf, which stays the fallback;
 > - **CP-60's precompute re-measurement on the installed version, which has not been performed.** It reads the installed build and the stored boundaries, read-only. This drafting assignment forbids that read. The re-measurement needs no model spend and no live compaction. The plan may not merge until an authorised read-only act has measured it (Task 1E, act 1, moved ahead of the merge), and a live path then holds every arming (O3);
 > - **CP-51's W2 close acts, which are not waived.** Before a W3 release or arming, the operator measures on the node any W2 live state those acts name: a recall-off generation, a headless-on marker, an update freeze or an `--out` file. None is assumed absent, and closing one is the operator's act.
@@ -61,7 +61,7 @@ Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63)
   `lib.mjs` `SWITCHES` (`steerOff`, `steerLivePrefix`, `steerOnDir`) is the one definer. The hook reads them by its own spelling, which is pinned by `HOLDERS`.
 - **The hook always exits 0** and never blocks a compaction. A failure or an undecided input prints nothing (§7.7). The one exception is an absent steer file on an armed main scope, which prints the generic variant.
 - **The hook never consumes the steer file** (PX13). Only the sweep's card step consumes, deletes or withdraws one. The guard is a static scan over resolved names plus a behavioural check, both in `session-hook-steer.test.ts` (Task 1C).
-- **Byte bounds are bytes.** Every bounded hook read runs under `LC_ALL=C`, set as a function-local, so `read -N` counts bytes in every locale.
+- **Byte bounds are bytes.** Every bounded hook read runs under `LC_ALL=C`, set as a function-local, so `read -N` counts bytes in every locale. A NUL byte is the exception: `read` drops it and does not count it (Task 1C, gate 6).
 - **Lane words are lib's `BACKENDS`** (`['anthropic', 'other', 'unknown']`), the one declaration `switches-history.test.ts` pins. The hook spells them again, under a parity pin. `unknown` is never armed, and the breaker reads open for it.
 - **Values, verbatim from the spec:**
 
@@ -72,11 +72,11 @@ Programme: `docs/superpowers/programs/ccrc-history.md`, Stage 6 (CP-60 to CP-63)
   | Parent add-on | when `FAN_IN.leaf` (8) leaves wait, at most 4,000 chars; the whole file, add-on and previous-leaf lines included, at most 8,192 bytes after escaping (Task 4) |
   | Breaker | 5 consecutive `absent` or `invalid` leaves with a receipt open it, for 24 h, then half-open for one full attempt; keyed `session:<id>:<backend>`, counted under the span's producer. Which clock measures the 24 h is O8, blocked |
   | Caps | gist 1,200 (`GIST_MAX`), 16 topics (`TOPICS_MAX`) of 80 chars (`TOPIC_CHARS`), 40 refs (`REFS_MAX`), each set `capped=1` with no marker |
-  | W3 acceptance | per backend: compliance (`ok` + `degraded`) at the operator's bar; output headroom (§7.5): no truncated summary and `summary_unclosed` not raised, each measured, read as O17 and O19 to O21 rule; added p50 compaction time at most +10% (*chosen* in the spec) |
+  | W3 acceptance | per backend: compliance (`ok` + `degraded`) at the operator's bar; output headroom (§7.5): no truncated summary and `summary_unclosed` not raised, each measured, read as O17 and O19 to O22 rule; added p50 compaction time at most +10% (*chosen* in the spec) |
   | Kill rule | remove `history-steer-live.<backend>` after 48 h under its bar; set `history-steer-off` on any truncated summary |
 
 - **Compliance bars are the operator's** (CP-62). No task, test or default sets one, and no code compares compliance with a bar. A bar never reopens the fixed gates, which hold whatever bar the operator sets:
-  - §7.5's output headroom: no truncated summary, and `summary_unclosed` not raised (§10.7's "truncation 0" is its first half). Its reading is O17 and O19 to O21, all open;
+  - §7.5's output headroom: no truncated summary, and `summary_unclosed` not raised (§10.7's "truncation 0" is its first half). Its reading is O17 and O19 to O22, all open;
   - §10.7's added p50 compaction time at most +10%.
 
   `analysis_only` is reported beside compliance. It is neither a bar nor a headroom signal.
@@ -143,7 +143,7 @@ flowchart LR
 ```
 *Figure 1. Spike first, with no W2 PASS before it (the 2026-11-02 ruling), and any W2 live state measured before a release. The spike PR carries only what the cohort needs: the steer-on-only print with no breaker, and the refs repair. The cohort runs on one immutable release, and no later W3 PR is rolled onto a cohort node until its markers are removed. Arming waits for the breaker, the lanes and the operator's bar. W3-4's add-on reaches an armed node only after it is measured there, under the same fixed gates.*
 
-**What CP-63's evidence covers (A2).** The spike measures the composer with `children: []`, so CP-63's arming covers the leaf template and the previous-leaf lines only. W3-4's add-on adds up to 4,000 chars to one compaction in eight, which nothing has measured. So W3-4 is released onto a node with an armed backend only after an add-on re-measure there (Task 4 Step 6, an operator act, O15). That re-measure uses the spec's fixed gates unchanged: headroom (no truncated summary, and `summary_unclosed` not raised, read as O17 and O19 to O21 rule), and added p50 compaction time at most +10%. Neither gate moves, and a compliance bar does not reopen them.
+**What CP-63's evidence covers (A2).** The spike measures the composer with `children: []`, so CP-63's arming covers the leaf template and the previous-leaf lines only. W3-4's add-on adds up to 4,000 chars to one compaction in eight, which nothing has measured. So W3-4 is released onto a node with an armed backend only after an add-on re-measure there (Task 4 Step 6, an operator act, O15). That re-measure uses the spec's fixed gates unchanged: headroom (no truncated summary, and `summary_unclosed` not raised, read as O17 and O19 to O22 rule), and added p50 compaction time at most +10%. Neither gate moves, and a compliance bar does not reopen them.
 
 **How CP-61's list maps here (O10, a proposed ordering departure, not approved).** CP-61 expects "the spike PR, then the hook, receipt, breaker and parser PRs". A §7.5 spike arms `steer-on/<id>` sessions, and those can only steer if a print and a receipt exist. This plan proposes, as the departure `history-steer-spike-pr-scope`:
 - the steer-on-only print and the receipt land **inside** the spike PR;
@@ -187,7 +187,7 @@ All test paths are under `server/test/`.
 
 ## Decision table (none approved by this plan)
 
-This is the plan's one decision table, and none of its rows is approved here. Each row blocks its first consumer until it is ruled, together with every test assertion and mutant that encodes its answer (Global Constraints, "Blocked decisions"). Accepting this draft rules no row, and ruling a row arms nothing. The owner a row names is this plan's proposal. The coordinator's ruling on review 1632 makes the spike's headroom rule, its evidence and its attribution the operator's (O17 to O21).
+This is the plan's one decision table, and none of its rows is approved here. Each row blocks its first consumer until it is ruled, together with every test assertion and mutant that encodes its answer (Global Constraints, "Blocked decisions"). Accepting this draft rules no row, and ruling a row arms nothing. The owner a row names is this plan's proposal. The coordinator's ruling on review 1632 makes the spike's headroom rule, its evidence and its attribution the operator's (O17 to O21). O22, added for review 1651, is proposed as the operator's for the same reason.
 
 | # | Decision (owner) | Options | Recommendation, not approved | Affected task | First blocked consumer |
 |---|---|---|---|---|---|
@@ -210,8 +210,9 @@ This is the plan's one decision table, and none of its rows is approved here. Ea
 | O17 | The evidence for a truncated summary (the operator: it is the input of §7.5's first headroom prerequisite) | (a) cut shapes in the stored text: in a receipted span, a `<ccrc-leaf` or `<ccrc-node` opening with no close after it; in any span, an `<analysis>` never closed with no `<summary>` open after it. Each is consistent with a cut, and none proves one. An unclosed `<summary>` alone is not one: it is RG12's native shape, and the second prerequisite's figure; (b) `summary_unclosed` alone, which reads that native shape as truncation; (c) a captured stop reason for the compaction call, which no stored field holds: new instrumentation, not approved | (a), reported as `cutShapes` beside the baseline's, never as proven truncation. Each cut shape counts against the prerequisite, the safe direction. Act 4's watch stays the kill rule's consumer | Task 1D | Step 3's `cutShapes` arm; its case and mutants (k), (r) and (s) held; so CP-63's headroom reading |
 | O18 | Reasons in the spike report (the operator, as for the spike's other evidence) | (a) a reason only where the stored status fixes it, else `reason-not-stored`; (b) re-derive `blockStatus` per leaf from stored inputs, a second evaluation of derive's verdict that can drift from what derive stored; (c) store each leaf's reason, a schema change, not approved | (a): the bars and the gates read status, never reason | Task 1D | Step 3's reason arm; its case held |
 | O19 | What "`summary_unclosed` not raised" compares with (the operator: it reads §7.5's second headroom prerequisite) | (a) an absolute count: no cohort span counted under O21 is unclosed; (b) the baseline: on a backend, the cohort's unclosed share is no higher than O21's baseline's in the same range. The comparison's form (a plain comparison, a margin, or a test at O2's sample) is part of (b) | none: this plan selects neither, as the coordinator's ruling on review 1599 selected neither. The tradeoffs are below ("O17 to O21 in detail") | Task 1D, Task 1E | CP-63's headroom reading; Step 1's O19 case held |
-| O20 | How a span whose stored text cannot decide a prerequisite enters the gate (the operator) | (a) the earlier draft: a span holding no tag O17 tests is unmeasured, and one unmeasured span leaves the gate unmet; (b) untestable kept apart from unmeasured: such a span is `cutUntestable`, and it shows no cut, as a span with every tag closed shows none. Only missing or contaminated evidence is unmeasured, and one such span leaves the gate unmet; (c) the first prerequisite read over testable spans only, untestable ones printed beside, with at least O2's bound of testable spans per backend, else unmeasured | (b): it keeps both prerequisites, asks no compliance level, and never reads missing evidence as 0 or as met. (a) makes the gate need a closed block on nearly every cohort span (review 1632, F2), and (c) can leave a rarely steered backend unmeasured for good | Task 1D | Step 3's `cutUntestable` arm; its case and mutant (q) held; so CP-63's headroom reading |
+| O20 | How a span whose stored text cannot decide a prerequisite enters the gate (the operator) | (a) the earlier draft: a span holding no tag O17 tests is unmeasured, and one unmeasured span leaves the gate unmet; (b) untestable kept apart from unmeasured: such a span is `cutUntestable`, and it shows no cut, as a span with every tag closed shows none. Only missing evidence (an unmeasured word) and contamination as O22 classes it are unmeasured, and one such span leaves the gate unmet; (c) the first prerequisite read over testable spans only, untestable ones printed beside, with at least O2's bound of testable spans per backend, else unmeasured | (b): it keeps both prerequisites, asks no compliance level, and never reads missing evidence as 0 or as met. (a) makes the gate need a closed block on nearly every cohort span (review 1632, F2), and (c) can leave a rarely steered backend unmeasured for good | Task 1D | Step 3's `cutUntestable` arm; its case and mutant (q) held; so CP-63's headroom reading |
 | O21 | The spike's attribution: which spans each figure counts, its baseline, and when a span's producer is observed (the operator) | (a) as Task 1D proposes: headroom over every cohort span in range, receipted or not; compliance over receipted spans; the baseline as other sessions' unprinted main spans of the same backend, on the node, in the range; the producer from the rows stored when the report runs; (b) headroom over receipted cohort spans only; (c) the baseline as the cohort sessions' own spans before arming; (d) the producer as derivation saw it, which `nodes` does not store: a schema change or a re-derivation, not approved | (a). Its producer can differ from the breaker's for a span derived before its first reply (Task 1D, "Two observation times"), and no reconciliation is proposed | Task 1D | Step 3's population, baseline and producer arms; the cases and mutants (b), (h) and (t) that encode them, held; so CP-63's readings of headroom and added p50 |
+| O22 | Which contamination leaves the headroom gate unmet (the operator: like O20, it decides what the gate may read as met) | (a) every state Task 1D reports, on the spans it touches: the spans before a mid-range version change, a `stalePrint` span, a late receipt's own span, a leaf of another parser version, and every span of a report run while the newest `ticks` row's `files_behind` is not 0; (b) only a state that can hide a cut or a span: a report run while the sweep is behind (`sweep-behind`, every headroom figure of that run), and a `stalePrint` span (`stale-print`: it was asked for a block, reads `not-requested`, and `cutShapes`' block arm never tests it). A late receipt's own span (receipted though never asked: it can only add a cut shape, though under O21 (b) it joins the receipted population), another parser version (headroom reads the stored text with the report's own rules) and a version change (O11's split) are reported apart | (b): what it classes as contaminated is what can hide a cut or a span, and that never reads as 0 or as met. Its cost: under O21 (b), a late receipt's span stays in the receipted population though it was never asked. (a) is the safest, but it leaves the gate unmet for states that cannot hide a cut: after a version change, until the operator records a new range. Under both, the report prints every count and no verdict, so W3-1's merge does not wait on O22 | Task 1D, Task 1E | CP-63's headroom reading; Step 1's O22 case and mutant (v), held |
 
 **O13 in detail.** A compaction printed nothing (history-off, unarmed, a switch, or a lane with no live marker), and a print followed before the next tick. Today's `pickReceipt` gives the earlier, unprinted span the exact receipt, so that span reads `absent` though it was never asked. Option (b) covers only the longest such window. Option (d) leaves status and association unchanged and counts `breaker_late_receipt`. Task 1B pins today's behaviour as a characterization, and Task 1D counts late receipts apart: neither needs the ruling.
 
@@ -223,7 +224,7 @@ The case is written now and kept `.todo`, and its mutant is held.
 
 **O17 to O21 in detail: what stored evidence can and cannot establish.** No stored field records why a compaction's output ended. The boundary row's `compactMetadata` gives `trigger`, `preTokens`, `postTokens` and `durationMs` only (lib's `boundaryOf`), so a cut shows, if at all, in the stored text. Three canonical facts bound what that text can show:
 - **Normalisation (G11).** Before it writes the summary row, Claude Code drops the first closed `<analysis>` and replaces the first closed `<summary>` pair with a `Summary:` line and its inner text (`compact-card.mjs` `normalizeSummary` mirrors it, measured on 2.1.266). So a native summary that closed normally keeps no `<summary>` or `<analysis>` tag at all. A tag left open is not rewritten: 10 of 622 summary rows, all on 2.1.287 or older, were never normalised.
-- **The native shapes (RG12).** Before any steering, gateway-run summaries keep an `<analysis>` in 74 of 91 and an unclosed `<summary>` in 75 of 91, 30 of them opened twice; Claude-run summaries leave `<summary>` unclosed in 12 of 51. `summaryParts` reads the last `<summary>` open, so a summary opened twice and closed once still reads unclosed after normalisation. A missing tag is not by itself proof of truncation.
+- **The native shapes (RG12).** Before any steering, gateway-run summaries keep an `<analysis>` in 74 of 91 and an unclosed `<summary>` in 75 of 91, 30 of them opened twice; Claude-run summaries leave `<summary>` unclosed in 12 of 51. `summaryParts` reads the last `<summary>` open. So a summary the model opened twice and closed once, `<summary>A<summary>B</summary>`, is stored normalised as `Summary:` then `A<summary>B`, which reads unclosed, while the same text never normalised would read closed. `<summary>A</summary>X<summary>B` reads unclosed either way. A missing tag is not by itself proof of truncation.
 - **Steering's own shape.** Derive parses blocks only in a receipted span (§7.4 item 2), and `parseBlocks` matches a block only with its close (`BLOCK_RE_SOURCE`). So a cut block reads `absent`, like a block never written, and a `<ccrc-leaf>` text that a native summary quotes is never read.
 
 | Span | What its stored text can establish | What it cannot | Under O17 (a) and O20 (b), recommended | Under the earlier draft's rule |
@@ -237,6 +238,13 @@ The case is written now and kept `.todo`, and its mutant is held.
 
 What each choice does:
 - **The first prerequisite (O17, O20).** Under O17 (a), each cut shape counts against "no truncated summary", the safe direction, with the baseline's count beside it, because a shape the baseline also shows may be native. Under O20 (b), a normalised span with no tested tag left shows no cut, exactly as a span whose every tag closed shows none. The text can rule a cut in, never out, so the first prerequisite rests on the cut shapes a text can show. Act 4's watch stays the backstop and the kill rule's consumer.
+- **If O17 rules (b).** The coordinator's ruling on review 1632 takes as its premise that a missing tag is not by itself proof of truncation, and this plan follows it under (a). (b) stays listed because the operator may still rule it. If the operator does, these change with it:
+  - act 4's watch and the kill rule: an unclosed `<summary>` alone then shows a truncation and sets `history-steer-off`;
+  - the span table's unclosed row: such a summary becomes a cut;
+  - Task 1D: the truncation figure becomes `summaryUnclosed` itself, in place of `cutShapes` and its held case;
+  - mutant (r): it then encodes the rule, not a defect.
+
+  On RG12's rates, the gate is then almost surely unmet on the gateway, and the kill rule fires on a native summary (review 1632, F1).
 - **The second prerequisite (O19).** Under (a), RG12's native rates decide it: on those measured rates, a cohort of O2's recommended 20 spans would almost surely hold an unclosed summary on either backend, unless steering changed that habit. It then measures the backend's habit, not steering. Under (b), it measures what steering adds, but only as far as the baseline is comparable: other sessions' work in the same range under O21 (a), or the same sessions before arming under (c). At O2's sample a difference in share is coarse, and a backend whose baseline holds no measured span leaves (b) unmeasured.
 - **Why the earlier rule is withdrawn as a recommendation.** It read an unclosed `<summary>` as a truncated summary and every span with no tested tag as unmeasured, and it met headroom only when both counts were 0. Together these make headroom almost surely unreachable on the gateway, fire the kill rule on a native summary, and ask a closed block on nearly every cohort span (review 1632, F1 and F2). It stays listed, as O20 (a) and as the count O19 (a) reads, so the operator sees it. It is not recommended, and headroom is not dropped to escape it.
 - The per-leaf reading itself is proposed by this plan, not approved: it replaces the counter deltas the table cannot supply.
@@ -259,13 +267,14 @@ What each choice does:
 - `history-steer-recall-off-tail-copy`, O9's recommendation and blocked with it: a second spelling of the recall-off gate, forced by the tail rule and held equal by a parity matrix;
 - `history-steer-breaker-first-derivation`. A breaker transition is applied only at a leaf's first derivation, so a re-derivation in place never moves it. What a rebuilt store holds is O16's (`history-steer-breaker-on-rebuild`);
 - `history-steer-spike-report`: O5;
-- `history-steer-spike-per-leaf-figures`. The spike's headroom and `analysis_only` figures are evaluated per leaf from stored summaries, with lib's own rules, instead of the node-wide counters, which carry no session or time (Task 1D). The evidence for a truncated summary is O17, the reasons O18, what "not raised" compares with O19, spans the text cannot test O20, and the population, baseline and producer time O21;
+- `history-steer-spike-per-leaf-figures`. The spike's headroom and `analysis_only` figures are evaluated per leaf from stored summaries, with lib's own rules, instead of the node-wide counters, which carry no session or time (Task 1D). The evidence for a truncated summary is O17, the reasons O18, what "not raised" compares with O19, spans the text cannot test O20, the population, baseline and producer time O21, and the contamination that leaves the gate unmet O22;
 - `history-steer-spike-pr-scope`, a proposed ordering departure from CP-61 (O10): the print, the receipt and Task 1F's parser change land in the spike PR;
 - `history-steer-stale-receipt-window`: O7's alternative, above, built only if it is ruled in.
 
 Spec errata, for the coordinator's docs PR after the merge:
 - §7.6 omits `ccd/ccd-history-sweep`, which §7.2 requires ("The roster is data passed by the shim"), and omits `card.mjs`.
-- §7.2's `:3626` and `:950-978` are stale line hints.
+- §7.2's `:3626` is a stale line hint: at `ce0c2c5ca` the `_hook_compact_pre` call line is `:5428`. §5.1, §7.6 and §8.6 cite the same hint; §4.7's review table records it as it then was. §7.2's `:950-978` is right: it spans `_hook_compact_scope` from its first line to its final `return 0`.
+- §10.3's heading ("only if the gate passes"), §10.4's heading and its "Wave independence" paragraph ("both are gated on W2"), and §10.6 item 5 ("only on a pass") still gate W3 and W4 on a W2 pass. The 2026-11-02 ruling replaced that gate. §9.15's W1-B4 bullet and §10.5's "Why W1 and why its own PR" give the old gate as a reason. Each needs an amendment that cites the ruling. These are amendments the ruling needs, not departures this plan proposes.
 
 ## Carried constraints this plan owns
 
@@ -314,6 +323,7 @@ it('the file body equals the pinned template with the id filled (PX14)', () => {
   expect(text[0]).not.toBe('{');
 });
 it('only a steered ok, unflagged previous leaf is quoted (PX23, and §7.7 "its status unreadable")', () => {
+  // nativePrev is hand-built as { ...okPrev, kind: 'native_leaf' }: status 'ok' and unflagged, so only the kind test refuses it
   for (const prev of [nativePrev, degradedPrev, rawPrev, { ...okPrev, flag: true },
     { ...okPrev, status: 'unreadable' }, { ...okPrev, status: undefined }])
     expect(composeSteerFile({ ...base, prev }).text).not.toContain('Previous leaf');
@@ -391,7 +401,7 @@ The generic variant is the same text with `<ccrc-leaf v="1">` in place of the id
   - A quotable previous leaf is `kind === 'steered_leaf' && status === 'ok' && flag === false`, so any other status, `'unreadable'` included, quotes nothing.
 - [ ] **Step 4: Run the file: it passes.** Then run mutants with `mutation-run.py`. Each is killed by the case named:
   - (a) escape before the cap (Review Focus 4);
-  - (b) `native_leaf` admitted (PX23);
+  - (b) `native_leaf` admitted (PX23's hand-built `nativePrev`). A native leaf that derive produced never has status `ok`, since `blockStatus` answers `ok` only for a selected block. So on a fixture of real derived leaves this mutant is equivalent, and only the hand-built row kills it;
   - (c) `&` not escaped (PX24, single quote);
   - (d) a previous leaf quoted unless its status is `degraded` (PX23's unreadable-status rows);
   - (e) `bytes` counted in chars (the 2,806-byte case, with a three-byte gist variant in the same case);
@@ -604,6 +614,10 @@ The card's per-session step already measures, decides and acts for the next comp
    - absent → print `HISTORY_STEER_GENERIC`;
    - present → it must be a regular non-link file, read with one `read -r -N 8193`. It prints whole only when fewer than 8,193 bytes were read (8,192 prints, 8,193 does not), its first byte is not `{`, and its first line equals `HISTORY_STEER_FIRST_LINE`;
    - anything else → no print.
+
+   **NUL bytes (disclosed; review 1651, P-A2).** `read` drops a NUL byte and does not count it. That review measured it under `LC_ALL=C`: the 9-byte file `ab\0cdefg` read with `-N 5` gives `abcde`. So `-N 8193` bounds the bytes kept, not the bytes on disk: a file over 8,192 bytes with at most 8,192 non-NUL bytes passes, prints without its NULs, and is read to its end. The print never exceeds 8,192 bytes, but §7.7's "oversized → no print" fails for such a file. PX20's NUL rows are the planned case.
+
+   How the gate refuses such a file with builtins is a build question, measured first by the W3-1 worker. A candidate is `IFS= read -r -d '' -n 8193`. Bash documents that an empty delimiter makes a NUL end the read, so the file prints only when the read reaches end-of-file with no NUL met. Under that candidate a NUL anywhere refuses the print, so the worker also measures whether a stored gist can hold U+0000, which the composer would then have to leave out. Nothing here has run.
 7. `{ printf '\n%s\n' "$text"; } 2>/dev/null`. Only on its rc 0 does `_hook_history_spool_append` write the receipt. The receipt's `leaf` is the `id="…"` of the file's `<ccrc-leaf` line when it matches `^L[0-9a-f]{20}$`, else `""`.
 
 **PX16** (§7.8: "added in the PR that ships Plan B's print, or in W3 if that is later"). Measure `STEER_TEXT` on W3-1's base.
@@ -640,7 +654,7 @@ The card's per-session step already measures, decides and acts for the next comp
   - PX13, the behavioural half: `the steer file is unchanged by every hook run`. Each case in this file that plants a steer file asserts, after the hook exits, the same bytes, inode and mtime;
   - PX17: `a steer file beginning { or with another first line → no print`;
   - PX18: `armed, scope main, no steer file → the generic text, and the receipt's leaf is ""`;
-  - PX20: `a 9 KB steer file → no print`; `exactly 8,192 bytes → printed whole; 8,193 → no print`; and `8,000 two-byte UTF-8 chars (16,000 bytes) under LANG=C.UTF-8 → no print`;
+  - PX20: `a 9 KB steer file → no print`; `exactly 8,192 bytes → printed whole; 8,193 → no print`; and `8,000 two-byte UTF-8 chars (16,000 bytes) under LANG=C.UTF-8 → no print`. Its NUL rows (gate 6's disclosure): `8,192 non-NUL bytes and one NUL byte (8,193 on disk) → no print`, and `a 9 KB file whose bytes past the first 8,000 are NUL → no print`;
   - PX22: `a print that fails (stdout closed) → no ev:"steer" line`;
   - `the receipt parses under lib's SPOOL_KEYS.steer and SPOOL_VALUE`, through `parseSpoolLine`;
   - the PX16 half;
@@ -671,7 +685,8 @@ The card's per-session step already measures, decides and acts for the next comp
   - (g) a recall-off copy that ignores the `.gen` record (the verdict matrix). It is **held with O9**, and runs once O9 is ruled, against the ruled gate;
   - (h) `rm -f -- "$f"` through a steer variable in `_hook_history_pre`, with `f` assigned from `HISTORY_STEER_DIR`. Both halves of PX13 kill it: the static scan of the hook names the line, and the behavioural half sees the file change;
   - (i) scope checked before arming (the fork count);
-  - (j) a W3 function moved above the anchor (the durable tail case).
+  - (j) a W3 function moved above the anchor (the durable tail case);
+  - (k) NUL bytes left uncounted, as `-N` reads them (PX20's NUL rows).
 
   Then run `GROWTH_CHECK=1` growth-check, and then the tail rule's PR-time check. §10.6 item 5 binds W3's own hook edits, so this check runs at W3's own gates:
   - take `git diff --unified=0 "$(git merge-base origin/main HEAD)" HEAD -- ccd/session-hook.sh`;
@@ -719,30 +734,41 @@ It prints counts and aggregates only, never text. It opens the store read-only.
 | `receipted` | `nodes.status`: a leaf whose status is not `not-requested` had a receipt. A raw leaf never looks one up, so it reads `not-requested` either way, and `kind = 'raw_leaf'` is counted apart; so is `parse-failed` | a count per backend | as `compliance` |
 | `multiReceipt` | `steer_receipts` rows whose `leaf_id` equals the leaf's `node_id` (exact receipts; no window is needed) | the leaves with two or more: a stale print's footprint under today's association | none |
 | `lateReceipts` | the same rows, against the boundary entry's `ts_ms` | the leaves whose exact receipt is timed after their own boundary: O13's shape | `boundary-untimed` |
+| `stalePrint` | the same rows, against each cohort span's window | the cohort spans whose window, the one `pickReceipt` gives the span, holds an exact receipt of another leaf: a span printed to under an earlier span's id, by a stale print or in a late receipt's shape. It reads `not-requested`. Printed beside headroom and folded into no figure; what it does to the gate is O22 | `boundary-untimed` |
 | `modelRefs` | `node_refs` rows of origin `model` of each `steered_leaf` | the nearest-rank p50 per backend, and how many `ok` leaves store none: O12's measure | none: a leaf with no row counts 0 because it has none |
-| `summaryUnclosed` | each leaf's stored summary: the blob `nodes.summary_blob_id` names, read with `blobPlainTextMeasured`, the reader `describe` uses | lib's `summaryParts(text).unclosed`, the rule derive bumps `summary_unclosed:<backend>` with, as a count and a share. Counted over the cohort spans O21 rules (under (a), **every** cohort span in range, receipted or not), and over the baseline beside it. What "not raised" compares with is O19: the report prints both sets and no verdict | `summary-missing` (a raw leaf: no summary blob), `summary-absent`, `summary-oversize`, `summary-undecodable` (`blobPlainTextMeasured`'s states) |
-| `cutShapes` | the same stored text | **BLOCKED on O17**, its evidence rule. Under (a): in a receipted span, a `<ccrc-leaf` or `<ccrc-node` opened with no close after it; in any span, an `<analysis>` never closed with no `<summary>` open after it. An unclosed `<summary>` alone is not one. Over the spans O21 rules, and over the baseline beside it | the summary words above |
-| `cutUntestable` | the same stored text | **BLOCKED on O20**. Under (b): a span whose text was read whole and holds no tag O17's rule tests, as a summary that closed normally keeps none after normalisation (G11). It shows no cut and rules none out, and it is printed beside `cutShapes` | the summary words above |
+| `summaryUnclosed` | each leaf's stored summary: the blob `nodes.summary_blob_id` names, read with `blobPlainTextMeasured`, the reader `describe` uses | lib's `summaryParts(text).unclosed`, the rule derive bumps `summary_unclosed:<backend>` with, as a count and a share. Counted over the cohort spans O21 rules (under (a), **every** cohort span in range, receipted or not), and over the baseline beside it. What "not raised" compares with is O19: the report prints both sets and no verdict | `leaf-absent` and `leaf-ambiguous` (no leaf, or two, to read the summary through), `summary-missing` (a raw leaf: no summary blob), `summary-absent`, `summary-oversize`, `summary-undecodable` (`blobPlainTextMeasured`'s states) |
+| `cutShapes` | the same stored text | **BLOCKED on O17**, its evidence rule. Under (a): in a receipted span, a `<ccrc-leaf` or `<ccrc-node` opened with no close after it; in any span, an `<analysis>` never closed with no `<summary>` open after it. An unclosed `<summary>` alone is not one. Over the spans O21 rules, and over the baseline beside it | the words above |
+| `cutUntestable` | the same stored text | **BLOCKED on O20**. Under (b): a span whose text was read whole and holds no tag O17's rule tests, as a summary that closed normally keeps none after normalisation (G11). It shows no cut and rules none out, and it is printed beside `cutShapes` | the words above |
 | `analysisOnly` | the same stored text, for a receipted leaf whose stored status is `absent` | lib's `parseBlocks` and `selectBlock` over the text `redactField` redacted, as derive reads them: no block selected, and one inside `<analysis>`. Reported beside compliance. It is not a headroom signal | the summary words above |
 | `durationMs` | `boundaries.duration_ms`, from Claude Code's `compactMetadata.durationMs` (NULL when absent or not a count, lib's `boundaryOf`), with `trigger` and `pre_tokens` | per backend: the nearest-rank p50 and p95 of the receipted cohort spans and of O21's baseline, all triggers together (the figure §10.7's gate reads) and per trigger beside it; the added p50 is p50(cohort) ÷ p50(baseline) − 1. `pre_tokens`' p50 is printed beside each set, and nothing adjusts for it | `duration-absent`: a NULL value is left out of the percentiles and counted. A set with no value is `unmeasured`, never 0 |
 | `echoChars` | after each **manual** cohort boundary, in its holding copy and before the next boundary: the first user row of provenance `harness` whose text starts `<local-command-stdout>` (G16; the test lib's `provenanceOf` applies), read with `expandEntryBody` | its length in characters; per backend, the nearest-rank p50 of the cohort and of O21's baseline, and the added p50 as their difference | `echo-absent` (a manual boundary with no such row), and `expandEntryBody`'s `body-tombstone`, `body-over-cap`, `body-undecodable` and `body-unparseable`. An auto boundary leaves no echo (G16), so it is not counted |
 
 The new unmeasured words join `COUNTER_UNMEASURED` in place, as its header asks. Nearest rank is the percentile rule `history-gate.mjs` already declares (`percentile: 'nearest-rank'`): the value at rank ⌈p·n⌉ of the sorted list.
 
-**Contamination is reported, never repaired:**
-- a cohort node whose release tag or Claude Code version changed mid-range: figures are split at the change (O11);
-- stale prints and late receipts: `multiReceipt`, `lateReceipts`, and compliance with and without them (O13);
-- a leaf derived under another `nodes.parser_version`: counted apart;
-- a span not yet derived when the report runs: `leaf-absent`. The operator runs the report once the sweep has caught up, and the report prints whether the newest `ticks` row had `files_behind = 0`.
+**Contamination is reported, never repaired.** Which state leaves the headroom gate unmet is O22, proposed and blocked. Missing evidence, an unmeasured word in the table above, never reads as 0 or as met under any option.
+- A cohort node whose release tag or Claude Code version changed mid-range: figures are split at the change (O11). Under O22 (b), each part is read on its own, as O11's restart rule says.
+- Stale prints and late receipts: `multiReceipt`, `lateReceipts`, and compliance with and without them (O13). Either one leaves a later span printed to under an earlier span's id, counted in `stalePrint`.
+  - That span reads `not-requested`, so `cutShapes`' block arm never tests the block it was asked for, and O21 (b) would leave it out of headroom. Under O22 (b) it is unmeasured for the gate, `stale-print`.
+  - The earlier span of a late receipt reads receipted though it was never asked. It can only add a cut shape, but under O21 (b) it also joins the receipted spans `summaryUnclosed` is counted over. Under O22 (b) it is reported apart.
+- A leaf derived under another `nodes.parser_version`: counted apart. Under O22 (b) it is only reported apart, since the headroom figures read the stored text with the report's own rules.
+- A span not yet derived when the report runs: `leaf-absent`, unmeasured under every option. A span not yet ingested is invisible, so the operator runs the report once the sweep has caught up, and the report prints whether the newest `ticks` row had `files_behind = 0`. Under O22 (b), when it did not, every headroom figure of that run is unmeasured, `sweep-behind`.
+
+Until O22 is ruled, the report prints each of these counts beside the headroom figures, folds none into them, and prints no verdict, as for O19.
 
 - [ ] **Step 1: Write the failing tests** on fixture stores (`history-counters.test.ts`). Every fixture stores each span's first reply before its leaf is derived, so the producer is the same at derivation and at report time, unless a case says otherwise. The cases that run now encode no open row:
   - `spike reports compliance by producer`;
   - `spike excludes unreceipted spans from compliance`;
   - `spike counts a stale print as multiReceipt`, and a generic receipt beside the two exact ones is not counted;
   - `spike counts a late exact receipt, and reports compliance with and without its span`;
+  - `spike reports contamination beside headroom`: a cohort session's second span is printed to under the first span's id, and its summary holds a `<ccrc-leaf` opened and never closed. `stalePrint` counts 1 and `multiReceipt` 1, and the report prints the newest `ticks` row's `files_behind`. Every summary is readable, so `summaryUnclosed`'s unmeasured count stays 0: no contamination is folded into a headroom figure before O22 is ruled;
   - `spike reports the stored model refs per steered leaf, and the ok leaves with none`, and a `tool_use` ref on the same leaf is not counted;
   - `spike reads no node-wide counter`: the fixture's `counters` table holds `summary_unclosed:anthropic` = 5 and `analysis_only:anthropic` = 3, while no cohort leaf, every one receipted, is unclosed or analysis-only. Both figures are measured 0;
-  - `spike measures summary_unclosed per leaf from the stored summary`: three receipted cohort spans, one with an unclosed `<summary>`, one whose pair closed and was normalised, and one opened twice and closed once. The cohort counts 2: the third reads unclosed, as derive's rule reads it;
+  - `spike measures summary_unclosed per leaf from the stored summary`: three receipted cohort spans, each summary stored as Claude Code stores it, normalised wherever a `<summary>` pair closed (G11):
+    - `<summary>A`, never closed and so never normalised;
+    - `Summary:` then `A`, a pair that closed;
+    - `Summary:` then `A<summary>B`, what normalisation leaves of the model's `<summary>A<summary>B</summary>`, opened twice and closed once. The first open's lazy pair is replaced, and the inner open keeps no close.
+
+    The cohort counts 2: the third reads unclosed, as derive's rule reads it. The fixture stores the normalised text, because the same output never normalised would read closed;
   - `spike never reads an unreadable summary as closed`: cohort leaves whose summary blob is tombstoned, recorded past the decode bound, and missing altogether (a raw leaf). Each is counted under its word, and `summaryUnclosed`'s unmeasured count is 3. None is read as 0 or as met, under any O20 option;
   - `spike places a span by its boundary's time`: a boundary at `--since` is in range, one at `--until` is out, and one with a NULL `ts_ms` is `boundary-untimed`;
   - `spike attributes a span to its producer, not its session`: one cohort session whose first span's first reply is Anthropic's and whose second is the gateway's gives one span to each backend;
@@ -760,9 +786,10 @@ The new unmeasured words join `COUNTER_UNMEASURED` in place, as its header asks.
   - `spike keeps printed-to spans out of the baseline` (O21): under (a), an unnamed session with a receipt in range is not in the baseline;
   - `durationMs and echoChars against O21's baseline` (O21): under (a), baseline durations of 100, 150 and 200 ms give a p50 of 150, a p95 of 200 and an added p50 of one third against the cohort's 200. Two baseline spans of the other backend, at 1,000 ms each, leave the baseline p50 at 150. A baseline manual boundary followed by a 100-char echo gives an added 1,500;
   - `spike attributes at report time a span derived before its first reply` (O21): a manual boundary's leaf is derived with no assistant row after its summary, and derive's counters fold it under `unknown`. Then an Anthropic reply is stored. Under (a), the spike puts the span under `anthropic`, and a span with no reply yet stays `unknown`, reported apart. Its pair is Task 2's `a span derived before its first reply counts under no key`, and together they pin the disclosed difference;
-  - `reasons, under O18's rule` (O18).
+  - `reasons, under O18's rule` (O18);
+  - `headroom unmeasured as O22 rules` (O22): under (b), a report whose newest `ticks` row has `files_behind` 1 measures no headroom figure (`sweep-behind`); the printed-to span of the contamination case is `stale-print`, unmeasured for headroom, while compliance still reads it `not-requested`; and the earlier span of a late receipt stays measured, counted in `lateReceipts`. Under (a), each of these spans is unmeasured.
 - [ ] **Step 2: Run them: they fail.**
-- [ ] **Step 3: Implement** `spikeReport` and the `spike` arm (O5's recommended home; **BLOCKED on O5** until the coordinator confirms it). Its `cutShapes` arm is **BLOCKED on O17**, its `cutUntestable` arm on **O20**, its reason arm on **O18**, and its population, baseline and producer arms on **O21**. O19 adds no arm until it is ruled: the report prints the counts and shares each option reads, and never a verdict. So W3-1 does not merge before O5, O17, O18, O20 and O21 are ruled. Mutants, planned and measured only when built, each killed by the case named:
+- [ ] **Step 3: Implement** `spikeReport` and the `spike` arm (O5's recommended home; **BLOCKED on O5** until the coordinator confirms it). Its `cutShapes` arm is **BLOCKED on O17**, its `cutUntestable` arm on **O20**, its reason arm on **O18**, and its population, baseline and producer arms on **O21**. O19 and O22 add no arm until they are ruled: the report prints the counts and shares each option reads, and never a verdict. So W3-1 does not merge before O5, O17, O18, O20 and O21 are ruled. Mutants, planned and measured only when built, each killed by the case named:
   - (a) the delta read from the `counters` table (`reads no node-wide counter`);
   - (b) held with O21: `summaryUnclosed` over receipted spans only (`over O21's population`: under (a), the cohort counts 1 fewer);
   - (c) an unreadable summary read as `''`, so closed (`never reads an unreadable summary as closed`: unmeasured 0);
@@ -781,7 +808,9 @@ The new unmeasured words join `COUNTER_UNMEASURED` in place, as its header asks.
   - (q) held with O20: an untestable span read as unmeasured (`cutUntestable`: the `absent` span reads unmeasured);
   - (r) held with O17: an unclosed `<summary>` alone counted as a cut shape (`cutShapes`: it counts 3);
   - (s) held with O17: the block arm applied to an unreceipted span, so a quoted block counts (`cutShapes`: it counts 3);
-  - (t) held with O21: the producer read only from rows stored before the leaf's `created_ms` (`attributes at report time`: the span stays `unknown`).
+  - (t) held with O21: the producer read only from rows stored before the leaf's `created_ms` (`attributes at report time`: the span stays `unknown`);
+  - (u) a `stalePrint` span folded into `summaryUnclosed`'s unmeasured count before O22 is ruled (`reports contamination beside headroom`: it reads 1);
+  - (v) held with O22: a `stale-print` span read as measured (`headroom unmeasured as O22 rules`: under (b), the cut block goes unseen and the unmeasured count drops by 1).
 - [ ] **Step 4: Take review 966's three carries,** each red-first:
   - `combine names every node-report field it does not check`: the field list covers `excluded.unmeasured.count` and the dropped lists, or `combine` checks them, with a mutant that drops one;
   - the "which the strata key on" comment reworded to `unrealised` only (a comment change, no test);
@@ -803,7 +832,7 @@ The new unmeasured words join `COUNTER_UNMEASURED` in place, as its header asks.
 | 1 | Re-measure the precompute reuse, read-only, on the installed Claude Code version: find by string anchor in the installed bundle how a precomputed compaction is recorded (the spec's anchor on 2.1.289 is `reuse:"miss_hook"`), then count the node's stored boundaries that carry it. **This act must run before the plan merges** (the gate box). Any precomputed boundary → stop: **BLOCKED on O3** | the method, the count, the version |
 | 2 | Choose one Anthropic-lane and one gateway-lane session | the two ids, kept off the repo |
 | 3 | Record the release tag and each session's Claude Code version; touch `~/.ccrc/history/steer-on/<id>` for both (**BLOCKED on O11**) | the tag, the versions, the time |
-| 4 | Watch every manual and auto compaction for truncation. On one, set `history-steer-off`, and record it. What shows one is O17's evidence: an unclosed `<summary>` alone does not | any truncation |
+| 4 | Watch every manual and auto compaction for truncation. On one, set `history-steer-off`, and record it. What shows one is O17's evidence, which the operator rules. Under (a), the recommendation, an unclosed `<summary>` alone does not, on the coordinator's premise that a missing tag is not by itself proof of truncation. Under (b) it does ("O17 to O21 in detail", "If O17 rules (b)") | any truncation |
 | 5 | At the sample bound (**BLOCKED on O2**), run `history-counters.mjs spike` per session over its armed range; post shas and aggregates only | the report's sha256 and figures |
 | 6 | Remove both `steer-on/<id>` markers (§9.4's ruling: "`steer-on/<id>` when the spike ends") | the time |
 
@@ -821,7 +850,7 @@ The evidence per backend, each figure with its unmeasured count:
 
 **These are measurements, not bars.** The spike report states figures and never a pass or fail. Three kinds of threshold apply to them, and they are not the same:
 - the operator sets each backend's **compliance** bar from them (CP-62, O4);
-- **output headroom** is §7.5's gate, and it keeps both prerequisites on a backend: no truncated summary, and `summary_unclosed` not raised. The gate is the spec's and not a compliance bar. Where the spec leaves its reading open, the operator rules it: the evidence (O17), what "not raised" compares with (O19), how spans the text cannot test enter it (O20), and which spans, baseline and producer it reads (O21). Under every option, a span whose evidence is missing or contaminated leaves it unmet and is never read as 0, and `analysisOnly` does not enter it;
+- **output headroom** is §7.5's gate, and it keeps both prerequisites on a backend: no truncated summary, and `summary_unclosed` not raised. The gate is the spec's and not a compliance bar. Where the spec leaves its reading open, the operator rules it: the evidence (O17), what "not raised" compares with (O19), how spans the text cannot test enter it (O20), which spans, baseline and producer it reads (O21), and which contamination leaves it unmet (O22). Under every option, a span whose evidence is classed missing (an unmeasured word) or contaminated (O22) never meets it and is never read as 0. A span whose text cannot decide a prerequisite is O20's, and `analysisOnly` does not enter the gate;
 - **added p50 compaction time at most +10%** is §10.7's fixed gate. Its baseline is O21's.
 
 A compliance bar does not reopen either fixed gate, and CP-63 arms a backend only when both hold on that backend's figures. Act 4's watch stays the kill rule's consumer: the report's `cutShapes` figure counts after the fact and replaces no watch.
@@ -996,10 +1025,11 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
   - The canonical cases:
     - the trigger: `the add-on appears exactly when planCardPrediction answers parentKind predicted, and names its parentId and children`. A run of eight slots with one not final gives no predicted parent and no add-on;
     - both bounds, all-escapable: `seven 300-char all-& child gists and a 300-char all-& previous gist`. The add-on is at most 4,000 chars and the file at most 8,192 bytes. There are eight slots and eight quotes (seven children and the previous leaf), each closed exactly once and each followed by the sentence. Every `&` begins `&amp;`, `&lt;` or `&gt;`;
+    - no entity clipped, whatever the cut: `seven 300-char child gists of one x then 299 &, and a 300-char all-& previous gist`. Each entity in a child's escaped gist then starts one char past a multiple of 5. Both bounds hold, there are eight slots and eight quotes, each closed once and followed by the sentence, and every `&` in the file begins `&amp;`, `&lt;` or `&gt;`;
     - both bounds, non-ASCII: `seven 300-char gists of a three-byte character, and a previous gist of the same` keep the same two bounds;
     - astral: `a gist of four-byte characters is cut between surrogate pairs, never inside one`;
     - PX24, several quotes: `a parent add-on with three steered children carries the sentence four times, once after every closing tag`;
-    - PX14 and §7.7's child row: `a native child gives its id and range only; a flagged child's gist is omitted; a child carrying a fixture token is redacted; a child whose row cannot be read, or whose status is unreadable, gives its id and range only`;
+    - PX14 and §7.7's child row: `a native child gives its id and range only` (the native child is hand-built with status `ok` and unflagged, so only its kind refuses it); `a flagged child's gist is omitted; a child carrying a fixture token is redacted; a child whose row cannot be read, or whose status is unreadable, gives its id and range only`;
     - `the generic variant never carries the add-on` (the open-breaker print of Task 2 is the generic variant);
     - `a steered node block replaces only the parent's gist (§6.3), and a wrong id is degraded`.
   - The O14 cases, each `.todo`:
@@ -1014,11 +1044,11 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 - [ ] **Step 3: Implement** the `children` answer, the composer's contract and the node read. The budget is **BLOCKED on O14**: until it is ruled, Task 4 does not merge.
 - [ ] **Step 4: Run them, then `history-derive.test.ts` and `history-card.test.ts` whole: all pass.** Mutants, each killed by the case named:
   - (a) the sentence once per group of quotes (PX24, several quotes);
-  - (b) native child gists admitted (PX14);
+  - (b) native child gists admitted (PX14's hand-built native child). A native child that derive produced never reads `ok`, so on a fixture of real derived children this mutant is equivalent, and only the hand-built child kills it;
   - (c) the generic variant composed with the add-on (the generic case);
   - (d) a node gist that replaces the topics too (the node case);
   - (e) the budget counted in chars only (the non-ASCII case: 8,192 bytes broken);
-  - (f) the cut after the escape (the all-escapable case: a clipped entity);
+  - (f) the cut after the escape (the no-clipped-entity case). Computed by hand, planned and not run: under the mutant the search reaches `C` = 300, with the add-on at 801 + 7 × (300 + 146) = 3,923 chars and the file at 3,607 + 3,122 = 6,729 bytes. Each child's escaped gist (1,496 chars) is cut at 300, after `x` and 59 whole entities, so it ends in a clipped `&amp` and the last assertion goes red. The all-escapable case cannot kill it: there the cut also falls at 300, a multiple of 5, on an entity boundary;
   - (g) a fixed `C` of 40 (the maximality cases). It is **held with O14**, and runs once O14 is ruled, against the ruled budget;
   - (h) the previous-leaf lines left out of the budget (the non-ASCII case: the byte bound broken);
   - (i) a second fan-in rule in `steer.mjs`, counting `FAN_IN.leaf` slots itself (the trigger case with one slot not final).
@@ -1034,7 +1064,7 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 - **Watch for 48 h** with the `spike` report per node over every armed session.
 - **Kill rule:**
   - compliance under the bar for 48 h → the operator removes that backend's marker, and the other backend keeps steering;
-  - any truncated summary → the operator sets `history-steer-off`. What shows one is O17's evidence. A missing tag is not by itself proof of truncation, so an unclosed `<summary>` alone, the gateway's native shape (RG12), is not one.
+  - any truncated summary → the operator sets `history-steer-off`. What shows one is O17's evidence. Under (a), the recommendation, an unclosed `<summary>` alone, the gateway's native shape (RG12), is not one: the coordinator's ruling on review 1632 rests on the premise that a missing tag is not by itself proof of truncation. Under (b) it is one, and the kill rule then fires on a native summary ("O17 to O21 in detail", "If O17 rules (b)").
 
   The coordinator measures read-only and reports. It never writes a marker.
 - **Accepted** when §10.7's W3 row is recorded per backend.
@@ -1058,7 +1088,7 @@ The order in the file: the leaf template, the previous-leaf lines, the instructi
 | §7.3 breaker: 5, 24 h, half-open, per backend by producer, in SQLite, file per backend, unreadable is open | Task 2 (PX15, PX21, PX26, the readable-open case) |
 | §7.4 parser and receipt gate | W1-B2, merged; Task 1F repairs the refs split; Task 1B pins PX5 end to end, the stale print and O13's shape; Task 4 adds the node read |
 | §7.5 spike, task 1, one session per backend, bars per backend | Task 1 (1A-1F), CP-62 |
-| §7.5 output headroom, both halves: no truncated summary, and `summary_unclosed` not raised | Task 1D's per-leaf `summaryUnclosed`, O17's evidence (`cutShapes` under (a)) and O20's `cutUntestable`, with their unmeasured words; the rules O17 and O19 to O21, all blocked; Task 1E's gate reading; Global Constraints |
+| §7.5 output headroom, both halves: no truncated summary, and `summary_unclosed` not raised | Task 1D's per-leaf `summaryUnclosed`, O17's evidence (`cutShapes` under (a)) and O20's `cutUntestable`, with their unmeasured words, and the contamination counts beside them (`stalePrint`, O22); the rules O17 and O19 to O22, all blocked; Task 1E's gate reading; Global Constraints |
 | §7.5 compaction duration with versus without, and the G16 echo's added context | Task 1D's `durationMs` and `echoChars`, each with its cases and mutants |
 | §7.7 failure table | the table below |
 | §9.4 `history-steer-files`, `history-switches` | Tasks 1B, 3 |
