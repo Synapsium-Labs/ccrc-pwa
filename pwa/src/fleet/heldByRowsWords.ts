@@ -30,18 +30,18 @@ export function heldByRowsOf(coord: unknown): CleanupHeldByItem[] {
 }
 
 /** Which control a line gets. Forget ONLY for a gone-unrecorded row the server also says forget for, and only where
- *  the session sheet would offer Forget session: the fleet lists the row (`session`), and `forgetOffered` says it is
- *  dead, no workspace and not asleep (Task C15, D-8111, review 1580 F9). Every other case is a re-check, so a server
+ *  the session sheet's Forget rule (`forgetOffered`) allows it: the fleet lists the row (`session`), and it is dead, no
+ *  workspace and not asleep (Task C15, D-8111, review 1580 F9). Every other case is a re-check, so a server
  *  item that asks for forget on another word, or for a row ccd would refuse, still gets the harmless control. */
 export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts | undefined): CleanupHeldByAct {
   return item.act === 'forget' && item.word === 'gone-unrecorded' && session !== undefined && forgetOffered(session)
     ? 'forget' : 'recheck';
 }
 
-/** The line under the server's sentence when a forget act shows Check again because of the row's presence (review
- *  1663 F1, the coordinator's ruling; words of mail 16603). One line per presence reason of `forgetHeldBack`; a workspace
- *  row has none (ruling R2). Forget needs the session stopped: checking again cannot change an asleep row, and waking it
- *  does not unlock Forget, so `running` and `asleep` both say stop it first. */
+/** The line after the server's sentence, in the same wrapping row, when a forget act shows Check again because of
+ *  the row's presence (review 1663 F1, the coordinator's ruling; words of mail 16603). One line per presence reason of
+ *  `forgetHeldBack`; a workspace row has none (ruling R2). Forget needs the session stopped: checking again cannot
+ *  change an asleep row, and waking it does not unlock Forget, so `running` and `asleep` both say stop it first. */
 const HELD_BY_FORGET_HELD_BACK: Record<Exclude<ForgetHeldBack, 'workspace'>, string> = {
   running: 'Forget is not offered while the fleet lists this session as running: stop it first.',
   asleep: 'Forget is not offered while this session is asleep: stop it first.',

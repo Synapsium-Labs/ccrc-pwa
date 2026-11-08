@@ -322,4 +322,3 @@ describe('a forget act the fleet holds back says why', () => {
     expect(screen.queryByText(/Forget is not offered/)).toBeNull();
   });
 });
-

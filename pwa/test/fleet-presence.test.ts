@@ -107,4 +107,3 @@ describe('forgetHeldBack', () => {
     expect(forgetOffered(s)).toBe(reason === null);
   });
 });
-

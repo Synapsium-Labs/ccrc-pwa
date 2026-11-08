@@ -1,8 +1,9 @@
 // The held-rows list (cleanup un-wedge R2): the registry rows that hold the automatic cleanup, one line each, in
 // `AttentionList`'s shape. Each line carries ONE control, and a tap only opens its confirm; only the confirm acts.
 // The server decided the act and wrote the sentence (`heldByRowControl` is the console's own check that forget is
-// never offered beyond gone-unrecorded, nor where the session sheet would not offer it: a row listed dead, with no
-// workspace and not asleep, Task C15). Forget calls the existing forget door with exactly the row id the server named;
+// never offered beyond gone-unrecorded, nor where the session sheet's Forget rule, `forgetOffered`, does not allow it,
+// Task C15). When that check turns a forget act into Check again, a line after the server's sentence, in the same
+// wrapping row, says why (`heldByRowWhyNotForget`: running, asleep or in doubt). Forget calls the existing forget door with exactly the row id the server named;
 // "Check again" sends nothing: it re-reads the latest status the store already holds, and the line says ccrc reads the
 // row again when it next checks what it holds, at their own pace (minutes to hours), and nothing while the cleanup is
 // paused. It never implies it asked the server. Nothing here stops a process or offers any other act.
@@ -65,25 +66,27 @@ export function HeldByRows(
     <>
       <AttentionList
         label={CLEANUP_HELD_BY_LABEL}
-        lines={items.map((item) => ({
-          key: item.rowId,
-          who: [heldByRowWho(item)],
-          sentence: item.sentence,
-          control: (
-            <>
-              {heldByRowWhyNotForget(item, listed.get(item.rowId)) !== null && (
-                <span className="child-reclaim-sentence">{heldByRowWhyNotForget(item, listed.get(item.rowId))}</span>
-              )}
-              <Button variant="quiet" size="fit" aria-label={CLEANUP_HELD_BY_CONTROL[controlOf(item)].ariaLabel(item.rowId)}
-                onClick={() => setOpen({ rowId: item.rowId, act: controlOf(item) })}>
-                {CLEANUP_HELD_BY_CONTROL[controlOf(item)].button}
-              </Button>
-              {rechecked[item.rowId] !== undefined && (
-                <span className="child-reclaim-sentence">{CLEANUP_HELD_BY_RECHECKED}</span>
-              )}
-            </>
-          ),
-        }))}
+        lines={items.map((item) => {
+          const act = controlOf(item);
+          const why = heldByRowWhyNotForget(item, listed.get(item.rowId));
+          return {
+            key: item.rowId,
+            who: [heldByRowWho(item)],
+            sentence: item.sentence,
+            control: (
+              <>
+                {why !== null && <span className="child-reclaim-sentence">{why}</span>}
+                <Button variant="quiet" size="fit" aria-label={CLEANUP_HELD_BY_CONTROL[act].ariaLabel(item.rowId)}
+                  onClick={() => setOpen({ rowId: item.rowId, act })}>
+                  {CLEANUP_HELD_BY_CONTROL[act].button}
+                </Button>
+                {rechecked[item.rowId] !== undefined && (
+                  <span className="child-reclaim-sentence">{CLEANUP_HELD_BY_RECHECKED}</span>
+                )}
+              </>
+            ),
+          };
+        })}
       />
       <QuickConfirm
         open={confirming !== null}
