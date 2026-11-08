@@ -19,6 +19,7 @@ import {
   available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, type CommandContext, type CommandPage,
 } from './registry';
 import { DOOR_EVENT } from './door';
+import { runEntries } from './runEntries';
 import { sessionEntries } from './sessionEntries';
 import { useShortcuts } from './useShortcuts';
 
@@ -173,8 +174,10 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
   // The first level is the top search (D-6714): the commands offered here, then every session, search-only, so an
   // empty query lists the commands alone and a session ranks after every matching command.
   const list = useMemo(
-    () => (page === null ? [...available(commands, ctx), ...sessionEntries(ctx.sessions, ctx.runs, 'top')] : page.commands),
-    [page, commands, ctx],
+    () => (page === null
+      ? [...available(commands, ctx), ...sessionEntries(ctx.sessions, ctx.runs, 'top'), ...runEntries(query, ctx.runs)]
+      : page.commands),
+    [page, commands, ctx, query],
   );
   const ranked = useMemo(() => rankCommands(query, list), [query, list]);
   const options = useMemo<CommandPaletteOption[]>(
@@ -215,7 +218,7 @@ export function CommandLayer({ openNewSession }: CommandLayerProps): ReactNode {
         onRun={run}
         onBack={page === null ? undefined : () => { setPage(null); setQuery(''); }}
         label={page === null ? 'Command palette' : page.title}
-        // The first level is the top search (D-6714): it says the field's own words, and finds sessions too. A page
+        // The first level is the top search (D-6714): it says the field's own words, and finds sessions and runs too. A page
         // keeps its own placeholder and the palette's default empty text.
         placeholder={page === null ? COMMAND_FIELD_WORDS : `${page.title}…`}
         empty={page === null ? SEARCH_EMPTY : undefined}

@@ -1,0 +1,15 @@
+/* The run board's search (`RunFind`, D-8072; spec 2026-11-04 §8.3). Skin tokens only; no `.run` rule, and nothing here lives in
+   `instrument.css` or `refined.css`. The box is sticky under the header on a phone. Every link keeps the tap floor, text wraps,
+   nothing is ellipsised. */
+.rf-box { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 var(--sp-3); position: sticky; top: 0; z-index: 1; background: var(--bg-page); padding-block: var(--sp-1); }
+.rf-label { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.rf-results { display: grid; gap: var(--sp-3); min-width: 0; }
+.rf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.rf-head { margin: 0 0 var(--sp-1); font-size: var(--fs-xs); font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.rf-link { display: grid; gap: 0; min-height: var(--tap-min); padding: var(--sp-2) 0; color: var(--ink-primary); text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+.rf-name { font-size: var(--fs-base); }
+.rf-state, .rf-line { font-size: var(--fs-meta); color: var(--ink-secondary); }
+@media (min-width: 900px) {
+  .rf-link { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); column-gap: var(--sp-3); }
+  .rf-line { grid-column: 1 / -1; }
+}

@@ -48,8 +48,8 @@ import { CapsControl } from '../fleet/CapsControl';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
-import { useLocation } from '../lib/router';
-import { runParam } from '../lib/routes';
+import { navigate, useLocation } from '../lib/router';
+import { runParam, runQueryOf } from '../lib/routes';
 import { useArrival } from '../lib/useArrival';
 import { backToFleet } from '../command/door';
 import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
@@ -73,6 +73,7 @@ const ARCHIVE_PAGE = 50;
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
+import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
 import { useColdRuns, type PagedLoader } from './useColdRuns';
 
 
@@ -207,7 +208,44 @@ export function RunsScreen({
   const [foldAt, setFoldAt] = useState(FINISHED_FOLD);
   // The run `/runs?run=<id>` names (chat reading Task L, D-8062). A finished one past the fold is unfolded to, so its row
   // mounts and the arrival can reach it.
-  const runId = runParam(useLocation().search);
+  const search = useLocation().search;
+  const runId = runParam(search);
+  // The search (spec §8.3): `?q=` holds the query, so Back and a reload keep it. Typing replaces the entry rather than pushing
+  // one, and a change of `?q=` from outside (Back) is read back into the box.
+  const heldQuery = runQueryOf(search);
+  const [findText, setFindText] = useState(heldQuery ?? '');
+  useEffect(() => {
+    const held = heldQuery ?? '';
+    setFindText((t) => (t.trim() === held ? t : held));
+  }, [heldQuery]);
+  const typeFind = (text: string): void => {
+    setFindText(text);
+    const t = text.trim();
+    navigate(t === '' ? '/runs' : `/runs?${new URLSearchParams({ q: t })}`, { replace: true });
+  };
+  const finding = findText.trim() !== '';
+  // Clearing the query restores the board with its folds (they live in this component) and the place it was scrolled to.
+  const scrollWas = useRef<number | null>(null);
+  const wasFinding = useRef(finding);
+  useEffect(() => {
+    if (finding && !wasFinding.current) scrollWas.current = window.scrollY;
+    if (!finding && wasFinding.current && scrollWas.current !== null) window.scrollTo(0, scrollWas.current);
+    wasFinding.current = finding;
+  }, [finding]);
+  // `/` focuses the box, outside a text field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      const box = document.getElementById(RUN_FIND_ID);
+      if (box === null) return;
+      e.preventDefault();
+      box.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const runAtFinished = runId === null ? -1 : finished.findIndex((r) => r.id === runId);
   const shownFinished = Math.max(foldAt, runAtFinished + 1);
   const finishedHead = useRef<HTMLParagraphElement>(null);
@@ -336,6 +374,8 @@ export function RunsScreen({
       back={backToFleet('runs-back')}
     >
 
+      <RunFindBox value={findText} onChange={typeFind} />
+
       {/* Review finding 26: `runs`/`runsFrameSeen` are sticky across a socket
           loss (`stores/fleet.ts`, "sticky until replaced") — without this,
           the board keeps rendering ages that tick upward with nothing on
@@ -378,6 +418,7 @@ export function RunsScreen({
           closed run never waits; renders nothing when no run does. */}
       <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
 
+      {finding ? <RunFindResults q={findText} store={store} /> : (<>
       {/* Chat reading Task L (D-8062): a run named by `?run=` that the board has not loaded, said once both sources answered. */}
       {runNotLoaded && <EmptyState data-state="ok" role="status">{runNotLoadedLine(runId)}</EmptyState>}
 
@@ -478,6 +519,8 @@ export function RunsScreen({
           ) : null}
         </>
       )}
+
+      </>)}
 
       {/* Task 12, spec §4.3: `onDone` re-runs the screen's own `loadCold()`
           (Step 5) so an abandoned run moves into Finished — the live frame's

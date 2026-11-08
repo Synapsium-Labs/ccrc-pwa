@@ -271,6 +271,7 @@ const CONTROLS: Record<string, string> = {
     'SELECTOR .insp-routing-row button. The inspector\'s model and effort chips (W2 Task S8, D-5474): the header\'s '
     + '`metaChipTone()` doors, which the rail has the room to raise to the floor the header\'s chips are ruled under.',
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
+  'screens/RunFind.tsx <a> rf-link': 'TOKEN. A search result (the runs rebuild, D-8072): the whole result row is the link, `--tap-min` tall in run-find.css.',
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
   'screens/RunRow.tsx <button> run-resume': 'TOKEN. The resume door.',
