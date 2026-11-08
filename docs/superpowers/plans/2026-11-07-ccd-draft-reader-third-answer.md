@@ -24,6 +24,19 @@ the limit swap must go ahead.
 or the capture missed the box. `_pane_box_draft` stays the marker-row reader and returns rc 2 when no box is on screen.
 Server `hasMenu` gives the same veto the other way round: no menu while the prompt box shows.
 
+A bordered box on screen does not prove that no dialog is open. On a pane whose conversation fills it, Claude Code
+keeps drawing the box and the statusline UNDER a slash command's dialog: the real 2.1.291 `/model` captures show the
+picker (`❯ 1. Default …` above `Enter to set as default · … · Esc to cancel`) and its `Switch model?` dialog over a
+bare `❯` box. The border rule finds that bare row, so before this check the reader answered `empty` there, and an
+Enter would pick the highlighted row. `_pane_box_dialog` closes that gap. Before the reader answers `empty`, it reads
+the rows between the box's top border and the border before it. An indented numbered cursor row (`❯ N.`, the cursor
+`_pane_model_state` reads) in those rows means a dialog is open, and the answer is `absent`. The cursor row counts
+when a border closes those rows from above (both 2.1.291 shapes draw one) or a dialog footer (`Esc to cancel`,
+`Enter to confirm`, `Enter to select`) sits beside it. Without either, an indented `❯ 1.` is a reply quoting one, and
+the box stays `empty`. A draft still reads `draft` under a dialog, so the limit swap still stands down on it. Server
+`hasMenu` has the same blind spot, because its `promptBoxShowing` veto fires on this shape. Mirroring the server
+would not have caught it.
+
 | Caller | empty | draft | absent |
 |---|---|---|---|
 | `_session_hard_blocked` (the limit swap) | rescue | stand down, `draft` | rescue |
@@ -34,7 +47,8 @@ Server `hasMenu` gives the same veto the other way round: no menu while the prom
 | `_redrive_after_spawn` | types the resume prompt | `redrive-skip`, box not empty | `redrive-skip`, no input box |
 
 An Enter on the limit dialog would pick its highlighted row, and that row can be "Switch to usage credits" or "Upgrade
-your plan". So every caller that types or presses keys refuses on `absent`.
+your plan". So every caller that types or presses keys refuses on `absent`, whether the dialog hides the box or
+sits above it.
 
 The limit swap goes ahead on `absent` because it only reaches the draft guard when the transcript's newest real row is
 this process's own limit row. A limit row carried in from an earlier process answers no before that point. With the
@@ -51,5 +65,11 @@ capture and the repo's real slash-command dialog captures (`cc291-model-picker-*
 one with the `❯ /rate-limit-options` echo above the dialog, and one with an old `❯ ccrc-mail: …` row above the limit
 message. They are modelled captures, not recorded ones. `verdicts.json` gains the `_pane_box_read` column on every
 capture. The two dialog captures read `absent`, and the existing columns are unchanged.
+
+The two modelled captures leave out the box and statusline, so they only cover dialogs that hide the box. The corpus
+also holds two real 2.1.291 captures copied verbatim from `fixtures/panes/`: `cc291-model-picker-220x50-full` (the
+picker over the box) and `cc291-model-default-switch-120x30` (the `Switch model?` dialog, which has no footer, over
+the box). Both read `absent`. The marker row there is the bare box row, so `_pane_box_draft` reads `''` and
+`draftOfMeasured` reads `{box: 'present', draft: ''}`.
 
 Test panes that drew a bare `❯` row with no border now draw the box with its borders, as Claude Code does.

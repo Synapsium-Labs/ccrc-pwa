@@ -29,7 +29,12 @@
  * then a limit message under the turn it hit and Claude Code's own `/rate-limit-options` dialog in the box's place,
  * shaped on the real slash-command dialogs in `fixtures/panes/` (`cc291-model-picker-*`: an echo `❯ /…` row above
  * a bordered dialog whose cursor row is indented). One keeps the echo; the other keeps only the `❯ ccrc-mail: …` turn
- * the limit hit. ccd's third column, `_pane_box_read`, reads both `absent`.
+ * the limit hit. ccd's third column, `_pane_box_read`, reads both `absent`. Both leave out the box and statusline,
+ * so they hold only a dialog that hides the box. `cc291-model-picker-220x50-full` and
+ * `cc291-model-default-switch-120x30` are RECORDED (copied verbatim from `fixtures/panes/`, Claude Code 2.1.291): the
+ * /model picker and its footerless `Switch model?` dialog drawn OVER a bare `❯` box and the statusline. Their marker
+ * row is that bare box row, so this column reads `{box: 'present', draft: ''}`, and `_pane_box_read` reads `absent`
+ * off the dialog's cursor row (`_pane_box_dialog`).
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';

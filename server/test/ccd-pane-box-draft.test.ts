@@ -265,6 +265,42 @@ describe('D-8116: no bordered box is its own answer, `absent`', () => {
     expect(boxRead(`❯ /rate-limit-options\n\n${'─'.repeat(24)}\n  What do you want to do?\n  ❯ 1. Stop\n    2. Upgrade\n`)).toBe('absent');
   });
 
+  // The real 2.1.291 shape (`_pane_model_state`): on a full pane the bordered box and statusline stay drawn UNDER an
+  // open slash-command dialog, so the border rule finds a bare `❯` box row and only the dialog's cursor row tells.
+  const RECORDED = ['cc291-model-picker-220x50-full.ansi', 'cc291-model-default-switch-120x30.ansi'];
+  for (const name of RECORDED) {
+    it(`${name}: a dialog drawn over an empty box reads absent, not empty`, () => {
+      const p = capture(name);
+      expect(draft(p)).toBe('');
+      expect(boxRead(p)).toBe('absent');
+      // The server's `promptBoxShowing` veto fires on this shape, so `hasMenu` misses the dialog: no mirror helps.
+      expect(hasMenu(stripSgr(p))).toBe(false);
+    });
+  }
+
+  const rule = '─'.repeat(24);
+  const box = [rule, `❯${NBSP}`, rule, '  👤 team·max'];
+  it('a footer beside an indented cursor row opens a dialog even with no border above it', () => {
+    const dlg = ['● a reply', '  Pick one', '  ❯ 1. Switch to usage credits', '    2. Stop',
+      '  Enter to confirm · Esc to cancel'];
+    expect(boxRead([...dlg, ...box].join('\n') + '\n')).toBe('absent');
+  });
+
+  it('a reply quoting a cursor row, with no border or footer around it, leaves the box empty', () => {
+    const quote = ['● The menu looks like this:', '  ❯ 1. Yes, switch', '    2. No, go back', '  Done.'];
+    expect(boxRead([...quote, ...box].join('\n') + '\n')).toBe('empty');
+  });
+
+  it('a dialog in scrollback above an older box does not reach the box below it', () => {
+    const old = [rule, '  Select model', '  ❯ 1. Default', '  Esc to cancel'];
+    expect(boxRead([...old, rule, '● a reply after it', ...box].join('\n') + '\n')).toBe('empty');
+  });
+
+  it('a draft under a dialog still reads draft, so the limit swap stands down on it', () => {
+    const dlg = [rule, '  Switch model?', '  ❯ 1. Yes, switch to Opus', '    2. No, go back', ''];
+    expect(boxRead([...dlg, rule, '❯ half a sentence', rule].join('\n') + '\n')).toBe('draft');
+  });
+
   it('a real draft in a bordered box still reads draft, with an old turn above it', () => {
     expect(boxRead(pane(['❯ half a sentence']))).toBe('draft');
     expect(boxRead(pane([`❯${NBSP}`]))).toBe('empty');

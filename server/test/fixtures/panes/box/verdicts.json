@@ -187,6 +187,22 @@
       },
       "_pane_box_draft": null,
       "_pane_box_read": "absent"
+    },
+    "cc291-model-picker-220x50-full.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": "",
+      "_pane_box_read": "absent"
+    },
+    "cc291-model-default-switch-120x30.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": "",
+      "_pane_box_read": "absent"
     }
   }
 }

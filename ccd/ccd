@@ -23522,8 +23522,10 @@ _pane_box_read() {   # ANSI (`capture-pane -e`) pane-text -> `empty`, `draft` or
   #   draft  — it holds text, on the marker row or on a continuation row below
   #            it (Alt+Enter leaves an EMPTY marker row above real text);
   #   absent — no bordered box: a dialog or menu is open, or the capture missed
-  #            the box. Server `hasMenu` gives the same veto the other way
-  #            round: no menu while the prompt box shows.
+  #            the box; or an empty box with a dialog drawn over it
+  #            (`_pane_box_dialog`). Server `hasMenu` gives the same veto the
+  #            other way round, no menu while the prompt box shows, and so
+  #            misses that last shape.
   # Every caller that types or presses keys refuses on `absent` as it does on
   # `draft`: an Enter on Claude Code's limit dialog can pick "Switch to usage
   # credits" or "Upgrade your plan". Only `_session_hard_blocked` goes over it.
@@ -23558,8 +23560,36 @@ _pane_box_read() {   # ANSI (`capture-pane -e`) pane-text -> `empty`, `draft` or
       prev = $0
     }
     END { exit(found ? 0 : 1) }
-  '; then echo draft; else echo empty; fi
+  '; then echo draft; return 0; fi
+  # AN EMPTY BOX UNDER AN OPEN DIALOG IS NOT AN EMPTY BOX. On a pane whose
+  # conversation fills it, Claude Code keeps the bordered box drawn UNDER a
+  # slash command's dialog (`_pane_model_state`: the /model picker and its
+  # `Switch model?` dialog, real 2.1.291 captures), so the marker rules above
+  # find a bare `❯` and the keys a caller sends would answer the dialog.
+  _pane_box_dialog "$1" && { echo absent; return 0; }
+  echo empty
   return 0
+}
+
+_pane_box_dialog() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff a dialog's numbered cursor row stands over the bordered box (D-8116)
+  # THE DIALOG'S SLOT is the rows between the box's top border and the border
+  # before it: the cursor row `_pane_model_state` reads (`❯ N.`, indented, the
+  # mark a dialog draws and the box never does) in that slot is an open dialog
+  # when a border closes the slot above it (both cc291 shapes draw one) or a
+  # footer (`Esc to cancel`, `Enter to confirm`/`Enter to select`) sits in it
+  # beside the cursor. With neither, an indented `❯ 1.` is a reply quoting one.
+  printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
+    function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
+    {
+      if (index($0, "❯") == 1 && NR > 1 && border(prev)) dlg = s_cur && (s_ruled || s_foot)
+      if (border($0)) { s_ruled = ruled; s_cur = cur; s_foot = foot; ruled = 1; cur = 0; foot = 0 }
+      else {
+        if ($0 ~ /^[ \t]+❯( | |\t)*[0-9]+\./) cur = 1
+        if (index($0, "Esc to cancel") || index($0, "Enter to confirm") || index($0, "Enter to select")) foot = 1
+      }
+      prev = $0
+    }
+    END { exit(dlg ? 0 : 1) }'
 }
 
 _pane_external_import_gate() {   # pane text -> 0 iff Claude Code's external-CLAUDE.md-import dialog is UP (D-3108)
