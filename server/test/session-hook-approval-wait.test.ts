@@ -164,6 +164,18 @@ const decision = (r: Run): Decision | null => {
   return JSON.parse(lines[0] as string) as Decision;
 };
 
+/** A test that proves the hook ends its OWN wait (a stop state, the pane's answer, a ruling after a forgery) runs a
+ *  window it never reaches, and counts polls to prove where it stopped. Measured on CI: in a loaded burst one hook run
+ *  took 1-2.5 s with no wait at all, so a 1-3 s window ended those tests at their deadline instead. LONG_S is under
+ *  Linux's 20 s test budget, so a hook that wrongly ran to its window fails on EARLY_MS, by name, not on the budget.
+ *  EARLY_MS is half the window: a hook that ran to it cannot pass, and it is twice the slowest run measured. */
+const LONG_S = 10;
+const EARLY_MS = 5_000;
+const longWindow = (): NodeJS.ProcessEnv => {
+  put('stub/request.out', `{"id":41,"waitS":${LONG_S}}`);
+  return { ...ENV(), CCRC_APPROVAL_CEILING_S: String(LONG_S) };
+};
+
 describe('the shared constants\' bash copies', () => {
   it('APPROVAL_HOOK_WAIT_S and the stop states are shared/api.ts\'s, and the wait stays under the managed hook timeout', () => {
     expect(Number(hookAssign('APPROVAL_HOOK_WAIT_S'))).toBe(APPROVAL_HOOK_WAIT_S);
@@ -245,9 +257,17 @@ describe('a verified ruling is printed, once, and nothing else is', () => {
   ];
   it.each(forged)('a forged ruling (%s) prints nothing', (_n, arrange) => {
     arrange();
-    const r = fire(payloadFor(MAIN));
+    // Poll 1 serves the forged ruling; from poll 2 the stub serves a `declined` row (a D-5440 stop), appended on that
+    // poll. A forgery that ended the wait, printed or not, stops at one poll; a hook that kept polling for a real
+    // ruling reaches the stop. Each forged poll starts node twice (the signer, approval-verify.mjs), so a 1 s window
+    // could end on its first poll on a loaded runner, before the second poll could show anything.
+    put('stub/append-stop/on', '2');
+    put('stub/append-stop/line', '{"state":"declined"}');
+    put('stub/append-stop/to', path.join(stub, 'ruling.out'));
+    const r = fire(payloadFor(MAIN), longWindow());
     expect(r.stdout).toBe('');
-    expect(r.rulings, 'it kept polling for a real ruling').toBeGreaterThan(1);
+    expect(r.rulings, 'it kept polling for a real ruling').toBeGreaterThanOrEqual(2);
+    expect(r.ms, 'it ended at the stop, not at its window').toBeLessThan(EARLY_MS);
   });
 });
 
@@ -304,11 +324,10 @@ describe('the window (D-5441): the hook waits for the request\'s waitS, never pa
 describe('an escalation ends the wait (D-5440)', () => {
   it.each(APPROVAL_HOOK_STOP_STATES.map((s) => [s]))('a %s row: the hook exits at once, prints nothing and polls no more', (state) => {
     put('stub/ruling.out', JSON.stringify({ state }));
-    put('stub/request.out', '{"id":41,"waitS":3}');
-    const r = fire(payloadFor(MAIN));
+    const r = fire(payloadFor(MAIN), longWindow());
     expect(r.stdout).toBe('');
-    expect(r.rulings).toBe(1);
-    expect(r.ms).toBeLessThan(1500);
+    expect(r.rulings, 'it stopped on the first poll').toBe(1);
+    expect(r.ms, 'it ended at the stop, not at its window').toBeLessThan(EARLY_MS);
   });
 });
 
@@ -327,53 +346,51 @@ describe('the hook ends itself when the pane answered (D-5439)', () => {
   };
   it('main thread: the transcript gains the tool_result for this request: exit within one poll, nothing printed, no more polls', () => {
     put('stub/ruling.out', '{"state":"held"}');
-    put('stub/request.out', '{"id":41,"waitS":3}');
     fs.appendFileSync(transcript, assistantRow(TOOLU, MAIN.tool_input));
     arm(resultRow(TOOLU));
-    const r = fire(payloadFor(MAIN));
+    const r = fire(payloadFor(MAIN), longWindow());
     expect(r.stdout).toBe('');
     expect(r.rulings, 'it stopped right after the row landed').toBeLessThanOrEqual(3);
-    expect(r.ms).toBeLessThan(1500);
+    expect(r.ms, 'it ended at the answer, not at its window').toBeLessThan(EARLY_MS);
     landed(r);
   });
   it('an earlier identical command already answered (a repeated `npm test`): the open one is tied, and its answer ends the wait', () => {
     // The record's tie takes the last matching tool_use "which has no tool_result yet": the earlier, resolved twin is
     // not a second candidate. A hook that counted it would call the tie ambiguous and run to its window.
     put('stub/ruling.out', '{"state":"held"}');
-    put('stub/request.out', '{"id":41,"waitS":3}');
     const earlier = 'toolu_000000000000000000000003';
     fs.appendFileSync(transcript, assistantRow(earlier, MAIN.tool_input) + resultRow(earlier) + assistantRow(TOOLU, MAIN.tool_input));
     arm(resultRow(TOOLU));
-    const r = fire(payloadFor(MAIN));
+    const r = fire(payloadFor(MAIN), longWindow());
     expect(r.stdout).toBe('');
     expect(r.rulings, 'it stopped right after the row landed').toBeLessThanOrEqual(3);
-    expect(r.ms).toBeLessThan(1500);
+    expect(r.ms, 'it ended at the answer, not at its window').toBeLessThan(EARLY_MS);
     landed(r);
   });
   it('a subagent: the watch reads <dir>/<session_id>/subagents/agent-<agent_id>.jsonl', () => {
     put('stub/ruling.out', '{"state":"held"}');
-    put('stub/request.out', '{"id":41,"waitS":3}');
     const sub = path.join(path.dirname(transcript), String(SUB['session_id']), 'subagents', `agent-${String(SUB['agent_id'])}.jsonl`);
     put(path.relative(home, sub), assistantRow(TOOLU, SUB.tool_input));
     fs.appendFileSync(transcript, assistantRow(TOOLU, SUB.tool_input));
     arm(resultRow(TOOLU), sub);
-    const r = fire(payloadFor(SUB));
+    const r = fire(payloadFor(SUB), longWindow());
     expect(r.stdout).toBe('');
-    expect(r.ms).toBeLessThan(1500);
+    expect(r.rulings, 'it stopped right after the row landed').toBeLessThanOrEqual(3);
+    expect(r.ms, 'it ended at the answer, not at its window').toBeLessThan(EARLY_MS);
     landed(r);
   });
   it('a row that lands after the hook started is still tied (re-scanned each tick)', () => {
     put('stub/ruling.out', '{"state":"held"}');
-    put('stub/request.out', '{"id":41,"waitS":3}');
     // A real transcript is never empty: earlier rows that match nothing are there when the hook starts, so its first
     // look finds no match and must look again on every poll rather than give the tie up (Task 13's Linux record).
     fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user', promptId: 'p0', message: { role: 'user', content: 'start the task' } })}\n`
       + assistantRow('toolu_000000000000000000000009', { command: 'ls' }) + resultRow('toolu_000000000000000000000009'));
     arm(assistantRow(TOOLU, MAIN.tool_input), transcript, 1, 'a');
     arm(resultRow(TOOLU), transcript, 3, 'b');
-    const r = fire(payloadFor(MAIN));
+    const r = fire(payloadFor(MAIN), longWindow());
     expect(r.stdout).toBe('');
-    expect(r.ms).toBeLessThan(1500);
+    expect(r.rulings, 'it stopped right after the answer landed').toBeLessThanOrEqual(4);
+    expect(r.ms, 'it ended at the answer, not at its window').toBeLessThan(EARLY_MS);
     landed(r, 'a');
     landed(r, 'b');
   });
@@ -386,11 +403,22 @@ describe('the hook ends itself when the pane answered (D-5439)', () => {
     const r = fire(payloadFor(MAIN));
     expect(r.stdout).toBe('');
     expect(r.ms, 'it ran to its window').toBeGreaterThanOrEqual(900);
+    landed(r);
+    // Then both answers in one run whose window it never reaches, so the count of polls, not the clock, says which
+    // answer ended it: the other's lands on poll 1, its own on poll 3. Ended by the other's, it stops by poll 2 and
+    // the own row never lands; ended by its own, it stops within a poll of poll 3. (A 1 s window gave only 4 polls
+    // under a local CPU hog, too few to count past the other's answer on a loaded runner.)
     fs.rmSync(path.join(stub, 'append-a'), { recursive: true }); fs.rmSync(path.join(stub, 'calls')); fs.rmSync(path.join(stub, 'ruling.n'));
     fs.writeFileSync(transcript, assistantRow(TOOLU, MAIN.tool_input) + assistantRow(other, { command: 'echo something else' }));
-    put('stub/request.out', '{"id":41,"waitS":3}');
-    arm(resultRow(TOOLU));
-    expect(fire(payloadFor(MAIN)).ms, 'its own answer ends it').toBeLessThan(1500);
+    arm(resultRow(other), transcript, 1, 'a');
+    arm(resultRow(TOOLU), transcript, 3, 'b');
+    const own = fire(payloadFor(MAIN), longWindow());
+    expect(own.stdout).toBe('');
+    landed(own, 'a');
+    landed(own, 'b');
+    expect(own.rulings, 'it polled on past the other request\'s answer').toBeGreaterThan(2);
+    expect(own.rulings, 'its own answer ends it within one poll').toBeLessThanOrEqual(4);
+    expect(own.ms, 'its own answer ends it, not its window').toBeLessThan(EARLY_MS);
   });
   it('two concurrent requests with identical commands: no tie, so one answer ends neither wait early', () => {
     put('stub/ruling.out', '{"state":"held"}');
@@ -470,12 +498,17 @@ describe('it engages only where it can act, and asks for nothing otherwise', () 
     expect(spawnSync('bash', ['-c', 'command -v node'], { env }).status, 'the harness PATH really has no node').not.toBe(0);
     noRequest(fire(payloadFor(MAIN), env));
   });
-  it('a forbidden command, iterating over the forbidden Bash rows of Task 12\'s corpus: no request', () => {
-    const rows = (JSON.parse(fs.readFileSync(GUARD, 'utf8')) as Array<{ tool: string; input: Record<string, unknown>; class: string }>)
-      .filter((r) => r.class === 'forbidden' && r.tool === 'Bash');
-    expect(rows.length).toBeGreaterThan(40);
-    for (const row of rows) noRequest(fire(payloadFor(MAIN, { tool_input: row.input })));
+  // One test per row, so each full hook run has its own budget and a failure names the row: in one test the ~100 runs
+  // took 9-11 s on CI and 20-35 s in a slow burst, past Linux's 20 s budget.
+  const forbiddenRows = (JSON.parse(fs.readFileSync(GUARD, 'utf8')) as Array<{ tool: string; input: Record<string, unknown>; class: string }>)
+    .filter((r) => r.class === 'forbidden' && r.tool === 'Bash');
+  it('Task 12\'s corpus has more than 40 forbidden Bash rows to iterate over', () => {
+    expect(forbiddenRows.length).toBeGreaterThan(40);
   });
+  it.each(forbiddenRows.map((row, i) => [i, JSON.stringify(row.input['command'] ?? row.input), row] as const))(
+    'a forbidden command, forbidden Bash row %i of Task 12\'s corpus (%s): no request', (_i, _c, row) => {
+      noRequest(fire(payloadFor(MAIN, { tool_input: row.input })));
+    });
   it('AskUserQuestion delivered as PermissionRequest: today\'s questions envelope, no request', () => {
     const r = fire(payloadFor(MAIN, { tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'which?', options: [] }] } }));
     noRequest(r);

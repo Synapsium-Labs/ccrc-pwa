@@ -388,9 +388,17 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
 # the LOCALE's decimal point, and a box running a comma locale would otherwise
 # have its timestamps silently truncated to seconds.
+#
+# THE CLOCK IS READ ONCE. Every expansion of `EPOCHREALTIME` reads the clock
+# anew, so taking the seconds from one expansion and the fraction from a
+# second could straddle a second boundary: seconds N with the fraction of N+1,
+# an answer about 1000 ms in the past. Measured under CPU load: about 4 in
+# 10,000 calls ran backwards by 992-999 ms with two reads, none in 10,059 with
+# one. A deadline taken from such a reading is "now", so the session hook's
+# approval wait ended before its first poll with no ruling read.
 _plat_epoch_ms() {   # -> epoch milliseconds, 13 digits
   if [ -n "${EPOCHREALTIME:-}" ]; then
-    local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
+    local e="$EPOCHREALTIME" s f; s="${e%%[.,]*}" f="${e#*[.,]}"
     f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
     return 0
   fi
