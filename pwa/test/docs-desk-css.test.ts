@@ -70,6 +70,8 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(declValue(actions, 'margin-inline-start')).toBe('auto');
     expect(declValue(actions, 'flex')).toBe('0 1 auto');
     expect(declValue(actions, 'min-width')).toBe('0');
+    // Each action keeps its whole face: none of them shrinks inside the group (F6, mutant X2).
+    expect(declValue(ruleIn(docsCss, '.docs-full .docs-actions > *'), 'flex')).toBe('none');
     expect(declValue(ruleIn(docsCss, '.docs-full .docs-action'), 'white-space')).toBe('nowrap');
     expect(declValue(ruleIn(docsCss, '.docs-full .docs-action'), 'gap')).toBe('var(--sp-1)');
   });

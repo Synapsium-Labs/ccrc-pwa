@@ -988,6 +988,23 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       expect(px).toBe(28);
       expect(px).toBeLessThan(Number.parseFloat(declValue(rootBody(tokensCss), '--tap-min') ?? 'NaN'));
     });
+
+    it('is defined only in tokens.css, those two times: no skin or sheet under ui/src or pwa/src redefines it (fix round 1, F6)', () => {
+      const roots = [path.join(import.meta.dirname, '..', '..', 'ui', 'src'), path.join(import.meta.dirname, '..', 'src')];
+      const defs: string[] = [];
+      const walk = (dir: string): void => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          const at = path.join(dir, e.name);
+          if (e.isDirectory()) walk(at);
+          else if (/\.(css|tsx?)$/.test(e.name)) {
+            const n = (stripComments(readFileSync(at, 'utf8')).match(/--docs-line-h\s*:/g) ?? []).length;
+            for (let i = 0; i < n; i++) defs.push(path.relative(path.join(import.meta.dirname, '..', '..'), at).split(path.sep).join('/'));
+          }
+        }
+      };
+      for (const r of roots) walk(r);
+      expect(defs).toEqual(['ui/src/styles/tokens.css', 'ui/src/styles/tokens.css']);
+    });
   });
 
   describe('every banner action: .docs-banner-action (a btn-ghost) and .docs-hint-link', () => {

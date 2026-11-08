@@ -636,6 +636,8 @@ describe('the desk head (desk-nav Part B)', () => {
     try {
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${DEEP}?ref=${ref}`, { waitUntil: 'load' });
       await app.page.waitForFunction((sel) => document.querySelector(sel) !== null, ready, { timeout: 30_000 });
+      // The widest settled actions: the reader is up, so Export reads "Export (plain view)" (before it, "Export" or a wait).
+      await app.page.waitForFunction(() => document.querySelector('.docs-full .docs-export')?.getAttribute('aria-label') === 'Export (plain view)', undefined, { timeout: 90_000 });
       const got = await app.page.evaluate(async () => {
         await document.fonts.ready;
         const r = (e: Element | null): DOMRect | null => e?.getBoundingClientRect() ?? null;
