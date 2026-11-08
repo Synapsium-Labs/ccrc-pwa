@@ -156,6 +156,30 @@ describe('RunsScreen: the archive read is a high-water mark (spec §5.9)', () =>
     expect(result.current.timedOut).toBe(false);
   });
 
+  // Review 1689 F1 (C14 fix round 1, D-8110): dropping the newest-failure guard must flip both rows' timedOut.
+  it.each([
+    { kind: 'timeout', newer: new ApiTimeout('/api/runs', 8_000), older: new Error('read failed'), timedOut: true },
+    { kind: 'network', newer: new Error('read failed'), older: new ApiTimeout('/api/runs', 8_000), timedOut: false },
+  ])('a newer $kind failure keeps its timeout signal after an older failure settles', async ({ newer, older, timedOut }) => {
+    const store = makeStore();
+    const reads: { reject(error: Error): Promise<void> }[] = [];
+    const loadRuns = vi.fn(() => new Promise<{ runs: RunSummary[] }>((_resolve, reject) => {
+      reads.push({ reject: async (error) => { await act(async () => { reject(error); }); } });
+    }));
+    const { result } = renderHook(() => useColdRuns(store, loadRuns, { page: 2, rereadOnTransitions: false }));
+    await waitFor(() => expect(reads).toHaveLength(1));
+    act(() => { void result.current.reload(); });
+    expect(reads).toHaveLength(2);
+    await reads[1]!.reject(newer);
+    expect(result.current.state).toBe('error');
+    expect(result.current.timedOut).toBe(timedOut);
+    expect(result.current.reading).toBe(false);
+    await reads[0]!.reject(older);
+    expect(result.current.state).toBe('error');
+    expect(result.current.timedOut).toBe(timedOut);
+    expect(result.current.reading).toBe(false);
+  });
+
   it('a success whose body cannot be read is an error, not a silent drop: the mark moves only after the read', async () => {
     // No frame has landed, so the board knows nothing and shows the error state when the read fails.
     // A `null` answer throws when the body is read. If the mark had already moved to this read, the

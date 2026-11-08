@@ -165,10 +165,9 @@ export function useColdRuns(
   // older error in either arrival order, and an older success still lands its rows
   // after a newer failure (the freshest answer there is), though not its `ok` (below).
   //
-  // A newer SETTLED failure holds `state` at `error` AND keeps the `timedOut` value it set against an older success landing
-  // after it (review 1606 F2; desktop-polish Task C14, D-8110). That older read started before whatever the newer one was
-  // issued for, so its ROWS still land, as before, but only a read newer than the failure may clear either failure signal.
-  // `failed` is the newest sequence that settled so.
+  // The newest SETTLED failure holds `state` at `error` and owns `timedOut` (reviews 1606 F2 and 1689 F1; Task C14, D-8110).
+  // An older success still lands its ROWS, but clears neither failure signal; an older failure cannot replace `timedOut`.
+  // Only a success newer than that failure clears both signals. `failed` is the newest sequence that settled as a failure.
   const issued = useRef(0);
   const applied = useRef(0);
   const failed = useRef(0);
@@ -208,9 +207,10 @@ export function useColdRuns(
       // A failed read changes its failure signals: the rows, and the stored pages, stay (never a fold to empty).
       .catch((e: unknown) => {
         if (!aliveRef.current || seq <= applied.current) return;
+        const newest = seq >= failed.current;
         failed.current = Math.max(failed.current, seq);
         setColdState('error');
-        setTimedOut(e instanceof ApiTimeout);
+        if (newest) setTimedOut(e instanceof ApiTimeout);
       })
       .finally(settled);
   };
