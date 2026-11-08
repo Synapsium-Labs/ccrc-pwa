@@ -2,6 +2,7 @@
 // discipline `whitelist-subset.test.ts` and `wsaudit.test.ts` already
 // established), and the happy path.
 import { describe, it, expect, afterEach } from 'vitest';
+import { isDelegationAdoptRefusal } from '../../shared/delegation-adopt.js';
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1000,6 +1001,11 @@ describe('the rejection table is total, in both directions', () => {
         // key and an audit not yet asked. None is a mail rejection or a run refusal: they ride the lane's memory, log lines and health.
         // Admitted through the exported guard, derived from the module's tables, never NOT_CODES.
         || isDelegationAdoptionKebab(tok)
+        // DELEGATION BROKER, WAVE 5 (PR8b, D-8113): the adoption switch door's refusal words, beside the adoption decider's and never
+        // merged into them. `coord/delegation-adopt-switch.ts` (the L1 rule) and `coord/routes.ts` (the door) spell them; they ARE route
+        // refusals, sent through `refuseRoute` at the one status `shared/delegation-adopt.ts#DELEGATION_ADOPT_REFUSALS` gives each.
+        // Admitted through that file's guard, read and never re-spelled, never NOT_CODES.
+        || isDelegationAdoptRefusal(tok)
         // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
         // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
         // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code

@@ -7,7 +7,7 @@
 // now: `delegation-adopt-section.test.tsx` collects them all and holds the census.
 import { isMarkerState, type DelegationAdoptionHealth, type DelegationAdoptionKeep, type DelegationAdoptionKeeps } from '../../../shared/api';
 import {
-  isDelegationAdoptRefusal, type DelegationAdoptCap, type DelegationAdoptRefusal, type DelegationAdoptView,
+  DELEGATION_ADOPT_CAPS, isDelegationAdoptRefusal, type DelegationAdoptCap, type DelegationAdoptRefusal, type DelegationAdoptView,
 } from '../../../shared/delegation-adopt';
 import { ApiError } from '../lib/apiError';
 import { isCount, isRecord } from '../lib/wire';
@@ -61,7 +61,7 @@ const MODE_LINE: Readonly<Record<DelegationAdoptionHealth['mode'], string>> = {
 };
 
 const MODES: readonly string[] = ['live', 'shadow', 'suspended', 'unmeasured'];
-const CAPS: readonly unknown[] = ['present', 'absent', 'unmeasured'];
+const CAPS: readonly unknown[] = DELEGATION_ADOPT_CAPS;
 
 const COUNT_KEYS = ['adopted', 'wouldAdopt', 'waiting', 'unchanged', 'unaudited', 'conflicting', 'unsupported', 'uncensused', 'owed'] as const;
 

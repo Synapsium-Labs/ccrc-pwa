@@ -830,6 +830,9 @@ describe('the coordinator skill: linkage', () => {
       // D-7994: the sweep's two switches, the operator's and session-gated: no coordinator's door.
       'GET /api/coord/scope-sweep',
       'POST /api/coord/scope-sweep',
+      // D-8112: the adoption switch and its read, the operator's gate (O5-7 (a)) and session-gated: no coordinator's door.
+      'GET /api/coord/delegation-adopt',
+      'POST /api/coord/delegation-adopt',
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the
@@ -849,11 +852,6 @@ describe('the coordinator skill: linkage', () => {
       // the stopped session's pane scope. A coordinator told about it would be told how to arm or disarm the stop of
       // its own workers' leftovers. The forbid-mention case below forbids it.
       'POST /api/coord/pane-scope-stop',
-      // THE ADOPTION SWITCH (D-8112) — the operator-dial shape once more: it arms the delegation lane's keeping of a finished
-      // delegated worktree (O5-7 (a), the operator's gate). A coordinator told about it would be told how to arm the keeping of
-      // its own workers' worktrees. Its read is the first half of that invitation. The forbid-mention case below forbids both.
-      'GET /api/coord/delegation-adopt',
-      'POST /api/coord/delegation-adopt',
       // DELEGATION BROKER wave 5 PR8 — Retain is NAMED THROUGH ITS CLIENT VERB, the intent route's reason: the reference
       // `delegated-worktrees.md` tells the coordinator to run `ccrc-api leases retain`, and the closed client owns the path. The
       // operator's two lease doors are session-gated and never a coordinator's, for `POST /api/coord/pause`'s reason: naming them
@@ -1947,12 +1945,6 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // route and of the bare verb (ccd has no caller auth, so `ccd pane-scope-stop` from a shell is the shorter door).
     expect(`${allSkillText}\nPOST /api/coord/pane-scope-stop\n`, 'CONTROL: a planted mention is seen').toContain('pane-scope-stop');
     expect(allSkillText).not.toContain('pane-scope-stop');
-  });
-
-  it('never names the adoption switch or its verb — a door that would tell a coordinator how to arm the keeping of its own workers\' worktrees (D-8112)', () => {
-    // The route and the bare verb (ccd has no caller auth, so the verb from a shell is the shorter door); FORBIDDEN_CCD_VERBS refuses it too.
-    expect(`${allSkillText}\nPOST /api/coord/delegation-adopt\n`, 'CONTROL: a planted mention is seen').toContain('delegation-adopt');
-    expect(allSkillText).not.toContain('delegation-adopt');
   });
 
   it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {

@@ -869,7 +869,7 @@ describe('the pane-scope stop switch: its definer, the verb\'s one write, the ac
 // lane's adoption (O5-7 (a)): absent, the lane only records what it would adopt. Since D-8112 it has EXACTLY ONE writer, the
 // `ccd delegation-adopt` verb in ccd/ccd (behind `POST /api/coord/delegation-adopt`, the operator's switch in Settings), whose two
 // lines name the marker and its staging file. The session hook and its installer name the verb only to forbid it to every session.
-// Its one TS literal spelling beside the definer is the verb's argv row; the files that name its constant read it from a registry
+// Its TS literal spellings beside the definer are the verb's argv row and its agent grant; the files that name its constant read it from a registry
 // listing and reach no write.
 describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd delegation-adopt (W5-X1, D-8112)', () => {
   const NAME = 'delegation-adopt';
@@ -889,9 +889,9 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     }
   });
 
-  it('its TS literal spellings are its definer and the verb\'s argv row; the files that name its constant reach no write', () => {
+  it('its TS literal spellings are its definer, the verb\'s argv row and its agent grant; the files that name its constant reach no write', () => {
     expect(ALL.filter((f) => stallCode(f).split('\n').some((l) => new RegExp(`['"\`]${NAME}['"\`]`).test(l))).map(rel).sort(),
-      `spelled as a literal on a code line outside ${DEFINER} and the argv row`).toEqual(['server/src/ccdargv.ts', DEFINER]);
+      `spelled as a literal on a code line outside ${DEFINER}, the argv row and the grant`).toEqual(['agent/src/whitelist.ts', 'server/src/ccdargv.ts', DEFINER]);
     expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
       .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
