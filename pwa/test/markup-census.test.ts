@@ -427,6 +427,12 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'anyway and Show as text side by side. They are the gate\'s answer '
     + 'buttons, each setting a different choice; a component would be a '
     + 'button taking its label and its choice.',
+  'Button.rd-control[onClick,variant]':
+    'DIFFERENT ACTIONS, each a ghost Button wearing `.rd-control` in the run '
+    + 'page control row: Lift cap and Abandon run. The class is the one shared '
+    + 'override that sizes them alongside the anchors; what differs is the '
+    + 'whole of what either does, so a wrapper would be `Button` with two more '
+    + 'names.',
   'button.doc-img-action[onClick,type]':
     'DIFFERENT ACTIONS, mutually exclusive by construction: a refused image '
     + 'offers Open externally (a new tab, `openExternal`) when its plan is '
