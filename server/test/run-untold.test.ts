@@ -106,6 +106,18 @@ describe('the drain', () => {
     expect(untold(s)).toEqual([]);
   });
 
+  it("a gone claimant's rows go to the heir the reclaim installs, and the heir is told", async () => {
+    const s = store();
+    const a = open(s, 1);
+    close(s, a, 'sweep');
+    const r = s.reclaimProgram(a, 'coord-heir', Date.now(), null);
+    expect(r.ok).toBe(true);
+    expect(untold(s)).toEqual([{ runId: a, claimant: 'coord-heir' }]);
+    await untoldPass({ coord: s, measure: verdicts({ 'coord-a': { state: 'dead', cause: 'absent', why: 'gone' }, 'coord-heir': ALIVE }) });
+    expect(mails(s).map((m) => m.toId)).toEqual(['coord-heir']);
+    expect(untold(s)).toEqual([]);
+  });
+
   it('a mail that cannot be written leaves the rows standing, so a retry still tells once', async () => {
     const s = store();
     const a = open(s, 1);

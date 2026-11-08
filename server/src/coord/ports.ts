@@ -62,7 +62,7 @@ export type WatcherCoordMember =
   | 'childStaleActivity' | 'claimDigestDay' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
-  | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteUntold'
+  | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteUntold' | 'drainUntold'
   | 'deliveredUnacked'
   | 'delivery' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'driftAwaitingReview'
   | 'driftFindingRows' | 'driftFindingsOpenAt' | 'driftHeldQuestions' | 'driftOpenRuns' | 'driftOutstandingDeliveries'

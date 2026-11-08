@@ -25,6 +25,7 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from '../src/coord/updateintentlog.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import type { FleetState } from '../src/fleetstate.js';
+import { UNTOLD_SUBJECT_PREFIX } from '../src/coord/untold.js';
 import { STALL_CHECK_PREFIX, STALL_FAILED_PREFIX, STALL_ORPHANED_PREFIX, STALL_REPLY_PREFIX, STALL_REPORT_PREFIX, stallFailedSubject, stallOrphanESubject } from '../src/coord/stall.js';
 
 /** Item 3, fix round 1 (F3/F4): a remote-mode fleetState double — a minimal `FleetState`, same shape as
@@ -1754,6 +1755,15 @@ describe('the stall watch on the phone — pushNewMail\'s stall classes', () => 
     await w.tick();
     expect(sent).toEqual([]);
     expect(log.seq).toBe(1);
+  });
+
+  it('an untold notice (runs closed:) is recorded, never pushed', async () => {
+    const { sent, log, w, mail } = await stallRig();
+    mail('operator', 'cc-b', 'cc-b', `${UNTOLD_SUBJECT_PREFIX} 2 runs`);
+    await w.tick();
+    // Filtered to the mail lane's own tag: an unrelated lane (a disk notice on a full box) may push in the same tick.
+    expect(sent.filter((p) => p.tag?.startsWith('mail-'))).toEqual([]);
+    expect(log.seq).toBeGreaterThanOrEqual(1);
   });
 
   it('a BOUND reply (the run\'s worker, after the first check on that run) is recorded, never pushed', async () => {

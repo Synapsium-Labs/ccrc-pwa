@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
+import { fleetSession } from '../test/fleetFixture';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer, type OpenedApp } from './app';
 
 const NOW = Date.now();
@@ -25,6 +26,19 @@ const RUN = {
   childReclaim: null, reviewCap: null, hadChild: false,
 };
 
+// The run's worker carries a child mark and the run's claimant is a live session, so the sheet shows the child sentence (the
+// longest) and the "Its coordinator is told." line: the worst-case height the 360 by 667 check pins.
+const WORKER = fleetSession({
+  id: 'project-a-w1501', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: '/w/project-a/w1501',
+  workspace: 'w1501', name: 'w1501', status: 'busy', bucket: 'working',
+  child: { kind: 'child', runId: 1501 }, run: { id: 1501, state: 'working', claimedBy: 'project-a-coord' },
+  openRun: { id: 1501, state: 'working', claimedBy: 'project-a-coord' },
+});
+const COORD = fleetSession({
+  id: 'project-a-coord', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: '/w/project-a/coord',
+  workspace: 'coord', name: 'coord', status: 'busy', bucket: 'working',
+});
+
 const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
@@ -33,7 +47,7 @@ const FIXTURE: AppFixture = {
     '/api/coord/caps': { ok: true, caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 }, updatedAt: null },
   },
   fleetFrames: [
-    { type: 'fleet', sessions: [] }, { type: 'runs', runs: [RUN] },
+    { type: 'fleet', sessions: [WORKER, COORD] }, { type: 'runs', runs: [RUN] },
     { type: 'pools', pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } },
   ],
 };
@@ -110,6 +124,8 @@ for (const skin of [REFINED, INSTRUMENT]) {
         expect(TITLE_122).toHaveLength(122);
         const { ctx, page } = await openSheet(360, skin, theme, 667);
         try {
+          // The sheet shows the child sentence (the longest), not the hedge: this is the worst-case height.
+          await page.locator('.sheet-panel').getByText('is a child workspace, so the server reclaims it').waitFor({ timeout: 20_000 });
           const m = await measure(page);
           for (const b of m.buttons) {
             expect(b.top, `${b.text} starts inside the window`).toBeGreaterThanOrEqual(0);

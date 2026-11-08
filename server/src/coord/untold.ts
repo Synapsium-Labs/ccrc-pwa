@@ -4,8 +4,7 @@
 // reads alive (a hibernated one included, which the ladder reads alive), and deletes the rows in the SAME transaction as the
 // insert. The delivery carries `wake = 'never'`, so the mail sweep holds it for a sleeper without asking `ccd ensure`, and
 // the push lane records it without pushing. A claimant that reads dead or unmeasurable gets no mail and its rows wait for an
-// heir (the rows' claimant is rewritten by Resume and the reclaim door, not here).
-import { tx } from './tx.js';
+// heir (`CoordStore.reclaimProgram` rewrites the rows' claimant in the transaction that rewrites the programme's `claimedBy`).
 import type { WatcherCoordPort } from './ports.js';
 import type { ClaimantVerdict } from './reclaim.js';
 import { insertSystemMailTx } from './rundefsTx.js';
@@ -39,14 +38,10 @@ export async function untoldPass(deps: UntoldPassDeps): Promise<void> {
     for (const claimant of claimants) {
       const verdict = await deps.measure(claimant);
       if (verdict.state !== 'alive') continue;
-      tx(coord.db, () => {
-        // Re-read inside the transaction: a row an heir's rewrite moved away in between is not this claimant's now.
-        const rows = coord.untoldRows().filter((r) => r.claimant === claimant);
-        if (rows.length === 0) return;
+      coord.drainUntold(claimant, (rows) => {
         const n = noticeOf(rows);
         insertSystemMailTx(coord, null, { fromId: 'operator', toId: claimant, runId: null, kind: 'status',
           subject: n.subject, body: n.body, wake: 'never' });
-        coord.deleteUntold(rows.map((r) => r.runId));
       });
     }
   } catch (err) {

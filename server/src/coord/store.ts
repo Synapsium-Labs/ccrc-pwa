@@ -2247,6 +2247,8 @@ export class CoordStore {
       // have the board assert a coordinator this very statement retired.
       this.db.prepare('UPDATE runs SET claimedBy = ?, coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL')
         .run(to, coordProject, run.program);
+      // D-8073 (spec §11.7): the programme's untold rows go to the heir with its runs, in this same transaction.
+      this.db.prepare('UPDATE run_close_untold SET claimant = ? WHERE program = ? AND claimant != ?').run(to, run.program, to);
       for (const m of moved) {
         // One `at` for N rows (D-1134): the operator acted once, and a trail that
         // reads five clock samples describes five acts.
@@ -3145,6 +3147,17 @@ export class CoordStore {
   untoldRows(): UntoldRow[] {
     return this.db.prepare('SELECT runId, program, wave, waveOf, claimant, cause, detail, at FROM run_close_untold ORDER BY at, runId')
       .all() as unknown as UntoldRow[];
+  }
+
+  /** One claimant's drain in ONE transaction: re-reads the claimant's rows (a row an heir's rewrite moved away is not its now),
+   *  hands them to `send`, which queues the notice, and deletes them. No rows, no call. */
+  drainUntold(claimant: string, send: (rows: UntoldRow[]) => void): void {
+    tx(this.db, () => {
+      const rows = this.untoldRows().filter((r) => r.claimant === claimant);
+      if (rows.length === 0) return;
+      send(rows);
+      this.deleteUntold(rows.map((r) => r.runId));
+    });
   }
 
   /** Delete the `untold` rows of these runs. Opens no transaction: the notice's own holds it (D-8073). */
