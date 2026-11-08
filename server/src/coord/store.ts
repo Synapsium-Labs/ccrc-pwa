@@ -1,7 +1,11 @@
+// The coordination store, ring L3 (the 08-10 spec's adapter list): every coordination read and write runs a
+// `node:sqlite` statement on the connection it is handed. That import is type-only, so the facts alone would read
+// L1; this declaration is what makes a runtime import of `CoordStore` from an L1 file an outward edge (#2370).
 import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
@@ -19,6 +23,7 @@ import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } f
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
+import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
 // policy — the house port pattern. This read exists to feed that policy and
@@ -136,7 +141,7 @@ import {
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, isRunClosedBy, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
   TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskMintReleaseReason, type AskReleaseReason, type AskState,
@@ -151,14 +156,14 @@ import {
   type NotifyEvent, type PeerDeliverable, type ProgramState,
   type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
-  type RunSummary,
+  type RunSummary, type RunFindAnswer, type RunHit,
   type SetAccountPoolsRefuseCode,
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
   type WorkItemState, type LastReviewReport, type RunRefuseCode,
-} from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+} from '../../../shared/api.js'; import { programmeNameFromSlug } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.
@@ -198,6 +203,9 @@ export interface PrLineageEntry { pr: number; branch: string; prbranch?: string;
  * longer this occupant's own (spec §5.3, the recycled-slug hazard extended
  * across a rollback).
  */
+/** One `gone_since` row (D-8071): the first pass of this spell that read the person gone, and the latest. Epoch ms. */
+export interface GoneAnchor { readonly firstGoneAt: number; readonly lastGoneAt: number }
+
 export interface RunRow extends RunSummary {
   prLineage: PrLineageEntry[]; coordProject: string | null;
   sessionBornAt: number | null; sessionBornFor: string | null;
@@ -970,6 +978,9 @@ interface RunRowDb {
   sessionBornFor: string | null;
   unattributed: number;
   hadChild: number;
+  runTitle: string | null;
+  closedBy: string | null;
+  closeDetail: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -990,7 +1001,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -1835,9 +1846,12 @@ export class CoordStore {
   openRun(input: {
     program: string; title: string; project: string;
     wave: number; waveOf: number | null; claimedBy: string;
+    /** The title a NEW programme row takes (D-8071). Used on the row's first insert only; absent, the slug as words.
+     *  `title` above is this RUN's own and is stored on the run. */
+    programmeTitle?: string;
     /** The project whose repository holds this programme's ledger (design §3
      *  F2). Written on the programme row's FIRST insert ONLY — the `ON
-     *  CONFLICT` arm below updates `title` and nothing else — so a later open
+     *  CONFLICT` arm below does nothing — so a later open
      *  can never silently re-home a programme. Backfilling a stored NULL is
      *  `setProgramHome`'s job, deliberately a second, narrower write.
      *  OPTIONAL: during the legacy generation an open carries none, and the
@@ -1942,18 +1956,18 @@ export class CoordStore {
         const now = Date.now();
         this.db.prepare(
           'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
-        ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
+          'ON CONFLICT(slug) DO NOTHING',
+        ).run(input.program, input.programmeTitle ?? programmeNameFromSlug(input.program), now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
-          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0,
+          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0, input.title,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -2786,10 +2800,15 @@ export class CoordStore {
       return { ok: false as const, error: 'bad-transition' as const, from, to };
     }
     const now = Date.now();
+    // D-8071: the close columns ride the statement that writes `closedAt`. A `causedBy` outside the three words stores
+    // no `closedBy`, and the detail is stored whenever the run ends.
+    const closer = isRunClosedBy(causedBy) ? causedBy : null;
     this.db.prepare(
-      `UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedAt END ` +
+      `UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedAt END, ` +
+      `closedBy = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedBy END, ` +
+      `closeDetail = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closeDetail END ` +
       'WHERE id = ?',
-    ).run(to, to, now, runId);
+    ).run(to, to, now, to, closer, to, detail ?? null, runId);
     this.db.prepare(
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
@@ -2978,6 +2997,9 @@ export class CoordStore {
      *  omitted pair leaves the columns NULL, which is exactly the "no dispatch
      *  decided anything here" reading migration 7 reserves for null. */
     briefQueued?: boolean; clearError?: string | null;
+    /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
+     *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
+    intents?: readonly string[];
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
@@ -2993,8 +3015,25 @@ export class CoordStore {
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
+      for (const key of input.intents ?? []) {
+        this.db.prepare(
+          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
+          'SELECT id, project, ?, claimedBy, dispatchedAt FROM runs WHERE id = ?',
+        ).run(key, input.runId);
+      }
       return adv;
     });
+  }
+
+  /** The landing intents held in a project for these keys: every row whose run is not terminal, ordered by key then run
+   *  id. A raw `state` outside the vocabulary holds, because only the terminal states are excluded. */
+  heldLandingIntents(project: string, keys: readonly string[]): readonly LandingIntentHold[] {
+    if (keys.length === 0) return [];
+    return this.db.prepare(
+      'SELECT i.key AS key, i.runId AS runId, r.program AS program FROM landing_intents i JOIN runs r ON r.id = i.runId ' +
+      `WHERE i.project = ? AND i.key IN (${keys.map(() => '?').join(',')}) AND r.state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
+      'ORDER BY i.key, i.runId',
+    ).all(project, ...keys) as unknown as LandingIntentHold[];
   }
 
   /**
@@ -3027,6 +3066,9 @@ export class CoordStore {
      *  only while the run's `claimedBy` still equals it, read INSIDE this transaction; otherwise `claimant-changed`
      *  and nothing is written. The dead-coordinator lane passes the crashed id; every other caller passes nothing. */
     expectClaimedBy?: string;
+    /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
+     *  `abandon:<reason>`; every other caller passes nothing. */
+    detail?: string;
   }): AdvanceResult {
     return tx(this.db, () => {
       if (input.expectClaimedBy !== undefined) {
@@ -3050,7 +3092,7 @@ export class CoordStore {
         const closingAdv = this.advanceInner(input.runId, 'closing', input.causedBy);
         if (!closingAdv.ok) return closingAdv;
       }
-      const finalAdv = this.advanceInner(input.runId, input.finalState, input.causedBy);
+      const finalAdv = this.advanceInner(input.runId, input.finalState, input.causedBy, input.detail);
       if (!finalAdv.ok) return finalAdv;
       // Only a SHAPE-VALID handoff commit is ever written (fix — review
       // findings 6/18): the caller (the close route) runs the same 40-hex
@@ -3859,6 +3901,17 @@ export class CoordStore {
     ).all(n) as unknown as RunRowDb[]);
   }
 
+  /** `GET /api/runs/find` (D-8071, spec §11.4): the lookup and the close-order list, over stored columns. The query is
+   *  `runFind.ts`'s; this delegate hands it the terminal-state list. */
+  /** The runs that review run `id`, as hits (D-8071; spec §11.5 `reviewedBy`). */
+  runsReviewing(id: number): RunHit[] {
+    return runsReviewing(this.db, id);
+  }
+
+  findRuns(parsed: RunFindParsed): RunFindAnswer {
+    return runFindQuery(this.db, parsed, { terminalStatesSql: TERMINAL_RUN_STATES_SQL });
+  }
+
   /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
   runsPage(opts: { limit: number; before?: number; pinned: readonly number[] }): RunsPage {
     return runsPageQuery(this.db, opts, { columns: RUN_ROW_COLUMNS, terminalStatesSql: TERMINAL_RUN_STATES_SQL },
@@ -4161,6 +4214,64 @@ export class CoordStore {
    *  `commitDeadCoordinatorBreakerState` (D-4857): a delete never lands without the snapshot that still holds it. */
   deleteDeadAnchor(claimantId: string): void {
     this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
+  /** The stuck verdict's own anchors (`gone_since`, migration 45; D-8071, spec 2026-11-04 §7, A63) — EVERY row, one
+   *  statement, ALL-OR-FAILURE like `deadAnchors`: an integer it cannot prove throws, and the verdict's pass gives no
+   *  verdict that pass rather than count an hour nobody measured. */
+  goneSince(): ReadonlyMap<string, GoneAnchor> {
+    const rows = this.db.prepare(
+      'SELECT personId, CAST(firstGoneAt AS TEXT) AS firstText, CAST(lastGoneAt AS TEXT) AS lastText FROM gone_since',
+    ).all() as unknown as { personId: string; firstText: string; lastText: string }[];
+    const out = new Map<string, GoneAnchor>();
+    for (const r of rows) {
+      const first = persistedInt(r.firstText, 'firstGoneAt');
+      if (!first.ok) throw new Error(first.detail);
+      const last = persistedInt(r.lastText, 'lastGoneAt');
+      if (!last.ok) throw new Error(last.detail);
+      out.set(r.personId, { firstGoneAt: first.value, lastGoneAt: last.value });
+    }
+    return out;
+  }
+
+  /** Write one person's `gone_since` row — an upsert keyed by the person. The verdict's pass is the pair's one caller. */
+  setGoneSince(personId: string, a: GoneAnchor): void {
+    this.db.prepare(
+      'INSERT INTO gone_since (personId, firstGoneAt, lastGoneAt) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(personId) DO UPDATE SET firstGoneAt = excluded.firstGoneAt, lastGoneAt = excluded.lastGoneAt',
+    ).run(personId, a.firstGoneAt, a.lastGoneAt);
+  }
+
+  /** Delete one person's `gone_since` row: alive or asleep now, or holding no open run. A no-op when absent. */
+  deleteGoneSince(personId: string): void {
+    this.db.prepare('DELETE FROM gone_since WHERE personId = ?').run(personId);
+  }
+
+  /** Per programme with NO open run and a close at or after `sinceMs`: the claimant of its newest run (D-8071, spec §7,
+   *  A55). The verdict's pass reads each claimant's `coordinatorGone` for a closed run's header. A programme whose newest
+   *  run names no claimant is left out. */
+  closedProgrammeClaimants(sinceMs: number): { program: string; claimedBy: string }[] {
+    const programmes = this.db.prepare(
+      'SELECT program FROM runs GROUP BY program ' +
+      `HAVING SUM(CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END) = 0 AND MAX(COALESCE(closedAt, 0)) >= ?`,
+    ).all(sinceMs) as unknown as { program: string }[];
+    const newest = this.db.prepare('SELECT claimedBy FROM runs WHERE program = ? ORDER BY id DESC LIMIT 1');
+    const out: { program: string; claimedBy: string }[] = [];
+    for (const { program } of programmes) {
+      const row = newest.get(program) as { claimedBy: string | null } | undefined;
+      if (row !== undefined && row.claimedBy !== null) out.push({ program, claimedBy: row.claimedBy });
+    }
+    return out;
+  }
+
+  /** The first moment any LATER wave of `program` (wave above `afterWave`, work runs) left `planned`, from `run_events`, or
+   *  null when none has (D-8071, spec §7 row 4: what `overtaken` and its `since` read). */
+  programmeLeftPlannedAt(program: string, afterWave: number): number | null {
+    const row = this.db.prepare(
+      'SELECT MIN(e.at) AS at FROM run_events e JOIN runs r ON r.id = e.runId ' +
+      "WHERE r.program = ? AND r.wave > ? AND r.kind = 'work' AND e.fromState = 'planned' AND e.toState <> 'planned'",
+    ).get(program, afterWave) as { at: number | bigint | null } | undefined;
+    return row === undefined || row.at === null ? null : Number(row.at);
   }
 
   /** The RECORD of the dead-coordinator breaker's held set (review 381, F1; since D-4857 the typed state,
@@ -4724,7 +4835,7 @@ export class CoordStore {
    * The writer `programs.state` had none of, outside `openRun`'s hardcoded
    * `'active'` at first open (fix, found in a later Task 3 review — D-26):
    * the two `INSERT … ON CONFLICT(slug) DO UPDATE` sites (`openRun`,
-   * `reconstruct`) both only ever touch `title` in their conflict arm, so a
+   * `reconstruct`) both only ever touched `title` in their conflict arm (D-8071: now neither writes it), so a
    * program could never be retired. That silently disarmed
    * `soleActiveCoordinator()` the moment a SECOND program existed — its
    * "single active program" guard reads `ambiguous` (`active.length !== 1`)
@@ -5017,6 +5128,12 @@ export class CoordStore {
       // Migration 41 (D-8068). The column says a child was asked for or inherited, and the session says one was bound:
       // a spawn that never bound, or a spent run `clearSession` emptied, held no child and has no chip to wait for.
       hadChild: row.hadChild === 1 && row.sessionId !== null,
+      // Migration 43 (D-8071): the title the run was opened with, null for a run opened before it.
+      runTitle: row.runTitle,
+      // Migration 44 (D-8071): who closed the run and why, from the columns `advanceInner` writes beside `closedAt`. A
+      // stored word outside the three is no `closedBy`; the detail is the redacted form.
+      closedBy: isRunClosedBy(row.closedBy) ? row.closedBy : null,
+      closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
     };
   }
 
@@ -7225,7 +7342,7 @@ export class CoordStore {
       const now = Date.now();
       this.db.prepare(
         'INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?) ' +
-        'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
+        'ON CONFLICT(slug) DO NOTHING',
       ).run(input.ledger.slug, input.ledger.title, now, 'active');
 
       const doneWaves = input.ledger.waves.filter((w) => w.handoffCommit !== null);

@@ -192,6 +192,11 @@ nowhere else.
 sessions a run was bound to (current and predecessors) so it can report their spend. It reads the trail
 for that one join and for nothing else; the 2026-09-14 measurement is unaffected.
 
+**Addendum, 2026-11-08** (D-8071): `GET /api/runs/:id/record` calls `coord.runEvents(id)` too, to serve the
+run's lasting record: its trail, stall observations folded one row per span, the newest 200 kept and each
+`detail` redacted. It reads one run's own trail for that answer and for nothing else; the 2026-09-14
+measurement is unaffected.
+
 The single counted event **at the time of this read** is run 43 (programme `account-pools`, wave 5/6),
 `causedBy=coordinator`, at `2026-09-11T12:02:33.805Z` — the only `legacy-home-project` event this read
 counted (count = 1, first = last, at read time), so this read projected the rolling window clearing

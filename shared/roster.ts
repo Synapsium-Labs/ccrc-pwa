@@ -322,6 +322,10 @@ export function inRoster(roster: Roster, v: unknown): boolean {
  *  Paste versus mint is NOT a roster fact and is not here: it lives in the lane state (`mintedAt`). */
 export type RosterKind = 'sign-in' | 'token' | 'codex' | 'key';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const ROSTER_KIND_MAP: Record<RosterKind, true> = { 'sign-in': true, token: true, codex: true, key: true };
+export const ROSTER_KINDS: readonly RosterKind[] = Object.keys(ROSTER_KIND_MAP) as RosterKind[];
+
 /** The lane-kind half of `RosterWire` (`shared/api.ts`), with one home. Every field is a closed union or a
  *  boolean, so none can carry free text (`test/types/bypasses/b8-roster-wire-open-string.ts` pins that). Every
  *  field is OPTIONAL and ABSENT when the entry does not say, never defaulted: an older server omits all four, and

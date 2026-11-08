@@ -933,7 +933,7 @@ describe('sweepStalls: wiring', () => {
     const claims = at('this.lapseClaims(sessions, registryRead.refused);');
     // `void` is the pin that the sweep is dispatched and never awaited: `inlinedSourceOf` splices a helper before its statement, so the keyword stays in front of the call.
     const lane = at('void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(');
-    expect(src).toContain('this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));');   // the pids are assembleFleet's own
+    expect(tick, 'the pids are the assembly\'s own output (#2399)').toContain('const { sessions, panePids } = await timed(this.deps.perf, \'assemble\', assembleFleetWithPanePids(');
     const primed = at('this.primed = true;');
     expect(claims).toBeGreaterThan(-1);
     expect(lane).toBeGreaterThan(claims);

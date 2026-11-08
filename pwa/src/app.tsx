@@ -148,11 +148,20 @@ export function App(): ReactNode {
   // that route remounts the fleet column, so its scroll is not kept across an
   // item visit (departure pl9-fleet-column-remounts).
   const detail = useRef<HTMLElement | null>(null);
+  // EXCEPT opening or closing a run in a broad runs column: there the pane's scroller IS the board's list, the board
+  // stays mounted beside the run, and zeroing it would throw the operator's place away and scroll the row they just
+  // opened out of view. `RunsScreen` marks that layout with `data-column="broad"`.
+  const lastRoute = useRef<{ route: string | null; search: string }>({ route, search });
   useLayoutEffect(() => {
     const pane = detail.current;
+    const prev = lastRoute.current;
+    lastRoute.current = { route, search };
+    const runsBoth = (prev.route === 'runs' || prev.route === 'run') && (route === 'runs' || route === 'run');
+    const keepPlace = runsBoth && prev.search === search && pane !== null
+      && pane.querySelector('.runs-column[data-column="broad"]') !== null;
     // Null only if the shell has not mounted; on mobile the document scrolls
     // rather than this pane, so the write is a harmless no-op there.
-    if (pane !== null) pane.scrollTop = 0;
+    if (pane !== null && !keepPlace) pane.scrollTop = 0;
   }, [path, search]);
   // THE DETAIL LADDER, behind its own RenderBoundary (design 2026-10-01
   // section 4.12). Rendered INSIDE `.shell-detail` below, so a screen that
@@ -178,6 +187,11 @@ export function App(): ReactNode {
     <MailScreen />
   ) : route === 'runs' ? loading(
     <RunsScreen />
+  ) : route === 'run' ? loading(
+    // The runs screen again, with the run open: a broad column draws it in the pane beside the board, a narrower one as
+    // the run's page. Same element in the same place as `/runs`, so the board stays mounted when a row opens. The row's
+    // `accepts` kept the grammar to a canonical positive safe integer, so `Number` is exact.
+    <RunsScreen openId={Number(at!.param)} />
   ) : settings ? loading(
     <SettingsScreen />
   ) : route === 'digest' ? loading(

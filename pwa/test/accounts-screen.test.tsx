@@ -581,9 +581,9 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     expect(document.activeElement).toBe(rowOf('claude'));
   });
 
-  // Chat reading Task L review 1606 F6 (desktop-polish Task C14, D-8110): the runs board holds its arrival while its row is missing
-  // (`useArrival`'s `hold`); this screen holds nothing. A lane removed from the roster and from usage while `?lane=` stays open, then
-  // restored under the same value, has gone missing and come back, and the row arrives again: one scroll for each stay of the lane.
+  // Chat reading Task L review 1606 F6 (desktop-polish Task C14, D-8110): this screen does not hold an arrival across a missing row.
+  // A lane removed from the roster and usage while `?lane=` stays open, then restored under the same value, arrives again:
+  // one scroll for each stay of the lane. The runs board's old arrival, unlike this Accounts case, was superseded by #2478.
   it('a lane hidden and then restored under the same ?lane= arrives again, once for each stay', async () => {
     stubAccounts(twoLanes);
     navigate('/accounts?lane=claude9');

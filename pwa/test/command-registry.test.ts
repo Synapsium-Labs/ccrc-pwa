@@ -1,6 +1,6 @@
 // The command registry (D-5103): pure ranking, and the base commands' own
 // invariants. `command-layer.test.tsx` drives the palette and the keys.
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,8 @@ import {
   available, COMMAND_FIELD_WORDS, rankCommands, SEARCH_EMPTY, SEARCH_MIN, type Command, type CommandContext,
 } from '../src/command/registry';
 import { baseCommands, fleetOrder, GO_TO, SESSION_COMMANDS } from '../src/command/commands';
+import { runEntries } from '../src/command/runEntries';
+import { sessionEntries } from '../src/command/sessionEntries';
 import { matchRoute, ROUTES } from '../src/lib/routes';
 import { fleetSession } from './fleetFixture';
 import { fleetTree } from '../src/fleet/fleetTree';
@@ -131,6 +133,8 @@ describe("the ids are W2's door table's", () => {
       'session-restore', 'open-terminal', 'session-pr',
       // Desktop polish T3e (D-6385): the inspector's hide and show, offered only while a part places a rail.
       'toggle-inspector',
+      // D-8121: the ⋯ menu's Browser tools item, the session's own browser MCP choice.
+      'session-browser',
     ].sort());
   });
 });
@@ -224,7 +228,8 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
     // the new command's own place is pinned in the empty list below.
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab');
+    // D-8121 reads it without session-browser the same way; its own rank row and place are pinned below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
@@ -240,6 +245,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // The reader lab plan, Task 10: the one command whose title holds "reader", placed right after R19's page.
     expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['go-reader-lab']);
     expect(empty.indexOf('go-reader-lab'), 'after R19\'s page').toBe(empty.indexOf('go-measure-highlighting') + 1);
+    // D-8121: the one command whose title holds "browser", placed right after Change effort, as the menu places it.
+    expect(rankCommands('browser', baseCommands()).map((c) => c.id)).toEqual(['session-browser']);
+    expect(empty.indexOf('session-browser'), 'after Change effort').toBe(empty.indexOf('session-effort') + 1);
   });
 
   // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.
@@ -287,5 +295,50 @@ describe("the palette's words and the session builder each have one home (D-6714
   it('one session builder', () => {
     const holders = files(SRC).filter((f) => strings(f).some((s) => s.startsWith('open-session-'))).map(rel);
     expect(holders).toEqual(['command/sessionEntries.ts']);
+  });
+});
+
+describe('the run entries (D-8072, spec 2026-11-04 §8.3)', () => {
+  const nav: string[] = [];
+  const ctx = { navigate: (h: string) => { nav.push(h); } } as unknown as CommandContext;
+  const openRun = (over: Partial<RunSummary>): RunSummary => ({ id: 11, program: 'programme-a', programTitle: 'Programme A', runTitle: null,
+    wave: 2, waveOf: 3, kind: 'work', reviews: null, state: 'working', project: 'project-a', workspace: 'lane-a', branch: 'ws/lane-a', closedAt: null, ...over }) as unknown as RunSummary;
+  const titles = (q: string, runs: RunSummary[], sessions: FleetSession[] = []): string[] =>
+    rankCommands(q, [...baseCommands(), ...sessionEntries(sessions, runs, 'top'), ...runEntries(q, runs)]).map((c) => c.title);
+
+  it('a number offers Open run 410, which goes to /runs/410', () => {
+    for (const q of ['410', '#410', 'run 410']) {
+      const found = rankCommands(q, runEntries(q, []));
+      expect(found[0]!.title, q).toBe('Open run 410');
+      nav.length = 0;
+      found[0]!.run(ctx);
+      expect(nav).toEqual(['/runs/410']);
+    }
+  });
+
+  it('open runs join the entries by the same terms, ranked after sessions', () => {
+    const s = fleetSession({ id: 'lane-a-session', project: 'project-a', workspace: 'lane-a', bucket: 'idle' });
+    const order = titles('lane-a', [openRun({}), openRun({ id: 12, state: 'done' })], [s]);
+    const at = order.findIndex((t) => t.startsWith('Run 11'));
+    expect(at).toBeGreaterThan(order.findIndex((t) => t.includes('lane-a-session') || t === 'lane-a-session') );
+    expect(order.some((t) => t.startsWith('Run 12'))).toBe(false);
+  });
+
+  it('other text offers Find runs matching, which opens /runs?q=', () => {
+    const found = rankCommands('xyz abc', runEntries('xyz abc', []));
+    expect(found.map((c) => c.title)).toEqual(["Find runs matching 'xyz abc'"]);
+    nav.length = 0;
+    found[0]!.run(ctx);
+    expect(nav).toEqual(['/runs?q=xyz+abc']);
+  });
+
+  it('the palette reads no server', () => {
+    const src = readFileSync(path.join(__dirname, '../src/command/runEntries.ts'), 'utf8');
+    expect(src).not.toMatch(/lib\/api|fetch\(/);
+  });
+
+  it('entry ids do not collide with the base commands', () => {
+    const ids = [...baseCommands().map((c) => c.id), ...runEntries('11', [openRun({})]).map((c) => c.id)];
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

@@ -1193,11 +1193,13 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // word inside an unrelated comment added 60 lines up and silently EMPTIED
     // this slice, inverting both ordering pins (stage-4 branch review, D-145).
     const agentBranch = deploySh.slice(deploySh.indexOf('if [ "$TARGET" = "agent" ]'), deploySh.indexOf('\nelse'));
-    expect(agentBranch, 'the agent branch no longer try-restarts claude-session@*')
-      .toContain('try-restart "claude-session@*"');
+    // D-8122: the sweep restarts the running units by name, in batches, never with the glob.
+    expect(agentBranch, 'the agent branch no longer try-restarts the claude-session@ supervisors')
+      .toContain('try-restart $(printf "%s\\n" $chunk)');
+    expect(agentBranch, 'the agent branch restarts with the glob again').not.toContain('try-restart "claude-session@*"');
     // After the agent chain, so a broken agent fails the deploy before any
     // supervisor is touched…
-    const sweepAt = agentBranch.indexOf('try-restart "claude-session@*"');
+    const sweepAt = agentBranch.indexOf('try-restart $(printf "%s\\n" $chunk)');
     const agentCmdAt = agentBranch.indexOf('"$AGENT_CMD"');
     expect(agentCmdAt).toBeGreaterThan(-1);
     expect(sweepAt, 'the sweep must run after the agent chain, not before it')
@@ -1260,7 +1262,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(sweep, 'SWEEP_CMD is no longer a single-quoted assignment').not.toBeNull();
     const body = sweep![1]!;
     const guardAt = body.indexOf('KillMode=process');
-    const restartAt = body.indexOf('try-restart "claude-session@*"');
+    const restartAt = body.indexOf('try-restart $(printf "%s\\n" $chunk)');
     expect(guardAt, 'the sweep does not check KillMode at all').toBeGreaterThan(-1);
     expect(guardAt, 'the KillMode guard must precede try-restart, not follow it')
       .toBeLessThan(restartAt);
@@ -1345,7 +1347,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
     });
     expect(ok.status).toBe(0);
     // The stub echoes `$*` unquoted, so the recorded line has no quotes.
-    expect(readFileSync(path.join(home, 'calls'), 'utf8')).toContain('try-restart claude-session@*');
+    // D-8122: this box lists no running unit, so there is no batch to restart; the sweep ran to its end (the
+    // post-sweep FAILED listing) and never used the glob.
+    const calls = readFileSync(path.join(home, 'calls'), 'utf8');
+    expect(calls).toContain('list-units claude-session@* --state=failed');
+    expect(calls).not.toContain('try-restart claude-session@*');
   });
 
   it('a DROP-IN that overrides KillMode refuses too — the pre-flight reads the EFFECTIVE value', () => {
@@ -1399,7 +1405,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
     });
     expect(ok.status).toBe(0);
-    expect(readFileSync(path.join(home, 'calls'), 'utf8')).toContain('try-restart claude-session@*');
+    // D-8122: by name, never the glob.
+    expect(readFileSync(path.join(home, 'calls'), 'utf8')).toMatch(/try-restart claude-session@[^*\s]+\.service/);
   });
 
   /** A box the sweep can run against: the unit file this deploy just copied, a
@@ -1483,7 +1490,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       { recursive: true, force: true });
     const ok = runSweep(box.home);
     expect(ok.status).toBe(0);
-    expect(box.calls()).toContain('try-restart claude-session@*');
+    expect(box.calls()).toContain('try-restart claude-session@good.service claude-session@bad.service');
   });
 
   it('a unit that is ACTIVATING at sweep time is pre-flighted too — `try-restart` acts on it', () => {
@@ -1520,7 +1527,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       { recursive: true, force: true });
     const ok = runSweep(box.home);
     expect(ok.status).toBe(0);
-    expect(box.calls()).toContain('try-restart claude-session@*');
+    expect(box.calls()).toContain('try-restart claude-session@rising.service');
   });
 
   it('coord.db is snapshotted (WAL folded in) into the backup set before the server rsync', () => {

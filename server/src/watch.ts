@@ -4,7 +4,7 @@ import type { WatcherDeps } from './deps.js';
 import { timed } from './perf/recorder.js';
 import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
-import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
+import { assembleFleetWithPanePids, fleetNow, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
 import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
@@ -43,7 +43,7 @@ import {
 import { askActions } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
-// module — `watch.ts` imports `assembleFleet` from it — so they now live
+// module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
 import { ASK_SETTLE_TICKS } from './askwindow.js';
@@ -158,7 +158,9 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
+import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
+import { runStuckPass } from './coord/runStuckPass.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
@@ -244,7 +246,9 @@ import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, ty
 import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
-import { wakeAdmit, wakeRefund, type WakeAdmission, type WakeKind } from './coord/wakeBudget.js';
+import {
+  WAKE_GATE_DEFAULT, WAKE_GATE_LINE_MS, wakeAdmit, wakeMemoryGate, wakeRefund, wakeRefusalWord, type WakeAdmission, type WakeKind, type WakeMemoryRefusal, type WakeRefused,
+} from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import { rollPass, type RollSweepMemory } from './rollLane.js';
@@ -353,7 +357,7 @@ interface StallResolution {
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
- * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid `assembleFleet` read for every alive
+ * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid the assembly read (`FleetAssembly.panePids`) for every alive
  * row: `null` when tmux answered none, and no entry for a pane that was not alive. `records` holds the registry rows
  * this tick read. REQUIRED: the lane has no pid or uuid read of its own, so production and the tests run one path.
  */
@@ -1255,6 +1259,8 @@ export class FleetWatcher {
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
+  /** D-8122: when each wake-gate word was last journalled (`wakeGateLine`). In memory: a restart says it once more. */
+  private readonly wakeGateLinesAt = new Map<string, number>();
   /** Delivery ids whose `mail-gate-busy-shadow` "would deliver" line has been
    *  logged (worker stall watch §5.1). Before `mail-gate-busy` is armed, the
    *  operator checks each line against the session's transcript for 48 h, so
@@ -1345,6 +1351,9 @@ export class FleetWatcher {
    *  its memory per claimant (IN MEMORY: the run of crashed passes, the backoff, the last outcome and the report — the
    *  durable half, the first-dead anchor, is `coord.db`'s `dead_claimants`); its breaker as the last pass measured it;
    *  and its attention list, which `emitCoord` reads. */
+  /** The stuck verdict's one in-memory reader (D-8071; spec 2026-11-04 §7, A45). `sweepRunStuck` is its one writer; the runs
+   *  frame, its cold start and the run routes read it (`withVerdicts`), and the abandon arm reads the run's reason from it. */
+  readonly runVerdicts: RunVerdicts = createRunVerdicts();
   private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
   private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
   /** The breaker's memory: the members it holds with every first-dead instant they have carried, released only on evidence
@@ -1642,6 +1651,8 @@ export class FleetWatcher {
       runLocal: updateRunner ?? null,
       onAccepted: () => this.triggerInventory(),
       recordMove: (r) => { this.recordMoveFeed(r); },
+      // D-8122: the update hold reads `FleetHealth.psi`'s own level (the banner's), not the wake gate's memory level.
+      hostPressure: () => this.pressureLane.block(true)?.level ?? null,
     }, Date.now());
   }
 
@@ -2210,14 +2221,40 @@ export class FleetWatcher {
    * rule is `wakeAdmit` (L1); this is the one list it is applied to.
    */
   admitWake(kind: WakeKind, id: string): boolean {
-    return this.admitWakeAt(kind, id, Date.now());
+    return this.wakeVerdictAt(kind, id, Date.now()).admit;
   }
 
-  private admitWakeAt(kind: WakeKind, id: string, now: number): boolean {
+  /** `admitWake` with the reason a refusal had (D-8122): `wake-budget` for the window, the memory gate's word for the
+   *  gate. The mail lane reads it to name the gate on the delivery. */
+  wakeVerdict(kind: WakeKind, id: string): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
+    return this.wakeVerdictAt(kind, id, Date.now());
+  }
+
+  /** D-8122: the memory gate first (an `auto` wake only; nothing is recorded when it refuses), then the window. */
+  private wakeVerdictAt(kind: WakeKind, id: string, now: number): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
+    if (kind === 'auto') {
+      const cfg = (this.deps.cfg as Partial<typeof this.deps.cfg>).wakeGate ?? WAKE_GATE_DEFAULT;
+      const g = wakeMemoryGate(this.pressureLane.memoryReading(), cfg);
+      if (!g.admit) {
+        this.wakeGateLine(`refused:${g.refused}`, now, `ccrc-server: wake gate: an automatic wake of ${id} waits for a later pass (${wakeRefusalWord(g.refused)}; D-8122)`);
+        return { admit: false, refused: g.refused };
+      }
+      for (const n of g.notes) {
+        this.wakeGateLine(n, now, `ccrc-server: wake gate: ${n}: the node sent no ${n === 'pressure-unmeasured' ? 'fresh pressure reading' : 'headroom reading'}, so the automatic wake of ${id} is admitted (fail open; D-8122)`);
+      }
+    }
     const r = wakeAdmit(this.wakeRecent, now, kind);
     this.wakeRecent = r.recent;
     if (r.admit) this.lastWakeAt.set(id, now);
-    return r.admit;
+    return { admit: r.admit, refused: r.admit ? null : 'wake-budget' };
+  }
+
+  /** One wake-gate journal line per word per `WAKE_GATE_LINE_MS`, so a held fleet says so without a line per pass. */
+  private wakeGateLine(word: string, now: number, line: string): void {
+    const at = this.wakeGateLinesAt.get(word);
+    if (at !== undefined && now - at < WAKE_GATE_LINE_MS) return;
+    this.wakeGateLinesAt.set(word, now);
+    console.warn(line);
   }
 
   /**
@@ -2226,10 +2263,11 @@ export class FleetWatcher {
    * takes this admission back out of the window and puts the session's last wake back as it stood, so a roll ccd
    * refused, or whose wake failed, neither eats `WAKE_BURST` nor delays the mail lane's wake of that session.
    */
-  admitWakeRefundable(id: string): WakeAdmission | null {
+  admitWakeRefundable(id: string): WakeAdmission | WakeRefused | null {
     const now = Date.now();
     const before = this.lastWakeAt.get(id);
-    if (!this.admitWakeAt('auto', id, now)) return null;
+    const v = this.wakeVerdictAt('auto', id, now);
+    if (!v.admit) return v.refused === 'wake-budget' || v.refused === null ? null : { refused: wakeRefusalWord(v.refused) };
     let spent = true;
     return {
       refund: () => {
@@ -2703,6 +2741,8 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the ORPHAN-WORKTREE lane (fleet disk retention, D-6631), a fifth sibling at the
       // same cadence and under the same pause. It reads no tick listing; its census is its own.
       void this.sweepOrphanTrees().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the STUCK VERDICT's pass (D-8071) — read-only, on its own row, and it reads no tick listing.
+      void this.sweepRunStuck().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -2719,8 +2759,8 @@ export class FleetWatcher {
       // generation per sweep. Awaiting it would put the dialog detector and
       // the busy->idle push behind a journal read.
       void this.sweepLifecycle().catch(() => { /* one bad sweep must not kill the poll */ });
-      // `records` PASSED IN, never re-read here: `assembleFleet` would
-      // otherwise take its OWN read (`records ?? await readRegistry(...)`),
+      // `records` PASSED IN, never re-read here: `assembleFleetWithPanePids` would
+      // otherwise take its OWN read (`readRegistryMeasured`, when `records` is absent),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
       // in remote mode, 4 [registry-read-census:fields] unconditional reads and
       // one per other listed field per session, so a 24-session fleet's floor is 97
@@ -2747,9 +2787,12 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const panePids = new Map<string, number | null>();
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
-      const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to the assembly as `limitsRead`
+      const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
+        pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
+        hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
+        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits,
+      }));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
       this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
@@ -2891,7 +2934,7 @@ export class FleetWatcher {
       }
       // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
       // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
-      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
+      // the assembly returned (`FleetAssembly.panePids`) and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
       // listing's refused ids too, so a refused worker or claimant holds as unmeasured rather than reading as absent
       // from `sessions` (`tick-lanes-hold-a-refused-id`). It is never awaited: its reads are async, so it cannot sit in
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
@@ -2983,7 +3026,8 @@ export class FleetWatcher {
       }
       // ARCH-61 (#796): `childIds`, decided through `childrenOf` against this tick's reading of the fleet's sessions.
       // D-7334: each run's last move, in one read for the frame; a failed read leaves the field off (`withLastMoves`).
-      runs = withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`));
+      // D-8071: the stuck verdict's fields, from the one in-memory reader (`withVerdicts`); an empty reader stamps nothing.
+      runs = withVerdicts(this.runVerdicts, withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`)));
     }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
@@ -5888,6 +5932,17 @@ export class FleetWatcher {
     }
   }
 
+  /** The stuck verdict's lane (D-8071; spec 2026-11-04 §7): one read-only pass a minute, one at a time, filling `runVerdicts`. */
+  async sweepRunStuck(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('runStuck', () => runStuckPass({
+      coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, verdicts: this.runVerdicts,
+      journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()),
+      now: () => Date.now(),
+    }));
+  }
+
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
   private async deadCoordinatorPass(
     coord: WatcherCoordPort, records: readonly SessionRecord[], names: readonly string[], now: number,
@@ -8006,9 +8061,12 @@ export class FleetWatcher {
           // 60 s); `due` is ordered oldest first, so the budget goes to the oldest deliveries. A delivery the budget or
           // the floor defers stays outstanding under the same gate and is looked at again next sweep. `mail-disabled`
           // returns before this loop, so it never wakes anything. A kickoff is system mail and wakes through here.
-          gated(d, 'hibernated');
+          // D-8122: the memory gate is asked inside the budget's admission; a delivery it holds names `wake-pressure`,
+          // not `hibernated`, so the operator sees why the sleeper was not woken. Either way it stays outstanding.
           const lastWake = this.lastWakeAt.get(d.toId);
-          if ((lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS) && this.admitWake('auto', d.toId)) {
+          const wv = lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS ? this.wakeVerdict('auto', d.toId) : null;
+          if (wv !== null && wv.refused !== null && wv.refused !== 'wake-budget') gated(d, 'wake-pressure'); else gated(d, 'hibernated');
+          if (wv?.admit === true) {
             const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));
             if (!res.ok) console.warn(`ccrc-server: mail: waking hibernated ${d.toId} failed (${res.stderr.trim() || 'no stderr'}) — its mail stays queued`);
           }

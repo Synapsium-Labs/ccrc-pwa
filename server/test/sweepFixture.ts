@@ -107,6 +107,10 @@ export interface BoxOpts {
   tmpdir?: 'dir' | 'file';
   /** Plants `<home>/.ccrc/update.json` as a report owned by `pid`. */
   report?: { pid: number; phase?: string };
+  /** D-8122: `CCRC_SWEEP_BATCH` for the sweep (default 999: one batch); `null` leaves it unset (the setting's default). */
+  batch?: number | null;
+  /** D-8122: the text of `<home>/proc/pressure/memory` (`CCRC_PROC_ROOT`); absent, there is no pressure file. */
+  psi?: string;
 }
 
 export interface Box { home: string; env: NodeJS.ProcessEnv }
@@ -304,7 +308,16 @@ export function makeBox(o: BoxOpts): Box {
     CCRC_VERIFY_WINDOW: '0',
     CCRC_VERIFY_LOG_LINES: '5',
     CCRC_VERIFY_STOP_INTERVAL: '0',
+    // D-8122: every case written before the batches sweeps its units as ONE batch, which is what each was written to
+    // measure (one shared verify window, a signal mid-batch); `BoxOpts.batch` names a size, `null` leaves it unset.
+    ...(o.batch === null ? {} : { CCRC_SWEEP_BATCH: String(o.batch ?? 999) }),
+    // No case reads the box's own /proc/pressure: `BoxOpts.psi` plants the file the sweep's wait reads.
+    CCRC_PROC_ROOT: join(home, 'proc'),
   };
+  if (o.psi !== undefined) {
+    mkdirSync(join(home, 'proc', 'pressure'), { recursive: true });
+    writeFileSync(join(home, 'proc', 'pressure', 'memory'), o.psi);
+  }
   return { home, env: ccrcContainedEnv(home, base, { managers: false, curl: 'poison' }) };
 }
 

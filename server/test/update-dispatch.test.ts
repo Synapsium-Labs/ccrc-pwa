@@ -229,7 +229,7 @@ describe('planDispatch — the halt (§18 "`failed` halts dispatch", "a provenan
 describe('planDispatch — who is considered', () => {
   it('an unreachable node is not considered: no move, no note, no met', () => {
     const p = plan(view(fleet({ ...ask('v0.0.10'), reachable: false })));
-    expect(p).toEqual({ gate: OPEN, move: null, refusals: [], met: [] });
+    expect(p).toEqual({ gate: OPEN, move: null, refusals: [], held: [], met: [] });
     expect(plan(view(fleet({ ...ask('v0.0.9'), reachable: false }))).met).toEqual([]);
   });
 
@@ -259,7 +259,7 @@ describe('planDispatch — who is considered', () => {
 
   it('a request whose kind this build cannot read moves nothing, and auto does not take over', () => {
     const p = plan(view(fleet({ desiredTag: 'v0.0.10', requestedTag: 'v0.0.10', requestedKind: null }), 'stable'));
-    expect(p).toEqual({ gate: OPEN, move: null, refusals: [], met: [] });
+    expect(p).toEqual({ gate: OPEN, move: null, refusals: [], held: [], met: [] });
   });
 });
 

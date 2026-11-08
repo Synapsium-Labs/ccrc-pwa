@@ -64,11 +64,19 @@ export interface DispatchRow {
 /** One live node as the dispatcher sees it: its row, the `auto` its intent resolved to, and the tags THIS node
  *  refused (decision 16 — another node's refusal is not an input). */
 export interface DispatchNodeView { row: DispatchRow; auto: AutoMode; refusedTags: ReadonlySet<string> }
-export interface DispatchInput { nodes: readonly DispatchNodeView[]; releases: readonly EligibilityRow[] }
+/** `autoHeld` (D-8122): a cleared AUTOMATIC move this predicate names a reason for is held — listed in `held`, never
+ *  the move — and the plan keeps looking, so a held auto move never stands in front of a request after it. Absent:
+ *  nothing is held. A requested move never reads it. */
+export interface DispatchInput {
+  nodes: readonly DispatchNodeView[]; releases: readonly EligibilityRow[];
+  autoHeld?: (v: DispatchNodeView) => string | null;
+}
 /** `viaLink` = the row has an agent (`agentOps` not NULL) — the op rides the link; false = the server's own
  *  row, spawned locally (decision 11). */
 export interface DispatchMove { nodeId: string; kind: RequestKind; target: string; source: 'request' | 'auto'; viaLink: boolean; detail: string }
 export interface PlannedRefusal { nodeId: string; refusal: DispatchRefusal; detail: string }
+/** D-8122: a cleared auto move `autoHeld` held, with its reason; the act notes it on the row. */
+export interface PlannedHold { nodeId: string; detail: string }
 export interface MetRequest { nodeId: string; tag: string }
 /** Over the live rows: `haltedBy` every halting row's nodeId, in nodeId order; `leaseHeldBy` the first busy
  *  row's, or null. */
@@ -80,6 +88,8 @@ export interface DispatchPlan {
   /** One per considered IDLE node refused, in compareDispatchOrder. A refused `failed`/`reverted` row is not
    *  listed: its updateDetail is the verdict the halt reads, and a note must never overwrite it (Review Focus 5). */
   refusals: PlannedRefusal[];
+  /** D-8122: cleared auto moves held by `autoHeld`, in compareDispatchOrder (idle rows only, as refusals). */
+  held: PlannedHold[];
   /** D-3380 — an idle node already running its requested tag; settled by the act, never
    *  dispatched. */
   met: MetRequest[];
@@ -288,6 +298,7 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
   const haltedRow = gate.haltedBy.length > 0 ? ordered.find((v) => v.row.nodeId === gate.haltedBy[0]) ?? null : null;
   const met: MetRequest[] = [];
   const refusals: PlannedRefusal[] = [];
+  const held: PlannedHold[] = [];
   let move: DispatchMove | null = null;
   for (const v of ordered) {
     const row = v.row;
@@ -315,11 +326,16 @@ export function planDispatch(input: DispatchInput): DispatchPlan {
       }
       continue;
     }
+    const heldWhy = m.source === 'auto' && input.autoHeld !== undefined ? input.autoHeld(v) : null;
+    if (heldWhy !== null) {
+      if (row.updateState === 'idle') held.push({ nodeId: row.nodeId, detail: heldWhy });
+      continue;
+    }
     if (move === null && gate.leaseHeldBy === null) {
       move = { nodeId: row.nodeId, kind: m.kind, target: m.target, source: m.source, viaLink: row.agentOps !== null, detail: moveDetail(row, m) };
     }
   }
-  return { gate, move, refusals, met };
+  return { gate, move, refusals, held, met };
 }
 
 // ── the op's answer (wave 5, Task 5) ─────────────────────────────────────────

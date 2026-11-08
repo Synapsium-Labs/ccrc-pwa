@@ -120,7 +120,8 @@ describe('opening the palette', () => {
   it('says so when nothing matches', () => {
     render(<CommandLayer openNewSession={vi.fn()} />);
     const input = openPalette();
-    fireEvent.change(input, { target: { value: 'zzzzqq' } });
+    // One character: from SEARCH_MIN on, any text offers "Find runs matching" (D-8072).
+    fireEvent.change(input, { target: { value: 'z' } });
     expect(screen.queryAllByRole('option')).toHaveLength(0);
     expect(screen.getByText(SEARCH_EMPTY)).toBeTruthy();
   });
@@ -676,7 +677,9 @@ describe('the top search finds sessions (D-6714)', () => {
   });
 
   /** Every option's accessible name, in order (an option names itself by `aria-label` when it has one). */
-  const optionNames = (): string[] => screen.queryAllByRole('option').map((o) => o.getAttribute('aria-label') ?? o.textContent ?? '');
+  // The run entries (D-8072) offer "Find runs matching" for any typed text, so these session pins read the options without it.
+  const optionNames = (): string[] => screen.queryAllByRole('option')
+    .map((o) => o.getAttribute('aria-label') ?? o.textContent ?? '').filter((n) => !n.startsWith('Find runs matching'));
   const sessionOptions = (): string[] => optionNames().filter((n) => SESSION_NAMES.has(n));
   const type = (q: string): HTMLElement => {
     const input = screen.getByRole('combobox');
@@ -768,7 +771,7 @@ describe('the top search finds sessions (D-6714)', () => {
     render(<CommandLayer openNewSession={vi.fn()} />);
     openPalette();
     expect(screen.getByRole('combobox').getAttribute('placeholder')).toBe(COMMAND_FIELD_WORDS);
-    type('zzzzqq');
+    type('z');
     expect(screen.getByText(SEARCH_EMPTY)).toBeTruthy();
     type('');
     openSessionPage();

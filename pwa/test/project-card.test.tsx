@@ -596,7 +596,7 @@ describe('the pending child — a spawn the operator can watch arrive', () => {
 // the row does not. It is answered from the run rows themselves — never by
 // reading the run id out of the hold string, which `rundefs.ts` keeps
 // display-only and `run-routes.test.ts` scans `pwa/src` to enforce.
-describe('the held cell opens the run board when a run is actually on it (Task 5)', () => {
+describe('the held cell opens the run page when a run is actually on it (Task 5, D-8072)', () => {
   const heldWorker = sess({
     id: 'demo-still-cove', workspace: 'still-cove', held: 'program:build9b wave:1/3 run:10',
   });
@@ -608,13 +608,13 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
     expect(cell()?.tagName).toBe('BUTTON');
   });
 
-  it('leads to /runs, and not into the session underneath it', () => {
+  it('leads to /runs/<id>, and not into the session underneath it', () => {
     const onOpen = vi.fn();
     history.pushState(null, '', '/');
     render(<ProjectCard group={grp({ sessions: [heldWorker] })} runs={[childRun]} nowMs={FROZEN}
                         onOpen={onOpen} onActions={() => {}} />);
     fireEvent.click(cell()!);
-    expect(location.pathname).toBe('/runs');
+    expect(location.pathname).toBe('/runs/10');
     expect(onOpen).not.toHaveBeenCalled();
   });
 

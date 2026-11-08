@@ -37,7 +37,7 @@ function planned(c: CoordStore, over: { wave?: number } = {}): number {
 
 function request(c: CoordStore, id: number, over: Partial<RequestFacts> = {}): RequestFacts {
   return { step: 'request', read: c.run(id), brief: 'go', items: undefined, route: undefined, slug: undefined,
-    prefixes: PREFIXES, ...over };
+    intents: undefined, held: () => [], prefixes: PREFIXES, ...over };
 }
 
 /** A decision narrowed to its refusal, for the row assertions. */
@@ -83,6 +83,97 @@ describe('decideDispatch, the request step (ARCH-22)', () => {
     c.setSession(id, 'demo-bound');
     expect(outcomeOf(decideDispatch(request(c, id, { slug: 'next-one' }))))
       .toEqual({ ok: false, kind: 'bad-request', detail: 'slug: this run resumes its bound session; a slug names a fresh spawn only' });
+  });
+
+  it('a clean request carries its landing intent keys; absent and [] both mean none', () => {
+    const c = store(); const id = planned(c);
+    const keys = (intents: unknown) => { const d = decideDispatch(request(c, id, { intents })); return d.kind === 'go' ? d.plan.intentKeys : null; };
+    expect(keys(['#1', 'D-2'])).toEqual(['#1', 'D-2']);
+    expect(keys(undefined)).toEqual([]);
+    expect(keys([])).toEqual([]);
+  });
+
+  it('the landing intents grammar refuses in its own words', () => {
+    const c = store(); const id = planned(c);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: '#1' }))))
+      .toEqual({ ok: false, kind: 'bad-request', detail: 'intents: not an array' });
+  });
+
+  it('a review run naming a landing intent is bad-request', () => {
+    const c = store(); const id = planned(c);
+    c.db.prepare("UPDATE runs SET kind = 'review' WHERE id = ?").run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1'] }))))
+      .toEqual({ ok: false, kind: 'bad-request', detail: 'intents: a review run names no landing intents' });
+    expect(decideDispatch(request(c, id, { intents: [] })).kind).toBe('go');
+  });
+
+  const holdBy = (program: string, key = '#1') => (): never[] =>
+    [{ key, runId: 42, program }] as unknown as never[];
+
+  it("another programme's hold answers intent-held with the key and the holder", () => {
+    const c = store(); const id = planned(c);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1'], held: holdBy('prog-b') }))))
+      .toEqual({ ok: false, kind: 'refused', code: 'intent-held', key: '#1', holder: { runId: 42, program: 'prog-b' } });
+  });
+
+  it("the same programme's hold goes", () => {
+    const c = store(); const id = planned(c);   // the fixture run's programme is 'p'
+    expect(decideDispatch(request(c, id, { intents: ['#1'], held: holdBy('p') })).kind).toBe('go');
+  });
+
+  it("the first holder of another programme refuses, past the run's own", () => {
+    const c = store(); const id = planned(c);
+    const held = () => [{ key: '#1', runId: 7, program: 'p' }, { key: '#2', runId: 8, program: 'prog-b' }];
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1', '#2'], held }))))
+      .toMatchObject({ code: 'intent-held', key: '#2', holder: { runId: 8, program: 'prog-b' } });
+  });
+
+  it('no keys calls no thunk, and an earlier refusal calls none', () => {
+    const c = store(); const id = planned(c);
+    const boom = (): never => { throw new Error('the held thunk must not be called'); };
+    expect(decideDispatch(request(c, id, { held: boom })).kind).toBe('go');
+    expect(decideDispatch(request(c, id, { intents: [], held: boom })).kind).toBe('go');
+    c.db.prepare("UPDATE runs SET state = 'dispatched' WHERE id = ?").run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1'], held: boom })))).toMatchObject({ kind: 'bad-transition' });
+    c.db.prepare("UPDATE runs SET state = 'planned', sessionId = 'a/b' WHERE id = ?").run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1'], held: boom })))).toEqual({ ok: false, kind: 'bad-session' });
+  });
+
+  it('gate order: slug, then the intents grammar', () => {
+    const c = store(); const id = planned(c);
+    const d = decideDispatch(request(c, id, { slug: 'Bad Slug!', intents: '#1' }));
+    expect(d.kind === 'refused' && d.outcome.kind === 'bad-request' ? d.outcome.detail : null).toMatch(/^slug: must match /);
+  });
+
+  it('gate order: the intents grammar, then the review-run check', () => {
+    const c = store(); const id = planned(c);
+    c.db.prepare("UPDATE runs SET kind = 'review' WHERE id = ?").run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: '#1' })))).toMatchObject({ detail: 'intents: not an array' });
+  });
+
+  it('gate order: the intents grammar, then hold-invalid', () => {
+    const c = store(); const id = badHold(c);
+    c.db.prepare('UPDATE runs SET sessionId = NULL WHERE id = ?').run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: '#1' })))).toMatchObject({ kind: 'bad-request', detail: 'intents: not an array' });
+  });
+
+  it('gate order: the review-run check, then hold-invalid', () => {
+    const c = store(); const id = badHold(c);
+    c.db.prepare("UPDATE runs SET sessionId = NULL, kind = 'review' WHERE id = ?").run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1'] }))))
+      .toMatchObject({ kind: 'bad-request', detail: 'intents: a review run names no landing intents' });
+  });
+
+  it('gate order: the grammar, then the held check (a repeated key is bad-request, never read from the raw array)', () => {
+    const c = store(); const id = planned(c);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1', '#1'], held: holdBy('prog-b') }))))
+      .toMatchObject({ kind: 'bad-request', detail: 'intents: repeated key #1' });
+  });
+
+  it('gate order: bad-session, then intent-held', () => {
+    const c = store(); const id = planned(c);
+    c.db.prepare("UPDATE runs SET sessionId = 'a/b' WHERE id = ?").run(id);
+    expect(outcomeOf(decideDispatch(request(c, id, { intents: ['#1'], held: holdBy('prog-b') })))).toEqual({ ok: false, kind: 'bad-session' });
   });
 
   it('a stored session id that is not a registry id is bad-session', () => {

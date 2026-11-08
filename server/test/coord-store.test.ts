@@ -43,7 +43,7 @@ const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
 
 const openRun = (s: CoordStore, over: Partial<Parameters<CoordStore['openRun']>[0]> = {}) =>
-  s.openRun({ program: 'build4', title: 'Transcript surface', project: 'ccrc-pwa',
+  s.openRun({ program: 'build4', title: 'Transcript surface', programmeTitle: 'Transcript surface', project: 'ccrc-pwa',
               wave: 1, waveOf: 5, claimedBy: 'ccrc-pwa-coordinator', ...over });
 
 describe('CoordStore: runs', () => {
@@ -1786,7 +1786,7 @@ describe('CoordStore: programs', () => {
     // even after every one of its runs was done. This is the failure
     // scenario, demonstrated at the store level, and its fix.
     const s = store();
-    s.openRun({ program: 'p1', title: 'Program one', project: 'ccrc-pwa',
+    s.openRun({ program: 'p1', title: 'Program one', programmeTitle: 'Program one', project: 'ccrc-pwa',
                 wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordA' });
     expect(s.soleActiveCoordinator()).toBe('ccrc-pwa-coordA');
 

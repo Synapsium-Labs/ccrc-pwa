@@ -1014,6 +1014,54 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: 'the ON state of the same chip, same ground. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the pressed state — the one a reader taps to confirm — unmeasured',
   },
+  '.rf-label': {
+    under: ['var(--bg-page)'],
+    why: "the run board's search (RunFind, D-8072) sits in PageScaffold's body, which sets no background of its own (the box itself paints --bg-page), so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rf-head': {
+    under: ['var(--bg-page)'],
+    why: "the run board's search (RunFind, D-8072) sits in PageScaffold's body, which sets no background of its own (the box itself paints --bg-page), so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rf-link': {
+    under: ['var(--bg-page)'],
+    why: "the run board's search (RunFind, D-8072) sits in PageScaffold's body, which sets no background of its own (the box itself paints --bg-page), so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rf-state, .rf-line': {
+    under: ['var(--bg-page)'],
+    why: "the run board's search (RunFind, D-8072) sits in PageScaffold's body, which sets no background of its own (the box itself paints --bg-page), so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-note': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-head': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-kind-word': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-line, .rd-chips, .rd-warn': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-dispatch, .rd-reclaim-line, .rd-close': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-fact dt': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-trail-time, .rd-trail-by, .rd-trail-older': {
+    under: ['var(--bg-page)'],
+    why: "the run page's trail (RunTrail, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
+  '.rd-fact dd': {
+    under: ['var(--bg-page)'],
+    why: "the run page's text (RunDetailScreen, D-8072) sits in PageScaffold's body, which sets no background of its own, so its real ground is body's --bg-page (styles/base.css), the .mail-chip reasoning; the selector names no painted ancestor, so no route could ground it",
+  },
   '.mail-group-head': {
     under: ['var(--bg-page)'],
     why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",

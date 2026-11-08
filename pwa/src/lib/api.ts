@@ -3,7 +3,7 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WsAudit } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { RunsPageAnswer } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
@@ -42,6 +42,15 @@ export interface RollIdleView {
 
 // `ApiError` lives in `./apiError` (D-5897, ARCH-05), a leaf that imports nothing, so a pure word module can name
 // it without loading this fetch adapter. Re-exported: every existing import, and every screen, keeps its line.
+/** `GET /api/runs/:id/items`' answer: the wave's declared ledger, one row per item. */
+export interface RunItemsAnswer {
+  readonly ok: true;
+  readonly items: readonly { readonly id: number; readonly title: string; readonly state: WorkItemState; readonly claimedBy: string | null }[];
+}
+
+/** `GET /api/runs/:id/signals`' answer. */
+export interface RunSignalsAnswer { readonly ok: true; readonly signals: RunSignals }
+
 export { ApiError };
 // The read time limit (console speed, task C1) lives in `./readLimit`, this file being one the growth check holds.
 export { ApiTimeout, LONG_READ_MS, READ_TIMEOUT_MS, type ReadOpts } from './readLimit';
@@ -456,7 +465,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  an ordinary start's body is unchanged from before that row existed. */
     createSession: ({ crossPool, route, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
-      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow'>, string>>;
+      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow' | 'browser'>, string>>;
     }) => post('/api/sessions', {
       ...rest,
       ...(crossPool === true ? { crossPool: true } : {}),
@@ -713,6 +722,29 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  have accrued per the usage sweep; `spend` is unmeasured, with a reason, when
      *  the sweep cannot say. */
     run: (id: number) => getJson<{ ok: true; run: RunSummary; spend: RunSpend }>(`/api/runs/${id}`),
+    /** `GET /api/runs/find` (D-8071, spec 2026-11-04 §11.4): the lookup and the close-order list in one slim read. Open
+     *  runs come on the first page only; `next` walks closed runs. An older server reads the path as `GET /api/runs/:id`
+     *  and refuses it, which a caller reads as a failed search. */
+    findRuns: (q: RunFindQuery, opts?: ReadOpts) => {
+      const p = new URLSearchParams();
+      if (q.q !== undefined && q.q !== '') p.set('q', q.q);
+      if (q.scope !== undefined) p.set('scope', q.scope);
+      if (q.closedBy !== undefined) p.set('closedBy', q.closedBy);
+      if (q.closedSince !== undefined) p.set('closedSince', String(q.closedSince));
+      if (q.program !== undefined) p.set('program', q.program);
+      if (q.limit !== undefined) p.set('limit', String(q.limit));
+      if (q.beforeAt !== undefined) p.set('beforeAt', String(q.beforeAt));
+      if (q.beforeId !== undefined) p.set('beforeId', String(q.beforeId));
+      const qs = p.toString();
+      return getJson<RunFindAnswer>(`/api/runs/find${qs === '' ? '' : `?${qs}`}`, opts);
+    },
+    /** `GET /api/runs/:id/record` (D-8071, spec 2026-11-04 §11.5): any run's lasting record, open or closed, however old. One
+     *  read, no spend, no agent link. */
+    runRecord: (id: number, opts?: ReadOpts) => getJson<RunRecordAnswer>(`/api/runs/${id}/record`, opts),
+    /** `GET /api/runs/:id/items` (spec 2026-11-04 §8.4): the wave's declared ledger. Its first PWA caller is the run page. */
+    runItems: (id: number, opts?: ReadOpts) => getJson<RunItemsAnswer>(`/api/runs/${id}/items`, opts),
+    /** `GET /api/runs/:id/signals` (spec §8.4): the suite word and the failure kind the worker's last wave-done named. */
+    runSignals: (id: number, opts?: ReadOpts) => getJson<RunSignalsAnswer>(`/api/runs/${id}/signals`, opts),
     /** `POST /api/runs/:id/abandon` (spec §4.3, Task 12) — the operator's
      *  release valve for a wedged run, from the phone. The route (`server/src
      *  /coord/routes.ts:844`) reads NO body at all — `{intent:'abandon'}` is

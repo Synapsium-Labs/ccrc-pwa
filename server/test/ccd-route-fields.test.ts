@@ -154,7 +154,7 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     expect(swapLog()).toBe('');
   });
 
-  it('ROUTE_FIELDS is the seven-field record, in the spec\'s order', () => {
-    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact degraded inert');
+  it('ROUTE_FIELDS is the eight-field record, in the spec\'s order (`browser` after `compact`, D-8121)', () => {
+    expect(h.sh('printf "%s " "${ROUTE_FIELDS[@]}"').trim()).toBe('class effort subagent workflow compact browser degraded inert');
   });
 });

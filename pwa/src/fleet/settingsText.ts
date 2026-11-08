@@ -322,6 +322,12 @@ export const SETTINGS_CARDS = {
       purpose: 'Restarts an idle coordinator onto the current ccrc release, resuming its conversation, once it has been '
         + 'quiet for 90 minutes. Other sessions pick up a new release when they next start.',
     },
+    /** D-8121: the browser MCP servers' box default and what the fleet's running sessions use, before Roll idle sessions. */
+    browser: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Browser tools',
+      purpose: 'Whether fleet sessions start the browser MCP servers (Playwright, Chrome DevTools). Off by default: '
+        + 'a session that needs a browser asks for one.',
+    },
     /** D-7902: the deliberate stop's pane-scope switch, after Roll idle sessions, one of the stops it reaches. */
     paneScopeStop: {
       scope: SETTINGS_SCOPE.fleet, title: PANE_SCOPE_STOP_TEXT.title, purpose: PANE_SCOPE_STOP_TEXT.purpose,

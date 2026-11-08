@@ -11,7 +11,7 @@ import { stateWordFor } from '../../shared/accounts';
 import type { AccountUsage, LaneWire, RosterWire } from '../../shared/api';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { COPY_FAILED } from '../src/fleet/TroubleCard';
-import { STATE_LAMPS, WEEKLY_ONLY } from '../src/fleet/accountWords';
+import { fiveHourWords, NO_FIVE_HOUR, STATE_LAMPS, WEEKLY_ONLY } from '../src/fleet/accountWords';
 import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { declValue, rulesFor, stripComments } from './cssRule';
@@ -185,6 +185,38 @@ describe('the Refined Accounts card: one state word per lane (D-7718)', () => {
     expect(e.querySelectorAll('.acct-meter')).toHaveLength(1);
     // Only a Codex lane: another lane's unmeasured 5h still reads "—".
     expect(within(card('lane-a')).queryByText(WEEKLY_ONLY)).toBeNull();
+  });
+
+  // D-8120: an Anthropic lane whose plan has no 5-hour window. The statusline writer marks its row
+  // `fiveWindowMinutes: 0`; the card says so in place of the empty 5h meter. A lane whose 5h is merely unreported
+  // (no marker) keeps the meter, and the Codex lane keeps its own words.
+  it('an Anthropic lane whose row has no 5-hour window says No 5-hour limit; an unreported 5h keeps its meter', () => {
+    const fiveLess = USAGE.map((u) =>
+      u.wrapper === 'lane-a' ? { ...u, five: null, fiveResetAt: nowSec - 259_200, fiveWindowMinutes: 0 }
+        : u.wrapper === 'lane-d' ? { ...u, five: null, fiveResetAt: null } : u);
+    act(() => { useFleetStore.setState({ usage: fiveLess, projected: { wrapper: 'lane-a', score: 1 }, roster: ROSTER, lanes: LANES }); });
+    render(<><AccountsScreen /><ToastHost /></>);
+    const a = card('lane-a');
+    expect(within(a).getByText(NO_FIVE_HOUR)).toBeInTheDocument();
+    expect(a.querySelector("[data-five='none']")).not.toBeNull();
+    expect(a.querySelectorAll('.acct-meter')).toHaveLength(1);
+    expect(within(a).queryByText(WEEKLY_ONLY)).toBeNull();
+    expect(within(card('lane-d')).queryByText(NO_FIVE_HOUR)).toBeNull();
+    expect(card('lane-d').querySelectorAll('.acct-meter')).toHaveLength(2);
+    expect(within(card('lane-e')).getByText(WEEKLY_ONLY)).toBeInTheDocument();
+    expect(within(card('lane-e')).queryByText(NO_FIVE_HOUR)).toBeNull();
+  });
+
+  it.each([
+    ['a Codex lane with no 5h figure', 'codex', { five: null }, WEEKLY_ONLY],
+    ['a Codex lane carrying the marker', 'codex', { five: null, fiveWindowMinutes: 0 }, WEEKLY_ONLY],
+    ['an Anthropic lane carrying the marker', 'token', { five: null, fiveWindowMinutes: 0 }, NO_FIVE_HOUR],
+    ['an Anthropic lane with one unreported 5h', 'token', { five: null }, null],
+    ['an Anthropic lane with a real 5h window', 'token', { five: 12, fiveWindowMinutes: 300 }, null],
+    ['a lane whose 5h figure came back, marker or not', 'token', { five: 12, fiveWindowMinutes: 0 }, null],
+    ['no usage row at all', 'token', undefined, null],
+  ] as const)('fiveHourWords: %s', (_label, kind, u, want) => {
+    expect(fiveHourWords(kind, u)).toBe(want);
   });
 
   it('an answer with no lane state still draws one word per lane, and never Signed in', () => {

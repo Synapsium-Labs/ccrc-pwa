@@ -4,9 +4,9 @@
 // A record opens its SESSION when the fleet still lists it. Archived rows are
 // listed (`archivedAt` set, bucket `archived`) and `/s/:id` opens an archived
 // session's page, so an archived session is a target like any other. Failing
-// that, a record that names a run the board can show opens the RUN BOARD: a
-// run has no route of its own until F3's drill-down (W4). Otherwise it leads
-// nowhere, and says why in one word.
+// that, a record that names a run the board can show opens that run's page,
+// `/runs/<id>` (the runs rebuild, D-8072). Otherwise it leads nowhere, and says
+// why in one word.
 //
 // The run is read through `eventRunId`, never off the record directly: that is
 // the render boundary `NotifyEvent.runId`'s own comment (shared/api.ts) fixes,
@@ -38,11 +38,11 @@
 // `unknown`), and only `mail`, `run` and `queue` carry a run.
 import type { FleetSession, NotifyEvent, RunSummary } from '../../../shared/api';
 import { eventRunId } from '../lib/feed';
-import { sessionPath } from '../lib/routes';
+import { runPath, sessionPath } from '../lib/routes';
 
 export type InboxTarget =
   | { readonly kind: 'session'; readonly path: string }
-  | { readonly kind: 'runs'; readonly path: '/runs' }
+  | { readonly kind: 'runs'; readonly path: string }
   | { readonly kind: 'none'; readonly why: 'session gone' | 'no target' };
 
 export function inboxTarget(
@@ -55,6 +55,6 @@ export function inboxTarget(
     return { kind: 'session', path: sessionPath(ev.sessionId) };
   }
   const run = eventRunId(ev);
-  if (run !== null && runsById.has(run)) return { kind: 'runs', path: '/runs' };
+  if (run !== null && runsById.has(run)) return { kind: 'runs', path: runPath(run) };
   return { kind: 'none', why: named ? 'session gone' : 'no target' };
 }

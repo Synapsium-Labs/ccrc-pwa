@@ -119,7 +119,7 @@ A pin like this is the right answer when the two copies have to live in two lang
   - PWA: `*Words.ts`, policy and pure lib modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4.
   - Every non-test file under `server/src` and `pwa/src` has one ring and one context (C1 to C9, or K for the kernels and platform files), decided by that section's rules and its path table.
 - **Two cross-cutting rules are added** to 08-10's (a)–(e):
-  - **(f) One writer per fact.** Every fact this spec names in §2.2 has a declared writer set, and a `writers` pin (§5.1) lists it. The set may only shrink. "Writer" means the function that performs the write, not the callers that ask for it: two lanes may ask one primitive to write.
+  - **(f) One writer per fact.** Every fact this spec names in §2.2 has a declared writer set, and a `writers` pin (§5.1) lists it. The set may only shrink. "Writer" means the function that performs the write, not the callers that ask for it: two lanes may ask one primitive to write. Which pin holds each §2.2 fact, or why none holds it, is `server/test/single-definition/writers-map.test.ts` (#2369).
   - **(g) A schedule is data.** A lane's cadence, clock and single-flight rule are a row in one table. They are not fields on a class or a constant aliased from another lane. This is **not** a lane interface (see §2.5).
 - **A context is a row in ARCH-34's manifest and ARCH-04's context map**, not a directory. No file moves just to sit in a context's folder. 08-10 rule (e) says moving files silently deletes scanner coverage, so files move only where a cluster already deletes or splits them.
 

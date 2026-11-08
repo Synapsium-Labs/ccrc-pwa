@@ -127,6 +127,29 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
         + 'has ever measured',
     },
     {
+      // D-8120: an Anthropic lane whose plan has no 5h window. Until the writer
+      // marked it, both sides skipped it as unmeasured however empty its week;
+      // with the marker it ranks on its weekly figure alone and wins.
+      name: 'no-five-window-ranks-on-its-week',
+      files: {
+        claude: fresh(70, 70), 'claude-a': fresh(60, 60),
+        'claude-b': c({ five: null, seven: 12, ts: now - 60, fiveResetAt: now - 259200,
+                        sevenResetAt: now + 400000, fiveAbsentSince: now - 259200, fiveWindowMinutes: 0 }),
+      },
+      expect: { wrapper: 'claude-b', score: 12 },
+      why: 'a lane with no 5h window is scored on its week alone, so a quiet week wins placement',
+    },
+    {
+      name: 'five-absent-run-too-young-stays-unmeasured',
+      files: {
+        claude: fresh(70, 70), 'claude-a': fresh(60, 60),
+        'claude-b': c({ five: null, seven: 12, ts: now - 60, fiveResetAt: null,
+                        sevenResetAt: now + 400000, fiveAbsentSince: now - 3600 }),
+      },
+      expect: { wrapper: 'claude-a', score: 60 },
+      why: 'one five-less reading is not "no 5h window": without the writer\'s marker the lane is still unknown',
+    },
+    {
       name: 'tie',
       files: { claude: fresh(50, 50), 'claude-a': fresh(50, 50), 'claude-b': fresh(50, 50), 'claude-d': fresh(50, 50) },
       expect: { wrapper: 'claude', score: 50 },

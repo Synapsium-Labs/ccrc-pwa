@@ -884,3 +884,30 @@ describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
       Number(h.sh('echo "$REDRIVE_TAIL_LINES"')));
   });
 });
+
+// ── D-8116: an open dialog is no box, and no keystroke ───────────────────
+
+describe('D-8116: `_idle_for_keystroke` refuses an open dialog as no-box', () => {
+  const DIALOG = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'panes', 'box', 'rate-limit-dialog.ansi'), 'utf8');
+  /** The real box readers: `STUBS` minus its empty `_pane_box_draft`. */
+  const TMUX = `
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
+      case "\${1:-}" in
+        capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;;
+        list-panes)   echo "${PANE_PID}" ;;
+      esac; return 0; };`;
+  const idle = (pane: string): string => h.sh(`${TMUX}
+    _idle_for_keystroke ${ID} "$(printf '%s\\n' "$PANE_TEXT" | tail -8)" "ctx 88%" && echo "idle" || echo "$KS_WHY|$KS_DETAIL"`,
+  { PANE_TEXT: pane });
+
+  it('the limit dialog in the box\'s place answers no-box, and nothing is sent', () => {
+    seed(); sessionJson('idle', 600);
+    expect(idle(DIALOG)).toBe('no-box|no input box on screen, a dialog is open, ctx 88%');
+    expect(sendKeys()).toEqual([]);
+  });
+
+  it('control: the same session at an empty bordered box is idle', () => {
+    seed(); sessionJson('idle', 600);
+    expect(idle(AT_PROMPT)).toBe('idle');
+  });
+});

@@ -66,8 +66,7 @@ describe('the fleet frame reads the question tables (fleet.ts#readCurrentAsks, #
     for (const id of [CHILD, CHILD2, PARENT]) seedSession(home, id);
     const fleet = await assembleFleet(
       localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-      undefined, undefined, undefined, undefined, undefined, undefined, coord,
-    );
+      { coord });
     return [CHILD, CHILD2, PARENT].map((id) => {
       const r = fleet.find((x) => x.id === id)!;
       return { id, ask: r.ask, withCoordinator: r.withCoordinator };

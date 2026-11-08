@@ -46,12 +46,12 @@ describe('refHref (chat reading Task L, D-8062)', () => {
     });
   });
 
-  it('run 1527 opens /runs?run=1527', () => {
-    expect(refHref(mark('run 1527', 'run'), ctx)).toEqual({ href: '/runs?run=1527', external: false });
+  it('run 1527 opens /runs/1527', () => {
+    expect(refHref(mark('run 1527', 'run'), ctx)).toEqual({ href: '/runs/1527', external: false });
   });
 
-  it('review 1544 opens /runs?run=1544', () => {
-    expect(refHref(mark('review 1544', 'run'), ctx)).toEqual({ href: '/runs?run=1544', external: false });
+  it('review 1544 opens /runs/1544', () => {
+    expect(refHref(mark('review 1544', 'run'), ctx)).toEqual({ href: '/runs/1544', external: false });
   });
 
   it('item 34 is text unless held, item 340 opens its item', () => {
@@ -63,15 +63,15 @@ describe('refHref (chat reading Task L, D-8062)', () => {
 
   it('run 12 links because the console holds it, run 2 stays text', () => {
     expect(SMALL_ID_DIGITS).toBe(3);
-    expect(refHref(mark('run 12', 'run'), ctx)).toEqual({ href: '/runs?run=12', external: false });
+    expect(refHref(mark('run 12', 'run'), ctx)).toEqual({ href: '/runs/12', external: false });
     expect(refHref(mark('run 2 times', 'run'), ctx)).toBeNull();
     expect(refHref(mark('run 99', 'run'), ctx)).toBeNull();
-    expect(refHref(mark('run 100', 'run'), ctx)).toEqual({ href: '/runs?run=100', external: false });
+    expect(refHref(mark('run 100', 'run'), ctx)).toEqual({ href: '/runs/100', external: false });
   });
 
   it('a zero or a leading zero is read by its value', () => {
     expect(refHref(mark('run 0', 'run'), { ...ctx, knownRuns: new Set([0]) })).toBeNull();
-    expect(refHref(mark('run 012', 'run'), { ...ctx, knownRuns: new Set([12]) })).toEqual({ href: '/runs?run=12', external: false });
+    expect(refHref(mark('run 012', 'run'), { ...ctx, knownRuns: new Set([12]) })).toEqual({ href: '/runs/12', external: false });
     expect(refHref(mark('run 012', 'run'), { ...ctx, knownRuns: new Set() })).toBeNull();
   });
 

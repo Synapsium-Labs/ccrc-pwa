@@ -3,11 +3,11 @@
 // pane is painting, the one its title names when labels cannot say, and which screen of the ask the pane is on. Facts
 // of position only, never text to render (D-6325).
 //
-// A PORT of `pwa/src/session/askLive.ts`'s position facts (`questionCorresponds`, `liveQuestion`, `namedQuestion`,
-// `shownQuestion`, `askScreen`, `titleMatches`, `WRAP_BAR_RE`), held equal to it over Q3a's corpus
-// (`server/test/ask-pairing.test.ts`, against the table `ask-pairing-table.test.ts` records). The client keeps its copy
-// until W7, which reads this module's answer off the wire (`pairing` on the `ask` and `dialog` frames) and deletes it.
-// Until then a change to one is a change to both, and the parity row reds on a drift.
+// A PORT of `pwa/src/session/askLive.ts`'s former position facts (`questionCorresponds`, `liveQuestion`,
+// `namedQuestion`, `shownQuestion`, `askScreen`, `titleMatches`, `WRAP_BAR_RE`). W7 Task C7f (D-7184) deleted the
+// client's copy: the PWA reads this module's answer off the wire (`pairing` on the `ask`, `dialog` and `ask_cleared`
+// frames), so this is the one pairing rule. `server/test/ask-pairing.test.ts` holds it equal to the table
+// `ask-pairing-table.test.ts` recorded from the client's answers before C7f, and its parity row reds on a drift.
 //
 // L1, PURE: it imports `shared/api`'s types and `shared/ask-menu`'s rules, and nothing else; no fs, no store, no clock.
 // `Dialog.multi`, `parsed` and the review screen are read through `shared/ask-menu.ts`'s rules (`reviewRows`), never
@@ -39,7 +39,7 @@ const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, ' ').trim();
  *
  *  THE rule for "this scraped row and this structured option are the same option", moved here from
  *  `transcript/ask.ts` (which re-exports it). `inject/ask.ts`'s menu-identity gate must decide the same question a
- *  keystroke earlier, and the PWA's `askLive.ts` mirrors it (`prefixMatches`) until W7. A second server definition
+ *  keystroke earlier. The PWA's mirror (`askLive.ts#prefixMatches`) went with W7 C7f. A second server definition
  *  would let the layers disagree about which menu is on screen while each stayed internally consistent
  *  (`census-w3/questions.ts#envelopePairingRules` counts the server's definitions: 1). */
 export const pairMatches = (a: string, b: string): boolean => {

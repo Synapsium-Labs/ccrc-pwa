@@ -618,6 +618,12 @@ export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 
  *  off this comment. */
 export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
 
+/** Claude Code's input box as a pane draws it: the `❯` row between two `─` borders, chrome below. ccd reads a `❯` row
+ *  as the box only when it sits directly under a border (D-8116, `_pane_box_read`), so a pane that stands for an idle
+ *  or drafting session draws the box this way; a bare `❯` row with no border reads as no box (a dialog is open). */
+export const boxed = (text = '', below = '  ? for shortcuts'): string =>
+  `${'─'.repeat(24)}\n❯ ${text}\n${'─'.repeat(24)}${below ? `\n${below}` : ''}`;
+
 /** `WIDE_PANE` for a fixture that MODELS LIVENESS, and the reason it has to
  *  exist: a stub cannot answer `has-session` from `$HOME/pane-up` and report a
  *  200-column ACTIVE pane for that same session in the same breath. Real tmux
@@ -778,9 +784,12 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // `assertNoRealTool`. `CCD_MOUNTINFO` sits BEFORE `...extra` so a snippet can
   // override it: see `FIXTURE_MOUNTINFO` for why the host's table never decides
   // a verdict. A bus pair outside HOME cannot override the fixture's.
+  // `CCRC_BROWSER_MCP_DEFAULT=on` (D-8121): the box default is `off`, which adds the browser servers' denial to every
+  // spawn's one `--settings`; the suites that pin a spawn argv byte for byte predate it and measure everything else, so
+  // the harness keeps the servers on and `ccd-browser-spawn.test.ts` measures the default (an empty value is unset).
   const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
     ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
-      CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...extra }, { systemd: true, tmux: true, net: true });
+      CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), CCRC_BROWSER_MCP_DEFAULT: 'on', ...extra }, { systemd: true, tmux: true, net: true });
   // The ccd path and the caller's snippet ride the ENVIRONMENT, not argv (wave 18 fix round 3, D-5259): CodeQL reads
   // every argv element of a `bash -c` as part of the command (js/shell-command-injection-from-environment), and a
   // snippet often interpolates this fixture HOME. Both are set AFTER `env(extra)`, so no `extra` overrides them, and

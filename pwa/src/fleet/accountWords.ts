@@ -296,6 +296,21 @@ function troubleBody(o: TroubleFacts): Omit<TroubleCopy, 'checkAgain'> | null {
 
 /** A Codex lane has no 5-hour window: its absent 5h reads this, never "—" (spec §4.1). */
 export const WEEKLY_ONLY = 'weekly window only';
+/** An Anthropic lane whose plan has no 5-hour window (D-8120): its 5h row reads this instead of an empty meter. */
+export const NO_FIVE_HOUR = 'No 5-hour limit';
+
+/** What a lane's 5h row says in place of a meter, or null for the meter. The fact is the producer's: a Codex lane
+ *  with no 5h figure is weekly-only by its kind, and any other lane only when its row carries `fiveWindowMinutes: 0`,
+ *  the marker the statusline writer states once a whole 5h window of readings had no 5h figure (D-8120). A lane that
+ *  reports its 5h window, or one with a single unreported reading, keeps the meter exactly as before. */
+export function fiveHourWords(
+  kind: string | undefined,
+  usage: { five: number | null; fiveWindowMinutes?: number } | null | undefined,
+): typeof WEEKLY_ONLY | typeof NO_FIVE_HOUR | null {
+  if ((usage?.five ?? null) !== null) return null;
+  if (kind === 'codex') return WEEKLY_ONLY;
+  return usage?.fiveWindowMinutes === 0 ? NO_FIVE_HOUR : null;
+}
 
 // ── Check, and the kill switch (spec §10; accounts plan Task A14, D-7732) ─────────────────────────────────────────
 

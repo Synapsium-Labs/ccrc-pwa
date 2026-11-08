@@ -25,7 +25,7 @@ const NOW_S = 1784600000;
 
 /** One closed run naming `sessionId` as its worker. */
 const closedRun = (coord: CoordStore, sessionId: string, claimedBy = 'demo-coordinator'): number => {
-  const r = coord.openRun({ program: 'lifecycle', title: 'Workspace lifecycle', project: 'demo', wave: 1, waveOf: 1, claimedBy });
+  const r = coord.openRun({ program: 'lifecycle', title: 'Workspace lifecycle', programmeTitle: 'Workspace lifecycle', project: 'demo', wave: 1, waveOf: 1, claimedBy });
   if (!('id' in r)) throw new Error('openRun refused');
   coord.bindSession(r.id, sessionId);
   expect(coord.advance(r.id, 'failed', 'test-close').ok).toBe(true);
@@ -34,8 +34,7 @@ const closedRun = (coord: CoordStore, sessionId: string, claimedBy = 'demo-coord
 
 const assemble = (home: string, coord?: CoordStore) => assembleFleet(
   localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-  undefined, undefined, undefined, undefined, undefined, undefined, coord,
-);
+  { coord });
 
 describe('releasedFrom on the wire', () => {
   it('a workspace whose only run closed is released from that run', async () => {

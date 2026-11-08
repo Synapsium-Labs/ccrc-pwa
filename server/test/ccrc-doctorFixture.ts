@@ -1755,8 +1755,11 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  plants the registry and the switch.
  *
  *  RAISED BY ONE AGAIN, on every platform (D-8047): `playwright` SKIPs - `healthy()` caches no
- *  browser build, so there is nothing to launch. `ccrc-doctor-session-path.test.ts` plants the builds. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 17;
+ *  browser build, so there is nothing to launch. `ccrc-doctor-session-path.test.ts` plants the builds.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (D-8121): `browser-mcp` SKIPs - `healthy()` creates no `~/.cc-sessions`, so no
+ *  session runs a browser server. `ccrc-doctor-browser-mcp.test.ts` plants the registry and the process table. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 18;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

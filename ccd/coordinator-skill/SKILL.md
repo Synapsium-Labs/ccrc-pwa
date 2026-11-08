@@ -137,7 +137,7 @@ API="$HOME/.local/bin/ccrc-api"
 # so neither can be got wrong one caller at a time.
 
 body=$("$API" runs open --json - <<JSON
-{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<home project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
+{"program":"<slug>","title":"<title>","programmeTitle":"<the programme's name, used only when this opens a new programme>","project":"<project>","homeProject":"<home project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
 JSON
 )
 ```
@@ -168,7 +168,7 @@ field always present: `POST /api/runs`/`/dispatch`/`/:id/close` put it on
 `refused` (`paused`, `mail-disabled`, `cap-concurrency`,
 `ambiguous-dispatch`, `worker-busy`, `hookstate-unmeasurable`,
 `claimed-by-another`, `not-dispatched`, `prhistory-unreadable`,
-`workspace-spent`, `spent-unmeasured`); those same
+`workspace-spent`, `spent-unmeasured`, `intent-held`); those same
 three routes put `unknown-run`, `bad-transition` and the re-measurement
 family (`stale-tip`, `pr-regressed`, `no-handoff-commit`) on `error` instead;
 `POST /api/mail` puts every one of its own refusals on `error`; and `POST /api/runs/:id/advance` puts **every**
@@ -185,7 +185,7 @@ response said. The refusals you will actually meet are
 `spent-unmeasured`, `hold-oversize`, `hold-invalid`,
 `not-dispatched`, `prhistory-unreadable`, `bad-transition`, `stale-tip`,
 `pr-regressed`, `no-handoff-commit`, `unknown-run`, `registry-unmeasurable`,
-`unknown-item`, `item-terminal`. Their meanings are in
+`unknown-item`, `item-terminal`, `intent-held`. Their meanings are in
 `references/wave-lifecycle.md`.
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
@@ -286,6 +286,8 @@ not after.
    execution skill is not optional: the worker's clause 6 invokes "the
    execution skill the brief names", so an unnamed one is a clause pointing at
    nothing (`references/wave-lifecycle.md` §2).
+   The dispatch may also carry `intents`, the landing intents of the wave
+   (`references/wave-lifecycle.md` §2).
    **One sentence from that protocol still goes in every brief anyway: commit on
    this workspace's own branch, never a separate feature branch** — the
    done-fingerprint (step 4) re-measures the workspace branch, a feature branch
@@ -408,8 +410,13 @@ not after.
      `ejected:` mail once the advance's answer reads `landing.kind` `ejected`
      and `landing.entry.baseSha` equals the base you sent. If it reads
      anything else, the line recorded no
-     base: send no mail, and report it to the operator with the run at
-     `working`. The second ejection of one entry is not refused: where
+     base: send no mail, and report it to the operator with the run's state
+     as the advance answered it: `working` after `ok`; after a refusal, the
+     state the answer names (its `from`), which is still `merging` only when
+     the refusal came before any move; and when the answer names no state or
+     was uncertain (the 503 `run-unreadable`, an `unknown-run` after the
+     commit, a transport failure), read `runs list` for the run's state
+     before reporting. The second ejection of one entry is not refused: where
      the entry you read counts one ejection already, the advance still answers
      `ok` and the server raises one notice to the operator, so name the second
      ejection in your turn's text and send the round as usual. The worker's

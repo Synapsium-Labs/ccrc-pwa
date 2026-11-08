@@ -856,6 +856,11 @@ describe('the coordinator skill: linkage', () => {
       'POST /api/leases/:lease/retain',
       'POST /api/leases/:lease/operator-retain',
       'POST /api/leases/:lease/resolve',
+      // THE RUNS SCREEN'S TWO READS (D-8071, spec 2026-11-04 §11.4, §11.5): the operator's lookup and a run's lasting record. The
+      // screen's doors, not coordination doors: a coordinator reads its runs through `GET /api/runs`, and no programme acts on
+      // either answer.
+      'GET /api/runs/find',
+      'GET /api/runs/:id/record',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -998,12 +1003,16 @@ describe('the coordinator skill: linkage', () => {
     // coordinator reading only one of these two files must still see all
     // three keys named together, or it writes a body missing one.
     const lifecycle = refs('wave-lifecycle.md');
-    // ALL FIVE writable fields, not four: the literal showed `class`, `effort`,
+    // ALL SIX writable fields (D-8121 added `browser`), as ALL FIVE once were, not four: the literal showed `class`, `effort`,
     // `subagent` and `workflow` while the paragraph below it named five, so a
     // coordinator copying the body omitted `compact` every time (slice 5's
     // deferred minor, closed by slice 6 Task 5).
     expect(lifecycle).toContain(
-      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}');
+      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…","browser":"on"},"slug":"<child name>"}');
+    // D-8121: the sixth field, and the one rule a coordinator needs to use it.
+    expect(lifecycle).toContain('dispatch with `browser=on` when the task needs a browser');
+    // D-8121's fix: a route naming only `browser` keeps the run kind's default row (`dispatchDecide.ts`), and says so.
+    expect(lifecycle.replace(/\s+/g, ' ')).toContain('a route that names ONLY `browser` keeps its run kind\'s default row');
     // The optional child name rides the same body, and its paragraph says what
     // the coordinator must check after it (an older server ignores the field).
     expect(lifecycle).toContain("**`slug` — the child's name, chosen at birth.**");
@@ -2415,7 +2424,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     expect(body, 'the executable runs-open example has no one-line JSON body').not.toBeNull();
     const keys = [...body![1]!.matchAll(/"([A-Za-z]+)":/g)].map((m) => m[1]!).sort();
     expect(keys).toEqual([
-      'claimedBy', 'homeProject', 'program', 'project', 'title', 'wave', 'waveOf',
+      'claimedBy', 'homeProject', 'program', 'programmeTitle', 'project', 'title', 'wave', 'waveOf',
     ]);
     expect(body![1], 'the executable body omits the immutable programme home')
       .toContain('"homeProject":"<home project>"');
@@ -2430,6 +2439,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       const executable = blocks[0]!
         .replace(/<slug>/g, 'fixture-program')
         .replace(/<title>/g, 'Fixture title')
+        .replace(/<the programme's name[^>]*>/g, 'Fixture Programme')
         .replace(/<project>/g, 'consumer-project')
         .replace(/<home project>/g, 'home-project')
         .replace(/<M or null>/g, '3');
@@ -2439,7 +2449,7 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       const [argv, json] = readFileSync(calls, 'utf8').split('\n', 2);
       expect(argv).toBe('runs open --json -');
       expect(JSON.parse(json!)).toEqual({
-        program: 'fixture-program', title: 'Fixture title', project: 'consumer-project',
+        program: 'fixture-program', title: 'Fixture title', programmeTitle: 'Fixture Programme', project: 'consumer-project',
         homeProject: 'home-project', wave: 1, waveOf: 3, claimedBy: 'coordinator-id',
       });
     } finally {
@@ -3929,7 +3939,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
     'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
     'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
     'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
-    'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.',
+    'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.',
     'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
     'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
   ].join(' ');
@@ -4285,12 +4295,12 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
       'For either form, on route Q disarm first (§5), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
       'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
       'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
-      'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.',
+      'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.',
       'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
       'The worker\'s answering wave-done gets a NEW review run (step 5), whose brief names that round\'s commits as the change under review, for the new-head round its merge commit; the reviewer still reads the whole diff (reviewer clause 5), and a merge of `main` is reviewed like any other change.',
     ].join(' '));
     // The fail-closed sentence directly follows the new equality sentence, so deleting it reds here on its own.
-    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run at `working`.');
+    expect(s).toContain('equals the base you sent. If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.');
   });
 });
 
@@ -4315,5 +4325,13 @@ describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R
     expect(sentences, 'exactly one sentence names spawn-adopted').toHaveLength(1);
     expect(sentences[0]).toMatch(/wave-lifecycle\.md/);
     expect(sentences[0]).toMatch(/not/);
+  });
+  it('sends programmeTitle on both wave-1 open examples, so a new programme is named in words (D-8071)', () => {
+    const opens = [skill, refs('wave-lifecycle.md')].map((text) =>
+      text.split('\n').filter((l) => l.includes('"program":"<slug>"') && l.includes('"wave":1,')));
+    for (const lines of opens) {
+      expect(lines.length).toBeGreaterThan(0);
+      for (const l of lines) expect(l).toContain('"programmeTitle":');
+    }
   });
 });

@@ -25,6 +25,7 @@ import { isStallKebab, isStallCoordGate } from '../src/coord/stall.js';
 import { isQuestionPolicyKebab } from '../src/coord/questionPolicy.js';
 import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
 import { isAutoRollKebab } from '../src/coord/rollTarget.js';
+import { isWakeGateKebab } from '../src/coord/wakeBudget.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -38,7 +39,7 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
-import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
+import { isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
 import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
@@ -1075,8 +1076,17 @@ describe('the rejection table is total, in both directions', () => {
         // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/ledgersStore.ts` (behind `CoordStore`) answers a refused move of an operator item with
         // `'unknown-item'`, `'wrong-actor'`, `'not-open'` or `'programme-live'`. The decider's words and the store's, one
         // union in `shared/ledgers.ts`. Admitted through its exported guard, derived from `ITEM_MOVE_REFUSALS`, never NOT_CODES.
-        || isItemMoveRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word or item-move refusal`).toBe(true);
+        || isItemMoveRefusal(tok)
+        // THE RUN STUCK VERDICT (D-8071): `coord/runStuck.ts` names a run's stuck reason and its cause as literals. A word
+        // decides a run's `stuck` stamp on the wire, never a `refused` or `reject.code`. Admitted through the exported guards,
+        // derived from `STUCK_REASONS`, `STUCK_CAUSES` and `RUN_WAITS_ON`, never NOT_CODES.
+        || isStuckReason(tok) || isStuckCause(tok) || isRunWaitsOn(tok)
+        // THE WAKE MEMORY GATE (D-8122): `coord/wakeBudget.ts` names the gate's refusals and its fail-open notes as
+        // literals (`'pressure-warn'`, `'headroom-unmeasured'`). A refusal is journalled as `memory-gate:<word>` where the
+        // lane journals its skips, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
+        // `WAKE_MEMORY_REFUSALS` and `WAKE_MEMORY_NOTES`, never NOT_CODES.
+        || isWakeGateKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word or wake-gate word`).toBe(true);
     }
   });
 });

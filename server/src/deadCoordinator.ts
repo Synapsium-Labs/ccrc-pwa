@@ -1036,11 +1036,16 @@ export const SWEEP_STOPPED = 'sweep-stopped';
 export const SWEEP_FLEET_ACTS = ['released', 're-held'] as const;
 export type SweepFleetAct = typeof SWEEP_FLEET_ACTS[number];
 
+/** The journal's answer kinds, as a Record so the census can derive its guard from the union (D-8071: `runStuck.ts` reads `no-history`). */
+const DEAD_COORDINATOR_JOURNAL_KINDS: Readonly<Record<DeadCoordinatorJournal['kind'], true>> = {
+  quiet: true, deliberate: true, 'no-history': true, unreadable: true,
+};
+
 /** Every kebab word this lane spells as a literal in `server/src/coord` — its outcome kinds, its report kinds and the
  *  compare-and-set refusal — for `mail-routes.test.ts`'s scan. None is a mail rejection or a run refusal. Derived from
  *  the Records above, never a list. */
 export function isDeadCoordinatorKebab(v: string): boolean {
   const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
   return v === CLAIMANT_CHANGED || v === SWEEP_STOPPED || (SWEEP_FLEET_ACTS as readonly string[]).includes(v)
-    || own(DEAD_COORDINATOR_OUTCOME_KINDS) || own(DEAD_COORDINATOR_REPORT_KINDS);
+    || own(DEAD_COORDINATOR_OUTCOME_KINDS) || own(DEAD_COORDINATOR_REPORT_KINDS) || own(DEAD_COORDINATOR_JOURNAL_KINDS);
 }

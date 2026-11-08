@@ -59,10 +59,20 @@
  *  `case` has one arm per method (`ccd/ccd-account-auth`, Tasks 52-55). */
 export type ConnectMethod = 'login' | 'paste' | 'setup-token' | 'pkce' | 'openai-login';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const CONNECT_METHOD_MAP: Record<ConnectMethod, true> = {
+  login: true, paste: true, 'setup-token': true, pkce: true, 'openai-login': true,
+};
+export const CONNECT_METHODS: readonly ConnectMethod[] = Object.keys(CONNECT_METHOD_MAP) as ConnectMethod[];
+
 /** What `ccrc account check` can ask of a lane. `auth status` exists only for
  *  the Anthropic lanes — it is Claude Code's own subcommand — so every other
  *  provider is proved live by inference alone (spec §8). */
 export type ProbeKind = 'auth-status+inference' | 'inference';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const PROBE_KIND_MAP: Record<ProbeKind, true> = { 'auth-status+inference': true, inference: true };
+export const PROVIDER_PROBE_KINDS: readonly ProbeKind[] = Object.keys(PROBE_KIND_MAP) as ProbeKind[];
 
 /** One provider. Every field answers a question some surface asks; nothing here
  *  is decoration.

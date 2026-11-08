@@ -2,9 +2,11 @@
 #
 # Loaded with `jq -L <dir>` and `include "transcript";` by ccd/ccd and by
 # ccd/ccrc-doctor-checks. Entry points: `continued_in($u)` (the successor a
-# slurped raw tail window names, or nothing) and `last_turn_ts` (the newest real
-# turn's epoch seconds in a slurped raw window, or nothing). Everything else is
-# a helper. A named jq argument (`--arg u`) is not visible inside a module, so
+# slurped raw tail window names, or nothing), `last_turn_ts` (the newest real
+# turn's epoch seconds in a slurped raw window, or nothing) and
+# `limit_banner($mode; $since)` (whether the newest real row is a limit or auth
+# banner, as `_transcript_limit_banner` answers it). Everything else is a
+# helper. A named jq argument (`--arg u`) is not visible inside a module, so
 # the uuid travels as a parameter.
 #
 # WHAT COUNTS AS A MARKER — ONE RULE, THREE READERS (D-4940), TWO SPELLINGS
@@ -158,3 +160,86 @@ def turn_ts:
    | .timestamp | select(type == "string" and length >= 19)
    | .[:19] | try (strptime("%Y-%m-%dT%H:%M:%S") | mktime) catch empty];
 def last_turn_ts: split("\n") | map(turn_ts[]) | max // empty;
+
+# IS THE NEWEST REAL ROW A LIMIT BANNER (D-2362, D-2456, D-3522, D-3526; #2367
+# moved it here from an inline python reader). `_transcript_limit_banner` in
+# ccd/ccd holds the rule in words and the rc contract; this is the reading.
+# The input is a slurped raw window plus the one newline bash's `printf '%s\n'`
+# ends it with, so the last field `split` makes is that newline's and is
+# dropped. Unlike `last_turn_ts`, a line that does not parse, or parses to
+# anything but an object, CLEARS the candidate — fail closed, the python
+# reader's tolerance: a blank line, a cut line, a BOM before the row
+# (`json.loads` refuses one, and jq would read past it). A lone surrogate
+# escape is rewritten and parsed again, as everywhere in this module.
+#
+# The answer is ONE string, printed with `-j`: "1", or "0" or "3", a newline,
+# and what the bash function prints. A since is digits or it is none, and with
+# none no row is dated at all (`lb_at`), so dated mode prints `-`.
+#
+# THE TIMESTAMP, AS PYTHON 3.12's `fromisoformat` READ IT, where Claude Code
+# writes it: `YYYY-MM-DD`, any one separator, `HH:MM:SS`, an optional `.` or
+# `,` fraction (dropped: the since is whole seconds, so the floor compares the
+# same), then nothing, `Z`, or an offset `±HH`, `±HHMM`, `±HH:MM`, after at most
+# one space. A date that does not round-trip (February 30th, second 60) is
+# unreadable, as Python refuses it. Shapes python read and this does not — a
+# date alone, no seconds, the basic format, an offset with seconds — are
+# unreadable here: that never counts a 401 and never dates a banner, the side
+# the rule already takes on an unreadable stamp. A stamp with no zone is UTC
+# here, where python read it in the box's local zone.
+#
+# `resetsAt` prints when it is a finite whole number. Python printed only a
+# JSON integer, so a whole number spelled as a float (`1.0`, `1e3`) prints
+# here and printed nothing there; JSON.stringify spells neither. NULs are
+# dropped from `rateLimitType`: bash's `$(…)` drops them anyway.
+def lb_digits: length > 0 and ([explode[] | select(. < 48 or . > 57)] == []);
+def lb_nodigits: explode as $c
+  | ([range(0; $c | length) | select($c[.] < 48 or $c[.] > 57)] | .[0] // ($c | length)) as $k
+  | $c[$k:] | implode;
+def lb_offset: if . == "" or . == "Z" then 0
+  elif (startswith("+") or startswith("-")) | not then empty
+  else (if startswith("-") then -1 else 1 end) as $sign | .[1:] | split(":") as $p
+    | (if ($p | length) == 2 and ($p[0] | length) == 2 and ($p[1] | length) == 2 then $p
+       elif ($p | length) == 1 and ((.  | length) == 2 or (. | length) == 4) then [.[:2], .[2:]]
+       else empty end)
+    | select((.[0] | lb_digits) and (.[1] == "" or (.[1] | lb_digits)))
+    | [(.[0] | tonumber), (if .[1] == "" then 0 else .[1] | tonumber end)]
+    | select(.[0] <= 23 and .[1] <= 59)
+    | $sign * (.[0] * 3600 + .[1] * 60)
+  end;
+def lb_epoch: select(type == "string" and length >= 19)
+  | (.[:10] + "T" + .[11:19]) as $h
+  | .[19:] | (if startswith(".") or startswith(",") then .[1:] | lb_nodigits else . end)
+  | (if startswith(" ") and length > 1 then .[1:] else . end) | lb_offset as $off
+  | [$h | try (strptime("%Y-%m-%dT%H:%M:%S") | mktime) catch empty][]
+  | select((. | todate) == $h + "Z")
+  | . - $off;
+def lb_row: . as $l
+  | if startswith("﻿") then empty
+    else [try fromjson catch ($l | unsurrogate | try fromjson catch empty)][] end
+  | select(type == "object");
+def lb_at($s): if $s == null then null else [.timestamp | lb_epoch] | .[0] end;
+def limit_banner($mode; $since):
+  ($mode == "stuck" or $mode == "dated") as $stuck
+  | (if $since | lb_digits then $since | tonumber else null end) as $s
+  | reduce (split("\n") | .[:-1][]) as $l (null; . as $f
+      | [$l | lb_row] as $r
+      | if $r == [] then null
+        else $r[0] as $row | ($row | lb_at($s)) as $at
+        | if ($row.type == "user" or $row.type == "assistant") | not then $f
+          elif $row.type == "assistant" and $row.isApiErrorMessage == true and $row.error == "rate_limit" then $row
+          elif $stuck and $row.type == "assistant" and $row.isApiErrorMessage == true
+            and $row.error == "authentication_failed" and $row.apiErrorStatus == 401
+            and $s != null and $at != null and $at >= $s then $row
+          elif $row.type == "user" and ($row.message | type) == "object" and ($row.message.content | chatter) then $f
+          else null end
+        end)
+  | if . == null then "1"
+    else . as $f | ($f | lb_at($s)) as $at
+    | if $stuck and $f.error != "authentication_failed" and $s != null and $at != null and $at < $s then "3\n\($at)"
+      elif $f.error == "authentication_failed" then "0\n\t\tauthentication_failed"
+      else ($f.quotaLimits | if type == "object" then . else {} end) as $q
+      | ($q.resetsAt | if type == "number" and (isinfinite | not) and . == floor then . + 0 | tostring else "" end) as $reset
+      | ($q.rateLimitType | if type == "string" then [explode[] | select(. != 0)] | implode else "" end) as $kind
+      | "0\n\($reset)\t\($kind)" + (if $mode == "dated" then "\t" + ($at | if . == null then "-" else tostring end) else "" end)
+      end
+    end;

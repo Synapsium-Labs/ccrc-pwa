@@ -145,7 +145,7 @@ const EXPECTED_SITES: readonly string[] = [
   // W3 Q3f (D-7030; named exception 3): the rule handler's read moved into the claimant's core with its ladder, the
   // same reader and the same word; only the file and the enclosing symbol change.
   'coord/questions.ts | ruleApproval | readRegistry | refuses',
-  'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
+  'fleet.ts | assembleFleetWithPanePids | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
   'watch.ts | detectDialogs | readRegistry | tests-only',
@@ -336,11 +336,11 @@ describe('tick hands this tick\'s refused set to the lanes that hold a refused i
 });
 
 // PATH IDENTITY W1a, TASK 7 (spec §2.3). The three migrated readers and the three new reads carry their placed words,
-// and every production `assembleFleet(` call passes the rows it read, so `assembleFleet`'s own fallback read, tagged
-// `tests-only`, is reached by tests alone. A production call left at `undefined` would quietly bring back the fallback's
-// `[]` for an unlistable registry, the empty fleet without a stale mark that this wave removes. It reads through this
-// file's one scan (`sourceTexts`, `allSites`, `codeOnly`, `blankQuoted`, `isDefinition`) and adds one helper, the
-// argument splitter below.
+// and every production assembly call passes the rows it read as its `records` option, so `assembleFleet`'s own fallback
+// read, tagged `tests-only`, is reached by tests alone. A production call that leaves `records` out would quietly bring
+// back the fallback's `[]` for an unlistable registry, the empty fleet without a stale mark that this wave removes. It
+// reads through this file's one scan (`sourceTexts`, `allSites`, `codeOnly`, `blankQuoted`, `isDefinition`) and adds
+// the argument splitter and the options reader below.
 
 /** The top-level arguments of the call whose `(` sits at `open`, whitespace-normalised. String literals survive
  *  `codeOnly`, so quotes are tracked and a comma inside one never splits. */
@@ -371,30 +371,49 @@ function callArgs(text: string, open: number): string[] {
   throw new Error(`no closing parenthesis for the call at offset ${open}`);
 }
 
+/** The `records` option of an assembly call's options object (#2399: every input past the first five is named there),
+ *  whitespace-normalised: `records: <expr>` gives the expression, the shorthand `records` gives `records`. */
+function recordsOption(options: string | undefined): string {
+  if (options === undefined || !options.startsWith('{')) return '<absent>';
+  const props = callArgs(options, 0);
+  const prop = props.find((p) => /^records\b\s*(?::|$)/.test(p));
+  return prop === undefined ? '<absent>' : prop.replace(/^records\s*:?\s*/, '') || 'records';
+}
+
+/** Every production assembly call: `assembleFleet(` and `assembleFleetWithPanePids(` outside `fleet.ts` (whose one call
+ *  is `assembleFleet` handing its own arguments on to `assembleFleetWithPanePids`), found as this file finds reader
+ *  calls (`blankQuoted`, so a quoted name is no call); its blanking keeps every offset, so the arguments are split on
+ *  the `codeOnly` text, where string literals survive. */
+const ASSEMBLY_CALL = /\bassembleFleet(?:WithPanePids)?\s*\(/g;
+const assemblyCalls = (): { file: string; args: string[] }[] => sourceTexts().filter(({ file }) => file !== 'fleet.ts')
+  .flatMap(({ file, src }) => {
+  const text = codeOnly(src);
+  return [...blankQuoted(text).matchAll(ASSEMBLY_CALL)]
+    .filter((m) => !isDefinition(text, m.index ?? 0))
+    .map((m) => ({ file, args: callArgs(text, (m.index ?? 0) + m[0].length - 1) }));
+});
+
 describe('Task 7: the migrated readers and the six production assembleFleet calls (spec §2.3)', () => {
-  it('CONTROL: the argument splitter sees nesting, strings and a commented call', () => {
+  it('CONTROL: the argument splitter sees nesting, strings and a commented call; the options reader finds records', () => {
     const sample = codeOnly([
-      '// assembleFleet(a, b, c, d, e, f, g, h, i, NOT_THIS, k)',
-      "const s = assembleFleet(io, cfg, f(x, y), [1, 2], 'a,b', { k: 1, j: 2 }, u, u, u, reg.listed ? reg.records : [], coord);",
+      '// assembleFleet(a, b, c, d, e, { records: NOT_THIS })',
+      "const s = assembleFleet(io, cfg, f(x, y), [1, 2], 'a,b', { k: g(1, 2), records: reg.listed ? reg.records : [], coord });",
+      'const t = assembleFleetWithPanePids(io, cfg, tmux, read, now, { records });',
     ].join('\n'));
-    const hits = [...sample.matchAll(/\bassembleFleet\s*\(/g)];
-    expect(hits, 'the commented call is not code').toHaveLength(1);
+    const hits = [...sample.matchAll(ASSEMBLY_CALL)];
+    expect(hits, 'the commented call is not code').toHaveLength(2);
     const args = callArgs(sample, (hits[0]!.index ?? 0) + hits[0]![0].length - 1);
-    expect(args).toHaveLength(11);
-    expect(args[9]).toBe('reg.listed ? reg.records : []');
+    expect(args).toHaveLength(6);
+    expect(recordsOption(args[5])).toBe('reg.listed ? reg.records : []');
+    expect(recordsOption(callArgs(sample, (hits[1]!.index ?? 0) + hits[1]![0].length - 1)[5]), 'shorthand').toBe('records');
+    expect(recordsOption('{ coord }'), 'no records option').toBe('<absent>');
+    expect(recordsOption(undefined), 'no options object').toBe('<absent>');
     expect(isDefinition('export async function assembleFleet(', 'export async function '.length)).toBe(true);
     expect(isDefinition('  const x = assembleFleet(', '  const x = '.length)).toBe(false);
   });
 
-  it('the six production assembleFleet calls each pass the rows they read, never undefined', () => {
-    // Calls are found where this file finds reader calls (`blankQuoted`, so a quoted name is no call); its blanking
-    // keeps every offset, so the arguments are split on the `codeOnly` text, where string literals survive.
-    const calls = sourceTexts().flatMap(({ file, src }) => {
-      const text = codeOnly(src);
-      return [...blankQuoted(text).matchAll(/\bassembleFleet\s*\(/g)]
-        .filter((m) => !isDefinition(text, m.index ?? 0))
-        .map((m) => ({ file, records: callArgs(text, (m.index ?? 0) + m[0].length - 1)[10] ?? '<absent>' }));
-    });
+  it('the six production assembly calls each pass the rows they read, never undefined', () => {
+    const calls = assemblyCalls().map((c) => ({ ...c, records: recordsOption(c.args[5]) }));
     expect(calls.map((c) => `${c.file} ${c.records}`).sort()).toEqual([
       'coord/routes.ts reg.listed ? reg.records : []',   // the claims conflict
       'coord/routes.ts reg.records',                     // GET /api/peers
@@ -405,6 +424,23 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     ]);
     expect(calls.filter((c) => c.records === 'undefined' || c.records === '<absent>'),
       'a production call leaves its rows to the tests-only fallback').toEqual([]);
+  });
+
+  it('#2399: every production assembly call is five positional arguments and one options object, padded with no undefined', () => {
+    const calls = assemblyCalls();
+    expect(calls).toHaveLength(6);
+    for (const c of calls) {
+      expect(c.args, `${c.file}: five positional arguments, then the options`).toHaveLength(6);
+      expect(c.args[5]!.startsWith('{'), `${c.file}: the sixth argument is the options object`).toBe(true);
+      expect(c.args.filter((a) => a === 'undefined'), `${c.file}: no positional undefined`).toEqual([]);
+      expect(callArgs(c.args[5]!, 0).filter((p) => /:\s*undefined$/.test(p)), `${c.file}: no option set to undefined`)
+        .toEqual([]);
+    }
+    // The pane pids are the assembly's own output, not an argument (#2399): only the tick hands them on, so it alone
+    // calls the variant that returns them.
+    expect(calls.filter((c) => c.file === 'watch.ts').length).toBe(1);
+    expect(sourceTexts().filter(({ src }) => /\bassembleFleetWithPanePids\s*\(/.test(blankQuoted(codeOnly(src))))
+      .map(({ file }) => file).sort(), 'the callers of assembleFleetWithPanePids, its definition included').toEqual(['fleet.ts', 'watch.ts']);
   });
 
   it('the migrated readers carry their placed words, and readRegistry keeps its counted sites', () => {

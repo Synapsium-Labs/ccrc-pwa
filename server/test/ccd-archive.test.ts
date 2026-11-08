@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -206,6 +206,8 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(PR_STATE_PR_CAP);
     // D-6794: the default-route flag's token, held equal to ccd's own `echo route-default-v1`.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_DEFAULT_CAP);
+    // D-8121: the browser route field's token, held equal to ccd's own `echo browser-route-v1`.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(BROWSER_ROUTE_CAP);
     // The native Docs reader's token (docs W2): the third spelling of `docs-v1`, held equal to the constant the docs
     // adapter's gate reads (`capSupported`) and to ccd's own `echo docs-v1` (W1).
     expect(KNOWN_CAPABILITY_TOKENS).toContain(DOCS_CAP);

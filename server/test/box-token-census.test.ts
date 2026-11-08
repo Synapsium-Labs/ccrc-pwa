@@ -293,7 +293,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Landing order wave 5f: the two attributed landing writes, fifty-seven machine lanes and sixty in all.
   'fifty-nine', 'sixty',
   // Delegation wave 5 PR8: the lease parent's Retain, fifty-eight machine lanes and sixty-one in all.
-  'sixty-one'];
+  'sixty-one',
+  // D-8071: GET /api/runs/:id/record, a session-or-token read: sixty-two machine lanes in all.
+  'sixty-two'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

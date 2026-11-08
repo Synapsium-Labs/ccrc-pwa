@@ -18,7 +18,7 @@ import type { RunsPageAnswer, RunSummary } from '../../../shared/api';
 import { appendOlderRunPage, childReclaimDoneRefreshDue, childReclaimRefreshDue, mergeFirstRunPage } from '../fleet/runWords';
 import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import type { FleetStore } from '../stores/fleet';
-import { api } from '../lib/api';
+import { api, ApiTimeout } from '../lib/api';
 
 /** THE ONE archive reader (C7n, D-7192): `GET /api/runs?closed=1`, the run board's default and the Inbox's. Hoisted to
  *  module scope, not an inline default-parameter arrow: a default parameter expression is re-evaluated on every
@@ -71,6 +71,9 @@ export interface ColdRuns {
    *  effect issues that re-read (review 1597 F2), so an answer read before the run left is never the last word on it. `state`
    *  keeps the last answer meanwhile, so a held `ok` may be about to change. An older page (`loadOlder`) is not a re-read. */
   readonly reading: boolean;
+  /** Whether the re-read that left `state` at `error` ran out of time (C1's `ApiTimeout`), the one failure the board words as
+   *  "Could not load runs. Try again." (spec §8.2). False in every other state. */
+  readonly timedOut: boolean;
   /** Re-read now. The two sheets that close a run call it on `onDone`: the
    *  finished half of the board has no source but this read. */
   readonly reload: () => Promise<void>;
@@ -116,6 +119,7 @@ export function useColdRuns(
   const [cold, setCold] = useState<RunSummary[] | null>(heldPages?.runs ?? null);
   const [coldState, setColdState] = useState<'loading' | 'ok' | 'error'>(heldPages === null ? 'loading' : 'ok');
   const [reading, setReading] = useState(true);
+  const [timedOut, setTimedOut] = useState(false);
   const hasOlder = store((s) => page !== undefined && s.runPages !== null && s.runPages.nextBefore !== null);
 
   // Held in a ref, not the effect's own dependency array — the same fix
@@ -161,10 +165,10 @@ export function useColdRuns(
   // older error in either arrival order, and an older success still lands its rows
   // after a newer failure (the freshest answer there is), though not its `ok` (below).
   //
-  // A newer SETTLED failure also holds `state` at `error` against an older success landing after it (review 1606 F2; desktop-
-  // polish Task C14, D-8110): that older read started before whatever the newer one was issued for (a run leaving the frame),
-  // so it may not turn the failure back into an answer the board speaks from. Its ROWS still land, as before (the freshest
-  // rows there are); only a read newer than the failure clears the error. `failed` is the newest sequence that settled so.
+  // A newer SETTLED failure holds `state` at `error` AND keeps the `timedOut` value it set against an older success landing
+  // after it (review 1606 F2; desktop-polish Task C14, D-8110). That older read started before whatever the newer one was
+  // issued for, so its ROWS still land, as before, but only a read newer than the failure may clear either failure signal.
+  // `failed` is the newest sequence that settled so.
   const issued = useRef(0);
   const applied = useRef(0);
   const failed = useRef(0);
@@ -196,13 +200,17 @@ export function useColdRuns(
           store.getState().setRunPages({ ...next, at: Date.now() });
           setCold(next.runs);
         }
-        if (seq > failed.current) setColdState('ok');
+        if (seq > failed.current) {
+          setColdState('ok');
+          setTimedOut(false);
+        }
       })
-      // A failed read changes only `state`: the rows, and the stored pages, stay (never a fold to empty).
-      .catch(() => {
+      // A failed read changes its failure signals: the rows, and the stored pages, stay (never a fold to empty).
+      .catch((e: unknown) => {
         if (!aliveRef.current || seq <= applied.current) return;
         failed.current = Math.max(failed.current, seq);
         setColdState('error');
+        setTimedOut(e instanceof ApiTimeout);
       })
       .finally(settled);
   };
@@ -332,5 +340,5 @@ export function useColdRuns(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordFrame, coordFrameSeen]);
 
-  return { cold, state: coldState, reading, reload: loadCold, loadOlder, hasOlder };
+  return { cold, state: coldState, timedOut: coldState === 'error' && timedOut, reading, reload: loadCold, loadOlder, hasOlder };
 }

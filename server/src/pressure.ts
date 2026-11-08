@@ -19,8 +19,8 @@ export const PRESSURE_EVIDENCE_MS = 5 * 60_000;
 
 /** What the lane holds. */
 export interface PressureState {
-  /** The last reading that landed. */
-  last: { at: number; psi: HostPsi } | null;
+  /** The last reading that landed, with the session slice's headroom beside it when the agent sent one (D-8122). */
+  last: { at: number; psi: HostPsi; headroomBytes?: number | null } | null;
   /** When the last ask went unanswered (a timeout, a disconnect, an error reply), or null. */
   unansweredAt: number | null;
   /** When the ask still out was sent, or null. */
@@ -64,4 +64,22 @@ export function pressureBlock(s: PressureState, linkUp: boolean, now: number): H
     memory: s.last?.psi.memory ?? null,
     io: s.last?.psi.io ?? null,
   };
+}
+
+/** D-8122: the MEMORY level one reading carries: memory's `full avg10` alone, at the same two thresholds. The automatic
+ *  wakes' gate reads this, not `pressureLevelOf` (the worst of memory and io over avg10 and avg60, the banner's level):
+ *  the gate is a memory gate, and it reads what the update sweep's pacing reads on the box (`_upd_sweep_over`, memory
+ *  `full avg10`), so the two agree at the same setting and release as soon as the 10-second window eases. */
+export function memoryLevelOf(psi: HostPsi): 'ok' | 'warn' | 'critical' {
+  const w = psi.memory.full.avg10;
+  return w >= PSI_CRITICAL_FULL_PCT ? 'critical' : w >= PSI_WARN_FULL_PCT ? 'warn' : 'ok';
+}
+
+/** D-8122: what the automatic wakes' memory gate (`coord/wakeBudget.ts` `wakeMemoryGate`) reads: the memory level
+ *  (`memoryLevelOf`) of the last reading young enough to say anything (`unmeasured` otherwise), and that reading's headroom (`null` when it carried
+ *  none, or there is no fresh reading). The same freshness rule as `pressureBlock`, so the gate and `FleetHealth.psi`
+ *  never disagree about whether there is a reading. */
+export function memoryReadingOf(s: PressureState, now: number): { level: 'ok' | 'warn' | 'critical' | 'unmeasured'; headroomBytes: number | null } {
+  const fresh = evidence(s, now);
+  return fresh === null ? { level: 'unmeasured', headroomBytes: null } : { level: memoryLevelOf(fresh.psi), headroomBytes: fresh.headroomBytes ?? null };
 }

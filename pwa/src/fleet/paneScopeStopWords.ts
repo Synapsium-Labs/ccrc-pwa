@@ -6,6 +6,9 @@ import { VERB_WRITE_TEXT } from './verbWriteFailure';
 /** ccd's own vocabulary, as `POST /api/coord/pane-scope-stop` takes it. */
 export type PaneScopeStopState = 'live' | 'shadow';
 
+/** The card's element id, so the Browser tools card can bring it into view (D-8121). */
+export const PANE_SCOPE_STOP_ANCHOR = 'settings-pane-scope-stop';
+
 export const PANE_SCOPE_STOP_TEXT = {
   title: 'Stop leftovers',
   purpose: 'When a session is stopped on purpose, what it started in the background keeps running until the sweep finds '

@@ -5,7 +5,7 @@
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { Deps } from './deps.js';
 import type { MeasuredPressure } from './io.js';
-import { EMPTY_PRESSURE, PRESSURE_SWEEP_MS, pressureBlock, type PressureState } from './pressure.js';
+import { EMPTY_PRESSURE, PRESSURE_SWEEP_MS, memoryReadingOf, pressureBlock, type PressureState } from './pressure.js';
 
 export class PressureLane {
   /** The wall clock the pass last started on (0: never). */
@@ -20,6 +20,11 @@ export class PressureLane {
     return this.lastSweep === 0 ? null : pressureBlock(this.state, linkUp, this.now());
   }
 
+  /** D-8122: the last fresh reading's level and headroom, for the automatic wakes' memory gate. Issues no read. */
+  memoryReading(): ReturnType<typeof memoryReadingOf> {
+    return memoryReadingOf(this.state, this.now());
+  }
+
   /** One pass, throttled on its own clock, and never two asks out at once (a stalled one stays the evidence). Never
    *  rejects; PUBLIC through the watcher because `tick()` dispatches it with `void`. */
   async sweep(): Promise<void> {
@@ -31,7 +36,7 @@ export class PressureLane {
     let read: MeasuredPressure;
     try { read = await this.deps().io.pressureMeasured(); } catch { read = { ok: false, reason: 'unanswered' }; }
     const done = this.now();
-    if (read.ok) this.state = { last: { at: done, psi: read.psi }, unansweredAt: null, inflightSince: null };
+    if (read.ok) this.state = { last: { at: done, psi: read.psi, headroomBytes: read.headroomBytes ?? null }, unansweredAt: null, inflightSince: null };
     else if (read.reason === 'unanswered') this.state = { ...this.state, unansweredAt: done, inflightSince: null };
     else this.state = { ...this.state, inflightSince: null };
   }

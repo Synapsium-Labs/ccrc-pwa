@@ -1421,7 +1421,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     expect(declValue(rule, 'margin')?.replace(/\s+/g, ''), 'the strip\'s own gutters').toBe('0var(--sp-4)var(--sp-2)');
   });
 
-  it("lets the sheet's routing row shrink below its three selects", () => {
+  it("lets the sheet's routing row shrink below its four selects, two to a row (D-8121)", () => {
     // The same bug class as `.proj-card`'s `min-width: 0` above: a grid item's
     // automatic minimum size is its min-content, so a bare `1fr` track cannot
     // go narrower than the widest option of the `<select>` inside it and the
@@ -1432,7 +1432,7 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
     // Compared THROUGH `norm`, which is the reader's documented contract:
     // whitespace next to a comma or paren is never significant, so a
     // formatter reflowing this value must not red the suite.
-    expect(cols).toBe(norm('repeat(3, minmax(0, 1fr))'));
+    expect(cols).toBe(norm('repeat(2, minmax(0, 1fr))'));
   });
 
   it('leaves no bare repeat(n, 1fr) track anywhere in pwa/src', () => {

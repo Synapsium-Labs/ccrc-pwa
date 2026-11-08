@@ -210,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
   update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
-  graphify-path playwright   # one line, as `flock timeout`: _check_playwright is at the END of this file
+  graphify-path playwright browser-mcp   # one line, as `flock timeout`: _check_playwright and then _check_browser-mcp are at the END of this file
   build
   provenance
   fleet
@@ -11879,4 +11879,83 @@ _check_playwright() {
   _dr_warn playwright "${#failed[@]} of $n cached browser builds cannot start: $(_dr_join "${failed[@]}")${ok_list:+; started: $ok_list}" \
     "a run that asks for one of these fails the same way. From the project whose run needs it: npx playwright install --with-deps <browser> fetches the build that project pins and the libraries it wants (root is needed for the libraries); a library the distro has moved past needs a Playwright release built for this distro. Delete a build no run asks for from $root"
   return 2
+}
+
+# ── browser-mcp ───────────────────────────────────────────────────────────
+# THE BROWSER MCP SERVERS RUNNING AGAINST THE SESSIONS THAT ASKED FOR THEM (D-8121). Every spawn records what it applied
+# in `~/.cc-sessions/<id>.browsermcp` (`on` or `off`; ccd's `_browser_spawn_compose`), and the box default is off, so a
+# browser server running under a session whose spawn did not apply `on` is either a pane spawned before this ccd (it keeps
+# its servers until its next spawn) or a server CCRC_BROWSER_MCP_SERVERS does not name. Two counts, each read, none
+# re-derived:
+#   * USING: the Claude Code processes that run at least one configured browser server — the distinct parents of the
+#     topmost matching process of each server's tree (a server's launcher is a direct child of its session's Claude Code).
+#     A process matches a name when its command line holds the name's server key (the part after the last `:`) and `mcp`:
+#     `npm exec @playwright/mcp@latest` and `node …/playwright-mcp` for `plugin:playwright:playwright`, `npm exec
+#     chrome-devtools-mcp@…` for `plugin:chrome-devtools-mcp:chrome-devtools` (measured, the plans note of 2026-11-08). A
+#     command line that merely names both words is counted too: this is a count to read, never an act. A CLAUDE CODE
+#     PROCESS IS NEVER A SERVER, whatever its argv names: every session spawned with browser off carries the denial
+#     inline (`--settings '{"deniedMcpServers":[{"serverName":"plugin:chrome-devtools-mcp:chrome-devtools"},…]…}'`),
+#     and the native binary keeps that whole argv in `ps`, so without this every off session would match and its pane
+#     shell would be counted as running a server. Claude Code is a process whose first word's basename is `claude` or
+#     whose command line holds `--settings` or `deniedMcpServers` (`_dr_bmcp_is_claude`).
+#   * ON: the registry rows whose record says `on`. A hibernated row keeps its record, so ON can only be too high, which
+#     reads as PASS: the check never warns on a fleet that is doing what was asked.
+# WARN when USING is above ON, with the remedy (restart the idle ones, or fix the list); PASS otherwise; SKIP on a
+# `server`-role box and where there is no session registry. Never FAIL: the servers cost memory, not correctness.
+_dr_bmcp_ps() { ps -eo pid=,ppid=,args= 2>/dev/null; }   # THE SEAM: a test plants a process table
+_dr_bmcp_is_claude() {   # args -> 0 iff the command line is a Claude Code session's, never a browser server's
+  local a="$1" w="${1%% *}"
+  [[ "${w##*/}" == claude ]] && return 0
+  case "$a" in *"--settings "*|*"--settings="*|*deniedMcpServers*) return 0 ;; esac
+  return 1
+}
+_check_browser-mcp() {
+  local _srv_role="" reg names keys=() k n pid ppid args f on=0 using=0 procs=0
+  local -A match=() parent=() seen=()
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip browser-mcp "this box records CCRC_ROLE=server, so it runs no session"; return 3
+  fi
+  reg="$HOME/.cc-sessions"
+  if [ ! -d "$reg" ]; then
+    _dr_skip browser-mcp "no session registry at ~/.cc-sessions, so no session runs a browser server"; return 3
+  fi
+  if ! _ccrc_knob CCRC_BROWSER_MCP_SERVERS "$(_browser_mcp_servers_default)"; then
+    _dr_warn browser-mcp "$KNOB_WHY" "rewrite that line of ~/.ccrc/ccrc.env as a plain CCRC_BROWSER_MCP_SERVERS=<names> line (deploy/ccrc.env.example shows it)"
+    return 2
+  fi
+  names="$KNOB"
+  [ -n "$names" ] && _browser_mcp_servers_ok "$names" || names="$(_browser_mcp_servers_default)"
+  IFS=, read -r -a keys <<<"$names"
+  local v
+  for f in "$reg"/*.browsermcp; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    v=""; IFS= read -r v < "$f" 2>/dev/null || :
+    [ "$v" = on ] && on=$((on + 1))
+  done
+  while read -r pid ppid args; do
+    [[ "$pid" =~ ^[0-9]+$ && "$ppid" =~ ^[0-9]+$ ]] || continue
+    parent["$pid"]="$ppid"
+    case "$args" in *mcp*) ;; *) continue ;; esac
+    _dr_bmcp_is_claude "$args" && continue
+    for n in "${keys[@]}"; do
+      k="${n##*:}"
+      case "$args" in *"$k"*) match["$pid"]=1; break ;; esac
+    done
+  done < <(_dr_bmcp_ps)
+  for pid in "${!match[@]}"; do
+    procs=$((procs + 1))
+    ppid="${parent[$pid]}"
+    [ -n "${match[$ppid]:-}" ] && continue   # not the top of its server's tree
+    [ -n "${seen[$ppid]:-}" ] && continue
+    seen["$ppid"]=1; using=$((using + 1))
+  done
+  local detail
+  detail="$using Claude Code process$([ "$using" -eq 1 ] || printf es) run$([ "$using" -eq 1 ] && printf s) a browser MCP server ($procs process$([ "$procs" -eq 1 ] || printf es) in all); $on session$([ "$on" -eq 1 ] || printf s) last spawned with browser on"
+  if [ "$using" -gt "$on" ]; then
+    _dr_warn browser-mcp "$detail — the rest were spawned before the default turned off, or run a server CCRC_BROWSER_MCP_SERVERS ($names) does not name" \
+      "a session keeps its servers until its next spawn: restart the idle ones (Restart, or a hibernation and its wake), turn Stop leftovers on (Settings › Automation) so a hibernation takes the servers down with the pane, or add the server's name (claude -p's init event lists it) to CCRC_BROWSER_MCP_SERVERS"
+    return 2
+  fi
+  _dr_pass browser-mcp "$detail"
 }

@@ -64,6 +64,9 @@ export const isArchivedRow = (s: { readonly bucket: SessionBucket }): boolean =>
  *  lines warning about. */
 export type IdentityField = 'uuid' | 'wrapper' | 'workdir';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const IDENTITY_FIELD_MAP: Record<IdentityField, true> = { uuid: true, wrapper: true, workdir: true };
+
 /** Whether a registry row is a CHILD (spec §4, §5.1). Three answers, never two: an unreadable or malformed
  *  marker is neither "a child" nor "not a child", and callers act on it in OPPOSITE directions — a bind
  *  REFUSES, a reclaim DEFERS. */
@@ -332,6 +335,13 @@ export interface FleetSession {
    *  that gives no time carries the stop stamp's time instead, and null with no readable stop stamp (D-8067). ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
+  /** D-8121: what this session's last spawn applied for the browser MCP servers, from `$REG/<id>.browsermcp` (ccd's
+   *  `_browser_spawn_compose`, rewritten at every spawn; read only when the registry listing names it): `on` (it starts
+   *  the servers its account enables), `off` (they were denied), `unreadable` (listed, but its bytes did not come back as
+   *  one of the two). Null: no record — a pane spawned before this ccd, which runs whatever its account enables. ABSENT
+   *  (optional): an older server. The intended value is `route.fields.browser`, else the box default; the two differ
+   *  until the next spawn (`browserMcpView`, the PWA's one reader). Display only: no decision reads it. ADDITIVE. */
+  browserMcp?: BrowserMcpApplied | null;
   /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
    *  only rendered by a reader: `alive`, `asleep` (hibernated, woken by mail or ensure), `dead` (the pane is gone and the
    *  lifecycle is one `lifecycleIsDead` names) or `unknown` (a doubt: tmux did not answer, the lifecycle could not be
@@ -912,6 +922,10 @@ export function paneWidth(s: { paneCols?: number | null }): number | null {
  *  `subject` is the row label, `activeForm` the present-participle line the
  *  spinner wears while the task runs ("Building claude_spend_reader…"). */
 export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const TASK_STATUS_MAP: Record<TaskStatus, true> = { pending: true, in_progress: true, completed: true };
+export const TASK_STATUSES: readonly TaskStatus[] = Object.keys(TASK_STATUS_MAP) as TaskStatus[];
 
 export interface TaskItem {
   id: string;            // numeric string — Claude Code's own file name / task number
@@ -2413,6 +2427,10 @@ export function foldSkillStates(states: readonly SkillState[]): SkillState {
 /** What one precondition contributes to the aggregate. */
 export type PreconditionCell = 'ok' | 'blocked' | 'unknown';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const PRECONDITION_CELL_MAP: Record<PreconditionCell, true> = { ok: true, blocked: true, unknown: true };
+export const PRECONDITION_CELLS: readonly PreconditionCell[] = Object.keys(PRECONDITION_CELL_MAP) as PreconditionCell[];
+
 /**
  * THE per-precondition predicate, once (fix round 1, minor 5).
  *
@@ -3111,6 +3129,13 @@ const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[
   return { count, kinds: kinds as string[] };
 };
 
+/** D-8121: a PRESENT `FleetSession.browserMcp` off raw JSON (the caller keeps an absent key absent). Null or a word
+ *  outside the three → null. */
+const reviveBrowserMcp = (o: RawObj, k: string): BrowserMcpApplied | null => {
+  const v = o[k];
+  return typeof v === 'string' && (BROWSER_MCP_APPLIED as readonly string[]).includes(v) ? v as BrowserMcpApplied : null;
+};
+
 /** D-5237. Absent → null (an older snapshot or server predates the field);
  *  malformed → null too (`reviveBackground`'s rule: a display line, it gates
  *  nothing); an unknown cause word → `unknown`. */
@@ -3124,7 +3149,7 @@ const reviveLastEnd = (o: RawObj, k: string): LastEnd | null => {
   return { at, cause: isRestartCause(cause) ? cause : 'unknown' };
 };
 
-const IDENTITY_FIELDS: readonly string[] = ['uuid', 'wrapper', 'workdir'];
+const IDENTITY_FIELDS: readonly string[] = Object.keys(IDENTITY_FIELD_MAP);
 
 /** `FleetSession.unmeasured` — split from every OTHER array field above on
  *  purpose: absent degrades to `[]`, not to `null` (`optSubagents`'s own
@@ -3208,6 +3233,11 @@ function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | nu
  *  member that means "the server could not name ccd's rc". Either way the
  *  rest of the snapshot survives, and a non-string still rejects. */
 export type UnnamedSpawnWord = 'unrecognised' | 'keep';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const UNNAMED_SPAWN_WORD_MAP: Record<UnnamedSpawnWord, true> = { unrecognised: true, keep: true };
+export const UNNAMED_SPAWN_WORDS: readonly UnnamedSpawnWord[] =
+  Object.keys(UNNAMED_SPAWN_WORD_MAP) as UnnamedSpawnWord[];
 
 /** One persisted session in today's shape, or null if it cannot be one. */
 /** A `Presence` word, read from a persisted row (`reviveFleetSession`, D-7208). */
@@ -3376,6 +3406,10 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // D-5242. Absent → null: an older snapshot or server predates the field, and a session it did not know was
       // asleep reads as the stopped row it showed then.
       hibernatedAt: optNum(o, 'hibernatedAt'),
+      // D-8121: optional on the type, so `run`'s form below: an absent key stays absent (a snapshot or server from
+      // before the field said nothing), and a present one this build cannot read revives as null (a display line, it
+      // gates nothing).
+      ...(o['browserMcp'] === undefined ? {} : { browserMcp: reviveBrowserMcp(o, 'browserMcp') }),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -3776,6 +3810,10 @@ export interface FleetHealth {
  */
 export type BuildAgreement = 'agreed' | 'skewed' | 'unknown';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const BUILD_AGREEMENT_MAP: Record<BuildAgreement, true> = { agreed: true, skewed: true, unknown: true };
+export const BUILD_AGREEMENTS: readonly BuildAgreement[] = Object.keys(BUILD_AGREEMENT_MAP) as BuildAgreement[];
+
 /* ---------------------------------------------------------------------------
  * The lifecycle JOURNAL's MIRROR — build 9's provenance record, server side.
  *
@@ -3963,8 +4001,12 @@ export interface AccountUsage {
   /** Width of the 5h window in minutes, from the producer. `0` means the plan
    *  HAS NO 5h window — a different fact from "unmeasured", though both read as
    *  `five: null`. ADDITIVE and OPTIONAL: only a producer that knows the width
-   *  states it, so every Anthropic row keeps exactly the shape it has today, and
-   *  an older client that has never heard of the key is unaffected. */
+   *  states it, so a row that reports its 5h window keeps exactly the shape it
+   *  has today, and an older client that has never heard of the key is
+   *  unaffected. Codex lanes carry it from the backend; an Anthropic lane carries
+   *  it once the statusline writer has seen a whole 5h window of its readings
+   *  with no 5h figure (D-8120), and the Accounts screen then says "No 5-hour
+   *  limit" in place of the 5h meter. */
   fiveWindowMinutes?: number;
   sevenRolledOver: boolean;     // the 7d window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
   disabled: boolean;            // ccd's kill-switch for this lane is on
@@ -4462,6 +4504,13 @@ export interface SlashCommand {
  *  whose whole text is `IDLE_COMPACT_NUDGE_PROMPT`, shown as a pill so the
  *  operator sees why a turn started. */
 export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit' | 'idle-compact' | 'idle-compact-nudge';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const SYSTEM_ORIGIN_MAP: Record<SystemOrigin, true> = {
+  'resume-prompt': true, 'no-response': true, limit: true, 'idle-compact': true, 'idle-compact-nudge': true,
+};
+export const SYSTEM_ORIGINS: readonly SystemOrigin[] = Object.keys(SYSTEM_ORIGIN_MAP) as SystemOrigin[];
+
 /** `stale-task-strip` (D-5372): a task list whose newest file is older than
  *  this is a plan left open, not running work — the strip says "N open" and
  *  "Plan · untouched <age>" rather than "N running". Claude Code rewrites a task
@@ -5597,6 +5646,11 @@ export interface ProgramKickoffResumeInput { runId: unknown; wave: unknown }
  *  which errors an operator sees with nothing red. */
 export type ProgramKickoffField = 'slug' | 'title' | 'resume';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const PROGRAM_KICKOFF_FIELD_MAP: Record<ProgramKickoffField, true> = { slug: true, title: true, resume: true };
+export const PROGRAM_KICKOFF_FIELDS: readonly ProgramKickoffField[] =
+  Object.keys(PROGRAM_KICKOFF_FIELD_MAP) as ProgramKickoffField[];
+
 export type ProgramKickoffVerdict =
   | { ok: true; slug: string; title: string; body: string; bytes: number;
       resume?: ProgramKickoffResume }
@@ -6220,8 +6274,13 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `degraded` and `inert` are ccd's OWN fields (routing spec §5.2) and are
  * deliberately absent: nothing on the wire ever sets them, so a body naming
  * either is `unknown-field`, the same refusal an unrecognised word gets.
+ *
+ * `browser` (D-8121) is `on`/`off`: whether the session's NEXT spawn starts the
+ * browser MCP servers (absent: the box default, `CCRC_BROWSER_MCP_DEFAULT`). It
+ * has no keystroke and is never applied live; `FleetSession.browserMcp` says
+ * what the running pane's spawn applied.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser'] as const;
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
 
@@ -6337,6 +6396,15 @@ export function routeParseDetail(p: Extract<RouteFieldsParse, { ok: false }>): s
  */
 export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
   return Object.keys(r).length > 0 ? r : null;
+}
+
+/** D-8121: a route with its `browser` field kept only when the box takes it (`browser-route-v1`; the caller measures
+ *  the cap). `dropped` is true when the field was there and is not sent, so the caller can journal the omission; a route
+ *  left with no field is `null`, `routeFieldsOrNull`'s collapse. */
+export function routeForBrowserCap(r: RouteFields | null, browserOk: boolean): { route: RouteFields | null; dropped: boolean } {
+  if (r === null || r.browser === undefined || browserOk) return { route: r, dropped: false };
+  const { browser: _dropped, ...rest } = r;
+  return { route: routeFieldsOrNull(rest), dropped: true };
 }
 
 /**
@@ -6471,7 +6539,8 @@ export type RunRefuseCode =
   | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'status-unmeasurable' | 'worker-starting' | 'attribution-required' | 'not-a-child'   // the last two: D-5298
   | 'cap-review-rounds'   // D-6795: a fourth review run for one work run
-  | 'ejection-not-merging';   // D-7619: an ejection body on a run not at merging
+  | 'ejection-not-merging'   // D-7619: an ejection body on a run not at merging
+  | 'intent-held';   // D-8085: another programme's run holds a landing intent this dispatch names
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6482,7 +6551,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'review-in-flight': true, 'claimant-is-a-worker': true,
   'workspace-spent': true, 'spent-unmeasured': true,
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
-  'cap-review-rounds': true, 'ejection-not-merging': true,
+  'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -6513,6 +6582,8 @@ export type MailGate =
   | 'same-sweep' | 'in-flight' | 'cooldown'
   | 'registry-absent' | 'registry-unmeasurable'
   | 'tmux-gone' | 'session-dead' | 'tmux-unknown' | 'hibernated'   // D-5242: asleep, never parked — the mail lane wakes it
+  // D-8122: asleep, and its wake waits on the node's memory gate (pressure at the gate level, or headroom under the floor)
+  | 'wake-pressure'
   | 'pending-ask' | 'no-pane' | 'no-config-dir'
   | 'not-idle' | 'not-quiet' | 'turn-mark-unreadable'
   // D-5840 (D-5838): an `enter-ignored` PARK whose recipient's box still holds what it
@@ -6528,7 +6599,7 @@ export type MailGate =
 const MAIL_GATE_MAP: Record<MailGate, true> = {
   'same-sweep': true, 'in-flight': true, cooldown: true,
   'registry-absent': true, 'registry-unmeasurable': true,
-  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true,
+  'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true, 'wake-pressure': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
   'stash-failed': true, 'stash-occupied': true,
@@ -6818,10 +6889,125 @@ export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | 
 /** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
 export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
 
+/** A programme's name from its slug (D-8071): hyphens read as spaces and the first letter capital, so `programme-a` is
+ *  `Programme a`. The name a programme row takes when an open sends no `programmeTitle`, and the one migration 43 sets. */
+export const programmeNameFromSlug = (slug: string): string => {
+  const words = slug.replace(/-/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+/** Who closed a run (D-8071, migration 44): the three words `run_events.causedBy` carries for a close. */
+export type RunClosedBy = 'coordinator' | 'operator' | 'sweep';
+export const isRunClosedBy = (v: unknown): v is RunClosedBy => v === 'coordinator' || v === 'operator' || v === 'sweep';
+
+/** Why a run is stuck (spec 2026-11-04 §7, first match wins in this order). */
+export type StuckReason = 'owner-gone' | 'start-never-landed' | 'review-of-closed' | 'overtaken' | 'never-started';
+export const STUCK_REASONS: readonly StuckReason[] = ['owner-gone', 'start-never-landed', 'review-of-closed', 'overtaken', 'never-started'];
+export const isStuckReason = (v: unknown): v is StuckReason => typeof v === 'string' && (STUCK_REASONS as readonly string[]).includes(v);
+/** Why the reason holds (§7, A54). `name-reused` and `later-review` have no producer until their rows land. */
+export type StuckCause =
+  | 'coordinator-archived' | 'coordinator-forgotten' | 'coordinator-removed' | 'coordinator-stopped' | 'coordinator-gone'
+  | 'worker-stopped' | 'worker-gone' | 'name-reused' | 'target-closed' | 'later-review';
+export const STUCK_CAUSES: readonly StuckCause[] = [
+  'coordinator-archived', 'coordinator-forgotten', 'coordinator-removed', 'coordinator-stopped', 'coordinator-gone',
+  'worker-stopped', 'worker-gone', 'name-reused', 'target-closed', 'later-review',
+];
+export const isStuckCause = (v: unknown): v is StuckCause => typeof v === 'string' && (STUCK_CAUSES as readonly string[]).includes(v);
+/** The verdict. `since` is when the reason began (epoch ms); `closes` is `{at, armed}` or null when no lane row has a clock. */
+export interface RunStuck {
+  reason: StuckReason;
+  cause: StuckCause | null;
+  since: number;
+  closes: { at: number; armed: boolean } | null;
+}
+/** Who has the next move (§7, A29). There is no `operator` value: "waits on you" comes only from the one needs-you source (D-6170). */
+export type RunWaitsOn = 'worker' | 'reviewer' | 'coordinator' | 'merge-queue' | 'nobody';
+export const RUN_WAITS_ON: readonly RunWaitsOn[] = ['worker', 'reviewer', 'coordinator', 'merge-queue', 'nobody'];
+export const isRunWaitsOn = (v: unknown): v is RunWaitsOn => typeof v === 'string' && (RUN_WAITS_ON as readonly string[]).includes(v);
+
+/** `GET /api/runs/find`'s query (D-8071, spec 2026-11-04 §11.4). Every field optional on the wire. */
+export interface RunFindQuery {
+  q?: string;
+  scope?: 'open' | 'closed' | 'all';
+  closedBy?: string;
+  closedSince?: number;
+  program?: string;
+  limit?: number;
+  beforeAt?: number;
+  beforeId?: number;
+}
+
+/** One slim run row of `find`: stored columns only, no hydrate, no tally, no spend (D-8071, §11.4). `claimedBy` keeps
+ *  Resume reachable from a hit. The stored columns are `RunSummary`'s own fields, picked rather than restated, so the
+ *  two cannot drift; the close fields and the title are REQUIRED here, where `RunSummary` carries them optional. */
+export type RunHit = Pick<RunSummary,
+  'id' | 'program' | 'programTitle' | 'wave' | 'waveOf' | 'kind' | 'reviews' | 'state' | 'project' | 'workspace'
+  | 'branch' | 'claimedBy' | 'openedAt' | 'closedAt'> & {
+  runTitle: string | null;
+  closedBy: RunClosedBy | null;
+  closeDetail: string | null;
+};
+
+/** `GET /api/runs/find`'s answer (D-8071, §11.4). `exact` is the run whose id is `q`, whatever the filters; `runs` is
+ *  open runs (first page only) then closed runs by `closedAt` descending; `reviewsOf` is the runs that review run `q`;
+ *  `next` is the cursor for the next page of closed runs, or null. */
+export interface RunFindAnswer {
+  ok: true;
+  exact: RunHit | null;
+  runs: RunHit[];
+  reviewsOf: RunHit[];
+  next: { beforeAt: number; beforeId: number } | null;
+}
+
+/** One row of a run's trail (D-8071, spec 2026-11-04 §11.5). `by` is who caused it: a stored session id reads 'session'.
+ *  `folded` marks a span of stall observations as one row: the count, and the last one's time (`at` is the first's). */
+export interface RunRecordEvent {
+  at: number;
+  from: string;
+  to: string;
+  by: 'coordinator' | 'operator' | 'sweep' | 'session';
+  detail: string | null;
+  folded?: { count: number; untilAt: number };
+}
+
+/** `GET /api/runs/:id/record`'s answer (D-8071, §11.5). `events` are newest first, at most 200; `olderEvents` counts the
+ *  rest. `reviewedBy` is the runs that review this one. */
+export interface RunRecordAnswer {
+  ok: true;
+  run: RunSummary;
+  events: RunRecordEvent[];
+  reviewedBy: RunHit[];
+  olderEvents: number;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
   programTitle: string;
+  /** The title this run was opened with (D-8071, migration 43), or null for a run opened before it. OPTIONAL on the
+   *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
+   *  `FLEET_PROTO` is not bumped. */
+  runTitle?: string | null;
+  /** Who closed the run, from `runs.closedBy` (D-8071, migration 44), or null for a run closed by a session id or before
+   *  the column. OPTIONAL on the wire: an older server omits it. Read it ONLY through `closeWords`
+   *  (`pwa/src/fleet/closeWords.ts`). ADDITIVE; `FLEET_PROTO` is not bumped. */
+  closedBy?: RunClosedBy | null;
+  /** Why it was closed, from `runs.closeDetail` (redacted), or null. OPTIONAL on the wire; read ONLY through
+   *  `closeWords`. ADDITIVE. */
+  closeDetail?: string | null;
+  /** The stuck verdict (D-8071; spec 2026-11-04 §7, §11.2). Absent means the server's reader is empty (before its first
+   *  pass, or an older server); null means no verdict; set means the run is stuck for `reason`. OPTIONAL on the wire.
+   *  Read it ONLY through `runStateWord` and `stuckLine`. ADDITIVE; `FLEET_PROTO` is not bumped. */
+  stuck?: RunStuck | null;
+  /** Who has the next move (§7, A29). It has no `operator` value (D-6170). OPTIONAL; read ONLY through `runStateWord`
+   *  and `runWaitLine`. ADDITIVE. */
+  waitsOn?: RunWaitsOn;
+  /** The stuck run a planned run waits behind (§7), or null. OPTIONAL; read ONLY through `runWaitLine`. ADDITIVE. */
+  blockedBy?: number | null;
+  /** True when the run's claimant reads gone (§7, A56), false when alive, asleep or uncertain. Absent when the server has
+   *  no reading (A60). A closed run carries it only from its programme's entry (A55). OPTIONAL; read ONLY through
+   *  `coordinatorGoneOf`. ADDITIVE. */
+  coordinatorGone?: boolean;
   wave: number;
   waveOf: number | null;
   project: string;
@@ -10078,9 +10264,11 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
+  'browser-tools': true,
+  'memory-gate': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
 
@@ -10091,7 +10279,7 @@ export const BOX_SETTING_APPLIES: readonly BoxSettingApplies[] = Object.keys(BOX
 
 export interface BoxSettingSpec { cls: BoxSettingClass; family: BoxSettingFamily; roles: readonly NodeRole[]; applies: BoxSettingApplies }
 
-/** All 89 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
+/** All 93 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
 export const BOX_SETTING_TABLE = {
   CCRC_BACKUP_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
   CCRC_BACKUP_DATA_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
@@ -10182,11 +10370,18 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_SERVICE_TOKEN_FILE: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_UNIT_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
+  // D-8122: the automatic wakes' memory gate (read by the server) and the update sweep's pacing (read by the fleet box).
+  CCRC_WAKE_PRESSURE_GATE: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_WAKE_HEADROOM_MIN_GIB: { cls: 'value', family: 'memory-gate', roles: ['server', 'both'], applies: 'run' },
+  CCRC_SWEEP_BATCH: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_SWEEP_PRESSURE_WAIT_S: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
 export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
 /** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
 export const BOX_SETTING_SPECS: Readonly<Record<BoxSettingName, BoxSettingSpec>> = BOX_SETTING_TABLE;
-/** Version 2's row list and order: every name the table does not omit (61). */
+/** Version 2's row list and order: every name the table does not omit (65). */
 export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SETTING_TABLE) as BoxSettingName[]).filter((k) => BOX_SETTING_SPECS[k].cls !== 'omit');
 
 /** The words a refused row's `why` is one of (D22): every sentence `_set_says` prints for the shown keys, de-duplicated. A list on
@@ -10194,6 +10389,7 @@ export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SE
 export const BOX_SETTING_REFUSAL_WORDS = [
   '0, or a whole number with a K, M, G or T suffix',
   'a URL such as https://testbox.invalid',
+  'a comma-separated list of MCP server names (letters, digits and . _ @ : -)',
   'a list of file name patterns',
   'a nice value from 0 to 19',
   'a number of seconds (digits only, at most 18)',
@@ -10206,6 +10402,7 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'a whole number from 1 to 99',
   'a whole number from 1 to 999',
   'a whole number from 2 to 9999',
+  'a whole number of GiB from 0 to 1024',
   'a whole number of bytes from 1 to 18 digits',
   'a whole number of seconds from 0 to 3600',
   'a whole number of seconds from 0 to 9223372036854775807',
@@ -10224,14 +10421,26 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'an absolute path, or one starting ~/, with no . or .. part',
   'install or refuse',
   'local or fail',
+  'on or off',
   'space-separated repository keys (<name>-<8 hex digits>)',
+  'warn, critical or off',
 ] as const;
 export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
 
 /** The fixed words a setting's check admits beside the value shape, a key's own and no other's (D-7914). */
 export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, readonly string[]>>> = {
   CCRC_TESTBOX_LOST_RUN: ['local', 'fail'], CCRC_TESTBOX_FALLBACK_INSTALL: ['install', 'refuse'],
+  CCRC_BROWSER_MCP_DEFAULT: ['on', 'off'],
+  CCRC_WAKE_PRESSURE_GATE: ['warn', 'critical', 'off'],
 };
+/** `CCRC_BROWSER_MCP_SERVERS`' default (D-8121): the two browser MCP servers' names as Claude Code names them
+ *  (`plugin:<plugin>:<server key>`), measured from `claude -p`'s init event (2.1.318; the plans note of 2026-11-08). The
+ *  second copy of ccd/ccrc's `_browser_mcp_servers_default`; `ccd-browser-spawn.test.ts` holds the two equal. */
+export const BROWSER_MCP_SERVERS_DEFAULT = 'plugin:playwright:playwright,plugin:chrome-devtools-mcp:chrome-devtools';
+/** D-8121: what a spawn's record (`$REG/<id>.browsermcp`) can say, as the server reads it (`FleetSession.browserMcp`). */
+export type BrowserMcpApplied = 'on' | 'off' | 'unreadable';
+const BROWSER_MCP_APPLIED_MAP: Record<BrowserMcpApplied, true> = { on: true, off: true, unreadable: true };
+export const BROWSER_MCP_APPLIED: readonly BrowserMcpApplied[] = Object.keys(BROWSER_MCP_APPLIED_MAP) as BrowserMcpApplied[];
 /** The cut of a recorded text, and the most an `ok` value may be; a refusal's `why` is cut at the second. */
 export const BOX_SETTINGS_TEXT_MAX = 480;
 export const BOX_SETTINGS_WHY_MAX = 240;
@@ -11291,6 +11500,12 @@ export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice {
 /** What armed the lane, as the resolver measured it (§5.5, §5.7): Settings, the fleet box's legacy file, both during
  *  the hand transition, or neither. Only a live lane is armed by anything. */
 export type CollectArmedBy = 'settings' | 'legacy-marker' | 'both' | 'neither';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const COLLECT_ARMED_BY_MAP: Record<CollectArmedBy, true> = {
+  settings: true, 'legacy-marker': true, both: true, neither: true,
+};
+export const COLLECT_ARMED_BY_WORDS: readonly CollectArmedBy[] = Object.keys(COLLECT_ARMED_BY_MAP) as CollectArmedBy[];
 
 /** `POST /api/coord/collect-lane`'s body (§5.6). `confirm`, when present, is the key of 8 lowercase hex characters
  *  that a 409 answered with. The route refuses any other key, and any other shape of `confirm`, with a 400. */
@@ -12759,6 +12974,10 @@ export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 /** Which table a digest line came from, and so which id space `id` is in. */
 export type DigestRowKind = 'ask' | 'approval';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DIGEST_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true };
+export const DIGEST_ROW_KINDS: readonly DigestRowKind[] = Object.keys(DIGEST_ROW_KIND_MAP) as DigestRowKind[];
+
 /** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
  *  row stored: `text` is the question, or the command's first `DIGEST_COMMAND_CHARS` characters. */
 export interface DigestLine {
@@ -12985,6 +13204,11 @@ export type AccountGateRefusal = (typeof ACCOUNT_GATE_REFUSALS)[number];
 /** The class of `cfg.origin` the gate decides on, and `GET /api/accounts`'s `connect.origin` (A12): https, plain HTTP
  *  on a loopback host, or anything else. */
 export type AccountOriginClass = 'https' | 'loopback' | 'insecure';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const ACCOUNT_ORIGIN_CLASS_MAP: Record<AccountOriginClass, true> = { https: true, loopback: true, insecure: true };
+export const ACCOUNT_ORIGIN_CLASSES: readonly AccountOriginClass[] =
+  Object.keys(ACCOUNT_ORIGIN_CLASS_MAP) as AccountOriginClass[];
 
 /** One credential shape (D-5513, plan Task A10): a bare regular-expression source, with no flags and no boundary, so
  *  each reader adds its own (`server/src/accounts/mask.ts` for every egress of session-derived text,
@@ -13596,4 +13820,34 @@ export interface FleetHealth {
    * alone; absent reads as UNKNOWN, never as a healthy backup and never as an alarm.
    */
   backup?: BackupHealth;
+}
+
+/** One subject of an `AttentionRow`: a session, and the run it belongs to where its lane knows one. */
+export interface AttentionSubject {
+  readonly sessionId: string;
+  readonly runId: number | null;
+}
+
+/** The lane whose attention list an `AttentionRow` came from. */
+export type AttentionLane = 'child-reclaim' | 'expiry' | 'dead-coordinator';
+const ATTENTION_LANE_MAP: Record<AttentionLane, true> = { 'child-reclaim': true, expiry: true, 'dead-coordinator': true };
+export const ATTENTION_LANES: readonly AttentionLane[] = Object.keys(ATTENTION_LANE_MAP) as AttentionLane[];
+
+/** ONE row of the cleanup row's attention lists (consolidation spec K1, "Consumers move"; #2366), the shape the PWA's
+ *  three coord-frame readers (`childReclaimAttentionOf`, `expiryAttentionOf`, `deadCoordinatorAttentionOf`) all
+ *  return. A PWA reading, not a wire shape: each lane's own field (`ChildReclaimAttention`, `ExpiryAttention`,
+ *  `DeadCoordinatorAttention`) stays on the frame unchanged, and its reader maps it here. Appended at the foot, so no
+ *  line cited above moves.
+ *
+ *  `kind` is the lane's kind token the line leads with, or `null` where the line leads with no word (child
+ *  reclamation's). `who` holds one entry per name the line shows: one subject each for a collapsed kept line's
+ *  members, every claimant together for the circuit breaker's. `sentence` is the SERVER's. `sentenceFirst` is the
+ *  collapsed kept line's order: its sentence states the count, and its members follow. */
+export interface AttentionRow {
+  readonly lane: AttentionLane;
+  readonly key: string;
+  readonly kind: string | null;
+  readonly who: readonly (readonly AttentionSubject[])[];
+  readonly sentence: string;
+  readonly sentenceFirst: boolean;
 }

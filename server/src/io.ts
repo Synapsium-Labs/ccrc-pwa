@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { ReadFailure, TestboxOpReply, TestboxToolsSyncReply } from '../../shared/agent-protocol.js';
 import type { DiskMeasured } from '../../shared/disk.js';
 import { measureDisk } from '../../agent/src/disk.js';
-import { measurePressure } from '../../agent/src/pressure.js';
+import { measureHeadroom, measurePressure } from '../../agent/src/pressure.js';
 import { measureBackup } from '../../agent/src/backup.js';
 import type { BackupRead } from '../../shared/backup.js';
 import { measureTestbox, syncTestboxTools } from '../../agent/src/testboxOp.js';
@@ -297,7 +297,7 @@ export type MeasuredBackup =
 
 /** The `pressure` reading as a seam answers it (#1170), or why there is none. */
 export type MeasuredPressure =
-  | { ok: true; psi: HostPsi }
+  | { ok: true; psi: HostPsi; headroomBytes?: number | null }
   | { ok: false; reason: 'unsupported' | 'unanswered' };
 
 /** Read byte range [start, end) of `file` (createReadStream `end` is inclusive). */
@@ -525,7 +525,7 @@ export const localIO: FleetIO = {
   // The agent's own reader on this box's /proc (#1170): a box with no PSI (not Linux, or an old kernel) is
   // `unsupported`, never a stall, so a local fleet never reads its own missing /proc as host pressure.
   pressureMeasured: async () => {
-    try { return { ok: true, psi: measurePressure() }; } catch { return { ok: false, reason: 'unsupported' }; }
+    try { return { ok: true, psi: measurePressure(), headroomBytes: measureHeadroom() }; } catch { return { ok: false, reason: 'unsupported' }; }
   },
 
   // The agent's own `backup` body on this box (D-7858): this process's `CCRC_BACKUP_STATE_DIR` (D-7859). It never throws.

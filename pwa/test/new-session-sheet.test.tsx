@@ -342,8 +342,9 @@ describe('the optional routing row (routing slice 4, Task 6)', () => {
   it('shows the coordinator-row note under the row', async () => {
     await openAtStepTwo([]);
     expect(await screen.findByText(
-      "Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on). "
-      + "If the account can't serve the class today, ccd starts one rung down and restores it when it can.",
+      "Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on); Browser takes the "
+      + "fleet box's (off unless it says on). If the account can't serve the class today, ccd starts one rung down and "
+      + 'restores it when it can.',
     )).toBeInTheDocument();
   });
 });
@@ -452,6 +453,21 @@ describe('the routing row’s third select, and the project order', () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith({
       wrapper: 'claude', project: 'demo', workdir: '/w/demo',
       route: { workflow: 'off' },
+    }));
+  });
+
+  it('Browser alone posts `route: { browser: … }` and nothing else; Box default sends no key (D-8121)', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    expect(screen.getByLabelText('Browser')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('Browser'), { target: { value: 'on' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+      route: { browser: 'on' },
     }));
   });
 

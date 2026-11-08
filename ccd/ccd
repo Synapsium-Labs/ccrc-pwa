@@ -388,9 +388,17 @@ _plat_bytes() {   # <path>... -> total apparent bytes, one integer; rc 1 if not 
 # THE SEPARATOR IS NOT ASSUMED TO BE A DOT: `EPOCHREALTIME` is formatted with
 # the LOCALE's decimal point, and a box running a comma locale would otherwise
 # have its timestamps silently truncated to seconds.
+#
+# THE CLOCK IS READ ONCE. Every expansion of `EPOCHREALTIME` reads the clock
+# anew, so taking the seconds from one expansion and the fraction from a
+# second could straddle a second boundary: seconds N with the fraction of N+1,
+# an answer about 1000 ms in the past. Measured under CPU load: about 4 in
+# 10,000 calls ran backwards by 992-999 ms with two reads, none in 10,059 with
+# one. A deadline taken from such a reading is "now", so the session hook's
+# approval wait ended before its first poll with no ruling read.
 _plat_epoch_ms() {   # -> epoch milliseconds, 13 digits
   if [ -n "${EPOCHREALTIME:-}" ]; then
-    local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
+    local e="$EPOCHREALTIME" s f; s="${e%%[.,]*}" f="${e#*[.,]}"
     f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
     return 0
   fi
@@ -1667,7 +1675,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
                                 # swap.log's floored line, nothing more. If it is ever promoted to a
                                 # wire field it needs a reader and the additive-only contract first.
 # ── The routing record (routing spec 2026-09-14 §5.1) ───────────────────────
-# Seven ordinary registry fields per session, written by `cmd_route` and by ccd
+# Eight ordinary registry fields per session (`browser` joined the seven, D-8121), written by `cmd_route` and by ccd
 # itself (`degraded`, `inert`), read ONLY through `_route_get` below. The fields
 # are a byte channel into an argv and a pane — any session on the box can write
 # them (one UNIX user; attribution, not authentication) — so every value is
@@ -1683,7 +1691,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -1697,6 +1705,9 @@ ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # refusal word, never a guessed key.
 ROUTE_EFFORT_STOPS="low medium high xhigh max"
 ROUTE_WORKFLOWS="on off"
+# `browser` (D-8121): whether this session's spawn starts the browser MCP servers; absent, the box default
+# (`CCRC_BROWSER_MCP_DEFAULT`, off) decides. Read by `_browser_spawn_compose` alone, at a spawn, never typed.
+ROUTE_BROWSERS="on off"
 ROUTE_INERTABLE="effort workflow subagent"
 ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / route-skip notes for one
                                 # id+field. EQUAL TO `COMPACT_NOTE_FLOOR` BY CHOICE, NOT BY DERIVATION:
@@ -8066,9 +8077,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # THE ACTOR IS THE DECLARED ONE WHEN THERE IS ONE. The dispatch path already
   # passes `--actor 'run:<id> dispatch'`, which is a truer answer than the verb's
   # own name; `ws-add` is the fallback for a call that declared nothing.
+  # D-8121: a `--route` that names only `browser` is not a routing answer, so an operator spawn still gets the
+  # coordinator row beside it (`_route_argv_routes`; `_route_any` leaves `browser` out, so the seed is not skipped).
   if (( ${#lc_route[@]} )); then
     _route_argv_write "$id" "${lc_actor:-ws-add}" argv "${lc_route[@]}"
-  elif (( ! norc )); then
+  fi
+  if (( ! norc )) && ! _route_argv_routes "${lc_route[@]}"; then
     _route_seed_default "$id" "$hw"
   fi
   # AFTER the record, never before it: `degraded` is a statement about a record
@@ -9312,6 +9326,11 @@ EOF
   # this token may compose routing fields onto a dispatch argv; one that does
   # not passes none and journals that it could not.
   echo route-argv-v1
+  # browser-route-v1 (D-8121) — `browser` is a routing field (`route --set browser=on|off`, `--route browser=…` on the
+  # minting verbs), and every spawn composes the browser MCP servers' denial from it and the box default, recording what
+  # it applied in `$REG/<id>.browsermcp`. A server that does not see this token sends no `browser` field (an older ccd
+  # refuses the field by name).
+  echo browser-route-v1
   # route-default-v1 — `ws-add --route-default`: the `--route` pairs beside it are the server's default row for the
   # run kind, so their class places as a preference (strict=0) and never refuses a dispatch at the weekly ceiling.
   # A server that does not see this token sends no default route at all (an old ccd would bind the flag as the
@@ -19014,7 +19033,10 @@ _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH
   # as `fiveWindowMinutes` so the two cases stop looking alike in the row (both
   # are `five: null`). When the 5h window does not exist, the weekly figure is
   # not half the truth — it is the WHOLE truth, and max() over the one window
-  # that exists is a real score, not a lower bound.
+  # that exists is a real score, not a lower bound. Anthropic plans with no 5h
+  # window carry the same marker (D-8120): statusline-command.sh states it once
+  # a whole 5h window of that account's readings carried no 5h figure, so this
+  # function reads the fact and never re-derives it from a single null.
   #
   # Read the marker RAW, not through `_limit_field`: it is the row's SHAPE, not a
   # measurement, so the rollover and age rules must not touch it.
@@ -19720,7 +19742,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1 box
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -19778,7 +19800,14 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
-  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
+  # NO BOX IS GO HERE, and only here (D-8116). The newest real row is THIS
+  # process's limit row (a carried-in one answered above), so an open dialog is
+  # Claude Code's own limit dialog, which it opens by itself: the swap carries
+  # the transcript, and the dialog holds nothing a person typed. A draft inside a
+  # bordered box still stands down. Left over: text typed before the dialog
+  # opened may sit hidden under it, and the swap does not carry it.
+  box=$(_pane_box_read "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")
+  [[ "$box" == draft ]] && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
 }
@@ -19802,7 +19831,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # non-empty box (a human is at the keyboard; Enter would submit THEIR text),
   # and the cooldown, which also keeps the box-not-empty line from repeating
   # every five seconds (D-2361).
-  local id="$1" t pane now last
+  local id="$1" t pane now last box why
   t=$(_tmux_t "$id")
   _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
@@ -19813,8 +19842,11 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
-  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "$(date '+%F %T') stale-skip $id: usage limit has reset but the input box is not empty [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+  # An Enter on an open dialog picks its highlighted row (D-8116): no box refuses too.
+  box=$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
+  if [[ "$box" != empty ]]; then
+    why="the input box is not empty"; [[ "$box" == absent ]] && why="no input box is on screen (a dialog is open)"
+    echo "$(date '+%F %T') stale-skip $id: usage limit has reset but $why [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
     return 0
   fi
   echo "$(date '+%F %T') stale-resume $id: usage limit has reset; pressing Enter for Claude Code's own continuation [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
@@ -20770,8 +20802,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # gate's verdict table is untouched), then the per-account and fleet-wide
   # slots order the arrivals. A slot that cannot be written fails OPEN.
   if ! _swap_stagger_off && _affinity_cur_serves "$id" "$wrapper" "$aff_verb" "$hard_blocked"; then
-    _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" \
-      && { _standdown_note "$id" draft; return 0; }
+    # No box on screen (a dialog is open) stands the move down too (D-8116).
+    case "$(_pane_box_read "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")" in
+      draft) _standdown_note "$id" draft; return 0 ;;
+      absent) _standdown_note "$id" no-box; return 0 ;;
+    esac
     _affinity_slot_take "$target"
     case $? in 1) _standdown_note "$id" stagger; return 0 ;; 2) _standdown_note "$id" stagger-unwritable ;; esac
   fi
@@ -20930,7 +20965,7 @@ _pane_statusline_seg() {   # pane-text glyph -> text of the statusline ROW's `<g
   # only where it OPENS a `│` segment of that row, and a LAST segment holding
   # Claude Code's `…` cut mark reads as nothing — a narrow pane clips the row at
   # its width, so that segment is a prefix. LC_ALL=C: byte comparisons against
-  # literal UTF-8, `_pane_box_has_content`'s idiom; mawk and gawk both measured.
+  # literal UTF-8, `_pane_box_read`'s idiom; mawk and gawk both measured.
   printf '%s\n' "$1" | LC_ALL=C awk -v g="$2" '
     { l = $0; sub(/^[ \t]+/, "", l); if (index(l, "👤 ") == 1) row = l }
     END {
@@ -21009,8 +21044,17 @@ _route_word_in() {   # word list — 0 iff word is one of the space-separated li
 }
 _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a session with
   # no field at all is a pre-slice-1 session and gets today's behaviour).
+  # `browser` IS NOT A ROUTING FIELD FOR THIS QUESTION (D-8121): it decides which MCP servers a spawn starts, never the
+  # model, effort or placement, and `_browser_spawn_compose` reads it on its own. A row that names only `browser` is a
+  # row with no routing record, so the coordinator row is still seeded beside it and the spawn composes no route flags.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
+  for f in "${ROUTE_FIELDS[@]}"; do [[ "$f" != browser && -e "$REG/$1.$f" ]] && return 0; done
+  return 1
+}
+_route_argv_routes() {   # k=v... — 0 iff a pair names a field other than `browser` (D-8121): such an argv says what the
+  # session is for, so it replaces the default row; `browser` pairs alone ride beside the default, never instead of it.
+  local kv
+  for kv in "$@"; do [[ "${kv%%=*}" != browser ]] && return 0; done
   return 1
 }
 _route_valid() {   # field value — THREE answers, because two of them are two different
@@ -21039,6 +21083,7 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     subagent) declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 || return 2
               _route_word_in "$v" "${CCRC_SUBAGENT_CLASSES[*]}" ;;
     workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
+    browser)  _route_word_in "$v" "$ROUTE_BROWSERS" ;;
     compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
@@ -21493,7 +21538,7 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
 
 _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean idle turn boundary;
   # 1 with `KS_WHY` one of mid-turn / no-prompt / no-pane-pid / status-unreadable /
-  # not-idle / quiet-unmeasured / not-quiet / drafting and `KS_DETAIL` its sentence.
+  # not-idle / quiet-unmeasured / not-quiet / drafting / no-box and `KS_DETAIL` its sentence.
   #
   # `ctxnote` IS THE CALLER'S OWN MEASUREMENT, spliced into the sentences rather
   # than measured here: the compactor passes `ctx ${pct}%` and gets back byte for
@@ -21581,9 +21626,12 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
+  # No box on screen means a dialog took its place: a keystroke would answer it (D-8116).
   t=$(_tmux_t "$id")
-  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
-    && { KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1; }
+  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in
+    draft) KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1 ;;
+    absent) KS_WHY=no-box; KS_DETAIL="no input box on screen, a dialog is open${ctxnote:+, $ctxnote}"; return 1 ;;
+  esac
   return 0
 }
 
@@ -23404,9 +23452,10 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
 }
 
 # Two readings of the input box from one normalised pane: `_pane_box_draft`
-# keeps `draftOf`'s marker-row contract, while `_pane_box_has_content` asks the
-# safety question every synthesized ccd action needs — whether ANY box row is
-# occupied. Both share the dim/SGR normalizer, so those rules cannot drift.
+# keeps `draftOf`'s marker-row contract, while `_pane_box_read` asks the
+# safety question every synthesized ccd action needs — is the box empty, does
+# ANY box row hold text, or is there no box at all (D-8116). Both share the
+# dim/SGR normalizer, so those rules cannot drift.
 #
 # TWO corrections to the inline first-match, plain-space-anchored grep this
 # replaces, both measured live on 2026-08-14. (The old pattern is DESCRIBED
@@ -23476,31 +23525,53 @@ _pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghost
   LC_ALL=C sed -E $'s/\033\\[0;(1;)?2(;[0-9;]*)?m/\033[2m/g; s/\033\\[(0;)?(1;)?2(;[0-9;]*)?m((\033\\[([13-9][0-9;]*|2|2[013-9;][0-9;]*|22[0-9][0-9;]*)m)|[^\033])*\033\\[(0[0-9;]*|22(;[0-9;]*)?)?m//g; s/\033\\[[0-9;]*m//g'
 }
 
-_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty
+_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty; rc 2 when no box is on screen (D-8116)
+  # THE BOX IS THE BORDERED ONE (D-8116): the last `❯` row directly under a `─`
+  # border, the rule `_pane_outside_box` uses. A `❯` row anywhere else is an old
+  # turn (`❯ ccrc-mail: …`) or a slash command's echo (`❯ /rate-limit-options`)
+  # above an open dialog, and a dialog's own cursor row is indented. Taking the
+  # last `❯` row anywhere read those as a draft and stood a limit rescue down
+  # for as long as Claude Code's own limit dialog stayed open.
   printf '%s\n' "$1" \
     | _pane_box_plain \
-    | LC_ALL=C grep $'^\xe2\x9d\xaf' \
-    | tail -1 \
+    | LC_ALL=C awk '
+        function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
+        { if (index($0, "❯") == 1 && NR > 1 && border(prev)) row = $0; prev = $0 }
+        END { if (row == "") exit 2; print row }' \
     | LC_ALL=C sed -E $'s/^\xe2\x9d\xaf(\xc2\xa0| )*//; s/[[:space:]]*$//'
-  # A pane with no box at all is an EMPTY BOX, not an error: `grep` exits 1 on
-  # no match and this file runs under `set -o pipefail`, so without this the
-  # status of the pipeline would leak out as a failure the callers (which read
-  # the STDOUT, `[[ -n "$cur" ]]`) never asked about.
+  # NO BOX IS ITS OWN ANSWER, never an empty box: a dialog or menu has taken the
+  # box's place, or the capture never reached it, and nothing may be typed into
+  # either. `_pane_box_read` turns the status into its `absent`. PIPESTATUS
+  # reads the awk's own status, so no other stage's failure reads as no box.
+  (( PIPESTATUS[2] == 2 )) && return 2
   return 0
 }
 
-_pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any real box row is occupied (D-2457)
-  # `_pane_box_draft` deliberately answers only the marker row, matching
-  # `draftOf`. That is not enough before a synthesized action: a human can press
-  # Alt+Enter first, leaving an EMPTY marker row and real text on an indented
-  # continuation row. Scan from the LAST marker to the closing horizontal rule,
-  # exactly like server `hasContentBelowMarker`; chrome after the rule is not box
-  # content. The shared normalizer keeps dim ghost suggestions empty here too.
-  # Ask the marker-row reader first both to keep ONE rule for that row and so a
-  # test that stubs the seam beneath an injector still controls the full guard.
-  [[ -n "$(_pane_box_draft "$1")" ]] && return 0
-  printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
+_pane_box_read() {   # ANSI (`capture-pane -e`) pane-text -> `empty`, `draft` or `absent` (D-2457, D-8116)
+  # THREE ANSWERS, the shape of server `draftOfMeasured` (`present` / `absent`)
+  # with `hasContentBelowMarker`'s whole-box question folded in:
+  #   empty  — the bordered box is on screen and holds nothing a person typed;
+  #   draft  — it holds text, on the marker row or on a continuation row below
+  #            it (Alt+Enter leaves an EMPTY marker row above real text);
+  #   absent — no bordered box: a dialog or menu is open, or the capture missed
+  #            the box; or an empty box with a dialog drawn over it
+  #            (`_pane_box_dialog`). Server `hasMenu` gives the same veto the
+  #            other way round, no menu while the prompt box shows, and so
+  #            misses that last shape.
+  # Every caller that types or presses keys refuses on `absent` as it does on
+  # `draft`: an Enter on Claude Code's limit dialog can pick "Switch to usage
+  # credits" or "Upgrade your plan". Only `_session_hard_blocked` goes over it.
+  # The marker row is asked first, so a test that stubs `_pane_box_draft`
+  # beneath a caller still controls the whole read.
+  local row rc
+  row=$(_pane_box_draft "$1"); rc=$?
+  (( rc == 2 )) && { echo absent; return 0; }
+  [[ -n "$row" ]] && { echo draft; return 0; }
+  # Scan from the bordered marker to the closing rule, exactly like server
+  # `hasContentBelowMarker`; chrome after the rule is not box content.
+  if printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
     function nonblank(s) { gsub(/[[:space:]]/, "", s); return s != "" }
+    function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
     function rule(s, n) {
       gsub(/[[:space:]]/, "", s)
       n = gsub(/─/, "", s)
@@ -23508,19 +23579,54 @@ _pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any re
     }
     {
       line = $0
-      if (index(line, "❯") == 1) {
+      if (index(line, "❯") == 1 && NR > 1 && border(prev)) {
         active = 1; found = 0
         sub(/^❯( | )*/, "", line)
         if (nonblank(line)) found = 1
-        next
+        prev = $0; next
       }
       if (active) {
-        if (rule(line)) { active = 0; next }
-        if (nonblank(line)) found = 1
+        if (rule(line)) active = 0
+        else if (nonblank(line)) found = 1
       }
+      prev = $0
     }
     END { exit(found ? 0 : 1) }
-  '
+  '; then echo draft; return 0; fi
+  # AN EMPTY BOX UNDER AN OPEN DIALOG IS NOT AN EMPTY BOX. On a pane whose
+  # conversation fills it, Claude Code keeps the bordered box drawn UNDER a
+  # slash command's dialog (`_pane_model_state`: the /model picker and its
+  # `Switch model?` dialog, real 2.1.291 captures), so the marker rules above
+  # find a bare `❯` and the keys a caller sends would answer the dialog.
+  _pane_box_dialog "$1" && { echo absent; return 0; }
+  echo empty
+  return 0
+}
+
+_pane_box_dialog() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff a dialog's numbered cursor row stands over the bordered box (D-8116)
+  # THE DIALOG'S SLOT is the rows between the box's top border and the border
+  # before it: the cursor row `_pane_model_state` reads (`❯ N.`, indented, the
+  # mark a dialog draws and the box never does) in that slot is an open dialog
+  # when a border closes the slot above it (both cc291 shapes draw one) or a
+  # footer (`Esc to cancel`, `Enter to confirm`/`Enter to select`) sits in it
+  # beside the cursor. With neither, an indented `❯ 1.` is a reply quoting one.
+  # A REPLY QUOTING A WHOLE DIALOG must still leave the box empty: its quoted
+  # rule is indented under the `●`, so only a column-0 rule bounds a slot, and
+  # a slot holding conversation (`●`, `✻`, `⎿`) is a reply, never a dialog,
+  # whatever cursor, rule or footer it quotes.
+  printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
+    function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
+    {
+      if (index($0, "❯") == 1 && NR > 1 && border(prev)) dlg = s_cur && !s_talk && (s_ruled || s_foot)
+      if ($0 ~ /^──/) { s_ruled = ruled; s_cur = cur; s_foot = foot; s_talk = talk; ruled = 1; cur = 0; foot = 0; talk = 0 }
+      else {
+        if ($0 ~ /^(●|✻)/ || $0 ~ /^[ \t]*⎿/) talk = 1
+        if ($0 ~ /^[ \t]+❯( | |\t)*[0-9]+\./) cur = 1
+        if (index($0, "Esc to cancel") || index($0, "Enter to confirm") || index($0, "Enter to select")) foot = 1
+      }
+      prev = $0
+    }
+    END { exit(dlg ? 0 : 1) }'
 }
 
 _pane_external_import_gate() {   # pane text -> 0 iff Claude Code's external-CLAUDE.md-import dialog is UP (D-3108)
@@ -24598,11 +24704,15 @@ CHILD_DENY_SETTINGS="$REG/child-deny.settings.json"
 # REPLACES the left, so `$route * $child * $account` would throw away
 # `CHILD_DENY_RULES`. Over an array of objects: their `*`, then each of
 # `permissions.deny` and `permissions.allow` that any side carries set to the
-# union of every side's array, first-seen order kept.
+# union of every side's array, first-seen order kept; and the top-level `deniedMcpServers` the same way (D-8121), so the
+# browser servers' denial survives a merge with a lane's or a child's own list.
 SETTINGS_UNION_JQ='. as $s | (reduce $s[] as $x ({}; . * $x))
   | reduce ("deny", "allow") as $k (.; if any($s[]; (.permissions[$k]? | type) == "array")
       then .permissions[$k] = ([$s[] | .permissions[$k]? | arrays | .[]] | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end))
-      else . end)'
+      else . end)
+  | if any($s[]; (.deniedMcpServers? | type) == "array")
+      then .deniedMcpServers = ([$s[] | .deniedMcpServers? | arrays | .[]] | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end))
+      else . end'
 
 CHILD_SHELL_PIN=/bin/bash
 _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPAWN_ENV; writes the record
@@ -24678,6 +24788,85 @@ _account_spawn_compose() {   # id launchflags -> sets ACCOUNT_SPAWN_FLAGS; never
   else
     ACCOUNT_SPAWN_FLAGS="${flags:+$flags }--settings '$a'"
   fi
+  return 0
+}
+
+# ── THE BROWSER MCP SERVERS, OFF BY DEFAULT (D-8121) ─────────────────────────
+# Measured on the fleet before this: a third of the account config dirs enable
+# the playwright and chrome-devtools-mcp plugins, and every session on them ran
+# both servers (seven processes a session, ~3.9 GiB across ten sessions) whether
+# or not it ever opened a browser. Claude Code honours `deniedMcpServers` from
+# `--settings`: a server named there is never started, and the plugin's skills
+# stay (measured with `claude -p`'s init event and the session's process tree,
+# docs/superpowers/plans/2026-11-08-browser-mcp-off-by-default.md).
+#
+# THE EFFECTIVE VALUE: the session's own `browser` route field when it holds a
+# valid word, else the box default `CCRC_BROWSER_MCP_DEFAULT` (off). `off`
+# merges `{"deniedMcpServers":[{"serverName":…},…]}` into the row's ONE
+# `--settings` (D-5391), for the names in `CCRC_BROWSER_MCP_SERVERS`; `on`
+# composes nothing. Every wrapper execs Claude Code (`ccrc-codex` included,
+# argv untouched), so this composes on every lane, like the account deny file.
+# What was applied is recorded in `$REG/<id>.browsermcp` (`on`/`off`), rewritten
+# at every spawn, so the console tells applied from queued-until-restart; a
+# running pane keeps its servers until its next spawn. It never refuses or
+# delays a spawn: a settings reader that is missing composes nothing and
+# records `on` (what the pane will run), and a setting that cannot be read or
+# is refused reads as its default; each warns.
+_browser_mcp_box() {   # -> sets BROWSER_BOX_DEFAULT, BROWSER_BOX_SERVERS: the box's two settings, each validated or its default; rc 1 = no reader
+  local lib out
+  BROWSER_BOX_DEFAULT=""; BROWSER_BOX_SERVERS=""
+  lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"
+  [[ -f "$lib" ]] || lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
+  # A SUBSHELL: the library sets ccrc's own names (`CCD_OS`, `BOX_ENV_FILE`, `CCRC_SETTINGS`), which stay out of ccd.
+  # shellcheck disable=SC1090  # the library's path is chosen at run time: beside this ccd, else ~/.local/libexec/ccrc
+  out=$( . "$lib" 2>/dev/null && declare -F _ccrc_knob _browser_mcp_servers_default >/dev/null 2>&1 || exit 1
+         d=off; sv=$(_browser_mcp_servers_default)
+         if _ccrc_knob CCRC_BROWSER_MCP_DEFAULT off; then
+           if _browser_mcp_default_ok "$KNOB"; then d="$KNOB"
+           else echo "ccd: warn: CCRC_BROWSER_MCP_DEFAULT must be $(_browser_mcp_default_says) — read as off" >&2; fi
+         else echo "ccd: warn: $KNOB_WHY — CCRC_BROWSER_MCP_DEFAULT read as off" >&2; fi
+         if _ccrc_knob CCRC_BROWSER_MCP_SERVERS "$(_browser_mcp_servers_default)"; then
+           if [[ -n "$KNOB" ]] && _browser_mcp_servers_ok "$KNOB"; then sv="$KNOB"
+           elif [[ -n "$KNOB" ]]; then echo "ccd: warn: CCRC_BROWSER_MCP_SERVERS must be $(_browser_mcp_servers_says) — read as the default list" >&2; fi
+         else echo "ccd: warn: $KNOB_WHY — CCRC_BROWSER_MCP_SERVERS read as the default list" >&2; fi
+         printf '%s %s' "$d" "$sv" ) || return 1
+  BROWSER_BOX_DEFAULT="${out%% *}"; BROWSER_BOX_SERVERS="${out#* }"
+  return 0
+}
+_browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; writes $REG/<id>.browsermcp; never fails
+  local id="$1" flags="$2" want deny v base="" merged re="--settings '([^']*)'"
+  BROWSER_SPAWN_FLAGS="$flags"
+  want=$(_route_get "$id" browser)
+  if ! _browser_mcp_box; then
+    echo "ccd: warn: $id: the settings reader (ccrc-settings.sh) is missing or broken — spawning with the browser MCP servers its account enables; 'ccrc update --force' places it" >&2
+    _reg_set "$id" browsermcp on || true
+    return 0
+  fi
+  [[ -n "$want" ]] || want="$BROWSER_BOX_DEFAULT"
+  if [[ "$want" == on ]]; then _reg_set "$id" browsermcp on || true; return 0; fi
+  deny=$(jq -c -n --arg s "$BROWSER_BOX_SERVERS" '{deniedMcpServers: ($s | split(",") | map({serverName: .}))}' 2>/dev/null) || deny=""
+  if [[ -z "$deny" || "$deny" == *"'"* ]]; then
+    echo "ccd: warn: $id: could not compose the browser MCP servers' denial — spawning with them" >&2
+    _reg_set "$id" browsermcp on || true
+    return 0
+  fi
+  if [[ "$flags" =~ $re ]]; then
+    v="${BASH_REMATCH[1]}"
+    if [[ "$v" == "{"* ]]; then base="$v"
+    elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
+    fi
+    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --argjson d "$deny" "[\$b, \$d] | $SETTINGS_UNION_JQ" 2>/dev/null) \
+       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+      BROWSER_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+    else
+      echo "ccd: warn: $id: could not merge the browser MCP servers' denial into this spawn's one --settings — spawning with them" >&2
+      _reg_set "$id" browsermcp on || true
+      return 0
+    fi
+  else
+    BROWSER_SPAWN_FLAGS="${flags:+$flags }--settings '$deny'"
+  fi
+  _reg_set "$id" browsermcp off || true
   return 0
 }
 
@@ -25253,6 +25442,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE ACCOUNT DENY FILE (D-6202), for EVERY row, after the child's: the one
   # `--settings` the flags carry gains the account rules (`_account_spawn_compose`,
   # which fails open), so a top-level spawn differs from before only by them.
+  # THE BROWSER MCP SERVERS (D-8121), for EVERY row, before the account file: off (the box default) merges their
+  # denial into the one `--settings`; the record says what this spawn applied (`_browser_spawn_compose`, never fails).
+  _browser_spawn_compose "$id" "$launchflags"; launchflags="$BROWSER_SPAWN_FLAGS"
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
@@ -25632,9 +25824,11 @@ _inject_spawn_effort() {   # tmuxname [id] — apply the settle-time effort, onc
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
-  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
-  fi
+  # No box on screen (a dialog is open) refuses too: the Enter would answer it (D-8116).
+  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in
+    draft) echo "ccd: input box not empty, skipped /effort $level" >&2; return 0 ;;
+    absent) echo "ccd: no input box on screen (a dialog is open), skipped /effort $level" >&2; return 0 ;;
+  esac
   sleep 1
   _typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)
   tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
@@ -25700,83 +25894,19 @@ _transcript_limit_banner() {   # transcript-path [stuck|dated since-epoch] -> 0 
   # EARLIER than `since`; then it answers rc 3 with the row's epoch, a banner
   # this process did not write. Never folded into rc 1: the caller keeps the block when no
   # swap came after the row, or this process never came up. The default mode is unchanged.
-  local f="$1" mode="${2:-}" since="${3:-}" rows rc
+  # The reading is `limit_banner` in `ccd/lib/transcript.jq` (#2367; it was an
+  # inline python program, and `ccd-limit-banner-corpus.test.ts` holds the two to
+  # one table). It answers one string: the rc, then what this prints.
+  local f="$1" mode="${2:-}" since="${3:-}" rows out
   [[ -f "$f" && -r "$f" ]] || return 2
   rows=$(tail -n "$REDRIVE_TAIL_LINES" "$f" 2>/dev/null) || return 2
-  command -v python3 >/dev/null 2>&1 || return 2
-  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
-import json, sys
-from datetime import datetime
-
-stuck = sys.argv[1:2] in (["stuck"], ["dated"])
-since = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
-
-
-def stamp(row):
-    ts = row.get("timestamp")
-    if since is None or not isinstance(ts, str):
-        return None
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def born(row):
-    at = stamp(row)
-    return at is not None and at >= since
-
-
-def predates(row):
-    at = stamp(row)
-    return at is not None and at < since
-
-
-found = None
-for raw in sys.stdin:
-    try:
-        row = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        found = None
-        continue
-    if not isinstance(row, dict):
-        found = None
-        continue
-    if row.get("type") not in ("user", "assistant"):
-        continue
-    message = row.get("message")
-    content = message.get("content") if isinstance(message, dict) else None
-    if row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "rate_limit":
-        found = row
-        continue
-    if stuck and row.get("type") == "assistant" and row.get("isApiErrorMessage") is True and row.get("error") == "authentication_failed" \
-            and row.get("apiErrorStatus") == 401 and born(row):
-        found = row
-        continue
-    chatter = row.get("type") == "user" and isinstance(content, str) and content.startswith(
-        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
-    )
-    if chatter:
-        continue
-    found = None
-
-if found is None:
-    raise SystemExit(1)
-if stuck and found.get("error") != "authentication_failed" and predates(found):
-    print(int(stamp(found)))
-    raise SystemExit(3)
-if found.get("error") == "authentication_failed":
-    print("\t\tauthentication_failed")
-    raise SystemExit(0)
-quota = found.get("quotaLimits")
-quota = quota if isinstance(quota, dict) else {}
-reset = quota.get("resetsAt")
-kind = quota.get("rateLimitType")
-reset = str(reset) if isinstance(reset, int) and not isinstance(reset, bool) else ""
-print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)) + (f"\t{int(stamp(found)) if stamp(found) is not None else chr(45)}" if sys.argv[1:2] == ["dated"] else ""))
-' "$mode" "$since" 2>/dev/null
-  rc=$?
-  [[ "$rc" -le 1 || "$rc" -eq 3 ]] && return "$rc"
+  command -v jq >/dev/null 2>&1 || return 2
+  out=$(printf '%s\n' "$rows" | jq -L "$TRANSCRIPT_JQ_LIB" -jRs --arg mode "$mode" --arg since "$since" \
+          'include "transcript"; limit_banner($mode; $since)' 2>/dev/null) || return 2
+  case "$out" in
+    1) return 1 ;;
+    [03]$'\n'*) printf '%s\n' "${out#?$'\n'}"; return "${out:0:1}" ;;
+  esac
   return 2
 }
 
@@ -25906,7 +26036,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
   # outside the last 8 lines while still being well inside a full capture, so widening this
   # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
-  # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_read` alone keeps
   # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
   local id="$1" t fromswap="${3:-0}" f i rc pane; t=$(_tmux_at "$2")
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
@@ -25941,8 +26071,10 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane went under ${READER_MIN_COLS} columns during the redrive wait (§6.3)" >> "$REG/swap.log"; return 0; }
   _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
-  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
-    && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
+  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in   # D-8116: no box refuses too
+    draft) echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0 ;;
+    absent) echo "$(date '+%F %T') redrive-skip $id: no input box on screen (a dialog is open)" >> "$REG/swap.log"; return 0 ;;
+  esac
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "$(_resume_prompt_for "$id")"; sleep 1; tmux send-keys -t "$t" Enter   # D-5237: the prompt the flag carried
   return 0
@@ -26508,9 +26640,11 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `start` is the actor on both arms, including the one `cmd_enable` reaches:
   # that verb forwards the pairs here rather than parsing them twice, and its own
   # `enable` lifecycle row already records that boot-persistence was asked for.
+  # D-8121: a `--route` naming only `browser` keeps the mint's default row (the same rule as `ws-add`'s).
   if (( ${#route[@]} )); then
     _route_argv_write "$id" start argv "${route[@]}"
-  elif [[ -z "$regw" ]]; then
+  fi
+  if [[ -z "$regw" ]] && ! _route_argv_routes "${route[@]}"; then
     _route_seed_default "$id" "$wrapper"
   fi
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above

@@ -20,7 +20,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { childIdsOf, sessionRunOf, UNCHECKED_PR, type CoordCapsView, type FleetSession, type RunSpend, type RunSummary, type SessionRun } from '../../shared/api';
+import { childIdsOf, sessionRunOf, UNCHECKED_PR, type CoordCapsView, type FleetSession, type RunSummary, type SessionRun } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { childMarkOf, runCard } from '../src/fleet/runWords';
@@ -74,7 +74,6 @@ const { RunsScreen } = await import('../src/screens/RunsScreen');
 const W = 'session-a';
 const C = 'coord-a';
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
-const NO_SPEND = (): Promise<RunSpend> => new Promise<RunSpend>(() => {});
 
 const run = (id: number, over: Partial<RunSummary> = {}): RunSummary => ({
   id, program: `program-${id}`, programTitle: `Program ${id}`, wave: 1, waveOf: 2, project: 'project-a', homeProject: null,
@@ -148,7 +147,7 @@ async function board(sc: Scenario): Promise<{ rows: Map<number, { session: strin
   seen.rows.length = 0;
   seen.abandon.length = 0;
   const store = makeStore(sc);
-  render(createElement(RunsScreen, { store, loadRuns: async () => ({ runs: [...sc.cold] }), loadCaps: NO_CAPS, loadSpend: NO_SPEND }));
+  render(createElement(RunsScreen, { store, loadRuns: async () => ({ runs: [...sc.cold] }), loadCaps: NO_CAPS }));
   await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
   const rows = new Map<number, { session: string | null; coord: string | null; resume: boolean }>();
   for (const id of sc.focus) {

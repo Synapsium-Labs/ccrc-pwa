@@ -93,27 +93,32 @@ import {
 const LEGACY_SHA = '0d0ea592166496be5eccb948313e381bcb2b87c8';
 /** E0a. Re-pinned only by the commit that vendors one more helper, the one edit the fixture takes (its header says
  *  how); never to turn a red green. */
-const FIXTURE_SHA256 = '9f42511c1935940fa9d15b18e2a5910f8cf7b49995e3c3c5ae4a8f8cc2d40716';
-/** The sixteen vendored bodies, in the fixture's order: plan Task 2 Step 1's fourteen, then `_limit_score` and
- *  `_avail` (W2 Task 9, for its callers' rows). */
+const FIXTURE_SHA256 = 'd5e1d1a3ca0a06f893d5eef009ac77c263adb34061ab5b132fa4d45e67e89e13';
+/** The eighteen vendored bodies, in the fixture's order: plan Task 2 Step 1's fourteen, then `_limit_score` and
+ *  `_avail` (W2 Task 9, for its callers' rows), then `_route_valid` (D-8121, which adds its `browser` arm), then
+ *  `_route_any` (D-8121's fix, which leaves `browser` out of it). */
 const VENDORED = [
   '_reg_get', '_reg_read', '_authdead', '_cfg_dir', '_limit_json_num', '_limit_field', '_share_pct',
   '_home_measured', '_route_peek', '_route_effort_for', '_route_applied_get', '_route_wanted',
-  '_route_pending_word', '_route_apply_pending', '_limit_score', '_avail',
+  '_route_pending_word', '_route_apply_pending', '_limit_score', '_avail', '_route_valid', '_route_any',
 ] as const;
 /** The live helpers plan Task 2 Step 1 names as the bodies' direct callees. E0c derives the transitive set itself;
- *  this list only proves the derivation sees at least what the plan saw. */
+ *  this list only proves the derivation sees at least what the plan saw. `_route_valid` left it with D-8121: it is
+ *  vendored now (`VENDORED`), so the bodies reach its `_legacy` twin and no longer the live helper; `_route_any` the same,
+ *  with D-8121's fix. */
 const PLAN_DIRECT_HELPERS = [
-  '_route_valid', '_route_get', '_route_inert_has', '_route_pair_note', '_id_wrapper', '_authdead_expired',
-  '_route_any', '_ccrc_cfg_dir',
+  '_route_get', '_route_inert_has', '_route_pair_note', '_id_wrapper', '_authdead_expired',
+  '_ccrc_cfg_dir',
 ];
 /** Live helpers in E0c's closure that call a VENDORED name's LIVE form, which the diet converts by design. Both reach
  *  `_reg_get` from the journaling side of `_route_get` (the non-quiet arm of `_route_effort_for`, and the note floors
  *  under it), which no tick-diet wave converts and no planned row drives: the quiet arm reads `_legacy_route_peek`,
  *  which stays inside the fixture. A row that drives the journaling arm first vendors `_route_get` and
  *  `_route_note_floored` into the fixture (its header says how), so its legacy side reads `_legacy_reg_get`. Any NEW
- *  edge reds E0c. */
-const ACCEPTED_EDGES = ['_route_get -> _reg_get', '_route_note_floored -> _reg_get'];
+ *  edge reds E0c. `_route_get -> _route_valid` joined with D-8121, which vendors `_route_valid` because it adds its
+ *  `browser` arm: the same journaling side of `_route_get` reads the live validator, whose answers for every field the
+ *  legacy bodies name are unchanged (the arm is a new field's), so no planned row's two sides differ through it. */
+const ACCEPTED_EDGES = ['_route_get -> _reg_get', '_route_get -> _route_valid', '_route_note_floored -> _reg_get'];
 
 /** The index just past the balanced `open…close` run that starts at `s[i] === open`, quotes inside honoured. */
 function skipBalanced(s: string, i: number, open: string, close: string): number {

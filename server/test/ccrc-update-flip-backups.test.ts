@@ -931,6 +931,10 @@ describe('ccrc update and rollback: ~/ccrc-backups is pruned after a completed r
     plantOldBox(home, { version: 'v1.0.0' });
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
     plantKillModeDropIn(home);
+    // D-8122: the sweep restarts the listed units by name and no longer runs a glob try-restart on an empty box, so
+    // the knob's try-restart arm is reached only with a running unit to restart.
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
     writeFileSync(join(home, 'fixture-sweep-hold-lock'), '');
     plantDir(home, '20250101-000000');
     const r = runUpdate(home, [], { CCRC_BACKUP_KEEP: '0' });
@@ -2040,6 +2044,9 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
       plantOldBox(l, { version: 'v1.0.0' });
       stubUpdate(l);
       plantKillModeDropIn(l);
+      // D-8122: a running unit, so the sweep's by-name try-restart reaches the knob (P12's note).
+      writeFileSync(join(l, 'fixture-sweep-units'), UNIT_LINES);
+      writeFileSync(join(l, 'fixture-sweep-active'), UNIT_LINES);
       writeFileSync(join(l, 'fixture-sweep-hold-lock'), '');
       plantFull(l);
       const lBefore = fingerprint(l, NAMES);

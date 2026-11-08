@@ -302,6 +302,12 @@ export type DocsFailure = keyof typeof DOCS_FAILURES;
  */
 export type DocsRetryClass = 'auto' | 'manual' | 'none' | 'auto-while-young';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOCS_RETRY_CLASS_MAP: Record<DocsRetryClass, true> = {
+  auto: true, manual: true, none: true, 'auto-while-young': true,
+};
+export const DOCS_RETRY_CLASSES: readonly DocsRetryClass[] = Object.keys(DOCS_RETRY_CLASS_MAP) as DocsRetryClass[];
+
 /** The retry class of every word: exhaustive by type, so a word added to `DOCS_FAILURES` does not compile until
  *  it is placed here. `not-granted` is `manual` (section 7.1, C3: it was none); `caps-unknown` is `auto` (C1). */
 export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = {
@@ -382,6 +388,14 @@ export type DocsFetchFailure =
   | 'fetch-transport'
   | 'fetch-failed';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOCS_FETCH_FAILURE_MAP: Record<DocsFetchFailure, true> = {
+  'fetch-timeout': true, 'remote-branch-absent': true, 'fetch-rejected-objects': true, 'fetch-auth-failed': true,
+  'ref-locked': true, 'fetch-transport': true, 'fetch-failed': true,
+};
+export const DOCS_FETCH_FAILURES: readonly DocsFetchFailure[] =
+  Object.keys(DOCS_FETCH_FAILURE_MAP) as DocsFetchFailure[];
+
 /** `not-a-file {kind}` (section 2 (i) "Objects and paths"). */
 export type DocsNotAFileKind =
   | 'directory'
@@ -393,6 +407,14 @@ export type DocsNotAFileKind =
   | 'hardlink'
   | 'foreign-owner'
   | 'other-device';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOCS_NOT_A_FILE_KIND_MAP: Record<DocsNotAFileKind, true> = {
+  directory: true, 'section-not-a-directory': true, symlink: true, submodule: true, 'file-in-path': true,
+  special: true, hardlink: true, 'foreign-owner': true, 'other-device': true,
+};
+export const DOCS_NOT_A_FILE_KINDS: readonly DocsNotAFileKind[] =
+  Object.keys(DOCS_NOT_A_FILE_KIND_MAP) as DocsNotAFileKind[];
 
 /** One step of the default-ref chain, as `unresolved-ref {tried}` and `DocsTreeOk.ref.tried` both carry it. */
 type DocsTriedRef = { ref: string; result: 'resolved' | 'absent' | 'dangling' | 'malformed' | 'not-a-commit' };
@@ -475,6 +497,12 @@ export function redactDocsText(s: string): string {
 // Additive only: no FLEET_PROTO bump. Every ccd answer is one JSON line: `{v:1, verb, ok, elapsedMs, ...}`.
 
 export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOCS_VERB_MAP: Record<DocsVerb, true> = {
+  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true,
+};
+export const DOCS_VERBS: readonly DocsVerb[] = Object.keys(DOCS_VERB_MAP) as DocsVerb[];
 
 /** The project's GitHub origin, as ccd's `_gh_repo_slug` rule reads `remote.origin.url` (section 3.11). */
 export type DocsGithub = { state: 'named'; slug: string /* owner/name */ } | { state: 'none' };
@@ -591,6 +619,12 @@ export type DocsCcdFailure = {
 // ---------------------------------------------------------------------------
 
 export type DocContentClass = 'markdown' | 'raster' | 'svg' | 'html' | 'text' | 'other';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOC_CONTENT_CLASS_MAP: Record<DocContentClass, true> = {
+  markdown: true, raster: true, svg: true, html: true, text: true, other: true,
+};
+export const DOC_CONTENT_CLASSES: readonly DocContentClass[] = Object.keys(DOC_CONTENT_CLASS_MAP) as DocContentClass[];
 
 /** The extension table, spec 5.1 verbatim. `xml`, `xsl` and `xhtml` are TEXT: shown as source, never as a
  *  document. Anything unlisted (`pdf`, `mht`, `svgz`, fonts) is `other`, download only. */
@@ -847,12 +881,26 @@ export function resolveDocRef(from: { section: DocSectionSlug; path: string }, r
  *  every row and leaf there is the committed entry at the served commit, and the drafts only feed the hint. */
 export type EntryMode = 'default' | 'ref';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const ENTRY_MODE_MAP: Record<EntryMode, true> = { default: true, ref: true };
+export const ENTRY_MODES: readonly EntryMode[] = Object.keys(ENTRY_MODE_MAP) as EntryMode[];
+
 /** The one badge vocabulary, for rows and leaf headers alike. Its display text is the PWA's. */
 export type EntryBadge = 'modified' | 'new' | 'deleted' | 'typechange' | 'conflicted' | 'withheld';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const ENTRY_BADGE_MAP: Record<EntryBadge, true> = {
+  modified: true, new: true, deleted: true, typechange: true, conflicted: true, withheld: true,
+};
+export const ENTRY_BADGES: readonly EntryBadge[] = Object.keys(ENTRY_BADGE_MAP) as EntryBadge[];
 
 /** Why an overlaid draft is not shown: a regular file over the hash ceiling (`fp: null`), an unreadable path, or
  *  anything that is not a regular file which passed the leaf checks. */
 export type WithheldReason = 'too-large' | 'unreadable' | 'not-a-file';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const WITHHELD_REASON_MAP: Record<WithheldReason, true> = { 'too-large': true, unreadable: true, 'not-a-file': true };
+export const WITHHELD_REASONS: readonly WithheldReason[] = Object.keys(WITHHELD_REASON_MAP) as WithheldReason[];
 
 /** One entry as the page shows it (spec 4.6).
  *  - `opens`: the bytes a tap reaches. `'none'` for a committed symlink or submodule (listed, never followed) and
@@ -1064,6 +1112,16 @@ export type DocsPageLocation =
 export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref'
   | 'bad-view' | 'bad-frame' | 'bad-escape' | 'encoded-slash' | 'commit-in-page' | 'unknown-param'
   | 'repeated-param' | 'reserved-node';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const DOCS_PAGE_PARSE_FAILURE_MAP: Record<DocsPageParseFailure, true> = {
+  'not-docs': true, 'bad-project': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-view': true,
+  'bad-frame': true, 'bad-escape': true, 'encoded-slash': true, 'commit-in-page': true, 'unknown-param': true,
+  'repeated-param': true, 'reserved-node': true,
+};
+export const DOCS_PAGE_PARSE_FAILURES: readonly DocsPageParseFailure[] =
+  Object.keys(DOCS_PAGE_PARSE_FAILURE_MAP) as DocsPageParseFailure[];
+
 export type DocsPageParse =
   | { ok: true; loc: DocsPageLocation; canonical: string }
   | { ok: false; why: DocsPageParseFailure };

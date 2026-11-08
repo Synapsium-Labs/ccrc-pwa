@@ -1170,9 +1170,9 @@ describe('L1', () => {
     // D-5855: the live switch is re-exported from its row in the L0 switchboard.
     // ARCH-14 (#560): the machine token's reader is L0 too (`shared/ccd-refusal.ts`).
     // ARCH-41 (#776): the expiry words are typed and narrowed from L0's `WORKSPACE_TRANSITIONS`.
-    // Cleanup un-wedge R2 (D-8000): `./cleanupHeldBy.js`, an L1 module, for `heldByRowsOf`, the ONE reader of an audit
-    // document's `heldBy` (it imports `expiryReportStands` back from here: function references only).
+    // Cleanup un-wedge R2 (D-8000): the ONE reader of an audit document's `heldBy`, `heldByFieldOf`, from the leaf
+    // `./heldByRead.js` (Task C15, D-8111), an L1 module that imports L0 alone, so nothing here imports this file back.
     expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js',
-      '../../shared/workspaceTransitions.js', './cleanupHeldBy.js', '../../shared/switches.js']);
+      '../../shared/workspaceTransitions.js', './heldByRead.js', '../../shared/switches.js']);
   });
 });

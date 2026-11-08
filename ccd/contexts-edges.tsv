@@ -10,12 +10,14 @@ _auto_stale_check -> _reg_get_to
 _auto_stale_check -> _reg_set
 _auto_stale_check -> _tmux_t
 _auto_swap_check -> _pane_born
-_auto_swap_check -> _pane_box_has_content
+_auto_swap_check -> _pane_box_read
 _auto_swap_check -> _pane_measurable
 _auto_swap_check -> _route_note_floored
 _auto_swap_check -> _tmux_t
 _auto_swap_check -> _transcript_limit_banner
 _auto_swap_check -> _transcript_path
+_browser_spawn_compose -> _reg_set
+_browser_spawn_compose -> _route_get
 _child_spawn_compose -> _reg_set
 _child_tmpdir -> _child_runid_valid
 _child_tmpdir -> _reg_get
@@ -124,7 +126,7 @@ _route_unread_note -> _route_note_floored
 _route_wanted_to -> _route_effort_for_to
 _route_wanted_to -> _route_peek_to
 _session_hard_blocked -> _pane_born
-_session_hard_blocked -> _pane_box_has_content
+_session_hard_blocked -> _pane_box_read
 _session_hard_blocked -> _pane_carried_in
 _session_hard_blocked -> _pane_hard_blocked
 _session_hard_blocked -> _pane_limit_banner
@@ -415,6 +417,7 @@ cmd_start -> _reg_id_cap
 cmd_start -> _reg_read
 cmd_start -> _reg_set
 cmd_start -> _route_argv_check
+cmd_start -> _route_argv_routes
 cmd_start -> _route_argv_write
 cmd_start -> _route_seed_default
 cmd_start -> _strand_clear
@@ -471,6 +474,7 @@ cmd_ws_add -> _reg_id_cap
 cmd_ws_add -> _reg_set
 cmd_ws_add -> _route_argv_check
 cmd_ws_add -> _route_argv_class
+cmd_ws_add -> _route_argv_routes
 cmd_ws_add -> _route_argv_write
 cmd_ws_add -> _route_degrade
 cmd_ws_add -> _route_seed_default

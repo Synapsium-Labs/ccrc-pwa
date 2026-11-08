@@ -9,7 +9,7 @@ import { hasPrCap, prDoorWord } from './prCap';
 
 /** One item of the ⋯ menu: its command, its words, and whether it is offered enabled. */
 export interface SessionMenuEntry {
-  id: 'open-terminal' | 'session-pr' | 'session-model' | 'session-effort' | 'open-history' | 'session-docs'
+  id: 'open-terminal' | 'session-pr' | 'session-model' | 'session-effort' | 'session-browser' | 'open-history' | 'session-docs'
     | 'session-swap' | 'session-archive' | 'session-restore';
   label: string;
   enabled: boolean;
@@ -35,6 +35,9 @@ export function sessionMenu(session: FleetSession | null): SessionMenuEntry[] {
   const entries: SessionMenuEntry[] = [
     { id: 'session-model', label: 'Change model', enabled: true },
     { id: 'session-effort', label: 'Change effort', enabled: true },
+    // D-8121: the session's own browser MCP choice, a routing field read at its next start. It needs the row (what it
+    // asked and what its run applied), so a deep link before its first frame offers it disabled.
+    { id: 'session-browser', label: 'Browser tools', enabled: session !== null },
     { id: 'open-history', label: 'History', enabled: true },
   ];
   if (docsLink !== null) {

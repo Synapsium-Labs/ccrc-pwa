@@ -62,6 +62,11 @@
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.
  */
+import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
+
+// The close-columns fill (entry 44) reads RunState's terminal set from its one home, never spelled as a literal tuple.
+const TERMINAL_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+
 export const MIGRATIONS: readonly string[] = [
   // ── 1: user_version 0 -> 1 ────────────────────────────────────────────────
   `
@@ -2209,6 +2214,113 @@ export const MIGRATIONS: readonly string[] = [
       AND NOT EXISTS (SELECT 1 FROM run_events e WHERE e.runId = runs.id AND e.detail LIKE 'child-omitted:%');
   UPDATE runs SET hadChild = 1
     WHERE hadChild = 0 AND sessionId IN (SELECT m.sessionId FROM runs m WHERE m.hadChild = 1);
+  `,
+  // ── 42: user_version 41 -> 42 ─────────────────────────────────────────────
+  // A dispatch's landing intents (landing order wave 5g, D-8080 to D-8086; spec 2026-09-23 §5.5): the pull requests or
+  // deviations a run said, at dispatch, it will land. One row per (run, key): `key` is `#<pr>` or `D-<n>` (the grammar
+  // is `shared/landingIntents.ts`'s, not this table's), `project` the run's project, `takenAt` the run's `dispatchedAt`.
+  // `setBy` is NULL with ONE meaning: the run had no claimant when it dispatched. Its ONE writer is
+  // `CoordStore.dispatchRun`, inside the dispatch's own transaction and after the transition is allowed; its ONE reader
+  // is `CoordStore.heldLandingIntents`. A hold ends when its run is terminal, and nothing writes that end: the read
+  // excludes terminal runs, so no row is ever updated or deleted.
+  //
+  // ONE NEW TABLE AND ONE INDEX, NOTHING ELSE: an older build opening a file at `user_version 42` takes rule 3 (it
+  // warns, reads as-is and migrates nothing) and never names the table, so it neither writes nor honours an intent.
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 41 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE landing_intents (
+    runId   INTEGER NOT NULL REFERENCES runs(id),
+    project TEXT    NOT NULL,
+    key     TEXT    NOT NULL,
+    setBy   TEXT,
+    takenAt INTEGER NOT NULL,
+    PRIMARY KEY (runId, key)
+  );
+  CREATE INDEX landing_intents_by_key ON landing_intents(project, key);
+  `,
+  // ── 43: user_version 42 -> 43 ─────────────────────────────────────────────
+  // A run keeps the title it was opened with (D-8071; spec 2026-11-04 §11.1, F6, A8). `runs.title` is that title. Its ONE
+  // writer is `CoordStore.openRun`, at INSERT. NULL is "this run has no title of its own", which every run before this
+  // entry is, bar the one below. `programs.title` stops being the last open's title: both `ON CONFLICT(slug)` arms
+  // leave it alone, so it is written once, when the programme row is created.
+  //
+  // THE COPY: each programme's current title goes to its NEWEST run (the highest id), then `programs.title` becomes the
+  // slug as words, the spelling `programmeNameFromSlug` (`shared/api.ts`) gives. Earlier runs keep NULL and read the
+  // programme's name. The restore statement `run-titles.test.ts` pins sets each `programs.title` from its newest titled
+  // run, and Rollback names it.
+  //
+  // ONE NULLABLE COLUMN AND ONE REWRITE OF `programs.title`: an older build opening a file at `user_version 43` takes
+  // rule 3 (it warns, reads as-is and migrates nothing), never names the column, and still writes `programs.title` on
+  // each open, which is its old reading. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before
+  // merge (it must print 42 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN title TEXT;
+  UPDATE runs SET title = (SELECT p.title FROM programs p WHERE p.slug = runs.program)
+    WHERE id IN (SELECT MAX(id) FROM runs GROUP BY program);
+  UPDATE programs SET title = upper(substr(replace(slug, '-', ' '), 1, 1)) || substr(replace(slug, '-', ' '), 2)
+    WHERE slug IN (SELECT program FROM runs);
+  `,
+  // ── 44: user_version 43 -> 44 ─────────────────────────────────────────────
+  // Who closed a run, and why (D-8071; spec 2026-11-04 §9.3, §11.2, A17, A30). `runs.closedBy` is one of the three words
+  // `run_events.causedBy` carries for a close ('coordinator', 'operator', 'sweep'), and `runs.closeDetail` is that row's
+  // `detail`. Their ONE writer is `CoordStore.advanceInner`, in the statement that writes `closedAt`, so they cannot
+  // differ from the terminal `run_events` row it writes beside them. A `causedBy` outside the three words (a session id)
+  // stores no `closedBy`, and the run reads as it did before.
+  //
+  // THE FILL: each terminal run takes both columns from its newest terminal `run_events` row. A run with no such row, and
+  // a row whose `causedBy` is not one of the three words, stays NULL.
+  //
+  // TWO NULLABLE COLUMNS, NOTHING ELSE: an older build opening a file at `user_version 44` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the columns, and its closes store NULL, which reads "as today". Every earlier
+  // entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 43 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closedBy TEXT;
+  ALTER TABLE runs ADD COLUMN closeDetail TEXT;
+  UPDATE runs SET
+    closedBy = (SELECT e.causedBy FROM run_events e WHERE e.runId = runs.id AND e.toState IN ${TERMINAL_STATES_SQL}
+                  AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1),
+    closeDetail = (SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.toState IN ${TERMINAL_STATES_SQL}
+                  AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1)
+    WHERE state IN ${TERMINAL_STATES_SQL};
+  `,
+  // ── 45: user_version 44 -> 45 ─────────────────────────────────────────────
+  // The stuck verdict's own clock for a person with no other stored time (D-8071; spec 2026-11-04 §7, A63, n3):
+  // `gone_since (personId, firstGoneAt, lastGoneAt)`, one row per coordinator or worker the verdict's pass last read GONE.
+  // Epoch ms, the server's clock. The pass is the table's one writer, through `CoordStore.setGoneSince` and
+  // `deleteGoneSince`, and it follows `deadAnchorNext`'s rule: the first pass writes `firstGoneAt`, a later one moves
+  // `lastGoneAt` alone, and a gap over `DEAD_COORDINATOR_GAP_MS` starts afresh. It exists so a restart that empties the
+  // in-memory reader moves no age, and so a paused dead-coordinator lane (which writes no `dead_claimants` row) leaves
+  // no run without its owner-gone verdict.
+  //
+  // A NEW TABLE AND NOTHING ELSE, migration 18's shape and for its reason: an older build opening a file at
+  // `user_version 45` takes rule 3 (it warns, reads as-is and migrates nothing), never names this table, and boots.
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 44 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE gone_since (personId TEXT NOT NULL PRIMARY KEY, firstGoneAt INTEGER NOT NULL, lastGoneAt INTEGER NOT NULL);
+  `,
+  // ── 46: user_version 45 -> 46 ─────────────────────────────────────────────
+  // The close-order list's index (D-8071; spec 2026-11-04 §11.4, A30): `GET /api/runs/find` pages terminal runs by
+  // `closedAt` descending, then id, and a partial index on `closedAt` for runs that have one lets that order walk the
+  // index instead of sorting the archive. The query repeats the index's predicate (`closedAt IS NOT NULL`) so the
+  // planner may use it.
+  //
+  // AN INDEX AND NOTHING ELSE: an older build opening a file at `user_version 46` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), never names the index, and boots. Every earlier entry is frozen. RE-MEASURE the slot before the PR
+  // and before merge (it must print 45 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE INDEX runs_by_closed_at ON runs(closedAt DESC, id DESC) WHERE closedAt IS NOT NULL;
   `,
 ];
 

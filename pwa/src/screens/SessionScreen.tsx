@@ -31,6 +31,7 @@ import { heldAskLine } from '../session/askWords';
 import { deepLinkFallback, heldCoordinatorWords } from '../session/sessionHeaderView';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { PickSheet } from '../session/PickSheet';
+import { BrowserSheet } from '../session/BrowserSheet';
 import { ReapSheet } from '../session/ReapSheet';
 import { useQueuedRoute } from '../session/useQueuedRoute';
 import { ensureSession, useEnsure } from '../session/useEnsure';
@@ -250,6 +251,7 @@ export function SessionScreen({
   const [picker, setPicker] = useState<'model' | 'effort' | null>(null);
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);   // D-8121: the session's Browser tools sheet
   const composerRef = useRef<HTMLDivElement>(null);
   // A routing write in flight, until the fleet frame reads it back — the
   // badge, its 60s timer and every carve-out that cancels it live in
@@ -519,6 +521,7 @@ export function SessionScreen({
   const actions: SessionActions = {
     changeModel,
     changeEffort,
+    openBrowser: () => setBrowserOpen(true),
     openHistory: () => setHistoryOpen(true),
     moveAccount: () => setSwapOpen(true),
     archive: () => setArchiveOpen(true),
@@ -768,6 +771,7 @@ export function SessionScreen({
         )}
         onPick={(o) => void pick(o)}
       />
+      <BrowserSheet id={id} session={live} open={browserOpen} onClose={() => setBrowserOpen(false)} />
       <SwapSheet
         // `home: null` — not `wrapper`. With no live row there is no home
         // account to read, and W3 §3.4's copy names the account a swap returns

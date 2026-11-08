@@ -27,6 +27,8 @@ import { sessionMenu, type SessionMenuEntry } from './sessionMenu';
 export interface SessionActions {
   changeModel: () => void;
   changeEffort: () => void;
+  /** D-8121: the session's Browser tools sheet. */
+  openBrowser: () => void;
   openHistory: () => void;
   moveAccount: () => void;
   archive: () => void;
@@ -136,6 +138,7 @@ export function SessionFlows({ session, title, actions, children }: SessionFlows
       switch (id) {
         case 'session-model': act.changeModel(); break;
         case 'session-effort': act.changeEffort(); break;
+        case 'session-browser': act.openBrowser(); break;
         case 'open-history': act.openHistory(); break;
         case 'session-docs': {
           const href = now.find((e) => e.id === 'session-docs')?.docs?.href;

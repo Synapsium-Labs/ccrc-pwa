@@ -77,9 +77,12 @@ describe('the top search lists a project\'s sessions after the commands, the coo
         const first = page.getByRole('option', { name: 'first, project-a', exact: true });
         await lead.waitFor({ timeout: 5_000 });
         const names = await page.getByRole('option').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
-        // Every option before the sessions is a command (no aria-label); the two sessions follow, coordinator first.
+        // Every option before the sessions is a command (no aria-label); the two sessions follow, coordinator first. The runs
+        // rebuild's palette entry, "Find runs matching …", ranks after every session (D-8072), so it is the one option after them.
         const firstSession = names.findIndex((n) => n !== null);
-        expect(names.slice(firstSession)).toEqual(['lead, coordinator, project-a', 'first, project-a']);
+        expect(names.slice(firstSession, firstSession + 2)).toEqual(['lead, coordinator, project-a', 'first, project-a']);
+        expect(names.slice(firstSession + 2)).toEqual([null]);
+        await expect.poll(() => page.getByRole('option').last().textContent()).toContain("Find runs matching 'project-a'");
         expect(await first.count()).toBe(1);
         expect(await sideways(page), 'nothing scrolls sideways').toBe(false);
         // No command matches a project name, so the coordinator is the first option and Enter opens it.

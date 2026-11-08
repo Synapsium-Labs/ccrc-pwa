@@ -3,6 +3,7 @@ import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRoute
   type CoordCaps, type CoordCapsUsage, type RouteFields, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { routeDefaultFor } from '../../../shared/route-defaults.js';
+import { parseLandingIntents, type LandingIntentHold } from '../../../shared/landingIntents.js';
 import { measuredIdentity, type RegistryRead, type SessionRecord } from '../registry.js';
 import type { MeasuredRead } from '../io.js';
 import type { HookStateRead } from '../hookstate.js';
@@ -24,8 +25,8 @@ import type { DispatchOutcome, SpawnPollTarget } from './dispatch.js';
  * every fleet act in the middle (the `ws-add`, the `ensure`, the `ws-hold`) changes what the next read means. So the
  * facts arrive in the order the executor can have them, one `step` at a time, and the first refusal wins:
  *
- *   request  the stored row and the body: unknown row, transition, brief, oversize, items, route, slug, hold,
- *            stored session id.
+ *   request  the stored row and the body: unknown row, transition, brief, oversize, items, route, slug, landing
+ *            intents (grammar, review run), hold, stored session id, then another programme's held landing intent.
  *   admit    the registry listing's pause markers, then the two caps.
  *   before   (a fresh spawn) the registry listing taken before the `ws-add` is measured.
  *   bind     (a fresh spawn) the registry diff after the `ws-add`: which new row is this run's, or whether to adopt.
@@ -77,6 +78,11 @@ export interface RequestFacts {
   read: RunReadResult;
   /** UNKNOWN off the wire: the route's JSON parse gives these no shape. */
   brief: unknown; items: unknown; route: unknown; slug: unknown;
+  /** UNKNOWN off the wire. Absent and `[]` both mean no landing intents (wave 5g, D-8081). */
+  intents: unknown;
+  /** The landing intents held in a project for these keys: a synchronous thunk over `coord.db` (the step stays
+   *  synchronous from the row read to its answer), called only for a non-empty key list that passed every earlier gate. */
+  held: (project: string, keys: readonly string[]) => readonly LandingIntentHold[];
   /** The standing protocol a brief of each kind invokes (`dispatch.ts` hands over its L0 constants). */
   prefixes: KickoffPrefixes;
 }
@@ -89,13 +95,15 @@ export interface RequestPlan {
   /** D-6794: the fields came from the run kind's default row, because the caller passed no route. */
   routeDefaulted: boolean;
   childSlug: string | null;
+  /** The parsed landing intent keys, distinct; `[]` when the dispatch named none. */
+  intentKeys: readonly string[];
   hold: Extract<HoldReasonVerdict, { ok: true }>;
 }
 
 export interface KickoffPrefixes { work: string; review: string }
 
 function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
-  const { read, brief, items, route, slug, prefixes } = f;
+  const { read, brief, items, route, slug, intents, held, prefixes } = f;
   // D-2545: the row exists and its integers are unrepresentable: refused in words, ahead of any fleet act.
   if (!read.ok) return refused({ ok: false, kind: 'hold-invalid', detail: read.detail });
   const run = read.run;
@@ -128,7 +136,7 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
   // D-6794: a dispatch that passes NO route (`undefined`) gets its run kind's row from the shared table; a route the
-  // coordinator did pass, even an empty one, is never overridden, and a resumed session (already bound) is left alone:
+  // coordinator did pass, even an empty one, is never overridden (one naming only `browser` is merged over it, D-8121), and a resumed session (already bound) is left alone:
   // its record holds wave 1's route, its default or a ladder write, none of which an unrouted wave may undo.
   let routeFields: RouteFields | null = null;
   let routeDefaulted = false;
@@ -138,6 +146,13 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
     // D-6790: Fable runs only when the operator selects it; a dispatch is a coordinator's act, never the operator's.
     if (routeNamesFable(parsed.route)) return refused({ ok: false, kind: 'fable-operator-only' });
     routeFields = routeFieldsOrNull(parsed.route);
+    // D-8121: `browser` says which MCP servers the worker starts, never what it is for, so a fresh spawn's route that
+    // names ONLY `browser` rides over its run kind's default row (and the row's class keeps placing as a preference,
+    // `--route-default`), rather than replacing it the way any routing field does.
+    if (routeFields !== null && run.sessionId === null && Object.keys(routeFields).every((k) => k === 'browser')) {
+      const row = routeDefaultFor(run.kind);
+      if (row !== null) { routeFields = { ...row, ...routeFields }; routeDefaulted = true; }
+    }
   } else if (run.sessionId === null) {
     // Fresh spawn only: a resumed session keeps the route wave 1, its default or the ladder wrote.
     routeFields = routeDefaultFor(run.kind);
@@ -156,6 +171,17 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
     }
     childSlug = slug;
   }
+  // Landing order wave 5g (D-8084, D-8085): the keys this dispatch will hold. The grammar is read here, with the other
+  // body fields; the held check is the LAST gate of the step, below, over the parsed keys and never the raw array.
+  // The guarantee that two programmes never both hold one key rests on the route's `coordMutex`, which serialises
+  // this check and the write in `CoordStore.dispatchRun`; a caller of `dispatchRun` outside that mutex would open a
+  // check-then-write gap.
+  const parsedIntents = parseLandingIntents(intents);
+  if (!parsedIntents.ok) return refused({ ok: false, kind: 'bad-request', detail: parsedIntents.detail });
+  const intentKeys = parsedIntents.keys;
+  if (run.kind === 'review' && intentKeys.length > 0) {
+    return refused({ ok: false, kind: 'bad-request', detail: 'intents: a review run names no landing intents' });
+  }
   // The complete hold is known from the persisted run. `openRun` checks it too; this seam rechecks authoritatively
   // because reconstructed or newer-database rows can bypass that ingress, and it must land before a fresh dispatch
   // can spawn a workspace.
@@ -164,7 +190,16 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   // The stored SESSION ID, re-checked for the hold's reason (spec §2.3): every id-taking call after this takes this
   // column. It runs after the body checks and before the pause listing, so a refused id costs no read.
   if (run.sessionId !== null && !isRegistryId(run.sessionId)) return refused({ ok: false, kind: 'bad-session' });
-  return go({ run, body, itemTitles, routeFields, routeDefaulted, childSlug, hold });
+  // D-8083, D-8085: another programme's run in this project holds a key this dispatch names. The run's own programme
+  // never blocks itself (wave 2 may name what wave 1 holds). The thunk is read only for a non-empty list.
+  if (intentKeys.length > 0) {
+    const other = held(run.project, intentKeys).find((h) => h.program !== run.program);
+    if (other !== undefined) {
+      return refused({ ok: false, kind: 'refused', code: 'intent-held', key: other.key,
+        holder: { runId: other.runId, program: other.program } });
+    }
+  }
+  return go({ run, body, itemTitles, routeFields, routeDefaulted, childSlug, intentKeys, hold });
 }
 
 // -- step: admit -------------------------------------------------------------------------------------------------

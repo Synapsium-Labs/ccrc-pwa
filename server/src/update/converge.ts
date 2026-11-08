@@ -11,6 +11,7 @@
 // stretch). The one await above it — the server's own report, read for the deadline's words — is taken BEFORE the
 // stretch's first row read and handed in (fix round 1 item 4). The acquire's own WHERE re-checks what SQL can.
 import path from 'node:path';
+import type { PressureLevel } from '../../../shared/pressure.js';
 import {
   inFlightReport, type DispatchRefusal, type NodeRole, type RequestKind, type SettledUpdateState,
 } from '../../../shared/api.js';
@@ -78,6 +79,11 @@ export interface ConvergeDeps {
    *  once per move that took a lease, AFTER the answer's lease write and after `onAccepted`, synchronously; a throw
    *  is caught here. */
   recordMove: ((r: MoveFeedRecord) => void) | null;
+  /** D-8122: the fleet host's pressure level now (`FleetHealth.psi`'s `level`), or null when the server holds none.
+   *  An AUTOMATIC move to the box that reading is of (the fleet-role node over the link, or this server's own row in
+   *  local mode) is held inside the plan while it reads `critical` (`planDispatch`'s `autoHeld`), so a move after it
+   *  still goes; a requested move never reads it. Absent: no hold (a harness that does not wire it, as before). */
+  hostPressure?: () => PressureLevel | null;
 }
 
 export const NO_FLEET_LINK_DETAIL = 'disconnected — no fleet link is wired on this server; the request stands';
@@ -87,6 +93,10 @@ export const NO_LOCAL_RUNNER_DETAIL = 'no local runner — this server was start
 export const OK_WITHOUT_ACCEPTED = 'ok-without-accepted';
 /** D-3400: the server-side twin of the agent's `an update op is already spawning on this agent`. */
 export const LOCAL_SPAWNING_DETAIL = 'an update op is already spawning on this server';
+/** D-8122: an automatic move held off a fleet host whose memory pressure reads critical. Noted on the row (the update
+ *  view's refusal line), never a lease; the next run asks again. */
+export const AUTO_PRESSURE_HELD_DETAIL =
+  'held: the fleet host\'s memory pressure is critical, so this automatic update waits until it eases (D-8122); an update you start yourself is not held';
 
 /** The server's `process.kill(pid, 0)` adapter for `updateWriterAlive` (D-3411; the liveness RULE is L0's, and the
  *  agent supplies its own adapter for the same rule). */
@@ -294,7 +304,16 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   }
   // (2) The plan, over rows read after those writes.
   const views = dispatchViewsFor(store);
-  const plan = planDispatch({ nodes: views, releases: store.releases() });
+  // D-8122: an AUTOMATIC move to the box `hostPressure` reads — the fleet-role node over the link, or this server's
+  // own row in local mode — is held while that box reads critical: the update's supervisor sweep is the last thing
+  // a thrashing box needs. Held inside the plan, so the next cleared move (an operator's request) still goes.
+  const critical = deps.hostPressure?.() === 'critical';
+  const autoHeld = critical
+    ? (v: DispatchNodeView): string | null =>
+      (deps.fleet === null ? v.row.agentOps === null : v.row.agentOps !== null && v.row.role === 'fleet')
+        ? AUTO_PRESSURE_HELD_DETAIL : null
+    : undefined;
+  const plan = planDispatch({ nodes: views, releases: store.releases(), ...(autoHeld !== undefined ? { autoHeld } : {}) });
   // (3) A request the node already runs is convergence, measured (D-3380).
   const settled: string[] = [];
   for (const m of plan.met) {
@@ -307,6 +326,7 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
     if (w.ok && w.changed) noted += 1;
   };
   for (const r of plan.refusals) note(r.nodeId, r.detail);
+  for (const h of plan.held) note(h.nodeId, h.detail);
   const done = (outcome: MoveOutcome | null): DispatchRunResult => ({ ran: true, expired, settled, noted, plan, outcome });
   const move = plan.move;
   if (move === null) return done(null);

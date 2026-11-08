@@ -14,21 +14,20 @@
 import { memo } from 'react';
 import type { ReactNode } from 'react';
 import {
-  type FleetSession, type RunSpend, type RunSummary, graphReadCount, unmeasuredFields,
+  type FleetSession, type RunSummary, graphReadCount, unmeasuredFields,
 } from '../../../shared/api';
 import {
-  DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, childReclaimChip, childReclaimGone,
+  DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, dispatchStalledTitle,
   childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel,
-  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState,
+  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord, runWaitLine,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { coordinatorPresence } from '../fleet/presence';
-import { runSpendLine } from '../fleet/runSpendWords';
-import { useRunSpend } from './useRunSpend';
+import { inAppClick } from '../fleet/settingsText';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
-import { sessionPath } from '../lib/routes';
+import { runPath } from '../lib/routes';
 import '../fleet/fleet.css';
 
 // `memo` (D-6442, D-6438): the board re-renders each second while a dispatch is pending,
@@ -55,9 +54,7 @@ export const RunRow = memo(function RunRow({
   programHasOpenRun,
   onAbandon,
   onResume,
-  loadSpend,
-  arrived = false,
-  rowRef,
+  current = false,
 }: {
   run: RunSummary;
   /** The shared tick, in MILLISECONDS (Task 3). The row derives its own
@@ -93,13 +90,8 @@ export const RunRow = memo(function RunRow({
   onAbandon: (run: RunSummary) => void;
   /** Opens the ResumeSheet for this row (spec §7.3). */
   onResume: (run: RunSummary) => void;
-  /** `GET /api/runs/:id`'s `spend` (D-6799), injected by the screen for the reason `loadCaps` is. */
-  loadSpend: (id: number) => Promise<RunSpend>;
-  /** The board arrived at this run from `/runs?run=<id>` (chat reading Task L, D-8062): the row wears `data-arrived`. */
-  arrived?: boolean;
-  /** The screen's record of its mounted rows, for the arrival (`useArrival`): called with this run's id and its `<li>`, then
-   *  with `null` when it unmounts. Stable on the screen's side, so the row's memo holds. */
-  rowRef?: (id: number, el: HTMLLIElement | null) => void;
+  /** This run is the one open in the broad pane (spec §8.4): the row says so to a screen reader and to the eye. */
+  current?: boolean;
 }): ReactNode {
   // The registry ladder's degrade note, same idiom as `SessionLine.tsx`'s own
   // (`.sess-unmeasured`, reused verbatim rather than a second `.run-…` class
@@ -161,11 +153,13 @@ export const RunRow = memo(function RunRow({
   // workspace. `childReclaimChip` is the one reader. The word and the sentence
   // are the server's, and this component picks neither.
   const reclaim = childReclaimChip(run);
-  const spendWords = runSpendLine(useRunSpend(run, loadSpend));
+  // §7: what the run waits on, in place of the row's ordinary line. The DECISION is `runWaitLine`'s. A run behind a stuck run
+  // links that run, and a link cannot sit inside the open button, so it stands beside it.
+  const waitLine = runWaitLine(run, nowMs);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
-      <span className="run-state">{RUN_WORD[state]}</span>
+      <span className="run-state">{runStateWord(run)}</span>
       {/* D-6170: the name is the programme's title and wave in words, never a
           workspace, a branch or a run number — those ride the row's `title`. */}
       <span className="run-name">{runRowName(run)}</span>
@@ -206,10 +200,10 @@ export const RunRow = memo(function RunRow({
         <span
           className="run-dispatch"
           data-phase="stalled"
-          title={`the dispatch began ${formatElapsed(spawn.elapsedMs)} ago and the run is still planned`}
+          title={dispatchStalledTitle(spawn.elapsedMs)}
         >
           <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>
-          {'dispatch never completed — a workspace may exist'}
+          {DISPATCH_STALLED_WORDS}
         </span>
       )}
       {/* The linked session's spawn verdict, in `SessionLine`'s own class and
@@ -254,15 +248,7 @@ export const RunRow = memo(function RunRow({
         <span className="run-child-reclaim-sentence">{reclaim.line}</span>
       )}
       <UnmeasuredChip fields={degradedFields} />
-      {/* D-6799: what the run's sessions have spent. ONE line on its own wrapped
-          row (`.run-warn`'s idiom), at every width: the short half always, the
-          long half from 480px up (fleet.css). A measurement, never a warning. */}
-      {spendWords !== null && (
-        <span className="run-spend" data-testid="run-spend" data-measured={String(spendWords.measured)} title={spendWords.title}>
-          <span className="run-spend-short">{spendWords.short}</span>
-          {spendWords.long !== '' && <span className="run-spend-long">{spendWords.long}</span>}
-        </span>
-      )}
+      {waitLine !== null && run.blockedBy == null && <span className="run-wait" data-testid="run-wait">{waitLine}</span>}
       {warnings.length > 0 && (
         // Its own wrapped LINE, not another inline cell: `.run-row` is
         // `flex-wrap: wrap`, so a `flex-basis: 100%` child becomes a sub-row
@@ -285,8 +271,8 @@ export const RunRow = memo(function RunRow({
   // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
   // whole row body in `<button className="run-open">`, and a `<button>`
   // inside a `<button>` is invalid HTML and unreachable to a screen reader.
-  // It renders on every OPEN row, including the inert (no-session) one just below
-  // — an inert row is exactly the wedge shape (`ambiguous-dispatch`, a
+  // It renders on every OPEN row, including one with no session
+  // — that is exactly the wedge shape (`ambiguous-dispatch`, a
   // `planned` run with no session) this control exists to release
   // (`abandon-sheet.test.tsx`'s own pin on that case).
   //
@@ -362,43 +348,22 @@ export const RunRow = memo(function RunRow({
     </button>
   ) : null;
 
-  // A run with no session has nothing to open. An inert row says that; a
-  // button that navigates to a session that does not exist says something
-  // false.
-  //
-  // Task 3: `data-inert` is about the TAP and nothing else, and it stays
-  // exactly as it was — the in-flight row is the ONE row that is inert and
-  // has something to say, and the two are not in tension. `body` renders
-  // inside the inert `<li>` just as it does inside `.run-open`, and nothing
-  // in `fleet.css` selects `[data-inert]` at all (measured), so no rule dims
-  // or hides what the row now says while the spawn is under way. Making the
-  // row tappable to let the affordance through would have traded a true
-  // sentence for a dead tap onto a session id that does not exist yet.
-  //
-  // A reclaimed child's session no longer exists either (spec §5.9: the row
-  // "stops offering to open its session"). It gets the same inert row, for the
-  // same reason. `resumeButton` and `abandonButton` keep their place: neither
-  // is about the worker's session.
-  // D-6170 keeps D-5589's id rule: the run number and the workspace (else the
-  // branch) live in the row's title and the controls' accessible names only.
+  // Every row opens its run's page (the runs rebuild, D-8072; spec A9). A run with no session, a spawn under way or a
+  // reclaimed child still has a page, so no row is inert any more: the page says what the row cannot. The session is one more
+  // tap, on the page. The id rule stays D-5589's: the run number and the workspace (else the branch) live in the row's title
+  // and the controls' accessible names only (D-6170).
   const where = run.workspace ?? run.branch;
   const rowTitle = where === null ? `run ${run.id}` : `run ${run.id} · ${where}`;
-  // The arrival (Task L): every row is a programmatic focus target only (tabindex -1, never a tab stop), as the accounts
-  // screen's lane rows are, so `/runs?run=<id>` can focus it; the arrived one is marked.
-  const arrival = {
-    tabIndex: -1,
-    'data-arrived': arrived ? 'true' : undefined,
-    ref: rowRef === undefined ? undefined : (el: HTMLLIElement | null) => rowRef(run.id, el),
-  };
-  return run.sessionId === null || childReclaimGone(reclaim)
-    ? <li className="run-row" data-inert="true" title={rowTitle} {...arrival}>{body}{resumeButton}{abandonButton}</li>
-    : (
-      <li className="run-row" title={rowTitle} {...arrival}>
-        <button type="button" className="run-open" onClick={() => navigate(sessionPath(run.sessionId!))}>
-          {body}
-        </button>
-        {resumeButton}
-        {abandonButton}
-      </li>
-    );
+  return (
+    <li className="run-row" title={rowTitle}>
+      <button type="button" className="run-open" aria-current={current ? 'true' : undefined} onClick={() => navigate(runPath(run.id))}>
+        {body}
+      </button>
+      {resumeButton}
+      {abandonButton}
+      {waitLine !== null && run.blockedBy != null && (
+        <a className="run-wait" href={runPath(run.blockedBy)} onClick={inAppClick(runPath(run.blockedBy))}>{waitLine}</a>
+      )}
+    </li>
+  );
 });

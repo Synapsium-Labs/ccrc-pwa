@@ -1,9 +1,9 @@
-// D-6799: the run board shows what a run's sessions have spent, in ONE line, at
-// every width. Measuring only. The words are `runSpendLine`'s; the row mounts them.
+// D-6799: what a run's sessions have spent, in ONE line. `runSpendLine` owns the words; the run page mounts them (the runs
+// rebuild, D-8072, A10: the board's row no longer does, which was 69 reads per mount).
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { RUN_SPEND_UNMEASURED_REASONS, type RunSpend, type RunSummary } from '../../shared/api';
 import { runSpendLine } from '../src/fleet/runSpendWords';
 import { RunRow } from '../src/screens/RunRow';
@@ -45,44 +45,25 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
     briefQueued: true, clearError: null, coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
-const mount = (r: RunSummary, loadSpend: (id: number) => Promise<RunSpend>) => render(
-  <ul><RunRow run={r} nowMs={Date.now()} session={null} coordSession={null} frameSeen={false}
-    programHasOpenRun={true} onAbandon={() => {}} onResume={() => {}} loadSpend={loadSpend} /></ul>);
 
-describe('the run row\'s spend line', () => {
-  it('asks once for the run, then shows both halves in ONE element with the long title', async () => {
-    const load = vi.fn().mockResolvedValue(MEASURED);
-    mount(run(), load);
-    const el = await waitFor(() => screen.getByTestId('run-spend'));
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(load).toHaveBeenCalledWith(3);
-    expect(el.querySelector('.run-spend-short')!.textContent).toBe('≈ $1.52 · out 17.4k');
-    expect(el.querySelector('.run-spend-long')!.textContent).toBe('in 1.2k · cache r 4.5m w 300k');
-    expect(el.getAttribute('data-measured')).toBe('true');
-    expect(screen.getAllByTestId('run-spend')).toHaveLength(1);
+describe('the run row reads no spend (A10)', () => {
+  it('a row mounts with no spend line and sends no read, for a run with a session or without one', () => {
+    const fetchImpl = vi.fn();
+    vi.stubGlobal('fetch', fetchImpl);
+    for (const r of [run(), run({ sessionId: null, state: 'planned' })]) {
+      render(
+        <ul><RunRow run={r} nowMs={Date.now()} session={null} coordSession={null} frameSeen={false}
+          programHasOpenRun={true} onAbandon={() => {}} onResume={() => {}} /></ul>);
+      expect(screen.queryByTestId('run-spend')).toBeNull();
+      cleanup();
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
-  it('a run with no session bound NOW is still asked about: the server alone judges "no-session"', async () => {
-    const load = vi.fn().mockResolvedValue(MEASURED);   // an unbound run that once had a worker
-    mount(run({ sessionId: null, state: 'planned' }), load);
-    await waitFor(() => expect(screen.getByTestId('run-spend').getAttribute('data-measured')).toBe('true'));
-    expect(load).toHaveBeenCalledWith(3);
-    cleanup();
-    mount(run({ sessionId: null }), vi.fn().mockResolvedValue({ measured: false, reason: 'no-session' }));
-    await waitFor(() => expect(screen.getByTestId('run-spend').getAttribute('data-measured')).toBe('false'));
-  });
-  it('a failed read (rate-limited, signed out, network) shows no line, never "sweep unreadable"', async () => {
-    const load = vi.fn().mockRejectedValue(new Error('boom'));
-    mount(run(), load);
-    await waitFor(() => expect(load).toHaveBeenCalled());
-    await Promise.resolve();
-    expect(screen.queryByTestId('run-spend')).toBeNull();
-  });
-});
-
-describe('at every width', () => {
-  const css = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
-  it('the long half is hidden below the desktop-row width and the line takes its own full-width row', () => {
-    expect(css).toMatch(/\.run-row \.run-spend\s*\{[^}]*flex:\s*1 0 100%/);
-    expect(css).toMatch(/@media \(max-width: 479px\)\s*\{[^}]*\.run-row \.run-spend-long\s*\{\s*display:\s*none/);
+  it('the board leaves no spend hook or class behind', () => {
+    const src = (f: string): string => readFileSync(path.join(import.meta.dirname, '..', 'src', f), 'utf8');
+    expect(existsSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'useRunSpend.ts'))).toBe(false);
+    expect(src('screens/RunRow.tsx')).not.toMatch(/useRunSpend|runSpendLine|loadSpend/);
+    expect(src('fleet/fleet.css')).not.toMatch(/\.run-row \.run-spend/);
   });
 });

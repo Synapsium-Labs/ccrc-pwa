@@ -4,18 +4,14 @@
 // pid, its command and the path, and says to find out what it is before ending it. Nothing renders when the list is
 // empty or the server predates it.
 import type { ReactNode } from 'react';
-import { AttentionList } from './AttentionList';
-import { expiryAttentionOf, expiryKindWord } from './expiryWords';
+import { AttentionList, attentionLines } from './AttentionList';
+import { expiryAttentionOf } from './expiryWords';
 
 export function ExpiryAttention({ coord }: { coord: unknown }): ReactNode {
   return (
     <AttentionList
       label="archived workspaces the cleanup is reporting"
-      lines={expiryAttentionOf(coord).map((a) => ({
-        key: a.sessionId,
-        who: [`${expiryKindWord(a.kind)} · ${a.sessionId}`],
-        sentence: a.sentence,
-      }))}
+      lines={attentionLines(expiryAttentionOf(coord))}
     />
   );
 }

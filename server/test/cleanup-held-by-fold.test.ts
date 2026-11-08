@@ -20,9 +20,10 @@ import {
 import type { ArchivedExpiryEntry, ExpireAuditRead } from '../src/archivedExpiry.js';
 import { collectAfterAudit, collectFirstSighting, parseCollectAudit } from '../src/collectLane.js';
 import {
-  cleanupHeldBy, cleanupHeldByAct, heldByOf, withCleanupHeldBy,
+  cleanupHeldBy, cleanupHeldByAct, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
-import type { HeldByRead, HeldByRow } from '../src/cleanupHeldBy.js';
+import { heldByOf } from '../src/heldByRead.js';
+import type { HeldByRead, HeldByRow } from '../src/heldByRead.js';
 import { step, verdict } from './collectAnswers.js';
 
 const NOW = 1_790_000_000_000;
@@ -109,7 +110,7 @@ describe('the reclaim carriage', () => {
   });
 
   it('an older document (no heldBy key) reads absent, and the read and the entry carry nothing', () => {
-    // A parser spreads `heldBy` only when the document NAMES rows (`heldByRowsOf`), so a read without rows keeps the shape
+    // A parser spreads `heldBy` only when the document NAMES rows (`heldByFieldOf`), so a read without rows keeps the shape
     // it had before R2.
     const read = parseChildReclaimAuditFailed('project-a-child-1', doc(), '');
     expect(read.kind).toBe('unmeasured');

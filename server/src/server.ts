@@ -10,7 +10,7 @@ import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor } from './config.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
-import { assembleFleet, dropStaleLandings } from './fleet.js';
+import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
 import { liveStateReaderOver, readLiveState } from './livestate.js';
 import { readLaneStates, readLimits, projectHome, projectPlacement } from './limits.js';
 import { accountsConnect, lanesWire } from './accounts/lanes.js';
@@ -35,7 +35,7 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
+import { ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
          capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
@@ -91,7 +91,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type CoordStore, type NodeRow } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -117,7 +117,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
-  isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
+  isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
@@ -221,7 +221,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
  *  in `secret-mask.test.ts`'s egress inventory. */
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
-  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
+  '/api/runs', '/api/runs/find', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
   // The programme ledgers (plan PL3): an item's title, reason and steps are written by sessions.
   '/api/programmes/:slug/items',
@@ -1270,7 +1270,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
     ]);
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches(), undefined, watcher?.currentLandings()),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), fleetNow(), {
+        pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
+        taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
+        hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
+        usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+      }),
       pools: poolsWire(
         poolsRead,
         poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
@@ -1713,7 +1718,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     } else {
       // [registry-refused:stale]
       cold = readRegistryMeasured(deps.io, deps.cfg).then((reg) => (reg.listed
-        ? assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches(), undefined, watcher?.currentLandings())
+        ? assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io), fleetNow(), {
+          pendingDialogs: watcher?.currentPending(), statuslines: watcher?.currentStatuslines(),
+          taskProgress: watcher?.currentTaskProgress(), prStates: watcher?.currentPrStates(),
+          hookStates: watcher?.currentHookStates(), records: reg.records, coord: deps.coord,
+          usageReadings: watcher?.currentUsage(), headBranches: watcher?.currentHeadBranches(), landings: watcher?.currentLandings(),
+        })
         : null));
     }
     void cold.then((sessions) => {
@@ -1748,7 +1758,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
             // no reading of the sessions to decide against, so the frame goes without it (absence permits).
             // D-7334: each run's last move, in one read for the frame (`withLastMoves`); a failed read leaves the field off.
             const summaries = withLastMoves(deps.coord, read.runs.map(toRunSummary), (d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the runs' last moves (${d}) — lastMoveAt absent`));
-            onRuns(sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`)));
+            const withIds = sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`));
+            // D-8071: the stuck verdict's fields, from the watcher's one reader (`withVerdicts`); no watcher or an empty reader stamps nothing.
+            onRuns(watcher === undefined ? withIds : withVerdicts(watcher.runVerdicts, withIds));
           }
         }
         catch (err) {
@@ -2498,6 +2510,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     if (!ccdCan(deps.fleetState, 'routeApply')) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    // D-8121: the `browser` field needs `browser-route-v1` (an older ccd refuses it by name). It is applied at the
+    // session's next spawn, never live: `--apply` types nothing for it.
+    if (routeForBrowserCap(parsed.route, capSupported(deps.fleetState, BROWSER_ROUTE_CAP)).dropped) {
+      return refuseRoute(reply, 'unsupported');
+    }
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
@@ -2863,6 +2880,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const fields = routeFieldsOrNull(parsed.route);
     if (fields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
       return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
+    }
+    // D-8121: an older ccd refuses `browser` by name, so the operator hears 501 rather than a spawn that fails.
+    if (routeForBrowserCap(fields, capSupported(deps.fleetState, BROWSER_ROUTE_CAP)).dropped) {
+      return { reply: refuseRoute(reply, 'unsupported') };
     }
     return { reply: null, route: fields };
   };

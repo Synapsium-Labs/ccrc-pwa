@@ -35,7 +35,7 @@ import {
   runUpdate,
   freshUpdateBox,
   plantKillModeDropIn,
-  UNIT_LINES,
+  UNIT_LINES, UNIT_RESTART,
   homeSnapshot,
   treeDigest,
   localUrls,
@@ -1549,7 +1549,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
       '--user show -p KillMode claude-session@alpha.service',
       '--user show -p KillMode claude-session@beta.service',
       '--user show -p KillMode claude-session@ccrc-update-preflight.service',
-      '--user try-restart claude-session@*',
+      UNIT_RESTART,
       '--user list-units claude-session@* --state=failed --plain --no-legend',
       '--user list-units claude-session@* --state=active --plain --no-legend',
     ]);
@@ -1788,7 +1788,7 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
     expect(r.stdout).not.toContain('every live claude-session@ supervisor now runs the ccd this update installed');
     expect(r.stdout).not.toContain('no claude-session@ supervisor was active when the sweep began');
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
-    expect(calls).toMatch(/--user try-restart claude-session@\*/);
+    expect(calls).toMatch(/--user try-restart claude-session@alpha\.service claude-session@beta\.service/);
     // R10k (wave 17, D-5315): the report keeps `phase: done` and `detail: null` (review 196 item 1) and says so in `sweep`.
     expect(JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>)
       .toMatchObject({ phase: 'done', detail: null, sweep: 'unverified: relist' });
@@ -2438,7 +2438,7 @@ describe('ccrc update: the "already there" gate (spec §5)', () => {
     const r = runUpdate(home, ['--force']);
     expect(r.code, r.stderr).toBe(0);
     const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
-    expect(calls).toMatch(/--user try-restart claude-session@\*/);
+    expect(calls).toMatch(/--user try-restart claude-session@alpha\.service claude-session@beta\.service/);
   });
 
   it('same version, record absent → proceeds', () => {
