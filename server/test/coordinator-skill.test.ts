@@ -1011,6 +1011,8 @@ describe('the coordinator skill: linkage', () => {
       '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…","browser":"on"},"slug":"<child name>"}');
     // D-8121: the sixth field, and the one rule a coordinator needs to use it.
     expect(lifecycle).toContain('dispatch with `browser=on` when the task needs a browser');
+    // D-8121's fix: a route naming only `browser` keeps the run kind's default row (`dispatchDecide.ts`), and says so.
+    expect(lifecycle.replace(/\s+/g, ' ')).toContain('a route that names ONLY `browser` keeps its run kind\'s default row');
     // The optional child name rides the same body, and its paragraph says what
     // the coordinator must check after it (an older server ignores the field).
     expect(lifecycle).toContain("**`slug` — the child's name, chosen at birth.**");

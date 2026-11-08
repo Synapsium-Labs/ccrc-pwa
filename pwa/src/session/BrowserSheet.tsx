@@ -2,13 +2,15 @@
 // writes the session's `browser` routing field (`api.route`, `ccd route --set browser=…`), which ccd reads at the
 // session's NEXT start — nothing is typed into the pane and a running session keeps the servers it has. The line under
 // the rows is `browserMcpView`'s reading of the fleet frame: what this run's spawn applied, and whether a change waits
-// for a restart. A box whose ccd does not take the field answers 501, said in words.
-import { useState } from 'react';
+// for a restart. The box default it follows comes from one `/api/updates` read each time the sheet opens
+// (`browserBoxOf`), so a session with no field of its own still shows the change its next start makes; a read that fails
+// leaves it unknown. A box whose ccd does not take the field answers 501, said in words.
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { OptionRow, Sheet, toast } from '@ccrc/ui';
 import type { FleetSession } from '../../../shared/api';
 import { ApiError, api, failedTo } from '../lib/api';
-import { BROWSER_SHEET_TEXT, BROWSER_WORDS, browserLine, browserMcpView, type BrowserWord } from '../fleet/browserMcpWords';
+import { BROWSER_SHEET_TEXT, BROWSER_WORDS, browserBoxOf, browserLine, browserMcpView, type BrowserWord } from '../fleet/browserMcpWords';
 import './chat.css';
 
 export interface BrowserSheetProps {
@@ -20,7 +22,14 @@ export interface BrowserSheetProps {
 
 export function BrowserSheet({ id, session, open, onClose }: BrowserSheetProps): ReactNode {
   const [saving, setSaving] = useState<BrowserWord | null>(null);
-  const view = session === null ? null : browserMcpView(session);
+  const [boxDefault, setBoxDefault] = useState<BrowserWord | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api.updates().then((u) => { if (live) setBoxDefault(browserBoxOf(Array.isArray(u.nodes) ? u.nodes : []).default); }, () => { /* unknown */ });
+    return () => { live = false; };
+  }, [open]);
+  const view = session === null ? null : browserMcpView(session, boxDefault);
   const pick = async (word: BrowserWord): Promise<void> => {
     if (saving !== null) return;
     setSaving(word);

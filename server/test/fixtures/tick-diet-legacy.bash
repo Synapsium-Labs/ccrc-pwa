@@ -1,16 +1,17 @@
-# FROZEN (#387, tick-diet spec §9, plan Task 2) — the legacy bodies of the seventeen helpers the supervisor tick diet
+# FROZEN (#387, tick-diet spec §9, plan Task 2) — the legacy bodies of the eighteen helpers the supervisor tick diet
 # converts or reads through, exactly as `ccd/ccd` holds them at 0d0ea592166496be5eccb948313e381bcb2b87c8, the base every
 # tick-diet wave is measured against. `ccd-tick-diet-equivalence.test.ts` sources this file over the tree's `ccd/ccd`
 # and compares each converted helper (its stdout, stderr, rc, out-var and registry bytes) with its legacy twin here.
 #
-# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The seventeen are
+# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The eighteen are
 # `_reg_get`, `_reg_read`, `_authdead`, `_cfg_dir`, `_limit_json_num`, `_limit_field`, `_share_pct`, `_home_measured`,
 # `_route_peek`, `_route_effort_for`, `_route_applied_get`, `_route_wanted`, `_route_pending_word`,
 # `_route_apply_pending`, `_limit_score`, `_avail` (those two vendored by W2 Task 9, for its callers' rows, by
-# the remedy below) and `_route_valid` (vendored by D-8121, which adds its `browser` arm). Every occurrence of those
+# the remedy below), `_route_valid` (vendored by D-8121, which adds its `browser` arm) and `_route_any` (vendored by
+# D-8121's fix, which leaves `browser` out of it). Every occurrence of those
 # names below, code and comments alike, carries the prefix, so a call from one vendored body to another stays inside
 # this file. Every other call (`_route_get`,
-# `_route_inert_has`, `_id_wrapper`, `_authdead_expired`, `_route_any`, `_ccrc_cfg_dir`, …) reaches the LIVE function
+# `_route_inert_has`, `_id_wrapper`, `_authdead_expired`, `_ccrc_cfg_dir`, …) reaches the LIVE function
 # of the sourced tree.
 #
 # Never edit what follows. The suite pins this file's sha256 (E0a), each body with the map reversed against
@@ -321,13 +322,13 @@ _legacy_route_apply_pending() {   # id -> 0 iff the record asks for a class or e
   # REGISTRY READS ONLY, AND THAT IS NOW TRUE (controller ruling S4-R9; it was
   # not, and the comment here said it was — `_legacy_route_wanted` reached
   # `_legacy_route_effort_for`, which could leave a `routenotepair` marker and a
-  # `route-refuse` line on a tick). The reads: `_route_any`'s seven `-e` stats,
+  # `route-refuse` line on a tick). The reads: `_legacy_route_any`'s seven `-e` stats,
   # then `_legacy_route_wanted`'s four (`class`, `degraded`, `effort`, `inert`) and one
   # or two `_legacy_route_applied_get`s. This is the tick's first act on every live
   # session — ~20 sessions x 12 ticks a minute — so the healthy answer, nothing
   # pending, has to cost a few stats and no tmux at all.
   local id="$1"
-  _route_any "$id" || return 1
+  _legacy_route_any "$id" || return 1
   [[ -n "$(_legacy_route_pending_word "$id")" ]] && return 0
   return 1
 }
@@ -495,4 +496,11 @@ _legacy_route_valid() {   # field value — THREE answers, because two of them a
               for x in ${v//,/ }; do _route_word_in "$x" "$ROUTE_INERTABLE" || return 1; done ;;
     *)        return 1 ;;
   esac
+}
+
+_legacy_route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a session with
+  # no field at all is a pre-slice-1 session and gets today's behaviour).
+  local f
+  for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
+  return 1
 }

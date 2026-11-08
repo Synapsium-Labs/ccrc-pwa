@@ -42,12 +42,26 @@ const fleetNode = (rows: Partial<Record<'CCRC_BROWSER_MCP_DEFAULT' | 'CCRC_BROWS
 
 describe('browserMcpView: what a session asked and what its run applied (D-8121)', () => {
   it('reads the route field, the record, and a change waiting for the next start', () => {
-    expect(browserMcpView(live({ route: route({ browser: 'on' }), browserMcp: 'off' }))).toEqual({ asked: 'on', askedUnreadable: false, applied: 'off', queued: true });
+    expect(browserMcpView(live({ route: route({ browser: 'on' }), browserMcp: 'off' }))).toEqual({ asked: 'on', askedUnreadable: false, applied: 'off', next: 'on', queued: true });
     expect(browserMcpView(live({ route: route({ browser: 'off' }), browserMcp: 'off' }))).toMatchObject({ queued: false });
-    expect(browserMcpView(live({ route: null, browserMcp: null }))).toEqual({ asked: null, askedUnreadable: false, applied: 'none', queued: false });
+    expect(browserMcpView(live({ route: null, browserMcp: null }))).toEqual({ asked: null, askedUnreadable: false, applied: 'none', next: null, queued: false });
     expect(browserMcpView(live({ route: null }))).toMatchObject({ applied: 'unknown' });   // an older server: no key
     expect(browserMcpView(live({ route: route({ browser: 'maybe' }), browserMcp: 'on' }))).toMatchObject({ asked: null, queued: false });
     expect(browserMcpView(live({ route: route({}, ['browser']), browserMcp: 'on' }))).toMatchObject({ askedUnreadable: true, queued: false });
+    expect(browserMcpView(live({ route: route({}, ['browser']), browserMcp: 'on' }), 'off')).toMatchObject({ next: null, queued: false });
+  });
+
+  it('a session with no field of its own follows the box default, and a change of it waits for the next start', () => {
+    // A pane spawned before ccd managed the servers (`none`) runs them; a default of off is a change at its next start.
+    expect(browserMcpView(live({ route: null, browserMcp: null }), 'off')).toMatchObject({ next: 'off', queued: true });
+    expect(browserMcpView(live({ route: null, browserMcp: null }), 'on')).toMatchObject({ next: 'on', queued: false });
+    // The box default flipped after the pane started.
+    expect(browserMcpView(live({ route: null, browserMcp: 'off' }), 'on')).toMatchObject({ next: 'on', queued: true });
+    expect(browserMcpView(live({ route: null, browserMcp: 'off' }), 'off')).toMatchObject({ queued: false });
+    // Its own field wins over the box default.
+    expect(browserMcpView(live({ route: route({ browser: 'on' }), browserMcp: 'on' }), 'off')).toMatchObject({ next: 'on', queued: false });
+    expect(browserLine(browserMcpView(live({ route: null, browserMcp: null }), 'off')))
+      .toBe('This run started before ccrc managed browser tools, so it has what its account enables. It follows the box default, off, from its next restart.');
   });
 
   it('says it in one line', () => {
@@ -74,8 +88,12 @@ describe('browserBoxOf and the count (D-8121)', () => {
       live({ id: 'd', browserMcp: 'off', route: route({ browser: 'on' }) }),
       fleetSession({ id: 'e', presence: 'asleep', browserMcp: 'on' }),
     ]);
-    expect(c).toEqual({ running: 4, using: 2, queued: 1, unrecorded: 1 });
-    expect(browserCountLine(c)).toBe('2 of 4 running sessions use a browser. 1 started before ccrc managed browser tools. 1 will change at its next start.');
+    // A pane with no record runs what its account enables, which the console cannot see: counted apart, never as using.
+    expect(c).toEqual({ running: 4, using: 1, queued: 1, unrecorded: 1 });
+    expect(browserCountLine(c)).toBe('1 of 4 running sessions uses a browser. 1 more started before ccrc managed browser tools and runs what its account enables. 1 will change at its next start.');
+    // With the box default read (off), the unrecorded pane's next start is a change too.
+    expect(browserFleetCount([live({ id: 'c', browserMcp: null }), live({ id: 'f', browserMcp: null })], 'off'))
+      .toEqual({ running: 2, using: 0, queued: 2, unrecorded: 2 });
   });
 });
 
@@ -91,7 +109,8 @@ describe('Settings › Automation › Browser tools (D-8121)', () => {
     expect(screen.getByRole('heading', { level: 3, name: 'Browser tools' })).toBeInTheDocument();
     expect(screen.getByText(BROWSER_TEXT.defaultOff)).toBeInTheDocument();
     for (const n of BROWSER_MCP_SERVERS_DEFAULT.split(',')) expect(screen.getByText(n)).toBeInTheDocument();
-    expect(screen.getByText('1 of 2 running sessions uses a browser.')).toBeInTheDocument();
+    // `a` follows the box default (off) and its pane runs them: a change at its next start.
+    expect(screen.getByText('1 of 2 running sessions uses a browser. 1 will change at its next start.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: BROWSER_TEXT.stopLeftovers }));
     expect(scroll).toHaveBeenCalledTimes(1);
     target.remove();
@@ -120,7 +139,15 @@ describe('the session\'s Browser tools sheet (D-8121)', () => {
     expect(sessionMenu(null).find((e) => e.id === 'session-browser')?.enabled).toBe(false);
   });
 
+  it('a session with no field reads the box default once the sheet opens and says the change its next start makes', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue({ nodes: [fleetNode()] } as never);
+    render(<BrowserSheet id="demo-a" session={live({ route: null, browserMcp: 'on' })} open onClose={() => undefined} />);
+    expect(await screen.findByText('Browser tools are on in this run. It follows the box default, off, from its next restart.')).toBeInTheDocument();
+    expect(document.querySelector('[data-browser-queued]')?.getAttribute('data-browser-queued')).toBe('yes');
+  });
+
   it('marks what the session asked, says what its run has, and a tap writes the field', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
     const write = vi.spyOn(api, 'route').mockResolvedValue({ ok: true } as never);
     const onClose = vi.fn();
     render(<BrowserSheet id="demo-a" session={live({ route: route({ browser: 'off' }), browserMcp: 'on' })} open onClose={onClose} />);
@@ -131,6 +158,7 @@ describe('the session\'s Browser tools sheet (D-8121)', () => {
   });
 
   it('a box whose ccd does not take the field (501) leaves the sheet open', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new Error('offline'));
     vi.spyOn(api, 'route').mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     const onClose = vi.fn();
     render(<BrowserSheet id="demo-a" session={live()} open onClose={onClose} />);

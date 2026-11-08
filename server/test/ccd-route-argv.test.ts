@@ -268,6 +268,51 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
   });
 });
 
+describe('a --route that names only browser keeps the coordinator row (D-8121)', () => {
+  it('an operator ws-add with --route browser=on gets the coordinator row beside it, and the spawn composes the row', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route browser=on demo`);
+    const id = 'demo-quiet-mesa';
+    expect(record(id)).toEqual(['opus', 'high', 'sonnet', 'on']);
+    expect(h.reg(id, 'browser')).toBe('on');
+    const rows = routeRows();
+    expect(rows).toHaveLength(5);
+    expect(decOf(rows[0]!)).toMatchObject({ actor: 'ws-add', reason: 'argv' });
+    expect(decOf(rows[1]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
+    expect(composed(newSessions()[0]!)).toContain('--model opus');
+  });
+
+  it('a dispatched worker (--no-rc) with --route browser=on writes that field alone: the server sends its row', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route browser=on demo`);
+    expect(record('demo-quiet-mesa')).toEqual([null, null, null, null]);
+    expect(h.reg('demo-quiet-mesa', 'browser')).toBe('on');
+    expect(routeRows()).toHaveLength(1);
+  });
+
+  it('browser beside a routing field is the caller\'s answer: no coordinator row', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route browser=on --route class=sonnet demo`);
+    expect(record('demo-quiet-mesa')).toEqual(['sonnet', null, null, null]);
+    expect(routeRows()).toHaveLength(2);
+  });
+
+  it('a minting start with --route browser=off gets the coordinator row too; a revival with it seeds nothing', () => {
+    h.sh(`${START_SPAWNLESS} cmd_start --route browser=off claude demo`);
+    expect(record('claude-demo')).toEqual(['opus', 'high', 'sonnet', 'on']);
+    expect(h.reg('claude-demo', 'browser')).toBe('off');
+    expect(routeRows()).toHaveLength(5);
+    h.sh(`${START_SPAWNLESS} cmd_start --route browser=on claude demo`);
+    expect(h.reg('claude-demo', 'browser')).toBe('on');
+    expect(routeRows()).toHaveLength(6);
+  });
+
+  it('_route_any leaves browser out: a row naming only browser has no routing record', () => {
+    fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-x.browser'), 'on');
+    expect(h.sh('_route_any demo-x && echo yes || echo no').trim()).toBe('no');
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-x.effort'), 'high');
+    expect(h.sh('_route_any demo-x && echo yes || echo no').trim()).toBe('yes');
+  });
+});
+
 describe('--route on start and enable (routing spec §5.3)', () => {
   it('start takes --route, writes after the mint, journals with actor start; enable forwards it; an existing row is never re-seeded', () => {
     h.sh(`${START_SPAWNLESS} cmd_start --route subagent=haiku claude demo`);

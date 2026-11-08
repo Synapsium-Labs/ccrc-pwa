@@ -11892,12 +11892,23 @@ _check_playwright() {
 #     A process matches a name when its command line holds the name's server key (the part after the last `:`) and `mcp`:
 #     `npm exec @playwright/mcp@latest` and `node …/playwright-mcp` for `plugin:playwright:playwright`, `npm exec
 #     chrome-devtools-mcp@…` for `plugin:chrome-devtools-mcp:chrome-devtools` (measured, the plans note of 2026-11-08). A
-#     command line that merely names both words is counted too: this is a count to read, never an act.
+#     command line that merely names both words is counted too: this is a count to read, never an act. A CLAUDE CODE
+#     PROCESS IS NEVER A SERVER, whatever its argv names: every session spawned with browser off carries the denial
+#     inline (`--settings '{"deniedMcpServers":[{"serverName":"plugin:chrome-devtools-mcp:chrome-devtools"},…]…}'`),
+#     and the native binary keeps that whole argv in `ps`, so without this every off session would match and its pane
+#     shell would be counted as running a server. Claude Code is a process whose first word's basename is `claude` or
+#     whose command line holds `--settings` or `deniedMcpServers` (`_dr_bmcp_is_claude`).
 #   * ON: the registry rows whose record says `on`. A hibernated row keeps its record, so ON can only be too high, which
 #     reads as PASS: the check never warns on a fleet that is doing what was asked.
 # WARN when USING is above ON, with the remedy (restart the idle ones, or fix the list); PASS otherwise; SKIP on a
 # `server`-role box and where there is no session registry. Never FAIL: the servers cost memory, not correctness.
 _dr_bmcp_ps() { ps -eo pid=,ppid=,args= 2>/dev/null; }   # THE SEAM: a test plants a process table
+_dr_bmcp_is_claude() {   # args -> 0 iff the command line is a Claude Code session's, never a browser server's
+  local a="$1" w="${1%% *}"
+  [[ "${w##*/}" == claude ]] && return 0
+  case "$a" in *"--settings "*|*"--settings="*|*deniedMcpServers*) return 0 ;; esac
+  return 1
+}
 _check_browser-mcp() {
   local _srv_role="" reg names keys=() k n pid ppid args f on=0 using=0 procs=0
   local -A match=() parent=() seen=()
@@ -11926,6 +11937,7 @@ _check_browser-mcp() {
     [[ "$pid" =~ ^[0-9]+$ && "$ppid" =~ ^[0-9]+$ ]] || continue
     parent["$pid"]="$ppid"
     case "$args" in *mcp*) ;; *) continue ;; esac
+    _dr_bmcp_is_claude "$args" && continue
     for n in "${keys[@]}"; do
       k="${n##*:}"
       case "$args" in *"$k"*) match["$pid"]=1; break ;; esac

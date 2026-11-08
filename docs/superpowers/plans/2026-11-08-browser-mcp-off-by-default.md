@@ -80,6 +80,13 @@ sessions on the machine are not counted).
   there; the session's control is a ⋯ menu item and sheet, because the session screen has no route sheet with a
   Workflows row; and the test harness pins `CCRC_BROWSER_MCP_DEFAULT=on` (`ccdWsHelpers.ts`) so the suites that pin a
   spawn argv byte for byte measure what they did, while `ccd-browser-spawn.test.ts` measures the default.
+  Review fixes in the same PR: `browser` is not a routing answer, so a route that names only `browser` keeps the
+  default row. A fresh dispatch's route of `browser` alone is laid over its run kind's row and keeps `--route-default`
+  (`dispatchDecide.ts`); `ws-add` and a minting `start` given only `browser` pairs still seed the coordinator row
+  (`_route_argv_routes`); and `_route_any` leaves `browser` out, so a stray `browser` field is not a routing record. The
+  doctor's count never reads a Claude Code process as a server: an off session's own argv carries the denial inline,
+  naming both `mcp` and each server key (`_dr_bmcp_is_claude`). The console's `queued` follows the box default for a
+  session with no field of its own, and its count no longer reads a pane with no record as using a browser.
 
 ## Known limits
 
@@ -92,9 +99,25 @@ sessions on the machine are not counted).
 - **A custom server list is shown as set, not listed** (`is-set`): the box settings view records only whether it is
   set, so the card names the default list or says the box sets its own.
 - **ccd cannot clear the field.** `ccd route` sets a field and has no unset, so a session that set `browser` keeps
-  following its own value; the sheet offers On and Off, not "box default".
+  following its own value; the sheet offers On and Off, not "box default". The field no longer counts as a routing
+  record (`_route_any`), so it does not suppress the coordinator row or the no-record effort keystroke.
 - **The doctor's match is by command line.** A process counts when its command line holds a configured server's key and
-  `mcp`; a server whose command line names neither is not counted, and one that names both is, whatever it is.
+  `mcp` and it is not Claude Code itself (first word `claude`, or `--settings` / `deniedMcpServers` in its argv); a
+  server whose command line names neither is not counted, and one that names both is, whatever it is.
+- **The doctor's ON counts every record that says on**, stopped, hibernated and archived rows included, not only the
+  running sessions whose effective value is on. ON can only be too high, so a stale `on` record can hide a pane that
+  really leaks a server (WARN is raised only when USING is above ON); it never raises a false WARN.
+- **A pane with no record is counted apart.** A pane spawned before this ccd (`browserMcp` absent on the row) runs
+  whatever its account enables, which the console cannot see; the card counts it as "started before ccrc managed browser
+  tools", never as using a browser, until it restarts. The session sheet reads the box default with one `/api/updates`
+  read when it opens; if that read fails, a session with no field of its own shows no pending change.
+- **The environment can shadow ccrc.env for ccd.** ccd reads both settings with `_ccrc_knob`'s default mode, where the
+  process environment wins over `~/.ccrc/ccrc.env`, while the console's settings read uses the file. A caller whose
+  environment carries a stale `CCRC_BROWSER_MCP_DEFAULT` (a unit's `EnvironmentFile` loaded at its start) spawns with it
+  until that process restarts, and the card can say otherwise meanwhile.
+- **Real-engine width checks cover the Settings card only.** `browser-tools-card.browser.test.ts` measures the card at
+  360, 390, 1280 and 1920; the session's Browser tools sheet (the shared `Sheet` and `OptionRow`) and the New session
+  route row's 2 x 2 grid are covered by jsdom only.
 - **Acceptance is checked on the box after deploy**, not here: a new session starts no browser server; an enabled one
   gets it and it is gone after hibernation with Stop leftovers armed; the process count matches the sessions using a
   browser.

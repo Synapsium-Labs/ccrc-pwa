@@ -25,19 +25,24 @@ export interface BrowserMcpView {
   /** The route read failed for this field this pass: what it asked is unknown, not "none". */
   askedUnreadable: boolean;
   applied: BrowserApplied;
-  /** It asked for something its running pane does not have: applied at its next start. */
+  /** What its next start applies: its own field, else the box default; null when neither is known. */
+  next: BrowserWord | null;
+  /** Its next start applies something its running pane does not have: its own field, or the box default it follows
+   *  (a pane spawned before ccd managed the servers, `none`, runs them, so a default of off is a change too). */
   queued: boolean;
 }
 
-export function browserMcpView(s: Pick<FleetSession, 'route' | 'browserMcp'>): BrowserMcpView {
+export function browserMcpView(s: Pick<FleetSession, 'route' | 'browserMcp'>, boxDefault: BrowserWord | null = null): BrowserMcpView {
   const route = s.route ?? null;
   // The live frame is cast, not revived: an older server's `route` may lack `unreadable` (`routeView`'s reading).
   const askedUnreadable = (route?.unreadable ?? []).includes('browser');
   const raw = route?.fields.browser;
   const asked = isBrowserWord(raw) ? raw : null;
   const applied: BrowserApplied = s.browserMcp === undefined ? 'unknown' : s.browserMcp === null ? 'none' : s.browserMcp;
-  const queued = asked !== null && (applied === 'on' || applied === 'off') && asked !== applied;
-  return { asked, askedUnreadable, applied, queued };
+  const next = askedUnreadable ? null : asked ?? boxDefault;
+  const queued = next !== null
+    && (((applied === 'on' || applied === 'off') && next !== applied) || (applied === 'none' && next === 'off'));
+  return { asked, askedUnreadable, applied, next, queued };
 }
 
 export const BROWSER_APPLIED_TEXT: Readonly<Record<BrowserApplied, string>> = {
@@ -52,7 +57,8 @@ export const BROWSER_APPLIED_TEXT: Readonly<Record<BrowserApplied, string>> = {
 export function browserLine(v: BrowserMcpView): string {
   const head = BROWSER_APPLIED_TEXT[v.applied];
   if (v.askedUnreadable) return `${head} What it asked for could not be read.`;
-  if (v.queued) return `${head} Asked: ${v.asked}, at its next restart.`;
+  if (v.queued && v.asked !== null) return `${head} Asked: ${v.asked}, at its next restart.`;
+  if (v.queued) return `${head} It follows the box default, ${v.next}, from its next restart.`;
   if (v.asked === null) return `${head} It follows the box default.`;
   return head;
 }
@@ -80,13 +86,18 @@ export const BROWSER_DEFAULT_SERVERS: readonly string[] = BROWSER_MCP_SERVERS_DE
 /** Running sessions (presence `alive`), and how many of them run the servers or have a change waiting for a restart. */
 export interface BrowserFleetCount { running: number; using: number; queued: number; unrecorded: number }
 
-export function browserFleetCount(sessions: readonly Pick<FleetSession, 'route' | 'browserMcp' | 'presence'>[]): BrowserFleetCount {
+/** `using` counts the panes whose record says on; a pane with no record (`unrecorded`) runs what its account enables,
+ *  which the console does not see, so it is counted apart rather than as using a browser. `boxDefault` is what a
+ *  session with no field of its own applies at its next start (null: not reported). */
+export function browserFleetCount(
+  sessions: readonly Pick<FleetSession, 'route' | 'browserMcp' | 'presence'>[], boxDefault: BrowserWord | null = null,
+): BrowserFleetCount {
   let running = 0, using = 0, queued = 0, unrecorded = 0;
   for (const s of sessions) {
     if (s.presence !== 'alive') continue;
     running++;
-    const v = browserMcpView(s);
-    if (v.applied === 'on' || v.applied === 'none') using++;
+    const v = browserMcpView(s, boxDefault);
+    if (v.applied === 'on') using++;
     if (v.applied === 'none') unrecorded++;
     if (v.queued) queued++;
   }
@@ -113,7 +124,9 @@ export const BROWSER_TEXT = {
 export function browserCountLine(c: BrowserFleetCount): string {
   const head = `${c.using} of ${c.running} running session${c.running === 1 ? '' : 's'} ${c.using === 1 ? 'uses' : 'use'} a browser.`;
   const parts = [head];
-  if (c.unrecorded > 0) parts.push(`${c.unrecorded} started before ccrc managed browser tools.`);
+  if (c.unrecorded > 0) {
+    parts.push(`${c.unrecorded} more started before ccrc managed browser tools and ${c.unrecorded === 1 ? 'runs' : 'run'} what ${c.unrecorded === 1 ? 'its' : 'their'} account enables.`);
+  }
   if (c.queued > 0) parts.push(`${c.queued} will change at ${c.queued === 1 ? 'its' : 'their'} next start.`);
   return parts.join(' ');
 }

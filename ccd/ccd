@@ -8077,9 +8077,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # THE ACTOR IS THE DECLARED ONE WHEN THERE IS ONE. The dispatch path already
   # passes `--actor 'run:<id> dispatch'`, which is a truer answer than the verb's
   # own name; `ws-add` is the fallback for a call that declared nothing.
+  # D-8121: a `--route` that names only `browser` is not a routing answer, so an operator spawn still gets the
+  # coordinator row beside it (`_route_argv_routes`; `_route_any` leaves `browser` out, so the seed is not skipped).
   if (( ${#lc_route[@]} )); then
     _route_argv_write "$id" "${lc_actor:-ws-add}" argv "${lc_route[@]}"
-  elif (( ! norc )); then
+  fi
+  if (( ! norc )) && ! _route_argv_routes "${lc_route[@]}"; then
     _route_seed_default "$id" "$hw"
   fi
   # AFTER the record, never before it: `degraded` is a statement about a record
@@ -21041,8 +21044,17 @@ _route_word_in() {   # word list — 0 iff word is one of the space-separated li
 }
 _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a session with
   # no field at all is a pre-slice-1 session and gets today's behaviour).
+  # `browser` IS NOT A ROUTING FIELD FOR THIS QUESTION (D-8121): it decides which MCP servers a spawn starts, never the
+  # model, effort or placement, and `_browser_spawn_compose` reads it on its own. A row that names only `browser` is a
+  # row with no routing record, so the coordinator row is still seeded beside it and the spawn composes no route flags.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
+  for f in "${ROUTE_FIELDS[@]}"; do [[ "$f" != browser && -e "$REG/$1.$f" ]] && return 0; done
+  return 1
+}
+_route_argv_routes() {   # k=v... — 0 iff a pair names a field other than `browser` (D-8121): such an argv says what the
+  # session is for, so it replaces the default row; `browser` pairs alone ride beside the default, never instead of it.
+  local kv
+  for kv in "$@"; do [[ "${kv%%=*}" != browser ]] && return 0; done
   return 1
 }
 _route_valid() {   # field value — THREE answers, because two of them are two different
@@ -26628,9 +26640,11 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `start` is the actor on both arms, including the one `cmd_enable` reaches:
   # that verb forwards the pairs here rather than parsing them twice, and its own
   # `enable` lifecycle row already records that boot-persistence was asked for.
+  # D-8121: a `--route` naming only `browser` keeps the mint's default row (the same rule as `ws-add`'s).
   if (( ${#route[@]} )); then
     _route_argv_write "$id" start argv "${route[@]}"
-  elif [[ -z "$regw" ]]; then
+  fi
+  if [[ -z "$regw" ]] && ! _route_argv_routes "${route[@]}"; then
     _route_seed_default "$id" "$wrapper"
   fi
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above

@@ -93,20 +93,22 @@ import {
 const LEGACY_SHA = '0d0ea592166496be5eccb948313e381bcb2b87c8';
 /** E0a. Re-pinned only by the commit that vendors one more helper, the one edit the fixture takes (its header says
  *  how); never to turn a red green. */
-const FIXTURE_SHA256 = '66dbbb91a2eb5500c89cb00f3d4e7c991f8793ee7d91c8e7b926d5458f840245';
-/** The seventeen vendored bodies, in the fixture's order: plan Task 2 Step 1's fourteen, then `_limit_score` and
- *  `_avail` (W2 Task 9, for its callers' rows), then `_route_valid` (D-8121, which adds its `browser` arm). */
+const FIXTURE_SHA256 = 'd5e1d1a3ca0a06f893d5eef009ac77c263adb34061ab5b132fa4d45e67e89e13';
+/** The eighteen vendored bodies, in the fixture's order: plan Task 2 Step 1's fourteen, then `_limit_score` and
+ *  `_avail` (W2 Task 9, for its callers' rows), then `_route_valid` (D-8121, which adds its `browser` arm), then
+ *  `_route_any` (D-8121's fix, which leaves `browser` out of it). */
 const VENDORED = [
   '_reg_get', '_reg_read', '_authdead', '_cfg_dir', '_limit_json_num', '_limit_field', '_share_pct',
   '_home_measured', '_route_peek', '_route_effort_for', '_route_applied_get', '_route_wanted',
-  '_route_pending_word', '_route_apply_pending', '_limit_score', '_avail', '_route_valid',
+  '_route_pending_word', '_route_apply_pending', '_limit_score', '_avail', '_route_valid', '_route_any',
 ] as const;
 /** The live helpers plan Task 2 Step 1 names as the bodies' direct callees. E0c derives the transitive set itself;
  *  this list only proves the derivation sees at least what the plan saw. `_route_valid` left it with D-8121: it is
- *  vendored now (`VENDORED`), so the bodies reach its `_legacy` twin and no longer the live helper. */
+ *  vendored now (`VENDORED`), so the bodies reach its `_legacy` twin and no longer the live helper; `_route_any` the same,
+ *  with D-8121's fix. */
 const PLAN_DIRECT_HELPERS = [
   '_route_get', '_route_inert_has', '_route_pair_note', '_id_wrapper', '_authdead_expired',
-  '_route_any', '_ccrc_cfg_dir',
+  '_ccrc_cfg_dir',
 ];
 /** Live helpers in E0c's closure that call a VENDORED name's LIVE form, which the diet converts by design. Both reach
  *  `_reg_get` from the journaling side of `_route_get` (the non-quiet arm of `_route_effort_for`, and the note floors

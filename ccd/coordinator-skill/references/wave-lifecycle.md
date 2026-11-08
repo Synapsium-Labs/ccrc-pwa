@@ -251,8 +251,11 @@ for saying so.
 **`browser` — dispatch with `browser=on` when the task needs a browser** (D-8121). Fleet sessions start no browser
 MCP server (Playwright, Chrome DevTools) unless they ask for one: the box default is off. A wave whose work drives a
 browser — a UI check at three widths, a browser-leg test, a page to read through the browser tools — carries
-`"browser":"on"` in its route; every other wave leaves the field out (`off` is only for a box whose default is on). It
-applies at the worker's spawn, so a resumed wave N ≥ 2 that newly needs one takes it at that worker's next start, never
+`"browser":"on"` in its route; every other wave leaves the field out (`off` is only for a box whose default is on).
+`browser` is not a routing answer: on a fresh worker, a route that names ONLY `browser` keeps its run kind's default row
+and that row's preference placement, with `browser` laid over it, so `{"browser":"on"}` alone is the usual spelling. A
+route that names `browser` beside any other field is a passed route like any other and replaces the row, so name every
+field you want with it. It applies at the worker's spawn, so a resumed wave N ≥ 2 that newly needs one takes it at that worker's next start, never
 mid-run. A ccd without `browser-route-v1` gets the rest of the route and the server journals
 `route-omitted:no-browser-route-cap`. A session that finds it needs a browser may turn its own on with
 `ccd route --session <own id> --set browser=on`; it applies at its next restart.

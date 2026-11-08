@@ -414,9 +414,12 @@ async function spawnFresh(
   // A box without `route-argv-v1` drops every `--route` already (journalled below as `route-omitted:no-route-argv-cap`),
   // so the default-specific withholding applies only where the pairs would otherwise have been sent.
   const defaultOk = routeDefaulted && routeFields !== null && capSupported(deps.fleetState, ROUTE_DEFAULT_CAP);
+  let defaultWithheld = false;
   if (routeDefaulted && routeFields !== null && !defaultOk && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
     coord.recordRunEvent(run.id, 'coordinator', 'route-omitted:no-route-default-cap');
-    routeFields = null;
+    defaultWithheld = true;
+    // D-8121: a `browser` the coordinator named rode over the row; it is the coordinator's, so it is still sent.
+    routeFields = routeFields.browser !== undefined ? { browser: routeFields.browser } : null;
   }
   // ROUTING (routing spec §5.3, slice 4, Task 3): gated on `ROUTE_ARGV_CAP`, the ARGV-PARSING capability: a
   // DIFFERENT token from the `ROUTE_CAP` the wave N>=2 arm gates the `ccd route` VERB on. `routeFields === null`
@@ -457,7 +460,7 @@ async function spawnFresh(
   if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) coord.recordRunEvent(run.id, 'coordinator', armEventDetail(routeFields));
   // `winner.wrapper` is MEASURED: the bind step refuses any same-project record whose identity is not.
   return { sessionId: winner.id, workspace: winner.workspace, branch: winner.branch, wrapper: winner.wrapper,
-    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: routeDefaulted && routeFields === null && routeFieldsIn !== null };
+    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: defaultWithheld };
 }
 
 /**

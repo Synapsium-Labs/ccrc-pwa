@@ -22,7 +22,7 @@ export function BrowserToolsSection({ nodes, store = useFleetStore }: {
   const sessions = store((s) => s.sessions);
   const card = SETTINGS_CARDS.automation.browser;
   const box = nodes === null ? null : browserBoxOf(nodes);
-  const count = browserFleetCount(sessions);
+  const count = browserFleetCount(sessions, box?.default ?? null);
   const toStopLeftovers = (): void => {
     document.getElementById(PANE_SCOPE_STOP_ANCHOR)?.scrollIntoView({ block: 'start' });
   };

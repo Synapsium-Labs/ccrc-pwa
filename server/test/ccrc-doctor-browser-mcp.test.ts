@@ -77,6 +77,22 @@ describe('browser-mcp: USING against ON (D-8121)', () => {
     expect(r.remedy).toMatch(/Stop leftovers/);
   });
 
+  it('PASS on a healthy default fleet: off sessions carry the denial in their own argv, and that is no server (D-8121)', () => {
+    // The real argv of a session spawned with browser off: the denial rides inline in its one `--settings`, and the
+    // native binary keeps it in `ps`. It names both `mcp` and each server key, so it must not be read as a server.
+    const deny = `--settings '{"deniedMcpServers":[{"serverName":"plugin:playwright:playwright"},{"serverName":"plugin:chrome-devtools-mcp:chrome-devtools"}],"permissions":{"deny":[]}}'`;
+    const b = box('ccrc-doctor-bmcp-argv-', { off: ['a', 'b'] });
+    const ps = ['1 0 /sbin/init', '200 1 tmux', '210 200 -bash', '220 200 -bash',
+      `300 210 claude ${deny} --resume x`, `400 220 /home/u/.local/bin/claude --model opus ${deny}`];
+    expect(check(b, ps)).toMatchObject({
+      line: 'PASS browser-mcp: 0 Claude Code processes run a browser MCP server (0 processes in all); 0 sessions last spawned with browser on', code: 0,
+    });
+    // An on session beside them, whose servers are its children, counts once, under its own Claude Code process.
+    const on = box('ccrc-doctor-bmcp-argv-on-', { on: ['c'], off: ['a', 'b'] });
+    expect(check(on, [...ps, '230 200 -bash', '500 230 claude --settings \'{"permissions":{}}\' --resume y', ...session(500, ['playwright', 'devtools'])]).line)
+      .toBe('PASS browser-mcp: 1 Claude Code process runs a browser MCP server (5 processes in all); 1 session last spawned with browser on');
+  });
+
   it('the configured list decides what counts: a list naming only playwright does not count the devtools tree', () => {
     const b = box('ccrc-doctor-bmcp-list-', { on: ['a'], env: ['CCRC_BROWSER_MCP_SERVERS=plugin:playwright:playwright'] });
     expect(check(b, [...session(1000, ['playwright']), ...session(2000, ['devtools'])]).line)
