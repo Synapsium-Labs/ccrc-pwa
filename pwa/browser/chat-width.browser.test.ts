@@ -275,12 +275,14 @@ describe('the chat at a desk: a wide column, prose held to a measure (D-8059)', 
           const m = measured!;
           near(m.bubble.right, m.content.right, 'the bubble\'s right edge');
           expect(m.bubble.width, `the bubble (${m.bubble.width}) against 70% of ${m.content.width}`).toBeLessThanOrEqual(0.7 * m.content.width + 1);
-          // Fix round 1, F2: a user turn is never wider than the reply beside it (Instrument 2560 and Refined 1600 with
-          // the rail hidden are where 70% of the column passes the prose).
+          // Fix round 1, F2: a user turn is never wider than the reply beside it (Instrument 2560, Refined 2560 and
+          // Refined 1600 with the rail hidden are where 70% of the column passes the prose).
           expect(m.bubble.width, `the bubble (${m.bubble.width}) against the paragraph (${m.paragraph.width})`).toBeLessThanOrEqual(m.paragraph.width + 1);
           // 80 words fill the bubble, so it reaches its cap: 85%, or a bare 70%, is wider than this where it binds.
           near(m.bubble.width, Math.min(0.7 * m.content.width, m.proseMeasure), 'the bubble at its cap');
-          // F9: the attachments above it are never wider than it, and share its right edge.
+          // F9: the attachments take the same cap as the bubble, `min(70%, prose)`, so at the cap (this long turn) they
+          // are no wider than it, and share its right edge. A short turn's bubble shrink-wraps under the cap and its
+          // attachments may be wider than it: the shared cap is the rule (review 1589 F4; desktop-polish Task C14).
           expect(m.attach, 'premise: the turn has an attachment').not.toBeNull();
           expect(m.attach!.width, `the attachments (${m.attach!.width}) against the bubble (${m.bubble.width})`).toBeLessThanOrEqual(m.bubble.width + 1);
           near(m.attach!.right, m.content.right, 'the attachments\' right edge');

@@ -116,7 +116,7 @@ describe('the chat\'s rules at a desk (D-8059)', () => {
   });
 
   it('the chat measure is resolved once, on .msg-assist, as a registered length whose source is --measure-chat-prose', () => {
-    // Fix round 1, F3: `ch` resolves in each element's own font, so a heading capped at `90ch` ran past the paragraphs.
+    // Fix round 1, F3: `ch` resolves in each element's own font, so a heading capped in `ch` ran past the paragraphs.
     // A registered <length> computes to px where it is set, on `.msg-assist`, and its children inherit that one length.
     const registered = rules(CHAT).filter((r) => r.prelude === `@property ${CAP}`);
     expect(registered, `one @property ${CAP}`).toHaveLength(1);
