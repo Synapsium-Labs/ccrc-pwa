@@ -179,7 +179,7 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
             <p className={SETTINGS_NOW_CLASS.note}>{delegationAdoptKeepsHeading(adoption.mode)}</p>
             <ul className="left-behind-keeps" aria-label={delegationAdoptKeepsHeading(adoption.mode)}>
               {keeps.items.map((k) => (
-                <li key={k.path} title={k.path} className={SETTINGS_NOW_CLASS.note}>
+                <li key={`${k.project}/${k.worktree}`} className={SETTINGS_NOW_CLASS.note}>
                   {delegationAdoptKeepLine(k)}
                   {': '}
                   {k.changes === undefined ? T.noChanges : delegationAdoptKeepChanges(k.changes).join(', ')}

@@ -38,12 +38,12 @@ const health = (over: Partial<DelegationAdoptionHealth> = {}): DelegationAdoptio
   uncensused: 0, owed: 0, ...over,
 });
 const keep = (over: Partial<DelegationAdoptionKeep> = {}): DelegationAdoptionKeep => ({
-  project: 'project-a', worktree: 'agent-a1', path: '/work/project-a/worktrees/agent-a1', parent: 'session-a', ...over,
+  project: 'project-a', worktree: 'agent-a1', parent: 'session-a', ...over,
 });
 const TWO = [
   keep(),
   keep({
-    worktree: 'agent-b2', path: '/work/project-b/worktrees/agent-b2', parent: 'session-b', project: 'project-b',
+    worktree: 'agent-b2', parent: 'session-b', project: 'project-b',
     changes: { dirty: true, aheadOfBase: 2, branchAheadOfBase: 1 },
   }),
 ];
@@ -200,18 +200,26 @@ describe('a refused choice says why and is disabled (D-8113)', () => {
 });
 
 describe('the list of worktrees (D-8114)', () => {
-  it('an item with changes, and one without: the project, the worktree and the parent show, and the path is the title', () => {
+  it('an item with changes, and one without: the project, the worktree and the parent show, one item each', () => {
     owned(view());
     expect(screen.getByText(delegationAdoptKeepsHeading('shadow'))).toBeInTheDocument();
-    const first = screen.getByTitle(TWO[0]!.path);
+    const [first, second] = screen.getAllByRole('listitem');
     expect(first).toHaveTextContent(delegationAdoptKeepLine(TWO[0]!));
     expect(first).toHaveTextContent('project-a');
     expect(first).toHaveTextContent('agent-a1');
     expect(first).toHaveTextContent('session-a');
     expect(first).toHaveTextContent(T.noChanges);
-    const second = screen.getByTitle(TWO[1]!.path);
     for (const part of delegationAdoptKeepChanges(TWO[1]!.changes!)) expect(second).toHaveTextContent(part);
     expect(second).not.toHaveTextContent(T.noChanges);
+  });
+
+  it('an item is project, worktree, parent and changes, with no path (review 1665 N10): the reader reads it whole and nothing shows a path', async () => {
+    expect(Object.keys(TWO[1]!).sort()).toEqual(['changes', 'parent', 'project', 'worktree']);
+    expect(asDelegationAdoptView(view())).toEqual(view());
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(view());
+    render(<Polled />);
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
+    for (const li of screen.getAllByRole('listitem')) expect(li).not.toHaveAttribute('title');
   });
 
   it('the changes read in words: uncommitted yes, no or unread; commits; the branch\'s three odd states', () => {
@@ -252,7 +260,7 @@ describe('the list of worktrees (D-8114)', () => {
   });
 
   it('a list of the bound\'s size is drawn whole', () => {
-    const items = Array.from({ length: DELEGATION_ADOPTION_KEEPS_MAX }, (_, i) => keep({ worktree: `agent-${i}`, path: `/work/p/agent-${i}` }));
+    const items = Array.from({ length: DELEGATION_ADOPTION_KEEPS_MAX }, (_, i) => keep({ worktree: `agent-${i}` }));
     owned(view({ adoption: health({ keeps: { items, more: 3 } }) }));
     expect(screen.getAllByRole('listitem')).toHaveLength(DELEGATION_ADOPTION_KEEPS_MAX);
   });

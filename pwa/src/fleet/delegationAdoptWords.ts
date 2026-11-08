@@ -69,9 +69,9 @@ const isMeasured = <T>(v: unknown, ok: (x: unknown) => x is T): boolean => v ===
 
 function asKeep(raw: unknown): DelegationAdoptionKeep | null {
   if (!isRecord(raw)) return null;
-  const { project, worktree, path, parent, changes } = raw;
-  if (typeof project !== 'string' || typeof worktree !== 'string' || typeof path !== 'string' || typeof parent !== 'string') return null;
-  const base = { project, worktree, path, parent };
+  const { project, worktree, parent, changes } = raw;
+  if (typeof project !== 'string' || typeof worktree !== 'string' || typeof parent !== 'string') return null;
+  const base: DelegationAdoptionKeep = { project, worktree, parent };
   if (changes === undefined) return base;
   if (!isRecord(changes)) return null;
   const { dirty, aheadOfBase, branchAheadOfBase } = changes;
