@@ -250,6 +250,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // total over the union's MEMBERS, not over one member's fields, so this
       // body would stay green while the distinction silently never shipped.
       adopted: r.adopted, spawnState: r.spawnState, skillState: r.skillState,
+      // D-8086: a `200` with no `intents` field came from a server older than 5g, which took no hold.
+      intents: r.intents,
     });
   }
   switch (r.kind) {
@@ -286,7 +288,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // PRESENCE. Its own spread rather than a member of `extra`, whose value
       // type is `number` and must stay so: `by` is the project's NAME.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
-        ...(r.by === undefined ? {} : { by: r.by }) });
+        ...(r.by === undefined ? {} : { by: r.by }),
+        ...(r.key === undefined ? {} : { key: r.key }), ...(r.holder === undefined ? {} : { holder: r.holder }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
     // distinction it received, and this member's `stderr` distinguishes by
@@ -1625,7 +1628,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
       // The one place a wrapper becomes a directory, called from L4 where the
@@ -1639,7 +1642,7 @@ export function registerCoordRoutes(
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
-    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug));
+    const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents));
     const outcome = await run();
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
     // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured

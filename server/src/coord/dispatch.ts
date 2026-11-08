@@ -150,7 +150,10 @@ export type DispatchOutcome =
        * `unmeasurable` is not `absent` — nothing was proven about the fleet
        * either way, so it is an unknown to report, not a gap to go fix.
        */
-      skillState: SkillState }
+      skillState: SkillState;
+      /** The landing intent keys this dispatch wrote (wave 5g, D-8086); `[]` when it named none. A `200` that carries no
+       *  `intents` field came from a server older than 5g, which took no hold. */
+      intents: readonly string[] }
   | { ok: false; kind: 'unknown-run' }
   /** Spec §2.3: the run's STORED `sessionId` is not a registry id, so no id-taking argv may name it. That rules out
    *  the resume's `ensure`, the spent-child release or hand-over, the hold and the route write. It is refused before
@@ -179,10 +182,14 @@ export type DispatchOutcome =
   | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable'>;
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch' | 'status-unmeasurable' |
+        'intent-held'>;
       limit?: number; running?: number; candidates?: number;
+      /** `intent-held`'s own fields, PRESENT exactly on that code: the key and the other programme's run that holds it. */
+      key?: string; holder?: { runId: number; program: string };
       /** WHICH project the measured party belongs to — `project-mismatch`'s
-       *  own field, and the only refusal on this union that carries a string.
+       *  own field, one of two string fields on this union (`key` is
+       *  `intent-held`'s).
        *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
        *  that differs from the run's — never `record.project`, whose
        *  `registry.ts` collapsing read (`project ?? id`) would arrive as the
@@ -521,16 +528,17 @@ async function resumeBound(
 
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
-  slug: unknown = undefined,
+  slug: unknown = undefined, intents: unknown = undefined,
 ): Promise<DispatchOutcome> {
   const coord = deps.coord;
   // Everything the request says, in D-46's order: the cheapest refusal first, and nothing listed, counted, spawned or
   // held for a request that was never going to be accepted. SYNCHRONOUS up to the first `await` below on purpose:
   // two calls fired together both read the same `planned` row (`coord-decide.test.ts`).
-  const req = decideDispatch({ step: 'request', read: coord.run(id), brief, items, route, slug,
+  const req = decideDispatch({ step: 'request', read: coord.run(id), brief, items, route, slug, intents,
+    held: (project, keys) => coord.heldLandingIntents(project, keys),
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
-  const { run, body, itemTitles, routeFields, routeDefaulted, childSlug, hold } = req.plan;
+  const { run, body, itemTitles, routeFields, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
   // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
   const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
     caps: () => capsMeasured(coord) });
@@ -648,7 +656,7 @@ export async function dispatchRun(
   // gated" will go.
   const briefQueued = !resumed || clearedAt !== null;
   const adv = coord.dispatchRun({ runId: id, sessionId, workspace: bound.workspace, branch: bound.branch, resumed,
-    clearedAt, items: itemTitles, briefQueued, clearError,
+    clearedAt, items: itemTitles, intents: intentKeys, briefQueued, clearError,
     // The SUFFIX is a `SpawnVerdict`, never a raw rc — and never the word
     // `spawnstate`, which is not a field and must never become one. Recorded only
     // on the adoption path, so its PRESENCE is the record that this workspace came
@@ -739,5 +747,5 @@ export async function dispatchRun(
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
-    adopted, spawnState: adoptedSpawn, skillState };
+    adopted, spawnState: adoptedSpawn, skillState, intents: intentKeys };
 }

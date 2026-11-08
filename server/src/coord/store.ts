@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
@@ -2981,6 +2982,9 @@ export class CoordStore {
      *  omitted pair leaves the columns NULL, which is exactly the "no dispatch
      *  decided anything here" reading migration 7 reserves for null. */
     briefQueued?: boolean; clearError?: string | null;
+    /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
+     *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
+    intents?: readonly string[];
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
@@ -2996,8 +3000,25 @@ export class CoordStore {
       const adv = this.advanceInner(input.runId, 'dispatched', 'coordinator', input.detail);
       if (!adv.ok) return adv;
       for (const title of input.items) this.addWorkItem(input.runId, title, []);
+      for (const key of input.intents ?? []) {
+        this.db.prepare(
+          'INSERT INTO landing_intents (runId, project, key, setBy, takenAt) ' +
+          'SELECT id, project, ?, claimedBy, dispatchedAt FROM runs WHERE id = ?',
+        ).run(key, input.runId);
+      }
       return adv;
     });
+  }
+
+  /** The landing intents held in a project for these keys: every row whose run is not terminal, ordered by key then run
+   *  id. A raw `state` outside the vocabulary holds, because only the terminal states are excluded. */
+  heldLandingIntents(project: string, keys: readonly string[]): readonly LandingIntentHold[] {
+    if (keys.length === 0) return [];
+    return this.db.prepare(
+      'SELECT i.key AS key, i.runId AS runId, r.program AS program FROM landing_intents i JOIN runs r ON r.id = i.runId ' +
+      `WHERE i.project = ? AND i.key IN (${keys.map(() => '?').join(',')}) AND r.state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
+      'ORDER BY i.key, i.runId',
+    ).all(project, ...keys) as unknown as LandingIntentHold[];
   }
 
   /**
