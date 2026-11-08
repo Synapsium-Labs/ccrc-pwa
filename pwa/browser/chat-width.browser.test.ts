@@ -11,7 +11,7 @@
 //   - "code, tables and the composer take the full column": the code block, the table and the inline ask are the
 //     column's content width and the composer is the column;
 //   - "the user bubble sits at the column's right edge, at most 70% wide and never wider than the prose" (fix round 1,
-//     F2: `min(70%, var(--measure-chat-prose))`), with its attachments no wider than it (F9);
+//     F2: `min(70%, var(--measure-chat-prose))`), with its attachments under the same cap (F9);
 //   - "headings share the paragraphs' measure": the h1's and h2's max-width is the paragraph's (F3, the measure resolved
 //     once on `.msg-assist`);
 //   - "no horizontal page scroll": the page never scrolls sideways, and the 300-column block scrolls inside its well;
