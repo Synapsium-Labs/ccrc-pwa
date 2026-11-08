@@ -275,3 +275,60 @@ for (const width of MATRIX.widths) {
     }
   }
 }
+
+describe('a broad column keeps the list\'s place when a run opens (D-8072)', () => {
+  it('scrolling the list, then opening a row, leaves the scroller where it was and the row in view', async () => {
+    const many = Array.from({ length: 120 }, (_, i) => run(2000 + i, { workspace: `ws-m${i}`, sessionId: null, state: 'planned', dispatchedAt: null }));
+    const runs = [...many.slice(0, 60), RUNS[5], ...many.slice(60)];
+    const fixture: AppFixture = {
+      ...FIXTURE,
+      api: {
+        ...FIXTURE.api, '/api/runs': { runs, nextBefore: null },
+        ...Object.fromEntries(many.flatMap((r, i) => {
+          const id = 2000 + i;
+          return [
+            [`/api/runs/${id}/record`, { ok: true, run: r, events: [], reviewedBy: [], olderEvents: 0 }],
+            [`/api/runs/${id}`, { ok: true, run: r, spend: { measured: false, reason: 'no-sweep' } }],
+            [`/api/runs/${id}/items`, { ok: true, items: [] }],
+            [`/api/runs/${id}/signals`, FIXTURE.api['/api/runs/1501/signals']],
+          ];
+        })),
+      },
+      fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'runs', runs }, FIXTURE.fleetFrames![2]!],
+    };
+    const opened = await openApp(browser!, { skin: INSTRUMENT, theme: 'dark', width: 1920 }, fixture);
+    const { ctx, page, errors } = opened;
+    try {
+      await page.goto(`${server!.origin}/runs`);
+      await page.locator('.run-row').first().waitFor({ timeout: 20_000 });
+      expect(await page.locator('.runs-column').getAttribute('data-column')).toBe('broad');
+      // Scroll the list well down, then take the row that is in the middle of the view.
+      await page.evaluate(() => { document.querySelector<HTMLElement>('.shell-detail')!.scrollTop = 1200; });
+      const id = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll<HTMLElement>('.run-row')];
+        const mid = rows.find((r) => r.getBoundingClientRect().top > window.innerHeight / 2)!;
+        return /^run (\d+)/.exec(mid.title)![1]!;
+      });
+      const row = page.locator(`.run-row[title^="run ${id}"]`);
+      const before = await page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>('.shell-detail')!;
+        return el.scrollTop;
+      });
+      expect(before, 'the list is scrolled before the click').toBeGreaterThan(300);
+      await row.locator('.run-open').click();
+      await page.waitForURL(new RegExp(`/runs/${id}$`), { timeout: 20_000 });
+      await page.locator('.runs-detail-pane .rd-note').waitFor({ state: 'detached', timeout: 20_000 });
+      const after = await page.evaluate((n) => {
+        const el = document.querySelector<HTMLElement>('.shell-detail')!;
+        const r = document.querySelector(`.run-row[title^="run ${n}"]`)!.getBoundingClientRect();
+        return { top: el.scrollTop, rowTop: r.top, rowBottom: r.bottom, vh: window.innerHeight };
+      }, id);
+      expect(after.top, 'the list keeps its place').toBe(before);
+      expect(after.rowTop).toBeGreaterThanOrEqual(0);
+      expect(after.rowBottom).toBeLessThanOrEqual(after.vh);
+      expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
