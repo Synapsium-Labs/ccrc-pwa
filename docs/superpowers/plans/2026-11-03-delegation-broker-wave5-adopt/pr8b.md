@@ -2,8 +2,8 @@
 
 Run 1645, delegation broker wave 5. The operator asked on 2026-11-07 to switch adoption on from the console rather than from a
 file. Until this PR `$REG/delegation-adopt` had no writer in the tree (O5-7 (a), D-7846), and the console showed none of what that
-ruling asks the operator to read first. This PR gives the marker one writer behind an operator door, and puts a Settings card in
-front of it. The coordinator's three rulings (R1, R2, R3) are the whole scope. What adoption keeps, and when, is unchanged.
+ruling asks the operator to read first. This PR gives the marker one writer behind an operator door, and serves what a Settings
+card in front of it reads; the card itself is a second pull request (below, "The split"). The coordinator's three rulings (R1, R2, R3) are the whole scope. What adoption keeps, and when, is unchanged.
 Adoption stays shadow until the operator turns the switch on.
 
 **Ledger.** Defined in the plan's "Deviations found": D-8112 (R1, the verb, the door and the guard), D-8113 (R2, the refusal rule)
@@ -33,9 +33,19 @@ L1 `adoptionKeepsOf`, and it rides the health block's `adoption` member as the o
   fleet box's measured caps (`null` is `unmeasured` for both, never `absent`), `delegationAdoptRefusal` is the rule, and
   `delegationAdoptViewOf` is the GET's answer. The refusal words and statuses are declared once in `shared/delegation-adopt.ts`
   and spread into `REFUSAL_STATUS`.
-- **R3 (D-8114).** `DelegationAdoptionHealth.keeps` (`{items, more}`, at most `DELEGATION_ADOPTION_KEEPS_MAX = 50` items), its one
-  reader `delegationAdoptionKeepsOf`, and the card "Worktrees left behind" in Settings › Automation after "Leftover processes"
-  (`DelegationAdoptSection.tsx`, `useDelegationAdoptView.ts`, `delegationAdoptWords.ts`).
+- **R3 (D-8114), the server half.** `DelegationAdoptionHealth.keeps` (`{items, more}`, at most `DELEGATION_ADOPTION_KEEPS_MAX = 50`
+  items), its one reader `delegationAdoptionKeepsOf`, written by the adoption step each pass and served by the GET. The card
+  "Worktrees left behind" (`DelegationAdoptSection.tsx`, `useDelegationAdoptView.ts`, `delegationAdoptWords.ts`, its tests and a
+  browser test) was built and measured on this branch, then moved to the second pull request.
+
+## The split
+
+Full CI on this branch's first tip went red on `consolidation-path-guard.test.ts` (D-5855, spec 2026-10-19 §5.1 rule 8): a diff that
+touches `pwa/` beside `shared/switches.ts` is refused, and R1 must edit `shared/switches.ts`. The coordinator ruled the split (run 1645,
+2026-11-08), as D-7994's card was split (#2289, then #2322): this PR keeps R1, R2 and R3's server half, and the card follows in a
+second pull request cut after this one merges. The card's whole diff (its five new files, the four edited sources, the settings
+tests, and the wave-3 scope census's PWA allow-list) is carried to that pull request; its measurements below (M7, the screenshots) are
+from this branch.
 
 ## Precedent sites (D-7902, D-7994)
 
@@ -52,7 +62,7 @@ Every site `git grep` finds for `pane-scope-stop`, `scope-sweep-busy` and `coord
 | `secret-mask.test.ts`'s unmasked-read list | mirrored |
 | `shared/switches.ts`, `switches.test.ts`, `switches-history.test.ts` | mirrored, the no-writer pins re-pointed |
 | `shared/scope-sweep.ts` (the L0 view) | mirrored as `shared/delegation-adopt.ts` |
-| The PWA card, hook and words; `pwa/src/lib/api.ts`; `settingsText.ts`; `SettingsDataProvider.tsx`; `AutomationSection.tsx`; the settings tests; a browser test | mirrored |
+| The PWA card, hook and words; `pwa/src/lib/api.ts`; `settingsText.ts`; `SettingsDataProvider.tsx`; `AutomationSection.tsx`; the settings tests; a browser test | mirrored, in the second pull request (the split) |
 | README's whitelist sentences | mirrored |
 | `fleetws.test.ts` and `watch.ts`'s coord frame member (`paneScopeStop`) | set aside: the door reads the registry itself, as `scope-sweep`'s does, and `watch.ts` stays +0 |
 | `ccd/ccrc-doctor-checks` and its fixtures (`pane-scope-stop`'s check) | set aside: the card is the operator's reading surface (R3), and no ruling asks for a doctor line; a new check would move every doctor fixture's count |
@@ -67,6 +77,8 @@ Every site `git grep` finds for `pane-scope-stop`, `scope-sweep-busy` and `coord
 - The precedents' history split CLAUDE.md, the session hook and the installer into a rules-only change, at an external review
   gate's request. This PR keeps them in, because the brief and R1 ask for them here.
 - The card's CSS class is `left-behind-keeps`, so no PWA stylesheet names the broker (`delegation-wave3.integration`'s scope census).
+- The adoption switch's staging file `$REG/.delegation-adopt.<pid>.tmp` joins the R-3 boundary paragraph in `ccd/ccd`, whose cardinal
+  `ccd-account-auth.test.ts` derives (twenty-two), as `scope-sweep-busy`'s did.
 
 ## Measurements
 
@@ -81,8 +93,9 @@ measured from the user's thread count:
 | M4 `off` refused when the caps lack `lease-audit-v1` | `delegation-adopt-switch.ts` | 4 of 22 rows, among them "off: refused only when the verb is missing" and "the view" |
 | M5 the verb dropped from `FORBIDDEN_CCD_VERBS` | `approvalguard.ts` | R1's forbidden row (1); `ccd-spawn-child-settings`: the two lists stay equal (2) |
 | M6 the list unbounded (the 51st served) | `delegation-adopt-switch.ts` | R3's bound row (1) |
-| M7 the confirmation skipped in the card | `DelegationAdoptSection.tsx` | 13 of 53 `delegation-adopt-section` rows, among them "tapping on opens the sheet ... and sends nothing" and "Cancel sends nothing" |
+| M7 the confirmation skipped in the card (second pull request) | `DelegationAdoptSection.tsx` | 13 of 53 `delegation-adopt-section` rows, among them "tapping on opens the sheet ... and sends nothing" and "Cancel sends nothing" |
 
-**Growth** over the base (`growthCheck.ts#netGrowth`): `ccd/ccd` +20, `server/src/coord/routes.ts` +31, `pwa/src/lib/api.ts` +4;
+**Growth** over the base (`growthCheck.ts#netGrowth`): `ccd/ccd` +20, `server/src/coord/routes.ts` +31, and, in the second pull request,
+`pwa/src/lib/api.ts` +4;
 `server/src/watch.ts` +0, `server/src/coord/store.ts` +0, `ccd/session-hook.sh` +0 (two lines changed in place). The PR adds new files
 under `server/src/coord/` and `shared/`, which waives the listed files; none passes 40 either way. `GROWTH_CHECK=1` growth-check green.
