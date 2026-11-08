@@ -32,7 +32,7 @@ import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
 import { DOCS_HEAD_TEXT } from '../src/docs/docsText';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
-import { COMMIT_A, draftOf, entry, holder, treeOk, treeResponse } from '../test/docsFixtures';
+import { COMMIT_A, COMMIT_B, draftOf, entry, holder, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
 import { resolveChrome } from './harness';
 
@@ -557,7 +557,7 @@ describe('the desk head (desk-nav Part B)', () => {
   })();
   const DIVERGED_DEEP = ((): ReturnType<typeof treeOk> => ({
     ...DEEP_TREE,
-    ref: { ...DEEP_TREE.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'diverged', counterpart: { ahead: 2, behind: 3 } },
+    ref: { ...DEEP_TREE.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'diverged', counterpart: { ref: 'refs/remotes/origin/lane-a', commit: COMMIT_B, ahead: 2, behind: 3, count: 'measured' } },
   }))();
   const DANGLING_DEEP = ((): ReturnType<typeof treeOk> => ({
     ...DEEP_TREE,
@@ -618,7 +618,7 @@ describe('the desk head (desk-nav Part B)', () => {
     const base = treeOk({ entries: [entry(SECTION, DEEP, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
     return {
       ...base,
-      ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ahead: 2, behind: 0 } },
+      ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ref: 'refs/remotes/origin/lane-a', commit: COMMIT_B, ahead: 2, behind: 0, count: 'measured' } },
     };
   })();
   /** GitHub's longest refusal (a repository name that cannot be linked), fix round 1, F5. */

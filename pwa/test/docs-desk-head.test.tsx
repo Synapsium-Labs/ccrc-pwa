@@ -67,7 +67,7 @@ function aheadTree(): ReturnType<typeof treeOk> {
   const base = treeOk();
   return {
     ...base,
-    ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ahead: 2, behind: 0 } },
+    ref: { ...base.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'local-ahead', counterpart: { ref: 'refs/remotes/origin/lane-a', commit: COMMIT_B, ahead: 2, behind: 0, count: 'measured' } },
   };
 }
 
