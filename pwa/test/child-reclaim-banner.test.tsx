@@ -17,7 +17,7 @@ import { ApiError, COORD_UNSUPPORTED_TEXT } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });

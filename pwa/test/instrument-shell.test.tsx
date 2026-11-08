@@ -428,7 +428,7 @@ const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
 /** One path per `ROUTES` row, and one outside the table. */
 const ROUTE_PATHS: Record<string, string> = {
   fleet: '/', session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
-  programme: '/programmes/prog-a', run: '/runs/410',
+  programme: '/programmes/prog-a', run: '/runs/410', 'runs-advanced': '/runs/advanced',
 };
 
 describe('the desk top bar (desk-nav Task A)', () => {

@@ -44,6 +44,9 @@ export const ROUTES: readonly Route[] = [
   // integers are outside the table and send no read. Not `top`: a page reached from the board, a search or a link, and
   // `topRouteOf` still places it under Runs.
   { id: 'run', pattern: /^\/runs\/(\d+)\/?$/, title: 'Run', top: false, path: null, accepts: isRunId },
+  // The runs ledger (the runs rebuild, Task 11, D-8073; spec 2026-11-04 §8.6): every run, the switches and the lanes. A page
+  // under Runs, reached from the board's foot; it sits before `run` only for reading order, `/runs/advanced` is no run number.
+  { id: 'runs-advanced', pattern: /^\/runs\/advanced\/?$/, title: 'Advanced', top: false, path: null },
   { id: 'accounts', pattern: /^\/accounts\/?$/, title: 'Accounts', top: true, path: '/accounts' },
   // `/docs` and every page under it, never `/docsearch` (design 2026-10-01 section 4.2).
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
@@ -83,6 +86,43 @@ export const ROUTES: readonly Route[] = [
  *  integer. What the `run` row's `accepts` asks, and what the page asks before it reads. */
 export function isRunId(param: string): boolean {
   return /^[1-9][0-9]*$/.test(param) && Number.isSafeInteger(Number(param));
+}
+
+/** Advanced's filter chips (spec §8.6): the runs still open, or the closed ones by who closed them. No chip is every run. */
+export type RunsFilter = 'open' | 'by-you' | 'by-ccrc' | 'by-coordinators';
+export const RUNS_FILTERS: readonly RunsFilter[] = ['open', 'by-you', 'by-ccrc', 'by-coordinators'];
+const RUNS_FILTER_QUERY = 'filter';
+const RUNS_CLOSED_SINCE_QUERY = 'closedSince';
+/** The query that opens a run in Advanced's broad pane (A51). */
+export const RUNS_OPEN_QUERY = 'open';
+
+/** The one builder of Advanced's address: the chip and `closedSince` ride the URL, so a reload or a link keeps both. */
+export function runsAdvancedPath(filter?: RunsFilter, closedSince?: number): string {
+  const p = new URLSearchParams();
+  if (filter !== undefined) p.set(RUNS_FILTER_QUERY, filter);
+  if (closedSince !== undefined) p.set(RUNS_CLOSED_SINCE_QUERY, String(closedSince));
+  const qs = p.toString();
+  return qs === '' ? '/runs/advanced' : `/runs/advanced?${qs}`;
+}
+
+/** The chip in a `location.search`-shaped string, or null when absent or not one of the four. */
+export function runsFilterOf(search: string): RunsFilter | null {
+  const v = new URLSearchParams(search).get(RUNS_FILTER_QUERY);
+  return RUNS_FILTERS.find((f) => f === v) ?? null;
+}
+
+/** `closedSince` in the query: whole milliseconds, plain digits, else null. */
+export function runsClosedSinceOf(search: string): number | null {
+  const v = new URLSearchParams(search).get(RUNS_CLOSED_SINCE_QUERY);
+  if (v === null || !/^[0-9]+$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** The run open beside Advanced's list in a broad column (`?open=<id>`, A51), or null. */
+export function runsOpenOf(search: string): number | null {
+  const v = new URLSearchParams(search).get(RUNS_OPEN_QUERY);
+  return v !== null && isRunId(v) ? Number(v) : null;
 }
 
 /** The run page's one query (spec §8.4, A42): the search a result was opened from, so the way-back strip can say "Search

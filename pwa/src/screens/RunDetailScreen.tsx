@@ -110,13 +110,16 @@ function useSpecHref(run: RunSummary | null): string | null {
 
 /** The way-back strip: "‹ Search results" with the query kept when the page was opened from a search, "‹ Runs" from anywhere
  *  else, a cold link included (A42). Named "Back to …" for a screen reader (o3). */
-function Strip({ q }: { q: string | null }): ReactNode {
-  const label = q === null ? RUN_PAGE_WORDS.stripRuns : RUN_PAGE_WORDS.stripSearch;
+export function WayStrip({ to, label }: { to: string; label: string }): ReactNode {
   return (
     <nav className="wi-nav rd-strip" aria-label={RUN_PAGE_WORDS.stripLabel}>
-      <WayBack to={q === null ? '/runs' : runsSearchPath(q)} label={label} />
+      <WayBack to={to} label={label} />
     </nav>
   );
+}
+
+function Strip({ q }: { q: string | null }): ReactNode {
+  return <WayStrip to={q === null ? '/runs' : runsSearchPath(q)} label={q === null ? RUN_PAGE_WORDS.stripRuns : RUN_PAGE_WORDS.stripSearch} />;
 }
 
 function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession | null; nowMs: number }): ReactNode {

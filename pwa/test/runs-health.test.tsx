@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT,
          type CoordCapsView, type RunHealth, type RunSummary } from '../../shared/api';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { runWarnings } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 

@@ -36,7 +36,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type RunSummary } from '../../../shared/api';
 import {
-  FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun, runClosedAt,
+  FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun,
   programmeTitle, runState, runsByProgram, waveLabel, coordinatorOf, workerOf,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
@@ -51,10 +51,11 @@ import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { api } from '../lib/api';
 import { inAppClick } from '../fleet/settingsText';
 import { navigate, useLocation } from '../lib/router';
-import { runParam, runPath, runQueryOf } from '../lib/routes';
+import { runParam, runPath, runQueryOf, runsAdvancedPath } from '../lib/routes';
 import { peek, put, runsBoardKey } from '../lib/screenCache';
 import { backToFleet } from '../command/door';
-import { Button, EmptyState, PageScaffold, useNow } from '@ccrc/ui';
+import { Button, EmptyState, PageScaffold, cn, useNow } from '@ccrc/ui';
+import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
@@ -69,14 +70,15 @@ const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
 const loadColdRunsPage: PagedLoader = (limit, before) => api.runsPage(limit, before ?? null);
 /** How many closed runs one read of the archive asks for (console speed S2). */
 const ARCHIVE_PAGE = 50;
-/** Finished's own failure sentence: its one source, the archive read, did not answer, so newer closes may be missing. */
+/** Finished's own failure sentence: its read did not answer, so newer closes may be missing. */
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
 import { RunDetailScreen } from './RunDetailScreen';
 import { useMeasuredColumn } from './runColumn';
 import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
-import { useColdRuns, type PagedLoader } from './useColdRuns';
+import { loadColdRuns, useColdRuns, type PagedLoader } from './useColdRuns';
+import { readFind, useRunList, type ArchiveReader, type FindReader } from './useRunList';
 
 
 /** The board's scroll place: the nearest scrolling ancestor of the search box (the desktop pane), else the document. */
@@ -90,7 +92,7 @@ function readBoardScroll(): { scroller: HTMLElement | null; top: number } {
 
 /** The board's words for no open run, and for a read that ran out of time (§8.2). */
 const NO_RUNS_OPEN = 'No runs open.';
-const COULD_NOT_LOAD = 'Could not load runs. Try again.';
+export const COULD_NOT_LOAD = 'Could not load runs. Try again.';
 
 /** The board's information lines (§8.2 item 5, n2, A62): a run no act can move is told, with no control and no count. An
  *  `unknown` run is in a state a newer server wrote; a run at `closing` is finished by the lane that put it there. One run
@@ -138,15 +140,35 @@ function boardPane(): HTMLElement | null {
 }
 
 /** The pane's words when no run is open (spec §8.4). */
-const SELECT_RUN = 'Select a run to see it here.';
+export const SELECT_RUN = 'Select a run to see it here.';
 
-/** The board's props: the store, the two injected reads, and the run open beside it, if any. */
+/** What an older server's Finished says (§8.2.3): it has no `find`, so the group is the unpaged archive it can list. */
+const FINISHED_OLDER = 'This server is older, so Finished shows only the runs it can list.';
+/** The foot link's words (§8.2 item 10). */
+const ADVANCED_WORDS = 'Advanced';
+
+/** The board's props: the store, the injected reads, and the run open beside it, if any. */
 interface BoardProps {
   store?: FleetStore;
   loadRuns?: PagedLoader;
+  /** Finished's reader: `GET /api/runs/find`, the board's own fixed call. */
+  loadFinished?: FindReader;
+  /** The unpaged archive, read only when the server is too old to have `find`. */
+  loadArchive?: ArchiveReader;
   loadCaps?: () => Promise<CoordCapsView>;
   /** The run open in the broad pane, or null: its row is marked current and a search keeps it open. */
   openId?: number | null;
+}
+
+/** The broad column's right pane: the run open beside the list, or the words that say none is (Advanced draws it too). */
+export function RunPane({ openId, store }: { openId: number | null; store: FleetStore }): ReactNode {
+  return (
+    <div className="runs-detail-pane">
+      {openId === null
+        ? <p className="rd-note" role="status">{SELECT_RUN}</p>
+        : <RunDetailScreen key={openId} id={openId} store={store} pane />}
+    </div>
+  );
 }
 
 /** The runs screen, and the one place the column's layout is decided (Task 9a, spec §8.1): `/runs` and `/runs/<id>` both land
@@ -163,11 +185,7 @@ export function RunsScreen(props: BoardProps): ReactNode {
     body = (
       <div className="runs-split">
         <div className="runs-list-pane"><RunsBoard {...props} /></div>
-        <div className="runs-detail-pane">
-          {openId === null
-            ? <p className="rd-note" role="status">{SELECT_RUN}</p>
-            : <RunDetailScreen key={openId} id={openId} store={store} pane />}
-        </div>
+        <RunPane openId={openId} store={store} />
       </div>
     );
   } else body = openId !== null ? <RunDetailScreen key={openId} id={openId} store={store} /> : <RunsBoard {...props} />;
@@ -177,11 +195,15 @@ export function RunsScreen(props: BoardProps): ReactNode {
 function RunsBoard({
   store = useFleetStore,
   loadRuns = loadColdRunsPage,
+  loadFinished = readFind,
+  loadArchive = loadColdRuns,
   loadCaps = loadCapsDefault,
   openId = null,
 }: {
   store?: FleetStore;
   loadRuns?: PagedLoader;
+  loadFinished?: FindReader;
+  loadArchive?: ArchiveReader;
   /** The caps dial's own read, injected HERE rather than left to
    *  `CapsControl`'s default, for the reason `loadRuns` is: every loader this
    *  screen sets going on mount is one a test must be able to hold, and a
@@ -220,8 +242,17 @@ function RunsBoard({
   // The archive read — the only carrier of a finished run — with its race
   // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
   // none of which rendered anything.
-  const { cold, state: coldState, timedOut, reload: loadCold, loadOlder, hasOlder } =
+  const { cold, state: coldState, timedOut, reload: loadColdPaged } =
     useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
+  // Finished reads `find` in close order (§8.2.3, F10, F18): its own state, its own rows, its own pages. The paged arm above
+  // now feeds `ChildReclaimBanner` and the pre-frame active rows only.
+  const fin = useRunList({ scope: 'closed' }, { read: loadFinished, fallback: loadArchive, watch: { live, seen: runsFrameSeen } });
+  const finishedState = fin.state;
+  const hasOlder = fin.hasOlder;
+  const reloadFinished = fin.reload;
+  const loadOlder = fin.loadOlder;
+  // Every act that closes or rewrites a run re-reads both: the banner's source and Finished's.
+  const loadCold = async (): Promise<void> => { await Promise.all([loadColdPaged(), reloadFinished()]); };
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
   // Only a page that FAILED says so: a page `dropped` as stale (a re-read landed meanwhile) is not an error, and the next tap
@@ -300,9 +331,12 @@ function RunsBoard({
   // Memoised on `cold` (D-6442): the 1 s tick re-renders this screen, and a sort
   // of up to 500 rows is no work for a tick to repeat. The FOLD is the other half:
   // only the newest `shownFinished` rows mount, and a door adds the next batch.
-  const finished = useMemo(() => (cold ?? [])
-    .filter((r) => isRunClosed(r))
-    .sort((a, b) => (runClosedAt(b) ?? 0) - (runClosedAt(a) ?? 0)), [cold]);
+  // A `find` hit is slim, and the paged read's newest rows are whole (they carry the child-reclaim chip and the tally), so a
+  // hit the paged arm also holds draws from that row; the ORDER and the membership are `find`'s alone.
+  const finished = useMemo(() => {
+    const whole = new Map((cold ?? []).filter(isRunClosed).map((r) => [r.id, r] as const));
+    return (fin.rows ?? []).filter((r) => isRunClosed(r)).map((r) => whole.get(r.id) ?? r);
+  }, [fin.rows, cold]);
   // The fold is kept across a visit to a run (C2, the runs rebuild D-8072): a return finds Finished as it was left.
   const [foldAt, setFoldAt] = useState(() => Math.max(FINISHED_FOLD, keptBoard()?.fold ?? FINISHED_FOLD));
   const foldKept = useRef(foldAt);
@@ -383,7 +417,8 @@ function RunsBoard({
   //
   // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now: a failed re-read over
   // stored pages keeps its rows, and must not swap the board for "Could not reach the server".
-  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null;
+  const finishedAnswered = fin.rows !== null || finishedState === 'ok' || finishedState === 'older';
+  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null && !finishedAnswered;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
   // composition is pinned at exactly two network calls
@@ -437,7 +472,7 @@ function RunsBoard({
   // has no standing to make, the exact thing `noSignalYet`'s own comment
   // above already refuses to do for the "never asked yet" case. Read below
   // for the second half: active rows present, finished's own read failed.
-  const coldFailed = coldState === 'error';
+  const coldFailed = coldState === 'error' || finishedState === 'error';
   // A read that ran out of time (C1's `ApiTimeout`) says so and offers to read again (§8.2); any other failure keeps the
   // sentence it always had.
   const failedLine: ReactNode = timedOut ? (
@@ -544,8 +579,8 @@ function RunsBoard({
         // "no runs" — it is "no answer". `coldState === 'error'` only after
         // the cold read has actually failed; until then this is the ordinary
         // in-flight window every mount passes through.
-        <EmptyState data-state={coldState === 'error' ? 'error' : 'loading'}>
-          {coldState === 'error' ? failedLine : 'Loading…'}
+        <EmptyState data-state={coldFailed ? 'error' : 'loading'}>
+          {coldFailed ? failedLine : 'Loading…'}
         </EmptyState>
       ) : !hasAny ? (
         // I6: `noSignalYet` above only covers the "nothing has answered at
@@ -558,7 +593,10 @@ function RunsBoard({
         coldFailed ? (
           <EmptyState data-state="error">{failedLine}</EmptyState>
         ) : (
-          <EmptyState data-state="ok">{NO_RUNS_OPEN}</EmptyState>
+          <>
+            <EmptyState data-state="ok">{NO_RUNS_OPEN}</EmptyState>
+            {finishedState === 'older' && <p className="runs-info" data-info="older-server">{FINISHED_OLDER}</p>}
+          </>
         )
       ) : (
         <>
@@ -589,7 +627,7 @@ function RunsBoard({
             );
           })}
 
-          {finished.length > 0 ? (
+          {finished.length > 0 || finishedState === 'older' ? (
             <div className="runs-group" role="group" aria-label={`finished (${finished.length})`}>
               <p className="runs-group-head" ref={finishedHead} tabIndex={-1}>
                 <span className="runs-program">Finished</span>
@@ -597,6 +635,7 @@ function RunsBoard({
               <ul className="runs-list">
                 {finished.slice(0, shownFinished).map((run) => rowFor(run, finishedNow))}
               </ul>
+              {finishedState === 'older' && <p className="runs-info" data-info="older-server">{FINISHED_OLDER}</p>}
               {/* One quiet control at the foot of Finished. It unfolds the loaded rows first; once every loaded row is
                   shown it asks for the next page ("Show older", console speed S2), so a tap always changes something the
                   operator can see. The two are never offered together, so they are one control. */}
@@ -636,6 +675,13 @@ function RunsBoard({
       )}
 
       </>)}
+
+      {/* The foot (§8.2 item 10): the door to Advanced, at every width, whatever else the board holds. */}
+      <p className="runs-foot">
+        <a className={cn(GHOST_ANCHOR, 'runs-foot-link')} href={runsAdvancedPath()} onClick={inAppClick(runsAdvancedPath())}>
+          {ADVANCED_WORDS}
+        </a>
+      </p>
 
       {/* Task 12, spec §4.3: `onDone` re-runs the screen's own `loadCold()`
           (Step 5) so an abandoned run moves into Finished — the live frame's

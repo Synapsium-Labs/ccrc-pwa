@@ -9,12 +9,13 @@ import path from 'node:path';
 import postcss from 'postcss';
 import { act, cleanup, render, screen } from '@testing-library/react';
 
-/** The seven, by module path as `app.tsx` names them. */
+/** The lazy screens (the seven of C1, and Advanced beside Runs, D-8073), by module path as `app.tsx` names them. */
 const LAZY = [
   './screens/SessionScreen',
   './screens/settings/SettingsFrame',
   './screens/AccountsScreen',
   './screens/RunsScreen',
+  './screens/RunsAdvancedScreen',
   './screens/DigestScreen',
   './screens/HighlightMeasure',
   './screens/ReaderLab',

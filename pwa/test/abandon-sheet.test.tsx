@@ -26,7 +26,7 @@ import { coordinatorGoneOf, runRowName } from '../src/fleet/runWords';
 import * as router from '../src/lib/router';
 import { ToastHost } from '@ccrc/ui';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
