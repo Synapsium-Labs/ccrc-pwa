@@ -176,7 +176,9 @@ describe('cleanupHeldBy', () => {
     expect(s).not.toContain('<project>');
     expect(s).not.toContain('worktree add');
     expect(s).not.toMatch(/recreate/i);
-    expect(s).toContain('If its folder still stands but a directory on its path cannot be searched, make that directory searchable, or restore a link on its path to its original target.');
+    // Review 1590 N-d: two remedies for two conditions, as ccd keeps them, with ccd's warning about a link's place.
+    expect(s).toContain('If its folder still stands but a directory on its path cannot be searched, make that directory searchable. If a link on its path no longer leads where it did, restore it to its original target; never create a directory in a link\'s place.');
+    expect(s).not.toContain('searchable, or restore a link');
     expect(s).not.toContain('only cannot be searched');
   });
   it('gone-unrecorded says its folder is gone with no record, or a directory or link on its path cannot be searched', () => {

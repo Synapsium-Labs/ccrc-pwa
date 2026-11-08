@@ -69,7 +69,7 @@ const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
     found: 'Its folder is gone with no record, or a directory or link on its path cannot be searched.',
     remedy: (act) => act === 'forget'
       ? `Forgetting the row removes only its registry entry. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks what this row holds: ${HELD_PACE}. ${HELD_PAUSED}`
-      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If its folder still stands but a directory on its path cannot be searched, make that directory searchable, or restore a link on its path to its original target. '
+      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If its folder still stands but a directory on its path cannot be searched, make that directory searchable. If a link on its path no longer leads where it did, restore it to its original target; never create a directory in a link\'s place. '
         + RECHECK_TAIL,
   },
   'not-plain': {
