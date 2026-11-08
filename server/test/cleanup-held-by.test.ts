@@ -226,6 +226,9 @@ describe('cleanupHeldBy', () => {
       const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], null);
       expect(item!.act).toBe('recheck');
       expect(item!.sentence).toContain('This row\'s state in the fleet has not been read yet, so only a re-check is offered.');
+      // Review 1590 N-c: nothing came before it, so no "Then check again." follows.
+      expect(item!.sentence.endsWith('so only a re-check is offered.')).toBe(true);
+      expect(item!.sentence).not.toContain('Then check again');
       expect(item!.sentence).not.toContain('nothing is offered');
       expect(item!.sentence).not.toContain('only a person removes it');
       expect(item!.sentence).not.toContain('worktree');

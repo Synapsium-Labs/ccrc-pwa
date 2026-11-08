@@ -60,7 +60,7 @@ type FleetStanding = 'listed' | 'missing' | 'unframed';
 
 const STANDING_REMEDY: Record<Exclude<FleetStanding, 'listed'>, string> = {
   missing: `The fleet state does not list this row. The line clears as each item it held is checked again, ${HELD_PACE}. If it stays after that, something in the registry still names this id that the fleet state cannot list (a partial entry, for one); a person removes it by hand once its session has ended. ${HELD_PAUSED}`,
-  unframed: 'This row\'s state in the fleet has not been read yet, so only a re-check is offered. ' + RECHECK_TAIL,
+  unframed: 'This row\'s state in the fleet has not been read yet, so only a re-check is offered.',
 };
 
 /** One entry per word; a missing word is a compile error. */
