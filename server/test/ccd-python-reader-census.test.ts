@@ -33,10 +33,10 @@ import { CCD, ccdSource } from './ccdWsHelpers.js';
  *   2. The escape: add a row below whose `d` is a D-number defined in `docs/superpowers/plans/`, with a `why` a reader
  *      can argue with. A false match takes the same route with `kind: 'no-read'`. One row, no other edit.
  *
- * WHEN THE BANNER READER'S PORT LANDS, nothing here has to change for the port to pass: `leaving` lets the row match
- * nothing and the count falls by one, and the cases that pin this run on a fixture, so they do not need the live tree
- * to still hold the reader. Delete the row in that pull request all the same, because a row left behind would let
- * Python back into that function unseen.
+ * WHEN A READER'S PORT LANDS, nothing here has to change for the port to pass: `leaving` lets the row match nothing
+ * and the count falls by one, and the cases that pin this run on a fixture, so they do not need the live tree to still
+ * hold the reader. Delete the row in that pull request all the same, because a row left behind would let Python back
+ * into that function unseen. The banner reader's row went that way (#2367).
  */
 
 type Kind =
@@ -55,8 +55,6 @@ interface Row {
 const ROWS: readonly Row[] = [
   { name: '_operator_choice_read', kind: 'reader', d: 'D-8070',
     why: 'keeps the operator\'s model and effort choice across a swap and reads back what a session runs' },
-  { name: '_transcript_limit_banner', kind: 'reader', d: 'D-8070', leaving: true,
-    why: 'dates the newest real row as a limit or auth banner; the one reader here with a port to come' },
   { name: 'ccd-usage-sweep.py', kind: 'reader', d: 'D-8070',
     why: 'sums usage from assistant rows, a standalone sweep that stays in Python' },
   { name: 'lib/carry-dedupe.py', kind: 'reader', d: 'D-8070',
