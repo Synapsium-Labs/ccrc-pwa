@@ -198,6 +198,9 @@ function ownerGone(f: RunStuckFacts, nowMs: number): RunStuck | null | 'unknown'
  *  until the run-close lane writes its own map (Task 25). */
 export function runStuck(f: RunStuckFacts, nowMs: number): RunStuck | null {
   if (f.state === 'done' || f.state === 'failed' || f.state === 'unknown') return null;
+  // Rule R2: any uncertain reading (the coordinator's, or for a started run the worker's) gives no verdict this pass.
+  if (claimantReading(f.claimant, f.claimantJournal) === 'uncertain') return null;
+  if (f.state !== 'planned' && claimantReading(f.worker, f.workerJournal) === 'uncertain') return null;
   const own = ownerGone(f, nowMs);
   if (own === 'unknown') return null;
   if (own !== null) return own;

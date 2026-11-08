@@ -102,6 +102,24 @@ describe('runStuck — §7\'s table, row by row, first match wins', () => {
     expect(claimantGone(f.claimant!)).toBe('uncertain');
     expect(runStuck(f, NOW)).toBeNull();
   });
+  it('an uncertain claimant blocks every later row too (rule R2)', () => {
+    const sub = dead('orphan', { substrate: { at: NOW - 3 * D, text: 'x' } });
+    const unm: PersonFacts = { verdict: { state: 'unmeasurable' }, hibernatedAt: null, substrate: null };
+    const absent = dead('absent');
+    const cases: Partial<RunStuckFacts>[] = [
+      { claimant: sub, dispatchStartedAt: NOW - 2 * H, times: times({ dispatchStartedAt: NOW - 2 * H }) },
+      { claimant: sub, aloneInProgramme: true, times: times({ openedAt: NOW - 9 * D }) },
+      { claimant: unm, aloneInProgramme: true, times: times({ openedAt: NOW - 9 * D }) },
+      { claimant: absent, claimantJournal: { kind: 'no-history' }, overtaken: true, times: times({ overtakenAt: NOW - 2 * D }) },
+      { claimant: sub, kind: 'review', target: { closed: true }, times: times({ targetClosedAt: NOW - 2 * H }) },
+    ];
+    for (const c of cases) expect(runStuck(facts(c), NOW)).toBeNull();
+  });
+  it('an uncertain worker of a started run gives no verdict', () => {
+    const f = facts({ state: 'working', worker: dead('orphan', { substrate: { at: NOW - 3 * D, text: 'x' } }),
+      times: times({ goneSinceWorker: NOW - 3 * D }) });
+    expect(runStuck(f, NOW)).toBeNull();
+  });
   it('a person with no stored time gets no verdict that pass', () => {
     expect(runStuck(facts({ claimant: dead() }), NOW)).toBeNull();
   });
