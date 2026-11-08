@@ -110,7 +110,7 @@ describe('the reclaim carriage', () => {
   });
 
   it('an older document (no heldBy key) reads absent, and the read and the entry carry nothing', () => {
-    // A parser spreads `heldBy` only when the document NAMES rows (`heldByRowsOf`), so a read without rows keeps the shape
+    // A parser spreads `heldBy` only when the document NAMES rows (`heldByFieldOf`), so a read without rows keeps the shape
     // it had before R2.
     const read = parseChildReclaimAuditFailed('project-a-child-1', doc(), '');
     expect(read.kind).toBe('unmeasured');

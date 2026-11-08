@@ -21,7 +21,7 @@ import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../sh
 import {
   isWorkspacePostActWord, isWorkspaceRefusal, type WorkspacePostActWord, type WorkspaceRefusal,
 } from '../../shared/workspaceTransitions.js';
-import { heldByRowsOf, type HeldByRead } from './heldByRead.js';
+import { heldByFieldOf, type HeldByRead } from './heldByRead.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes
@@ -179,7 +179,7 @@ export function parseExpireAudit(sessionId: string, ok: boolean, stdout: string)
   if (v.mode !== 'expire') return { kind: 'unreadable', detail: 'ws-audit answered without "mode":"expire"' };
   if (!ok) {
     return { kind: 'unreadable', detail: `ws-audit --expire measured nothing: ${typeof v.detail === 'string' ? v.detail : ''}`,
-      ...heldByRowsOf(v) };
+      ...heldByFieldOf(v) };
   }
   const sensitive = Array.isArray(v.sensitive) ? v.sensitive.length : 0;
   const inUse = Array.isArray(v.inUse) ? v.inUse.flatMap((u): ExpireInUse[] => (isRecord(u)

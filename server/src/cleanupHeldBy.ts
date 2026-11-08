@@ -1,7 +1,7 @@
 /**
  * The registry rows that hold a cleanup (cleanup un-wedge R2, spec 2026-11-04 §4.3). Ring L1, context C4: pure, no
  * I/O. It imports L0 (`shared/api.ts`) and one L1 predicate, `expiryReportStands` (`archivedExpiry.ts`, which imports
- * `heldByRowsOf` from here: a cycle of function references only, neither module calls the other at load).
+ * `heldByFieldOf` from here: a cycle of function references only, neither module calls the other at load).
  *
  * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents. This file
  * reads that pair (`heldByOf`), composes one item per holding row with the sentence that says what to do about it

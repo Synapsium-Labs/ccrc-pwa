@@ -25,7 +25,7 @@ import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { isWorkspaceRefusal, type WorkspaceRefusal } from '../../shared/workspaceTransitions.js';
 import { splitJournalRecords } from './journalKernel.js';
-import { heldByRowsOf, type HeldByRead } from './heldByRead.js';
+import { heldByFieldOf, type HeldByRead } from './heldByRead.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -188,7 +188,7 @@ export function parseCollectAudit(sessionId: string, ok: boolean, stdout: string
       return { kind: 'unreadable', detail: `ws-audit --collect failed with a document that is not its unmeasured answer${said}` };
     }
     if (seen.kind === 'bad') return { kind: 'unreadable', detail: 'ws-audit --collect answered unmeasured with a witness it cannot vouch for' };
-    return { kind: 'unmeasured', probe, witnessRun: witnessRunOf(seen), leaf, detail, ...heldByRowsOf(v) };
+    return { kind: 'unmeasured', probe, witnessRun: witnessRunOf(seen), leaf, detail, ...heldByFieldOf(v) };
   }
   if (v.verdict === 'collectable') {
     if (typeof v.token !== 'string' || !COLLECT_TOKEN_SHAPE.test(v.token)) {

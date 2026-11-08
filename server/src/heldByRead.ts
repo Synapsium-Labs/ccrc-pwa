@@ -5,7 +5,7 @@
  * of them import each other for it.
  *
  * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents.
- * `heldByOf` reads that pair; `heldByRowsOf` is the spread a lane parser puts on its read.
+ * `heldByOf` reads that pair; `heldByFieldOf` is the spread a lane parser puts on its read.
  */
 import { HELD_BY_WORDS } from '../../shared/api.js';
 import type { HeldByWord } from '../../shared/api.js';
@@ -64,7 +64,7 @@ export function heldByOf(doc: unknown): HeldByRead {
 /** What a lane parser spreads onto its read: `{ heldBy }` only when the document NAMES rows, else nothing. Every other
  *  answer (absent, not-reached, none, malformed) contributes no item and folds nothing, exactly as no read does, so a
  *  read without rows keeps the shape it had before R2. */
-export function heldByRowsOf(doc: unknown): { readonly heldBy?: HeldByRead } {
+export function heldByFieldOf(doc: unknown): { readonly heldBy?: HeldByRead } {
   const read = heldByOf(doc);
   return read.kind === 'rows' ? { heldBy: read } : {};
 }

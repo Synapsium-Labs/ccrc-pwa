@@ -810,7 +810,7 @@ describe('wave 8\'s formula, imported: one definer', () => {
     // `shared/switches.js` is L0: the lane's live marker is spelled once there (D-5855). So is `shared/ccd-refusal.js`
     // (ARCH-14, #560): the machine token's reader. And `shared/workspaceTransitions.js` (ARCH-41, #776): its refusal words.
     // And `./journalKernel.js` (D-7059, ARCH-73 #808), L1 importing nothing, for the journal's framer alone: no formula.
-    // And `./cleanupHeldBy.js` (cleanup un-wedge R2, D-8000), an L1 module, for `heldByRowsOf`: the ONE reader of an audit
+    // And `./cleanupHeldBy.js` (cleanup un-wedge R2, D-8000), an L1 module, for `heldByFieldOf`: the ONE reader of an audit
     // document's holding rows, no formula.
     expect(from, 'L1: L0, the one L1 file whose formula it shares, the journal framer and the held-rows reader')
       .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',

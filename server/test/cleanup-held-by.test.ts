@@ -5,7 +5,7 @@ import type { ChildReclaimAttention, CoordStatus, ExpiryAttention, HeldByWord } 
 import {
   cleanupHeldBy, cleanupHeldByAct, heldOnlyByListed, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
-import { HELD_BY_ABSENT, heldByOf, heldByRowsOf } from '../src/heldByRead.js';
+import { HELD_BY_ABSENT, heldByOf, heldByFieldOf } from '../src/heldByRead.js';
 import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/heldByRead.js';
 import type { ExpiryReport } from '../src/archivedExpiry.js';
 import { parsedFile } from './scan/symbols.js';
@@ -65,9 +65,9 @@ describe('heldByOf', () => {
 describe('the spread a lane parser takes', () => {
   it('names heldBy only for a document that names rows, and is empty for every other read', () => {
     const doc = { heldBy: [{ id: 'row-a', word: 'gone-unrecorded', workspace: 'absent' }], heldByOwn: false };
-    expect(heldByRowsOf(doc)).toEqual({ heldBy: rows([row('row-a')], false) });
+    expect(heldByFieldOf(doc)).toEqual({ heldBy: rows([row('row-a')], false) });
     for (const other of [{}, null, [], { heldBy: null }, { heldBy: [] }, { heldBy: 'row-a' }, { heldBy: [{ id: 'a b', word: 'gone-unrecorded' }] }]) {
-      const out = heldByRowsOf(other);
+      const out = heldByFieldOf(other);
       expect(out).toEqual({});
       expect(Object.keys(out)).toEqual([]);
     }
