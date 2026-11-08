@@ -226,8 +226,8 @@ function readHeldApprovals(coord: WatcherCoordPort | undefined, childIds: readon
  * per-session `readCurrentAsk` was (found by the full suite rather than by
  * any Task 19 test: `push-copy.test.ts`'s "a broken coord.db degrades,
  * never crashes the poll" and `fleetws.test.ts`'s matching cold-start
- * case): `assembleFleet` is called UNWRAPPED from both `FleetWatcher.tick()`
- * and the `/ws/fleet` connect handler, and `node:sqlite` throws
+ * case): the assembly is called UNWRAPPED from both `FleetWatcher.tick()`
+ * (`assembleFleetWithPanePids`) and the `/ws/fleet` connect handler, and `node:sqlite` throws
  * SYNCHRONOUSLY on a closed connection or a lock race. Because this is now
  * ONE call per assembly rather than one per session, a broken box warns
  * ONCE per tick/connect/request here, not once per session — the "20
@@ -505,23 +505,20 @@ export function dropStaleLandings(sessions: readonly FleetSession[], nowMs: numb
  *  io: that file is L3 (the torn-body wait), and this one is L1, so the read is handed in rather than imported. */
 export type LiveStateMeasuredReader = (configDir: string, pid: number) => Promise<LiveStateRead>;
 
-export async function assembleFleet(
-  io: FleetIO,
-  cfg: CcrcConfig,
-  tmux: Tmux,
-  readLive: LiveStateMeasuredReader,
-  now = Math.floor(Date.now() / 1000),
-  pendingDialogs?: ReadonlySet<string>,
-  statuslines?: Map<string, Statusline>,
-  taskProgress?: Map<string, TaskProgress>,
+/** `assembleFleet`'s inputs past the first five, by name (#2399): every one optional, so a caller names only what it
+ *  carries and the many short calls (io, cfg, tmux, reader, clock) stay positional. */
+export interface AssembleFleetOptions {
+  pendingDialogs?: ReadonlySet<string>;
+  statuslines?: Map<string, Statusline>;
+  taskProgress?: Map<string, TaskProgress>;
   /** Last-swept PR state per session id (FleetWatcher's third lane). Absent on
    *  a cold start and in every existing test — which is exactly why the
    *  registry fallback below exists. */
-  prStates?: Map<string, PrState>,
+  prStates?: Map<string, PrState>;
   /** Fresh per-session hook state (FleetWatcher's fifth lane), same pattern
    *  as `pendingDialogs`: absent on a cold start and in every existing test,
    *  which is exactly why every hook-derived field below defaults to null. */
-  hookStates?: Map<string, HookState>,
+  hookStates?: Map<string, HookState>;
   /**
    * The registry rows this assembly must describe, when the caller has
    * ALREADY read them — the same `records ?? await readRegistry(...)` idiom
@@ -548,7 +545,7 @@ export async function assembleFleet(
    * the same reasoning `tick()`'s own comment states for why it shares this
    * read with `sweepHookStates`/`detectDialogs` in the first place.
    */
-  records?: SessionRecord[],
+  records?: SessionRecord[];
   /**
    * Task 19: the ask pre-emption lane's own store, when this box runs
    * coordination at all — `undefined` on every caller that predates the
@@ -562,34 +559,67 @@ export async function assembleFleet(
    * state reads this assembly already does per row, and paid only when a
    * `coord` is actually passed.
    */
-  coord?: WatcherCoordPort,
+  coord?: WatcherCoordPort;
   /** Fresh per-session usage readings (routing slice 0, the watcher's usage
    *  lane), same pattern as `hookStates`: absent on a cold start and in every
    *  older test, which is why the field defaults to null. */
-  usageReadings?: Map<string, SessionUsage>,
+  usageReadings?: Map<string, SessionUsage>;
   /** The branch each worktree's own HEAD names, as the watcher's divergence
    *  sweep last measured it (`FleetWatcher.currentHeadBranches()`), keyed by
    *  session id; `null` for a detached or unreadable HEAD. Absent on a cold
    *  start, on callers that do not carry it, and in every older test — the
    *  registry fallback below covers all three. */
-  headBranches?: ReadonlyMap<string, string | null>,
-  /** OUT: the pane pid this assembly read for every ALIVE row, keyed by session id (`null` when tmux answered
-   *  none). A row whose pane is not alive gets no entry. Absent on every caller but `watch.ts`'s `tick()`, which
-   *  hands it to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time (worker stall
-   *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
-  panePids?: Map<string, number | null>,
+  headBranches?: ReadonlyMap<string, string | null>;
   /** The landing radar lane's map (landing order wave 4b, `FleetWatcher.currentLandings()`), keyed by session id. Absent
    *  on every caller that builds no fleet frame and in older tests. An entry past its window is dropped here, so no
    *  frame this assembly builds carries an old prediction however long the lane has been blind; the sends that carry an
    *  earlier fleet instead take `dropStaleLandings` (D-7481). */
-  landings?: ReadonlyMap<string, SessionLanding>,
+  landings?: ReadonlyMap<string, SessionLanding>;
   /** Console speed S1: the tick's one tmux listing. An ok one replaces the per-row `sessionVerdict` and `panePid`. */
-  paneListing?: PaneListing,
+  paneListing?: PaneListing;
   /** The limits the caller already read; absent = read here. */
-  limitsRead?: Awaited<ReturnType<typeof readLimits>>,
+  limitsRead?: Awaited<ReturnType<typeof readLimits>>;
+}
+
+/** One assembly's two outputs (#2399): the wire rows, and the pane pid it read for every ALIVE row, keyed by session id
+ *  (`null` when tmux answered none). A row whose pane is not alive gets no entry. Only `watch.ts`'s `tick()` reads
+ *  `panePids`: it hands them to the stall lane as `StallTick.panePids`, so the lane never reads a pid a second time
+ *  (worker stall watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
+export interface FleetAssembly {
+  sessions: FleetSession[];
+  panePids: Map<string, number | null>;
+}
+
+/** The assembly's clock, in epoch SECONDS: `assembleFleet`'s default `now`, and what a caller passes for "now" when it
+ *  also names options. */
+export const fleetNow = (): number => Math.floor(Date.now() / 1000);
+
+/** The wire rows alone: `assembleFleetWithPanePids` for every caller that does not hand pane pids on. */
+export async function assembleFleet(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  tmux: Tmux,
+  readLive: LiveStateMeasuredReader,
+  now = fleetNow(),
+  opts: AssembleFleetOptions = {},
 ): Promise<FleetSession[]> {
+  return (await assembleFleetWithPanePids(io, cfg, tmux, readLive, now, opts)).sessions;
+}
+
+/** The assembly itself, with the pane pid it read for each alive row as its own output (`FleetAssembly`). */
+export async function assembleFleetWithPanePids(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  tmux: Tmux,
+  readLive: LiveStateMeasuredReader,
+  now = fleetNow(),
+  opts: AssembleFleetOptions = {},
+): Promise<FleetAssembly> {
+  const { pendingDialogs, statuslines, taskProgress, prStates, hookStates, records, coord, usageReadings, headBranches, landings,
+    paneListing, limitsRead } = opts;
+  const panePids = new Map<string, number | null>();
   // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
-  // registry-refused-census.test.ts pins all six `assembleFleet(` calls, so this fallback decides nothing a user
+  // registry-refused-census.test.ts pins all six production assemblies, so this fallback decides nothing a user
   // sees. An unlistable registry reads as no rows here, the old fallback's answer; refused rows were never rows.
   // [registry-refused:tests-only]
   const [recs, limits] = await Promise.all([records ?? readRegistryMeasured(io, cfg).then((r) => (r.listed ? r.records : [])), limitsRead ?? readLimits(io, cfg, now)]);
@@ -607,7 +637,7 @@ export async function assembleFleet(
   // Workspace lifecycle §5.1: ONE run read for the whole assembly, like the placement read above.
   const released = readReleased(coord, recs.map((r) => r.id));
   const nowMs = now * 1000;
-  return Promise.all(recs.map(async (r): Promise<FleetSession> => {
+  const sessions = await Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
     // = false`, so a substrate fault reads 'dead' in the PWA — a false dead,
     // with the ungated Restart button under it. Known, and deferred BY DECISION
@@ -638,7 +668,7 @@ export async function assembleFleet(
     if (alive) {
       status = 'idle';
       const pid = listing ? pidFromListing(listing, r.id) : await tmux.panePid(r.id);
-      panePids?.set(r.id, pid);
+      panePids.set(r.id, pid);
       const cfgDir = configDirFor(cfg, r.wrapper);
       if (pid === null) {
         // D-5234: the pane is alive and its pid read FAILED (`list-panes`
@@ -743,7 +773,7 @@ export async function assembleFleet(
     //
     // `nowMs` DECISION (task-9-report.md carries the full reasoning, corrected
     // in fix round 1 after MEASUREMENT — see below): `now` is THIS PROCESS's
-    // own clock (`Date.now()`, `assembleFleet`'s own default parameter), not
+    // own clock (`Date.now()`, through `fleetNow()`, `assembleFleet`'s default `now`), not
     // the fleet host's — `r.supervisedAt` can be written on a REMOTE box
     // across `remote/io.ts`'s seam, and that protocol carries no clock op at
     // all (`stat`'s `mtimeMs` is the nearest thing, and no caller threads it
@@ -974,4 +1004,5 @@ export async function assembleFleet(
     // no `event` to give.
     return { ...session, ...sessionBucket(session, hs?.updatedAt ?? null, hs?.event ?? null) };
   }));
+  return { sessions, panePids };
 }

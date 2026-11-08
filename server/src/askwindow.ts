@@ -5,7 +5,7 @@
  * that was right while the watcher was their only reader. Whole-branch review
  * F2(b) gave them a SECOND reader — `fleet.ts`'s `fleetAsk`, which must bound
  * the `held` chip by the same numbers the lane it describes actually runs on —
- * and `fleet.ts` cannot import `watch.ts`: `watch.ts` imports `assembleFleet`
+ * and `fleet.ts` cannot import `watch.ts`: `watch.ts` imports `assembleFleetWithPanePids`
  * from it, so the arrow only points one way. Re-spelling either number in
  * `fleet.ts` would be the second copy this codebase treats as a defect, so
  * they moved HERE, to a module both may import and neither owns. `ASK_SWEEP_MS`

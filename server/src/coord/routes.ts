@@ -11,7 +11,7 @@ import {
 import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
-import { assembleFleet } from '../fleet.js';
+import { assembleFleet, fleetNow } from '../fleet.js';
 import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
@@ -3329,7 +3329,7 @@ export function registerCoordRoutes(
     const names = reg.names;
     const recById = new Map(reg.records.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
-      undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
+      fleetNow(), { records: reg.records, coord: deps.coord });
 
     let project: string;
     let selfId: string | null = null;
@@ -3528,7 +3528,7 @@ export function registerCoordRoutes(
         const reg = await readRegistryMeasured(deps.io, deps.cfg);
         const names = reg.listed ? reg.names : null;
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux, liveStateReaderOver(deps.io),
-          undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
+          fleetNow(), { records: reg.listed ? reg.records : [], coord: deps.coord });
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {

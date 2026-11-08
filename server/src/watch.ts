@@ -4,7 +4,7 @@ import type { WatcherDeps } from './deps.js';
 import { timed } from './perf/recorder.js';
 import type { PerfHealth } from '../../shared/perf.js';
 import type { Bus } from './bus.js';
-import { assembleFleet, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
+import { assembleFleetWithPanePids, fleetNow, lifecycleInputFor, registrySecondsToMs, sessionBranchOf, sessionPrOf } from './fleet.js';
 import { readRadarPass } from './coord/lineageRead.js';
 import { radarRowsOf, sessionLandingsOf } from './coord/radar.js';
 import { askPushBody, withCoordinatorBody } from './askbody.js';
@@ -43,7 +43,7 @@ import {
 import { askActions } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
-// module — `watch.ts` imports `assembleFleet` from it — so they now live
+// module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
 import { ASK_SETTLE_TICKS } from './askwindow.js';
@@ -353,7 +353,7 @@ interface StallResolution {
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
- * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid `assembleFleet` read for every alive
+ * slug `tick-hands-the-lane-pids-and-records` (D-3649)). `panePids` holds the pane pid the assembly read (`FleetAssembly.panePids`) for every alive
  * row: `null` when tmux answered none, and no entry for a pane that was not alive. `records` holds the registry rows
  * this tick read. REQUIRED: the lane has no pid or uuid read of its own, so production and the tests run one path.
  */
@@ -2719,8 +2719,8 @@ export class FleetWatcher {
       // generation per sweep. Awaiting it would put the dialog detector and
       // the busy->idle push behind a journal read.
       void this.sweepLifecycle().catch(() => { /* one bad sweep must not kill the poll */ });
-      // `records` PASSED IN, never re-read here: `assembleFleet` would
-      // otherwise take its OWN read (`records ?? await readRegistry(...)`),
+      // `records` PASSED IN, never re-read here: `assembleFleetWithPanePids` would
+      // otherwise take its OWN read (`readRegistryMeasured`, when `records` is absent),
       // a SEPARATE whole-fleet sweep a few hundred ms after the one above —
       // in remote mode, 4 [registry-read-census:fields] unconditional reads and
       // one per other listed field per session, so a 24-session fleet's floor is 97
@@ -2747,9 +2747,12 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const panePids = new Map<string, number | null>();
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to assembleFleet
-      const sessions = await timed(this.deps.perf, 'assemble', assembleFleet(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), undefined, pending, this.statuslines, this.taskProgress, this.prStates, this.hookStates, records, this.deps.coord, this.usage, this.currentHeadBranches(), panePids, this.landings, paneListing, limits));
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to the assembly as `limitsRead`
+      const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
+        pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
+        hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
+        headBranches: this.currentHeadBranches(), landings: this.landings, paneListing, limitsRead: limits,
+      }));
       // The frame leaves first (console speed S1): the fleet frame follows assembly directly; pools, "Finished" pushes, claims,
       // the lanes, the state cache and the runs frame all wait behind it.
       this.registryTick = { listed: true, at: listedAt };               // D-6436: `lastFleet` reflects this listing either way
@@ -2891,7 +2894,7 @@ export class FleetWatcher {
       }
       // The stall watch (spec 2026-09-29 §4.2, §5) runs after the claim lanes, on THIS tick's `sessions`, its
       // registry listing (the listing carries the markers) and what this tick already measured: the pane pids
-      // `assembleFleet` read and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
+      // the assembly returned (`FleetAssembly.panePids`) and the registry rows (`StallTick`), so the lane reads neither again. It is handed the
       // listing's refused ids too, so a refused worker or claimant holds as unmeasured rather than reading as absent
       // from `sessions` (`tick-lanes-hold-a-refused-id`). It is never awaited: its reads are async, so it cannot sit in
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick

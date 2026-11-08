@@ -34,8 +34,7 @@ const closedRun = (coord: CoordStore, sessionId: string, claimedBy = 'demo-coord
 
 const assemble = (home: string, coord?: CoordStore) => assembleFleet(
   localIO, loadConfig({ CCRC_HOME: home }), dead, liveStateReaderOver(localIO), NOW_S,
-  undefined, undefined, undefined, undefined, undefined, undefined, coord,
-);
+  { coord });
 
 describe('releasedFrom on the wire', () => {
   it('a workspace whose only run closed is released from that run', async () => {
