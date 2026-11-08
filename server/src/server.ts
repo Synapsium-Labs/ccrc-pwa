@@ -35,7 +35,7 @@ import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAg
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
+import { ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, SWAP_BUSY_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP,
          capSupported, deviceActor,
          stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, sweepFailureReason, unknownView } from './prstate.js';
@@ -117,7 +117,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
-  isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
+  isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
@@ -2510,6 +2510,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     if (!ccdCan(deps.fleetState, 'routeApply')) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    // D-8121: the `browser` field needs `browser-route-v1` (an older ccd refuses it by name). It is applied at the
+    // session's next spawn, never live: `--apply` types nothing for it.
+    if (routeForBrowserCap(parsed.route, capSupported(deps.fleetState, BROWSER_ROUTE_CAP)).dropped) {
+      return refuseRoute(reply, 'unsupported');
+    }
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
@@ -2875,6 +2880,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const fields = routeFieldsOrNull(parsed.route);
     if (fields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
       return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
+    }
+    // D-8121: an older ccd refuses `browser` by name, so the operator hears 501 rather than a spawn that fails.
+    if (routeForBrowserCap(fields, capSupported(deps.fleetState, BROWSER_ROUTE_CAP)).dropped) {
+      return { reply: refuseRoute(reply, 'unsupported') };
     }
     return { reply: null, route: fields };
   };

@@ -9,7 +9,7 @@ import type { SessionVerdict } from './exec.js';
 import {
   CHILD_RUN_ID, CHILD_SHELL_PATH, DENY_SETTINGS_DIGEST, isPrPhase, isRegistryId, isStopSurface, parseLastEnd,
   ROUTE_WRITABLE_FIELDS,
-  type ChildMark, type ChildShellMark, type DenySettingsMark, type IdentityField, type LastEnd, type LifecycleField,
+  type BrowserMcpApplied, type ChildMark, type ChildShellMark, type DenySettingsMark, type IdentityField, type LastEnd, type LifecycleField,
   type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
 
@@ -431,6 +431,11 @@ export interface SessionRecord {
    */
   denySettings?: DenySettingsMark;
   childShell?: ChildShellMark;
+  /**
+   * `$REG/<id>.browsermcp` — what ccd's last spawn of this row applied for the browser MCP servers (D-8121): `on`, `off`,
+   * or `unreadable` (listed, but not one of the two). Absent: no record (a spawn before that ccd). Read only when listed.
+   */
+  browserMcp?: BrowserMcpApplied;
 }
 
 /**
@@ -660,6 +665,13 @@ export function denySettingsOf(read: MeasuredRead | null): DenySettingsMark {
   return read.ok && DENY_SETTINGS_DIGEST.test(read.content) ? { kind: 'digest', sha256: read.content } : { kind: 'unreadable' };
 }
 
+/** `$REG/<id>.browsermcp`'s ONE reader (D-8121): `null` is an unlisted field (no record); a listed field is its word when
+ *  it is exactly `on` or `off`, else `unreadable`. */
+export function browserMcpOf(read: MeasuredRead | null): BrowserMcpApplied | null {
+  if (read === null) return null;
+  return read.ok && (read.content === 'on' || read.content === 'off') ? read.content : 'unreadable';
+}
+
 /** `$REG/<id>.childshell`'s ONE reader (plan Task 15, D-5391), the same three readings. */
 export function childShellOf(read: MeasuredRead | null): ChildShellMark {
   if (read === null) return { kind: 'none' };
@@ -861,14 +873,15 @@ async function buildRecord(
       ? fieldMeasured(io, cfg.registryDir, id, f, as)
       : Promise.resolve<MeasuredRead>({ ok: false, reason: 'absent' });
   // The six fields that were listed-only before this change (D-5237, D-5242, D-5299, D-5391, D-6163) keep their own
-  // answer for an unlisted field: `null`, which their consumers read as "none", not a synthesized `absent`.
+  // answer for an unlisted field: `null`, which their consumers read as "none", not a synthesized `absent`. D-8121's
+  // `browsermcp` takes the same shape.
   const listedOnlyMeasured = (f: string): Promise<MeasuredRead | null> =>
     names.has(`${id}.${f}`) ? fieldMeasured(io, cfg.registryDir, id, f) : Promise.resolve(null);
   const [wrapperRead, projectRead, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
     routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRead,
-    namedRead, titleRaw] = await Promise.all([
+    namedRead, titleRaw, browserRead] = await Promise.all([
     // The identity triple (`wrapper`, `workdir`, `uuid`) and `hold` are read whatever the listing says (D-6388): the
     // plan (C1) rules them unconditional. Every other field's one-listing window is accepted: its presence is as of
     // the listing, and a file created after it is seen on the next read.
@@ -916,6 +929,8 @@ async function buildRecord(
     // is MEASURED: a listed marker that will not read is told from one that is gone (see `namedByOperator`).
     listedOnlyMeasured('named'),
     listedField('title'),
+    // D-8121: the spawn's browser MCP record, read only when listed — a row spawned before it costs no read.
+    listedOnlyMeasured('browsermcp'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.has(id + '.uuid')`
@@ -1248,6 +1263,7 @@ async function buildRecord(
     // Only when listed: a row with neither field keeps today's record shape exactly (absent reads as `none`).
     ...(denyRead === null ? {} : { denySettings: denySettingsOf(denyRead) }),
     ...(shellRead === null ? {} : { childShell: childShellOf(shellRead) }),
+    ...(browserRead === null ? {} : { browserMcp: browserMcpOf(browserRead)! }),
   };
 }
 
@@ -1668,7 +1684,7 @@ export function parseHibernated(raw: string | null): number | null {
 /** A record NO field of which is unmeasured or unreadable (spec §2.1: "no unmeasured or unreadable field"): nothing
  *  unmeasured, no lifecycle field unmeasured, a project and a branch that did not read as `unreadable` (a MEASURED
  *  absence, a main checkout's ordinary state, is clean), no plain field (`listedField`) that failed to read, no unreadable route field, a readable hold,
- *  substrate and strand marker, and no `unreadable` child, deny-settings or child-shell mark. The one predicate for "may be reused or cached" (the row cache uses this too).
+ *  substrate and strand marker, and no `unreadable` child, deny-settings, child-shell or browser MCP mark. The one predicate for "may be reused or cached" (the row cache uses this too).
  *  `namedByOperator` is a boolean that is true for a readable AND an unreadable operator-name read, so the record
  *  cannot tell them apart and no clause can be written for it. */
 export function isCleanRecord(rec: SessionRecord): boolean {
@@ -1683,5 +1699,6 @@ export function isCleanRecord(rec: SessionRecord): boolean {
     && (rec.route === null || rec.route.unreadable.length === 0)
     && rec.child.kind !== 'unreadable'
     && rec.denySettings?.kind !== 'unreadable'
-    && rec.childShell?.kind !== 'unreadable';
+    && rec.childShell?.kind !== 'unreadable'
+    && rec.browserMcp !== 'unreadable';
 }

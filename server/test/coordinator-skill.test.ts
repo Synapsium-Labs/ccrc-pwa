@@ -1003,12 +1003,16 @@ describe('the coordinator skill: linkage', () => {
     // coordinator reading only one of these two files must still see all
     // three keys named together, or it writes a body missing one.
     const lifecycle = refs('wave-lifecycle.md');
-    // ALL FIVE writable fields, not four: the literal showed `class`, `effort`,
+    // ALL SIX writable fields (D-8121 added `browser`), as ALL FIVE once were, not four: the literal showed `class`, `effort`,
     // `subagent` and `workflow` while the paragraph below it named five, so a
     // coordinator copying the body omitted `compact` every time (slice 5's
     // deferred minor, closed by slice 6 Task 5).
     expect(lifecycle).toContain(
-      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}');
+      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…","browser":"on"},"slug":"<child name>"}');
+    // D-8121: the sixth field, and the one rule a coordinator needs to use it.
+    expect(lifecycle).toContain('dispatch with `browser=on` when the task needs a browser');
+    // D-8121's fix: a route naming only `browser` keeps the run kind's default row (`dispatchDecide.ts`), and says so.
+    expect(lifecycle.replace(/\s+/g, ' ')).toContain('a route that names ONLY `browser` keeps its run kind\'s default row');
     // The optional child name rides the same body, and its paragraph says what
     // the coordinator must check after it (an older server ignores the field).
     expect(lifecycle).toContain("**`slug` — the child's name, chosen at birth.**");

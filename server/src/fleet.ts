@@ -886,6 +886,8 @@ export async function assembleFleetWithPanePids(
       lastEnd: r.lastEnd,
       // D-5242: already epoch MS (`hibernatedAtOf`, `registry.ts`), carried straight off the record like `lastEnd`.
       hibernatedAt: r.hibernatedAt,
+      // D-8121: the spawn's browser MCP record, carried as is; null when the row has none.
+      browserMcp: r.browserMcp ?? null,
       // `?? null` and not `?? 0`: no hook data at all and a hook reporting
       // zero reads are two conditions, and `hookstate.ts` already keeps them
       // apart — collapsing them one layer out would undo that on the wire.

@@ -26,8 +26,11 @@ const stoppedMain = (over: Partial<FleetSession> = {}): FleetSession =>
 const HEAD = [
   { id: 'session-model', label: 'Change model', enabled: true },
   { id: 'session-effort', label: 'Change effort', enabled: true },
+  // D-8121: the session's own browser choice; it needs the row, so a deep link before its first frame offers it disabled.
+  { id: 'session-browser', label: 'Browser tools', enabled: true },
   { id: 'open-history', label: 'History', enabled: true },
 ];
+const HEAD_NO_ROW = HEAD.map((e) => (e.id === 'session-browser' ? { ...e, enabled: false } : e));
 const DOCS = { id: 'session-docs', label: 'Docs', enabled: true, docs: DOCS_DEMO };
 const TERMINAL = { id: 'open-terminal', label: 'Terminal', enabled: true };
 const SWAP = { id: 'session-swap', label: 'Move to another account', enabled: true, title: undefined };
@@ -38,7 +41,7 @@ const ARCHIVE_FAULTED = { id: 'session-archive', label: 'Archive', enabled: fals
 describe('sessionMenu: the exact entry list, in its order', () => {
   it('null (a deep link before its first frame): no Docs, no PR, Archive offered disabled', () => {
     expect(sessionMenu(null)).toEqual([
-      ...HEAD, TERMINAL, SWAP,
+      ...HEAD_NO_ROW, TERMINAL, SWAP,
       { id: 'session-archive', label: 'Archive', enabled: false, title: undefined, danger: true },
     ]);
   });

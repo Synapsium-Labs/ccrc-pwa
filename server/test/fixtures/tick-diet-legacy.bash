@@ -1,15 +1,17 @@
-# FROZEN (#387, tick-diet spec §9, plan Task 2) — the legacy bodies of the sixteen helpers the supervisor tick diet
+# FROZEN (#387, tick-diet spec §9, plan Task 2) — the legacy bodies of the eighteen helpers the supervisor tick diet
 # converts or reads through, exactly as `ccd/ccd` holds them at 0d0ea592166496be5eccb948313e381bcb2b87c8, the base every
 # tick-diet wave is measured against. `ccd-tick-diet-equivalence.test.ts` sources this file over the tree's `ccd/ccd`
 # and compares each converted helper (its stdout, stderr, rc, out-var and registry bytes) with its legacy twin here.
 #
-# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The sixteen are
+# THE RENAME MAP. Each function `_X` is renamed `_legacy_X`, so `_reg_get` is `_legacy_reg_get`. The eighteen are
 # `_reg_get`, `_reg_read`, `_authdead`, `_cfg_dir`, `_limit_json_num`, `_limit_field`, `_share_pct`, `_home_measured`,
 # `_route_peek`, `_route_effort_for`, `_route_applied_get`, `_route_wanted`, `_route_pending_word`,
-# `_route_apply_pending`, `_limit_score` and `_avail` (the last two vendored by W2 Task 9, for its callers' rows, by
-# the remedy below). Every occurrence of those names below, code and comments alike, carries the prefix, so a call
-# from one vendored body to another stays inside this file. Every other call (`_route_valid`, `_route_get`,
-# `_route_inert_has`, `_id_wrapper`, `_authdead_expired`, `_route_any`, `_ccrc_cfg_dir`, …) reaches the LIVE function
+# `_route_apply_pending`, `_limit_score`, `_avail` (those two vendored by W2 Task 9, for its callers' rows, by
+# the remedy below), `_route_valid` (vendored by D-8121, which adds its `browser` arm) and `_route_any` (vendored by
+# D-8121's fix, which leaves `browser` out of it). Every occurrence of those
+# names below, code and comments alike, carries the prefix, so a call from one vendored body to another stays inside
+# this file. Every other call (`_route_get`,
+# `_route_inert_has`, `_id_wrapper`, `_authdead_expired`, `_ccrc_cfg_dir`, …) reaches the LIVE function
 # of the sourced tree.
 #
 # Never edit what follows. The suite pins this file's sha256 (E0a), each body with the map reversed against
@@ -206,12 +208,12 @@ _legacy_route_peek() {   # id field -> stdout the VALIDATED value, or nothing. P
   # note and a floor marker behind on a call that then refused and changed
   # nothing (fix round 2, minor M2). `_route_get` stays what every APPLY path
   # uses: a value a real spawn actually dropped is what the journal is for.
-  # Both conditions `_route_valid` refuses are silent here — this read makes no
+  # Both conditions `_legacy_route_valid` refuses are silent here — this read makes no
   # claim about which it saw, and the caller's own `die` is not reached from
   # here anyway.
   local id="$1" f="$2" v
   v=$(_legacy_reg_get "$id" "$f") || return 0
-  _route_valid "$f" "$v" && printf '%s' "$v"
+  _legacy_route_valid "$f" "$v" && printf '%s' "$v"
   return 0
 }
 
@@ -320,13 +322,13 @@ _legacy_route_apply_pending() {   # id -> 0 iff the record asks for a class or e
   # REGISTRY READS ONLY, AND THAT IS NOW TRUE (controller ruling S4-R9; it was
   # not, and the comment here said it was — `_legacy_route_wanted` reached
   # `_legacy_route_effort_for`, which could leave a `routenotepair` marker and a
-  # `route-refuse` line on a tick). The reads: `_route_any`'s seven `-e` stats,
+  # `route-refuse` line on a tick). The reads: `_legacy_route_any`'s seven `-e` stats,
   # then `_legacy_route_wanted`'s four (`class`, `degraded`, `effort`, `inert`) and one
   # or two `_legacy_route_applied_get`s. This is the tick's first act on every live
   # session — ~20 sessions x 12 ticks a minute — so the healthy answer, nothing
   # pending, has to cost a few stats and no tmux at all.
   local id="$1"
-  _route_any "$id" || return 1
+  _legacy_route_any "$id" || return 1
   [[ -n "$(_legacy_route_pending_word "$id")" ]] && return 0
   return 1
 }
@@ -455,4 +457,50 @@ _legacy_avail() {   # wrapper -> success if it has included-usage headroom (rate
   [[ -n "$five"  && "$five"  -ge "$SWAP_CEILING" ]] && return 1
   [[ -n "$seven" && "$seven" -ge "$SWAP_CEILING" ]] && return 1
   return 0                                                # no KNOWN half at the ceiling = assume free
+}
+
+_legacy_route_valid() {   # field value — THREE answers, because two of them are two different
+  # facts and used to collapse into one (fix round 2, Finding 1):
+  #   0  the value IS in the field's closed vocabulary
+  #   1  the value is NOT in it — bad input, the caller's to refuse
+  #   2  THE VOCABULARY ITSELF WAS UNAVAILABLE, so this call measured nothing
+  #      about the value at all
+  # Only `subagent` can answer 2, and only because its vocabulary is the one
+  # that is not spelled in this file: it is `shared/models.mjs`'s
+  # `SUBAGENT_CLASSES` PROJECTED into `$HOME/.ccrc/accounts.sh` as
+  # `CCRC_SUBAGENT_CLASSES` (routing slice 1, Task 1), and a projection written
+  # before that line carries no such array — a hand-installed ccd, an adopt, or
+  # a half-finished deploy (the agent lane installs both in one run).
+  #
+  # BOTH 1 AND 2 FAIL CLOSED — neither an unrecognised value nor an unchecked
+  # one reaches an argv or a keystroke — but they are not the same fact and
+  # their remedies are different sentences (fix the value vs. re-run `ccrc
+  # install`). So no caller here may narrow the distinction it received:
+  # `cmd_route` dies with a different message for each, and `_route_get`
+  # journals `route-unmeasured` rather than calling a legal `haiku` garbage.
+  local f="$1" v="$2" x
+  case "$f" in
+    class)    _route_word_in "$v" "$ROUTE_CLASSES" ;;
+    effort)   _route_word_in "$v" "$ROUTE_EFFORTS" ;;
+    subagent) declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 || return 2
+              _route_word_in "$v" "${CCRC_SUBAGENT_CLASSES[*]}" ;;
+    workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
+    compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
+    # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
+    # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
+    # rather than typed a second time three lines below the first (controller
+    # ruling S1-R3). A SUFFIX strip, so `default` has to stay last in
+    # `ROUTE_CLASSES`; it is, and this is the only reader that depends on it.
+    degraded) _route_word_in "$v" "${ROUTE_CLASSES% default}" ;;
+    inert)    [[ "$v" =~ ^[a-z]+(,[a-z]+)*$ ]] || return 1
+              for x in ${v//,/ }; do _route_word_in "$x" "$ROUTE_INERTABLE" || return 1; done ;;
+    *)        return 1 ;;
+  esac
+}
+
+_legacy_route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a session with
+  # no field at all is a pre-slice-1 session and gets today's behaviour).
+  local f
+  for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
+  return 1
 }

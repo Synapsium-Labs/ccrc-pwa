@@ -16,6 +16,8 @@ _auto_swap_check -> _route_note_floored
 _auto_swap_check -> _tmux_t
 _auto_swap_check -> _transcript_limit_banner
 _auto_swap_check -> _transcript_path
+_browser_spawn_compose -> _reg_set
+_browser_spawn_compose -> _route_get
 _child_spawn_compose -> _reg_set
 _child_tmpdir -> _child_runid_valid
 _child_tmpdir -> _reg_get
@@ -415,6 +417,7 @@ cmd_start -> _reg_id_cap
 cmd_start -> _reg_read
 cmd_start -> _reg_set
 cmd_start -> _route_argv_check
+cmd_start -> _route_argv_routes
 cmd_start -> _route_argv_write
 cmd_start -> _route_seed_default
 cmd_start -> _strand_clear
@@ -471,6 +474,7 @@ cmd_ws_add -> _reg_id_cap
 cmd_ws_add -> _reg_set
 cmd_ws_add -> _route_argv_check
 cmd_ws_add -> _route_argv_class
+cmd_ws_add -> _route_argv_routes
 cmd_ws_add -> _route_argv_write
 cmd_ws_add -> _route_degrade
 cmd_ws_add -> _route_seed_default

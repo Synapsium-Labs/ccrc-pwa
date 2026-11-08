@@ -25,16 +25,17 @@ import {
  * parses — are below, derived from the imported list.
  */
 const ALL_FIELDS: Record<RouteField, true> = {
-  class: true, effort: true, subagent: true, workflow: true, compact: true,
+  class: true, effort: true, subagent: true, workflow: true, compact: true, browser: true,
 };
 void ALL_FIELDS;   // its whole job is the type error above, not a runtime read
 
 describe('ROUTE_WRITABLE_FIELDS', () => {
-  // A LITERAL RATCHET, not a value computed from the thing under test: `5` is
-  // typed out here, so a sixth field (or a lost one) reds this line and forces
-  // the author past it, rather than the expectation moving with the code.
-  it('is exactly five fields', () => {
-    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(5);
+  // A LITERAL RATCHET, not a value computed from the thing under test: `6` is
+  // typed out here, so a seventh field (or a lost one) reds this line and forces
+  // the author past it, rather than the expectation moving with the code. D-8121
+  // moved it from 5 to 6 (`browser`).
+  it('is exactly six fields', () => {
+    expect(ROUTE_WRITABLE_FIELDS).toHaveLength(6);
   });
 
   it('every field the list names is one parseRouteFields accepts', () => {

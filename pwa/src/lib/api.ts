@@ -456,7 +456,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  an ordinary start's body is unchanged from before that row existed. */
     createSession: ({ crossPool, route, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
-      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow'>, string>>;
+      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow' | 'browser'>, string>>;
     }) => post('/api/sessions', {
       ...rest,
       ...(crossPool === true ? { crossPool: true } : {}),

@@ -8,7 +8,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { fieldMeasured, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
-  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
+  BROWSER_ROUTE_CAP, CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
 } from '../ccdargv.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -21,7 +21,7 @@ import {
 import { queueSystemMail } from './rundefsTx.js';
 import { WAVE_BRIEF_SUBJECT } from './briefwatch.js';
 import {
-  SPAWN_NOT_RECORDED, armEventDetail,
+  SPAWN_NOT_RECORDED, armEventDetail, routeForBrowserCap,
   type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
@@ -414,9 +414,12 @@ async function spawnFresh(
   // A box without `route-argv-v1` drops every `--route` already (journalled below as `route-omitted:no-route-argv-cap`),
   // so the default-specific withholding applies only where the pairs would otherwise have been sent.
   const defaultOk = routeDefaulted && routeFields !== null && capSupported(deps.fleetState, ROUTE_DEFAULT_CAP);
+  let defaultWithheld = false;
   if (routeDefaulted && routeFields !== null && !defaultOk && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
     coord.recordRunEvent(run.id, 'coordinator', 'route-omitted:no-route-default-cap');
-    routeFields = null;
+    defaultWithheld = true;
+    // D-8121: a `browser` the coordinator named rode over the row; it is the coordinator's, so it is still sent.
+    routeFields = routeFields.browser !== undefined ? { browser: routeFields.browser } : null;
   }
   // ROUTING (routing spec §5.3, slice 4, Task 3): gated on `ROUTE_ARGV_CAP`, the ARGV-PARSING capability: a
   // DIFFERENT token from the `ROUTE_CAP` the wave N>=2 arm gates the `ccd route` VERB on. `routeFields === null`
@@ -457,7 +460,7 @@ async function spawnFresh(
   if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) coord.recordRunEvent(run.id, 'coordinator', armEventDetail(routeFields));
   // `winner.wrapper` is MEASURED: the bind step refuses any same-project record whose identity is not.
   return { sessionId: winner.id, workspace: winner.workspace, branch: winner.branch, wrapper: winner.wrapper,
-    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: routeDefaulted && routeFields === null && routeFieldsIn !== null };
+    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: defaultWithheld };
 }
 
 /**
@@ -538,11 +541,16 @@ export async function dispatchRun(
     held: (project, keys) => coord.heldLandingIntents(project, keys),
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
-  const { run, body, itemTitles, routeFields, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
+  const { run, body, itemTitles, routeFields: plannedRoute, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
   // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
   const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
     caps: () => capsMeasured(coord) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
+  // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
+  // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.
+  const browserCap = routeForBrowserCap(plannedRoute, capSupported(deps.fleetState, BROWSER_ROUTE_CAP));
+  if (browserCap.dropped) coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-browser-route-cap');
+  const routeFields = browserCap.route;
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same

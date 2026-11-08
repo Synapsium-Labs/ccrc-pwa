@@ -207,6 +207,7 @@ describe('T13 review 5-3: the session menu lists Docs directly after History', (
     expect(history.nextElementSibling).toBe(docs);
     expect(docs.parentElement).toBe(history.parentElement);
     const labels = [...(history.parentElement?.children ?? [])].map((n) => n.querySelector('.menu-label')?.textContent);
-    expect(labels.slice(0, 4)).toEqual(['Change model', 'Change effort', 'History', 'Docs']);
+    // D-8121 puts Browser tools between Change effort and History; Docs still follows History directly.
+    expect(labels.slice(0, 5)).toEqual(['Change model', 'Change effort', 'Browser tools', 'History', 'Docs']);
   });
 });

@@ -136,7 +136,7 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
   // D-6794: a dispatch that passes NO route (`undefined`) gets its run kind's row from the shared table; a route the
-  // coordinator did pass, even an empty one, is never overridden, and a resumed session (already bound) is left alone:
+  // coordinator did pass, even an empty one, is never overridden (one naming only `browser` is merged over it, D-8121), and a resumed session (already bound) is left alone:
   // its record holds wave 1's route, its default or a ladder write, none of which an unrouted wave may undo.
   let routeFields: RouteFields | null = null;
   let routeDefaulted = false;
@@ -146,6 +146,13 @@ function decideRequest(f: RequestFacts): DispatchDecision<RequestPlan> {
     // D-6790: Fable runs only when the operator selects it; a dispatch is a coordinator's act, never the operator's.
     if (routeNamesFable(parsed.route)) return refused({ ok: false, kind: 'fable-operator-only' });
     routeFields = routeFieldsOrNull(parsed.route);
+    // D-8121: `browser` says which MCP servers the worker starts, never what it is for, so a fresh spawn's route that
+    // names ONLY `browser` rides over its run kind's default row (and the row's class keeps placing as a preference,
+    // `--route-default`), rather than replacing it the way any routing field does.
+    if (routeFields !== null && run.sessionId === null && Object.keys(routeFields).every((k) => k === 'browser')) {
+      const row = routeDefaultFor(run.kind);
+      if (row !== null) { routeFields = { ...row, ...routeFields }; routeDefaulted = true; }
+    }
   } else if (run.sessionId === null) {
     // Fresh spawn only: a resumed session keeps the route wave 1, its default or the ladder wrote.
     routeFields = routeDefaultFor(run.kind);

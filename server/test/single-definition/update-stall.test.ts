@@ -23,7 +23,7 @@ describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slic
   const FIELDS = ROUTE_WRITABLE_FIELDS;
 
   it('the field list this scans is real, and is the routing record\'s own list', () => {
-    expect(FIELDS.length).toBe(5);
+    expect(FIELDS.length, 'D-8121 added `browser`: 5 -> 6').toBe(6);
     expect(FIELDS).toContain('class');
   });
 

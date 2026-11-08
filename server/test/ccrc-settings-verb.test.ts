@@ -228,7 +228,7 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
   const REFUSED_SAMPLE: Record<string, string> = {
     CCRC_TESTBOX_GIT_KEY: 'relative/key', CCRC_TESTBOX_UNTRACKED_FILE_MAX: '5MB', CCRC_GRAPH_MAX_SHRINK_PCT: '150', CCRC_GRAPH_SOURCE_REF: '../x',
     CCRC_TEST_SLICE_CPU_QUOTA: '4', CCRC_SESSION_SLICE_MEMORY_MAX: '90', CCRC_KEEPALIVE_FRESH: '30m', CCRC_USAGE_SWEEP_DAYS: '0',
-    CCRC_CARRY_COPY_WARN_BYTES: '10G', CCRC_TESTBOX_DENY_GLOBS: 'a\tzz-denied',
+    CCRC_CARRY_COPY_WARN_BYTES: '10G', CCRC_TESTBOX_DENY_GLOBS: 'a\tzz-denied', CCRC_BROWSER_MCP_SERVERS: 'zz/refused-servers',
   };
   const LIST = `for k in ${BOX_SETTINGS_SHOWN.join(' ')}; do w="$(_set_says "$k")" && printf '%s\\037%s\\n' "$k" "$w"; done`;
   const WITH_WORDS = (): [string, string][] => {
@@ -238,9 +238,9 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     return r.stdout.split('\n').filter(Boolean).map((l) => l.split(US) as [string, string]);
   };
 
-  it('V4: every key _set_says has words for (the 58) is written refused, with its words and its source, and the sample is nowhere', () => {
+  it('V4: every key _set_says has words for (the 60) is written refused, with its words and its source, and the sample is nowhere', () => {
     const keys = WITH_WORDS();
-    expect(keys).toHaveLength(58);
+    expect(keys).toHaveLength(60);
     const sample = (k: string, i: number): string => REFUSED_SAMPLE[k] ?? `zz-refused-${i}`;
     const home = boxWith('ccrc-sv-v4-', keys.map(([k], i) => `${k}=${sample(k, i)}\n`).join(''));
     // The sample is a refused one, in this fixture, for every key: a sample a check accepts fails here, loudly.
@@ -258,7 +258,7 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     const needles = keys.flatMap(([k], i) => [...sample(k, i).split(/[\t/]/), sample(k, i)]).filter((t) => t.length >= 4);
     if (!MAC) {
       refusedRows(d, keys);
-      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(58);
+      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(60);
       expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
       for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
     } else {
@@ -904,12 +904,12 @@ describe('ccrc settings: the human form keeps its three formats (V8, review F4)'
     const r = settings(home, [], { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: '120' });
     expect(r.code, r.stderr).toBe(0);
     const lines = r.stdout.split('\n').filter(Boolean);
-    expect(lines.slice(0, 61).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
+    expect(lines.slice(0, 63).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
     expect(lines[0]).toBe('CCRC_BACKUP_KEEP               not shown  (environment, refused): a whole number from 0 to 9999');
     expect(lines[3]).toBe('CCRC_UPDATE_HEALTH_S           120  (environment, ok)');
-    expect(lines[61]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
-    expect(lines[62]).toMatch(/^backups: /);
-    expect(lines[63]).toMatch(/^disk: /);
+    expect(lines[63]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
+    expect(lines[64]).toMatch(/^backups: /);
+    expect(lines[65]).toMatch(/^disk: /);
     expect(existsSync(join(home, '.ccrc', 'box-settings.json')), 'the human form writes nothing').toBe(false);
   });
 });
@@ -1136,8 +1136,9 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
       /_ccrc_knob CCRC_SESSION_SLICE_MEMORY_MAX 24G file;/, /_ccrc_knob CCRC_SESSION_SLICE_SWAP_MAX 6G file;/, /_ccrc_knob CCRC_TEST_PRESSURE_MAX 0 file;/,
       /_ccrc_knob CCRC_KEEPALIVE_FRESH 1800 file;/, /_ccrc_knob CCRC_KEEPALIVE_MODEL haiku file;/, /_ccrc_knob CCRC_KEEPALIVE_PROMPT "Reply with the single word: ok" file;/,
       /_ccrc_knob CCRC_USAGE_SWEEP_DAYS 7 file;/, /_ccrc_knob CCRC_CARRY_COPY_WARN_BYTES 10737418240 file;/, /_graph_knobs file\)/,
+      /_ccrc_knob CCRC_BROWSER_MCP_DEFAULT off file;/, /_ccrc_knob CCRC_BROWSER_MCP_SERVERS "\$\(_browser_mcp_servers_default\)" file;/,
     ]) expect(reads, String(re)).toMatch(re);
-    expect(reads.match(/_ccrc_knob /g), 'eight direct reads; the two line readers are the owners\' own').toHaveLength(8);
+    expect(reads.match(/_ccrc_knob /g), 'ten direct reads (D-8121 added the two browser reads); the two line readers are the owners\' own').toHaveLength(10);
   });
 
   it('V9: cmd_settings and its _set_ helpers never name the warning arrays, _tb_load, _gr_knobs or `_slice_limit ` with a space', () => {

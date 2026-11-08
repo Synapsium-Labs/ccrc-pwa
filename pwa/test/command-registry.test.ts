@@ -131,6 +131,8 @@ describe("the ids are W2's door table's", () => {
       'session-restore', 'open-terminal', 'session-pr',
       // Desktop polish T3e (D-6385): the inspector's hide and show, offered only while a part places a rail.
       'toggle-inspector',
+      // D-8121: the ⋯ menu's Browser tools item, the session's own browser MCP choice.
+      'session-browser',
     ].sort());
   });
 });
@@ -224,7 +226,8 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // T3e (D-6385) adds `toggle-inspector`; every other command ranks as it did, so the table is read without it, and
     // the new command's own place is pinned in the empty list below.
     // W5h-a reads the table without go-measure-highlighting the same way; its own rank row and place are pinned below.
-    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab');
+    // D-8121 reads it without session-browser the same way; its own rank row and place are pinned below.
+    const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
@@ -240,6 +243,9 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // The reader lab plan, Task 10: the one command whose title holds "reader", placed right after R19's page.
     expect(rankCommands('reader', baseCommands()).map((c) => c.id)).toEqual(['go-reader-lab']);
     expect(empty.indexOf('go-reader-lab'), 'after R19\'s page').toBe(empty.indexOf('go-measure-highlighting') + 1);
+    // D-8121: the one command whose title holds "browser", placed right after Change effort, as the menu places it.
+    expect(rankCommands('browser', baseCommands()).map((c) => c.id)).toEqual(['session-browser']);
+    expect(empty.indexOf('session-browser'), 'after Change effort').toBe(empty.indexOf('session-effort') + 1);
   });
 
   // Go to Waiting on you (desktop-polish PL5a): its own case, away from the lines other waves add to the one above.
