@@ -56,6 +56,8 @@ PWA allow-list hunk (`pr8b-card-census.patch`), and, from fix round 1, `pr8c-sha
 derived list, whose one reader is the card's wire guard, with its single-definition row (review 1659 F6; ask 335 ruled the move). Two
 other exports got callers here: `delegationAdoptionKeepsOf` (above) and `DelegationAdoptRequest`, which types the route's body parse.
 PR8c's card must also read `sign-in-unarmed` in the GET's `refused.on` (`DelegationAdoptOnRefusal`), which its patch predates.
+With the list gone, the caps union is derived from its table (`DelegationAdoptCap = keyof typeof DELEGATION_ADOPT_CAP_MAP`, the
+refusal words' idiom), so the table is read and a word is spelled once; the PR8c patch adds the list back beside it.
 The seventh mutant the ruling named (the card's confirmation skipped, red in 13 of 53 rows) moved to PR8c with the card.
 
 ## Precedent sites (D-7902, D-7994)
@@ -93,7 +95,9 @@ Every site `git grep` finds for `pane-scope-stop`, `scope-sweep-busy` and `coord
 - Two POSTs at once are not serialised: the marker always ends in one state, but the feed row can name a move the registry no longer
   shows, the precedent door's posture (F11, left as ruled).
 - W4-U27's older-server render (`pwa/test/older-server-render.test.tsx`): with no card in this PR no PWA file reads the new member,
-  and `keeps` is optional and additive, so the render cannot change; re-run alone at the tip all the same (F12; see the report).
+  and `keeps` is optional and additive, so the render cannot change; re-run alone at the tip all the same, green (F12).
+- Main was merged once, after #2453 (landing order 5g) merged first, as the leave agreed with that run asks of the second to land;
+  no conflict, and the route and census counts held on the merged tree, so none changed.
 - The precedents' history split CLAUDE.md, the session hook and the installer into a rules-only change, at an external review
   gate's request. This PR keeps them in, because the brief and R1 ask for them here.
 - The adoption switch's staging file `$REG/.delegation-adopt.<pid>.tmp` joins the R-3 boundary paragraph in `ccd/ccd`, whose cardinal

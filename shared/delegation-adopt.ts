@@ -5,12 +5,12 @@
 // `scope-sweep.ts`'s reason: other programmes append at that file's foot.
 import type { DelegationAdoptionHealth, MarkerState } from './api.js';
 
+// The caps words' one table: the union below is derived from it (`DELEGATION_ADOPT_REFUSALS`' idiom), so a word is spelled once. Its
+// derived list has one reader, the Settings card's wire guard, so it lands with the card in PR8c (D-8114; review 1659 F6, ruled).
+const DELEGATION_ADOPT_CAP_MAP = { present: true, absent: true, unmeasured: true } as const;
 /** What the fleet box's measured `ccd caps` says of one capability the door reads: listed, not listed, or not read at all. A list
  *  that did not read is never folded into "not listed" (D-8113). */
-export type DelegationAdoptCap = 'present' | 'absent' | 'unmeasured';
-// The union's map (wire totality, `SESSION_ROLE_MAP`'s idiom). Its derived list has one reader, the Settings card's wire guard, so it
-// lands with the card in PR8c (D-8114; review 1659 F6, ruled).
-const DELEGATION_ADOPT_CAP_MAP: Record<DelegationAdoptCap, true> = { present: true, absent: true, unmeasured: true };
+export type DelegationAdoptCap = keyof typeof DELEGATION_ADOPT_CAP_MAP;
 
 /** The door's refusal words, each with its ONE status (D-8113), spread into `shared/refusal.ts`'s `REFUSAL_STATUS`.
  *  `fleet-caps-unmeasured`: the fleet box's `ccd caps` did not read, so neither capability is known (503, try later).
