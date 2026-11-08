@@ -18,7 +18,7 @@ const held = (over: Partial<CleanupHeldByItem> = {}): CleanupHeldByItem => ({
   rowId: 'row-a', word: 'gone-unrecorded', sentence: 'Its workspace is gone and nothing records it.',
   holds: { reclaim: 3, expire: 0, collect: 1 }, act: 'forget', ...over,
 });
-const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 const PAUSED = 'Nothing is re-read while the cleanup is paused.';
 const frame = (list: unknown): unknown => ({ pause: 'clear', mail: 'clear', cleanupHeldBy: list });
 /** The rows these cases name, each listed dead with no workspace and not asleep: the session sheet's Forget check. */

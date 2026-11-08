@@ -48,7 +48,7 @@ const RECHECK_TAIL = 'Then check again.';
  *  fleet-wide, so it is usually minutes for a new hold and a few hours or more on the persistent tier. Nothing resets
  *  that backoff. The console's confirm words carry the same two phrases (`heldByRowsWords.ts`; a parity test holds them
  *  equal). */
-const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
 const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
 

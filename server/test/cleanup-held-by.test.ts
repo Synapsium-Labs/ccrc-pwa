@@ -167,7 +167,7 @@ describe('cleanupHeldBy', () => {
   // Review 1580 F7 and rulings 1-4 and 8: what each sentence says, so a dropped scope, a prune or a pace is a red.
   const sentenceOf = (w: HeldByWord, ws: HeldByWorkspace | null, fleet: string | null): string =>
     cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w, ws)]) }], () => fleet)[0]!.sentence;
-  const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+  const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
   const PAUSED = 'Nothing is re-read while the cleanup is paused.';
   it('a workspace gone-unrecorded row names the scoped remove and never a prune, and no recreate advice', () => {
     const s = sentenceOf('gone-unrecorded', 'present', '/x/ws');

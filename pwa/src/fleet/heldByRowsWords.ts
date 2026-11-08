@@ -41,7 +41,7 @@ export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts |
 /** The pace (reviews 1580 F1 and 1585 F1): ccrc asks a held item again only once its own backoff has run, one ask a
  *  minute fleet-wide. Nothing here resets it or asks the server. The server's sentences carry the same two phrases
  *  (`server/src/cleanupHeldBy.ts`); a parity test holds them equal. */
-const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
 const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
 
