@@ -131,6 +131,58 @@
 .docs-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }
 .docs-leaf-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 
+/* — the full head as one row and one dense line (desk-nav Part B, D-8101). `DocsHead` draws back, the crumbs and the
+   actions in `.docs-head-bar`, then the truth line under it. Every rule here is scoped to `.docs-full`, the full head's
+   own class, because the compact head's panel draws the same truth line and link actions in its own layout, which does
+   not change. No rule here keys on a viewport width: the row is a `docs-head` container, and only the container query
+   below hides the action words.
+   THE ROW. It never wraps. The crumbs take the room the actions leave (`flex: 1 1 0`), on one line, and their middle
+   crumbs give way first (a flex-shrink a thousand times the last crumb's), each down to one tap's width beside its `/`
+   (the floor is the tap, the separator's character and the gap after it), its words cut with an ellipsis; the last
+   crumb, the page itself, is cut last and keeps its whole name in its `title`. The crumbs clip what is left, so the
+   row's controls draw the focus ring inside their boxes, as the compact row's do. The actions keep their words while
+   there is room; under the container query each keeps its icon and its name. GitHub's may-differ note is the one part
+   of the actions that gives way, cut with its words in its `title`.
+   THE QUERY'S WIDTH, measured in Chrome (docs-compact-head.browser.test.ts): back (44) and the row's two 4 px gaps, the
+   crumbs at their floor when folded (the `…` button and two crumbs at a tap and a separator each, about 164), and the
+   widest actions with their words (GitHub, Share and "Export (plain view)", 313) come to about 529, so the words hide
+   below 530. A leaf at 600 has a 584 px row; a listing on a phone, which keeps the full head, has a narrower one.
+   THE LINE. One line at `--docs-line-h` (tokens.css: the tap floor, 28 px under a fine pointer), and so are the chip
+   and copy commit inside it. Its parts are flex items that never shrink, except the words that can: the via sentence
+   first, then the relation, the source and the served ref, each cut with an ellipsis; the commit, copy commit and the
+   freshness chip never give way. `white-space: pre` keeps the ` · ` separators' spaces, which a flex item would drop;
+   the one space that is a text run of its own, between the commit and copy commit, is not rendered in a flex container
+   at all, so the button's margin stands in for it (one `ch`, the mono space).
+   GROUNDS. Nothing here paints a ground or sets an ink: the row and the line inherit the head's, as before. — */
+.docs-full { gap: var(--sp-1); }
+.docs-full > .docs-head-bar { container: docs-head / inline-size; flex-wrap: nowrap; }
+.docs-full > .docs-head-bar :focus-visible { outline-offset: -2px; }
+.docs-full .docs-crumbs { flex: 1 1 0; min-width: 0; overflow: hidden; }
+.docs-full .docs-crumbs ol { flex-wrap: nowrap; }
+.docs-full .docs-crumbs li { flex: 0 1000 auto; min-width: calc(var(--tap-min) + 1ch + var(--sp-1)); }
+.docs-full .docs-crumbs li:last-child { flex: 0 1 auto; min-width: 0; }
+.docs-full .docs-crumb { display: block; flex: 0 1 auto; min-width: 0; line-height: var(--tap-min); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-full .docs-crumb-here { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-full .docs-actions { flex: 0 1 auto; flex-wrap: nowrap; }
+.docs-full .docs-actions > * { flex: none; }
+.docs-full .docs-actions > .docs-action-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-full .docs-action { gap: var(--sp-1); white-space: nowrap; text-decoration: none; }
+@container docs-head (width < 530px) {
+  .docs-action-words { display: none; }
+}
+.docs-full > .docs-truth {
+  display: flex; align-items: center; min-height: var(--docs-line-h);
+  white-space: pre; overflow: hidden;
+}
+.docs-full > .docs-truth > * { flex: none; }
+.docs-full > .docs-truth > .docs-truth-via { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.docs-full > .docs-truth > .docs-truth-relation { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.docs-full > .docs-truth > .docs-truth-source { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.docs-full > .docs-truth > .docs-truth-ref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.docs-full > .docs-truth .docs-fresh, .docs-full > .docs-truth .docs-copy { min-height: var(--docs-line-h); }
+.docs-full > .docs-truth .docs-copy { margin-inline-start: 1ch; }
+.docs-full > .docs-truth :focus-visible { outline-offset: -2px; }
+
 /* The quiet lines: the notes, loading words, the index head, "Formatting…". */
 .docs-note, .docs-loading, .docs-index-head, .doc-formatting {
   margin: 0;

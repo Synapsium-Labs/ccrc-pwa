@@ -9,7 +9,9 @@
 // Under DOCS_COMPACT_QUERY (600 CSS px) a leaf page draws the compact head instead (the phone-header plan of 2026-11-03):
 // one row of back, where and what, Share and Export as icons, and Page details, which opens a panel holding the crumbs,
 // the truth line and the link actions (`CompactHead`). Every other page, and every page at a wider viewport, draws the
-// header above, unchanged.
+// header above as one row and one dense line (desk-nav Part B, D-8101): back, the crumbs and the actions share the row
+// (GitHub, Share and Export an icon beside their words, the words giving way under docs.css's container query), and the
+// truth line sits under it on one line.
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
 import {
   DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
@@ -399,7 +401,7 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: bo
         {shown.map((c, i) => (
           <li key={c.href}>
             {i === shown.length - 1
-              ? <span className="docs-crumb-here" aria-current="page">{c.label}</span>
+              ? <span className="docs-crumb-here" aria-current="page" title={c.label}>{c.label}</span>
               : <DocsPageLink className="docs-crumb" href={c.href}>{c.label}</DocsPageLink>}
           </li>
         ))}
@@ -499,19 +501,35 @@ function TruthLine(p: {
   );
 }
 
+/** An action's face in the full head's row (desk-nav Part B, D-8101): its icon, then its words in `.docs-action-words`,
+ *  which docs.css hides under the `docs-head` container query; the control's name is set beside it, so it is kept. */
+function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download'; readonly words: string }): ReactNode {
+  return <><Icon name={p.icon} size={16} /><span className="docs-action-words">{p.words}</span></>;
+}
+
 /** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
- *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation. */
-function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean }): ReactNode {
+ *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
+ *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub"; the note keeps its full
+ *  words in its `title`, since the row may cut it. */
+function GithubAction(p: {
+  readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
+}): ReactNode {
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
   if (!link.ok) {
     return <span className="docs-action-off">{fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] })}</span>;
   }
+  const row = p.row === true;
   return (
     <>
-      <a className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}>
-        {DOCS_HEAD_TEXT.github}
+      <a
+        className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}
+        aria-label={row ? DOCS_HEAD_TEXT.github : undefined}
+      >
+        {row ? <RowFace icon="folder-code" words={DOCS_HEAD_TEXT.githubShort} /> : DOCS_HEAD_TEXT.github}
       </a>
-      {(link.note === 'may-differ' || p.showsDraft) && <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>}
+      {(link.note === 'may-differ' || p.showsDraft) && (
+        <span className="docs-action-note" title={row ? DOCS_HEAD_TEXT.githubMayDiffer : undefined}>{DOCS_HEAD_TEXT.githubMayDiffer}</span>
+      )}
     </>
   );
 }
@@ -545,6 +563,8 @@ function ExportAction(p: {
   readonly assets: ExportAssets | null; readonly readAt: number | null; readonly onPlainView: (() => void) | null;
   /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name. */
   readonly glyph?: boolean;
+  /** The full head's form (desk-nav Part B): an icon beside its words, named as the words form is. */
+  readonly row?: boolean;
 }): ReactNode {
   const { page, tree, state } = p;
   const [request, setRequest] = useState<ExportRequest | null>(null);
@@ -559,9 +579,9 @@ function ExportAction(p: {
     <>
       <button
         type="button" className="docs-action docs-export" disabled={!enabled} onClick={onClick}
-        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true ? words : undefined}
+        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true || p.row === true ? words : undefined}
       >
-        {p.glyph === true ? <Icon name="download" size={20} /> : words}
+        {p.glyph === true ? <Icon name="download" size={20} /> : p.row === true ? <RowFace icon="download" words={words} /> : words}
       </button>
       {request !== null && <ExportSheet request={request} onClose={() => setRequest(null)} />}
     </>
@@ -585,6 +605,8 @@ function ShareAction(p: {
   /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name ("Share: <words>" while
    *  it waits, as Export's is, since nothing visible says Share). */
   readonly glyph?: boolean;
+  /** The full head's form (desk-nav Part B): an icon beside its words, named by its words as the words form is. */
+  readonly row?: boolean;
 }): ReactNode {
   const { page, tree, share } = p;
   const [open, setOpen] = useState(false);
@@ -594,9 +616,9 @@ function ShareAction(p: {
     <>
       <button
         type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}
-        aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
+        aria-label={p.row === true ? words : p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
       >
-        {p.glyph === true ? <Icon name="share" size={20} /> : words}
+        {p.glyph === true ? <Icon name="share" size={20} /> : p.row === true ? <RowFace icon="share" words={words} /> : words}
       </button>
       {/* Whether this page offers Export (spec 4.17): the refusals that take Export's clause then carry it (spec 4.16). */}
       {target !== null && <ShareSheet target={target} exportOffered={p.exportOffered} onClose={() => setOpen(false)} />}
@@ -607,21 +629,22 @@ function ShareAction(p: {
 /** The actions (spec 4.5): View on GitHub; Share (spec 4.16), wherever `shareStateFor` offers it; and Open committed
  *  version, offered iff `entryView(...).offersCommitted` on a leaf not already at `view=committed`. Open committed
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
- *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. */
+ *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. The full head draws them in its
+ *  row (desk-nav Part B, D-8101): GitHub, Share and Export an icon beside their words, Open committed version its words. */
 function Actions(p: ActionInputs): ReactNode {
   const { page, tree, file } = p;
   const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
-      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
+      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} row />}
       {share.s !== 'absent' && (
-        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} />
+        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row />
       )}
       {exported.s !== 'absent' && page.kind === 'path' && (
         <ExportAction
           key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
-          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView}
+          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} row
         />
       )}
       {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
@@ -707,19 +730,25 @@ export function DocsHead(p: {
       />
     );
   }
+  // The full head (desk-nav Part B, D-8101): one row of back, the crumbs and the actions, then the truth line as one dense
+  // line, then the plain-view note and "Updated to". `docs-full` scopes docs.css's row and dense-line rules to this head,
+  // so the compact head's panel, which draws the same truth line and link actions, keeps its own layout.
+  const listed = tree !== null && page.kind !== 'index' ? { tree, page } : null;
   return (
-    <header className="docs-head">
+    <header className="docs-head docs-full">
       <div className="docs-head-bar">
         <BackButton page={page} />
         <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-      </div>
-      {tree !== null && page.kind !== 'index' && (
-        <>
-          <TruthLine page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} />
+        {listed !== null && (
           <Actions
-            page={page} tree={tree} file={visit.file} leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null}
+            page={listed.page} tree={listed.tree} file={visit.file} leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null}
             pageStore={p.pageStore ?? null} exportAssets={p.exportAssets ?? null} onPlainView={p.onPlainView ?? null}
           />
+        )}
+      </div>
+      {listed !== null && (
+        <>
+          <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
           {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
         </>
       )}

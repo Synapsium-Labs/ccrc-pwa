@@ -117,7 +117,8 @@ describe('which header a page draws (refinements (a), (b))', () => {
     // The full header's truth line is on the page at once; the row's is behind Page details.
     expect(screen.queryByRole('button', { name: DOCS_HEAD_TEXT.copyCommit }) !== null).toBe(!compact);
     if (!compact) {
-      expect([...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.textContent))
+      // Each action's NAME: the full head's row shows "GitHub" and names the link View on GitHub (desk-nav Part B).
+      expect([...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.getAttribute('aria-label') ?? e.textContent))
         .toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export]);
     }
   });

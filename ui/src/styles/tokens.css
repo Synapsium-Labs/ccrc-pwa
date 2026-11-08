@@ -389,6 +389,10 @@
   --r-full: 999px;  /* dots, pills, grabber */
 
   --tap-min:   44px;   /* minimum touch target (spec acceptance criterion) */
+  /* The Docs desk head's truth line and its two controls (desk-nav Part B,
+     D-8101): the tap floor, and dense only under a fine pointer (the ROLES BY
+     POINTER block below), the same in both skins. */
+  --docs-line-h: var(--tap-min);
   --lamp-size: 18px;   /* status-dot lamp bezel: --bg-well floor + inset ring */
   --well-max:  240px;  /* tool-output wells cap here and scroll internally */
   --measure-prose: 72ch;   /* assistant prose caps here; pre/table/img opt out. Inert <640px. */
@@ -1346,6 +1350,18 @@
 @media (min-width: 1600px) {
   :root {
     --gutter: var(--sp-8);
+  }
+}
+
+/* ==========================================================================
+   ROLES BY POINTER — a dense value for a mouse only. A coarse pointer, or a
+   device reporting `pointer: none`, keeps the tap floor above, so the dense
+   value fails toward the floor, never away from it (skins.css's dense row is
+   the pattern).
+   ========================================================================== */
+@media (pointer: fine) {
+  :root {
+    --docs-line-h: 28px;
   }
 }
 

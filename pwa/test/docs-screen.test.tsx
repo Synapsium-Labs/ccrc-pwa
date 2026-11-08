@@ -1287,7 +1287,8 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
     expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled();
-    const actions = [...document.querySelectorAll('.docs-actions .docs-action:not(.docs-export)')].map((e) => e.textContent);
+    // Each action's NAME (desk-nav Part B: the row shows "GitHub" and names the link View on GitHub).
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action:not(.docs-export)')].map((e) => e.getAttribute('aria-label') ?? e.textContent);
     expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.openCommitted]);
   });
 
@@ -1526,7 +1527,8 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
     await waitFor(() => expect(exportButton()).toBeEnabled());
-    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.textContent);
+    // Each action's NAME (desk-nav Part B: the row shows "GitHub" and names the link View on GitHub).
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.getAttribute('aria-label') ?? e.textContent);
     expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export, DOCS_HEAD_TEXT.openCommitted]);
   });
 
