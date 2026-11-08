@@ -3,7 +3,9 @@
 // not know, the coordinator's frame and claim rules, and the pane predicate the wording sites keep (OA-C15 (a), D-7265).
 import { describe, expect, it } from 'vitest';
 import type { FleetSession, Presence } from '../../shared/api';
-import { coordinatorPresence, paneGone, presenceOf, type CoordinatorPresence } from '../src/fleet/presence';
+import {
+  coordinatorPresence, forgetHeldBack, forgetOffered, paneGone, presenceOf, type CoordinatorPresence,
+} from '../src/fleet/presence';
 import { deadSession, fleetSession, hibernatedSession } from './fleetFixture';
 import { tableRows } from './presenceTable';
 
@@ -87,3 +89,22 @@ describe('paneGone words the pane, not the session', () => {
     }
   });
 });
+
+// Task C15 (D-8111), review 1666 F2 and N6: why Forget is held back, written once. `forgetOffered` is its null.
+describe('forgetHeldBack', () => {
+  const at = 1_700_000_000_000;
+  it.each([
+    ['a workspace row, whatever its presence', fleetSession({ workspace: 'ws-a' }), 'workspace'],
+    ['a dead workspace row', deadSession({ workspace: 'ws-a' }), 'workspace'],
+    ['alive', fleetSession({}), 'running'],
+    ['the server\'s asleep', hibernatedSession(at), 'asleep'],
+    ['dead with a hibernation marker (D-7371)', deadSession({ presence: 'dead', hibernatedAt: at }), 'asleep'],
+    ['in doubt', deadSession({ presence: 'unknown' }), 'doubt'],
+    ['in doubt with a hibernation marker', deadSession({ presence: 'unknown', hibernatedAt: at }), 'doubt'],
+    ['dead, no workspace, no marker', deadSession({}), null],
+  ] as const)('%s', (_, s, reason) => {
+    expect(forgetHeldBack(s)).toBe(reason);
+    expect(forgetOffered(s)).toBe(reason === null);
+  });
+});
+

@@ -292,6 +292,8 @@ describe('a forget act the fleet holds back says why', () => {
     ['asleep', hibernatedSession(1_700_000_000_000, { id: 'row-a' }), ASLEEP],
     ['asleep under a dead presence', deadSession({ id: 'row-a', presence: 'dead', hibernatedAt: 1_700_000_000_000 }), ASLEEP],
     ['in doubt', deadSession({ id: 'row-a', presence: 'unknown' }), DOUBT],
+    // Review 1666 F2(b): the server's doubt stays doubt, marker or not; an in-doubt row is never called asleep.
+    ['in doubt with a hibernation marker', deadSession({ id: 'row-a', presence: 'unknown', hibernatedAt: 1_700_000_000_000 }), DOUBT],
   ];
 
   it.each(why)('a row the fleet lists as %s carries its line', (_, session, line) => {
@@ -306,6 +308,18 @@ describe('a forget act the fleet holds back says why', () => {
     expect(screen.queryByText(/Forget is not offered/)).toBeNull();
     expect(heldByRowWhyNotForget(held(), deadSession({ id: 'row-a' }))).toBeNull();
     expect(heldByRowWhyNotForget(held({ act: 'recheck' }), fleetSession({ id: 'row-a' }))).toBeNull();
+  });
+
+  // Review 1666 F2(a) and (c), ruling R2: a workspace row and an unlisted row get no line, whatever the presence.
+  it.each([
+    ['a dead workspace row', [deadSession({ id: 'row-a', workspace: 'ws-a' })]],
+    ['a running workspace row', [fleetSession({ id: 'row-a', workspace: 'ws-a' })]],
+    ['an unlisted row', [deadSession({ id: 'row-b' })]],
+  ] as const)('%s gets no line', (_, sessions) => {
+    expect(heldByRowWhyNotForget(held(), sessions.find((x) => x.id === 'row-a'))).toBeNull();
+    render(<HeldByRows sessions={sessions} coord={frame([held()])} />);
+    expect(screen.getByRole('button', { name: 'Check again — row-a…' })).toBeInTheDocument();
+    expect(screen.queryByText(/Forget is not offered/)).toBeNull();
   });
 });
 

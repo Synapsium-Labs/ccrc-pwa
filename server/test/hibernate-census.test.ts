@@ -129,8 +129,9 @@ const CENSUS: readonly Row[] = [
       + 'ignored' },
   { source: 'presence-reader', file: 'pwa/src/fleet/presence.ts', hits: 5, stances: ['definition'],
     why: 'the PWA\'s one reader of the server\'s presence (D-7181): `presenceOf` reads `asleep` as the server sends it, '
-      + '`coordinatorPresence` spells it `hibernated` (never `dead`), `paneGone` words the pane only, and `forgetOffered` '
-      + '(D-8111) is the Forget rule, written once: the server\'s `dead`, no workspace, and not asleep' },
+      + '`coordinatorPresence` spells it `hibernated` (never `dead`), `paneGone` words the pane only, and `forgetHeldBack` '
+      + '(D-8111) is the Forget rule and its reasons, written once: a workspace row first, then `alive` running, `unknown` '
+      + 'doubt (never asleep), `asleep`, or `dead` with a marker asleep; `forgetOffered` is its null' },
   { source: 'dead-compare', file: 'pwa/src/fleet/presence.ts', hits: 1, stances: ['definition'],
     why: '`paneGone`, the pane predicate OA-C15 (a) keeps for sites that only word the pane: a sleeper\'s pane is gone, '
       + 'which is true, and the sites that must tell a sleep from a death read `presenceOf` or `hibernatedSince`' },
@@ -177,9 +178,6 @@ const CENSUS: readonly Row[] = [
     why: 'a dead row\'s rank on the card: a sleeper\'s pane is not running; `inArchivedFold` keeps it at the top level' },
   { source: 'presence-reader', file: 'pwa/src/fleet/groupFleet.ts', hits: 1, stances: ['true-of-pane'],
     why: 'the stranded count over rows the server reads alive (`presenceOf`, D-7181): a sleeper is not running' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/heldByRowsWords.ts', hits: 1, stances: ['consults'],
-    why: 'the held-rows list says why a forget act shows Check again (D-8111, review 1663 F1): a sleeper, the server\'s '
-      + '`asleep` or a dead row `hibernatedSince` reads asleep, is told to wake it or check again, never that it runs' },
   { source: 'dead-compare', file: 'pwa/src/command/sessionEntries.ts', hits: 1, stances: ['true-of-pane'],
     why: 'the palette\'s session entries (D-6714) rank a dead row last among equal matches (tier 3): a sleeper\'s pane '
       + 'is not running; it is still listed and found, and opening it is the session screen\'s wake' },
@@ -225,7 +223,8 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
   { name: 'ccd cmd_ws_archive', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_ws_archive')),
     why: 'removes `.hibernated`: an archived row is never woken by mail' },
   { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/presence.ts',
-    holds: (s) => /export function forgetOffered\([^)]*\): boolean \{\s*return session\.workspace === null && presenceOf\(session\) === 'dead' && hibernatedSince\(session\) === null;/.test(s),
+    holds: (s) => /export function forgetHeldBack\([^)]*\)[^{]*\{\s*if \(session\.workspace !== null\) return 'workspace';\s*const presence = presenceOf\(session\);\s*if \(presence === 'alive'\) return 'running';\s*if \(presence === 'unknown'\) return 'doubt';\s*if \(presence === 'asleep' \|\| hibernatedSince\(session\) !== null\) return 'asleep';\s*return null;\s*\}/.test(s)
+      && /export function forgetOffered\([^)]*\): boolean \{\s*return forgetHeldBack\(session\) === null;/.test(s),
     why: 'the rule, written once (D-8111): offered on a dead non-workspace row and hidden on a sleeper, which offers Wake '
       + '(ccd forget refuses it)' },
   { name: 'the session sheet\'s Forget session', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
