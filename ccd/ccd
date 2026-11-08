@@ -1675,7 +1675,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
                                 # swap.log's floored line, nothing more. If it is ever promoted to a
                                 # wire field it needs a reader and the additive-only contract first.
 # ── The routing record (routing spec 2026-09-14 §5.1) ───────────────────────
-# Seven ordinary registry fields per session, written by `cmd_route` and by ccd
+# Eight ordinary registry fields per session (`browser` joined the seven, D-8121), written by `cmd_route` and by ccd
 # itself (`degraded`, `inert`), read ONLY through `_route_get` below. The fields
 # are a byte channel into an argv and a pane — any session on the box can write
 # them (one UNIX user; attribution, not authentication) — so every value is
@@ -1691,7 +1691,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -1705,6 +1705,9 @@ ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # refusal word, never a guessed key.
 ROUTE_EFFORT_STOPS="low medium high xhigh max"
 ROUTE_WORKFLOWS="on off"
+# `browser` (D-8121): whether this session's spawn starts the browser MCP servers; absent, the box default
+# (`CCRC_BROWSER_MCP_DEFAULT`, off) decides. Read by `_browser_spawn_compose` alone, at a spawn, never typed.
+ROUTE_BROWSERS="on off"
 ROUTE_INERTABLE="effort workflow subagent"
 ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / route-skip notes for one
                                 # id+field. EQUAL TO `COMPACT_NOTE_FLOOR` BY CHOICE, NOT BY DERIVATION:
@@ -9320,6 +9323,11 @@ EOF
   # this token may compose routing fields onto a dispatch argv; one that does
   # not passes none and journals that it could not.
   echo route-argv-v1
+  # browser-route-v1 (D-8121) — `browser` is a routing field (`route --set browser=on|off`, `--route browser=…` on the
+  # minting verbs), and every spawn composes the browser MCP servers' denial from it and the box default, recording what
+  # it applied in `$REG/<id>.browsermcp`. A server that does not see this token sends no `browser` field (an older ccd
+  # refuses the field by name).
+  echo browser-route-v1
   # route-default-v1 — `ws-add --route-default`: the `--route` pairs beside it are the server's default row for the
   # run kind, so their class places as a preference (strict=0) and never refuses a dispatch at the weekly ceiling.
   # A server that does not see this token sends no default route at all (an old ccd would bind the flag as the
@@ -21063,6 +21071,7 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     subagent) declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 || return 2
               _route_word_in "$v" "${CCRC_SUBAGENT_CLASSES[*]}" ;;
     workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
+    browser)  _route_word_in "$v" "$ROUTE_BROWSERS" ;;
     compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
@@ -24683,11 +24692,15 @@ CHILD_DENY_SETTINGS="$REG/child-deny.settings.json"
 # REPLACES the left, so `$route * $child * $account` would throw away
 # `CHILD_DENY_RULES`. Over an array of objects: their `*`, then each of
 # `permissions.deny` and `permissions.allow` that any side carries set to the
-# union of every side's array, first-seen order kept.
+# union of every side's array, first-seen order kept; and the top-level `deniedMcpServers` the same way (D-8121), so the
+# browser servers' denial survives a merge with a lane's or a child's own list.
 SETTINGS_UNION_JQ='. as $s | (reduce $s[] as $x ({}; . * $x))
   | reduce ("deny", "allow") as $k (.; if any($s[]; (.permissions[$k]? | type) == "array")
       then .permissions[$k] = ([$s[] | .permissions[$k]? | arrays | .[]] | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end))
-      else . end)'
+      else . end)
+  | if any($s[]; (.deniedMcpServers? | type) == "array")
+      then .deniedMcpServers = ([$s[] | .deniedMcpServers? | arrays | .[]] | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end))
+      else . end'
 
 CHILD_SHELL_PIN=/bin/bash
 _child_spawn_compose() {   # id launchflags -> sets CHILD_SPAWN_FLAGS, CHILD_SPAWN_ENV; writes the record
@@ -24763,6 +24776,85 @@ _account_spawn_compose() {   # id launchflags -> sets ACCOUNT_SPAWN_FLAGS; never
   else
     ACCOUNT_SPAWN_FLAGS="${flags:+$flags }--settings '$a'"
   fi
+  return 0
+}
+
+# ── THE BROWSER MCP SERVERS, OFF BY DEFAULT (D-8121) ─────────────────────────
+# Measured on the fleet before this: a third of the account config dirs enable
+# the playwright and chrome-devtools-mcp plugins, and every session on them ran
+# both servers (seven processes a session, ~3.9 GiB across ten sessions) whether
+# or not it ever opened a browser. Claude Code honours `deniedMcpServers` from
+# `--settings`: a server named there is never started, and the plugin's skills
+# stay (measured with `claude -p`'s init event and the session's process tree,
+# docs/superpowers/plans/2026-11-08-browser-mcp-off-by-default.md).
+#
+# THE EFFECTIVE VALUE: the session's own `browser` route field when it holds a
+# valid word, else the box default `CCRC_BROWSER_MCP_DEFAULT` (off). `off`
+# merges `{"deniedMcpServers":[{"serverName":…},…]}` into the row's ONE
+# `--settings` (D-5391), for the names in `CCRC_BROWSER_MCP_SERVERS`; `on`
+# composes nothing. Every wrapper execs Claude Code (`ccrc-codex` included,
+# argv untouched), so this composes on every lane, like the account deny file.
+# What was applied is recorded in `$REG/<id>.browsermcp` (`on`/`off`), rewritten
+# at every spawn, so the console tells applied from queued-until-restart; a
+# running pane keeps its servers until its next spawn. It never refuses or
+# delays a spawn: a settings reader that is missing composes nothing and
+# records `on` (what the pane will run), and a setting that cannot be read or
+# is refused reads as its default; each warns.
+_browser_mcp_box() {   # -> sets BROWSER_BOX_DEFAULT, BROWSER_BOX_SERVERS: the box's two settings, each validated or its default; rc 1 = no reader
+  local lib out
+  BROWSER_BOX_DEFAULT=""; BROWSER_BOX_SERVERS=""
+  lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"
+  [[ -f "$lib" ]] || lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
+  # A SUBSHELL: the library sets ccrc's own names (`CCD_OS`, `BOX_ENV_FILE`, `CCRC_SETTINGS`), which stay out of ccd.
+  # shellcheck disable=SC1090  # the library's path is chosen at run time: beside this ccd, else ~/.local/libexec/ccrc
+  out=$( . "$lib" 2>/dev/null && declare -F _ccrc_knob _browser_mcp_servers_default >/dev/null 2>&1 || exit 1
+         d=off; sv=$(_browser_mcp_servers_default)
+         if _ccrc_knob CCRC_BROWSER_MCP_DEFAULT off; then
+           if _browser_mcp_default_ok "$KNOB"; then d="$KNOB"
+           else echo "ccd: warn: CCRC_BROWSER_MCP_DEFAULT must be $(_browser_mcp_default_says) — read as off" >&2; fi
+         else echo "ccd: warn: $KNOB_WHY — CCRC_BROWSER_MCP_DEFAULT read as off" >&2; fi
+         if _ccrc_knob CCRC_BROWSER_MCP_SERVERS "$(_browser_mcp_servers_default)"; then
+           if [[ -n "$KNOB" ]] && _browser_mcp_servers_ok "$KNOB"; then sv="$KNOB"
+           elif [[ -n "$KNOB" ]]; then echo "ccd: warn: CCRC_BROWSER_MCP_SERVERS must be $(_browser_mcp_servers_says) — read as the default list" >&2; fi
+         else echo "ccd: warn: $KNOB_WHY — CCRC_BROWSER_MCP_SERVERS read as the default list" >&2; fi
+         printf '%s %s' "$d" "$sv" ) || return 1
+  BROWSER_BOX_DEFAULT="${out%% *}"; BROWSER_BOX_SERVERS="${out#* }"
+  return 0
+}
+_browser_spawn_compose() {   # id launchflags -> sets BROWSER_SPAWN_FLAGS; writes $REG/<id>.browsermcp; never fails
+  local id="$1" flags="$2" want deny v base="" merged re="--settings '([^']*)'"
+  BROWSER_SPAWN_FLAGS="$flags"
+  want=$(_route_get "$id" browser)
+  if ! _browser_mcp_box; then
+    echo "ccd: warn: $id: the settings reader (ccrc-settings.sh) is missing or broken — spawning with the browser MCP servers its account enables; 'ccrc update --force' places it" >&2
+    _reg_set "$id" browsermcp on || true
+    return 0
+  fi
+  [[ -n "$want" ]] || want="$BROWSER_BOX_DEFAULT"
+  if [[ "$want" == on ]]; then _reg_set "$id" browsermcp on || true; return 0; fi
+  deny=$(jq -c -n --arg s "$BROWSER_BOX_SERVERS" '{deniedMcpServers: ($s | split(",") | map({serverName: .}))}' 2>/dev/null) || deny=""
+  if [[ -z "$deny" || "$deny" == *"'"* ]]; then
+    echo "ccd: warn: $id: could not compose the browser MCP servers' denial — spawning with them" >&2
+    _reg_set "$id" browsermcp on || true
+    return 0
+  fi
+  if [[ "$flags" =~ $re ]]; then
+    v="${BASH_REMATCH[1]}"
+    if [[ "$v" == "{"* ]]; then base="$v"
+    elif [[ -f "$v" && ! -L "$v" ]] && ! grep -q "'" -- "$v" 2>/dev/null; then base=$(jq -c . "$v" 2>/dev/null) || base=""
+    fi
+    if [[ -n "$base" ]] && merged=$(jq -c -n --argjson b "$base" --argjson d "$deny" "[\$b, \$d] | $SETTINGS_UNION_JQ" 2>/dev/null) \
+       && [[ -n "$merged" && "$merged" != *"'"* ]]; then
+      BROWSER_SPAWN_FLAGS="${flags%%"--settings '$v'"*}--settings '$merged'${flags#*"--settings '$v'"}"
+    else
+      echo "ccd: warn: $id: could not merge the browser MCP servers' denial into this spawn's one --settings — spawning with them" >&2
+      _reg_set "$id" browsermcp on || true
+      return 0
+    fi
+  else
+    BROWSER_SPAWN_FLAGS="${flags:+$flags }--settings '$deny'"
+  fi
+  _reg_set "$id" browsermcp off || true
   return 0
 }
 
@@ -25338,6 +25430,9 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # THE ACCOUNT DENY FILE (D-6202), for EVERY row, after the child's: the one
   # `--settings` the flags carry gains the account rules (`_account_spawn_compose`,
   # which fails open), so a top-level spawn differs from before only by them.
+  # THE BROWSER MCP SERVERS (D-8121), for EVERY row, before the account file: off (the box default) merges their
+  # denial into the one `--settings`; the record says what this spawn applied (`_browser_spawn_compose`, never fails).
+  _browser_spawn_compose "$id" "$launchflags"; launchflags="$BROWSER_SPAWN_FLAGS"
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer

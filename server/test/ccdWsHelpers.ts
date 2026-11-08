@@ -784,9 +784,12 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   // `assertNoRealTool`. `CCD_MOUNTINFO` sits BEFORE `...extra` so a snippet can
   // override it: see `FIXTURE_MOUNTINFO` for why the host's table never decides
   // a verdict. A bus pair outside HOME cannot override the fixture's.
+  // `CCRC_BROWSER_MCP_DEFAULT=on` (D-8121): the box default is `off`, which adds the browser servers' denial to every
+  // spawn's one `--settings`; the suites that pin a spawn argv byte for byte predate it and measure everything else, so
+  // the harness keeps the servers on and `ccd-browser-spawn.test.ts` measures the default (an empty value is unset).
   const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv =>
     ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
-      CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...extra }, { systemd: true, tmux: true, net: true });
+      CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), CCRC_BROWSER_MCP_DEFAULT: 'on', ...extra }, { systemd: true, tmux: true, net: true });
   // The ccd path and the caller's snippet ride the ENVIRONMENT, not argv (wave 18 fix round 3, D-5259): CodeQL reads
   // every argv element of a `bash -c` as part of the command (js/shell-command-injection-from-environment), and a
   // snippet often interpolates this fixture HOME. Both are set AFTER `env(extra)`, so no `extra` overrides them, and

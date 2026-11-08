@@ -335,6 +335,13 @@ export interface FleetSession {
    *  that gives no time carries the stop stamp's time instead, and null with no readable stop stamp (D-8067). ADDITIVE: the row's lifecycle reads `stopped` and its bucket `dead` as for any deliberate stop
    *  (no new `SessionBucket` member), and this field alone tells a sleeping session from one that is gone. */
   hibernatedAt: number | null;
+  /** D-8121: what this session's last spawn applied for the browser MCP servers, from `$REG/<id>.browsermcp` (ccd's
+   *  `_browser_spawn_compose`, rewritten at every spawn; read only when the registry listing names it): `on` (it starts
+   *  the servers its account enables), `off` (they were denied), `unreadable` (listed, but its bytes did not come back as
+   *  one of the two). Null: no record — a pane spawned before this ccd, which runs whatever its account enables. ABSENT
+   *  (optional): an older server. The intended value is `route.fields.browser`, else the box default; the two differ
+   *  until the next spawn (`browserMcpView`, the PWA's one reader). Display only: no decision reads it. ADDITIVE. */
+  browserMcp?: BrowserMcpApplied | null;
   /** ARCH-48 (#783): whether this session is there, computed ONCE by the server's `readSession` (`sessionReading.ts`) and
    *  only rendered by a reader: `alive`, `asleep` (hibernated, woken by mail or ensure), `dead` (the pane is gone and the
    *  lifecycle is one `lifecycleIsDead` names) or `unknown` (a doubt: tmux did not answer, the lifecycle could not be
@@ -3122,6 +3129,12 @@ const reviveBackground = (o: RawObj, k: string): { count: number; kinds: string[
   return { count, kinds: kinds as string[] };
 };
 
+/** D-8121: `FleetSession.browserMcp` off raw JSON. Absent, null or a word outside the three → null. */
+const reviveBrowserMcp = (o: RawObj, k: string): BrowserMcpApplied | null => {
+  const v = o[k];
+  return typeof v === 'string' && (BROWSER_MCP_APPLIED as readonly string[]).includes(v) ? v as BrowserMcpApplied : null;
+};
+
 /** D-5237. Absent → null (an older snapshot or server predates the field);
  *  malformed → null too (`reviveBackground`'s rule: a display line, it gates
  *  nothing); an unknown cause word → `unknown`. */
@@ -3392,6 +3405,8 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       // D-5242. Absent → null: an older snapshot or server predates the field, and a session it did not know was
       // asleep reads as the stopped row it showed then.
       hibernatedAt: optNum(o, 'hibernatedAt'),
+      // D-8121. Absent or malformed → null: a display line, it gates nothing (`reviveLastEnd`'s rule).
+      browserMcp: reviveBrowserMcp(o, 'browserMcp'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
       // its being zero. Present-but-not-a-finite-number throws inside
@@ -6256,8 +6271,13 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `degraded` and `inert` are ccd's OWN fields (routing spec §5.2) and are
  * deliberately absent: nothing on the wire ever sets them, so a body naming
  * either is `unknown-field`, the same refusal an unrecognised word gets.
+ *
+ * `browser` (D-8121) is `on`/`off`: whether the session's NEXT spawn starts the
+ * browser MCP servers (absent: the box default, `CCRC_BROWSER_MCP_DEFAULT`). It
+ * has no keystroke and is never applied live; `FleetSession.browserMcp` says
+ * what the running pane's spawn applied.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser'] as const;
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
 
@@ -6373,6 +6393,15 @@ export function routeParseDetail(p: Extract<RouteFieldsParse, { ok: false }>): s
  */
 export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
   return Object.keys(r).length > 0 ? r : null;
+}
+
+/** D-8121: a route with its `browser` field kept only when the box takes it (`browser-route-v1`; the caller measures
+ *  the cap). `dropped` is true when the field was there and is not sent, so the caller can journal the omission; a route
+ *  left with no field is `null`, `routeFieldsOrNull`'s collapse. */
+export function routeForBrowserCap(r: RouteFields | null, browserOk: boolean): { route: RouteFields | null; dropped: boolean } {
+  if (r === null || r.browser === undefined || browserOk) return { route: r, dropped: false };
+  const { browser: _dropped, ...rest } = r;
+  return { route: routeFieldsOrNull(rest), dropped: true };
 }
 
 /**
@@ -10230,9 +10259,10 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
+  'browser-tools': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
 
@@ -10334,6 +10364,8 @@ export const BOX_SETTING_TABLE = {
   CCRC_TESTBOX_SERVICE_TOKEN_FILE: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_TESTBOX_UNIT_MAX: { cls: 'omit', family: 'testbox', roles: [], applies: 'run' },
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
 export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
 /** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
@@ -10346,6 +10378,7 @@ export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SE
 export const BOX_SETTING_REFUSAL_WORDS = [
   '0, or a whole number with a K, M, G or T suffix',
   'a URL such as https://testbox.invalid',
+  'a comma-separated list of MCP server names (letters, digits and . _ @ : -)',
   'a list of file name patterns',
   'a nice value from 0 to 19',
   'a number of seconds (digits only, at most 18)',
@@ -10376,6 +10409,7 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'an absolute path, or one starting ~/, with no . or .. part',
   'install or refuse',
   'local or fail',
+  'on or off',
   'space-separated repository keys (<name>-<8 hex digits>)',
 ] as const;
 export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
@@ -10383,7 +10417,16 @@ export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
 /** The fixed words a setting's check admits beside the value shape, a key's own and no other's (D-7914). */
 export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, readonly string[]>>> = {
   CCRC_TESTBOX_LOST_RUN: ['local', 'fail'], CCRC_TESTBOX_FALLBACK_INSTALL: ['install', 'refuse'],
+  CCRC_BROWSER_MCP_DEFAULT: ['on', 'off'],
 };
+/** `CCRC_BROWSER_MCP_SERVERS`' default (D-8121): the two browser MCP servers' names as Claude Code names them
+ *  (`plugin:<plugin>:<server key>`), measured from `claude -p`'s init event (2.1.318; the plans note of 2026-11-08). The
+ *  second copy of ccd/ccrc's `_browser_mcp_servers_default`; `ccd-browser-spawn.test.ts` holds the two equal. */
+export const BROWSER_MCP_SERVERS_DEFAULT = 'plugin:playwright:playwright,plugin:chrome-devtools-mcp:chrome-devtools';
+/** D-8121: what a spawn's record (`$REG/<id>.browsermcp`) can say, as the server reads it (`FleetSession.browserMcp`). */
+export type BrowserMcpApplied = 'on' | 'off' | 'unreadable';
+const BROWSER_MCP_APPLIED_MAP: Record<BrowserMcpApplied, true> = { on: true, off: true, unreadable: true };
+export const BROWSER_MCP_APPLIED: readonly BrowserMcpApplied[] = Object.keys(BROWSER_MCP_APPLIED_MAP) as BrowserMcpApplied[];
 /** The cut of a recorded text, and the most an `ok` value may be; a refusal's `why` is cut at the second. */
 export const BOX_SETTINGS_TEXT_MAX = 480;
 export const BOX_SETTINGS_WHY_MAX = 240;

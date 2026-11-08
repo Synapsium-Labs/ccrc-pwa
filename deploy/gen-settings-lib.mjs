@@ -7,7 +7,7 @@
 // GENERATED COPY, never a move and never a hand-kept second reader: ccd/ccrc keeps `_ccrc_knob` and the byte-wise model
 // it reads through exactly where they are (moving them would shift every line citation and slice that names them), and
 // this script copies the `CCD_OS` detection block, the `BOX_ENV_FILE=` line, the `CCRC_SETTINGS=` line, the eight
-// functions of that closure and the checks two sweeps share with `ccrc settings`, each whole, out of it, in ccd/ccrc's order.
+// functions of that closure and the checks two sweeps and ccd's spawn (D-8121) share with `ccrc settings`, each whole, out of it, in ccd/ccrc's order.
 // server/test/ccrc-settings-lib.test.ts holds the committed file equal to what this writes. Run it after any edit to that
 // block, to those two lines, to `_ccrc_knob`, to a `_box_*` function or to a check the library carries. It reads no environment.
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -15,17 +15,19 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** The library's functions, in ccd/ccrc's order: the reader's closure (what `_ccrc_knob` calls, and what they call), then
- *  the checks two sweeps share with `ccrc settings`, each a multi-line function this script copies whole. */
+ *  the checks two sweeps and ccd's spawn share with `ccrc settings`, each a multi-line function this script copies whole. */
 export const SETTINGS_LIB_FUNCTIONS = Object.freeze([
   '_box_env_value', '_box_env_shell_plain', '_box_env_has_nul', '_box_env_qopen', '_box_env_unit_whole',
   '_box_unit_env', '_box_unit_env_shell', '_ccrc_knob',
   '_keepalive_fresh_ok', '_keepalive_fresh_says', '_usage_days_ok', '_usage_days_says',
+  // D-8121: ccd's spawn reads the two browser MCP settings through this library, so their checks ride it too.
+  '_browser_mcp_default_ok', '_browser_mcp_default_says', '_browser_mcp_servers_default', '_browser_mcp_servers_ok', '_browser_mcp_servers_says',
 ]);
 
 const HEADER = [
   '# ccd/lib/ccrc-settings.sh — GENERATED from ccd/ccrc by deploy/gen-settings-lib.mjs; never edit it by hand.',
   '# ccrc\'s one reader of its settings (`_ccrc_knob`), the byte-wise model it reads through and the checks two sweeps share',
-  '# with `ccrc settings`, copied whole out of ccd/ccrc, so the ccd-* sweeps, which never source ccd/ccrc, read ~/.ccrc/ccrc.env',
+  '# with `ccrc settings`, copied whole out of ccd/ccrc, so the ccd-* sweeps and ccd itself, which never source ccd/ccrc, read ~/.ccrc/ccrc.env',
   '# and refuse a value exactly as ccrc does. The argument for every rule is in ccd/ccrc, above each function.',
   '# server/test/ccrc-settings-lib.test.ts reds when the two differ.',
   '# Installed 0644 at ~/.local/libexec/ccrc/ccrc-settings.sh: sourced, never executed, and sourcing it runs nothing.',

@@ -16,6 +16,8 @@ _auto_swap_check -> _route_note_floored
 _auto_swap_check -> _tmux_t
 _auto_swap_check -> _transcript_limit_banner
 _auto_swap_check -> _transcript_path
+_browser_spawn_compose -> _reg_set
+_browser_spawn_compose -> _route_get
 _child_spawn_compose -> _reg_set
 _child_tmpdir -> _child_runid_valid
 _child_tmpdir -> _reg_get

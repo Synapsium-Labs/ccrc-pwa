@@ -1836,6 +1836,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "auth": "SKIP",
   "box-settings": "PASS",
   "box-token": "PASS",
+  // D-8121: PASS at every stage, for carry-copies' reason: the install creates ~/.cc-sessions, and a fresh box runs no session,
+  // so no browser server runs and no record says on.
+  "browser-mcp": "PASS",
   "build": "PASS",
   // D-7857: PASS at every stage (Linux-only rows; set from the install's steps and held by CI's Linux leg): the install places
   // ~/.cc-sessions/lib/carry-dedupe.py, so the registry exists, and a
