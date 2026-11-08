@@ -975,6 +975,21 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     });
   });
 
+  // desk-nav Part B (D-8101): the desk head's dense truth line, its chip and copy commit size to `--docs-line-h`, the
+  // tap floor in :root and a dense value only under a fine pointer, so a coarse pointer keeps the floor.
+  describe('--docs-line-h — the desk truth line\'s height role', () => {
+    it('is --tap-min in :root and below it only inside @media (pointer: fine)', () => {
+      expect(declValue(rootBody(tokensCss), '--docs-line-h')).toBe('var(--tap-min)');
+      const media = [...stripComments(tokensCss).matchAll(/@media([^{]*)\{\s*:root\s*\{([^}]*)\}\s*\}/g)];
+      const where = media.filter((m) => /--docs-line-h\s*:/.test(m[2] ?? '')).map((m) => norm(m[1] ?? ''));
+      expect(where).toEqual(['(pointer: fine)']);
+      const dense = media.find((m) => norm(m[1] ?? '') === '(pointer: fine)' && /--docs-line-h\s*:/.test(m[2] ?? ''));
+      const px = Number(/--docs-line-h\s*:\s*(\d+)px/.exec(dense?.[2] ?? '')?.[1] ?? Number.NaN);
+      expect(px).toBe(28);
+      expect(px).toBeLessThan(Number.parseFloat(declValue(rootBody(tokensCss), '--tap-min') ?? 'NaN'));
+    });
+  });
+
   describe('every banner action: .docs-banner-action (a btn-ghost) and .docs-hint-link', () => {
     it('are at least one tap tall, off the shared token, and the banner rule gives back only the width', () => {
       expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor
