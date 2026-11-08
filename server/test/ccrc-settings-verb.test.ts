@@ -1043,7 +1043,7 @@ describe('ccrc settings --write: the file', () => {
     if (got !== 'LAST-GOOD') {
       const doc = JSON.parse(got) as { v: number; settings: unknown[] };
       expect(doc.v).toBe(2);
-      expect(doc.settings).toHaveLength(61);
+      expect(doc.settings).toHaveLength(67);
     }
   }, 60_000);
 });
