@@ -1,6 +1,7 @@
 // THE EXPIRY LANE'S DECISIONS (workspace lifecycle spec 2026-09-24 §5.3 "The lane", wave 3b). L1: pure, clock-free
 // (the clock is an argument), `fs`-free and fastify-free — `childReclaimSweep.ts`'s shape, beside it and sharing
-// nothing with it. It imports L0 alone. `watch.ts`'s `sweepArchivedExpiry` (L4) GATHERS the evidence and APPLIES
+// nothing with it. It imports L0, and the held-by reader from the leaf `heldByRead.ts` (L1, which imports L0 alone;
+// Task C15, D-8111). `watch.ts`'s `sweepArchivedExpiry` (L4) GATHERS the evidence and APPLIES
 // these verdicts; `coord/expireArchived.ts` (the one executor) reads the box's two documents through the parsers
 // here. Nothing in this file reads a file, a row or a clock.
 //

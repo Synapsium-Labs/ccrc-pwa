@@ -1,12 +1,13 @@
 /**
  * The registry rows that hold a cleanup (cleanup un-wedge R2, spec 2026-11-04 §4.3). Ring L1, context C4: pure, no
- * I/O. It imports L0 (`shared/api.ts`) and one L1 predicate, `expiryReportStands` (`archivedExpiry.ts`, which imports
- * `heldByFieldOf` from here: a cycle of function references only, neither module calls the other at load).
+ * I/O. It imports L0 (`shared/api.ts`), the held-by reader's types from the leaf `heldByRead.ts` (L1, which imports L0
+ * alone), and one L1 predicate, `expiryReportStands` (`archivedExpiry.ts`, which does not import this file: Task C15,
+ * D-8111, moved the reader it took from here into the leaf).
  *
- * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents. This file
- * reads that pair (`heldByOf`), composes one item per holding row with the sentence that says what to do about it
- * (`cleanupHeldBy`), decides the row's one control (`cleanupHeldByAct`), and folds the children that only those rows
- * hold into the row's line (`withCleanupHeldBy`).
+ * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents, and
+ * `heldByRead.ts` reads that pair. This file composes one item per holding row with the sentence that says what to do
+ * about it (`cleanupHeldBy`), decides the row's one control (`cleanupHeldByAct`), and folds the children that only those
+ * rows hold into the row's line (`withCleanupHeldBy`).
  */
 import { HELD_BY_WORDS } from '../../shared/api.js';
 import { expiryReportStands, type ExpiryReport } from './archivedExpiry.js';
