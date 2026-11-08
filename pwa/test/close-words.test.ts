@@ -68,6 +68,26 @@ describe('runStateWord', () => {
   });
 });
 
+describe('runStateWord, the stuck and reviewed arms (Task 4)', () => {
+  const stuck = { reason: 'owner-gone', cause: 'coordinator-gone', since: 1, closes: null } as const;
+  it('says stuck and reviewed', () => {
+    expect(runStateWord(run({ state: 'planned', closedAt: null, stuck }))).toBe('stuck');
+    expect(runStateWord(run({ state: 'awaiting-review', closedAt: null, waitsOn: 'coordinator' }))).toBe('reviewed');
+  });
+  it('stuck comes after the closed words and before reviewed', () => {
+    expect(runStateWord(run({ state: 'failed', closedBy: 'operator', stuck }))).toBe('closed by you');
+    expect(runStateWord(run({ state: 'awaiting-review', closedAt: null, waitsOn: 'coordinator', stuck }))).toBe('stuck');
+  });
+  it('reviewed needs awaiting review and the coordinator', () => {
+    expect(runStateWord(run({ state: 'awaiting-review', closedAt: null, waitsOn: 'reviewer' }))).toBe(RUN_WORD['awaiting-review']);
+    expect(runStateWord(run({ state: 'working', closedAt: null, waitsOn: 'coordinator' }))).toBe(RUN_WORD.working);
+  });
+  it('an older server reads as today', () => {
+    expect(runStateWord(run({ state: 'awaiting-review', closedAt: null }))).toBe(RUN_WORD['awaiting-review']);
+    expect(runStateWord(run({ state: 'planned', closedAt: null, stuck: null }))).toBe(RUN_WORD.planned);
+  });
+});
+
 describe('one reader of a row\'s word', () => {
   it('the run row draws its word through runStateWord and never indexes RUN_WORD', () => {
     const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'screens', 'RunRow.tsx'), 'utf8');

@@ -2285,6 +2285,24 @@ export const MIGRATIONS: readonly string[] = [
                   AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1)
     WHERE state IN ('done', 'failed');
   `,
+  // ── 45: user_version 44 -> 45 ─────────────────────────────────────────────
+  // The stuck verdict's own clock for a person with no other stored time (D-8071; spec 2026-11-04 §7, A63, n3):
+  // `gone_since (personId, firstGoneAt, lastGoneAt)`, one row per coordinator or worker the verdict's pass last read GONE.
+  // Epoch ms, the server's clock. The pass is the table's one writer, through `CoordStore.setGoneSince` and
+  // `deleteGoneSince`, and it follows `deadAnchorNext`'s rule: the first pass writes `firstGoneAt`, a later one moves
+  // `lastGoneAt` alone, and a gap over `DEAD_COORDINATOR_GAP_MS` starts afresh. It exists so a restart that empties the
+  // in-memory reader moves no age, and so a paused dead-coordinator lane (which writes no `dead_claimants` row) leaves
+  // no run without its owner-gone verdict.
+  //
+  // A NEW TABLE AND NOTHING ELSE, migration 18's shape and for its reason: an older build opening a file at
+  // `user_version 45` takes rule 3 (it warns, reads as-is and migrates nothing), never names this table, and boots.
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 44 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE gone_since (personId TEXT NOT NULL PRIMARY KEY, firstGoneAt INTEGER NOT NULL, lastGoneAt INTEGER NOT NULL);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

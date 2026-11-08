@@ -29,6 +29,7 @@ import type { LandingLineView } from '../../../shared/landingLine.js';
 import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
+import { withVerdicts } from './runWire.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
@@ -51,7 +52,7 @@ import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
-import { abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
+import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -637,7 +638,8 @@ export function registerCoordRoutes(
   const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(
     { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
       childReclaim: childReclaimPort(deps, coord) },
-    runId, { intent: 'abandon' }, 'operator'), (runId) => abandonRefusal(coord, runId)));
+    // D-8071: the run's reason from the stuck verdict's reader, read HERE, inside the hold; null with no verdict.
+    runId, { intent: 'abandon' }, 'operator', abandonDetail(watcher?.runVerdicts.of(runId) ?? null)), (runId) => abandonRefusal(coord, runId)));
 
   /** The dead-coordinator lane's abandon (workspace lifecycle spec §5.4) — `withAbandon`'s deps, `'sweep'` and the
    *  crashed id, inside the same `coordMutex`. Handed to the watcher by `buildServer`. */
@@ -2862,6 +2864,11 @@ export function registerCoordRoutes(
    * D-2545's all-or-failure: that rule protects the run rows themselves, and a
    * chip that could not be read is not a reason to hide the runs.
    */
+  /** D-8071: the stuck verdict's fields on a `RunSummary` answer, from the watcher's one reader (`withVerdicts`). A server with
+   *  no watcher, or a reader not yet filled, stamps nothing. */
+  const stampVerdicts = (summaries: RunSummary[]): RunSummary[] =>
+    watcher === undefined ? summaries : withVerdicts(watcher.runVerdicts, summaries);
+
   const composeChildReclaim = (summaries: RunSummary[]): RunSummary[] => {
     const coord = deps.coord;
     if (!coord) return summaries;
@@ -2979,7 +2986,7 @@ export function registerCoordRoutes(
         return refuseRoute(reply, 'runs-unreadable', { detail: page.read.detail });
       }
       return {
-        runs: composeChildReclaim(page.read.runs.map(toRunSummary)),
+        runs: stampVerdicts(composeChildReclaim(page.read.runs.map(toRunSummary))),
         ...(page.nextBefore === undefined ? {} : { nextBefore: page.nextBefore }),
       };
     }
@@ -2993,7 +3000,7 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
     }
     const summaries: RunSummary[] = read.runs.map(toRunSummary);
-    return { runs: composeChildReclaim(summaries) };
+    return { runs: stampVerdicts(composeChildReclaim(summaries)) };
   });
 
   /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
@@ -3067,7 +3074,7 @@ export function registerCoordRoutes(
     if (read.run === null) return refuseRoute(reply, 'unknown-run');
     const bound = boundSessionsOf(read.run.sessionId, deps.coord.runEvents(id));
     const spend = joinRunSpend(bound, bound.length === 0 ? { kind: 'absent' } : await readSessionSpendMeasured(deps.io, deps.cfg.registryDir));
-    return { ok: true, run: toRunSummary(read.run), spend };
+    return { ok: true, run: stampVerdicts([toRunSummary(read.run)])[0]!, spend };
   });
 
   /**

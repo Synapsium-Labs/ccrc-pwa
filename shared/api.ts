@@ -6862,6 +6862,31 @@ export const programmeNameFromSlug = (slug: string): string => {
 export type RunClosedBy = 'coordinator' | 'operator' | 'sweep';
 export const isRunClosedBy = (v: unknown): v is RunClosedBy => v === 'coordinator' || v === 'operator' || v === 'sweep';
 
+/** Why a run is stuck (spec 2026-11-04 §7, first match wins in this order). */
+export type StuckReason = 'owner-gone' | 'start-never-landed' | 'review-of-closed' | 'overtaken' | 'never-started';
+export const STUCK_REASONS: readonly StuckReason[] = ['owner-gone', 'start-never-landed', 'review-of-closed', 'overtaken', 'never-started'];
+export const isStuckReason = (v: unknown): v is StuckReason => typeof v === 'string' && (STUCK_REASONS as readonly string[]).includes(v);
+/** Why the reason holds (§7, A54). `name-reused` and `later-review` have no producer until their rows land. */
+export type StuckCause =
+  | 'coordinator-archived' | 'coordinator-forgotten' | 'coordinator-removed' | 'coordinator-stopped' | 'coordinator-gone'
+  | 'worker-stopped' | 'worker-gone' | 'name-reused' | 'target-closed' | 'later-review';
+export const STUCK_CAUSES: readonly StuckCause[] = [
+  'coordinator-archived', 'coordinator-forgotten', 'coordinator-removed', 'coordinator-stopped', 'coordinator-gone',
+  'worker-stopped', 'worker-gone', 'name-reused', 'target-closed', 'later-review',
+];
+export const isStuckCause = (v: unknown): v is StuckCause => typeof v === 'string' && (STUCK_CAUSES as readonly string[]).includes(v);
+/** The verdict. `since` is when the reason began (epoch ms); `closes` is `{at, armed}` or null when no lane row has a clock. */
+export interface RunStuck {
+  reason: StuckReason;
+  cause: StuckCause | null;
+  since: number;
+  closes: { at: number; armed: boolean } | null;
+}
+/** Who has the next move (§7, A29). There is no `operator` value: "waits on you" comes only from the one needs-you source (D-6170). */
+export type RunWaitsOn = 'worker' | 'reviewer' | 'coordinator' | 'merge-queue' | 'nobody';
+export const RUN_WAITS_ON: readonly RunWaitsOn[] = ['worker', 'reviewer', 'coordinator', 'merge-queue', 'nobody'];
+export const isRunWaitsOn = (v: unknown): v is RunWaitsOn => typeof v === 'string' && (RUN_WAITS_ON as readonly string[]).includes(v);
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
@@ -6877,6 +6902,19 @@ export interface RunSummary {
   /** Why it was closed, from `runs.closeDetail` (redacted), or null. OPTIONAL on the wire; read ONLY through
    *  `closeWords`. ADDITIVE. */
   closeDetail?: string | null;
+  /** The stuck verdict (D-8071; spec 2026-11-04 §7, §11.2). Absent means the server's reader is empty (before its first
+   *  pass, or an older server); null means no verdict; set means the run is stuck for `reason`. OPTIONAL on the wire.
+   *  Read it ONLY through `runStateWord` and `stuckLine`. ADDITIVE; `FLEET_PROTO` is not bumped. */
+  stuck?: RunStuck | null;
+  /** Who has the next move (§7, A29). It has no `operator` value (D-6170). OPTIONAL; read ONLY through `runStateWord`
+   *  and `runWaitLine`. ADDITIVE. */
+  waitsOn?: RunWaitsOn;
+  /** The stuck run a planned run waits behind (§7), or null. OPTIONAL; read ONLY through `runWaitLine`. ADDITIVE. */
+  blockedBy?: number | null;
+  /** True when the run's claimant reads gone (§7, A56), false when alive, asleep or uncertain. Absent when the server has
+   *  no reading (A60). A closed run carries it only from its programme's entry (A55). OPTIONAL; read ONLY through
+   *  `coordinatorGoneOf`. ADDITIVE. */
+  coordinatorGone?: boolean;
   wave: number;
   waveOf: number | null;
   project: string;

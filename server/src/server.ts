@@ -91,7 +91,7 @@ import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
 import { toRunSummary, type CoordStore, type NodeRow } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
 import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
@@ -1758,7 +1758,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
             // no reading of the sessions to decide against, so the frame goes without it (absence permits).
             // D-7334: each run's last move, in one read for the frame (`withLastMoves`); a failed read leaves the field off.
             const summaries = withLastMoves(deps.coord, read.runs.map(toRunSummary), (d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the runs' last moves (${d}) — lastMoveAt absent`));
-            onRuns(sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`)));
+            const withIds = sessions === null ? summaries : withChildIds(deps.coord, summaries, incarnationsOfSessions(deps.coord, sessions), (c, d) => console.warn(`ccrc-server: /ws/fleet cold-start could not read the series of ${c} (${d}) — childIds absent for its runs`));
+            // D-8071: the stuck verdict's fields, from the watcher's one reader (`withVerdicts`); no watcher or an empty reader stamps nothing.
+            onRuns(watcher === undefined ? withIds : withVerdicts(watcher.runVerdicts, withIds));
           }
         }
         catch (err) {

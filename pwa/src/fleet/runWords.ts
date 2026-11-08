@@ -46,9 +46,16 @@ export const runState = (run: { state: RunState }): RunState =>
   isRunState(run.state) ? run.state : 'unknown';
 
 /** THE ONE STATE WORD a run's row draws (D-8071; spec §11.3, A16). A closed run's words come from `closeWords` first, so
- *  an abandoned run never reads "failed"; otherwise `RUN_WORD`. Task 4 adds its "stuck" and "reviewed" arms. */
-export const runStateWord = (run: RunSummary): string =>
-  closeWords(run) ?? RUN_WORD[runState(run)];
+ *  an abandoned run never reads "failed"; then "stuck" when the server set a verdict, then "reviewed" when the run awaits
+ *  review and its next move is the coordinator's; otherwise `RUN_WORD`. It has no input from the PWA's own liveness, and an
+ *  older server sends neither field, so every run then reads exactly as before. */
+export const runStateWord = (run: RunSummary): string => {
+  const closed = closeWords(run);
+  if (closed !== null) return closed;
+  if (run.stuck !== undefined && run.stuck !== null) return 'stuck';
+  if (run.state === 'awaiting-review' && run.waitsOn === 'coordinator') return 'reviewed';
+  return RUN_WORD[runState(run)];
+};
 
 /** Tolerant read of `RunSummary.items`, same idiom as `unmeasuredFields`
  *  (`shared/api.ts`) for the identical reason: the parameter type says

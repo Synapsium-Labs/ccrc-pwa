@@ -202,6 +202,9 @@ export interface PrLineageEntry { pr: number; branch: string; prbranch?: string;
  * longer this occupant's own (spec §5.3, the recycled-slug hazard extended
  * across a rollback).
  */
+/** One `gone_since` row (D-8071): the first pass of this spell that read the person gone, and the latest. Epoch ms. */
+export interface GoneAnchor { readonly firstGoneAt: number; readonly lastGoneAt: number }
+
 export interface RunRow extends RunSummary {
   prLineage: PrLineageEntry[]; coordProject: string | null;
   sessionBornAt: number | null; sessionBornFor: string | null;
@@ -4199,6 +4202,64 @@ export class CoordStore {
    *  `commitDeadCoordinatorBreakerState` (D-4857): a delete never lands without the snapshot that still holds it. */
   deleteDeadAnchor(claimantId: string): void {
     this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
+  /** The stuck verdict's own anchors (`gone_since`, migration 45; D-8071, spec 2026-11-04 §7, A63) — EVERY row, one
+   *  statement, ALL-OR-FAILURE like `deadAnchors`: an integer it cannot prove throws, and the verdict's pass gives no
+   *  verdict that pass rather than count an hour nobody measured. */
+  goneSince(): ReadonlyMap<string, GoneAnchor> {
+    const rows = this.db.prepare(
+      'SELECT personId, CAST(firstGoneAt AS TEXT) AS firstText, CAST(lastGoneAt AS TEXT) AS lastText FROM gone_since',
+    ).all() as unknown as { personId: string; firstText: string; lastText: string }[];
+    const out = new Map<string, GoneAnchor>();
+    for (const r of rows) {
+      const first = persistedInt(r.firstText, 'firstGoneAt');
+      if (!first.ok) throw new Error(first.detail);
+      const last = persistedInt(r.lastText, 'lastGoneAt');
+      if (!last.ok) throw new Error(last.detail);
+      out.set(r.personId, { firstGoneAt: first.value, lastGoneAt: last.value });
+    }
+    return out;
+  }
+
+  /** Write one person's `gone_since` row — an upsert keyed by the person. The verdict's pass is the pair's one caller. */
+  setGoneSince(personId: string, a: GoneAnchor): void {
+    this.db.prepare(
+      'INSERT INTO gone_since (personId, firstGoneAt, lastGoneAt) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(personId) DO UPDATE SET firstGoneAt = excluded.firstGoneAt, lastGoneAt = excluded.lastGoneAt',
+    ).run(personId, a.firstGoneAt, a.lastGoneAt);
+  }
+
+  /** Delete one person's `gone_since` row: alive or asleep now, or holding no open run. A no-op when absent. */
+  deleteGoneSince(personId: string): void {
+    this.db.prepare('DELETE FROM gone_since WHERE personId = ?').run(personId);
+  }
+
+  /** Per programme with NO open run and a close at or after `sinceMs`: the claimant of its newest run (D-8071, spec §7,
+   *  A55). The verdict's pass reads each claimant's `coordinatorGone` for a closed run's header. A programme whose newest
+   *  run names no claimant is left out. */
+  closedProgrammeClaimants(sinceMs: number): { program: string; claimedBy: string }[] {
+    const programmes = this.db.prepare(
+      'SELECT program FROM runs GROUP BY program ' +
+      `HAVING SUM(CASE WHEN state NOT IN ${TERMINAL_RUN_STATES_SQL} THEN 1 ELSE 0 END) = 0 AND MAX(COALESCE(closedAt, 0)) >= ?`,
+    ).all(sinceMs) as unknown as { program: string }[];
+    const newest = this.db.prepare('SELECT claimedBy FROM runs WHERE program = ? ORDER BY id DESC LIMIT 1');
+    const out: { program: string; claimedBy: string }[] = [];
+    for (const { program } of programmes) {
+      const row = newest.get(program) as { claimedBy: string | null } | undefined;
+      if (row !== undefined && row.claimedBy !== null) out.push({ program, claimedBy: row.claimedBy });
+    }
+    return out;
+  }
+
+  /** The first moment any LATER wave of `program` (wave above `afterWave`, work runs) left `planned`, from `run_events`, or
+   *  null when none has (D-8071, spec §7 row 4: what `overtaken` and its `since` read). */
+  programmeLeftPlannedAt(program: string, afterWave: number): number | null {
+    const row = this.db.prepare(
+      'SELECT MIN(e.at) AS at FROM run_events e JOIN runs r ON r.id = e.runId ' +
+      "WHERE r.program = ? AND r.wave > ? AND r.kind = 'work' AND e.fromState = 'planned' AND e.toState <> 'planned'",
+    ).get(program, afterWave) as { at: number | bigint | null } | undefined;
+    return row === undefined || row.at === null ? null : Number(row.at);
   }
 
   /** The RECORD of the dead-coordinator breaker's held set (review 381, F1; since D-4857 the typed state,

@@ -158,7 +158,9 @@ import {
 import { definitionsIn, floorFromScan, unallocatedDefinitions } from './coord/ledger.js';
 import { LEDGER_FLOOR_DIRS, SWEEP_POLICY, readLedgerDocs } from './coord/ledgerseed.js';
 import type { ProvenancePair } from './coord/store.js';
-import { incarnationsOfSessions, withChildIds, withLastMoves } from './coord/runWire.js';
+import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
+import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
+import { runStuckPass } from './coord/runStuckPass.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
@@ -1345,6 +1347,9 @@ export class FleetWatcher {
    *  its memory per claimant (IN MEMORY: the run of crashed passes, the backoff, the last outcome and the report — the
    *  durable half, the first-dead anchor, is `coord.db`'s `dead_claimants`); its breaker as the last pass measured it;
    *  and its attention list, which `emitCoord` reads. */
+  /** The stuck verdict's one in-memory reader (D-8071; spec 2026-11-04 §7, A45). `sweepRunStuck` is its one writer; the runs
+   *  frame, its cold start and the run routes read it (`withVerdicts`), and the abandon arm reads the run's reason from it. */
+  readonly runVerdicts: RunVerdicts = createRunVerdicts();
   private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
   private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
   /** The breaker's memory: the members it holds with every first-dead instant they have carried, released only on evidence
@@ -2703,6 +2708,8 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the ORPHAN-WORKTREE lane (fleet disk retention, D-6631), a fifth sibling at the
       // same cadence and under the same pause. It reads no tick listing; its census is its own.
       void this.sweepOrphanTrees().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the STUCK VERDICT's pass (D-8071) — read-only, on its own row, and it reads no tick listing.
+      void this.sweepRunStuck().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -2986,7 +2993,8 @@ export class FleetWatcher {
       }
       // ARCH-61 (#796): `childIds`, decided through `childrenOf` against this tick's reading of the fleet's sessions.
       // D-7334: each run's last move, in one read for the frame; a failed read leaves the field off (`withLastMoves`).
-      runs = withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`));
+      // D-8071: the stuck verdict's fields, from the one in-memory reader (`withVerdicts`); an empty reader stamps nothing.
+      runs = withVerdicts(this.runVerdicts, withLastMoves(coord, withChildIds(coord, read.runs.map(toRunSummary), incarnationsOfSessions(coord, sessions), (c, d) => console.warn(`ccrc-server: emitRuns could not read the series of ${c} (${d}) — childIds absent for its runs`)), (d) => console.warn(`ccrc-server: emitRuns could not read the runs' last moves (${d}) — lastMoveAt absent this tick`)));
     }
     catch (err) {
       console.warn(`ccrc-server: emitRuns failed (${err instanceof Error ? err.message : String(err)}) — one bad read must not kill the poll`);
@@ -5889,6 +5897,17 @@ export class FleetWatcher {
     } catch (err) {
       console.warn(`ccrc-server: dispatch-abandon: the pass failed (${err instanceof Error ? err.message : String(err)}) — nothing more this pass`);
     }
+  }
+
+  /** The stuck verdict's lane (D-8071; spec 2026-11-04 §7): one read-only pass a minute, one at a time, filling `runVerdicts`. */
+  async sweepRunStuck(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('runStuck', () => runStuckPass({
+      coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, verdicts: this.runVerdicts,
+      journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()),
+      now: () => Date.now(),
+    }));
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
