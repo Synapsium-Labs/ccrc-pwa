@@ -181,7 +181,7 @@ function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
                 <dd>
                   {f.parts.map((p, i) => p.href === undefined ? <span key={i}>{p.text}</span> : (
                     p.external === true
-                      ? <TextLink key={i} href={p.href} target="_blank" rel="noopener noreferrer">{p.text}</TextLink>
+                      ? <TextLink key={i} href={p.href}>{p.text}</TextLink>
                       : <TextLink key={i} href={p.href} onClick={inAppClick(p.href)}>{p.text}</TextLink>
                   ))}
                 </dd>
