@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `ws-lease-mark` or `ws-lease-audit`, or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `ws-lease-mark`, `ws-lease-audit` or `delegation-adopt` (D-8112), or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
@@ -31,7 +31,7 @@ if [[ $# -ge 5 && "${1-}" == ws-audit && "${2-}" == --session && "${4-}" == --re
     case "${!__ccd_i}" in --defer-expired) ;; --stale|--hold-digest) __ccd_i=$((__ccd_i + 1)) ;; *) __ccd_stale=0; break ;; esac
   done
 fi
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect || "${1-}" == ws-orphan || "${1-}" == scratch-rescue || "${1-}" == ws-shed-deps || "${1-}" == ws-lease-mark || "${1-}" == ws-lease-audit || "${1-}" == delegation-adopt ]] \
      || (( __ccd_stale )) \
      || { [[ $# -ge 4 && $# -le 6 && "${1-}" == ws-audit && "${2-}" == --session ]] \
           && [[ ( "${4-}" == --reclaim && ( $# -eq 4 || ( $# -eq 5 && "${5-}" == --defer-expired ) ) ) || ( "${4-}" == --expire && ( $# -eq 4 || ( $# -eq 6 && "${5-}" == --child-of ) ) ) || ( $# -eq 4 && "${4-}" == --collect ) ]]; } || [[ $# -eq 4 && "${1-}" == ws-audit && "${2-}" == --loose-hex && "${4-}" == --collect ]]; }; then   # + the loose arm's audit (D-6625)
@@ -31083,7 +31083,8 @@ cmd_delegation_adopt() {   # ccd delegation-adopt --state on|off — raise or lo
   # (D-8112). While `$REG/delegation-adopt` exists, the server's delegation lane keeps a changed worktree whose delegated
   # activity has terminal evidence and mails its owner; absent, it only records what it would keep (O5-7 (a)). This verb is
   # the marker's ONE writer, reached from `POST /api/coord/delegation-adopt` (session-only, the operator's door) through the
-  # agent's two-token grant, after the door's refusal rule (D-8113); the lane is its one reader, by listing $REG.
+  # agent's two-token grant and the installed direct entry (`bash -p`, as `ws-lease-mark`), after the door's refusal rule
+  # (D-8113); the lane is its one reader, by listing $REG.
   # `cmd_scope_sweep_busy`'s shape: the raise atomic, both arms CHECKED, journalling nothing. Never a session's verb: the
   # child hook and the child deny file stop a child; for a top-level session it is `ws-lease-mark`'s convention, and the
   # door refuses `on` without a signed-in operator (D-8113).

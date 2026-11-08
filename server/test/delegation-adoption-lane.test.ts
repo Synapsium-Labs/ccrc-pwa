@@ -1084,7 +1084,7 @@ describe('PR8b: the last pass names the worktrees it would keep, or kept (D-8114
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     for (let n = 0; n < 9; n += 1) await pass(w, at(n));
     expect(health(w)).toMatchObject({ mode: 'shadow', wouldAdopt: 1 });
-    expect(health(w)?.keeps).toEqual({ items: [{ project: 'demo', worktree: 'wt-x', path: WTX.canonicalPath, parent: OWNER,
+    expect(health(w)?.keeps).toEqual({ items: [{ project: 'demo', worktree: 'wt-x', parent: OWNER,
       changes: { dirty: false, aheadOfBase: 1, branchAheadOfBase: 'no-branch' } }], more: 0 });
     expect(JSON.stringify(durable.state().checkpoint), 'the list is lane memory: no checkpoint member names it').not.toMatch(/keeps/);
     expect(leaseOf(durable, lease.leaseId).disposition).toBe('ephemeral');

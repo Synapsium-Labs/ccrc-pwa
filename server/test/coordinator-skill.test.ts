@@ -1947,6 +1947,13 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(allSkillText).not.toContain('pane-scope-stop');
   });
 
+  it('never names the adoption switch, its verb or its door — a coordinator is a top-level session the forbidden-verb guard does not reach (D-8112)', () => {
+    // Review 1665 N4, the pane-scope stop's row mirrored: a coordinator runs with permissions bypassed, so `FORBIDDEN_CCD_VERBS`
+    // never fires for it; the convention, this row and the door's sign-in rule are what hold. The verb and the route alike.
+    expect(`${allSkillText}\nPOST /api/coord/delegation-adopt\n`, 'CONTROL: a planted mention is seen').toContain('delegation-adopt');
+    expect(allSkillText).not.toContain('delegation-adopt');
+  });
+
   it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {
     // The caps dial's accounting: EXEMPT above only PERMITS the omission; this is what FORBIDS the mention.
     expect(`${allSkillText}\nGET /api/coord/roll-idle\n`, 'CONTROL: a planted mention is seen').toContain('/api/coord/roll-idle');

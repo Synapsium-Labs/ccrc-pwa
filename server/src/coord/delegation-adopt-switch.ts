@@ -1,7 +1,8 @@
 // Delegation broker wave 5 PR8b (D-8113, D-8114). L1, pure: the adoption switch's refusal rule, the door's view, and the bounded
 // list of worktrees a pass would keep. No I/O and no clock: the route (`routes.ts`, L4) reads the listing, the caps and the lane's
 // health, hands them here, and acts on the answer; the adoption step (`delegationAdoptStep.ts`, L4) hands its pass's kept leases.
-// Nothing here changes what adoption keeps or when (the decider is `delegation-adoption.ts`, unchanged).
+// Nothing here changes what adoption keeps or when (the decider is `delegation-adoption.ts`, unchanged in behaviour; FR1 exports its
+// `definite`).
 import { DELEGATION_ADOPTION_KEEPS_MAX, type DelegationAdoptionHealth, type DelegationAdoptionKeep, type DelegationAdoptionKeeps,
   type LeaseAuditAnswer } from '../../../shared/api.js';
 import type { DelegationAdoptCap, DelegationAdoptOnRefusal, DelegationAdoptRefusal, DelegationAdoptView } from '../../../shared/delegation-adopt.js';
@@ -37,11 +38,19 @@ export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: false, sig
 export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: boolean, signedIn: boolean): DelegationAdoptOnRefusal | null;
 export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: boolean, signedIn: boolean): DelegationAdoptOnRefusal | null {
   if (!on) return caps.verb === 'absent' ? 'fleet-switch-missing' : null;
-  if (!signedIn) return 'sign-in-unarmed';
+  const unsigned = delegationAdoptSignInRefusal(on, signedIn);
+  if (unsigned !== null) return unsigned;
   if (caps.verb === 'unmeasured' || caps.audit === 'unmeasured') return 'fleet-caps-unmeasured';
   if (caps.verb === 'absent') return 'fleet-switch-missing';
   if (caps.audit === 'absent') return 'fleet-audit-missing';
   return null;
+}
+
+/** THE RULE's sign-in arm, on its own (review 1665 N8): `on` from a caller that is not a signed-in operator is `sign-in-unarmed`;
+ *  `off` never is. The route asks it BEFORE any I/O, as the collect-lane door does, and `delegationAdoptRefusal` asks it too: one
+ *  definition. */
+export function delegationAdoptSignInRefusal(on: boolean, signedIn: boolean): 'sign-in-unarmed' | null {
+  return on && !signedIn ? 'sign-in-unarmed' : null;
 }
 
 /** The door's view of one registry listing (null: unlisted), one caps list (null: unread) and the lane's last pass, for a caller
@@ -64,8 +73,8 @@ export function adoptionKeepsOf(kept: readonly { readonly lease: DelegationLease
   DelegationAdoptionKeeps | null {
   if (kept.length === 0) return null;
   const items = kept.slice(0, DELEGATION_ADOPTION_KEEPS_MAX).map(({ lease, audit }): DelegationAdoptionKeep => ({
-    project: lease.project, worktree: lease.adminRecord, path: lease.canonicalPath, parent: lease.parentId,
-    ...(audit !== undefined && audit !== 'unsupported' && definite(audit) && audit.ok
+    project: lease.project, worktree: lease.adminRecord, parent: lease.parentId,
+    ...(audit !== undefined && audit !== 'unsupported' && definite(audit)
       ? { changes: { dirty: audit.dirty, aheadOfBase: audit.aheadOfBase, branchAheadOfBase: audit.branchAheadOfBase } } : {}),
   }));
   return { items, more: kept.length - items.length };

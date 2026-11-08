@@ -12354,19 +12354,35 @@ export const DELEGATION_ADOPTION_KEEPS_MAX = 50;
 /** Wave 5 PR8b (D-8114): one worktree the last pass would have kept, or kept. `changes` is what the tree's audit measured when its
  *  answer carries it (a definite audit answer); absent when the pass kept it without one (unaudited, unmeasured or unsupported). */
 export interface DelegationAdoptionKeep {
-  project: string; worktree: string; path: string; parent: string;
+  project: string; worktree: string; parent: string;
   changes?: { dirty: boolean | 'unmeasured'; aheadOfBase: number | 'unmeasured';
     branchAheadOfBase: number | 'unmeasured' | 'no-branch' | 'branch-gone' };
 }
 /** Wave 5 PR8b (D-8114): the list, at most `DELEGATION_ADOPTION_KEEPS_MAX` items, and how many more the pass kept. */
 export interface DelegationAdoptionKeeps { items: DelegationAdoptionKeep[]; more: number }
 
-/** `keeps`' one reader: absence permits and reads as null (no list served: none kept, or an older server), and so does a list that is
- *  not `{items: [...], more: <count>}`. A list longer than `DELEGATION_ADOPTION_KEEPS_MAX` is read as served: the bound is the
- *  writer's (`adoptionKeepsOf`), and a reader never re-counts what a newer server chose to name. */
+/** `keeps`' one reader: absence permits and reads as null (no list served: none kept, or an older server), and so does anything else
+ *  that is not `{items, more}` with every item's `project`, `worktree` and `parent` strings, its `changes` (when present) an object
+ *  whose three fields have their declared types, and `more` an integer of at least 0 (review 1665 N19). A list longer than
+ *  `DELEGATION_ADOPTION_KEEPS_MAX` is read as served: the bound is the writer's (`adoptionKeepsOf`), and a reader never re-counts what
+ *  a newer server chose to name. */
 export function delegationAdoptionKeepsOf(health: Pick<DelegationAdoptionHealth, 'keeps'>): DelegationAdoptionKeeps | null {
-  const k = health.keeps;
-  return typeof k === 'object' && k !== null && Array.isArray(k.items) && typeof k.more === 'number' ? k : null;
+  const k: unknown = health.keeps;
+  if (typeof k !== 'object' || k === null) return null;
+  const { items, more } = k as { items?: unknown; more?: unknown };
+  if (!Array.isArray(items) || typeof more !== 'number' || !Number.isInteger(more) || more < 0) return null;
+  const count = (v: unknown): boolean => v === 'unmeasured' || (typeof v === 'number' && Number.isInteger(v) && v >= 0);
+  const item = (i: unknown): boolean => {
+    if (typeof i !== 'object' || i === null) return false;
+    const { project, worktree, parent, changes } = i as Record<string, unknown>;
+    if (typeof project !== 'string' || typeof worktree !== 'string' || typeof parent !== 'string') return false;
+    if (changes === undefined) return true;
+    if (typeof changes !== 'object' || changes === null) return false;
+    const c = changes as Record<string, unknown>;
+    return (typeof c['dirty'] === 'boolean' || c['dirty'] === 'unmeasured') && count(c['aheadOfBase'])
+      && (count(c['branchAheadOfBase']) || c['branchAheadOfBase'] === 'no-branch' || c['branchAheadOfBase'] === 'branch-gone');
+  };
+  return items.every(item) ? (k as DelegationAdoptionKeeps) : null;
 }
 
 /** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block).

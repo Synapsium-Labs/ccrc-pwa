@@ -115,7 +115,7 @@ describe('R3: the list of worktrees a pass would keep is bounded and names what 
     const k = adoptionKeepsOf([{ lease: lease(0), audit: ok }, { lease: lease(1), audit: 'unsupported' },
       { lease: lease(2), audit: { ok: false, refusal: 'unmeasured', detail: 'x' } }, { lease: lease(3), audit: undefined }])!;
     expect(k.more).toBe(0);
-    expect(k.items[0]).toEqual({ project: 'demo', worktree: 'wt-0', path: '/w/demo/.claude/worktrees/wt-0', parent: 'lane-a-demo',
+    expect(k.items[0], 'R3\'s fields and no path (review 1665 N10)').toEqual({ project: 'demo', worktree: 'wt-0', parent: 'lane-a-demo',
       changes: { dirty: true, aheadOfBase: 2, branchAheadOfBase: 'no-branch' } });
     for (const i of [1, 2, 3]) expect(k.items[i], `item ${i}`).not.toHaveProperty('changes');
   });
@@ -142,13 +142,24 @@ describe('R3: the list of worktrees a pass would keep is bounded and names what 
 
   // Review 1659 F6: `keeps`' one reader, beside its type, and `adoption`'s reader reads `keeps` through it.
   it('the reader: absent is null, a list is read as served (over the bound too: the bound is the writer\'s), a malformed one is null', () => {
-    const item = { project: 'demo', worktree: 'wt-0', path: '/w/demo/.claude/worktrees/wt-0', parent: 'lane-a-demo' };
+    const item = { project: 'demo', worktree: 'wt-0', parent: 'lane-a-demo' };
     expect(delegationAdoptionKeepsOf({})).toBeNull();
     expect(delegationAdoptionKeepsOf({ keeps: { items: [item], more: 0 } })).toEqual({ items: [item], more: 0 });
     const over = { items: Array.from({ length: DELEGATION_ADOPTION_KEEPS_MAX + 1 }, () => item), more: 4 };
     expect(delegationAdoptionKeepsOf({ keeps: over })).toBe(over);
     for (const bad of [null, 'x', { items: 'x', more: 0 }, { items: [item] }, { items: [item], more: '0' }]) {
       expect(delegationAdoptionKeepsOf({ keeps: bad } as never), JSON.stringify(bad)).toBeNull();
+    }
+    // Review 1665 N19: the items and the count are checked, not just the envelope.
+    const changes = { dirty: false, aheadOfBase: 2, branchAheadOfBase: 'no-branch' as const };
+    expect(delegationAdoptionKeepsOf({ keeps: { items: [{ ...item, changes }], more: 0 } }), 'CONTROL: a full item').not.toBeNull();
+    for (const badItem of [null, 'wt-0', { ...item, project: 3 }, { worktree: 'wt-0', parent: 'p' }, { ...item, parent: null },
+      { ...item, changes: 'x' }, { ...item, changes: { ...changes, dirty: 'yes' } }, { ...item, changes: { ...changes, aheadOfBase: -1 } },
+      { ...item, changes: { ...changes, branchAheadOfBase: 'gone' } }]) {
+      expect(delegationAdoptionKeepsOf({ keeps: { items: [item, badItem], more: 0 } } as never), `item ${JSON.stringify(badItem)}`).toBeNull();
+    }
+    for (const badMore of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(delegationAdoptionKeepsOf({ keeps: { items: [item], more: badMore } }), `more ${badMore}`).toBeNull();
     }
   });
 
@@ -164,24 +175,27 @@ describe('R3: the list of worktrees a pass would keep is bounded and names what 
 });
 
 // ── R1 (D-8112): the door, the verb and the guard ────────────────────────────────────────────────────────────────────────────
-/** The runner the agent would be: the real ccd dispatcher, under the fixture HOME. */
+/** The runner the agent would be: the real ccd dispatcher, under the fixture HOME, started as the installed direct entry starts a
+ *  protected verb (review 1665 N1): `bash -p`, with no startup variable or exported function inherited. */
+const STARTUP_KEYS = ['BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE'];
 const realCcd = (h: CcdHarness, argvs: string[][]): Runner => (_cmd, args) => new Promise((resolve) => {
   argvs.push(args);
-  const env = ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true });
-  execFile('bash', [CCD, ...args], { cwd: h.home, env, encoding: 'utf8' }, (err, stdout, stderr) => {
+  const clean = Object.fromEntries(Object.entries(inheritedEnv()).filter(([k]) => !k.startsWith('BASH_FUNC_') && !STARTUP_KEYS.includes(k)));
+  const env = ghContainedEnv(h.home, { ...clean, HOME: h.home }, { systemd: true, tmux: true });
+  execFile('bash', ['-p', CCD, ...args], { cwd: h.home, env, encoding: 'utf8' }, (err, stdout, stderr) => {
     resolve({ ran: true, code: err === null ? 0 : typeof err.code === 'number' ? err.code : 1, stdout, stderr });
   });
 });
 
-interface Setup { app: FastifyInstance; h: CcdHarness; argvs: string[][]; reg: string; marker: string; feed: string[] }
+interface Setup { app: FastifyInstance; h: CcdHarness; argvs: string[][]; reg: string; marker: string; feed: string[]; listings: () => number }
 const SHADOW: DelegationAdoptionHealth = { mode: 'shadow', adopted: 0, wouldAdopt: 1, waiting: 0, unchanged: 0, unaudited: 0, conflicting: 0,
   unsupported: 0, uncensused: 0, owed: 0,
-  keeps: { items: [{ project: 'demo', worktree: 'wt-x', path: '/w/demo/.claude/worktrees/wt-x', parent: 'lane-a-demo' }], more: 0 } };
+  keeps: { items: [{ project: 'demo', worktree: 'wt-x', parent: 'lane-a-demo' }], more: 0 } };
 
 /** `auth`: `armed` (sign-in armed, the caller holds a session; the default), `no-session` (armed, no session) or `dark` (unarmed). */
 type Auth = 'armed' | 'no-session' | 'dark';
 function setup(o: { verbs?: string[] | null; runner?: Runner; unlistable?: boolean; adoption?: DelegationAdoptionHealth | null;
-  auth?: Auth } = {}): Setup {
+  auth?: Auth; gate?: { enabled: boolean; decision: GateDecision } } = {}): Setup {
   const h = makeCcdHarness('ccrc-delegation-adopt-switch-');
   harnesses.push(h);
   const argvs: string[][] = [];
@@ -189,20 +203,23 @@ function setup(o: { verbs?: string[] | null; runner?: Runner; unlistable?: boole
   const feed: string[] = [];
   const verbs = o.verbs === undefined ? BOTH : o.verbs;
   const auth = o.auth ?? 'armed';
+  let listed = 0;
   const deps: Deps = {
     ...base,
-    cfg: { ...base.cfg, authEnabled: auth !== 'dark' },
-    io: { ...base.io, ...(o.unlistable ? { readdirMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) } : {}) },
+    cfg: { ...base.cfg, authEnabled: o.gate?.enabled ?? auth !== 'dark' },
+    io: { ...base.io, readdirMeasured: async (dir: string) => { listed += 1;
+      return o.unlistable ? { ok: false as const, reason: 'unreadable' as const } : base.io.readdirMeasured(dir); } },
     notifyLog: { record: async (n: { title: string; body: string }) => { feed.push(`${n.title}: ${n.body}`); }, flush: async () => undefined } as unknown as Deps['notifyLog'],
     fleetState: { ccdVerbs: verbs } as unknown as Deps['fleetState'],
   };
-  const sessionAuth = (): GateDecision => (auth === 'armed' ? { allow: true, verdict: 'ok', reason: 'session', device: null } : NO_SESSION);
+  const sessionAuth = (): GateDecision => o.gate?.decision
+    ?? (auth === 'armed' ? { allow: true, verdict: 'ok', reason: 'session', device: null } : NO_SESSION);
   const watcher = { currentDelegationHealth: () => (o.adoption === null ? {} : { adoption: o.adoption ?? SHADOW }) };
   const app = Fastify();
   registerCoordRoutes(app, deps, new Bus(), sessionAuth, { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null }, watcher as never);
   apps.push(app);
   const reg = path.join(h.home, '.cc-sessions');
-  return { app, h, argvs, reg, marker: path.join(reg, DELEGATION_ADOPT_MARKER), feed };
+  return { app, h, argvs, reg, marker: path.join(reg, DELEGATION_ADOPT_MARKER), feed, listings: () => listed };
 }
 const get = (app: FastifyInstance) => app.inject({ method: 'GET', url: DOOR });
 const post = (app: FastifyInstance, payload?: unknown) =>
@@ -226,7 +243,7 @@ describe('GET /api/coord/delegation-adopt: the switch, the caps, the refusals an
       refused: { on: 'fleet-audit-missing', off: null } });
   });
 
-  it('a registry that cannot be listed reads unmeasurable, never clear; a lane that counted nothing reads null', async () => {
+  it('a registry that cannot be listed reads unmeasurable, never clear; a lane whose last pass counted nothing reads null', async () => {
     expect((await get(setup({ unlistable: true }).app)).json()).toMatchObject({ state: 'unmeasurable' });
     expect((await get(setup({ adoption: null }).app)).json()).toMatchObject({ adoption: null });
   });
@@ -285,6 +302,36 @@ describe('POST /api/coord/delegation-adopt: the marker through its one writer, p
       expect(s.feed).toEqual([]);
       expect((await post(s.app, {})).statusCode, `${auth}: a body that does not parse answers 400 first, as when armed`).toBe(400);
     }
+  });
+
+  // Review 1665 N2: each half of the measurement on its own. Auth off with a live session is not signed in; auth armed with any
+  // reason but `session` is not either.
+  it('on with sign-in off is refused even when the session read answers session (the flag half)', async () => {
+    const s = setup({ gate: { enabled: false, decision: { allow: true, verdict: 'ok', reason: 'session', device: null } } });
+    const r = await post(s.app, { on: true });
+    expect([r.statusCode, r.json().error]).toEqual([403, 'sign-in-unarmed']);
+    expect(s.argvs).toEqual([]);
+  });
+
+  it('on with sign-in armed is refused for every reason but session (the session half)', async () => {
+    const reasons: GateDecision[] = [{ allow: true, verdict: 'ok', reason: 'flag-off', device: null },
+      { allow: true, verdict: 'ok', reason: 'exempt', device: null }, NO_SESSION];
+    for (const decision of reasons) {
+      const s = setup({ gate: { enabled: true, decision } });
+      const r = await post(s.app, { on: true });
+      expect([r.statusCode, r.json().error], decision.reason).toEqual([403, 'sign-in-unarmed']);
+      expect(s.argvs).toEqual([]);
+    }
+  });
+
+  // Review 1665 N8: as the collect-lane door does, an unsigned on is refused before any I/O.
+  it('an unsigned on answers 403 before the registry is ever listed', async () => {
+    const s = setup({ auth: 'dark' });
+    const r = await post(s.app, { on: true });
+    expect(r.statusCode).toBe(403);
+    expect(s.listings(), 'no listing for an unsigned on').toBe(0);
+    await post(s.app, { on: false });
+    expect(s.listings(), 'CONTROL: off still lists the registry').toBeGreaterThan(0);
   });
 
   it('on from a signed-in operator passes to the caps rules; off while sign-in is dark is sent', async () => {

@@ -33,7 +33,8 @@ export type DelegationAdoptOnRefusal = DelegationAdoptRefusal | 'sign-in-unarmed
  *  `state`: the marker, as one registry listing reads it (`unmeasurable` is never read as off). `caps`: the two capabilities the
  *  door's rule reads. `refused`: what a tap of each direction would be refused with now, for the caller that asked, or null (`on`
  *  reads `sign-in-unarmed` for a caller that is not a signed-in operator). `adoption`: the lane's last
- *  pass (`DelegationAdoptionHealth`, its `keeps` list included), or null when the lane has counted nothing in this process. */
+ *  pass (`DelegationAdoptionHealth`, its `keeps` list included), or null when the last pass counted nothing (review 1665 N7). The
+ *  switch's own position is `state`, read from the marker, never from `adoption`. */
 export interface DelegationAdoptView {
   readonly state: MarkerState;
   readonly caps: { readonly verb: DelegationAdoptCap; readonly audit: DelegationAdoptCap };
