@@ -1099,4 +1099,23 @@ describe('PR8b: the last pass names the worktrees it would keep, or kept (D-8114
     await pass(w, at(next));
     expect(health(w)?.keeps, 'the next pass keeps nothing new, so it names nothing').toBeUndefined();
   }, ROW_MS);
+
+  // Review 1659 F11: the list is pushed only after an adoption APPLIED, while `adopted` counts the pass's adopt decisions, so a
+  // refused or already-applied transition leaves the list shorter than `adopted`.
+  for (const out of [{ kind: 'refused', refusal: 'carrier-behind', detail: 'fixture refusal' },
+    { kind: 'unchanged', generation: 2, state: 'ephemeral' }] as const) {
+    it(`live: an adopt decision whose transition answers ${out.kind} is counted in adopted but is not on the list`, async () => {
+      const { w, durable, lease } = await leased();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      for (let n = 0; n < 9; n += 1) await pass(w, at(n));
+      expect(health(w)?.keeps?.items.map((i) => i.worktree), 'CONTROL: shadow names it').toEqual(['wt-x']);
+      const door = vi.spyOn(durable, 'transitionLease').mockResolvedValue({ ...out, leaseId: lease.leaseId } as never);
+      touch(w, 'delegation-adopt');
+      let n = 9;
+      while (door.mock.calls.length === 0 && n < 14) await pass(w, at(n++));
+      expect(door.mock.calls.length, 'the live pass asked the door').toBeGreaterThan(0);
+      expect(health(w)).toMatchObject({ mode: 'live', adopted: 1 });
+      expect(health(w)?.keeps, 'not applied, so not kept').toBeUndefined();
+    }, ROW_MS);
+  }
 });

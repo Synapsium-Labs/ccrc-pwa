@@ -15,7 +15,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Deps } from '../src/server.js';
 import { registerCoordRoutes } from '../src/coord/routes.js';
 import { Bus } from '../src/bus.js';
-import { EXEMPT, type GateDecision } from '../src/auth/gate.js';
+import { EXEMPT, NO_SESSION, type GateDecision } from '../src/auth/gate.js';
 import type { Runner } from '../src/exec.js';
 import { notRanSentence } from '../src/unmeasured.js';
 import { LEASE_AUDIT_CAP } from '../src/ccdargv.js';
@@ -24,7 +24,9 @@ import {
   adoptionKeepsOf, delegationAdoptCapsOf, delegationAdoptRefusal, delegationAdoptViewOf, type DelegationAdoptCaps,
 } from '../src/coord/delegation-adopt-switch.js';
 import type { DelegationLeaseRow } from '../src/coord/delegation-model.js';
-import { DELEGATION_ADOPTION_KEEPS_MAX, type DelegationAdoptionHealth, type LeaseAuditAnswer } from '../../shared/api.js';
+import {
+  DELEGATION_ADOPTION_KEEPS_MAX, delegationAdoptionHealthOf, delegationAdoptionKeepsOf, type DelegationAdoptionHealth, type LeaseAuditAnswer,
+} from '../../shared/api.js';
 import { DELEGATION_ADOPT_REFUSALS } from '../../shared/delegation-adopt.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { DELEGATION_ADOPT_MARKER } from '../../shared/switches.js';
@@ -55,30 +57,41 @@ describe('R2: the rule refuses what the operator\'s checks used to catch (D-8113
   });
 
   it('on: refused on unmeasured caps, on a missing verb, on a missing audit; allowed only when both are present', () => {
-    expect(delegationAdoptRefusal(caps('unmeasured', 'unmeasured'), true)).toBe('fleet-caps-unmeasured');
-    expect(delegationAdoptRefusal(caps('present', 'unmeasured'), true)).toBe('fleet-caps-unmeasured');
-    expect(delegationAdoptRefusal(caps('absent', 'present'), true)).toBe('fleet-switch-missing');
-    expect(delegationAdoptRefusal(caps('absent', 'absent'), true)).toBe('fleet-switch-missing');
-    expect(delegationAdoptRefusal(caps('present', 'absent'), true)).toBe('fleet-audit-missing');
-    expect(delegationAdoptRefusal(caps('present', 'present'), true)).toBeNull();
+    expect(delegationAdoptRefusal(caps('unmeasured', 'unmeasured'), true, true)).toBe('fleet-caps-unmeasured');
+    expect(delegationAdoptRefusal(caps('present', 'unmeasured'), true, true)).toBe('fleet-caps-unmeasured');
+    expect(delegationAdoptRefusal(caps('absent', 'present'), true, true)).toBe('fleet-switch-missing');
+    expect(delegationAdoptRefusal(caps('absent', 'absent'), true, true)).toBe('fleet-switch-missing');
+    expect(delegationAdoptRefusal(caps('present', 'absent'), true, true)).toBe('fleet-audit-missing');
+    expect(delegationAdoptRefusal(caps('present', 'present'), true, true)).toBeNull();
   });
 
-  it('off: refused only when the verb is missing; unmeasured caps and a missing audit let it through (the safe direction)', () => {
-    expect(delegationAdoptRefusal(caps('absent', 'present'), false)).toBe('fleet-switch-missing');
-    expect(delegationAdoptRefusal(caps('absent', 'absent'), false)).toBe('fleet-switch-missing');
-    expect(delegationAdoptRefusal(caps('present', 'absent'), false)).toBeNull();
-    expect(delegationAdoptRefusal(caps('unmeasured', 'unmeasured'), false)).toBeNull();
-    expect(delegationAdoptRefusal(caps('present', 'present'), false)).toBeNull();
+  it('on: refused sign-in-unarmed first for a caller that is not a signed-in operator, whatever the caps say (review 1659 F2)', () => {
+    for (const [v, a] of [['present', 'present'], ['unmeasured', 'unmeasured'], ['absent', 'absent'], ['present', 'absent']] as const) {
+      expect(delegationAdoptRefusal(caps(v, a), true, false), `${v} ${a}`).toBe('sign-in-unarmed');
+    }
+    expect(delegationAdoptRefusal(caps('present', 'present'), true, true), 'CONTROL: signed in, it passes to the caps rules').toBeNull();
+  });
+
+  it('off: refused only when the verb is missing; unmeasured caps, a missing audit and no sign-in let it through (the safe direction)', () => {
+    for (const signedIn of [true, false]) {
+      expect(delegationAdoptRefusal(caps('absent', 'present'), false, signedIn)).toBe('fleet-switch-missing');
+      expect(delegationAdoptRefusal(caps('absent', 'absent'), false, signedIn)).toBe('fleet-switch-missing');
+      expect(delegationAdoptRefusal(caps('present', 'absent'), false, signedIn)).toBeNull();
+      expect(delegationAdoptRefusal(caps('unmeasured', 'unmeasured'), false, signedIn)).toBeNull();
+      expect(delegationAdoptRefusal(caps('present', 'present'), false, signedIn)).toBeNull();
+    }
   });
 
   it('the view: the marker from one listing (an unlisted registry is unmeasurable), the caps, both refusals, and the lane\'s pass', () => {
     const adoption: DelegationAdoptionHealth = { mode: 'shadow', adopted: 0, wouldAdopt: 1, waiting: 0, unchanged: 0, unaudited: 0,
       conflicting: 0, unsupported: 0, uncensused: 0, owed: 0 };
-    expect(delegationAdoptViewOf([], BOTH, null)).toEqual({ state: 'clear', caps: { verb: 'present', audit: 'present' },
+    expect(delegationAdoptViewOf([], BOTH, null, true)).toEqual({ state: 'clear', caps: { verb: 'present', audit: 'present' },
       refused: { on: null, off: null }, adoption: null });
-    expect(delegationAdoptViewOf([DELEGATION_ADOPT_MARKER], [VERB], adoption)).toEqual({ state: 'set',
+    expect(delegationAdoptViewOf([DELEGATION_ADOPT_MARKER], [VERB], adoption, true)).toEqual({ state: 'set',
       caps: { verb: 'present', audit: 'absent' }, refused: { on: 'fleet-audit-missing', off: null }, adoption });
-    expect(delegationAdoptViewOf(null, null, null)).toMatchObject({ state: 'unmeasurable', refused: { on: 'fleet-caps-unmeasured', off: null } });
+    expect(delegationAdoptViewOf(null, null, null, true)).toMatchObject({ state: 'unmeasurable', refused: { on: 'fleet-caps-unmeasured', off: null } });
+    expect(delegationAdoptViewOf([], BOTH, null, false), 'not signed in: on says so, off is open')
+      .toMatchObject({ refused: { on: 'sign-in-unarmed', off: null } });
   });
 
   it('each refusal word has one status, spread into the route table', () => {
@@ -107,6 +120,15 @@ describe('R3: the list of worktrees a pass would keep is bounded and names what 
     for (const i of [1, 2, 3]) expect(k.items[i], `item ${i}`).not.toHaveProperty('changes');
   });
 
+  it('an answer that read but did not settle changed (changed: unmeasured) names no changes; changed true or false still does (review 1659 F1)', () => {
+    const unsettled: LeaseAuditAnswer = { ...ok, dirty: false, aheadOfBase: 0, changed: 'unmeasured' };
+    const k = adoptionKeepsOf([{ lease: lease(0), audit: unsettled }, { lease: lease(1), audit: ok },
+      { lease: lease(2), audit: { ...ok, dirty: false, aheadOfBase: 0, changed: false } }])!;
+    expect(k.items[0], 'never "kept, nothing changed" for a check that did not complete').not.toHaveProperty('changes');
+    expect(k.items[1]?.changes, 'CONTROL: changed: true').toEqual({ dirty: true, aheadOfBase: 2, branchAheadOfBase: 'no-branch' });
+    expect(k.items[2]?.changes, 'CONTROL: changed: false').toEqual({ dirty: false, aheadOfBase: 0, branchAheadOfBase: 'no-branch' });
+  });
+
   it('at most 50 are named, in decision order, and the rest are counted: the 51st is never served', () => {
     expect(DELEGATION_ADOPTION_KEEPS_MAX).toBe(50);
     const all = Array.from({ length: 53 }, (_, n) => ({ lease: lease(n), audit: undefined }));
@@ -116,6 +138,28 @@ describe('R3: the list of worktrees a pass would keep is bounded and names what 
     expect(k.items.map((i) => i.worktree)).not.toContain('wt-50');
     expect(k.more).toBe(3);
     expect(adoptionKeepsOf(all.slice(0, 50))!.more).toBe(0);
+  });
+
+  // Review 1659 F6: `keeps`' one reader, beside its type, and `adoption`'s reader reads `keeps` through it.
+  it('the reader: absent is null, a list is read as served (over the bound too: the bound is the writer\'s), a malformed one is null', () => {
+    const item = { project: 'demo', worktree: 'wt-0', path: '/w/demo/.claude/worktrees/wt-0', parent: 'lane-a-demo' };
+    expect(delegationAdoptionKeepsOf({})).toBeNull();
+    expect(delegationAdoptionKeepsOf({ keeps: { items: [item], more: 0 } })).toEqual({ items: [item], more: 0 });
+    const over = { items: Array.from({ length: DELEGATION_ADOPTION_KEEPS_MAX + 1 }, () => item), more: 4 };
+    expect(delegationAdoptionKeepsOf({ keeps: over })).toBe(over);
+    for (const bad of [null, 'x', { items: 'x', more: 0 }, { items: [item] }, { items: [item], more: '0' }]) {
+      expect(delegationAdoptionKeepsOf({ keeps: bad } as never), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  it('adoption\'s reader keeps a list its reader reads and drops one it refuses, so a malformed list reads as none served', () => {
+    const base: DelegationAdoptionHealth = { mode: 'shadow', adopted: 0, wouldAdopt: 1, waiting: 0, unchanged: 0, unaudited: 0,
+      conflicting: 0, unsupported: 0, uncensused: 0, owed: 0 };
+    const good = { ...base, keeps: { items: [], more: 0 } };
+    expect(delegationAdoptionHealthOf({ adoption: good })).toBe(good);
+    expect(delegationAdoptionHealthOf({ adoption: base })).toBe(base);
+    expect(delegationAdoptionHealthOf({ adoption: { ...base, keeps: { items: 'x' } } as never })).toEqual(base);
+    expect(delegationAdoptionHealthOf({})).toBeNull();
   });
 });
 
@@ -134,20 +178,25 @@ const SHADOW: DelegationAdoptionHealth = { mode: 'shadow', adopted: 0, wouldAdop
   unsupported: 0, uncensused: 0, owed: 0,
   keeps: { items: [{ project: 'demo', worktree: 'wt-x', path: '/w/demo/.claude/worktrees/wt-x', parent: 'lane-a-demo' }], more: 0 } };
 
-function setup(o: { verbs?: string[] | null; runner?: Runner; unlistable?: boolean; adoption?: DelegationAdoptionHealth | null } = {}): Setup {
+/** `auth`: `armed` (sign-in armed, the caller holds a session; the default), `no-session` (armed, no session) or `dark` (unarmed). */
+type Auth = 'armed' | 'no-session' | 'dark';
+function setup(o: { verbs?: string[] | null; runner?: Runner; unlistable?: boolean; adoption?: DelegationAdoptionHealth | null;
+  auth?: Auth } = {}): Setup {
   const h = makeCcdHarness('ccrc-delegation-adopt-switch-');
   harnesses.push(h);
   const argvs: string[][] = [];
   const base = testDeps(h.home, o.runner ?? realCcd(h, argvs));
   const feed: string[] = [];
   const verbs = o.verbs === undefined ? BOTH : o.verbs;
+  const auth = o.auth ?? 'armed';
   const deps: Deps = {
     ...base,
+    cfg: { ...base.cfg, authEnabled: auth !== 'dark' },
     io: { ...base.io, ...(o.unlistable ? { readdirMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) } : {}) },
     notifyLog: { record: async (n: { title: string; body: string }) => { feed.push(`${n.title}: ${n.body}`); }, flush: async () => undefined } as unknown as Deps['notifyLog'],
     fleetState: { ccdVerbs: verbs } as unknown as Deps['fleetState'],
   };
-  const sessionAuth = (): GateDecision => ({ allow: true, verdict: 'ok', reason: 'session', device: null } as unknown as GateDecision);
+  const sessionAuth = (): GateDecision => (auth === 'armed' ? { allow: true, verdict: 'ok', reason: 'session', device: null } : NO_SESSION);
   const watcher = { currentDelegationHealth: () => (o.adoption === null ? {} : { adoption: o.adoption ?? SHADOW }) };
   const app = Fastify();
   registerCoordRoutes(app, deps, new Bus(), sessionAuth, { tmux: deps.tmux, queue: deps.queue, readAsk: async () => null }, watcher as never);
@@ -182,8 +231,21 @@ describe('GET /api/coord/delegation-adopt: the switch, the caps, the refusals an
     expect((await get(setup({ adoption: null }).app)).json()).toMatchObject({ adoption: null });
   });
 
+  it('says when on would be refused because the caller is not a signed-in operator; off is open either way (review 1659 F2)', async () => {
+    for (const auth of ['dark', 'no-session'] as const) {
+      expect((await get(setup({ auth }).app)).json(), auth).toMatchObject({ refused: { on: 'sign-in-unarmed', off: null } });
+    }
+    expect((await get(setup().app)).json(), 'CONTROL: signed in').toMatchObject({ refused: { on: null, off: null } });
+  });
+
+  it('serves the lane\'s list through its reader: a malformed list reads as none served', async () => {
+    const { keeps: _k, ...bare } = SHADOW;
+    const r = (await get(setup({ adoption: { ...SHADOW, keeps: { items: 'x' } } as never }).app)).json();
+    expect(r.adoption).toEqual(bare);
+  });
+
   it('it is no exempt door: the gate holds it for a session', () => {
-    expect([...EXEMPT].filter((e) => e.includes('delegation-adopt'))).toEqual([]);
+    expect([...EXEMPT.keys()].filter((e) => e.includes('delegation-adopt'))).toEqual([]);   // review 1659 F5: the keys, never the pairs
   });
 });
 
@@ -210,6 +272,30 @@ describe('POST /api/coord/delegation-adopt: the marker through its one writer, p
       expect(existsSync(s.marker), 'the marker is as it was').toBe(!on);
       expect(s.feed).toEqual([]);
     }
+  });
+
+  it('on is refused sign-in-unarmed (403) while sign-in is dark or the caller holds no session, and nothing runs (review 1659 F2)', async () => {
+    for (const auth of ['dark', 'no-session'] as const) {
+      const s = setup({ auth });
+      const r = await post(s.app, { on: true });
+      expect([r.statusCode, r.json().error], auth).toEqual([403, 'sign-in-unarmed']);
+      expect(REFUSAL_STATUS['sign-in-unarmed']).toBe(403);
+      expect(s.argvs, 'nothing ran').toEqual([]);
+      expect(existsSync(s.marker)).toBe(false);
+      expect(s.feed).toEqual([]);
+      expect((await post(s.app, {})).statusCode, `${auth}: a body that does not parse answers 400 first, as when armed`).toBe(400);
+    }
+  });
+
+  it('on from a signed-in operator passes to the caps rules; off while sign-in is dark is sent', async () => {
+    const audit = await post(setup({ verbs: [VERB] }).app, { on: true });
+    expect([audit.statusCode, audit.json().error], 'armed with a session: the caps rule answers').toEqual([409, 'fleet-audit-missing']);
+    const s = setup({ auth: 'dark' });
+    writeFileSync(s.marker, '');
+    const off = await post(s.app, { on: false });
+    expect([off.statusCode, off.json()]).toMatchObject([200, { ok: true, state: 'clear' }]);
+    expect(existsSync(s.marker)).toBe(false);
+    expect(s.argvs).toEqual([[VERB, '--state', 'off']]);
   });
 
   it('off on unmeasured caps or a missing audit is sent: turning it off is never held behind the check', async () => {

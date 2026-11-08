@@ -8,9 +8,9 @@ import type { DelegationAdoptionHealth, MarkerState } from './api.js';
 /** What the fleet box's measured `ccd caps` says of one capability the door reads: listed, not listed, or not read at all. A list
  *  that did not read is never folded into "not listed" (D-8113). */
 export type DelegationAdoptCap = 'present' | 'absent' | 'unmeasured';
+// The union's map (wire totality, `SESSION_ROLE_MAP`'s idiom). Its derived list has one reader, the Settings card's wire guard, so it
+// lands with the card in PR8c (D-8114; review 1659 F6, ruled).
 const DELEGATION_ADOPT_CAP_MAP: Record<DelegationAdoptCap, true> = { present: true, absent: true, unmeasured: true };
-/** Every word of `DelegationAdoptCap`, derived (`SESSION_ROLE_MAP`'s idiom), for a reader's wire guard. */
-export const DELEGATION_ADOPT_CAPS: readonly DelegationAdoptCap[] = Object.keys(DELEGATION_ADOPT_CAP_MAP) as DelegationAdoptCap[];
 
 /** The door's refusal words, each with its ONE status (D-8113), spread into `shared/refusal.ts`'s `REFUSAL_STATUS`.
  *  `fleet-caps-unmeasured`: the fleet box's `ccd caps` did not read, so neither capability is known (503, try later).
@@ -24,17 +24,22 @@ export type DelegationAdoptRefusal = keyof typeof DELEGATION_ADOPT_REFUSALS;
 export function isDelegationAdoptRefusal(v: unknown): v is DelegationAdoptRefusal {
   return typeof v === 'string' && Object.hasOwn(DELEGATION_ADOPT_REFUSALS, v);
 }
+/** What a tap of `on` can be refused with (D-8113, review 1659 F2): the three words above, and the collect-lane door's own
+ *  `sign-in-unarmed` (403, already in `REFUSAL_STATUS`), when sign-in is dark or the caller holds no session. `off` is never refused
+ *  for it. */
+export type DelegationAdoptOnRefusal = DelegationAdoptRefusal | 'sign-in-unarmed';
 
 /** What `GET /api/coord/delegation-adopt` answers, and what its POST answers after the verb ran.
  *  `state`: the marker, as one registry listing reads it (`unmeasurable` is never read as off). `caps`: the two capabilities the
- *  door's rule reads. `refused`: what a tap of each direction would be refused with now, or null. `adoption`: the lane's last
+ *  door's rule reads. `refused`: what a tap of each direction would be refused with now, for the caller that asked, or null (`on`
+ *  reads `sign-in-unarmed` for a caller that is not a signed-in operator). `adoption`: the lane's last
  *  pass (`DelegationAdoptionHealth`, its `keeps` list included), or null when the lane has counted nothing in this process. */
 export interface DelegationAdoptView {
   readonly state: MarkerState;
   readonly caps: { readonly verb: DelegationAdoptCap; readonly audit: DelegationAdoptCap };
-  readonly refused: { readonly on: DelegationAdoptRefusal | null; readonly off: DelegationAdoptRefusal | null };
+  readonly refused: { readonly on: DelegationAdoptOnRefusal | null; readonly off: DelegationAdoptRefusal | null };
   readonly adoption: DelegationAdoptionHealth | null;
 }
 
-/** `POST /api/coord/delegation-adopt`'s body: the switch, and nothing else. */
+/** `POST /api/coord/delegation-adopt`'s body: the switch, and nothing else. The route's body parse is typed by it. */
 export interface DelegationAdoptRequest { on: boolean }

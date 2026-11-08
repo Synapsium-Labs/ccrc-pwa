@@ -879,9 +879,25 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
   it('ccd/ccd names the marker on the verb\'s two lines alone; the hook and its installer name the verb only to forbid it', () => {
     expect(holdersOf(NAME), 'a line of shell outside ccd/ccd, the hook and its installer names it — a writer in waiting')
       .toEqual(['ccd/ccd', 'ccd/install-session-hooks.sh', 'ccd/session-hook.sh']);
+    // Review 1659 F12: as wide as the row it replaced. EVERY code line of ccd/ccd that names it, however a path to it is spelled
+    // (`"$REG"/delegation-adopt` too), is one of the verb's own: its definition, usage check, marker and staging lines, its
+    // dispatcher arm, its `ccd caps` token and the usage list. A reader or writer anywhere else in ccd/ccd is red.
     const ccd = codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '');
-    expect(ccd.filter((l) => l.includes(`$REG/${NAME}`) || l.includes(`$REG/.${NAME}`)), 'the verb\'s lines are the only ones that name the marker')
-      .toEqual([`  marker="$REG/${NAME}"`, `    tmp="$REG/.${NAME}.$$.tmp"`]);
+    const OWN: readonly [string, RegExp][] = [
+      ['caps token', /^ {2}echo delegation-adopt {3}# D-8112: /],
+      ['definition', /^cmd_delegation_adopt\(\) \{ {3}# ccd delegation-adopt --state on\|off — /],
+      ['usage check', /^ {2}\[\[ \$# -eq 2 && \$1 == --state \]\] \|\| die "usage: ccd delegation-adopt --state on\|off"$/],
+      ['marker', /^ {2}marker="\$REG\/delegation-adopt"$/],
+      ['staging file', /^ {4}tmp="\$REG\/\.delegation-adopt\.\$\$\.tmp"$/],
+      ['dispatcher arm', /^ {2}delegation-adopt\) shift; cmd_delegation_adopt "\$@" ;;$/],
+      ['usage list', /^ {2}\*\) echo "usage: ccd \{[a-z|-]*\|delegation-adopt\|[a-z|-]*\} <args>" >&2; exit 1 ;;$/],
+    ];
+    const kinds = (lines: string[]): string[] => lines.filter((l) => l.includes(NAME))
+      .map((l) => OWN.find(([, re]) => re.test(l))?.[0] ?? `NOT THE VERB'S: ${l.trim()}`);
+    expect(kinds(ccd), 'ccd/ccd names it on the verb\'s own lines alone, each once').toEqual(OWN.map(([k]) => k).sort((a, b) =>
+      kinds(ccd).indexOf(a) - kinds(ccd).indexOf(b)));
+    expect(kinds(['  [[ -e "$REG"/delegation-adopt ]] && live=1']), 'CONTROL: a reader spelled with a quoted $REG is not the verb\'s')
+      .toEqual(['NOT THE VERB\'S: [[ -e "$REG"/delegation-adopt ]] && live=1']);
     for (const f of ['ccd/install-session-hooks.sh', 'ccd/session-hook.sh']) {
       const lines = codeLines(BASH.find((b) => rel(b) === f) ?? '').filter((l) => l.includes(NAME));
       expect(lines.length, `${f} forbids the verb`).toBeGreaterThan(0);

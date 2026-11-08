@@ -12322,15 +12322,22 @@ export interface DelegationAdoptionKeep {
 /** Wave 5 PR8b (D-8114): the list, at most `DELEGATION_ADOPTION_KEEPS_MAX` items, and how many more the pass kept. */
 export interface DelegationAdoptionKeeps { items: DelegationAdoptionKeep[]; more: number }
 
-/** `keeps`' one reader: absence permits and reads as null (no list served: none kept, or an older server). */
+/** `keeps`' one reader: absence permits and reads as null (no list served: none kept, or an older server), and so does a list that is
+ *  not `{items: [...], more: <count>}`. A list longer than `DELEGATION_ADOPTION_KEEPS_MAX` is read as served: the bound is the
+ *  writer's (`adoptionKeepsOf`), and a reader never re-counts what a newer server chose to name. */
 export function delegationAdoptionKeepsOf(health: Pick<DelegationAdoptionHealth, 'keeps'>): DelegationAdoptionKeeps | null {
   const k = health.keeps;
   return typeof k === 'object' && k !== null && Array.isArray(k.items) && typeof k.more === 'number' ? k : null;
 }
 
-/** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block). */
+/** `adoption`'s one reader: absence permits and reads as null (the step has not run in this process, or an older server's block).
+ *  Its `keeps` is read through `keeps`' own reader (review 1659 F6): a list that reader refuses is dropped, so it reads as none served. */
 export function delegationAdoptionHealthOf(health: Pick<DelegationObservationHealth, 'adoption'>): DelegationAdoptionHealth | null {
-  return typeof health.adoption === 'object' && health.adoption !== null ? health.adoption : null;
+  const a = health.adoption;
+  if (typeof a !== 'object' || a === null) return null;
+  if (a.keeps === undefined || delegationAdoptionKeepsOf(a) !== null) return a;
+  const { keeps: _unread, ...rest } = a;
+  return rest;
 }
 
 /** `uncensusedLeases`' one reader (review 1498 F5): absence permits and reads as 0, none counted (a lane whose last census reached every

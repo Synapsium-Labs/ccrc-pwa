@@ -4,9 +4,10 @@
 // Nothing here changes what adoption keeps or when (the decider is `delegation-adoption.ts`, unchanged).
 import { DELEGATION_ADOPTION_KEEPS_MAX, type DelegationAdoptionHealth, type DelegationAdoptionKeep, type DelegationAdoptionKeeps,
   type LeaseAuditAnswer } from '../../../shared/api.js';
-import type { DelegationAdoptCap, DelegationAdoptRefusal, DelegationAdoptView } from '../../../shared/delegation-adopt.js';
+import type { DelegationAdoptCap, DelegationAdoptOnRefusal, DelegationAdoptRefusal, DelegationAdoptView } from '../../../shared/delegation-adopt.js';
 import { DELEGATION_ADOPT_MARKER, readSwitches } from '../../../shared/switches.js';
 import { CCD_ARGV, LEASE_AUDIT_CAP } from '../ccdargv.js';
+import { definite } from './delegation-adoption.js';
 import type { DelegationLeaseRow } from './delegation-model.js';
 
 /** The two capabilities the door reads from the fleet box's measured `ccd caps` (`FleetState.ccdVerbs`): the switch's verb, and the
@@ -23,38 +24,48 @@ export function delegationAdoptCapsOf(ccdVerbs: readonly string[] | null): Deleg
 }
 
 /**
- * THE RULE (D-8113): what a tap of `on` or `off` is refused with, or null. `on` is refused when the caps did not read, when the
- * fleet box's ccd has no switch verb, or when it lacks `lease-audit-v1` (without the audit, a box that holds trees keeps every
- * finished worktree without checking it, D-8057). `off` is refused only when the verb is missing: a list that did not read lets
- * `off` through, because turning adoption off is the safe direction, and a box without the verb answers the verb's own failure.
+ * THE RULE (D-8113): what a tap of `on` or `off` is refused with, or null. `signedIn` is measured by the route: sign-in is armed and
+ * the caller holds a session (the collect-lane door's own condition). `on` is refused first when the caller is not a signed-in
+ * operator (`sign-in-unarmed`, review 1659 F2: arming fleet-wide adoption needs one, as arming unattended deletion does), then when
+ * the caps did not read, when the fleet box's ccd has no switch verb, or when it lacks `lease-audit-v1` (without the audit, a box
+ * that holds trees keeps every finished worktree without checking it, D-8057). `off` is refused only when the verb is missing,
+ * signed in or not: a list that did not read lets `off` through, because turning adoption off is the safe direction. Sent to a box
+ * whose ccd lacks the verb after all (its caps unread), `off` fails with ccd's own usage error, which the route answers as
+ * `fleetFailed`, and the marker is as it was.
  */
-export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: boolean): DelegationAdoptRefusal | null {
+export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: false, signedIn: boolean): DelegationAdoptRefusal | null;
+export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: boolean, signedIn: boolean): DelegationAdoptOnRefusal | null;
+export function delegationAdoptRefusal(caps: DelegationAdoptCaps, on: boolean, signedIn: boolean): DelegationAdoptOnRefusal | null {
   if (!on) return caps.verb === 'absent' ? 'fleet-switch-missing' : null;
+  if (!signedIn) return 'sign-in-unarmed';
   if (caps.verb === 'unmeasured' || caps.audit === 'unmeasured') return 'fleet-caps-unmeasured';
   if (caps.verb === 'absent') return 'fleet-switch-missing';
   if (caps.audit === 'absent') return 'fleet-audit-missing';
   return null;
 }
 
-/** The door's view of one registry listing (null: unlisted), one caps list (null: unread) and the lane's last pass. */
+/** The door's view of one registry listing (null: unlisted), one caps list (null: unread) and the lane's last pass, for a caller
+ *  that is (`signedIn`) or is not a signed-in operator. */
 export function delegationAdoptViewOf(listing: readonly string[] | null, ccdVerbs: readonly string[] | null,
-  adoption: DelegationAdoptionHealth | null): DelegationAdoptView {
+  adoption: DelegationAdoptionHealth | null, signedIn: boolean): DelegationAdoptView {
   const caps = delegationAdoptCapsOf(ccdVerbs);
   return { state: readSwitches(listing)[DELEGATION_ADOPT_MARKER], caps,
-    refused: { on: delegationAdoptRefusal(caps, true), off: delegationAdoptRefusal(caps, false) }, adoption };
+    refused: { on: delegationAdoptRefusal(caps, true, signedIn), off: delegationAdoptRefusal(caps, false, signedIn) }, adoption };
 }
 
 /**
  * The bounded list (D-8114): the worktrees a pass would keep (its `would-adopt` decisions) or kept (its applied `adopt`s), in decision
  * order, at most `DELEGATION_ADOPTION_KEEPS_MAX` named and the rest counted. `changes` is what the audit fed to the decider measured,
- * only when that answer is a definite one (`ok`); an unsupported, refused or unmeasured audit names none. Null when none was kept.
+ * only when that answer is a DEFINITE one, the decider's own predicate (`delegation-adoption.ts#definite`: it read, and `changed` is
+ * true or false); an unsupported or refused audit, or one that read with `changed: 'unmeasured'`, names none (review 1659 F1).
+ * Null when none was kept.
  */
 export function adoptionKeepsOf(kept: readonly { readonly lease: DelegationLeaseRow; readonly audit: LeaseAuditAnswer | 'unsupported' | undefined }[]):
   DelegationAdoptionKeeps | null {
   if (kept.length === 0) return null;
   const items = kept.slice(0, DELEGATION_ADOPTION_KEEPS_MAX).map(({ lease, audit }): DelegationAdoptionKeep => ({
     project: lease.project, worktree: lease.adminRecord, path: lease.canonicalPath, parent: lease.parentId,
-    ...(audit !== undefined && audit !== 'unsupported' && audit.ok
+    ...(audit !== undefined && audit !== 'unsupported' && definite(audit) && audit.ok
       ? { changes: { dirty: audit.dirty, aheadOfBase: audit.aheadOfBase, branchAheadOfBase: audit.branchAheadOfBase } } : {}),
   }));
   return { items, more: kept.length - items.length };
