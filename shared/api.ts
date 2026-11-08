@@ -13606,6 +13606,8 @@ export interface AttentionSubject {
 
 /** The lane whose attention list an `AttentionRow` came from. */
 export type AttentionLane = 'child-reclaim' | 'expiry' | 'dead-coordinator';
+const ATTENTION_LANE_MAP: Record<AttentionLane, true> = { 'child-reclaim': true, expiry: true, 'dead-coordinator': true };
+export const ATTENTION_LANES: readonly AttentionLane[] = Object.keys(ATTENTION_LANE_MAP) as AttentionLane[];
 
 /** ONE row of the cleanup row's attention lists (consolidation spec K1, "Consumers move"; #2366), the shape the PWA's
  *  three coord-frame readers (`childReclaimAttentionOf`, `expiryAttentionOf`, `deadCoordinatorAttentionOf`) all
