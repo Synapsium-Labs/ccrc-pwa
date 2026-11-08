@@ -399,7 +399,7 @@ describe('the journal’s trust is READ AGAIN after the claimant’s measure (wa
     const mark = 'stop: await sweep.stillCrashed(), release:';
     const last = arm.indexOf(mark);
     expect(last, 'close’s re-measure after the fleet act').toBeGreaterThan(-1);
-    const commit = arm.indexOf('commitAbandon(deps, id, plan, causedBy, sweep, true)', last);
+    const commit = arm.indexOf('commitAbandon(deps, id, plan, causedBy, sweep, true, detail)', last);
     expect(commit, 'then the commit').toBeGreaterThan(last);
     // Between them sits only the decider's `recheck` verdict, which is synchronous: nothing awaits on the path from the
     // re-measure to the commit, and the commit itself (`commitAbandon`, the store's synchronous close) awaits nothing.

@@ -25,7 +25,7 @@ const NOW_S = 1784600000;
 
 /** One closed run naming `sessionId` as its worker. */
 const closedRun = (coord: CoordStore, sessionId: string, claimedBy = 'demo-coordinator'): number => {
-  const r = coord.openRun({ program: 'lifecycle', title: 'Workspace lifecycle', project: 'demo', wave: 1, waveOf: 1, claimedBy });
+  const r = coord.openRun({ program: 'lifecycle', title: 'Workspace lifecycle', programmeTitle: 'Workspace lifecycle', project: 'demo', wave: 1, waveOf: 1, claimedBy });
   if (!('id' in r)) throw new Error('openRun refused');
   coord.bindSession(r.id, sessionId);
   expect(coord.advance(r.id, 'failed', 'test-close').ok).toBe(true);

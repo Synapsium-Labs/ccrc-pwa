@@ -2699,11 +2699,11 @@ describe('POST /api/runs/:id/close', () => {
     coord.markDispatched(sibling.id, `${sessionA}-sib`, 'sib-ws', 'ws/sib', false);
     coord.advance(sibling.id, 'dispatched', 'coordinator');
 
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'active' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'active' }]);
     const resA = await postClose(app!, idA, { fingerprint: GOOD_CLAIM, final: true });
     expect(resA.statusCode).toBe(200);
     // The SIBLING is still non-terminal — the program must stay `active`.
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'active' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'active' }]);
 
     // Close the sibling too, as an explicit abandon — D-49 lets this route
     // skip verifyDone, so a fabricated sessionId with no real git root still
@@ -2711,7 +2711,7 @@ describe('POST /api/runs/:id/close', () => {
     // `abandoned`, mirroring the run that closed it out.
     const resB = await postClose(app!, sibling.id, { fingerprint: GOOD_CLAIM, final: true, state: 'failed' });
     expect(resB.statusCode).toBe(200);
-    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Transcript surface', state: 'abandoned' }]);
+    expect(coord.programs()).toEqual([{ slug: 'build4', title: 'Build4', state: 'abandoned' }]);
   });
 
   it('answers 404 unknown-run for a run id that does not exist', async () => {

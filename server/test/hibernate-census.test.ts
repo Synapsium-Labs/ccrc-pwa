@@ -85,6 +85,9 @@ const CENSUS: readonly Row[] = [
   { source: 'stopped-compare', file: 'server/src/deadCoordinator.ts', hits: 1, stances: ['journal'],
     why: '`deadCoordinatorCrash`: a claimant still reading `stopped` is never counted; one whose wake failed reads '
       + '`orphan`, and `hibernate` in `DEAD_COORDINATOR_DELIBERATE_ACTS` makes it deliberate' },
+  { source: 'stopped-compare', file: 'server/src/coord/runStuck.ts', hits: 1, stances: ['consults'],
+    why: '`stuckCause` words a gone person\'s cause (`coordinator-stopped`, `worker-stopped`); it runs only after `claimantGone`, '
+      + 'which reads `hibernatedAt` before any dead reading, so a sleeper is asleep and never reaches a cause (D-7371)' },
   { source: 'stopped-compare', file: 'server/src/coord/collectTempRoot.ts', hits: 1, stances: ['other-meaning'],
     why: 'the collector\'s own lane state (`lane.kind === \'stopped\'`), not a session' },
   { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 5, stances: ['held-awake'],

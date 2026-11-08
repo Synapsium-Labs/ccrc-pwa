@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the nine separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These nine are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the eleven separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These eleven are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -396,12 +396,18 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // The delegation lease expiry (delegation broker wave 5, D-7829) is a separate quantity: an adopted or retained lease's cleanup-due
     // interval, which every Retain resets, not the workspace lifecycle's archive-to-expiry interval. The operator approved it as one of
     // the wave 5 plan's thresholds (D-7794, 2026-11-04), and the coordinator ruled it in here. It does not import the token interval.
+    // The runs screen's stuck verdict brings two more (D-8071), both from spec 2026-11-04-runs-screen-rebuild-design, whose
+    // answers the operator ruled (D-8115): `never-started`'s age (§7 row 5, planned work over 7 days old with nothing else open
+    // in its programme), and A55's window, how long a closed programme's claimant is still measured after its last close. Each is
+    // the spec's own seven days of run age or programme quiet, unrelated to token rotation, and neither imports the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',
       'server/src/coord/delegation-lease-state.ts:DELEGATION_LEASE_EXPIRY_MS',
       'server/src/coord/delegation-model.ts:DELEGATION_HEALTH_WINDOW_MS',
+      'server/src/coord/runStuck.ts:NEVER_STARTED_AFTER_MS',
+      'server/src/coord/runStuckPass.ts:PROGRAMME_GONE_KEEP_MS',
       'shared/accounts.ts:SIGNED_IN_WITHIN_MS',
       'shared/api.ts:LEDGER_STALE_MS',
       'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',

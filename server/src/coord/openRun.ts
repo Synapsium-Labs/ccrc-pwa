@@ -203,6 +203,8 @@ export interface OpenRunPlan {
   program: string; title: string; project: string; wave: number; waveOf: number | null;
   claimedBy: string; kind: Exclude<RunKind, 'unknown'>; reviews: number | null;
   homeProject?: string; sessionId?: string;
+  /** D-8071: the name a NEW programme row takes; absent, the slug as words. */
+  programmeTitle?: string;
   /** D-5298: accepted with no `claimedByUuid` before the switch-over. */
   unattributed: boolean;
   /** The claimant's measured registry project — the `claimantProject` gate's
@@ -260,7 +262,9 @@ const GATES = [
       // D-5298: a sent `claimedByUuid` is a non-empty string; absent is the
       // unattributed open the `attribution` gate decides.
       !(b.claimedByUuid === undefined || (typeof b.claimedByUuid === 'string' && b.claimedByUuid.trim() !== '')) ||
-      !(homeProject === undefined || typeof homeProject === 'string'))
+      !(homeProject === undefined || typeof homeProject === 'string') ||
+      // D-8071: an optional programme name, a non-blank string when sent.
+      !(b.programmeTitle === undefined || (typeof b.programmeTitle === 'string' && b.programmeTitle.trim() !== '')))
       ? { error: 'bad-request' } : undefined;
   }],
   // Path identity (spec §2.3). Every id this route stores can later reach an
@@ -451,6 +455,7 @@ export async function openRunPreconditions(f: OpenRunFacts): Promise<OpenRunVerd
       kind: review ? 'review' : 'work', reviews: review ? b.reviews as number : null,
       ...(c.home !== undefined ? { homeProject: c.home } : {}),
       ...(typeof b.sessionId === 'string' ? { sessionId: b.sessionId } : {}),
+      ...(typeof b.programmeTitle === 'string' ? { programmeTitle: b.programmeTitle } : {}),
       unattributed: c.unattributed === true, coordProject: c.coordProject!,
     },
   };

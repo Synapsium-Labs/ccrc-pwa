@@ -8,11 +8,14 @@
 // and each of those is true because the call is absent from the arm, not
 // because a flag skipped it. A later edit that folds any of them back in fails
 // here rather than on a phone.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
+import { Bus } from '../src/bus.js';
+import { FleetWatcher } from '../src/watch.js';
+import { watcherTeardown } from './watcherTeardown.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -555,5 +558,82 @@ describe("closeRun's abandon arm, called directly", () => {
     const id = wedged(coord, home, 'planned', null);
     expect(await closeRun(deps, id, { fingerprint: {}, final: true }, 'coordinator'))
       .toEqual({ ok: false, kind: 'refused', code: 'not-dispatched' });
+  });
+});
+
+// D-8071 (spec §9.3, A30): the abandon arm records WHY from what the stuck verdict's reader holds, read INSIDE the hold. The
+// route still reads no body: nothing a caller sends reaches the stored reason.
+describe('the abandon arm records the stuck reason', () => {
+  let app: FastifyInstance | undefined;
+  const teardown = watcherTeardown();
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const verdictFor = (reason: 'overtaken' | 'owner-gone') => ({
+    stuck: { reason, cause: null, since: 1, closes: null }, blockedBy: null, coordinatorGone: false,
+  });
+  const start = async (home: string, run: Runner) => {
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const deps = { ...testDeps(home, run), mailToken: TOKEN, coord };
+    const bus = new Bus();
+    const watcher = teardown.track(new FleetWatcher(deps, bus, 10_000));
+    app = await buildServer(deps, bus, watcher);
+    return { coord, watcher };
+  };
+  const closeCols = (coord: CoordStore, id: number) =>
+    coord.db.prepare('SELECT closedBy, closeDetail FROM runs WHERE id = ?').get(id) as { closedBy: string | null; closeDetail: string | null };
+  const lastEvent = (coord: CoordStore, id: number) => coord.runEvents(id).at(-1)!;
+
+  it('the abandon arm writes abandon:<reason> from what RunVerdicts holds', async () => {
+    const home = mkTmp('ccrc-abandon-'); const { run } = makeRunner();
+    const w = await start(home, run);
+    const id = wedged(w.coord, home, 'planned', null);
+    w.watcher.runVerdicts.replace(new Map([[id, verdictFor('overtaken')]]), new Map());
+    expect((await postAbandon(app!, id)).statusCode).toBe(200);
+    expect(closeCols(w.coord, id)).toEqual({ closedBy: 'operator', closeDetail: 'abandon:overtaken' });
+    expect(lastEvent(w.coord, id)).toMatchObject({ causedBy: 'operator', detail: 'abandon:overtaken' });
+  });
+
+  it('it reads inside the hold: a verdict that changes while an earlier write holds the serialiser is the one recorded', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const started: string[] = [];
+    const run: Runner = async (_cmd, args) => {
+      started.push(args[0] ?? '');
+      await gate;
+      return { ran: true, code: 0, stdout: '', stderr: '' };
+    };
+    const w = await start(home, run);
+    const first = wedged(w.coord, home, 'working', `${PROJECT}-first`, 'programme-a');
+    const second = wedged(w.coord, home, 'planned', null, 'programme-b');
+    w.watcher.runVerdicts.replace(new Map([[second, verdictFor('overtaken')]]), new Map());
+    const a = postAbandon(app!, first);
+    await vi.waitFor(() => expect(started.length).toBeGreaterThan(0));
+    const b = postAbandon(app!, second);
+    // The second request has arrived and waits behind the first; the reader moves before its hold begins.
+    w.watcher.runVerdicts.replace(new Map([[second, verdictFor('owner-gone')]]), new Map());
+    release();
+    expect((await a).statusCode).toBe(200);
+    expect((await b).statusCode).toBe(200);
+    expect(closeCols(w.coord, second).closeDetail).toBe('abandon:owner-gone');
+  });
+
+  it('with no verdict it writes no detail and the run reads closed by you', async () => {
+    const home = mkTmp('ccrc-abandon-'); const { run } = makeRunner();
+    const w = await start(home, run);
+    const id = wedged(w.coord, home, 'planned', null);
+    expect((await postAbandon(app!, id)).statusCode).toBe(200);
+    expect(closeCols(w.coord, id)).toEqual({ closedBy: 'operator', closeDetail: null });
+    expect(lastEvent(w.coord, id).detail).toBeNull();
+  });
+
+  it('the route still reads no body', async () => {
+    const home = mkTmp('ccrc-abandon-'); const { run } = makeRunner();
+    const w = await start(home, run);
+    const id = wedged(w.coord, home, 'planned', null);
+    w.watcher.runVerdicts.replace(new Map([[id, verdictFor('overtaken')]]), new Map());
+    await postAbandon(app!, id, { detail: 'abandon:owner-gone', state: 'done', reason: 'x' });
+    expect(closeCols(w.coord, id)).toEqual({ closedBy: 'operator', closeDetail: 'abandon:overtaken' });
   });
 });
