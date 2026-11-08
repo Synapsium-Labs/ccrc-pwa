@@ -11,7 +11,9 @@
 //     clause ("passed: 0 of 12", "failed: 0 — all good": review 1601 F2);
 //   - the status word's sentence ends in "?".
 // A clause ends at `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the end, or at a line break; a sentence at
-// `.`, `!` or `?` followed by a space or the end, or at a line break. Through the plugin, the text of the same block
+// a run of `.`, `!` or `?` (any closers after it) followed by a space or the end, at a `)` or `]` followed by a space and
+// a capital, at a spaced dash, or at a line break, and an end inside an aside that opens after the label is the aside's
+// (review 1592 F5, desktop-polish Task C14). Through the plugin, the text of the same block
 // before and after a text node counts too, bounded to the clause and the sentence ("**No** tests failed.").
 // `chat-marks.test.ts` (Task L's claim) keeps the S3 table; this file holds only the withholding.
 import { describe, expect, it } from 'vitest';
@@ -105,6 +107,36 @@ describe('S3 withholds a label in a question (c-s3-negation)', () => {
   it('the question governs its own sentence only', () => {
     expect(statusesOf('Is CI green? Yes: #651 merged.')).toEqual([{ text: 'merged', tone: 'merged' }]);
     expect(statusesOf('#651 merged. Is it out?')).toEqual([{ text: 'merged', tone: 'merged' }]);
+  });
+});
+
+describe('a sentence end reads its closers (review 1592 F5; desktop-polish Task C14, D-8110)', () => {
+  it.each<[string, string, { text: string; tone: string }[]]>([
+    // A "?" glued to a closer ends a question.
+    ['a question inside parentheses', '(Has #651 merged?)', []],
+    ['a "?" before a closing parenthesis', 'Has #651 merged?)', []],
+    ['a "?" before a closing quote', 'Has #651 merged?"', []],
+    ['a "?!" run', 'Is #651 merged?!', []],
+    ['a "!?" run', 'Is #651 merged!?', []],
+    // A closer before a space and a capital ends the sentence, so the next sentence's "?" does not reach back.
+    ['a parenthesis around the label, then a question', '(#651 merged) Is it out?', [{ text: 'merged', tone: 'merged' }]],
+    ['a full stop and a parenthesis, then a question', '#651 merged.) Is it out?', [{ text: 'merged', tone: 'merged' }]],
+    ['a spaced dash, then a question', '#651 merged — is it out?', [{ text: 'merged', tone: 'merged' }]],
+    ['a quoted aside, then a question', 'CI green ("done") Ready to land?', [{ text: 'green', tone: 'ok' }]],
+    // A "?" inside a parenthesis that opens after the label is not the label's sentence end.
+    ['a question in an aside, then a full stop', '#651 merged (really?) yes.', [{ text: 'merged', tone: 'merged' }]],
+    ['a question in an aside, then more of the sentence', '#651 merged (why?) and shipped.', [{ text: 'merged', tone: 'merged' }]],
+    // Guards around those: an aside with a lower-case word after it does not end the sentence.
+    ['an aside inside a question', 'Is CI green (on main) today?', []],
+    ['an aside at the end of a question', 'Is CI green (see the log)?', []],
+    ['a full stop inside an aside ends nothing outside it', 'Is CI green (see run 3.) on main?', []],
+    ['an unclosed aside hides its marks', 'CI green (see the log? on main.', [{ text: 'green', tone: 'ok' }]],
+    ['an unspaced dash ends nothing', 'Is CI green—or red?', []],
+    ['a line break ends an aside too', 'CI green (see the log\nthen) is it out?', [{ text: 'green', tone: 'ok' }]],
+    // The cost of the spaced dash, named in Task C14's note: a question split by one reads its first half alone.
+    ['a spaced dash splits a question as well', 'Is CI green — or red?', [{ text: 'green', tone: 'ok' }]],
+  ])('%s', (_name, text, statuses) => {
+    expect(statusesOf(text)).toEqual(statuses);
   });
 });
 
