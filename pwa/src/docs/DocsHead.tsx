@@ -625,7 +625,8 @@ function ShareAction(p: {
   /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name ("Share: <words>" while
    *  it waits, as Export's is, since nothing visible says Share). */
   readonly glyph?: boolean;
-  /** The full head's form (desk-nav Part B): an icon beside its words, named by its words as the words form is. */
+  /** The full head's form (desk-nav Part B): an icon beside its words, named as the compact form is, so a waiting Share
+   *  is "Share: <words>" whether or not its words show (fix round 1, F4). */
   readonly row?: boolean;
 }): ReactNode {
   const { page, tree, share } = p;
@@ -636,7 +637,7 @@ function ShareAction(p: {
     <>
       <button
         type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}
-        aria-label={p.row === true ? words : p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
+        aria-label={p.glyph !== true && p.row !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
       >
         {p.glyph === true ? <Icon name="share" size={20} /> : p.row === true ? <RowFace icon="share" words={words} /> : words}
       </button>

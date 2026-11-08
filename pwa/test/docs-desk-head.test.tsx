@@ -157,15 +157,17 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     }
   });
 
-  it('while the leaf moves to its pin, Share and Export keep the names they had: the words, and Export: <words>', async () => {
+  it('while the leaf moves to its pin, Share is named Share: <words> and Export: <words>, as their icon forms are (F4)', async () => {
     atWidth(1280);
     const f = fakeLoaders();
     f.file.mockImplementation(() => new Promise(() => {}));
     open('/docs/demo/specs/a.md', f);
     const updating = fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(treeOk().ref.commit) });
-    const share = await within(await waitFor(() => row())).findByRole('button', { name: updating });
+    const share = await within(await waitFor(() => row())).findByRole('button', { name: fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: updating }) });
     expect(share).toBeDisabled();
     expect(shownText(share)).toBe(updating);
+    expect(labelInName(shownText(share), share.getAttribute('aria-label') ?? '')).toBe(true);
+    expect(within(row()).queryByRole('button', { name: updating }), 'never the bare sentence').toBeNull();
     const exp = within(row()).getByRole('button', { name: fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: updating }) });
     expect(exp).toBeDisabled();
     expect(labelInName(shownText(exp), exp.getAttribute('aria-label') ?? '')).toBe(true);

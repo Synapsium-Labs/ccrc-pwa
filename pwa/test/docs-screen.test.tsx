@@ -1235,7 +1235,9 @@ describe("W5 Share: a raster leaf's own image reports the pin it settled at (spe
 describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX12 Share half, M4.SH1 raster clause)', () => {
   const GH = 'https://github.com/example-org/example-repo';
   const shareButton = (): HTMLElement | null => screen.queryByRole('button', { name: DOCS_HEAD_TEXT.share });
-  const updatingTo = (commit: string): string => fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(commit) });
+  // A waiting Share's NAME: "Share: Updating to <short>…", its visible words after "Share: " (desk-nav Part B, fix round 1, F4).
+  const updatingTo = (commit: string): string =>
+    fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(commit) }) });
   const sheetUrl = (): string | null | undefined => document.querySelector('.docs-share-url')?.textContent;
   function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
     let resolve: (v: T) => void = () => {};
