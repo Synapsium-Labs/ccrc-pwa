@@ -6874,13 +6874,13 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # (DEPSSHED region).
 #
 # NOT reachable this way, and this set IS the boundary — TWENTY-TWO dot-prefixed
-# artifacts live under `$REG`; the eight above are reachable, these thirteen are
+# artifacts live under `$REG`; the eight above are reachable, these fourteen are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The twelve: `$REG/.carry.lock` (no id is the dash-free `.carry`);
+# a paragraph that disagrees with it. The fourteen: `$REG/.carry.lock` (no id is the dash-free `.carry`);
 # `$REG/.train-proofs` and `$REG/.train-tried` (D-7362, D-7381: the PR lane's kept train proofs and its tried
 # records, `PR_TRAIN_PROOFS_FILE` and `PR_TRAIN_TRIED_FILE`; neither name has a dot after its leading one, so no
 # `<id>.<field>` split leaves an id at all, and `.train-tried`'s `.tmp.XXXXXX` staging files, counted WITH it,
@@ -31148,8 +31148,9 @@ cmd_delegation_adopt() {   # ccd delegation-adopt --state on|off — raise or lo
   # activity has terminal evidence and mails its owner; absent, it only records what it would keep (O5-7 (a)). This verb is
   # the marker's ONE writer, reached from `POST /api/coord/delegation-adopt` (session-only, the operator's door) through the
   # agent's two-token grant, after the door's refusal rule (D-8113); the lane is its one reader, by listing $REG.
-  # `cmd_scope_sweep_busy`'s shape: the raise atomic, both arms CHECKED, journalling nothing. Forbidden to every session
-  # (`FORBIDDEN_CCD_VERBS`): the switch is the operator's gate.
+  # `cmd_scope_sweep_busy`'s shape: the raise atomic, both arms CHECKED, journalling nothing. Never a session's verb: the
+  # child hook and the child deny file stop a child; for a top-level session it is `ws-lease-mark`'s convention, and the
+  # door refuses `on` without a signed-in operator (D-8113).
   [[ $# -eq 2 && $1 == --state ]] || die "usage: ccd delegation-adopt --state on|off"
   local state=$2 marker tmp
   [[ $state == on || $state == off ]] || die "bad state: $state (want on|off)"

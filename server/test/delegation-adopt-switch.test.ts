@@ -345,6 +345,9 @@ describe('POST /api/coord/delegation-adopt: the marker through its one writer, p
     expect(r.statusCode).toBe(502);
     expect(r.json().stderr).toMatch(/could not raise the adoption switch/);
     expect(readdirSync(s.reg).filter((n) => n.startsWith('.delegation-adopt.'))).toEqual([]);
+    // Review 1659 F10: the directory reads `set` by name, so the GET says the switch is on; neither arm can clear it (a hand step).
+    expect((await get(s.app)).json().state).toBe('set');
+    expect((await post(s.app, { on: false })).statusCode, 'off cannot remove a directory, and says so').toBe(502);
   });
 
   it('a verb that never ran answers its own reason, never the forged code\'s words (D-6840)', async () => {

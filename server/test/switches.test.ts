@@ -85,7 +85,7 @@ describe('the switchboard: SWITCHES rows and readSwitches (D-5855)', () => {
     expect(TESTBOX_REMOTE_LIVE_MARKER).toBe('testbox-remote-live');
     // D-7902: the deliberate stop's pane-scope stop switch, written by a ccd verb behind a route, read by ccd's own act.
     expect(PANE_SCOPE_STOP_LIVE_MARKER).toBe('pane-scope-stop-live');
-    // Delegation PR7 (W5-X1): the adoption marker, a hand-armed row with no writer in the tree.
+    // Delegation PR7 (W5-X1): the adoption marker; since PR8b (D-8112) written by a ccd verb behind a route, read by the lane.
     expect(DELEGATION_ADOPT_MARKER).toBe('delegation-adopt');
     expect(markers.sort()).toEqual([...Object.values(TODAY), 'asks-disabled', 'landing-disabled', 'landing-checks-live', 'collect-loose-live', 'drift-push-live', 'child-reclaim-disabled', 'coordinator-roster-card-live', 'deps-shed-live', TESTBOX_REMOTE_LIVE_MARKER, PANE_SCOPE_STOP_LIVE_MARKER, 'scope-sweep-live', 'scope-sweep-busy-live', DELEGATION_ADOPT_MARKER].sort());
     expect([...markerSwitchNames].sort()).toEqual(markers.sort());

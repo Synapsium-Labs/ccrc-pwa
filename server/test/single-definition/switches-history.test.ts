@@ -876,7 +876,7 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
   const DEFINER = 'shared/switches.ts';
   const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
 
-  it('ccd/ccd names the marker on the verb\'s two lines alone; the hook and its installer name the verb only to forbid it', () => {
+  it('ccd/ccd names it on the verb\'s own lines alone, however a path to it is spelled; the hook and its installer name the verb only to forbid it', () => {
     expect(holdersOf(NAME), 'a line of shell outside ccd/ccd, the hook and its installer names it — a writer in waiting')
       .toEqual(['ccd/ccd', 'ccd/install-session-hooks.sh', 'ccd/session-hook.sh']);
     // Review 1659 F12: as wide as the row it replaced. EVERY code line of ccd/ccd that names it, however a path to it is spelled

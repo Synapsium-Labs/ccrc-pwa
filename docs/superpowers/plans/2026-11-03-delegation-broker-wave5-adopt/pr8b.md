@@ -9,7 +9,11 @@ Adoption stays shadow until the operator turns the switch on.
 **Ledger.** Defined in the plan's "Deviations found": D-8112 (R1, the verb, the door and the guard), D-8113 (R2, the refusal rule)
 and D-8114 (R3; here, its server half: the bounded list). Amended in place, to name D-8112: the plan's Global Constraints line "Stage marker
 with no writer" (now "with one writer"), its Gate paragraph, Task 5.7.1's snippet and Step 1 (W5-X1, W5-X2), D-7846, and
-`pr7b.md`'s opening paragraph. The block issued to this run is used whole.
+`pr7b.md`'s opening paragraph; in fix round 1 (review 1659 F7, F12), also the "safe dark" paragraph, the snippet's `writer` line,
+the Rider's "Never planned" list, two "Where things stand" lines, the Additive-wire constraint (it names `keeps`), and the comment in
+`server/test/switches.test.ts`. Left, and why: the approved design spec (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md`)
+still says the marker has no writer, because the plan's rule is that feature PRs edit no spec text; and the programme ledger is the
+coordinator's, folded on its own pull request. The block issued to this run is used whole.
 
 ## The floor rule, as built
 
@@ -32,9 +36,14 @@ L1 `adoptionKeepsOf`, and it rides the health block's `adoption` member as the o
 - **R2 (D-8113).** `server/src/coord/delegation-adopt-switch.ts` (L1): `delegationAdoptCapsOf` reads the two capabilities from the
   fleet box's measured caps (`null` is `unmeasured` for both, never `absent`), `delegationAdoptRefusal` is the rule, and
   `delegationAdoptViewOf` is the GET's answer. The refusal words and statuses are declared once in `shared/delegation-adopt.ts`
-  and spread into `REFUSAL_STATUS`.
+  and spread into `REFUSAL_STATUS`. Since fix round 1 (review 1659 F2, ruled) the rule also takes `signedIn`, measured by the route
+  as the collect-lane door does (sign-in armed and the caller holds a session): `on` without it is refused `sign-in-unarmed` (403),
+  first, after the body parses; `off` never is. The GET says so for the caller that asks.
 - **R3 (D-8114), the server half.** `DelegationAdoptionHealth.keeps` (`{items, more}`, at most `DELEGATION_ADOPTION_KEEPS_MAX = 50`
-  items), its one reader `delegationAdoptionKeepsOf`, written by the adoption step each pass and served by the GET.
+  items), its one reader `delegationAdoptionKeepsOf` (called by `adoption`'s reader, `delegationAdoptionHealthOf`, which drops a list
+  it refuses), written by the adoption step each pass and served by the GET. A tree's `changes` are named only from a definite audit
+  answer, the decider's own `definite`, now exported and reused (review 1659 F1). The list names only adoptions that applied, so it may
+  be shorter than `adopted` (F11).
 
 ## The split
 
@@ -42,7 +51,12 @@ Full CI on this branch's first tip went red on `consolidation-path-guard.test.ts
 touches `pwa/` beside `shared/switches.ts` is refused, and R1 must edit `shared/switches.ts`. The coordinator ruled the split (run 1645,
 2026-11-08), as D-7994's card was split (#2289, then #2322): this PR keeps R1, R2 and R3's server half, and the card follows in a
 follow-on pull request, PR8c, a new run cut after this one merges. Every `pwa/` path went back to the merge base in one commit; the
-card half is carried as a patch the coordinator holds.
+card half is carried as a patch the coordinator holds. Three patches go to PR8c: the card (`pr8c-card.patch`), the wave-3 census's
+PWA allow-list hunk (`pr8b-card-census.patch`), and, from fix round 1, `pr8c-shared.patch`: `DELEGATION_ADOPT_CAPS`, the caps union's
+derived list, whose one reader is the card's wire guard, with its single-definition row (review 1659 F6; ask 335 ruled the move). Two
+other exports got callers here: `delegationAdoptionKeepsOf` (above) and `DelegationAdoptRequest`, which types the route's body parse.
+PR8c's card must also read `sign-in-unarmed` in the GET's `refused.on` (`DelegationAdoptOnRefusal`), which its patch predates.
+The seventh mutant the ruling named (the card's confirmation skipped, red in 13 of 53 rows) moved to PR8c with the card.
 
 ## Precedent sites (D-7902, D-7994)
 
@@ -61,16 +75,25 @@ Every site `git grep` finds for `pane-scope-stop`, `scope-sweep-busy` and `coord
 | `shared/scope-sweep.ts` (the L0 view) | mirrored as `shared/delegation-adopt.ts` |
 | The PWA card and its wiring and tests (`ScopeSweepSection.tsx` and its siblings) | moves with the card, to PR8c (the split) |
 | README's whitelist sentences | mirrored |
+| README's operator prose for the door, its refusals and the verb (`scope-sweep`'s and `pane-scope-stop`'s paragraphs) | mirrored in fix round 1 (review 1659 F9), at the end of "Delegation observation"; the card's prose comes with PR8c |
 | `fleetws.test.ts` and `watch.ts`'s coord frame member (`paneScopeStop`) | set aside: the door reads the registry itself, as `scope-sweep`'s does, and `watch.ts` stays +0 |
 | `ccd/ccrc-doctor-checks` and its fixtures (`pane-scope-stop`'s check) | set aside: the door's GET is the operator's reading surface (R3), and no ruling asks for a doctor line; a new check would move every doctor fixture's count |
 | `ccd/ccd-scope-sweep`, `deploy/measure-continuity.py`, `paneScopeFixture.ts`, `hibernate-census.test.ts` | set aside: specific to the sweep's own reader |
-| `ccd/ccd-entry.py`'s protected list | set aside: no switch verb is on it (`coord-pause`, `testbox-remote`, `pane-scope-stop`, `scope-sweep-busy`), the ruling names the hook and the classifier, and the entry protects verbs whose body re-proves a token |
+| `ccd/ccd-entry.py`'s protected list | set aside: no switch verb is on it (`coord-pause`, `testbox-remote`, `pane-scope-stop`, `scope-sweep-busy`), and the ruling names the hook and the classifier (corrected in fix round 1, F9: its list holds `ws-lease-mark`, `ws-lease-audit` and `scratch-rescue`, none of which re-proves a token, so that was not the reason) |
 
 ## Departures and notes
 
 - The route carries one `ccdCan(deps.fleetState, 'delegationAdopt')` check after the rule, which `verb-gate.test.ts` requires at every
-  `CCD_ARGV` call site. It is a TOCTOU re-check, not a second rule: the caps can change across the listing's await (an agent
-  reconnect), and it answers the rule's own word (`fleet-switch-missing`). Recorded in D-8113.
+  `CCD_ARGV` call site. It is the exec path's verb gate, not a re-check (corrected in fix round 1, review 1659 F4): it reads the caps
+  list the rule just read, with no `await` between, so it never refuses what the rule let through, and with the caps unread it
+  permits, which is what lets `off` through. No behaviour row guards it; `verb-gate` does. Recorded in D-8113.
+- A directory standing in the marker's place reads `set` (by name), so adoption runs live, while `on` answers "could not raise" and
+  `off` "STILL on": the console cannot clear it, as with `scope-sweep-busy`. The failure is reported, not hidden; the hand step is
+  removing that directory on the fleet box (README says so). The existing failed-raise row now also reads the GET's `set` (F10).
+- Two POSTs at once are not serialised: the marker always ends in one state, but the feed row can name a move the registry no longer
+  shows, the precedent door's posture (F11, left as ruled).
+- W4-U27's older-server render (`pwa/test/older-server-render.test.tsx`): with no card in this PR no PWA file reads the new member,
+  and `keeps` is optional and additive, so the render cannot change; re-run alone at the tip all the same (F12; see the report).
 - The precedents' history split CLAUDE.md, the session hook and the installer into a rules-only change, at an external review
   gate's request. This PR keeps them in, because the brief and R1 ask for them here.
 - The adoption switch's staging file `$REG/.delegation-adopt.<pid>.tmp` joins the R-3 boundary paragraph in `ccd/ccd`, whose cardinal
@@ -89,6 +112,9 @@ measured from the user's thread count:
 | M4 `off` refused when the caps lack `lease-audit-v1` | `delegation-adopt-switch.ts` | 4 of 22 rows, among them "off: refused only when the verb is missing" and "the view" |
 | M5 the verb dropped from `FORBIDDEN_CCD_VERBS` | `approvalguard.ts` | R1's forbidden row (1); `ccd-spawn-child-settings`: the two lists stay equal (2) |
 | M6 the list unbounded (the 51st served) | `delegation-adopt-switch.ts` | R3's bound row (1) |
+| M7 the card's confirmation skipped | PWA card | moved to PR8c with the card (13 of 53 card rows, measured before the split) |
+
+Fix round 1's mutants are in the report's FR1 table.
 
 **Growth** over the base (`growthCheck.ts#netGrowth`): `ccd/ccd` +20, `server/src/coord/routes.ts` +31;
 `server/src/watch.ts` +0, `server/src/coord/store.ts` +0, `ccd/session-hook.sh` +0 (two lines changed in place). The PR adds new files
