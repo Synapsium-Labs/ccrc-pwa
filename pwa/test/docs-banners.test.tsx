@@ -172,7 +172,7 @@ describe('each drafts state that shows no drafts says why (M4.T4)', () => {
     [['skip-worktree', 'assume-unchanged'], ['caveat-hash']],
     [['filters-bypassed'], ['caveat-filters']],
     [['skip-worktree', 'filters-bypassed'], ['caveat-hash', 'caveat-filters']],
-  ] as const)('a holder with caveats %j and a draft in view says %j', (caveats, ids) => {
+  ] as const)('a holder with caveats %j and a draft in the tree says %j', (caveats, ids) => {
     const h = holder() as Extract<DraftsFacts, { state: 'holder' }>;
     banners('/docs/demo?ref=main', treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: { ...h, caveats: [...caveats] } }));
     expect(bannerIds()).toEqual(ids);
@@ -180,8 +180,8 @@ describe('each drafts state that shows no drafts says why (M4.T4)', () => {
   });
 
   // desk-nav Task B, departure caveats-follow-drafts (D-8101): both caveats describe how drafts are read, so a page with
-  // no draft in view (n = 0, the count the hint banners use) shows neither; with a draft in view they show as before.
-  it('a holder with both caveats and no draft in view (n = 0) shows no caveat banner', () => {
+  // no draft in its tree (n = 0, the tree's draft count the hint banners use) shows neither; with a draft they show as before.
+  it('a holder with both caveats and no draft in the tree (n = 0) shows no caveat banner', () => {
     const h = holder() as Extract<DraftsFacts, { state: 'holder' }>;
     const tree = treeOk({ drafts: { ...h, caveats: ['assume-unchanged', 'filters-bypassed'] } });
     expect(tree.entries.filter((e) => e.draft !== null)).toEqual([]);
@@ -192,7 +192,7 @@ describe('each drafts state that shows no drafts says why (M4.T4)', () => {
     expect(bannerIds()).toEqual([]);
   });
 
-  it('a holder with both caveats and a draft in view (n > 0) shows both banners, words unchanged', () => {
+  it('a holder with both caveats and a draft in the tree (n > 0) shows both banners, words unchanged', () => {
     const h = holder() as Extract<DraftsFacts, { state: 'holder' }>;
     const tree = treeOk({
       entries: [entry('specs', 'a.md'), entry('specs', 'b.md', { draft: draftOf('modified') })],
