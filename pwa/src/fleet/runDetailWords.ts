@@ -19,6 +19,7 @@ export const RUN_PAGE_WORDS = {
   openSession: 'Open the session',
   openCoordinator: 'Open the coordinator',
   liftCap: 'Lift cap',
+  abandon: 'Abandon',
   /** The link back to the board under "There is no run N.". */
   toBoard: 'Back to Runs',
 } as const;

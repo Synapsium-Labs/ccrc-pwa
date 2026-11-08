@@ -40,6 +40,7 @@ import {
   programmeTitle, runState, runsByProgram, waveLabel, coordinatorOf, workerOf,
 } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
+import { coordinatorPresence } from '../fleet/presence';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
 import { ReviewCapBand } from '../fleet/ReviewCapBand';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -239,6 +240,8 @@ function RunsBoard({
   // binds to it (`workerOf`, D-7182): a recycled id, or an older server's frame
   // with no binding, finds none, and the sheet hedges as it does for no row.
   const abandonSession = abandonTarget === null ? undefined : workerOf(abandonTarget, sessionById) ?? undefined;
+  // The sheet's "Its coordinator is told." line asks `coordinatorGoneOf`, whose fallback is the board's reading of the claimant.
+  const abandonPresence = abandonTarget === null ? 'unknown' : coordinatorPresence(abandonTarget.claimedBy, coordinatorOf(abandonTarget, sessionById), fleetFrameSeen);
   // ACTIVE reads `live` the instant the socket has said anything at all
   // (`runsFrameSeen`) — including an honest `[]`, which is what a run
   // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
@@ -639,7 +642,7 @@ function RunsBoard({
           own vanish-diff (above) also fires for the same close, and both
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
-      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)}
+      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)} coordinatorPresence={abandonPresence}
         onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
       {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of

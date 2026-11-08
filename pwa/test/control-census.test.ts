@@ -233,6 +233,9 @@ const CONTROLS: Record<string, string> = {
     + 'the two sheets that drew it were drawing the same button down to the '
     + 'parenthesised count (`OtherPoolsDisclosure`). The rule it leans on is '
     + 'unchanged; what is gone is the second copy of the markup.',
+  'fleet/AbandonSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. The abandon sheet\'s two stand-alone links (the runs rebuild, D-8073): "See this run" and, under '
+    + '"This run already closed.", "Open record": `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks.',
   'accounts/RunFrame.tsx <a> (computed)':
     'VARIANT buttonVariants. The sign-in URL card\'s Open ↗ (accounts plan Task A22, D-7849): the primary at ≥900 (52px, '
     + '`acct-open-primary`) and the ghost below 900 (`GHOST_ANCHOR`). An anchor, not a button, because it opens the '

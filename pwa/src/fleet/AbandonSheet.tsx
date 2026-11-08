@@ -32,11 +32,16 @@
 // `server/src/coord/routes.ts`); its reaching that destructive act is inside
 // the single-user trust model: recorded, not changed.
 import { useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { isRunState, type FleetSession, type RunSummary } from '../../../shared/api';
-import { RUN_WORD, childMarkOf } from './runWords';
-import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, toast } from '@ccrc/ui';
-import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api, isRegistryUnmeasurable } from '../lib/api';
+import { RUN_WORD, childMarkOf, coordinatorGoneOf, runRowName, runWaitLine } from './runWords';
+import type { CoordinatorPresence } from './presence';
+import { inAppClick } from './settingsText';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, cn, toast } from '@ccrc/ui';
+import { GHOST_ANCHOR } from '../lib/ghostAnchor';
+import { ApiError, COORD_UNSUPPORTED_TEXT, UNKNOWN_RUN_TEXT, api, isRegistryUnmeasurable, type ReadOpts } from '../lib/api';
+import { navigate } from '../lib/router';
+import { runPath } from '../lib/routes';
 import './fleet.css';
 
 /** The refusal vocabulary this sheet renders its OWN sentence for. A total
@@ -57,13 +62,13 @@ export const ABANDON_COPY: Record<
   string
 > = {
   'unknown-run': UNKNOWN_RUN_TEXT,
-  'bad-transition': 'this run already closed',
+  'bad-transition': 'This run already closed',
   // Review, M2: this used to be a byte-identical literal of `CoordBanner`'s
   // own 501 arm. One box, one skew, one sentence — see the constant's own
   // docstring (`lib/api.ts`) for why it lives there and not in either
   // component.
   unsupported: COORD_UNSUPPORTED_TEXT,
-  'fleet-failed': 'the release failed',
+  'fleet-failed': 'The release failed.',
   // D-5971: the box could not read the registry, so it could not look — not a release that failed.
   'registry-unmeasurable': 'the registry could not be read, so the box could not finish the abandon — try again',
   unknown: 'the abandon was refused, for a reason this build does not recognise',
@@ -75,7 +80,22 @@ export const ABANDON_COPY: Record<
  *  generic "request failed". Unlike that banner, every branch here returns a
  *  string (never `null`): this sheet has no ordinary-toast fallback to defer
  *  to — a failed abandon has nowhere else to be said. */
-function abandonErrorText(err: unknown): string {
+function abandonErrorText(err: unknown): AbandonError {
+  const said = abandonSentence(err);
+  // "This run already closed." comes with a door to the record (spec 9.1): the close is the proof.
+  const closed = err instanceof ApiError && err.status === 409 && said.startsWith(ABANDON_COPY['bad-transition']);
+  if (err instanceof ApiError && err.status === 502 && !isRegistryUnmeasurable(err)) {
+    const stderr = typeof err.body === 'object' && err.body !== null ? (err.body as { stderr?: unknown }).stderr : undefined;
+    // The release failed, then the server's own words (spec 9.1).
+    if (typeof stderr === 'string' && stderr.trim().length > 0) return { lead: ABANDON_COPY['fleet-failed'], text: stderr.trim(), record: false };
+  }
+  return { lead: null, text: closed ? `${said}.` : said, record: closed };
+}
+
+/** What the sheet says under a refusal: an optional lead sentence, the text, and whether a link to the record follows. */
+interface AbandonError { readonly lead: string | null; readonly text: string; readonly record: boolean }
+
+function abandonSentence(err: unknown): string {
   if (!(err instanceof ApiError)) return ABANDON_COPY.unknown;
   // D-5971: the word, at any status. ccd's stderr, when it came too, is the more specific fact.
   if (isRegistryUnmeasurable(err)) {
@@ -121,6 +141,12 @@ function abandonErrorText(err: unknown): string {
       : undefined;
     return typeof stderr === 'string' && stderr.trim().length > 0 ? stderr.trim() : ABANDON_COPY['fleet-failed'];
   }
+  // 400 `hold-invalid` and 413 `hold-oversize` carry the server's `detail`, which names the surviving run's hold and is
+  // shown in full (F23). A body with no `detail` falls to the catch-all.
+  if (err.status === 400 || err.status === 413) {
+    const detail = typeof err.body === 'object' && err.body !== null ? (err.body as { detail?: unknown }).detail : undefined;
+    if (typeof detail === 'string' && detail.trim().length > 0) return detail;
+  }
   // 400 bad-request (non-integer id) is not reachable from the UI (the phone
   // always has a real run id) and falls to the same total catch-all.
   //
@@ -151,28 +177,44 @@ export function abandonChildOf(session: FleetSession | undefined): AbandonChild 
   return 'unknown';
 }
 
-const workspaceOf = (run: Pick<RunSummary, 'id' | 'workspace' | 'branch'>): string =>
-  run.workspace ?? run.branch ?? String(run.id);
+/** What the sheet calls the run's workspace (spec 9.1, A44): the recorded workspace, or a branch as "the workspace on <branch>",
+ *  or "its workspace" when neither is recorded. It never falls back to the run number. `Subject` opens a sentence. */
+export function workspaceSubject(run: Pick<RunSummary, 'workspace' | 'branch'>): { subject: string; Subject: string } {
+  if (run.workspace !== null && run.workspace !== '') return { subject: run.workspace, Subject: run.workspace };
+  if (run.branch !== null && run.branch !== '') return { subject: `the workspace on ${run.branch}`, Subject: `The workspace on ${run.branch}` };
+  return { subject: 'its workspace', Subject: 'Its workspace' };
+}
 
-/** The confirm line. Says what happens WHEN nothing keeps a child, never that it
- *  will: the sheet cannot know before the tap what will keep it. */
+/** The confirm line, without the title's "Abandon run N?" (check 13). Says what happens WHEN nothing keeps a child, never that
+ *  it will: the sheet cannot know before the tap what will keep it. */
 export function abandonConsequence(
   run: Pick<RunSummary, 'id' | 'sessionId' | 'workspace' | 'branch'>, child: AbandonChild,
 ): string {
   // Decided on `run.sessionId` alone: a run with no session names no workspace,
   // so it names no child (close.ts's abandon arm does no fleet act for it).
   if (run.sessionId === null) {
-    return `Abandon run ${run.id}? It holds no workspace of its own, so it has none to release or reclaim.`;
+    return 'It holds no workspace of its own, so it has none to release or reclaim.';
   }
-  const ws = workspaceOf(run);
+  const ws = workspaceSubject(run);
+  const RELEASE_TAIL = 'A release destroys nothing: the worktree survives, the record stays.';
   switch (child) {
-    case 'not-child':
-      return `Abandon run ${run.id} — ${ws}? A release destroys nothing: the worktree survives, the record stays.`;
+    case 'not-child': {
+      if (run.workspace !== null && run.workspace !== '') return `Its workspace is ${run.workspace}. ${RELEASE_TAIL}`;
+      if (run.branch !== null && run.branch !== '') return `Its branch is ${run.branch}. ${RELEASE_TAIL}`;
+      return RELEASE_TAIL;
+    }
     case 'child':
-      return `Abandon run ${run.id} — ${ws}? ${ws} is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped, its worktree, branch, clips and temp root are removed, and its registry row is purged.`;
+      return `${ws.Subject} is a child workspace, so the server reclaims it when nothing keeps it: its commits and uncommitted work (not ignored or secret-shaped files) are pinned in the attic and its transcripts kept, then its session is stopped, its worktree, branch, clips and temp root are removed, and its registry row is purged.`;
     case 'unknown':
-      return `Abandon run ${run.id} — ${ws}? This board cannot tell whether ${ws} is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.`;
+      return `This board cannot tell whether ${ws.subject} is a child workspace. If it is, the server reclaims it when nothing keeps it, pinning its commits and uncommitted work (not ignored or secret-shaped files) in the attic first; if not, a release destroys nothing.`;
   }
+}
+
+/** What `abandonRun` resolves with: `released` as before, and the child reclaim's two facts when the server sent them (F24). */
+export interface AbandonAnswer {
+  readonly released: boolean;
+  readonly childReclaim?: 'queued' | 'not-queued';
+  readonly childReclaimWhy?: string;
 }
 
 export interface AbandonSheetProps {
@@ -180,6 +222,11 @@ export interface AbandonSheetProps {
   /** The run's workspace's child mark, as `abandonChildOf` reads it off the fleet
    *  row. Absent means the caller did not say, which reads 'unknown'. */
   workspaceChild?: AbandonChild;
+  /** The row's context line, verbatim (F8). Absent, the sheet reads the same line the row does, `runWaitLine`; a stuck run's
+   *  line is the stuck band's, which hands it in. */
+  contextLine?: string | null;
+  /** The run's coordinator as the board reads it, for `coordinatorGoneOf` when the server sent no verdict. */
+  coordinatorPresence?: CoordinatorPresence;
   onClose: () => void;
   onDone?: () => void;
 }
@@ -187,6 +234,8 @@ export interface AbandonSheetProps {
 export function AbandonSheet({
   run,
   workspaceChild = 'unknown',
+  contextLine,
+  coordinatorPresence = 'unknown',
   onClose,
   onDone,
   abandonRun = api.abandonRun,
@@ -195,10 +244,10 @@ export function AbandonSheet({
    *  uses — defaults to the real `api.abandonRun`, whose own URL/method are
    *  pinned separately in `api.test.ts` so this injection is never the ONLY
    *  coverage of the write path. */
-  abandonRun?: (id: number) => Promise<{ released: boolean }>;
+  abandonRun?: (id: number, opts?: ReadOpts) => Promise<AbandonAnswer>;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AbandonError | null>(null);
 
   // Review fix round 1, Important 1 — the same defect class `ReapSheet`
   // already litigated (`session/ReapSheet.tsx:124-186`, findings 17-F1/F2)
@@ -234,7 +283,11 @@ export function AbandonSheet({
 
   if (run === null) return null;
 
-  const ws = workspaceOf(run);
+  const ws = workspaceSubject(run).subject;
+  const line = contextLine !== undefined ? contextLine : runWaitLine(run, Date.now());
+  const told = run.claimedBy !== null && !coordinatorGoneOf(run, coordinatorPresence);
+
+  const toRecord = (e: MouseEvent<HTMLAnchorElement>): void => { inAppClick(runPath(run.id))(e); onClose(); };
 
   const confirm = (): void => {
     if (busy) return;
@@ -245,21 +298,17 @@ export function AbandonSheet({
       (res) => {
         if (gen.current !== mine) return; // superseded — a different run's sheet is open now
         setBusy(false);
-        // NOT silent: a close that could not release is the case Wave 2's
-        // whole sibling check exists for, and before this line the sheet
-        // discarded it entirely.
-        //
-        // GATED ON `run.sessionId`, because `released:false` is the negation
-        // of one fact, not one fact (`CloseOutcome.released`'s own docstring
-        // enumerates all four producers). On this route it has TWO: a sibling
-        // re-hold — the sentence below — and an abandon of a `planned` run
-        // with no session, where `closeRun` performs no fleet act at all
-        // because there is no workspace. The wedged, never-dispatched run is
-        // exactly what this sheet exists for, so that second producer is not
-        // a corner case here; ungated, the toast would tell the operator that
-        // another run claims a workspace that was never allocated.
-        if (!res.released && run.sessionId !== null) {
-          toast(`Run ${run.id} abandoned — ${ws} is still claimed by another open run.`, 'info');
+        // The toast is the proof, and its action opens the record (spec 9.1, F9). It is not silent for a close that could not
+        // release: `released:false` is the negation of one fact, not one fact (`CloseOutcome.released`'s docstring), so it is
+        // gated on `run.sessionId`: a `planned` run with no session does no fleet act, and no sibling holds a workspace that
+        // was never allocated. A queued child reclaim is exclusive with a sibling's hold: the close never re-held it.
+        const action = { label: 'Open record', onClick: () => navigate(runPath(run.id)) };
+        if (res.childReclaim === 'queued') {
+          toast(`Run ${run.id} abandoned. Its workspace is being reclaimed.`, 'info', action);
+        } else if (!res.released && run.sessionId !== null) {
+          toast(`Run ${run.id} abandoned — ${ws} is still claimed by another open run.`, 'info', action);
+        } else {
+          toast(`Run ${run.id} abandoned.`, 'info', action);
         }
         onDone?.();
         onClose();
@@ -276,24 +325,41 @@ export function AbandonSheet({
     <Sheet
       open
       onClose={onClose}
-      title="Abandon this run?"
+      title={`Abandon run ${run.id}?`}
       // The answers are pinned in the Sheet's footer (D-5932).
       footer={
         <div className={QC_ACTIONS}>
           <Button variant="danger" disabled={busy} onClick={confirm}>
-            {busy ? 'Abandoning…' : 'Abandon'}
+            {busy ? 'Abandoning…' : `Abandon run ${run.id}`}
           </Button>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
-            Cancel
+            Keep it
           </Button>
         </div>
       }
     >
       <div className="abandon-sheet">
+        <p className="abandon-name">{runRowName(run)}</p>
+        {line !== null && <p className="abandon-line">{line}</p>}
         <p className={QC_CONSEQUENCE}>
           {abandonConsequence(run, workspaceChild)}
         </p>
-        {error !== null && <p className="abandon-error">{error}</p>}
+        {run.waitsOn === 'worker' && <p className="abandon-note">Its worker is still running.</p>}
+        {told && <p className="abandon-note">Its coordinator is told.</p>}
+        <p className="abandon-note abandon-links">
+          <a className={cn(GHOST_ANCHOR, 'abandon-link')} href={runPath(run.id)} onClick={toRecord}>See this run</a>
+        </p>
+        {error !== null && (
+          <>
+            {error.lead !== null && <p className="abandon-error">{error.lead}</p>}
+            <p className="abandon-error">{error.text}</p>
+            {error.record && (
+              <p className="abandon-note">
+                <a className={cn(GHOST_ANCHOR, 'abandon-link')} href={runPath(run.id)} onClick={toRecord}>Open record</a>
+              </p>
+            )}
+          </>
+        )}
       </div>
     </Sheet>
   );

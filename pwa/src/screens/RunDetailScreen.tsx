@@ -31,11 +31,12 @@ import { spawnVerdictChip } from '../fleet/spawnWords';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, childReclaimTitle, coordinatorOf, crossingNote, dispatchStalledTitle,
   dispatchWindow, itemTallyLabel, anyDispatchPending, runWaitLine,
-  resumeNote, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
+  isRunClosed, resumeNote, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
 } from '../fleet/runWords';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
 import { WayBack } from '../ledgers/WaitingRoutes';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
+import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { RunTrail } from './RunTrail';
 import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
@@ -192,11 +193,15 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
 
 /** The controls under the header (spec §8.4, §9.4): each one tap to its place. Abandon joins them with its sheet and Resume
  *  with its picker, in later tasks. */
-function Controls({ run, coordinatorOpenable, onLift }: { run: RunSummary; coordinatorOpenable: boolean; onLift: () => void }): ReactNode {
+function Controls({ run, coordinatorOpenable, onLift, onAbandon }: {
+  run: RunSummary; coordinatorOpenable: boolean; onLift: () => void; onAbandon?: () => void;
+}): ReactNode {
   const session = run.sessionId;
   const coordinator = run.claimedBy;
   const lift = capWaiting(run) === 'waiting';
-  if (session === null && !(coordinatorOpenable && coordinator !== null) && !lift) return null;
+  // Abandon is for an open run, whatever the stuck verdict says or lacks: it is the guard for a wrong or uncertain one (spec 8.4, 7).
+  const abandon = onAbandon !== undefined && !isRunClosed(run);
+  if (session === null && !(coordinatorOpenable && coordinator !== null) && !lift && !abandon) return null;
   return (
     <p className="rd-controls">
       {session !== null && (
@@ -210,6 +215,7 @@ function Controls({ run, coordinatorOpenable, onLift }: { run: RunSummary; coord
         </a>
       )}
       {lift && <Button variant="ghost" className="rd-control" onClick={onLift}>{RUN_PAGE_WORDS.liftCap}</Button>}
+      {abandon && <Button variant="ghost" className="rd-control" onClick={onAbandon}>{RUN_PAGE_WORDS.abandon}</Button>}
     </p>
   );
 }
@@ -280,6 +286,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const signals = useSide(id, readSignals);
   const pinnedSpec = useSpecHref(run);
   const [liftOpen, setLiftOpen] = useState(false);
+  const [abandonOpen, setAbandonOpen] = useState(false);
   const title = `Run ${id}`;
   if (state.kind === 'loading') {
     return <Frame pane={pane} title={title} q={q}><p role="status" className="rd-note">Loading…</p></Frame>;
@@ -331,10 +338,13 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
     <Frame pane={pane} title={title} q={q}>
       <Header run={run} worker={worker} nowMs={now} />
       {lead !== null && <p className="rd-close">{lead}</p>}
-      <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} />
+      <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} onAbandon={() => setAbandonOpen(true)} />
       <Facts groups={groups} />
       <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
       <LiftCapSheet run={liftOpen ? run : null} onClose={() => setLiftOpen(false)} onDone={retry} />
+      {/* The one abandon sheet the board uses (spec 9.1); a done abandon re-reads the record, which now says who closed it and why. */}
+      <AbandonSheet run={abandonOpen ? run : null} workspaceChild={abandonChildOf(worker ?? undefined)} coordinatorPresence={presence}
+        onClose={() => setAbandonOpen(false)} onDone={retry} />
     </Frame>
   );
 }

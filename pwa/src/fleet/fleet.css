@@ -3300,6 +3300,24 @@ button.proj-card-pool::before {
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
 }
+/* The abandon sheet's repeated row (D-8073): the run's name and context line, then the notes. They take the sheet's own
+   ground and ink; text wraps, nothing is ellipsised. */
+.abandon-sheet .abandon-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.abandon-sheet .abandon-line,
+.abandon-sheet .abandon-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.abandon-sheet .abandon-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
 /* The ask's lines take the sheet's own ground and ink: no colour of their own. */
 .lift-cap-sheet .lift-cap-note,
 .lift-cap-sheet .lift-cap-findings {
