@@ -8340,10 +8340,13 @@ after Leftover processes, shows what the door's GET serves and nothing it decide
 (the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
 only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
 missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
-each with what the change check measured or that none was read, at most 50 and then "and N more". It polls once a minute.
+each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
+dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
 
-**Keep them** asks first: a confirmation names how many worktrees the last pass listed (or says the card cannot tell) and that the
-session that started each agent is mailed, and nothing is sent before it is confirmed. **Do not keep** goes at once; its note says
+**Keep them** asks first: a confirmation names how many worktrees the last pass would keep (the counts line's figure; it says it
+cannot tell only when the lane has counted nothing), how many of them the card lists and how many it does not when the list leaves
+some off, and that the session that started each agent is mailed. Nothing is sent before it is confirmed, and nothing is sent when
+the card's latest reading refuses Keep them by then. **Do not keep** goes at once; its note says
 that worktrees already kept stay held back from the disk sweep until their hold ends. A choice the GET says would be refused is
 disabled, with the refusal in the card's own words, `sign-in-unarmed` included (turning it on needs sign-in armed and a signed-in
 operator), and a refused write says the same and re-reads. On a server without the door the card says it is not available there.

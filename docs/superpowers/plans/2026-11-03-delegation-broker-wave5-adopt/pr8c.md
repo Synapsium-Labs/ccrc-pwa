@@ -17,7 +17,7 @@ they applied before any fix:
 | Patch | sha256 | How it applied |
 |---|---|---|
 | `pr8c-shared.patch` | `7ff3aec7…6908b7c` | cleanly: `DELEGATION_ADOPT_CAPS` beside its type, and its single-definition row |
-| `pr8b-card-census.patch` | `373a3f6e…0502fb1741` | cleanly: the wave-3 census's PWA allow-list (`W5_SWITCH_PWA_FILES`), its comment relabelled from PR8b to PR8c |
+| `pr8b-card-census.patch` | `373a3f6e…0502fb1741` | cleanly: the wave-3 census's PWA allow-list (`W5_SWITCH_PWA_FILES`); both comments that name it (the list's own, and the allow-list's entry) relabelled from PR8b to PR8c, the second in fix round 1 (review 1693 F5) |
 | `pr8c-card.patch` | `2299f76c…7a2631` | with `git apply --3way`; three files conflicted with #2474's Browser tools card, resolved by hand, below |
 
 The card patch predates #2474, which added the Browser tools card to the same page. Each conflict kept both cards:
@@ -42,9 +42,12 @@ sentence, which is keyed by the type, so the table stays total; a 403 `sign-in-u
 refusal tone instead of the ccd write reader's line.
 
 Rows, red first: a dark server's view reads whole, through the poll, with its refusal in the card's words, `on` disabled and `off`
-checked; `off` refused with the word is no view, and each guard keeps its own words; the write reply's sentence; the refusal table
-total over the four words; and a single-definition row (`vocabularies.test.ts`) pinning the one table, the derived union and the one
-guard. Mutants: the table without the word reds four card rows; a hand-kept union reds the vocabulary row. The browser file gains
+checked; `off` refused with the word is no view, and each guard keeps its own words; the write reply's sentence; and a
+single-definition row (`vocabularies.test.ts`) pinning the one table and the derived union. The refusal table's totality row was
+extended to the four words; it was not red first (review 1693 F11). Since fix round 1 the same row also pins that the guard's body
+reads the table and spells none of its words (review 1693 F7). Mutants: the table without the word reds four card rows; a hand-kept
+union reds the vocabulary row; a hand-kept guard body (`v === 'sign-in-unarmed'`, the table unread) reds it too, where it left all
+151 rows green before F7. The browser file gains
 a dark server's step at every width: the view reads whole, its list is drawn, `on` is refused in the card's words, and nothing
 overflows.
 
@@ -54,7 +57,11 @@ Fix round 2 of PR8b dropped `path` from each would-keep item, so an item is proj
 patch's reader still required `path`, so it read every path-less view as no view. Its card keyed the list on `path` and showed it as
 each item's title. Now the reader reads the four fields, the list keys on project and worktree with no title, and no fixture carries
 a path, the browser file's included. Row, red first: an item of exactly those four keys reads whole through the reader and the poll, and no list item carries a
-title. Mutant: the reader requiring `path` again reds nine rows.
+title. Mutant: the reader requiring `path` again reds nine rows. That title assertion could not fail on path-less fixtures, so fix
+round 1 adds a row whose two items still carry one shared `path` (the shared reader passes unknown fields through): the path is shown
+nowhere, is no item's title, and is no key (two items with one path would warn of a duplicate key). Mutants: the card putting the
+item's `path` into a title reds it, and so does keying on it (review 1693 F2). The second guard is the pwa typecheck:
+`DelegationAdoptionKeep` has no `path`, so `k.path` in the card does not compile.
 
 With N10 alone the pwa typecheck still failed on N6's gap: `delegationAdoptRefusedLine` could not take `sign-in-unarmed`. As the
 patch applied it failed on `path` too, because the shared type no longer has the field. N6 closes both, and the typecheck is green.
@@ -84,8 +91,25 @@ Every site `git grep` finds for `ScopeSweepSection`, `useScopeSweepView`, `scope
 The card never decides a refusal: it shows what the GET serves. `watch.ts` and `store.ts` are untouched, and no transition row,
 journal kind, entry field or checkpoint member is added. No test, script or fixture raises the live marker.
 
-## Observation for the ledger fold
+The census reads the card's own words. A failed write that is not one of the door's words is said by the ccd write reader
+(`verbWriteFailure`), which relays the server's detail as the precedent cards do: that detail is the server's data, not the card's
+words (review 1693 F9, ruled no change).
 
-The card's reader checks each keep item itself (`asKeep`), and a malformed list nulls the whole view, while `keeps`' one reader,
-`delegationAdoptionKeepsOf`, drops a malformed list and keeps the rest; the card's list then reads through that one reader. Both
-read the same fields since N10. No ruling asked to fold the card's check into the one reader, so it is left as the patch made it.
+## Fix round 1 (review 1693)
+
+| F | What changed | Row, red then green | Mutant |
+|---|---|---|---|
+| F1 | `asKeep` goes: the card reads `keeps` through its one reader, `delegationAdoptionKeepsOf`, and a list it refuses is dropped, so the card says "served no list" and the switch stays drawn; `asHealth` keeps its mode and count checks | a malformed item with no earlier view: both answers, the counts and the no-list line drawn; the reader row now asserts three bad lists are dropped, not the view | the view nulled again on a refused list: 2 red |
+| F2 | a row that can fail: items carrying a shared `path` | the path shown nowhere, no title, no duplicate-key warning (green before the fix too; the mutants are its proof) | `path` as the title: 1 red; `path` as the key: 1 red |
+| F3 | `choose` reads the current view: a choice it refuses sends nothing and closes the sheet; the comment on refused choices corrected | sheet open, a newer view refuses `on`, confirm: no POST, the sheet closed, the refusal line shown | the re-check dropped: 1 red |
+| F4 | after a tap, once the write settles or a refusal closes the sheet, the focus goes to the checked answer when it can be chosen, else to the card's status lines (a `tabIndex=-1` wrapper) | the active element after the confirm and the settle, and after a refused write (jsdom) | the focus step dropped: 2 red |
+| F5 | the allow-list entry's comment relabelled PR8c | text | none |
+| F6 | AutomationSection's header: this card reads the frame's view | text | none |
+| F7 | the vocabulary row pins the guard's body | the reviewer's hand-kept guard left 151 green | the hand-kept guard: 1 red |
+| F8 | the sheet names `adoption.wouldAdopt`, list or no list; "cannot tell" only for `adoption` null; with `more` above 0 it says how many are listed and how many are not | would keep 0 with no list; a served list; `more` above 0; `adoption` null; the card's own sheet at 0 | none ruled |
+| F9 | no change; the census sentence above | text | none |
+| F10 | the live mode line speaks of the last pass; the refused line and `fleet-caps-unmeasured`'s sentence drop "now"; the census regex gains `now` | the census | the old live line put back: 1 red |
+| F11 | text: the totality row is not claimed as red first | text | none |
+
+F4's precedents, by reading and not measured: `ScopeSweepSection` and `PaneScopeStopSection` open no sheet, but both disable their
+fieldset while a write is in flight, so the radio just tapped is disabled under the focus. Their fix is out of this PR's scope.

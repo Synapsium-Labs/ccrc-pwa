@@ -1200,7 +1200,7 @@ describe('8. the closed scope census', () => {
         // Delegation wave 5 PR10 (O5-6 (a)): the wire's carrier-state word `adopted`, a key and a compared value in the words
         // module; no string the module makes public says it.
         'pwa/src/fleet/delegationWords.ts',
-        // Delegation wave 5 PR8b (D-8114): the adoption switch's card, its door's URL and its wire's type names.
+        // Delegation wave 5 PR8c (D-8114): the adoption switch's card, its door's URL and its wire's type names.
         ...W5_SWITCH_PWA_FILES,
       ]],
       // Delegation wave 5 PR10 (O5-6 (a)): the operator's keep door's URL (`/operator-retain`) in `pwa/src/lib/api.ts`, and the
