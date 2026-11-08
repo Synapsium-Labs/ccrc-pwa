@@ -284,9 +284,9 @@ describe('Forget follows the session sheet\'s presence check', () => {
 // Review 1663 F1 (the coordinator's ruling): the server's act stays the authority, so when the fleet switches a forget
 // act to Check again, a line under the server's sentence says why.
 describe('a forget act the fleet holds back says why', () => {
-  const RUNNING = 'Forget is not offered while the fleet lists this session as running.';
-  const ASLEEP = 'Forget is not offered while the fleet lists this session as asleep; wake it or check again.';
-  const DOUBT = 'Forget is not offered while the fleet cannot tell whether it is running.';
+  const RUNNING = 'Forget is not offered while the fleet lists this session as running: stop it first.';
+  const ASLEEP = 'Forget is not offered while this session is asleep: stop it first.';
+  const DOUBT = 'Forget is not offered while the fleet cannot tell whether this session is running.';
   const why: [string, ReturnType<typeof deadSession>, string][] = [
     ['running', fleetSession({ id: 'row-a' }), RUNNING],
     ['asleep', hibernatedSession(1_700_000_000_000, { id: 'row-a' }), ASLEEP],

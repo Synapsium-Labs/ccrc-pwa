@@ -39,12 +39,13 @@ export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts |
 }
 
 /** The line under the server's sentence when a forget act shows Check again because of the row's presence (review
- *  1663 F1, the coordinator's ruling). One line per presence reason of `forgetHeldBack`; a workspace row has none
- *  (ruling R2). */
+ *  1663 F1, the coordinator's ruling; words of mail 16603). One line per presence reason of `forgetHeldBack`; a workspace
+ *  row has none (ruling R2). Forget needs the session stopped: checking again cannot change an asleep row, and waking it
+ *  does not unlock Forget, so `running` and `asleep` both say stop it first. */
 const HELD_BY_FORGET_HELD_BACK: Record<Exclude<ForgetHeldBack, 'workspace'>, string> = {
-  running: 'Forget is not offered while the fleet lists this session as running.',
-  asleep: 'Forget is not offered while the fleet lists this session as asleep; wake it or check again.',
-  doubt: 'Forget is not offered while the fleet cannot tell whether it is running.',
+  running: 'Forget is not offered while the fleet lists this session as running: stop it first.',
+  asleep: 'Forget is not offered while this session is asleep: stop it first.',
+  doubt: 'Forget is not offered while the fleet cannot tell whether this session is running.',
 };
 
 /** The line for a forget act the console turned into Check again, or `null`. It decides nothing itself: the reason is
