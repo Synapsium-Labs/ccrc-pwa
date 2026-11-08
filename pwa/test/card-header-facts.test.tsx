@@ -3,11 +3,16 @@
 // ways — the model's card facts are a subset of its header facts, and the
 // rendered card's facts are all in the rendered header, in both skins.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { SessionLine } from '../src/fleet/SessionLine';
+import { RunRow } from '../src/screens/RunRow';
+import { RunDetailScreen } from '../src/screens/RunDetailScreen';
+import { api } from '../src/lib/api';
+import { createFleetStore } from '../src/stores/fleet';
+import type { RunSummary } from '../../shared/api';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import {
   MARKER_ORDER, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers, sessionFacts, shortenByToken,
@@ -459,5 +464,39 @@ describe('the R9 chip: a worker\'s attached delegation entries (delegation broke
     const toggle = screen.queryByRole('button', { name: /details/i });
     if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
     expect(visible(document.querySelector('.chat-head')!)).toContain('2 delegated');
+  });
+});
+
+// The run page's header is a superset of the run row (the runs rebuild, Task 7, D-8072; spec 2026-11-04 §8.4; D-5545): every
+// element the row draws is drawn again, word for word, from the same readers.
+describe('a run row and its page header', () => {
+  it('every row element appears verbatim in the header', async () => {
+    const run = {
+      id: 410, program: 'programme-a', programTitle: 'Programme A', runTitle: null, wave: 2, waveOf: 4, project: 'project-b',
+      homeProject: 'project-a', kind: 'review', reviews: 409, state: 'working', sessionId: null, claimedBy: null, workspace: null,
+      branch: null, resumed: true, clearedAt: null, dispatchStartedAt: null, dispatchedAt: null, openedAt: NOW - 60_000,
+      closedAt: null, items: { done: 1, total: 3 }, unreadMail: 0, handoffCommit: null,
+      stuck: { reason: 'owner-gone', cause: null, since: NOW - 60_000, closes: null }, waitsOn: 'coordinator', blockedBy: null,
+      health: { mailParked: 2, mailOutstanding: 1, mailParkedLive: 1, mailReplayMax: 0, briefQueued: null, clearError: null, coordKickoffPendingSince: null },
+    } as unknown as RunSummary;
+    const row = render(<ul><RunRow run={run} nowMs={NOW} session={null} coordSession={null} frameSeen={false} programHasOpenRun
+      onAbandon={() => {}} onResume={() => {}} loadSpend={async () => ({ measured: false, reason: 'no-sweep' })} /></ul>);
+    const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-resumed, .run-warn-item')]
+      .map((e) => e.textContent ?? '');
+    row.unmount();
+    // Neither the lamp's word nor a marker is optional in this case: the row draws them, so the header must.
+    expect(rowTexts).toEqual(expect.arrayContaining(['stuck', 'resumed, not cleared']));
+    expect(rowTexts.length).toBeGreaterThanOrEqual(8);
+    vi.spyOn(api, 'runRecord').mockResolvedValue({ ok: true, run, events: [], reviewedBy: [], olderEvents: 0 });
+    vi.spyOn(api, 'run').mockRejectedValue(new Error('offline'));
+    vi.spyOn(api, 'runItems').mockRejectedValue(new Error('offline'));
+    vi.spyOn(api, 'runSignals').mockRejectedValue(new Error('offline'));
+    vi.spyOn(api, 'goals').mockRejectedValue(new Error('offline'));
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+    try {
+      render(<RunDetailScreen id={410} store={createFleetStore({ makeSocket: () => ({ close() {} }) as unknown as WebSocket })} />);
+    } finally { vi.useRealTimers(); }
+    const header = (await waitFor(() => { const h = document.querySelector('.rd-head'); if (h === null) throw new Error('no header'); return h; })).textContent ?? '';
+    for (const t of rowTexts) expect(header, t).toContain(t);
   });
 });

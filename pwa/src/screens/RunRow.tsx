@@ -17,7 +17,7 @@ import {
   type FleetSession, type RunSpend, type RunSummary, graphReadCount, unmeasuredFields,
 } from '../../../shared/api';
 import {
-  DISPATCH_GLYPH, RUN_GLYPH, childReclaimChip, childReclaimGone,
+  DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, childReclaimGone, dispatchStalledTitle,
   childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel,
   resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord,
 } from '../fleet/runWords';
@@ -206,10 +206,10 @@ export const RunRow = memo(function RunRow({
         <span
           className="run-dispatch"
           data-phase="stalled"
-          title={`the dispatch began ${formatElapsed(spawn.elapsedMs)} ago and the run is still planned`}
+          title={dispatchStalledTitle(spawn.elapsedMs)}
         >
           <span className="run-dispatch-glyph" aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>
-          {'dispatch never completed — a workspace may exist'}
+          {DISPATCH_STALLED_WORDS}
         </span>
       )}
       {/* The linked session's spawn verdict, in `SessionLine`'s own class and

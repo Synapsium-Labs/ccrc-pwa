@@ -9,7 +9,7 @@
 import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
   type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type RunsPageAnswer, type SessionRun } from '../../../shared/api';
-import { formatAge } from './formatReset';
+import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -206,6 +206,11 @@ export function dispatchWindow(
     ? { phase: 'stalled', elapsedMs }
     : { phase: 'in-flight', elapsedMs };
 }
+
+/** The stalled dispatch's sentence, and its long form: said by the run row and by the run page's header (D-8072), so one spelling. */
+export const DISPATCH_STALLED_WORDS = 'dispatch never completed — a workspace may exist';
+export const dispatchStalledTitle = (elapsedMs: number): string =>
+  `the dispatch began ${formatElapsed(elapsedMs)} ago and the run is still planned`;
 
 /** The two phases that RENDER, as a glyph each — the board's standing
  *  two-cue rule (a word AND a glyph, so no state is read out of colour

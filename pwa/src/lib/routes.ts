@@ -39,6 +39,11 @@ export const ROUTES: readonly Route[] = [
   { id: 'session', pattern: /^\/s\/([^/]+)\/?$/, title: 'Session', top: false, path: null },
   { id: 'inbox', pattern: /^\/mail\/?$/, title: 'Inbox', top: true, path: '/mail' },
   { id: 'runs', pattern: /^\/runs\/?$/, title: 'Runs', top: true, path: '/runs' },
+  // One run's page (the runs rebuild, D-8072; spec 2026-11-04 §8.4): any run, open or closed, by its number. `accepts` keeps
+  // the grammar to canonical positive safe integers (`isRunId`), so `/runs/0`, `/runs/007` and a number past the safe
+  // integers are outside the table and send no read. Not `top`: a page reached from the board, a search or a link, and
+  // `topRouteOf` still places it under Runs.
+  { id: 'run', pattern: /^\/runs\/(\d+)\/?$/, title: 'Run', top: false, path: null, accepts: isRunId },
   { id: 'accounts', pattern: /^\/accounts\/?$/, title: 'Accounts', top: true, path: '/accounts' },
   // `/docs` and every page under it, never `/docsearch` (design 2026-10-01 section 4.2).
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
@@ -73,6 +78,34 @@ export const ROUTES: readonly Route[] = [
   // carried under Fleet, `topRouteOf`), no "Go to" row.
   { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
 ];
+
+/** Whether a string is a run's number as a path carries it: plain decimal digits, no leading zero, a positive safe
+ *  integer. What the `run` row's `accepts` asks, and what the page asks before it reads. */
+export function isRunId(param: string): boolean {
+  return /^[1-9][0-9]*$/.test(param) && Number.isSafeInteger(Number(param));
+}
+
+/** The run page's one query (spec §8.4, A42): the search a result was opened from, so the way-back strip can say "Search
+ *  results" and keep the query across a reload or a shared link. `navigate` writes null history state, so it rides the URL. */
+export const RUN_FROM_SEARCH_QUERY = 'q';
+
+/** The one builder of a run's path, `/runs/<id>`, with the search it was opened from when there is one. */
+export function runPath(id: number, q?: string): string {
+  const path = `/runs/${id}`;
+  return q === undefined || q === '' ? path : `${path}?${new URLSearchParams({ [RUN_FROM_SEARCH_QUERY]: q })}`;
+}
+
+/** The search a run page was opened from, in a `location.search`-shaped string, or null when it is absent or empty. */
+export function runQueryOf(search: string): string | null {
+  const q = new URLSearchParams(search).get(RUN_FROM_SEARCH_QUERY);
+  return q === null || q === '' ? null : q;
+}
+
+/** The runs board's search address, `/runs?q=<query>`: where "Search results" goes back to. The search itself is the board's
+ *  (spec §8.3); this is only the address a run page's strip names. */
+export function runsSearchPath(q: string): string {
+  return `/runs?${new URLSearchParams({ [RUN_FROM_SEARCH_QUERY]: q })}`;
+}
 
 /** The one builder of a session's path, `/s/<id>`, which the `session` row above parses (D-7189). It encodes every
  *  id; over `isSessionIdShape`'s charset, every id the wire carries, `encodeURIComponent` is the identity, so the

@@ -1,0 +1,23 @@
+/* One run's page (`RunDetailScreen`, D-8072; spec 2026-11-04 §8.4). Skin tokens only; no `.run` rule, and nothing here lives in
+   `instrument.css` or `refined.css`. Phone: one column, each fact its label over its value. From a laptop's width the facts
+   are two columns, each label beside its value. Text wraps, nothing is ellipsised. */
+.rd-strip { padding-inline: 0; max-width: none; }
+.rd-note { margin: var(--sp-3) 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+.rd-head { display: grid; gap: var(--sp-1); min-width: 0; margin: var(--sp-3) 0; color: var(--ink-primary); }
+.rd-head > p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.rd-kind-word { font: var(--weight-medium) var(--fs-xs) / 1.4 var(--family-mono); color: var(--ink-secondary); }
+.rd-lamp { display: flex; align-items: center; gap: var(--sp-2); font-weight: var(--weight-medium); }
+.rd-name { font-size: var(--fs-base); }
+.rd-line, .rd-chips, .rd-warn { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-meta); color: var(--ink-secondary); }
+.rd-dispatch, .rd-reclaim-line, .rd-close { font-size: var(--fs-meta); color: var(--ink-secondary); }
+.rd-close { margin: 0 0 var(--sp-3); overflow-wrap: anywhere; }
+.rd-crossing > span:first-child, .rd-kind > span:first-child, .rd-reclaim > span:first-child { margin-right: var(--sp-1); }
+.rd-group { margin-bottom: var(--sp-3); }
+.rd-facts { display: grid; gap: var(--sp-2); margin: 0; }
+.rd-fact { display: grid; gap: 0; min-width: 0; }
+.rd-fact dt { font-size: var(--fs-xs); color: var(--ink-secondary); }
+.rd-fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+@media (min-width: 900px) {
+  .rd-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2) var(--sp-4); }
+  .rd-fact { grid-template-columns: minmax(6rem, 9rem) minmax(0, 1fr); gap: var(--sp-2); }
+}
