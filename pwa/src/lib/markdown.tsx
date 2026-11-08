@@ -299,8 +299,9 @@ export function ChatLink({ target, children }: { target: RefTarget; children?: R
   );
 }
 
-/** True under a Markdown link's anchor (chat's `a` arm provides it): a name there draws as text, so a link never holds a link
- *  and one click does one thing, the link's (review 1586 F1). The remark plugin marks nothing inside a link, but a whole-name
+/** True under a Markdown link's anchor (chat's `a` arm provides it): a name, an image or a link the parser made there draws
+ *  without an anchor of its own, so a link never holds a link and one click does one thing, the link's (reviews 1586 F1,
+ *  1597 F1 and 1606 F1). The remark plugin marks nothing inside a link, but a whole-name
  *  code span is decided at render time (R13), where only this tells it it sits inside one. */
 const InsideLinkContext = createContext(false);
 
@@ -348,11 +349,16 @@ function ImageLink({ href, alt }: { href: string | undefined; alt: string }): Re
  *  draws its name as a link when the session's context resolves it, else its text. */
 export const CHAT_COMPONENTS: Components = {
   ...SHARED_COMPONENTS,
-  a({ href, children }) {
+  a: function ChatAnchor({ href, children }) {
+    const insideLink = useContext(InsideLinkContext);
     if (isImageUrl(href) && !isRefusedChatImageSrc(href)) {
       const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
       return <ImageLink href={href} alt={name} />;
     }
+    // A link the parser made inside a link's text (an angle-bracket or mailto autolink, a footnote reference) draws as its
+    // text, as an image there does, so the outer link is the one anchor and one click (review 1606 F1; desktop-polish Task
+    // C14, D-8110).
+    if (insideLink) return <>{children}</>;
     // A path the console routes moves within the app (Task L); anything else, an unrouted or protocol-relative path included,
     // keeps the external arm.
     const inApp = href === undefined ? null : routedHref(href);
