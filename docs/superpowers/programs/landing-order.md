@@ -36,8 +36,8 @@ merges, workers never do, and an unattended landing is the goal when every safeg
 | 5d | 5, the lander key | the radar's conf accepts `lander=coordinator` or `none`, mirrored to a marker the server reads; and D-7546's restatement, wave 5b's dropped Task 2 | ccd (fleet box first), skills | — | #2029 | run 1311 (the run's wave 17); review 1313 closed at `36f9897d2`, fix round 1 (Decisions, 2026-11-01 18:39); review 1327 closed at `40cfb6752`, fix round 2 (Decisions, 2026-11-02 22:35); review 1357 clean at `307e47b85`, accepted, departures D-7788 to D-7790 (Decisions, 2026-11-02 23:55); merged 2026-11-03 (`43e11b36`, release v0.0.921; Decisions, 2026-11-03 03:38), run 1311 closed done; plan `docs/superpowers/plans/2026-10-31-landing-order-wave5d-lander-key-latest-attempt.md`, D-7635 to D-7647; the fleet box runs it (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27) |
 | 5e | 5, the line's core | `landing_entries` and `landing_projects`, an entry pinned at `advance → merging`, the ejection that records its base, the second-ejection notice, the order and hold decider, and the coordinator's read of the line (`GET /api/landing`) | server, skills | wave 5a | — | merged 2026-10-31 (#2020 `4fc83e57`; `docs/superpowers/plans/2026-10-31-landing-order-wave5e-landing-line-core.md`, D-7610 to D-7627, and its departures note, D-7628 to D-7633; Decisions, 2026-10-31 15:17) |
 | 5f | 5, attributed writes | the `landing.log` journal and its replay (D-7610), `POST /api/landing/entries` and `POST /api/landing/order`, `setBy` and their feed events, and the coord.db invariant's journal sentence | server, skills | 5e | #2246 | planned 2026-10-31 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`, D-7652 to D-7663; Decisions, 2026-10-31 20:00); the operator approved its CLAUDE.md amendments (Decisions, 2026-11-03 06:27); run 1312 dispatched 2026-11-03 before the plan reached `main`, on the operator's ruling (Decisions, 2026-11-03 16:14); wave-done verified at `89579e774`, review run 1413 (Decisions, 2026-11-04 03:12); fix round 1 on its report (Decisions, 2026-11-04 03:53); its wave-done verified at `65e81913d`, accepted by review 1425, departures D-7941 to D-7949 (Decisions, 2026-11-04 08:09); land-synced at `211fdff14` after #2248, MERGED 2026-11-04 10:17 UTC (`6da86bb8`), run 1312 closed (Decisions, 2026-11-04 10:36) |
-| 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); the plan's approval waits; run 1427 |
-| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan |
+| 5g | 5, intents | dispatch's `intents[]` and `intent-held`, in a table of their own | server, skills | 5e | — | planned 2026-11-06 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089; Decisions, 2026-11-06 22:15); item 60 answered as proposed (Decisions, 2026-11-07 14:33); approved as written (item 74), the plan merged (#2408 `67db632c`) and run 1427 dispatched 2026-11-07 (Decisions, 2026-11-07 23:08); wave-done verified at `e8c92d065`, review 1654, fix round 1; its wave-done verified at `f9b65a028`, accepted by review 1660, departures D-8117 to D-8119; MERGED 2026-11-08 02:23 UTC (#2453 `12ce1ba7`), run 1427 closed (Decisions, 2026-11-08 02:25) |
+| 5h | 5, the landed reader | the lane that walks the entries with 5c's form, apart from `sweepMerged` | server | 5c on the fleet box, and 5e | — | to plan; run 1661 (the run's wave 20) opened 2026-11-08, planned, before run 1427 closed (Decisions, 2026-11-08 02:25) |
 | 5i | 5, the line's head | `mainRedHold` from the radar's `main-health`, the next-to-land mail, and the reader of 5d's marker | server, skills | 5d on the fleet box, 5e and 5h | — | to plan |
 | 5j | 5, the doors (server) | the two session-only routes, pause the line and withdraw an entry, and `landing-subtractive.test.ts` | server, skills | 5e and 5i | — | to plan |
 | 5k | 5, the doors (PWA) | the line on the project card, the pause control and the withdraw sheet | pwa | 5j | — | to plan |
@@ -2063,6 +2063,69 @@ carries it (spec §5.1, amended 2026-09-24).
     (D-8080).
   - **Next.** The plan's approval as an item, then the plan lands, item 60 is confirmed against `main`, and run 1427
     is dispatched.
+- **2026-11-07 23:08 — the plan is approved and merged (#2408, `67db632c`), and run 1427 is dispatched.**
+  - **The answer** to item 74: "Approve as written: land the plan and dispatch it" (22:40 UTC).
+  - **The landing.** #2408 merged at 22:51:02 UTC as `67db632c2`, from head `6c9382fcc`, through the merge queue.
+    Items 60 and 74 were then confirmed against `main`.
+  - **The dispatch.** Run 1427 went to a fresh child at 23:08 UTC, with four items (Tasks 1 to 4), routed Opus at
+    high with Sonnet subagents, workflow off, compact 40. `main` had reached migration 41 (#2404), so the brief named
+    slot 42 (D-8117).
+  - **Leave in another programme's claim.** The wave needed one hunk in each of `shared/api.ts`,
+    `server/src/coord/routes.ts` and `README.md`. All three files were under claim 3772, held by the delegation
+    broker's run 1645.
+    - That programme's coordinator consented to the three hunks exactly as the worker listed them: the refusal code;
+      the dispatch body's intents and the outcome's key and holder; one README sentence. It named three regions of
+      its own to keep clear.
+    - In return, this coordinator gave run 1645 leave in 5g's claim 3773, for two door strings in
+      `coordinator-skill.test.ts`.
+    - Whichever branch lands second merges `main` once and recounts.
+- **2026-11-08 02:25 — 5g is merged (#2453, `12ce1ba7`, 2026-11-08 02:23:16 UTC, from head `f9b65a028`), and run
+  1427 is closed.**
+  - **The first wave-done** came at `e8c92d065` (4 commits, 19 files), and this coordinator verified it:
+    - the tip is the PR's head, the required checks passed, and the merge-tree with `main` is clean;
+    - `CLAUDE.md` and the verdict fence are unchanged;
+    - `main` still had 41 migrations, and the branch has 42;
+    - the held-file hunks are exactly the consented ones.
+  - **Then** its four items were settled done, and the run moved to `awaiting-review`.
+  - **Review 1654** ran three Opus lenses and 13 Sonnet refuters (16 agents). It confirmed 2 important findings,
+    left 5 minor ones as advisory and refuted 2. Fix round 1 was ruled as follows:
+    - **F1 and F4:** step 6's D-8089 sentence was wrong for some of the advance's answers. Reworded to report the
+      state the answer names (D-8118).
+    - **F2 and F3:** the worker-starting re-run can answer `intent-held` after the request's first pass started or
+      woke the bound worker's pane. The held check stays. README's consented sentence and `wave-lifecycle.md`'s
+      `intent-held` row now name the edge. One test and a mutation row drive it (D-8119).
+    - **F6:** the route-level grammar refusal now asserts no `ccd` call, the run `planned` and no row, with a
+      mutation row.
+    - **Not for that round:**
+      - F5, the plan's slot-41 literals: the plan stays a snapshot, and the move is D-8117.
+      - JSON `null` for `intents` stays refused: the plan's grammar refuses anything but an array, and only absence
+        and `[]` mean none.
+      - The two refuted findings.
+  - **The second wave-done** came at `f9b65a028` (1 commit, 5 files, no production code), verified the same way.
+    The merge-tree was clean against `7f2f987c6`.
+  - **Review 1660** ran three Opus lenses and 15 Sonnet refuters (18 agents). It confirmed nothing and found
+    rulings 1 to 3 done.
+    - It measured mutation rows 5G-DISPATCH-10 and -11 red itself.
+    - Of its 4 advisory findings, A1 and A2 are carried to 5h (Carried constraints), and 9 findings were refuted.
+    - `deviation-refs` went red once in that review and green on its re-run. This coordinator ran it twice at
+      `f9b65a028`, green both times.
+  - **Accepted** at 02:03 UTC. D-8117 was allocated then, and D-8118 and D-8119 at 02:27 UTC. All three are defined
+    in `docs/superpowers/plans/2026-11-06-landing-order-wave5g-departures.md`.
+  - **The landing.**
+    - Run 1661 opened first, for 5h, at 02:03 UTC, so closing 1427 cannot retire the programme.
+    - Run 1427 then advanced to `merging`, with landing entry 103 pinned at `f9b65a028`.
+    - A `BOUND_S=0` verdict read the native queue and squash, the required-checks gate passed, and no mail was
+      queued.
+    - #2453 was enqueued at 02:03:41 UTC with `--match-head-commit`, at queue position 2, and merged at 02:23:16.
+  - **A merge notice came this time.** The server's `merged:#2453` mail arrived at 02:24 UTC, about a minute after
+    the merge (the 5h item under Carried constraints). `gh pr view` then answered MERGED, with `headRefOid` equal to
+    the run's recorded head.
+  - **The close.**
+    - This coordinator mailed the worker MERGED, then closed run 1427 final: done, released, its child's reclaim
+      queued.
+    - Claim 3773 ended with the run.
+    - Run 1645 lands second, so it merges `main` once and recounts. Its coordinator was told at 02:25 UTC.
+  - **Next.** 5h, run 1661, is to plan.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -2534,6 +2597,17 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     - **The read is unbounded.** With a held 40-byte secret, the masker replaces `order`'s shas after about 2048
       entries, and `entries`' after about 4096. The landing check then fails closed. 5h bounds the read, to
       non-terminal states or with `?pr=`.
+- **From wave 5g's reviews (1654, 1660).** Neither is a defect in behaviour: each is a guard that a wording or an
+  order rests on.
+  - **To 5h's plan,** which takes them or names the wave that will:
+    - **The worker-starting wording is not pinned** (review 1660's A1). README's sentence at the end of Run lifecycle
+      item 2 and `wave-lifecycle.md`'s `intent-held` row name the edge (D-8119). But the only suite that reads the row
+      checks only that `intent-held` appears somewhere in the file, so reverting either text leaves every suite green.
+      A `toContain` on the edge's clause, with a mutation row, would pin it.
+    - **The grammar refusal's "lists no registry" half rests on order rows alone** (review 1660's A2).
+      `landing-intents-dispatch.test.ts`'s grammar case catches a parse moved after a fleet act, through `f.calls`.
+      It cannot catch one moved after `admit`'s registry listing and before the spawn, because that read does not go
+      through the recording runner. `dispatch-gate-order.test.ts` pins the order, so the code is right today.
 - **From wave 5f's review (1425).**
   - **To the next wave that edits README's landing section:** the fence paragraph says every later caller answers
     `landing-fenced` with the recovery word. A `restart` fence closes the database handle, and the advance route
@@ -2545,10 +2619,10 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
     because the route's only notice is the second-ejection ask and every fixture entry starts at 0 ejections. Seed
     one entry at 1 ejection, so that a wrongly successful retreat would make the ask due.
 - **From wave 5f's review (1413).**
-  - **To the next wave that edits the coordinator skill:** step 6 says to report "with the run at `working`" when an
-    advance records no base. In 5f a retreat out of `merging` can be refused before the run moves (a recovery hold,
-    the fence, `landing-projection-unreadable`), and an uncertain answer leaves the run's state unknown, so the run
-    can still be at `merging` (D-7942).
+  - **To the next wave that edits the coordinator skill; taken by wave 5g** (#2453 `12ce1ba7`; D-8089, D-8118): step
+    6 says to report "with the run at `working`" when an advance records no base. In 5f a retreat out of `merging`
+    can be refused before the run moves (a recovery hold, the fence, `landing-projection-unreadable`), and an
+    uncertain answer leaves the run's state unknown, so the run can still be at `merging` (D-7942).
   - **To 5i** (the binding order):
     - An equal-head retreat still ejects a pinned row whose projection is unreadable (a non-hash `handoffCommit`, a
       blank `setBy`). Rule on it before the order binds.
@@ -2571,14 +2645,17 @@ restatement, taken by wave 5a). None of them accepts wrongly a doc the radar wri
       2026-11-04 10:36). 5h is planned only once the cause is
       measured: a lane that reads landings cannot rest on a notice that stayed silent. Until then, any report of a
       merge is a cue for the coordinator to prove it, as this landing did.
+    - **5g's notice did come.** `merged:#2453` arrived about a minute after the merge (Decisions, 2026-11-08 02:25),
+      so the silence is not every landing's. 5h's measurement compares the landings that were announced with those
+      that were not.
 - **SAFETY.** Never a destructive `ccd` verb against the live host; never touch tmux, `~/.cc-sessions`,
   `~/.cc-limits` or `claude-session@*.service` directly; fixture HOMEs only in tests; `gh` stays off the exec
   whitelist; never print secret contents.
 
 ## Next-wave brief
 
-Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b, 5a, 5b, 5c, 5d and 5e are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
-#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`, #2015 `83c3544c`, #2017 `a77811e5`, #2020 `4fc83e57`, #2029 `43e11b36`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
+Waves 1–3, 2b, 3b, 3c, 3d, 3e, 4, 4c, 4b, 5a, 5b, 5c, 5d, 5e, 5f and 5g are merged (#231 `10f32755`, #234 `0087a045`, #1863 `d3250900`, #248 `9a255a74`,
+#1740 `3ca67389`, #1046 `4ce282f8`, #1096 `e173c1aa`, #1127 `7e38b5f4`, #1884 `f6b67a5b`, #1911 `9ec4fc54`, #1923 `85d61aa8`, #1960 `d196d8b3`, #2015 `83c3544c`, #2017 `a77811e5`, #2020 `4fc83e57`, #2029 `43e11b36`, #2246 `6da86bb8`, #2453 `12ce1ba7`). Task 7's re-run on 2026-10-21 turned the merge queue on for `main`, and
 it stays on by the operator's ruling (Decisions, 2026-10-21 12:15). Wave 3d answers its stop rule 6: a removal whose
 reason is `merged` reads `landed` (Decisions, 2026-10-21 14:49 and 19:17).
 
@@ -2659,10 +2736,14 @@ Deploy: ccrc's updater carries the server, the PWA and the skill text.
   (v0.0.926), and `lander=coordinator` is written for this project (Decisions, 2026-11-03 06:27).
 - **5f is merged** (#2246 `6da86bb8`, 2026-11-04; Decisions, 2026-11-04 10:36). Review 1425 accepted it; its
   departures are D-7941 to D-7949 (`docs/superpowers/plans/2026-10-31-landing-order-wave5f-departures.md`). The plan is
-  `docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`. Wave 5g's run is
-  1427, planned.
-- **5g is planned** (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`, D-8080 to D-8089;
-  Decisions, 2026-11-06 22:15). Item 60 is answered as proposed (Decisions, 2026-11-07 14:33); the plan's approval
-  waits; its run is 1427.
+  `docs/superpowers/plans/2026-10-31-landing-order-wave5f-authority-recovery-attributed-writes.md`.
+- **5g is merged** (#2453 `12ce1ba7`, 2026-11-08; Decisions, 2026-11-08 02:25). Review 1660 accepted it; its
+  departures are D-8117 to D-8119 (`docs/superpowers/plans/2026-11-06-landing-order-wave5g-departures.md`). The plan
+  is `docs/superpowers/plans/2026-11-06-landing-order-wave5g-landing-intents.md`. Deploy: ccrc's updater carries the
+  server and the skill text. A server older than 5g ignores `intents` and its `200` names none, which a coordinator
+  reads as no hold taken (D-8086). Stage 5's §10 count is read by hand two weeks after the rollout (D-8088).
+- **5h is next.** Its run, 1661, is open at `planned`. Its plan is still to be written, against `main` at `12ce1ba7`
+  or later. The plan takes the items carried to 5h, review 1660's A1 and A2 among them, and first measures why some
+  merge notices stay silent.
 - **5h to 5k follow in order**, each planned against `main` as it then stands. The fleet box runs 5c, which 5h reads
   (v0.0.926, measured 2026-11-03; Decisions, 2026-11-03 06:27).
