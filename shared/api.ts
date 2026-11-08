@@ -6932,6 +6932,27 @@ export interface RunFindAnswer {
   next: { beforeAt: number; beforeId: number } | null;
 }
 
+/** One row of a run's trail (D-8071, spec 2026-11-04 §11.5). `by` is who caused it: a stored session id reads 'session'.
+ *  `folded` marks a span of stall observations as one row: the count, and the last one's time (`at` is the first's). */
+export interface RunRecordEvent {
+  at: number;
+  from: string;
+  to: string;
+  by: 'coordinator' | 'operator' | 'sweep' | 'session';
+  detail: string | null;
+  folded?: { count: number; untilAt: number };
+}
+
+/** `GET /api/runs/:id/record`'s answer (D-8071, §11.5). `events` are newest first, at most 200; `olderEvents` counts the
+ *  rest. `reviewedBy` is the runs that review this one. */
+export interface RunRecordAnswer {
+  ok: true;
+  run: RunSummary;
+  events: RunRecordEvent[];
+  reviewedBy: RunHit[];
+  olderEvents: number;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug

@@ -221,7 +221,7 @@ export const WRITE_ANSWER_EXEMPT = /^\/api\/(?:auth\/|token\/|sessions\/:id\/upl
  *  in `secret-mask.test.ts`'s egress inventory. */
 export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
-  '/api/runs', '/api/runs/:id', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
+  '/api/runs', '/api/runs/find', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
   // The programme ledgers (plan PL3): an item's title, reason and steps are written by sessions.
   '/api/programmes/:slug/items',

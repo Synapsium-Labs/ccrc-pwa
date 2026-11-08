@@ -856,6 +856,11 @@ describe('the coordinator skill: linkage', () => {
       'POST /api/leases/:lease/retain',
       'POST /api/leases/:lease/operator-retain',
       'POST /api/leases/:lease/resolve',
+      // THE RUNS SCREEN'S TWO READS (D-8071, spec 2026-11-04 §11.4, §11.5): the operator's lookup and a run's lasting record. The
+      // screen's doors, not coordination doors: a coordinator reads its runs through `GET /api/runs`, and no programme acts on
+      // either answer.
+      'GET /api/runs/find',
+      'GET /api/runs/:id/record',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {

@@ -23,7 +23,7 @@ import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } f
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
-import { runFind as runFindQuery, type RunFindParsed } from './runFind.js';
+import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
 // policy — the house port pattern. This read exists to feed that policy and
@@ -156,7 +156,7 @@ import {
   type NotifyEvent, type PeerDeliverable, type ProgramState,
   type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
-  type RunSummary, type RunFindAnswer,
+  type RunSummary, type RunFindAnswer, type RunHit,
   type SetAccountPoolsRefuseCode,
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
@@ -3903,6 +3903,11 @@ export class CoordStore {
 
   /** `GET /api/runs/find` (D-8071, spec §11.4): the lookup and the close-order list, over stored columns. The query is
    *  `runFind.ts`'s; this delegate hands it the terminal-state list. */
+  /** The runs that review run `id`, as hits (D-8071; spec §11.5 `reviewedBy`). */
+  runsReviewing(id: number): RunHit[] {
+    return runsReviewing(this.db, id);
+  }
+
   findRuns(parsed: RunFindParsed): RunFindAnswer {
     return runFindQuery(this.db, parsed, { terminalStatesSql: TERMINAL_RUN_STATES_SQL });
   }

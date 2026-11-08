@@ -30,7 +30,8 @@ import { measureLedgerFloor, type FloorMeasurement } from './ledgerseed.js';
 import { LedgerLog, defaultLedgerLogPath } from './ledgerlog.js';
 import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
 import { parseRunFind } from './runFind.js';
-import { withVerdicts } from './runWire.js';
+import { runRecordTrail } from './runRecord.js';
+import { withLastMoves, withVerdicts } from './runWire.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
@@ -2873,6 +2874,14 @@ export function registerCoordRoutes(
   const stampVerdicts = (summaries: RunSummary[]): RunSummary[] =>
     watcher === undefined ? summaries : withVerdicts(watcher.runVerdicts, summaries);
 
+  /** D-8071 (spec §11.2): `lastMoveAt` on a `RunSummary` answer, as the runs frame carries it (`withLastMoves`, ONE read). A read
+   *  that fails leaves every run without the field and logs once, so the board still ships. */
+  const stampLastMoves = (summaries: RunSummary[]): RunSummary[] => {
+    const coord = deps.coord;
+    if (!coord) return summaries;
+    return withLastMoves(coord, summaries, (d) => console.warn(`ccrc-server: a runs read could not read the runs' last moves (${d}) — lastMoveAt absent`));
+  };
+
   const composeChildReclaim = (summaries: RunSummary[]): RunSummary[] => {
     const coord = deps.coord;
     if (!coord) return summaries;
@@ -2990,7 +2999,7 @@ export function registerCoordRoutes(
         return refuseRoute(reply, 'runs-unreadable', { detail: page.read.detail });
       }
       return {
-        runs: stampVerdicts(composeChildReclaim(page.read.runs.map(toRunSummary))),
+        runs: stampVerdicts(composeChildReclaim(stampLastMoves(page.read.runs.map(toRunSummary)))),
         ...(page.nextBefore === undefined ? {} : { nextBefore: page.nextBefore }),
       };
     }
@@ -3004,7 +3013,7 @@ export function registerCoordRoutes(
       return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
     }
     const summaries: RunSummary[] = read.runs.map(toRunSummary);
-    return { runs: stampVerdicts(composeChildReclaim(summaries)) };
+    return { runs: stampVerdicts(composeChildReclaim(stampLastMoves(summaries))) };
   });
 
   /** D-8071 (spec 2026-11-04 §11.4): `GET /api/runs/find`, the lookup and the close-order list in one slim read.
@@ -3095,7 +3104,48 @@ export function registerCoordRoutes(
     if (read.run === null) return refuseRoute(reply, 'unknown-run');
     const bound = boundSessionsOf(read.run.sessionId, deps.coord.runEvents(id));
     const spend = joinRunSpend(bound, bound.length === 0 ? { kind: 'absent' } : await readSessionSpendMeasured(deps.io, deps.cfg.registryDir));
-    return { ok: true, run: stampVerdicts([toRunSummary(read.run)])[0]!, spend };
+    return { ok: true, run: stampVerdicts(stampLastMoves([toRunSummary(read.run)]))[0]!, spend };
+  });
+
+  /** D-8071 (spec 2026-11-04 §11.5): `GET /api/runs/:id/record`, any run's lasting record. DUAL GATE like `GET /api/runs/:id`
+   *  (a session cookie OR the box token). One read of stored rows: no spend, no agent link, so it answers with the link down.
+   *  The run carries `lastMoveAt` and the verdict's fields as a frame row does, so a header can repeat its row. */
+  app.get('/api/runs/:id/record', {
+    config: { rateLimit: RUN_SPEND_RATE_LIMIT },
+    errorHandler: (err, _req, reply) => {
+      if ((err as { statusCode?: number }).statusCode === 429) return refuseRateLimited(reply);
+      return reply.send(err);
+    },
+    onRequest: async (req, reply) => {
+      if (deps.cfg.authEnabled) {
+        const session = sessionAuth(req);
+        if (session.reason !== 'session') {
+          const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/runs/:id/record');
+          if (token !== 'ok') {
+            return refuseRoute(reply, 'unauthenticated', {
+              verdict: session.verdict,
+              detail: `GET /api/runs/:id/record takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})`,
+            });
+          }
+        }
+      }
+    },
+  }, async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return refuseRoute(reply, 'bad-request');
+    const read = deps.coord.run(id);
+    if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
+    if (read.run === null) return refuseRoute(reply, 'unknown-run');
+    const trail = runRecordTrail(deps.coord.runEvents(id));
+    return {
+      ok: true,
+      run: stampVerdicts(stampLastMoves([toRunSummary(read.run)]))[0]!,
+      events: trail.events,
+      reviewedBy: deps.coord.runsReviewing(id),
+      olderEvents: trail.olderEvents,
+    };
   });
 
   /**

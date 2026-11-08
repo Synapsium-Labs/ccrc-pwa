@@ -115,6 +115,12 @@ const toHit = (row: HitRow): RunHit => ({
   closeDetail: row.closeDetail === null ? null : redactCommand(row.closeDetail),
 });
 
+/** The runs that review run `id`, newest first, as hits (D-8071; spec §11.5 `reviewedBy`). The one statement `find`'s
+ *  `reviewsOf` runs, shared so the record read and the lookup list the same rows. */
+export function runsReviewing(db: RunsDb, id: number): RunHit[] {
+  return (db.prepare(`SELECT ${COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program WHERE r.reviews = ? ORDER BY r.id DESC LIMIT 100`).all(id) as HitRow[]).map(toHit);
+}
+
 /** The text match: case-insensitive `LIKE` over run title, programme slug and title, workspace, branch and project. */
 const TEXT_COLUMNS = ['r.title', 'r.program', 'p.title', 'r.workspace', 'r.branch', 'r.project'];
 
@@ -134,7 +140,7 @@ export function runFind(
   if (id !== null && cursor === null) {
     const row = db.prepare(`SELECT ${COLUMNS} ${from} WHERE r.id = ?`).all(id)[0] as HitRow | undefined;
     exact = row === undefined ? null : toHit(row);
-    reviewsOf = (db.prepare(`SELECT ${COLUMNS} ${from} WHERE r.reviews = ? ORDER BY r.id DESC LIMIT 100`).all(id) as HitRow[]).map(toHit);
+    reviewsOf = runsReviewing(db, id);
   }
 
   const where: string[] = [];
