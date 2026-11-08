@@ -38,10 +38,10 @@ describe('the chat draws a name as a link (chat reading Task L, D-8062)', () => 
     const [a, ...rest] = anchors(container);
     expect(rest).toEqual([]);
     expect(a!.textContent).toBe('run 1527');
-    expect(a!.getAttribute('href')).toBe('/runs?run=1527');
+    expect(a!.getAttribute('href')).toBe('/runs/1527');
     expect(a!.hasAttribute('target')).toBe(false);
     fireEvent.click(a!);
-    expect(location.pathname + location.search).toBe('/runs?run=1527');
+    expect(location.pathname + location.search).toBe('/runs/1527');
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -154,7 +154,7 @@ describe('the chat draws a name as a link (chat reading Task L, D-8062)', () => 
     expect(viaWorker.querySelector('pre.msg-plain')).toBeNull();
     expect(viaWorker.querySelector('p')!.outerHTML).toBe(sync);
     expect([...viaWorker.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual([
-      'https://github.com/owner-a/repo-a/issues/651', 'https://github.com/owner-a/repo-a/commit/4c677d328', '/runs?run=1527',
+      'https://github.com/owner-a/repo-a/issues/651', 'https://github.com/owner-a/repo-a/commit/4c677d328', '/runs/1527',
       '/waiting/340', '/docs/project-a/plans/p.md?ref=ws/one', '/runs',
     ]);
   });

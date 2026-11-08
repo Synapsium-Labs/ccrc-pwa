@@ -275,6 +275,8 @@ const CONTROLS: Record<string, string> = {
   'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
   'screens/RunRow.tsx <button> run-resume': 'TOKEN. The resume door.',
+  'screens/RunRow.tsx <a> run-wait': 'TOKEN. The link a planned run behind a stuck run draws (the runs rebuild, D-8072): `.run-row a.run-wait` declares the floor.',
+  'screens/RunsScreen.tsx <a> runs-info-link': 'TOKEN. The board\'s information line, when it names one run (D-8072): `.runs-info .runs-info-link` declares the floor.',
   'session/ChatList.tsx <button> jump-latest': 'TOKEN. The jump-to-latest affordance.',
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',
   'session/Composer.tsx <button> send-btn': 'TOKEN. Send.',

@@ -16,7 +16,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createElement } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { isSessionIdShape, type NotifyEvent, type RunSpend, type RunSummary } from '../../shared/api';
+import { isSessionIdShape, type NotifyEvent } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { seedAccountsAnswer } from './accountsAnswer';
 import { navigate } from '../src/lib/router';
@@ -27,7 +27,6 @@ import { sessionEntries } from '../src/command/sessionEntries';
 import { KickoffRecovery } from '../src/fleet/KickoffRecovery';
 import { inboxTarget } from '../src/fleet/inboxTarget';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
-import { RunRow } from '../src/screens/RunRow';
 import { SessionCoordination } from '../src/session/SessionDetails';
 import { sessionFacts } from '../src/fleet/sessionFacts';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -47,14 +46,6 @@ afterEach(() => {
 
 /** Where a door lands: the router's pathname after it ran. */
 const landed = (): string => location.pathname;
-
-const run = (sessionId: string): RunSummary => ({
-  id: 7, program: 'program-a', programTitle: 'Program A', wave: 1, waveOf: 1, project: 'project-a', homeProject: null,
-  sessionId, workspace: 'ws-a', branch: null, state: 'working', kind: 'work', reviews: null, claimedBy: 'coord-a', resumed: false, clearedAt: null,
-  openedAt: 1, dispatchStartedAt: null, dispatchedAt: 1, closedAt: null, handoffCommit: null, items: { done: 0, total: 1 }, unreadMail: 0,
-  health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-  childReclaim: null, reviewCap: null, hadChild: false,
-});
 
 const fleetStore = (): FleetStore => createFleetStore({ makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket });
 /** The fleet chrome's own reads, held (`fleet-flows.test.tsx`'s set), so a board mount sends nothing. */
@@ -100,14 +91,6 @@ const SITES: Record<string, (id: string) => Promise<string>> = {
     render(createElement(AccountsScreen));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     fireEvent.click(document.querySelector<HTMLElement>('.accounts-session')!);
-    return landed();
-  },
-  'screens/RunRow.tsx': async (id) => {
-    render(createElement('ul', null, createElement(RunRow, {
-      run: run(id), nowMs: Date.now(), session: null, coordSession: null, frameSeen: true, programHasOpenRun: true,
-      onAbandon: () => {}, onResume: () => {}, loadSpend: () => new Promise<RunSpend>(() => {}),
-    })));
-    fireEvent.click(document.querySelector<HTMLElement>('.run-open')!);
     return landed();
   },
   // A working row: a project with a working member is not rolled up (D-6088), so its line is on the card.
@@ -158,7 +141,6 @@ describe('each driveable site\'s path, for an id inside the charset and one outs
     'fleet/KickoffRecovery.tsx#KickoffRecovery': ['/s/session-a', '/s/session%20a%2F1'],
     'fleet/inboxTarget.ts#inboxTarget': ['/s/session-a', '/s/session%20a%2F1'],
     'screens/AccountsScreen.tsx#AccountsScreen': ['/s/session-a', '/s/session%20a%2F1'],
-    'screens/RunRow.tsx': ['/s/session-a', '/s/session%20a%2F1'],
     'screens/FleetScreen.tsx#FleetScreen': ['/s/session-a', '/s/session%20a%2F1'],
     'fleet/openers.ts#openSession': ['/s/session-a', '/s/session%20a%2F1'],
     'session/SessionDetails.tsx#SessionCoordination': ['/s/session-a', '/s/session%20a%2F1'],

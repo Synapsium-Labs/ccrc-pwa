@@ -42,7 +42,6 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
 const NO_CAPS = (): Promise<never> => new Promise(() => {});
-const NO_SPEND = (): Promise<never> => new Promise(() => {});
 /** The Finished fold's door ("Show N more finished runs"), or null once every loaded row is shown. */
 const foldDoor = (): HTMLElement | null => screen.queryByRole('button', { name: /more finished run/i });
 const unfold = (): void => {
@@ -77,14 +76,14 @@ describe('the run archive in pages', () => {
   it('RunsScreen asks for limit 50', async () => {
     // The screen's own default reader: the paged `api` read, limit 50 and no `before` on the first ask.
     const spy = vi.spyOn(api, 'runsPage').mockImplementation(async () => ({ runs: [closed(3)] }));
-    render(<RunsScreen store={makeStore()} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={makeStore()} loadCaps={NO_CAPS} />);
     await flush();
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith(50, null);
     // And an injected loader is asked the same way: limit 50, no `before`.
     const a = archive(range(120, 1), [130]);
     cleanup();
-    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     expect(a.load).toHaveBeenCalledTimes(1);
     expect(a.load).toHaveBeenCalledWith(50);
@@ -92,7 +91,7 @@ describe('the run archive in pages', () => {
 
   it('Show older appears only while older runs remain', async () => {
     const a = archive(range(120, 1), [130]);
-    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     unfold();
     const button = screen.getByRole('button', { name: 'Show older' });
@@ -118,7 +117,7 @@ describe('the run archive in pages', () => {
 
   it('Show older appears only after the fold is exhausted', async () => {
     const a = archive(range(120, 1));
-    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     // 50 rows are loaded, FINISHED_FOLD (20) are shown: the other 30 sit behind the fold door, and a tap that loaded 50 more
     // below the fold would change nothing visible.
@@ -136,7 +135,7 @@ describe('the run archive in pages', () => {
 
   it('a failed Show older says so and keeps the rows', async () => {
     const a = archive(range(120, 1));
-    const { container } = render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    const { container } = render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     unfold();
     expect(screen.queryByText('Could not load older runs.')).toBeNull();
@@ -168,11 +167,11 @@ describe('the run archive in pages', () => {
   it('a failed background re-read with stored pages shows the error beside them (Step 6; fix round 1)', async () => {
     const a = archive(range(120, 1));
     const store = makeStore();
-    const first = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    const first = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     first.unmount();
     a.load.mockRejectedValueOnce(new Error('down'));                 // the remount's background re-read fails
-    const { container } = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    const { container } = render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} />);
     const rows = (): number => container.querySelectorAll('.runs-list > li').length;
     const drawn = rows();
     expect(drawn, 'the stored pages draw at once').toBeGreaterThan(0);
@@ -193,7 +192,7 @@ describe('the run archive in pages', () => {
     const a = archive(range(120, 1), [130]);
     const store = makeStore();
     store.setState({ runs: [run(130)], runsFrameSeen: true });
-    render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     unfold();
     let release: () => void = () => {};
@@ -217,7 +216,7 @@ describe('the run archive in pages', () => {
     const a = archive(range(120, 1), [130]);
     const store = makeStore();
     store.setState({ runs: [run(130)], runsFrameSeen: true });
-    render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={store} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     unfold();
     a.load.mockRejectedValueOnce(new Error('down'));
@@ -236,7 +235,7 @@ describe('the run archive in pages', () => {
 
   it('Show older is absent when the archive fits one page', async () => {
     const a = archive(range(30, 1));
-    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} loadSpend={NO_SPEND} />);
+    render(<RunsScreen store={makeStore()} loadRuns={a.load} loadCaps={NO_CAPS} />);
     await flush();
     unfold();
     expect(screen.queryByRole('button', { name: 'Show older' })).toBeNull();

@@ -996,12 +996,10 @@
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
-  /* The arrived lane's row (AccountsScreen) and run row (RunsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
+  /* The arrived lane's row (AccountsScreen): its accent edge is an inset box-shadow, dropped here, and its focus ring
      is removed by the script-focus rule (`:focus`, so the second selector outranks it), so the same inset outline marks it. */
   .accounts-row[data-arrived],
-  .accounts-row[data-arrived][tabindex="-1"]:focus,
-  .run-row[data-arrived],
-  .run-row[data-arrived][tabindex="-1"]:focus {
+  .accounts-row[data-arrived][tabindex="-1"]:focus {
     outline: 2px solid CanvasText;
     outline-offset: -2px;
   }
@@ -2465,14 +2463,11 @@ button.proj-card-pool::before {
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
 }
-/* A lane arrived at from a card (`/accounts?lane=<id>`), or a run from a name in chat (`/runs?run=<id>`, chat reading Task L,
-   D-8062): the screen scrolls it into view and focuses it by script, so
+/* A lane arrived at from a card (`/accounts?lane=<id>`): the screen scrolls it into view and focuses it by script, so
    the row is a focus target with no ring of its own (tabindex -1, never a tab stop), and the one quiet edge says which
    row the card meant. An inset shadow on the row's own ground, not a border: it moves no layout and adds no ink. */
-.accounts-row[tabindex="-1"]:focus,
-.run-row[tabindex="-1"]:focus { outline: none; }
-.accounts-row[data-arrived],
-.run-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
+.accounts-row[tabindex="-1"]:focus { outline: none; }
+.accounts-row[data-arrived] { box-shadow: inset 2px 0 0 var(--accent); }
 .accounts-row-head { display: flex; align-items: center; gap: var(--sp-2); }
 /* A sentence ("disabled on the fleet host"), so the UI face — see
    `.accounts-projection`. */
@@ -2909,6 +2904,17 @@ button.proj-card-pool::before {
 .runs-program { font-family: var(--family-mono); }
 .runs-wave { font-variant-numeric: tabular-nums; color: var(--ink-tertiary); }
 .runs-list { display: grid; gap: var(--sp-1); }
+/* The board's information line (§8.2 item 5, n2): a run no act can move, told on the row's own surface so its ink is priced
+   against that ground. Prose or one link, never a control. */
+.runs-info {
+  background: var(--bg-surface); color: var(--ink-secondary);
+  border-radius: var(--r-md); padding: var(--sp-1) var(--sp-3);
+  font: var(--fs-xs) / 1.6 var(--family-mono);
+}
+.runs-info .runs-info-link {
+  display: inline-flex; align-items: center; min-height: var(--tap-min);
+  color: inherit; text-decoration: underline; text-underline-offset: 2px;
+}
 .run-row {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2);
   min-height: var(--tap-min); padding: 0 var(--sp-2);
@@ -3001,26 +3007,20 @@ button.proj-card-pool::before {
    is `--status-attention-text`, already declared and already priced by
    contrast-check.mjs — the amber warn register `.pr-warn` and
    `.program-start-warn` use, not a new pair. */
-/* D-6799: the run's spend, ONE line on its own wrapped row at every width. The
-   short half (dollars, output) always shows; the long half (input, cache) only
-   from 480px, where the row has the room - a 320px phone keeps a single line. */
-.run-row .run-spend {
+/* The runs rebuild (D-8072; spec 2026-11-04 §7): what the run waits on, ONE sentence on its own wrapped row at every width
+   (`runWaitLine`). Inside the row's open button it is prose; when it names a stuck run it is a link beside the button, never
+   inside it. `--ink-secondary` on the row's own ground, the pair the spend line it replaces already priced. */
+.run-row .run-wait {
   flex: 1 0 100%;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: baseline;
-  gap: var(--sp-2);
   min-width: 0;
   padding-bottom: var(--sp-1);
   font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
   color: var(--ink-secondary);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
-@media (max-width: 479px) {
-  .run-row .run-spend-long { display: none; }
+.run-row a.run-wait {
+  display: flex; align-items: center; min-height: var(--tap-min);
+  text-decoration: underline; text-underline-offset: 2px;
 }
 .run-row .run-warn {
   flex: 1 0 100%;

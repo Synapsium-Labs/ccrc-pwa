@@ -438,10 +438,27 @@ export function resumeNote(
  *  away. A fold, not a removal: nothing is dropped from the archive. */
 export const FINISHED_FOLD = 20;
 
-/** What the board says when a run named by `/runs?run=<id>` (chat reading Task L, D-8062) is in neither the live frame nor the
- *  archive pages read so far: it may be older than the pages loaded, or no run at all. */
-export function runNotLoadedLine(id: number): string {
-  return `Run ${id} is not among the runs loaded here.`;
+/** The one reader of the row's "what it waits on" line (the runs rebuild, D-8072; spec 2026-11-04 §7, A29). Null means
+ *  today's line: the fact is absent (an older server sends no `waitsOn`), the case is not one §7 words, or the run is stuck,
+ *  which `stuckLine` words. A planned run behind a stuck run names that run (`blockedBy`; the row links it); "No move in N
+ *  days." is for a run at `dispatched` or `working` whose last move is over a day old, in whole days rounded down. */
+export function runWaitLine(run: RunSummary, nowMs: number): string | null {
+  if (run.stuck != null) return null;
+  const waits = run.waitsOn;
+  const state = runState(run);
+  if (state === 'planned') {
+    if (run.blockedBy != null) return 'Waits behind a stuck run.';
+    return waits === 'coordinator' ? 'Waits for its coordinator to start it.' : null;
+  }
+  if (state === 'awaiting-review') {
+    if (waits === 'coordinator') return 'Reviews done. Waits on its coordinator.';
+    return waits === 'reviewer' ? 'Waits on a reviewer.' : null;
+  }
+  if ((state === 'dispatched' || state === 'working') && run.lastMoveAt != null) {
+    const days = Math.floor((nowMs - run.lastMoveAt) / 86_400_000);
+    if (days >= 1) return `No move in ${days} ${days === 1 ? 'day' : 'days'}.`;
+  }
+  return null;
 }
 
 /** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
@@ -921,7 +938,8 @@ export interface ChildOfRunLabel {
  *  display name when the fleet carries it. `fleetTree.ts`'s `coordinationOf`
  *  builds it; the default says nothing is known. */
 export interface ChildRunContext {
-  readonly run: { program: string; programTitle: string; runTitle?: string | null; wave: number; waveOf: number | null; kind?: RunKind } | null;
+  /** `id` is the run's number when the context was built from a run row (a `RunSummary` always has one), so a door can open its page. */
+  readonly run: { id?: number; program: string; programTitle: string; runTitle?: string | null; wave: number; waveOf: number | null; kind?: RunKind } | null;
   readonly coordinator: string | null;
 }
 

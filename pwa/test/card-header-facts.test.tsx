@@ -480,7 +480,7 @@ describe('a run row and its page header', () => {
       health: { mailParked: 2, mailOutstanding: 1, mailParkedLive: 1, mailReplayMax: 0, briefQueued: null, clearError: null, coordKickoffPendingSince: null },
     } as unknown as RunSummary;
     const row = render(<ul><RunRow run={run} nowMs={NOW} session={null} coordSession={null} frameSeen={false} programHasOpenRun
-      onAbandon={() => {}} onResume={() => {}} loadSpend={async () => ({ measured: false, reason: 'no-sweep' })} /></ul>);
+      onAbandon={() => {}} onResume={() => {}} /></ul>);
     const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-resumed, .run-warn-item')]
       .map((e) => e.textContent ?? '');
     row.unmount();

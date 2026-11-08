@@ -17,12 +17,13 @@ import { useCallback, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Door, Icon, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
-import { sessionPath } from '../lib/routes';
+import { runPath, sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
 import { WorkLine } from '../fleet/WorkLine';
 import { cardFacts, contextFact, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
+import { openRunAt } from '../fleet/openers';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
 import { coordinationClauses } from './sessionHeaderView';
 
@@ -77,7 +78,7 @@ export function SessionCoordination({ facts, coordination, goals = null }: {
           with, or hold, a lone `·` (#633's leftover). */}
       {workingOn !== null && <span className="chat-coord-part">{`works on ${workingOn}`}</span>}
       {run !== null && (
-        <CoordLink glyph="≡" label={`Open the run board — ${programmeWave(run)}`} to="/runs">
+        <CoordLink glyph="≡" label={`Open the run board — ${programmeWave(run)}`} to={run.id === undefined ? '/runs' : runPath(run.id)}>
           {programmeWave(run)}
         </CoordLink>
       )}
@@ -150,7 +151,7 @@ export function SessionDetails({ facts, coordination }: {
       <SessionMeta
         facts={facts}
         mode="header"
-        onOpenRun={run !== null || s.held !== null ? () => navigate('/runs') : null}
+        onOpenRun={run?.id !== undefined ? openRunAt(run.id) : runId !== null && s.held !== null ? openRunAt(runId) : null}
         subagentsOpen={subagentsOpen}
         subagentsId={subagentsId}
         onToggleSubagents={() => setSubagentsOpen((v) => !v)}

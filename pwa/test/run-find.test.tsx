@@ -30,7 +30,7 @@ const board = (runs: RunSummary[] = []): FleetStore => {
   return store;
 };
 const NEVER = () => new Promise<never>(() => {});
-const mount = (store: FleetStore) => render(<RunsScreen store={store} loadRuns={async () => ({ ok: true, runs: [], nextBefore: null }) as never} loadCaps={NEVER} loadSpend={NEVER} />);
+const mount = (store: FleetStore) => render(<RunsScreen store={store} loadRuns={async () => ({ ok: true, runs: [], nextBefore: null }) as never} loadCaps={NEVER} />);
 const type = (text: string) => fireEvent.change(screen.getByLabelText('Find a run'), { target: { value: text } });
 const settle = async (ms = 200) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
 

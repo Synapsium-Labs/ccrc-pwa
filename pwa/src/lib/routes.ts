@@ -165,13 +165,14 @@ export function laneParam(search: string): string | null {
   return id === null || id === '' ? null : id;
 }
 
-/** The runs route's one query (chat reading Task L, D-8062; spec 2026-11-06 R10): a run named in chat opens the board at its
- *  row, a query on the existing `runs` route as the lane query is on `accounts`, until a page for one run exists. */
+/** The legacy runs query (chat reading Task L, D-8062): `/runs?run=<id>` stays only in old chat text and old links. The board
+ *  replaces it with the run's page (`runPath`, A50), so it never meets `?q=`; `runParam` is its one reader. */
 export const RUNS_RUN_QUERY = 'run';
 
-/** The one builder of `/runs?run=<id>`; `runParam` is its one reader. */
+/** The one builder of a link to a run: its page, `/runs/<id>` (A50). A name in chat, a session's header, the hold cell and
+ *  the inbox all use it. */
 export function runsRunHref(id: number): string {
-  return `/runs?${new URLSearchParams({ [RUNS_RUN_QUERY]: String(id) }).toString()}`;
+  return runPath(id);
 }
 
 /** The run id in a `location.search`-shaped string, with or without its leading `?`: a positive integer written in plain

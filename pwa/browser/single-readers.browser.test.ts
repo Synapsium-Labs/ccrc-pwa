@@ -4,7 +4,7 @@
 // of it may change a word, a state or a request on screen. Each view holds:
 //   - the Inbox: "Loading…" while its read on open is parked, "Nothing yet." once it lands empty, one feed and one runs
 //     request per open (a re-open asks again), and the error sentence when the feed read fails;
-//   - the run board: "No runs." with one `GET /api/runs?closed=1&limit=50` on mount;
+//   - the run board: "No runs open." with one `GET /api/runs?closed=1&limit=50` on mount;
 //   - Start programme and New session: the project list drawn from one class-blind `GET /api/projects`.
 // Phone 360 and 390, laptop 1280 and wide 1920, in both skins, light and dark.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -39,7 +39,7 @@ const FIXTURE: AppFixture = {
 };
 
 const MAIL_ERROR = 'Could not reach the server — mail may exist that is not shown.';
-const NO_RUNS = 'No runs. A program starts when a coordinator opens one.';
+const NO_RUNS = 'No runs open.';
 
 let dist: string | undefined;
 let server: DistServer | undefined;
@@ -103,7 +103,7 @@ describe('the single readers change nothing on screen (C7n, D-7192, D-7209)', ()
         await page.waitForTimeout(500);
         expect([count(sent.slice(before), '/api/feed?limit=100'), count(sent.slice(before), '/api/runs?closed=1')], 'one feed and one runs read on open').toEqual([1, 1]);
 
-        // The run board: "No runs.", one archive read on mount.
+        // The run board: "No runs open.", one archive read on mount.
         before = sent.length;
         await go(page, '/runs');
         await page.waitForFunction((words) => [...document.querySelectorAll('[data-state="ok"]')].some((el) => el.textContent === words), NO_RUNS, { timeout: 30_000 });
