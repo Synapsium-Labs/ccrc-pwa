@@ -251,7 +251,7 @@ describe('while a request is in flight everything it was built from is locked', 
     expect(field()).toBeDisabled();
     expect(screen.getByRole('button', { name: /change/ })).toBeDisabled();
     expect(screen.getByPlaceholderText('Search projects')).toBeDisabled();
-    for (const l of ['Class', 'Effort', 'Workflows']) expect(screen.getByLabelText(l)).toBeDisabled();
+    for (const l of ['Class', 'Effort', 'Workflows', 'Browser']) expect(screen.getByLabelText(l)).toBeDisabled();
     // The project rows are inside the same disabled fieldset: tapping another changes nothing.
     expect(screen.getByText('demo').closest('fieldset')).toBeDisabled();
   });

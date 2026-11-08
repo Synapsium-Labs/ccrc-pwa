@@ -1,6 +1,6 @@
-// Settings › Automation (settings spec §3.3, §5.4; D-5503): ten cards, in this order, each a `Section` with its
+// Settings › Automation (settings spec §3.3, §5.4; D-5503): eleven cards, in this order, each a `Section` with its
 // scope and purpose line: Stall watch, Temp root collector, Dispatches that never came back (D-7319), Cleanup pause,
-// Roll idle sessions (D-7453), which reads and writes its own door, Stop leftovers (D-7902), which reads the coord frame
+// Browser tools (D-8121), which reads the updates poll's fleet node and the fleet frame, Roll idle sessions (D-7453), which reads and writes its own door, Stop leftovers (D-7902), which reads the coord frame
 // through its one reader (`paneScopeStopMarker`) and writes its switch, Leftover processes (D-7994), Backups (D-7860) and
 // Work in transcript folders (D-7898), which read the shell's health poll, then Test box (D-7412), the section's last card
 // (D-7418), which reads the frame's view and writes its switch and its tools sync. Cleanup pause is its own card since
@@ -17,6 +17,7 @@ import { SETTINGS_CARDS } from '../../fleet/settingsText';
 import { StallWatchSection } from '../StallWatchSection';
 import { RollIdleSection } from '../../fleet/RollIdleSection';
 import { PaneScopeStopSection } from '../../fleet/PaneScopeStopSection';
+import { BrowserToolsSection } from '../../fleet/BrowserToolsSection';
 import { TestBoxSection } from '../../fleet/TestBoxSection';
 import { BackupSection } from '../../fleet/BackupSection';
 import { TranscriptWorkSection } from '../../fleet/TranscriptWorkSection';
@@ -32,6 +33,7 @@ export function AutomationSection({ view }: { view: SettingsView }): ReactNode {
       <Section level={3} scope={pause.scope} title={pause.title} purpose={pause.purpose}>
         <PauseAllCleanup />
       </Section>
+      <BrowserToolsSection nodes={view.updates.view?.nodes ?? null} />
       <RollIdleSection />
       <PaneScopeStopSection />
       <ScopeSweepSection poll={view.scopeSweep} />

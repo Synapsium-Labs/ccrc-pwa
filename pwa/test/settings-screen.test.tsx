@@ -2388,13 +2388,13 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(rows).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security']);
   });
 
-  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, Roll idle sessions (D-7453), Stop leftovers (D-7902), Leftover processes (D-7994), Backups (D-7860), Work in transcript folders (D-7898), then Test box (D-7412), each a card under the page heading', async () => {
+  it('LOADING state: the Automation page is Stall watch, Temp root collector, Dispatches that never came back, Cleanup pause, Browser tools (D-8121), Roll idle sessions (D-7453), Stop leftovers (D-7902), Leftover processes (D-7994), Backups (D-7860), Work in transcript folders (D-7898), then Test box (D-7412), each a card under the page heading', async () => {
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'dispatchAbandon').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Automation']);
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Roll idle sessions', 'Stop leftovers', 'Leftover processes', 'Backups', 'Work in transcript folders', 'Test box']);
+      .toEqual([STALL_SECTION_TEXT.title, 'Temp root collector', 'Dispatches that never came back', 'Cleanup pause', 'Browser tools', 'Roll idle sessions', 'Stop leftovers', 'Leftover processes', 'Backups', 'Work in transcript folders', 'Test box']);
   });
 
   it('LANDED state (api.updates answered, so the Box token card renders): it renders on the Security page', async () => {

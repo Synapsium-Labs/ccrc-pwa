@@ -76,6 +76,7 @@ export function stepSession(ctx: CommandContext, step: 1 | -1): void {
 export const SESSION_COMMANDS: readonly { id: string; title: string }[] = [
   { id: 'session-model', title: 'Change model' },
   { id: 'session-effort', title: 'Change effort' },
+  { id: 'session-browser', title: 'Browser tools for this session' },
   { id: 'open-history', title: 'Show history' },
   { id: 'session-docs', title: "Open this session's docs" },
   { id: 'session-swap', title: 'Move to another account' },

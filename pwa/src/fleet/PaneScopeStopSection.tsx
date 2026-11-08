@@ -15,7 +15,9 @@ import { api } from '../lib/api';
 import { useFleetStore } from '../stores/fleet';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
 import { COORD_CONFIRM_MS } from './coordWords';
-import { PANE_SCOPE_STOP_TEXT, paneScopeStopChecked, paneScopeStopMarker, type PaneScopeStopState } from './paneScopeStopWords';
+import {
+  PANE_SCOPE_STOP_ANCHOR, PANE_SCOPE_STOP_TEXT, paneScopeStopChecked, paneScopeStopMarker, type PaneScopeStopState,
+} from './paneScopeStopWords';
 import {
   NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_WHEN, UNCONFIRMED_TEXT, useResultLine,
 } from './settingsText';
@@ -29,7 +31,7 @@ export function PaneScopeStopSection({ store = useFleetStore }: { store?: typeof
   const marker = paneScopeStopMarker(coord);
   const card = SETTINGS_CARDS.automation.paneScopeStop;
   return (
-    <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
+    <Section id={PANE_SCOPE_STOP_ANCHOR} level={3} scope={card.scope} title={card.title} purpose={card.purpose}>
       {!coordFrameSeen ? (
         <Skeleton lines={2} />
       ) : marker === null ? (

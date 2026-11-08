@@ -67,6 +67,7 @@ export const BOX_SETTING_FAMILY_TEXT: Readonly<Record<BoxSettingFamily | 'other'
   keepalive: 'Keepalive',
   'usage-sweep': 'Usage sweep',
   'carry-copies': 'Carry copies',
+  'browser-tools': 'Browser tools',
   other: 'Other settings',
 };
 

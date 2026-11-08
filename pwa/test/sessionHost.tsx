@@ -44,6 +44,7 @@ export function SessionHeaderHost(
         actions={{
           changeModel: onChangeModel,
           changeEffort: onChangeEffort,
+          openBrowser: () => {},
           openHistory: onOpenHistory,
           moveAccount: onMoveAccount,
           archive: onArchive,

@@ -53,6 +53,7 @@ import { loadProjects } from './useProjectRows';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
 import { AUTOMATIC_CLASS } from './classWords';
+import { BROWSER_WORDS } from './browserMcpWords';
 import './fleet.css';
 
 /** How long an unnamed create waits for its session's row on the fleet feed before it gives up, toasts and closes. */
@@ -163,6 +164,7 @@ export function NewSessionSheet({
   const [routeClass, setRouteClass] = useState('');
   const [routeEffort, setRouteEffort] = useState('');
   const [routeWorkflow, setRouteWorkflow] = useState('');
+  const [routeBrowser, setRouteBrowser] = useState('');   // D-8121: the browser MCP servers, unset = the box default
   // The name field (named workspaces S8): what the operator typed, and the one sentence a refusal left behind.
   // `notice` is shown at the step it belongs to: an account refusal on the account step, every other on the field.
   const [name, setName] = useState('');
@@ -228,6 +230,7 @@ export function NewSessionSheet({
     setRouteClass('');
     setRouteEffort('');
     setRouteWorkflow('');
+    setRouteBrowser('');
     setName('');
     setNotice(null);
     setStarting(false);
@@ -343,10 +346,11 @@ export function NewSessionSheet({
   // Only the SET fields ride the request — an unset select contributes no
   // key, so an operator who never touches the row gets the request shape
   // this sheet has always sent (mirrors `crossPool`'s own rule just below).
-  const route: Partial<Record<'class' | 'effort' | 'workflow', string>> = {};
+  const route: Partial<Record<'class' | 'effort' | 'workflow' | 'browser', string>> = {};
   if (routeClass !== '') route.class = routeClass;
   if (routeEffort !== '') route.effort = routeEffort;
   if (routeWorkflow !== '') route.workflow = routeWorkflow;
+  if (routeBrowser !== '') route.browser = routeBrowser;
   const hasRoute = Object.keys(route).length > 0;
 
   /** The confirm's own gate, which Enter in the name field follows exactly. */
@@ -537,6 +541,7 @@ export function NewSessionSheet({
               setRouteClass('');
               setRouteEffort('');
               setRouteWorkflow('');
+              setRouteBrowser('');
               setNotice(null);
             }}
           >
@@ -627,9 +632,15 @@ export function NewSessionSheet({
               <option value="on">on</option>
               <option value="off">off</option>
             </RouteField>
+            {/* D-8121: the browser MCP servers; unset follows the fleet box's default (off unless it says on). */}
+            <RouteField label="Browser" value={routeBrowser} onChange={setRouteBrowser}>
+              <option value="">Box default</option>
+              {BROWSER_WORDS.map((w) => <option key={w} value={w}>{w}</option>)}
+            </RouteField>
           </div>
           <p className="sheet-copy route-note">
-            Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).
+            Unset fields take the routing matrix's default (Opus · high, Sonnet subagents, workflows on); Browser
+            takes the fleet box's (off unless it says on).
             If the account can't serve the class today, ccd starts one rung down and restores it when it can.
           </p>
         </fieldset>

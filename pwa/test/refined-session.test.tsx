@@ -62,7 +62,7 @@ function chromeTree(inputs: SessionHeaderProps): ReactNode {
         session={inputs.session}
         title="project-a"
         actions={{
-          changeModel: vi.fn(), changeEffort: vi.fn(), openHistory: vi.fn(), moveAccount: vi.fn(), archive: vi.fn(),
+          changeModel: vi.fn(), changeEffort: vi.fn(), openBrowser: vi.fn(), openHistory: vi.fn(), moveAccount: vi.fn(), archive: vi.fn(),
           restore: vi.fn(), openTerminal: vi.fn(), reapWorkspace: vi.fn(),
         }}
       >

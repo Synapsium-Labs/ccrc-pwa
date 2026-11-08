@@ -743,7 +743,9 @@
    * elsewhere in this file. Measured 2026-09-17: this was the ONLY bare
    * `repeat(n, 1fr)` left in `pwa/src`; the other nine multi-track grids
    * already spell it this way. */
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Two columns of two (D-8121 added the fourth select, Browser): four across a phone's sheet left each select under
+   * 80px, so the row is a 2 x 2 grid at every width — the same two tracks on a phone and on a desk's sheet. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-2);
   margin-bottom: var(--sp-2);
 }
