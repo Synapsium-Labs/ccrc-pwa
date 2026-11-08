@@ -1230,7 +1230,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `settings [--json] [--write]` | what each of the 63 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
+| `settings [--json] [--write]` | what each of the 67 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
@@ -1372,8 +1372,12 @@ default**): `CCRC_BROWSER_MCP_DEFAULT` (`on` or `off`, default `off`) decides wh
 field starts the browser MCP servers, and `CCRC_BROWSER_MCP_SERVERS` names them (default
 `plugin:playwright:playwright,plugin:chrome-devtools-mcp:chrome-devtools`). A value ccd cannot use reads as its default,
 with a warning on the spawn's stderr; a running session keeps what it has until its next spawn.
+Four are the memory gate's (D-8122): `CCRC_WAKE_PRESSURE_GATE` (warn, critical or off; default warn) and
+`CCRC_WAKE_HEADROOM_MIN_GIB` (default 3) hold the automatic wakes while the box is under memory pressure, and
+`CCRC_SWEEP_BATCH` (default 5) and `CCRC_SWEEP_PRESSURE_WAIT_S` (default 300) pace the update sweep's restarts. The server
+reads the first two from its own environment; `ccrc update` reads the gate level and the last two through the reader.
 
-**Seeing a box's settings.** `ccrc settings` prints what each of the 63 settings a fleet or server node reads resolves to on this
+**Seeing a box's settings.** `ccrc settings` prints what each of the 67 settings a fleet or server node reads resolves to on this
 box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and
 whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
 are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
@@ -3693,6 +3697,10 @@ see "Fleet coordination" below.
 | Var | Where | Meaning |
 | --- | --- | --- |
 | `CCRC_FLEET` | server | `local` (default) or `remote`. |
+| `CCRC_WAKE_PRESSURE_GATE` | server + fleet | `warn` (default), `critical` or `off`: an automatic wake (the roll's, the mail lane's) waits for a later pass while the node's memory pressure is at or above this level (warn is PSI full at or above 10%, critical at or above 50%), and the update sweep waits on it between batches. Wakes you start yourself are never held (D-8122). |
+| `CCRC_WAKE_HEADROOM_MIN_GIB` | server | Whole GiB, default 3 (spec decision 6), 0 off: an automatic wake waits while the session slice's headroom (its `memory.max` minus its use, no more than `MemAvailable`) is below this. A node that sends no reading admits, and the journal says so (D-8122). |
+| `CCRC_SWEEP_BATCH` | fleet | Default 5: how many `claude-session@` supervisors `ccrc update` and `deploy.sh` restart at once, each batch verified before the next (D-8122). |
+| `CCRC_SWEEP_PRESSURE_WAIT_S` | fleet | Default 300: the most the update sweep waits, over the whole sweep, between batches while memory pressure is at the gate level; past it the sweep warns and goes on (D-8122). |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
 | `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |

@@ -10264,10 +10264,11 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
   'browser-tools': true,
+  'memory-gate': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
 
@@ -10278,7 +10279,7 @@ export const BOX_SETTING_APPLIES: readonly BoxSettingApplies[] = Object.keys(BOX
 
 export interface BoxSettingSpec { cls: BoxSettingClass; family: BoxSettingFamily; roles: readonly NodeRole[]; applies: BoxSettingApplies }
 
-/** All 89 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
+/** All 93 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
 export const BOX_SETTING_TABLE = {
   CCRC_BACKUP_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
   CCRC_BACKUP_DATA_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
@@ -10371,11 +10372,16 @@ export const BOX_SETTING_TABLE = {
   CCRC_CARRY_COPY_WARN_BYTES: { cls: 'value', family: 'carry-copies', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_DEFAULT: { cls: 'value', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_BROWSER_MCP_SERVERS: { cls: 'is-set', family: 'browser-tools', roles: ['fleet', 'both'], applies: 'run' },
+  // D-8122: the automatic wakes' memory gate (read by the server) and the update sweep's pacing (read by the fleet box).
+  CCRC_WAKE_PRESSURE_GATE: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'server', 'both'], applies: 'run' },
+  CCRC_WAKE_HEADROOM_MIN_GIB: { cls: 'value', family: 'memory-gate', roles: ['server', 'both'], applies: 'run' },
+  CCRC_SWEEP_BATCH: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_SWEEP_PRESSURE_WAIT_S: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
 export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
 /** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
 export const BOX_SETTING_SPECS: Readonly<Record<BoxSettingName, BoxSettingSpec>> = BOX_SETTING_TABLE;
-/** Version 2's row list and order: every name the table does not omit (61). */
+/** Version 2's row list and order: every name the table does not omit (65). */
 export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SETTING_TABLE) as BoxSettingName[]).filter((k) => BOX_SETTING_SPECS[k].cls !== 'omit');
 
 /** The words a refused row's `why` is one of (D22): every sentence `_set_says` prints for the shown keys, de-duplicated. A list on
@@ -10396,6 +10402,7 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'a whole number from 1 to 99',
   'a whole number from 1 to 999',
   'a whole number from 2 to 9999',
+  'a whole number of GiB from 0 to 1024',
   'a whole number of bytes from 1 to 18 digits',
   'a whole number of seconds from 0 to 3600',
   'a whole number of seconds from 0 to 9223372036854775807',
@@ -10416,6 +10423,7 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'local or fail',
   'on or off',
   'space-separated repository keys (<name>-<8 hex digits>)',
+  'warn, critical or off',
 ] as const;
 export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
 
@@ -10423,6 +10431,7 @@ export type BoxSettingRefusalWord = typeof BOX_SETTING_REFUSAL_WORDS[number];
 export const BOX_SETTING_VALUE_WORDS: Readonly<Partial<Record<BoxSettingName, readonly string[]>>> = {
   CCRC_TESTBOX_LOST_RUN: ['local', 'fail'], CCRC_TESTBOX_FALLBACK_INSTALL: ['install', 'refuse'],
   CCRC_BROWSER_MCP_DEFAULT: ['on', 'off'],
+  CCRC_WAKE_PRESSURE_GATE: ['warn', 'critical', 'off'],
 };
 /** `CCRC_BROWSER_MCP_SERVERS`' default (D-8121): the two browser MCP servers' names as Claude Code names them
  *  (`plugin:<plugin>:<server key>`), measured from `claude -p`'s init event (2.1.318; the plans note of 2026-11-08). The

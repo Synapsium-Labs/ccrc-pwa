@@ -46,7 +46,7 @@ import {
   runUpdate,
   freshUpdateBox,
   plantKillModeDropIn,
-  UNIT_LINES,
+  UNIT_LINES, UNIT_RESTART,
   homeSnapshot,
   treeDigest,
   localUrls,
@@ -1770,7 +1770,7 @@ describe('ccrc update: one update at a time (the lock)', () => {
     lingerers.push(join(home, 'sweep-linger-pid'));
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(readFileSync(join(home, 'systemctl-calls'), 'utf8')).toMatch(/^--user try-restart claude-session@\*$/m);
+    expect(readFileSync(join(home, 'systemctl-calls'), 'utf8')).toMatch(/^--user try-restart claude-session@alpha\.service claude-session@beta\.service$/m);
     expect(existsSync(join(home, 'sweep-linger-pid')), 'the sweep never lingered — the absence below would be vacuous').toBe(true);
     const second = runUpdate(home, [], { PATH: pathWithoutJq(home) });
     expect(second.code).toBe(1);
@@ -2141,7 +2141,7 @@ describe('ccrc update: the health gate (per OS, exit 3 vs 4 — design §11)', (
     const calls = lines(home, 'systemctl-calls');
     const gate = calls.indexOf('--user is-active ccrc.service');
     expect(gate, calls.join('\n')).toBeGreaterThanOrEqual(0);
-    expect(calls.indexOf('--user try-restart claude-session@*')).toBeGreaterThan(gate);
+    expect(calls.indexOf(UNIT_RESTART)).toBeGreaterThan(gate);
     expect(healthProbes(home)).toEqual(['http://127.0.0.1:7788/health']);
     expect(reportOf(home)['phase']).toBe('done');
   });
@@ -3628,7 +3628,7 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
     // The sweep ran, and ran BEHIND its preflight: every unit's KillMode read
     // back before the one try-restart.
     const calls = systemctlCalls(home).split('\n').filter((l) => l !== '');
-    const restartAt = calls.indexOf('--user try-restart claude-session@*');
+    const restartAt = calls.indexOf(UNIT_RESTART);
     expect(restartAt, 'a standalone rollback must end in the supervisor sweep').toBeGreaterThan(-1);
     for (const u of ['alpha', 'beta', 'ccrc-update-preflight']) {
       const at = calls.indexOf(`--user show -p KillMode claude-session@${u}.service`);

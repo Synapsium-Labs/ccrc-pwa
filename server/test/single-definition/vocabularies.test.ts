@@ -826,6 +826,57 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
     // Refused is DEGRADED, never fatal — the same spec §6 shape as Linux.
     expect(darwin).toContain('update: DEGRADED: the supervisor sweep did not run');
   });
+
+  // D-8122: the two copies batch the same way. Each lists once, restarts the running units by name in batches of
+  // CCRC_SWEEP_BATCH (default 5, never the glob), verifies a batch before the next, and between batches waits on
+  // /proc/pressure/memory's `full avg10` at the CCRC_WAKE_PRESSURE_GATE level, bounded by CCRC_SWEEP_PRESSURE_WAIT_S.
+  // `_upd_sweep`'s reads and its wait live in its own helpers, so ccrc's text here is the Linux arm plus them.
+  const ccrcHelpers = (): string => {
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    return ['_upd_sweep_knobs', '_upd_sweep_over', '_upd_sweep_pace'].map((n) => {
+      const m = new RegExp(`^${n}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(ccrc);
+      expect(m, `ccd/ccrc has no ${n}`).toBeTruthy();
+      return m![0];
+    }).join('\n');
+  };
+  const batchScopes = (): Array<[name: string, text: string]> => sweepBodies().map(([name, body]) =>
+    [name, name === 'ccd/ccrc _upd_sweep' ? `${updSweepArms(body).linux}\n${ccrcHelpers()}` : body]);
+
+  it('D-8122: neither copy restarts with the glob; each restarts its batch by name', () => {
+    for (const [name, text] of batchScopes()) {
+      expect(text, `${name} still restarts every unit at once`).not.toContain('try-restart "claude-session@*"');
+      expect(text, name).toMatch(name === 'deploy.sh SWEEP_CMD' ? /systemctl --user try-restart \$chunk\b/ : /systemctl --user try-restart "\$\{chunk\[@\]\}"/);
+    }
+  });
+
+  it('D-8122: the same three settings, read through _ccrc_knob, at the same defaults, in both copies', async () => {
+    const { PSI_WARN_FULL_PCT, PSI_CRITICAL_FULL_PCT } = await import('../../../shared/pressure.js');
+    for (const [name, text] of batchScopes()) {
+      for (const read of ['_ccrc_knob CCRC_SWEEP_BATCH 5', '_ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300', '_ccrc_knob CCRC_WAKE_PRESSURE_GATE warn']) {
+        expect(text, `${name}: ${read}`).toContain(read);
+      }
+      // The gate's levels are L0's PSI thresholds, spelled in bash: warn, then critical, then off waits on nothing.
+      expect(text, `${name}: the default batch`).toMatch(/\bbatch=5\b|\bSWB_BATCH=5\b/);
+      expect(text, `${name}: the default bound`).toMatch(/\bwaitmax=300\b|\bSWB_WAIT_S=300\b/);
+      expect(text, `${name}: warn`).toMatch(new RegExp(`\\b(?:gate|SWB_GATE_PCT)=${PSI_WARN_FULL_PCT}\\b`));
+      expect(text, `${name}: critical`).toMatch(new RegExp(`critical\\) (?:gate|SWB_GATE_PCT)=${PSI_CRITICAL_FULL_PCT}\\b`));
+      expect(text, `${name}: off`).toMatch(/off\) (?:gate|SWB_GATE_PCT)=""/);
+    }
+  });
+
+  it('D-8122: each verifies a batch before the next, and waits on memory pressure between batches', () => {
+    for (const [name, text] of batchScopes()) {
+      const deploy = name === 'deploy.sh SWEEP_CMD';
+      const loop = text.indexOf(deploy ? 'while [ $# -gt 0 ]; do' : 'while :; do');
+      const restart = text.indexOf(deploy ? 'try-restart $chunk' : 'try-restart "${chunk[@]}"');
+      const verify = text.indexOf(deploy ? 'verify-service.sh "$u"' : 'bash "$verify"', restart);
+      const next = text.indexOf(deploy ? 'n=$((n + 1))' : 'cs=$((cs + SWB_BATCH))', verify);
+      expect(loop, `${name}: the batch loop`).toBeGreaterThan(-1);
+      expect([loop < restart, restart < verify, verify < next], `${name}: loop, restart, verify, next batch — in that order`).toEqual([true, true, true]);
+      expect(text, `${name}: the pressure file`).toMatch(/\/pressure\/memory\b/);
+      expect(text, `${name}: full avg10`).toMatch(/\$1 == \\?"full\\?"/);
+    }
+  });
 });
 
 

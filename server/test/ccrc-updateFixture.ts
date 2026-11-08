@@ -1061,6 +1061,9 @@ export function plantKillModeDropIn(home: string): void {
 export const UNIT_LINES =
   'claude-session@alpha.service loaded active running fixture supervisor\n'
   + 'claude-session@beta.service loaded active running fixture supervisor\n';
+/** D-8122: the sweep's restart of UNIT_LINES' two running units: by name, in listing order, one batch (two units under
+ *  CCRC_SWEEP_BATCH's default of 5), never the `claude-session@*` glob. */
+export const UNIT_RESTART = '--user try-restart claude-session@alpha.service claude-session@beta.service';
 
 /** A sorted recursive listing of `<home>` as `<relpath>\t<sha256>` lines
  *  (a regular file by its CONTENT digest, T2 of the final review: a size

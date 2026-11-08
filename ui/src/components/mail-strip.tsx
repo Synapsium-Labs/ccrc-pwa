@@ -114,6 +114,8 @@ const GATE_PHRASE: Record<MailGate, string> = {
   'tmux-unknown': 'tmux could not be asked',
   // D-5242: asleep, not gone — the lane wakes it (at most two wakes a minute fleet-wide) and delivers once it is up.
   hibernated: 'the session is asleep — it is being woken to take this',
+  // D-8122: asleep, and the node's memory gate holds its automatic wake for now.
+  'wake-pressure': 'the session is asleep — its wake waits until the box has memory to spare',
   'pending-ask': 'the session is waiting on a prompt of its own',
   'no-pane': 'the session has no pane',
   'no-config-dir': 'this wrapper resolves to no config dir',
