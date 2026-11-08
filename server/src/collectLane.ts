@@ -25,7 +25,7 @@ import { COLLECT_LANE_LIVE_MARKER } from '../../shared/switches.js';
 import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import { isWorkspaceRefusal, type WorkspaceRefusal } from '../../shared/workspaceTransitions.js';
 import { splitJournalRecords } from './journalKernel.js';
-import { heldByRowsOf, type HeldByRead } from './cleanupHeldBy.js';
+import { heldByRowsOf, type HeldByRead } from './heldByRead.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */

@@ -456,7 +456,7 @@ describe('the collect readers are their own (spec §5.10)', () => {
     // Cleanup un-wedge R2 (D-8000): `./cleanupHeldBy.js`, an L1 module, for `heldByRowsOf`, the one reader of an audit
     // document's holding rows.
     const ALLOWED = new Set(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
-      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './cleanupHeldBy.js', './journalKernel.js']);
+      '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './heldByRead.js', './journalKernel.js']);
     expect(specs.filter((s) => !ALLOWED.has(s)), 'a specifier outside that pair')
       .toEqual([]);
     expect(code).not.toMatch(/\bimport\s*\(|\brequire\s*\(/);

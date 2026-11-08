@@ -21,7 +21,7 @@ import { CCD_LOCK_UNOPENABLE, readCcdRefusal, withoutCcdRefusal } from '../../sh
 import {
   isWorkspacePostActWord, isWorkspaceRefusal, type WorkspacePostActWord, type WorkspaceRefusal,
 } from '../../shared/workspaceTransitions.js';
-import { heldByRowsOf, type HeldByRead } from './cleanupHeldBy.js';
+import { heldByRowsOf, type HeldByRead } from './heldByRead.js';
 
 /** THE LANE'S LIVE SWITCH (the coordinator's safety ruling (E), the scope sweep's precedent). Until `$REG/<this>`
  *  exists the lane AUDITS and RECORDS "would expire <id>" — a feed row and an attention entry — and NEVER composes

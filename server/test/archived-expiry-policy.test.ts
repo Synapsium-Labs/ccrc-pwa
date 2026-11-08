@@ -1173,6 +1173,6 @@ describe('L1', () => {
     // Cleanup un-wedge R2 (D-8000): `./cleanupHeldBy.js`, an L1 module, for `heldByRowsOf`, the ONE reader of an audit
     // document's `heldBy` (it imports `expiryReportStands` back from here: function references only).
     expect(froms).toEqual(['../../shared/nestedRescue.js', '../../shared/api.js', '../../shared/ccd-refusal.js',
-      '../../shared/workspaceTransitions.js', './cleanupHeldBy.js', '../../shared/switches.js']);
+      '../../shared/workspaceTransitions.js', './heldByRead.js', '../../shared/switches.js']);
   });
 });

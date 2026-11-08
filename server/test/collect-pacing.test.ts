@@ -814,7 +814,7 @@ describe('wave 8\'s formula, imported: one definer', () => {
     // document's holding rows, no formula.
     expect(from, 'L1: L0, the one L1 file whose formula it shares, the journal framer and the held-rows reader')
       .toEqual(['../../shared/api.js', '../../shared/ccd-refusal.js', '../../shared/switches.js',
-        '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './cleanupHeldBy.js', './journalKernel.js']);
+        '../../shared/workspaceTransitions.js', './childReclaimSweep.js', './heldByRead.js', './journalKernel.js']);
     expect(/import\s*\{([^}]*)\}\s*from\s*'\.\/journalKernel\.js'/.exec(lane)?.[1]?.trim()).toBe('splitJournalRecords');
     const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\/childReclaimSweep\.js'/.exec(lane)?.[1] ?? '';
     for (const name of ['childReclaimTierFrom', 'childReclaimTierPaceMs', 'childReclaimBackoffMs']) {

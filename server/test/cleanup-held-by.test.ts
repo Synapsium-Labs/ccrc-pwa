@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { HELD_BY_WORDS } from '../../shared/api.js';
 import type { ChildReclaimAttention, CoordStatus, ExpiryAttention, HeldByWord } from '../../shared/api.js';
 import {
-  HELD_BY_ABSENT, cleanupHeldBy, cleanupHeldByAct, heldByOf, heldByRowsOf, heldOnlyByListed, withCleanupHeldBy,
+  cleanupHeldBy, cleanupHeldByAct, heldOnlyByListed, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
-import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/cleanupHeldBy.js';
+import { HELD_BY_ABSENT, heldByOf, heldByRowsOf } from '../src/heldByRead.js';
+import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/heldByRead.js';
 import type { ExpiryReport } from '../src/archivedExpiry.js';
 import { parsedFile } from './scan/symbols.js';
 
@@ -246,7 +247,7 @@ describe('cleanupHeldBy', () => {
   // Review 1585 N5: the one L1 edge the fold added, pinned.
   it('cleanupHeldBy imports L0 and only expiryReportStands (and its report type) from archivedExpiry', () => {
     const imports = parsedFile('server/src/cleanupHeldBy.ts').imports;
-    expect([...new Set(imports.map((i) => i.specifier))].sort()).toEqual(['../../shared/api.js', './archivedExpiry.js']);
+    expect([...new Set(imports.map((i) => i.specifier))].sort()).toEqual(['../../shared/api.js', './archivedExpiry.js', './heldByRead.js']);
     const edge = imports.filter((i) => i.specifier === './archivedExpiry.js');
     expect(edge.map((i) => ({ names: i.names, typeNames: i.typeNames }))).toEqual([{ names: ['expiryReportStands', 'ExpiryReport'], typeNames: ['ExpiryReport'] }]);
   });

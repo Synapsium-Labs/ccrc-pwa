@@ -20,9 +20,10 @@ import {
 import type { ArchivedExpiryEntry, ExpireAuditRead } from '../src/archivedExpiry.js';
 import { collectAfterAudit, collectFirstSighting, parseCollectAudit } from '../src/collectLane.js';
 import {
-  cleanupHeldBy, cleanupHeldByAct, heldByOf, withCleanupHeldBy,
+  cleanupHeldBy, cleanupHeldByAct, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
-import type { HeldByRead, HeldByRow } from '../src/cleanupHeldBy.js';
+import { heldByOf } from '../src/heldByRead.js';
+import type { HeldByRead, HeldByRow } from '../src/heldByRead.js';
 import { step, verdict } from './collectAnswers.js';
 
 const NOW = 1_790_000_000_000;
