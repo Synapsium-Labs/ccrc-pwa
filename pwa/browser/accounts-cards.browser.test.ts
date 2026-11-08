@@ -1,6 +1,6 @@
 // The Refined Accounts cards at every width (accounts plan Task A2 Step 4, D-7718; spec 2026-10-18 accounts-connect
-// §4.4, §12.1). Five lanes, the plan's fixture: lane-a (on, fresh usage, a long label), lane-b (401), lane-c (5h at
-// 100%), lane-d (off), lane-e (codex). Sixteen cells: phone 360 and 390, laptop 1280 and wide 1920, both skins, light
+// §4.4, §12.1). Six lanes, the plan's fixture: lane-a (on, fresh usage, a long label), lane-b (401), lane-c (5h at
+// 100%), lane-d (off), lane-e (codex), and lane-f (on, a plan with no 5-hour window, D-8120). Sixteen cells: phone 360 and 390, laptop 1280 and wide 1920, both skins, light
 // and dark. Instrument draws the same cards in its own tokens until Task A4 moves it to its table, so the rail still
 // marks lane-b there.
 //
@@ -47,6 +47,8 @@ const ACCOUNTS = {
     acct('lane-c', { five: 100, fiveResetAt: nowSec + 72 * 60 }),
     acct('lane-d', { disabled: true }),
     acct('lane-e', { five: null, seven: 40 }),
+    // lane-f: the same marker on an ordinary signed-in lane, the card most five-less lanes draw (D-8120).
+    acct('lane-f', { five: null, seven: 22, fiveResetAt: nowSec - 259_200, fiveWindowMinutes: 0 }),
   ],
   projected: { wrapper: 'lane-a', score: 12 },
   roster: [
@@ -55,6 +57,7 @@ const ACCOUNTS = {
     rostered('lane-d', 'blue', { provider: 'openrouter', kind: 'key' }),
     rostered('lane-b', 'amber', { kind: 'token' }),
     rostered('lane-e', 'magenta', { provider: 'openai', kind: 'codex', homeAble: false }),
+    rostered('lane-f', 'green'),
   ],
   lanes: {
     'lane-a': {
@@ -65,6 +68,9 @@ const ACCOUNTS = {
     'lane-c': { state: { word: 'rate-limited', source: '5h limit reached · resets in 1h 12m' }, ready: true },
     'lane-d': { state: { word: 'off', source: 'Off on the fleet host' }, keyHint: 'sk-or-v1-…a3f9', validatedAt: now - 2 * 86_400_000, ready: true },
     'lane-e': { state: { word: 'signed-in', source: 'checked 9m ago', at: now - 540_000 }, ready: true },
+    'lane-f': {
+      state: { word: 'signed-in', source: 'checked 6m ago', at: now - 360_000 }, check: checked('ok', 360_000), ready: true,
+    },
   },
 };
 const FIXTURE: AppFixture = {
@@ -115,7 +121,7 @@ interface Measured {
   readonly pageMax: number;
   readonly metersSideBySide: boolean;
   readonly weeklyOnly: boolean;
-  readonly noFiveHour: { shown: boolean; clipped: boolean; meters: number; otherLanes: string[] };
+  readonly noFiveHour: { lanes: Record<string, { shown: boolean; clipped: boolean; meters: number }>; otherLanes: string[] };
   readonly rollUp: string | null;
   readonly skin: string | null;
   readonly theme: string;
@@ -143,7 +149,7 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
       try {
         await page.goto(server!.origin + '/');
         await go(page, '/accounts');
-        await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
+        await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 6, CARDS, { timeout: 30_000 });
         const m: Measured = await page.evaluate((sel) => {
           const cards = [...document.querySelectorAll<HTMLElement>(sel)];
           const card = (id: string): HTMLElement => cards.find((c) => c.dataset['lane'] === id)!;
@@ -175,12 +181,18 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
             metersSideBySide: meters.length === 2 && Math.abs(rect(meters[0]!).top - rect(meters[1]!).top) < 2,
             weeklyOnly: card('lane-e').textContent!.includes('weekly window only'),
             noFiveHour: (() => {
-              const words = card('lane-b').querySelector<HTMLElement>("[data-five='none'] .acct-weekly-only");
+              const marked = ['lane-b', 'lane-f'];
+              const of = (id: string): { shown: boolean; clipped: boolean; meters: number } => {
+                const words = card(id).querySelector<HTMLElement>("[data-five='none'] .acct-weekly-only");
+                return {
+                  shown: words !== null && words.textContent === 'No 5-hour limit' && rect(words).width > 0,
+                  clipped: words !== null && words.scrollWidth > words.clientWidth + 1,
+                  meters: card(id).querySelectorAll('.acct-meter').length,
+                };
+              };
               return {
-                shown: words !== null && words.textContent === 'No 5-hour limit' && rect(words).width > 0,
-                clipped: words !== null && words.scrollWidth > words.clientWidth + 1,
-                meters: card('lane-b').querySelectorAll('.acct-meter').length,
-                otherLanes: cards.filter((c) => c.dataset['lane'] !== 'lane-b' && c.textContent!.includes('No 5-hour limit'))
+                lanes: Object.fromEntries(marked.map((id) => [id, of(id)])),
+                otherLanes: cards.filter((c) => !marked.includes(c.dataset['lane']!) && c.textContent!.includes('No 5-hour limit'))
                   .map((c) => c.dataset['lane']!),
               };
             })(),
@@ -218,15 +230,18 @@ describe('the Refined Accounts cards at every width and skin (D-7718)', () => {
           };
         }, CARDS);
         expect([m.skin, m.theme], 'the cell draws the skin and theme it names').toEqual([view.skin, view.theme]);
-        expect(m.order, 'trouble cards first').toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e']);
-        expect(m.rollUp).toBe('5 accounts · 1 signed out · 1 rate-limited · 1 off');
+        expect(m.order, 'trouble cards first').toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e', 'lane-f']);
+        expect(m.rollUp).toBe('6 accounts · 1 signed out · 1 rate-limited · 1 off');
         expect(m.docOverflow, 'no horizontal page scroll').toBeLessThanOrEqual(0);
         expect(m.cardOverflow, 'nothing overflows a card').toEqual([]);
         expect(m.headWraps, 'every head line 1 stays one line').toEqual([]);
         expect(m.rails, 'the rail on the Signed-out card only').toEqual(['lane-b']);
         expect(m.weeklyOnly).toBe(true);
         expect(m.noFiveHour, 'a lane with no 5h window says so, whole, in place of its 5h meter (D-8120)')
-          .toEqual({ shown: true, clipped: false, meters: 1, otherLanes: [] });
+          .toEqual({
+            lanes: { 'lane-b': { shown: true, clipped: false, meters: 1 }, 'lane-f': { shown: true, clipped: false, meters: 1 } },
+            otherLanes: [],
+          });
         expect(m.clippedFields, 'every command shows whole').toEqual([]);
         expect(m.untitledTruncations, 'every truncation carries its whole value in title').toEqual([]);
         expect(m.headOverlaps, 'nothing on a head line 1 overlaps').toEqual([]);
@@ -332,23 +347,23 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
         await app.page.clock.install({ time: now });
         await app.page.goto(server!.origin + '/');
         await go(app.page, '/accounts');
-        await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
+        await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 6, CARDS, { timeout: 30_000 });
         const before = await readOffline(app.page);
         app.cut();
         // Leave and come back: the remount asks for a fresh answer (D-7180), which now fails.
         await go(app.page, '/');
         await go(app.page, '/accounts');
-        await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 5, CARDS, { timeout: 30_000 });
+        await app.page.waitForFunction((sel) => document.querySelectorAll(sel).length === 6, CARDS, { timeout: 30_000 });
         await app.page.waitForTimeout(1_500);
         await holdOffline(app.page);
         const m = await readOffline(app.page);
         await app.page.clock.resume();
         expect(m.cards.map((c) => [c.lane, c.state, c.word, c.source]), "the server's words and sources stand")
           .toEqual(before.cards.map((c) => [c.lane, c.state, c.word, c.source]));
-        expect(m.cards.map((c) => c.lane)).toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e']);
+        expect(m.cards.map((c) => c.lane)).toEqual(['lane-b', 'lane-c', 'lane-a', 'lane-d', 'lane-e', 'lane-f']);
         expect(m.cards.every((c) => !c.source.includes('no lane state')), 'held lanes are not forgotten').toBe(true);
         expect(m.cards.every((c) => c.usage !== ''), 'every card keeps its usage age').toBe(true);
-        expect(m.rollUp).toBe('5 accounts · 1 signed out · 1 rate-limited · 1 off');
+        expect(m.rollUp).toBe('6 accounts · 1 signed out · 1 rate-limited · 1 off');
         // From 900 the fleet pane beside the screen carries the shell's "Reconnecting…". Below 900 nothing on the
         // Accounts screen says the link is down: the PR's offline row names that, and A18 owns the sentence.
         if (view.width >= 900) expect(m.reconnecting, "the shell's offline reading is on screen").toBe(true);
@@ -367,6 +382,7 @@ describe('the Accounts cards offline, one cell per skin at 360 and 1280, dark (D
           .toBe("lane-b's token was refused, or it has none (3h ago).");
         expect(sourceOf('lane-a')).toBe('checked 1h ago');
         expect(sourceOf('lane-e')).toBe('checked 1h ago');
+        expect(sourceOf('lane-f')).toBe('checked 1h ago');
         expect(sourceOf('lane-c')).toMatch(/^5h limit reached · resets in 1[01]m$/);
         expect(sourceOf('lane-d')).toBe('Off on the fleet host');
         expect(later.cards.map((c) => [c.lane, c.state, c.word]), "the server's words stand")

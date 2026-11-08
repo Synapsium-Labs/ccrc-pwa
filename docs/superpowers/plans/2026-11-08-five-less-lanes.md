@@ -41,7 +41,9 @@ figure is the whole score": `measured()` in `server/src/limits.ts`, `_limit_scor
 
 ## What changed
 
-- `ccd/statusline-command.sh`: the `fiveAbsentSince` def, and the two optional keys on the row it prints.
+- `ccd/statusline-command.sh`: the `fiveAbsentSince` def, and the two optional keys on the row it prints. It rides
+  the `jq` that already read the row's kept `fiveResetAt` for a five-less reading, so a render reads the row no more
+  often than before this change: one `jq` prints both facts.
 - `ccd/ccd`: `_limit_score`'s comment names the Anthropic marker. There is no logic change. Every 5h-reset reader
   was checked: `_avail`, `_swap_pin_expiry_to` (#1114), the classwindow rung, the rescue waits and
   `_codex_lane_status`. None of them waits on or freezes at a 5h reset when `five` is null. The pin's expiry on such
@@ -52,6 +54,10 @@ figure is the whole score": `measured()` in `server/src/limits.ts`, `_limit_scor
   when its row carries the marker. Otherwise the meter is unchanged.
 - `pwa/src/screens/AccountsScreen.tsx`: the 5h row reads `fiveHourWords` and marks itself `data-five`. It reuses
   `.acct-weekly-only`, so the layout is the Codex row's at every width.
+- `pwa/src/fleet/AccountRow.tsx` (SwapSheet's targets, NewSessionSheet's step 1): a marked lane's 5h gauge is the
+  words "No 5-hour limit", taken from `fiveHourWords`. Only its `NO_FIVE_HOUR` answer is used, so a Codex lane keeps
+  the gauge it draws today. The words sit in the gauge's track and percentage columns of the fixed-width gauges
+  column, so the row is the same at every width.
 
 ## Tests
 
@@ -67,9 +73,14 @@ figure is the whole score": `measured()` in `server/src/limits.ts`, `_limit_scor
   ranks last, a marked one is refused at the weekly ceiling, and a marked home stays until its week is under
   pressure. `server/test/ccd-swap-pin.test.ts`: a pin on such a home expires at the weekly reset or the TTL.
 - Wire: `server/test/accounts-route.test.ts`.
+- Writer to readers: `server/test/five-less-writer-reader.test.ts` runs the real writer twice in one HOME (an
+  unmarked run, then a run a window old), and feeds the exact row it leaves to `_limit_score` and `/api/accounts`.
+  A renamed key or a type drift on either side goes red.
 - PWA: `pwa/test/accounts-trouble.test.tsx` (the card and the `fiveHourWords` table), `pwa/test/swap-sheet.test.tsx`
   (the picker), and `pwa/browser/accounts-cards.browser.test.ts`. The browser test covers 360, 390, 1280 and 1920,
-  both skins and both themes. Its lane-b has no 5h window: the words are shown whole and in place of its 5h meter.
+  both skins and both themes. Its lane-b (signed out) and lane-f (an ordinary signed-in lane) have no 5h window: the
+  words are shown whole and in place of the 5h meter. `pwa/test/account-row-five-less.test.tsx` covers the picker
+  row: marked, unmarked, Codex and ordinary lanes.
 
 ## Known limits
 
@@ -79,5 +90,11 @@ figure is the whole score": `measured()` in `server/src/limits.ts`, `_limit_scor
   readings. That is the cost of not trusting a single null.
 - A stale session's snapshot that still carries a 5h figure for a window newer than the row's kept `fiveResetAt`
   publishes, and restarts the run. Older ones are dropped by the existing verdict.
-- The history-replay gate (`deploy/history-replay.mjs` `decideLimits`) still refuses a five-less row as `five-null`,
-  so replay cannot run on these lanes. That reader is outside this change.
+- A lane that does have a 5h window can be marked falsely. That happens if, for 5h after a reset, its sessions only
+  render payloads without `five_hour` and make no API call. Ranking is unaffected, because the window really has
+  reset and the weekly figure is then the whole score. The card says "No 5-hour limit" until a real call reports a
+  5h figure and clears the marker.
+- Follow-up: the history-replay gate (`deploy/history-replay.mjs` `decideLimits`) still refuses a marked row as
+  `five-null`, so replay cannot run on these lanes.
+- Follow-up: the stall line (`server/src/coord/stall.ts`) still prints a 5h percent for such a lane, where it should
+  say the lane has no 5h window.

@@ -340,9 +340,6 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
     # renders landing together truncated and wrote the same file at once.
     acct_tmp="$HOME/.cc-limits/.$acct_id.$$.tmp"
     acct_five_reset="${five_reset:-null}"
-    if [ -z "${five_int:-}" ] && [ "$acct_five_reset" = null ] && [ -f "$acct_row" ]; then
-      acct_five_reset=$(jq -r 'if (.fiveResetAt | type) == "number" then .fiveResetAt else "null" end' "$acct_row" 2>/dev/null) || acct_five_reset=null
-    fi
     # NO 5H WINDOW ON THIS ACCOUNT (D-8120) — stated HERE, once, and read by
     # everyone else. Some Anthropic plans have no 5-hour window, and their
     # payloads carry `seven_day` alone, render after render. One null cannot
@@ -369,20 +366,33 @@ if [ "$measured" = 1 ] && { [ -n "${five_int:-}" ] || [ -n "${seven_int:-}" ]; }
     # plan has no 5h window; the weekly figure is the whole score" (`measured()`
     # in server/src/limits.ts, `_limit_score` in ccd, the PWA's swap picker) —
     # ccgpt-usage states it for Codex the same way. No reader re-derives it.
+    #
+    # ONE read of the row for both facts a five-less reading needs from it —
+    # the kept `fiveResetAt` and the run start — so a render reads the row no
+    # more often than it did before the marker existed. The `jq` prints the
+    # two on one line, `<fiveResetAt> <extra keys>`; an unparseable row keeps
+    # no reset and starts a fresh run, exactly as the two reads did apart.
     acct_five_extra=""
-    if [ -z "${five_int:-}" ] && [ "${five_reset:-null}" = null ]; then
-      acct_five_extra=$({ cat "$acct_row" 2>/dev/null || :; } | jq -Rsr --argjson now "$acct_now" '
-        def epoch: if type == "number" and . >= 0 then floor else null end;
-        def fiveAbsentSince($row; $now):
-          if ($row | type) == "object" and $row.five == null
-          then ($row.fiveAbsentSince | epoch) // ($row.fiveResetAt | epoch) // $now
-          else $now end;
-        (try fromjson catch null) as $row
-        | fiveAbsentSince($row; $now) as $since
-        | ",\"fiveAbsentSince\":\($since)"
-          + (if $now - $since >= 18000 then ",\"fiveWindowMinutes\":0" else "" end)' 2>/dev/null) || acct_five_extra=""
-      [[ "$acct_five_extra" =~ ^,\"fiveAbsentSince\":[0-9]+(,\"fiveWindowMinutes\":0)?$ ]] \
-        || acct_five_extra=",\"fiveAbsentSince\":$acct_now"
+    if [ -z "${five_int:-}" ] && [ "$acct_five_reset" = null ]; then
+      acct_five_extra=",\"fiveAbsentSince\":$acct_now"
+      if [ -f "$acct_row" ]; then
+        acct_five_pair=$(jq -Rsr --argjson now "$acct_now" '
+          def epoch: if type == "number" and . >= 0 then floor else null end;
+          def fiveAbsentSince($row; $now):
+            if ($row | type) == "object" and $row.five == null
+            then ($row.fiveAbsentSince | epoch) // ($row.fiveResetAt | epoch) // $now
+            else $now end;
+          (try fromjson catch null) as $row
+          | (if ($row | type) == "object" and ($row.fiveResetAt | type) == "number"
+             then ($row.fiveResetAt | tojson) else "null" end) as $reset
+          | fiveAbsentSince($row; $now) as $since
+          | "\($reset) ,\"fiveAbsentSince\":\($since)"
+            + (if $now - $since >= 18000 then ",\"fiveWindowMinutes\":0" else "" end)' "$acct_row" 2>/dev/null) || acct_five_pair=""
+        if [[ "$acct_five_pair" =~ ^([^\ ]+)\ (,\"fiveAbsentSince\":[0-9]+(,\"fiveWindowMinutes\":0)?)$ ]]; then
+          acct_five_reset="${BASH_REMATCH[1]}"
+          acct_five_extra="${BASH_REMATCH[2]}"
+        fi
+      fi
     fi
     printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s%s}\n' \
       "${five_int:-null}" "${seven_int:-0}" "$acct_now" "${acct_five_reset:-null}" "${seven_reset:-null}" "$acct_five_extra" \
