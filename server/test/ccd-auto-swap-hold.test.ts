@@ -50,7 +50,7 @@ const seed = (): void => {
  *  roster's live telemetry. */
 const AFFINITY_STUBS = `
   tmux() { ${WIDE_PANE} case "\${1:-}" in
-             capture-pane) printf '%s\\n' "❯ " ;;
+             capture-pane) printf '%s\\n' "────────────────────────" "❯ " "────────────────────────" ;;   # the bordered box (D-8116)
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
   _swap_target() { echo claude9; }; _avail() { return 0; };

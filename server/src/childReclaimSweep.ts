@@ -23,7 +23,7 @@ import {
 import { CCD_LOCK_UNOPENABLE } from '../../shared/ccd-refusal.js';
 import { runNamesSession } from './coord/runBinding.js';
 import type { SiblingRef } from './coord/staleSibling.js';
-import type { HeldByRead } from './cleanupHeldBy.js';
+import type { HeldByRead } from './heldByRead.js';
 
 /** How long a presence defer may continue before the reclaim proceeds past it
  *  (spec §5.7, "Presence, and its bound"). Unbounded would be worse than

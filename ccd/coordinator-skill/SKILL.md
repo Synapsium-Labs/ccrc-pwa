@@ -137,7 +137,7 @@ API="$HOME/.local/bin/ccrc-api"
 # so neither can be got wrong one caller at a time.
 
 body=$("$API" runs open --json - <<JSON
-{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<home project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
+{"program":"<slug>","title":"<title>","programmeTitle":"<the programme's name, used only when this opens a new programme>","project":"<project>","homeProject":"<home project>","wave":1,"waveOf":<M or null>,"claimedBy":"$id"}
 JSON
 )
 ```

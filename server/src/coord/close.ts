@@ -10,6 +10,7 @@ import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
+import type { RunVerdict } from './runVerdicts.js';
 import {
   abandonMove, decideClose, doneRejectionMail, recordedHandoff, type CloseHalt, type CloseStop, type FleetAct,
   type RequestPlan,
@@ -209,14 +210,18 @@ export function abandonRefusal(coord: CoordStore, id: number): Extract<CloseOutc
  */
 export function closeRun(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown, causedBy: 'coordinator' | 'operator',
+  detail?: string | null,
 ): Promise<CloseOutcome>;
 export function closeRun(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown, causedBy: 'sweep', sweep: SweepCloseGuard,
 ): Promise<CloseOutcome>;
 export async function closeRun(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, body: unknown,
-  causedBy: CloseCause, sweep?: SweepCloseGuard,
+  causedBy: CloseCause, sweepOrDetail?: SweepCloseGuard | string | null,
 ): Promise<CloseOutcome> {
+  // The fifth argument is the sweep's guard, or, on the other two words, the detail the final advance stores (D-8071).
+  const sweep = typeof sweepOrDetail === 'object' && sweepOrDetail !== null ? sweepOrDetail : undefined;
+  const detail = typeof sweepOrDetail === 'string' ? sweepOrDetail : null;
   // Everything the request says, ahead of any fleet act: `decideClose` names the arm and refuses what that arm cannot
   // take. The three arms are separate executors by construction (D-290): what an arm skips is ABSENT from it, not
   // skipped by a flag threaded through a shared path.
@@ -224,7 +229,7 @@ export async function closeRun(
   if (req.kind !== 'go') return stopped(deps, req);
   const plan = req.plan;
   switch (plan.arm) {
-    case 'abandon': return abandonRun(deps, id, plan, causedBy, sweep);
+    case 'abandon': return abandonRun(deps, id, plan, causedBy, sweep, detail);
     case 'review': return closeReviewRun(deps, plan.run, plan.body, causedBy);
     case 'work': return closeWorkRun(deps, id, plan, causedBy);
     default: return plan satisfies never;
@@ -291,13 +296,20 @@ async function sweepGateOf(
   return d.kind === 'go' ? null : stopped(deps, d);
 }
 
+/** The detail an operator abandon stores (D-8071; spec §9.3): `abandon:<reason>` from the verdict the reader holds, or null
+ *  with no verdict, so a run ended while the reader is empty reads "closed by you". */
+export function abandonDetail(verdict: RunVerdict | null): string | null {
+  return verdict === null || verdict.stuck === null ? null : `abandon:${verdict.stuck.reason}`;
+}
+
 /** The abandon's commit: the store's close of the run `failed`, and what its answer means (`commit` step). */
 function commitAbandon(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
-  causedBy: CloseCause, sweep: SweepCloseGuard | undefined, acted: boolean,
+  causedBy: CloseCause, sweep: SweepCloseGuard | undefined, acted: boolean, detail: string | null,
 ): CloseHalt | null {
   const closed = deps.coord.closeRun({
     runId: id, finalState: 'failed', causedBy, handoffCommit: null,
+    ...(detail === null ? {} : { detail }),
     program: plan.run.program, viaClosing: plan.target === 'closing',
     ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
   });
@@ -320,11 +332,11 @@ function commitAbandon(
  */
 async function abandonRun(
   deps: Omit<CloseRunDeps, 'coord'> & { coord: WatcherCoordPort }, id: number, plan: Extract<RequestPlan, { arm: 'abandon' }>,
-  causedBy: CloseCause, sweep: SweepCloseGuard | undefined,
+  causedBy: CloseCause, sweep: SweepCloseGuard | undefined, detail: string | null,
 ): Promise<CloseOutcome> {
   const { run } = plan;
   if (plan.unnamed) {
-    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
     if (halt !== null) return halt;
     deps.coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:bad-session');
     return { ok: true, id, state: 'failed', released: false, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' };
@@ -333,7 +345,7 @@ async function abandonRun(
   // dispatched holds no workspace, and a run with no session names no child.
   const sessionId = run.sessionId;
   if (sessionId === null) {
-    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false);
+    const halt = await sweepGateOf(deps, id, sweep) ?? commitAbandon(deps, id, plan, causedBy, sweep, false, detail);
     return halt ?? { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };
   }
   const sibRead = deps.coord.bindingsOf(sessionId).worker({ excludeRunId: id });
@@ -347,7 +359,7 @@ async function abandonRun(
     const after = decideClose({ step: 'recheck', stop: await sweep.stillCrashed(), release: act.plan.released });
     if (after.kind !== 'go') return stopped(deps, after);
   }
-  const late = commitAbandon(deps, id, plan, causedBy, sweep, true);
+  const late = commitAbandon(deps, id, plan, causedBy, sweep, true, detail);
   return late ?? { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
 }
 

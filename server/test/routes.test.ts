@@ -279,6 +279,8 @@ describe('canonical coordination id route census', () => {
       { method: 'GET', routePath: '/api/runs/:id/signals' },
       // D-6799: the run plus its spend.
       { method: 'GET', routePath: '/api/runs/:id' },
+      // D-8071: the run's lasting record, registered beside it.
+      { method: 'GET', routePath: '/api/runs/:id/record' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },

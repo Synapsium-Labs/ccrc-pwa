@@ -1,6 +1,7 @@
 import type { ChildMark, RunSummary } from '../../../shared/api.js';
 import type { BindingReadPort } from './bindingReads.js';
 import { childBirthOf } from './childSpent.js';
+import type { RunVerdicts } from './runVerdicts.js';
 import { childrenOf, incarnationOf, unbornIncarnation, type Incarnation } from './runBinding.js';
 
 /**
@@ -96,4 +97,27 @@ export function withLastMoves<R extends { readonly id: number }>(
     return [...runs];
   }
   return runs.map((run) => ({ ...run, lastMoveAt: read.moves.get(run.id) ?? null }));
+}
+
+/** The reader `withVerdicts` takes: `RunVerdicts`' two reads, and nothing it could write (D-8071; spec §7, A45). */
+export type VerdictReader = Pick<RunVerdicts, 'of' | 'ofProgramme'>;
+
+/** The stuck verdict's fields on every answer that carries a `RunSummary`, beside `withLastMoves`: the runs frame, its cold
+ *  start, `GET /api/runs` and `GET /api/runs/:id` (D-8071; spec §7). An open run takes `stuck`, `waitsOn`, `blockedBy` and
+ *  `coordinatorGone` from its entry; a closed run takes only `coordinatorGone`, from its programme's entry (A55). A run with
+ *  no entry, and an empty reader, stamp nothing: absence permits, and an older PWA draws exactly as before. */
+export function withVerdicts<R extends { readonly id: number }>(verdicts: VerdictReader, runs: readonly R[]): R[] {
+  return runs.map((run) => {
+    const v = verdicts.of(run.id);
+    if (v !== null) {
+      return { ...run, stuck: v.stuck, ...(v.waitsOn === undefined ? {} : { waitsOn: v.waitsOn }),
+        blockedBy: v.blockedBy, coordinatorGone: v.coordinatorGone };
+    }
+    const r = run as R & { readonly program?: string; readonly state?: string };
+    if ((r.state === 'done' || r.state === 'failed') && typeof r.program === 'string') {
+      const g = verdicts.ofProgramme(r.program);
+      if (g !== null) return { ...run, coordinatorGone: g };
+    }
+    return run;
+  });
 }

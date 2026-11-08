@@ -16,7 +16,7 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
    header and the wave-1 row, and **commit it**. The commit is the artefact; an
    uncommitted ledger is not a handoff.
 2. `POST /api/runs`
-   `{"program":"<slug>","title":"<title>","project":"<project>","homeProject":"<the project this programme lives in>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
+   `{"program":"<slug>","title":"<title>","programmeTitle":"<the programme's name, used only when this opens a new programme>","project":"<project>","homeProject":"<the project this programme lives in>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
    → `{"ok":true,"id":<run id>,"ledgerPath":…,"ledgerRepo":…,"ledgerAbsPath":…}`, or one of the refusals below.
 
 | refused | what it means | what you do |

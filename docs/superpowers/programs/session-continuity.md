@@ -25,7 +25,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
 | 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | plan #401; reanchor #409; implementation #435 | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; handoff `990c70cbb`, four items settled, implementation NOT accepted; review 489 failed without dispatch; review 630 closed done 2026-10-19 14:32 UTC with its original report fingerprint accepted; run 308 returned to working 14:50 UTC and fix-round rulings mailed, worker effort raised high to xhigh; required server CI red at reviewed tip, inherited README-size failure; fix-round handoff `2f6caa48e` accepted by the server 2026-10-20 07:25 UTC, NEW review 685 dispatched 07:42 UTC; PR conflicts with main on the generated stamp; review 685 closed done 2026-10-20 13:56 UTC with its report fingerprint accepted, no critical finding; run 308 returned to working 13:59 UTC for fix round 2, its last phase waiting on another run's claims on `ccd/ccd` and README; Task 5 coordinator-owned/pending; scope sweep remains SHADOWED; MERGED 2026-10-21 03:54 UTC (`d8cd4765`, #435) after reviews 714 and 729 and fix round 3; run 308 closed; deployed 2026-10-21 by ccrc's updater, fleet box first (v0.0.508); Task 5's week runs 2026-10-21 05:38 to 2026-10-28 05:38 UTC; read 2026-10-28: 0 reap-class, `not-triggered`, the variable stays; week 2 read 2026-11-04: 0 reap-class, `not-triggered` in the part read, its first 2 h 9 m unmeasured (the fleet moved boxes), the variable stays, direct figure 0 in both weeks but partial, reported under spec §9; weekly reading continues, next due 2026-11-11 05:38 UTC; the scope sweep is no longer shadowed: `scope-sweep-live` exists since 2026-10-26 23:38 UTC, armed by the operator (confirmed 2026-10-28) |
 | 4c | 6, first part | the direct-kill scanner reads the notifications it missed: queued-command attachments, queue enqueue rows, and summary-only notices that name no low memory | the instrument only (`deploy/measure-continuity.py`, in the release) | 4b and its two weekly readings | — | planned 2026-11-04 on the operator's ruling (`docs/superpowers/plans/2026-11-04-session-continuity-wave4c-direct-kill-scanner.md`, D-7960 to D-7963; Decisions, 2026-11-04 10:22); approved as written by the operator 2026-11-04 15:11 UTC (item 30; Decisions, 2026-11-04 15:14); plan merged 2026-11-04 16:18 UTC (`aff374c4`, #2262); run 1450 dispatched 16:23 UTC (`ccrc-pwa-continuity-4c`; Decisions, 2026-11-04 16:25); wave-done verified at `4a24db72` (PR #2277), review 1452 confirmed three important and three minor findings, fix round 1 sent (Decisions, 2026-11-04 17:35); accepted 18:07 UTC at `a5e8071e` after review 1458 (round 2); MERGED 2026-11-04 18:27 UTC (`ba93eb31`, #2277); run 1450 closed; released as prerelease v0.0.962 (18:29 UTC), and the first weekly reading after the fleet box installs v0.0.962 or later is the first under it (Decisions, 2026-11-04 18:44) |
-| 5 | 2 | the reduced spike: which resume call works after an ordinary swap (step 5), and a paused workflow under a blocked parent (step 6); steps 1 to 4 decided on the evidence, step 7 closed by D-5241 | measurement on a lent scratch account; no code | wave 1 | — | deferred by the operator 2026-10-20; resumed 2026-11-07, the operator lending a scratch account (item 59; Decisions, 2026-11-07 14:40); reduced to steps 5 and 6, the manifest primary (item 75; spec rev 11, §11 items 7 and 8; Decisions, 2026-11-07 22:40); plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md` (D-8102 to D-8109) waits for approval, and its live tasks for the operator's setup; run 730, planned |
+| 5 | 2 | the reduced spike: which resume call works after an ordinary swap (step 5), and a paused workflow under a blocked parent (step 6); steps 1 to 4 decided on the evidence, step 7 closed by D-5241 | measurement on a lent scratch account; no code | wave 1 | — | deferred by the operator 2026-10-20; resumed 2026-11-07, the operator lending a scratch account (item 59; Decisions, 2026-11-07 14:40); reduced to steps 5 and 6, the manifest primary (item 75; spec rev 11, §11 items 7 and 8; Decisions, 2026-11-07 22:40); plan `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md` (D-8102 to D-8109), approved as written (item 80) and merged (#2443 `86a713a5`); run 730 dispatched 2026-11-08 (Decisions, 2026-11-08 00:50); Task 1 done and row R5 added (Decisions, 2026-11-08 01:03); Tasks 2 to 4 wait for the operator's setup (item 95) |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
 | 8 | 5 | the three skill clauses; review-panel's "resume before re-run"; run signals; `FleetSession.delegations` and its chip | skills, server, pwa | wave 6; landing-order wave 1's clauses | — | after wave 6 |
@@ -1197,6 +1197,40 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     each account.
   - **Routing for run 730 (clause 13).** A worker running a measurement whose judgement is in the reading: Opus at
     high, Haiku scouts only, workflow off, compact 40.
+- **2026-11-08 00:50 UTC - the plan is approved and merged (#2443, `86a713a5`), run 730 is dispatched, and the setup
+  goes to the operator (item 95).**
+  - **The answer** to item 80: "Approve as written: land the plan and dispatch it" (2026-11-07 23:08 UTC).
+  - **The landing.** #2443 was enqueued at 23:12:51 UTC and merged at 00:34:27 UTC as `86a713a52`, from head
+    `70f0ae859`. Items 75 and 80 were then confirmed against `main`. Item 59 was already done.
+  - **The dispatch.** Run 730 went at 00:49 UTC to a fresh child, the conductor. It carries five items (Tasks 1 to 5)
+    and is routed Opus at high, Haiku scouts only, workflow off, compact 40. Task 1 needs no account. Tasks 2 to 4
+    wait for the operator's setup.
+  - **Item 95** asks for that setup at 00:50 UTC, from the plan's setup list. The names go only in the operator's
+    answer and in this coordinator's private mail to the conductor, never in this file.
+- **2026-11-08 01:03 UTC - Task 1 is done, and the matrix gains a fifth row (R5).**
+  - **Task 1's reading,** as the conductor reported it. Its results note is on its branch, and the wave's review reads
+    it at the end:
+    - 184 resume calls are on disk, from 2026-07-20 to 2026-11-08, in 37 sessions: 134 ok, 22 script-path refusals,
+      19 other errors (16 still running, 3 parse errors), 8 journal-missing and 1 with no result.
+    - Wave 1's five script-path refusals are gone from disk (its window now holds 37 of its 72 calls), so the disk
+      cannot explain them.
+    - **The old root's returned path, after a swap.** Up to 10-21, 28 of 33 passed the path check. From 10-22, 13 of
+      13 were refused, on builds 2.1.304 to 2.1.316. Neither the build, the trigger nor the carry mode explains the
+      change.
+    - **The carry's copy under the current root, never returned** (row R1's shape): 3 ok from 09-24 to 10-15, and 4
+      of 4 refused since 10-22.
+    - **Row R3** is untested by history.
+    - **Step 7.** Doctor's `oom-policy` line reads PASS, so step 7 stays closed (D-8103).
+  - **The ruling: R5.** Five calls after a swap passed the whole script inline, as `script` plus `resumeFromRunId`
+    with no `scriptPath`. All five were accepted, from 10-19 to 10-26, on builds 2.1.303 to 2.1.309. The refusal text
+    itself suggests this, but the plan's matrix has no such row.
+    - This coordinator added R5 to Task 3: a fourth identical workflow, resumed after the same swap with its script
+      inline. Its journal is read like the others. It measures the plan's own question, which call resumes an
+      interrupted run after a swap, for one more cheap run.
+    - The worker names it in the wave-done as the departure `inline-script-row`, and this coordinator numbers it at
+      the wave's acceptance.
+    - R1 and R2 are now expected to be refused. The results note says so as history, not as a result.
+  - **Waiting:** the operator's answer to item 95.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -1294,7 +1328,7 @@ variable stays (Decisions, 2026-10-28 05:51). Its second week is read too: 0 rea
 run 1450 is dispatched (Decisions, 2026-11-04 16:25). Wave 4c is merged (#2277, `ba93eb31`) and run 1450 is closed (Decisions, 2026-11-04 18:44); it is in prerelease
 v0.0.962. What is owed now: the weekly reading against baseline B,
 next due 2026-11-11 05:38 UTC, owned by this coordinator. `$REG/scope-sweep-live`
-exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). The operator lifted the stop on 2026-11-07 and lends a scratch account (item 59), and chose the reduced spike (item 75; Decisions, 2026-11-07 14:40 and 22:40). Wave 5's plan, `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`, waits for the operator's approval. Once it lands, run 730 is dispatched: Task 1 needs no account, and Tasks 2 to 4 start when the operator's setup item is answered. Wave 6 is planned from its results.
+exists since 2026-10-26 23:38 UTC: the operator armed it, and confirmed so on 2026-10-28 (Decisions, 08:00). The operator lifted the stop on 2026-11-07 and lends a scratch account (item 59), and chose the reduced spike (item 75; Decisions, 2026-11-07 14:40 and 22:40). Wave 5's plan, `docs/superpowers/plans/2026-11-07-session-continuity-wave5-reduced-spike.md`, is merged (#2443 `86a713a5`), and run 730 is dispatched (Decisions, 2026-11-08 00:50). Task 1 is done, and the matrix gained row R5 (Decisions, 2026-11-08 01:03). Tasks 2 to 4 start once the operator answers the setup item (item 95), and this coordinator mails that answer to the conductor privately. Wave 6 is planned from its results.
 The record below is the wave's history.
 
 Wave 4b is run 308 (dispatched 2026-10-15 16:00 UTC; deviation numbers 4316 to 4325, written bare). Its plan is

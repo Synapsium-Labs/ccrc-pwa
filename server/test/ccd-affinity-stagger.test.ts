@@ -18,14 +18,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, boxed } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-affinity-stagger-'); });
 afterEach(() => { h.cleanup(); });
 
-const PROMPT = '? for shortcuts\n❯ ';
-const DRAFT = '? for shortcuts\n❯ half a message';
+const PROMPT = boxed();
+const DRAFT = boxed('half a message');
 
 const reg = (f: string): string => path.join(h.home, '.cc-sessions', f);
 const swapLog = (): string =>

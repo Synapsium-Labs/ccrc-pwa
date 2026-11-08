@@ -696,9 +696,13 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // (operator_items.recommended and recommendedWhy, programme ledgers PL9), and MIGRATIONS[38] (the landing
     // authority overlay, its journal cursor, the projection witness and quarantineKind, landing order wave 5f), and
     // MIGRATIONS[39] (mail_deliveries.revivedFrom and its partial index, D-5914), and MIGRATIONS[40] (runs.hadChild,
-    // D-8068), and MIGRATIONS[41] (landing_intents, landing order wave 5g).
-    expect(COORD_SCHEMA_VERSION).toBe(42);
-    expect(MIGRATIONS.length).toBe(42);
+    // D-8068), and MIGRATIONS[41] (landing_intents, landing order wave 5g),
+    // and MIGRATIONS[42] (runs.title, D-8071),
+    // and MIGRATIONS[43] (runs.closedBy and runs.closeDetail, D-8071),
+    // and MIGRATIONS[44] (gone_since, D-8071),
+    // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071).
+    expect(COORD_SCHEMA_VERSION).toBe(46);
+    expect(MIGRATIONS.length).toBe(46);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -766,8 +770,12 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // (linear_events, D-7671) and MIGRATIONS[36] (the programme ledgers' three tables and the spec pin on programs)
     // and MIGRATIONS[37] (the PL9 recommendation columns) and MIGRATIONS[38] (the landing authority overlay, 5f)
     // and MIGRATIONS[39] (mail_deliveries.revivedFrom, D-5914)
-    // and MIGRATIONS[40] (runs.hadChild, D-8068) and MIGRATIONS[41] (landing_intents, landing order wave 5g); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(42);
+    // and MIGRATIONS[40] (runs.hadChild, D-8068) and MIGRATIONS[41] (landing_intents, landing order wave 5g)
+    // and MIGRATIONS[42] (runs.title, D-8071)
+    // and MIGRATIONS[43] (runs.closedBy and runs.closeDetail, D-8071)
+    // and MIGRATIONS[44] (gone_since, D-8071)
+    // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(46);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

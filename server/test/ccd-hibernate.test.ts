@@ -20,7 +20,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, boxed } from './ccdWsHelpers.js';
 import { eventsOf, readJournal } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -85,7 +85,7 @@ const marker = (over: Record<string, unknown> = {}): void => {
   fs.writeFileSync(regPath('turn.json'), JSON.stringify(m) + '\n');
 };
 /** An idle session at a clean boundary, every hold clear. */
-const idle = (): void => { seed(); pane('❯ '); live('idle'); marker(); attached('0'); };
+const idle = (): void => { seed(); pane(boxed()); live('idle'); marker(); attached('0'); };
 
 const hibernate = (extra = '', args = ID): { rc: number; err: string; out: string } => {
   const out = h.sh(`${STUBS} ${extra} ( cmd_hibernate ${args} ) 2>"$HOME/err"; echo "rc=$?"`, { TMUX: '' });

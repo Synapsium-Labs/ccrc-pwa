@@ -62,7 +62,8 @@ const writeTranscript = (lines: string[]): string => {
 };
 
 const BORDER = '────────────────────────────';
-const PROMPT = '? for shortcuts\n❯ ';
+/** The bordered box: ccd reads a `❯` row as the box only under a border (D-8116). */
+const PROMPT = `${BORDER}\n❯ \n${BORDER}\n  ? for shortcuts`;
 const STALLED = "You've hit your session limit · resets 9:10pm (UTC)\n❯ ";
 const BUSY = '✻ Working… (12s · esc to interrupt)\n❯ ';
 const DRAFT = `${BORDER}\n❯ a half-typed reply\n${BORDER}\n  ? for shortcuts`;
@@ -504,5 +505,36 @@ describe('D-6180: one episode per arm, so two arms on one tick do not flood', ()
     tick(PROMPT, { born: T0 - 50 });
     expect(h.reg(ID, 'standdownprobe')).toBe(`${T0} carried-in`);
     expect(standDowns()).toEqual([]);
+  });
+});
+
+// ── D-8116: Claude Code's own limit dialog is not a draft ────────────────────
+
+describe('D-8116: the limit dialog over this process\'s limit row is a rescue, not a draft', () => {
+  const dialog = (name: string): string =>
+    fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'panes', 'box', name), 'utf8');
+
+  for (const name of ['rate-limit-dialog.ansi', 'rate-limit-dialog-mail-row.ansi']) {
+    it(`${name}: one rescue dispatch and no draft stand-down`, () => {
+      seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+      tick(dialog(name), { extra: AFFINITY });
+      expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue`]);
+      expect(lines('stand-down')).toEqual([]);
+      expect(swapLog()).not.toMatch(/ draft /);
+    });
+  }
+
+  it('a real draft in a bordered box over the same limit row still stands down', () => {
+    seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]);
+    tick(DRAFT, { extra: AFFINITY });
+    expect(dispatches()).toEqual([]);
+    expect(standDowns()).toContainEqual(expect.stringMatching(/ stand-down lane-a-project-a: draft evidence=transcript banner-outside-tail=no$/));
+  });
+
+  it('with no limit row, the affinity move stands down over the dialog as no-box', () => {
+    seed(); idleStatus(); writeTranscript([turn(T0 - 60)]);
+    tick(dialog('rate-limit-dialog.ansi'), { extra: AFFINITY });
+    expect(dispatches()).toEqual([]);
+    expect(standDowns()).toEqual([expect.stringMatching(/ stand-down lane-a-project-a: no-box$/)]);
   });
 });

@@ -39,7 +39,7 @@ import { isDelegationCheckpointKebab } from '../src/coord/delegation-checkpoint.
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
-import { isDriftKind, isRunSpendUnmeasuredReason } from '../../shared/api.js';
+import { isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
 import { isDelegationProjectionKebab } from '../src/coord/delegation-projection.js';
@@ -1081,8 +1081,12 @@ describe('the rejection table is total, in both directions', () => {
         // THE PROGRAMME LEDGERS' ITEM MOVES (plan PL2): `coord/ledgersStore.ts` (behind `CoordStore`) answers a refused move of an operator item with
         // `'unknown-item'`, `'wrong-actor'`, `'not-open'` or `'programme-live'`. The decider's words and the store's, one
         // union in `shared/ledgers.ts`. Admitted through its exported guard, derived from `ITEM_MOVE_REFUSALS`, never NOT_CODES.
-        || isItemMoveRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word or item-move refusal`).toBe(true);
+        || isItemMoveRefusal(tok)
+        // THE RUN STUCK VERDICT (D-8071): `coord/runStuck.ts` names a run's stuck reason and its cause as literals. A word
+        // decides a run's `stuck` stamp on the wire, never a `refused` or `reject.code`. Admitted through the exported guards,
+        // derived from `STUCK_REASONS`, `STUCK_CAUSES` and `RUN_WAITS_ON`, never NOT_CODES.
+        || isStuckReason(tok) || isStuckCause(tok) || isRunWaitsOn(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal or run stuck word`).toBe(true);
     }
   });
 });

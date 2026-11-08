@@ -8,7 +8,7 @@ const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
 
 const open = (s: CoordStore, program: string, wave: number, claimedBy = 'demo-coordinator'): number => {
-  const r = s.openRun({ program, title: `${program} title`, project: 'ccrc-pwa', wave, waveOf: 3, claimedBy });
+  const r = s.openRun({ program, title: `${program} title`, programmeTitle: `${program} title`, project: 'ccrc-pwa', wave, waveOf: 3, claimedBy });
   if (!('id' in r)) throw new Error('openRun refused');
   return r.id;
 };

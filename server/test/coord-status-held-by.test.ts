@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ChildReclaimAttention, CoordStatus } from '../../shared/api.js';
 import { withCleanupHeldBy } from '../src/cleanupHeldBy.js';
-import type { HeldByRead } from '../src/cleanupHeldBy.js';
+import type { HeldByRead } from '../src/heldByRead.js';
 
 const listed: HeldByRead = { kind: 'rows', own: false, rows: [{ id: 'row-a', word: 'gone-unrecorded', workspace: 'absent' }] };
 const lane = (m: Record<string, HeldByRead | undefined>): ReadonlyMap<string, { heldBy?: HeldByRead }> =>

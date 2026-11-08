@@ -6851,10 +6851,125 @@ export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | 
 /** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
 export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
 
+/** A programme's name from its slug (D-8071): hyphens read as spaces and the first letter capital, so `programme-a` is
+ *  `Programme a`. The name a programme row takes when an open sends no `programmeTitle`, and the one migration 43 sets. */
+export const programmeNameFromSlug = (slug: string): string => {
+  const words = slug.replace(/-/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+/** Who closed a run (D-8071, migration 44): the three words `run_events.causedBy` carries for a close. */
+export type RunClosedBy = 'coordinator' | 'operator' | 'sweep';
+export const isRunClosedBy = (v: unknown): v is RunClosedBy => v === 'coordinator' || v === 'operator' || v === 'sweep';
+
+/** Why a run is stuck (spec 2026-11-04 §7, first match wins in this order). */
+export type StuckReason = 'owner-gone' | 'start-never-landed' | 'review-of-closed' | 'overtaken' | 'never-started';
+export const STUCK_REASONS: readonly StuckReason[] = ['owner-gone', 'start-never-landed', 'review-of-closed', 'overtaken', 'never-started'];
+export const isStuckReason = (v: unknown): v is StuckReason => typeof v === 'string' && (STUCK_REASONS as readonly string[]).includes(v);
+/** Why the reason holds (§7, A54). `name-reused` and `later-review` have no producer until their rows land. */
+export type StuckCause =
+  | 'coordinator-archived' | 'coordinator-forgotten' | 'coordinator-removed' | 'coordinator-stopped' | 'coordinator-gone'
+  | 'worker-stopped' | 'worker-gone' | 'name-reused' | 'target-closed' | 'later-review';
+export const STUCK_CAUSES: readonly StuckCause[] = [
+  'coordinator-archived', 'coordinator-forgotten', 'coordinator-removed', 'coordinator-stopped', 'coordinator-gone',
+  'worker-stopped', 'worker-gone', 'name-reused', 'target-closed', 'later-review',
+];
+export const isStuckCause = (v: unknown): v is StuckCause => typeof v === 'string' && (STUCK_CAUSES as readonly string[]).includes(v);
+/** The verdict. `since` is when the reason began (epoch ms); `closes` is `{at, armed}` or null when no lane row has a clock. */
+export interface RunStuck {
+  reason: StuckReason;
+  cause: StuckCause | null;
+  since: number;
+  closes: { at: number; armed: boolean } | null;
+}
+/** Who has the next move (§7, A29). There is no `operator` value: "waits on you" comes only from the one needs-you source (D-6170). */
+export type RunWaitsOn = 'worker' | 'reviewer' | 'coordinator' | 'merge-queue' | 'nobody';
+export const RUN_WAITS_ON: readonly RunWaitsOn[] = ['worker', 'reviewer', 'coordinator', 'merge-queue', 'nobody'];
+export const isRunWaitsOn = (v: unknown): v is RunWaitsOn => typeof v === 'string' && (RUN_WAITS_ON as readonly string[]).includes(v);
+
+/** `GET /api/runs/find`'s query (D-8071, spec 2026-11-04 §11.4). Every field optional on the wire. */
+export interface RunFindQuery {
+  q?: string;
+  scope?: 'open' | 'closed' | 'all';
+  closedBy?: string;
+  closedSince?: number;
+  program?: string;
+  limit?: number;
+  beforeAt?: number;
+  beforeId?: number;
+}
+
+/** One slim run row of `find`: stored columns only, no hydrate, no tally, no spend (D-8071, §11.4). `claimedBy` keeps
+ *  Resume reachable from a hit. The stored columns are `RunSummary`'s own fields, picked rather than restated, so the
+ *  two cannot drift; the close fields and the title are REQUIRED here, where `RunSummary` carries them optional. */
+export type RunHit = Pick<RunSummary,
+  'id' | 'program' | 'programTitle' | 'wave' | 'waveOf' | 'kind' | 'reviews' | 'state' | 'project' | 'workspace'
+  | 'branch' | 'claimedBy' | 'openedAt' | 'closedAt'> & {
+  runTitle: string | null;
+  closedBy: RunClosedBy | null;
+  closeDetail: string | null;
+};
+
+/** `GET /api/runs/find`'s answer (D-8071, §11.4). `exact` is the run whose id is `q`, whatever the filters; `runs` is
+ *  open runs (first page only) then closed runs by `closedAt` descending; `reviewsOf` is the runs that review run `q`;
+ *  `next` is the cursor for the next page of closed runs, or null. */
+export interface RunFindAnswer {
+  ok: true;
+  exact: RunHit | null;
+  runs: RunHit[];
+  reviewsOf: RunHit[];
+  next: { beforeAt: number; beforeId: number } | null;
+}
+
+/** One row of a run's trail (D-8071, spec 2026-11-04 §11.5). `by` is who caused it: a stored session id reads 'session'.
+ *  `folded` marks a span of stall observations as one row: the count, and the last one's time (`at` is the first's). */
+export interface RunRecordEvent {
+  at: number;
+  from: string;
+  to: string;
+  by: 'coordinator' | 'operator' | 'sweep' | 'session';
+  detail: string | null;
+  folded?: { count: number; untilAt: number };
+}
+
+/** `GET /api/runs/:id/record`'s answer (D-8071, §11.5). `events` are newest first, at most 200; `olderEvents` counts the
+ *  rest. `reviewedBy` is the runs that review this one. */
+export interface RunRecordAnswer {
+  ok: true;
+  run: RunSummary;
+  events: RunRecordEvent[];
+  reviewedBy: RunHit[];
+  olderEvents: number;
+}
+
 export interface RunSummary {
   id: number;
   program: string;              // slug
   programTitle: string;
+  /** The title this run was opened with (D-8071, migration 43), or null for a run opened before it. OPTIONAL on the
+   *  wire: an older server omits it. Read it ONLY through `runRowName` (`pwa/src/fleet/runWords.ts`). ADDITIVE;
+   *  `FLEET_PROTO` is not bumped. */
+  runTitle?: string | null;
+  /** Who closed the run, from `runs.closedBy` (D-8071, migration 44), or null for a run closed by a session id or before
+   *  the column. OPTIONAL on the wire: an older server omits it. Read it ONLY through `closeWords`
+   *  (`pwa/src/fleet/closeWords.ts`). ADDITIVE; `FLEET_PROTO` is not bumped. */
+  closedBy?: RunClosedBy | null;
+  /** Why it was closed, from `runs.closeDetail` (redacted), or null. OPTIONAL on the wire; read ONLY through
+   *  `closeWords`. ADDITIVE. */
+  closeDetail?: string | null;
+  /** The stuck verdict (D-8071; spec 2026-11-04 §7, §11.2). Absent means the server's reader is empty (before its first
+   *  pass, or an older server); null means no verdict; set means the run is stuck for `reason`. OPTIONAL on the wire.
+   *  Read it ONLY through `runStateWord` and `stuckLine`. ADDITIVE; `FLEET_PROTO` is not bumped. */
+  stuck?: RunStuck | null;
+  /** Who has the next move (§7, A29). It has no `operator` value (D-6170). OPTIONAL; read ONLY through `runStateWord`
+   *  and `runWaitLine`. ADDITIVE. */
+  waitsOn?: RunWaitsOn;
+  /** The stuck run a planned run waits behind (§7), or null. OPTIONAL; read ONLY through `runWaitLine`. ADDITIVE. */
+  blockedBy?: number | null;
+  /** True when the run's claimant reads gone (§7, A56), false when alive, asleep or uncertain. Absent when the server has
+   *  no reading (A60). A closed run carries it only from its programme's entry (A55). OPTIONAL; read ONLY through
+   *  `coordinatorGoneOf`. ADDITIVE. */
+  coordinatorGone?: boolean;
   wave: number;
   waveOf: number | null;
   project: string;

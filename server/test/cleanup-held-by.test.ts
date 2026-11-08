@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { HELD_BY_WORDS } from '../../shared/api.js';
 import type { ChildReclaimAttention, CoordStatus, ExpiryAttention, HeldByWord } from '../../shared/api.js';
 import {
-  HELD_BY_ABSENT, cleanupHeldBy, cleanupHeldByAct, heldByOf, heldOnlyByListed, withCleanupHeldBy,
+  cleanupHeldBy, cleanupHeldByAct, heldOnlyByListed, withCleanupHeldBy,
 } from '../src/cleanupHeldBy.js';
-import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/cleanupHeldBy.js';
+import { HELD_BY_ABSENT, heldByOf, heldByFieldOf } from '../src/heldByRead.js';
+import type { HeldByRead, HeldByRow, HeldByWorkspace } from '../src/heldByRead.js';
 import type { ExpiryReport } from '../src/archivedExpiry.js';
 import { parsedFile } from './scan/symbols.js';
 
@@ -57,6 +58,19 @@ describe('heldByOf', () => {
     expect(heldByOf({ heldBy: base })).toMatchObject({ kind: 'rows', own: true });
     expect(heldByOf({ heldBy: base, heldByOwn: 'no' })).toMatchObject({ kind: 'rows', own: true });
     expect(heldByOf({ heldBy: base, heldByOwn: false })).toMatchObject({ kind: 'rows', own: false });
+  });
+});
+
+// Task C15 (D-8111), characterization before the leaf-module move: what a lane parser spreads onto its read.
+describe('the spread a lane parser takes', () => {
+  it('names heldBy only for a document that names rows, and is empty for every other read', () => {
+    const doc = { heldBy: [{ id: 'row-a', word: 'gone-unrecorded', workspace: 'absent' }], heldByOwn: false };
+    expect(heldByFieldOf(doc)).toEqual({ heldBy: rows([row('row-a')], false) });
+    for (const other of [{}, null, [], { heldBy: null }, { heldBy: [] }, { heldBy: 'row-a' }, { heldBy: [{ id: 'a b', word: 'gone-unrecorded' }] }]) {
+      const out = heldByFieldOf(other);
+      expect(out).toEqual({});
+      expect(Object.keys(out)).toEqual([]);
+    }
   });
 });
 
@@ -153,8 +167,8 @@ describe('cleanupHeldBy', () => {
   // Review 1580 F7 and rulings 1-4 and 8: what each sentence says, so a dropped scope, a prune or a pace is a red.
   const sentenceOf = (w: HeldByWord, ws: HeldByWorkspace | null, fleet: string | null): string =>
     cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w, ws)]) }], () => fleet)[0]!.sentence;
-  const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
-  const PAUSED = 'Nothing is re-read while the cleanup is paused.';
+  const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
+  const PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
   it('a workspace gone-unrecorded row names the scoped remove and never a prune, and no recreate advice', () => {
     const s = sentenceOf('gone-unrecorded', 'present', '/x/ws');
     expect(s).toContain('`git -C <main> worktree remove <path>`');
@@ -162,7 +176,9 @@ describe('cleanupHeldBy', () => {
     expect(s).not.toContain('<project>');
     expect(s).not.toContain('worktree add');
     expect(s).not.toMatch(/recreate/i);
-    expect(s).toContain('If its folder still stands but a directory on its path cannot be searched, make that directory searchable, or restore a link on its path to its original target.');
+    // Review 1590 N-d: two remedies for two conditions, as ccd keeps them, with ccd's warning about a link's place.
+    expect(s).toContain('If its folder still stands but a directory on its path cannot be searched, make that directory searchable. If a link on its path no longer leads where it did, restore it to its original target; never create a directory in a link\'s place.');
+    expect(s).not.toContain('searchable, or restore a link');
     expect(s).not.toContain('only cannot be searched');
   });
   it('gone-unrecorded says its folder is gone with no record, or a directory or link on its path cannot be searched', () => {
@@ -199,8 +215,10 @@ describe('cleanupHeldBy', () => {
     for (const w of HELD_BY_WORDS) {
       const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], noFleet);
       expect(item!.act).toBe('recheck');
-      expect(item!.sentence).toContain(`The fleet state does not list this row. The line clears as each item it held is checked again, ${PACE}. If it stays after that, a partial registry entry remains for this id; remove it by hand once its session has ended. ${PAUSED}`);
+      expect(item!.sentence).toContain(`The fleet state does not list this row. The line clears as each item it held is checked again, ${PACE}. If it stays after that, something in the registry still names this id that the fleet state cannot list (a partial entry, for one); a person removes it by hand once its session has ended. ${PAUSED}`);
       expect(item!.sentence).not.toContain('no longer registered');
+      // Review 1590 N-b: a partial entry is one cause, not the only one.
+      expect(item!.sentence).not.toContain('a partial registry entry remains');
       expect(item!.sentence).not.toContain('only a person removes it');
       expect(item!.sentence).not.toContain('worktree');
     }
@@ -210,6 +228,9 @@ describe('cleanupHeldBy', () => {
       const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], null);
       expect(item!.act).toBe('recheck');
       expect(item!.sentence).toContain('This row\'s state in the fleet has not been read yet, so only a re-check is offered.');
+      // Review 1590 N-c: nothing came before it, so no "Then check again." follows.
+      expect(item!.sentence.endsWith('so only a re-check is offered.')).toBe(true);
+      expect(item!.sentence).not.toContain('Then check again');
       expect(item!.sentence).not.toContain('nothing is offered');
       expect(item!.sentence).not.toContain('only a person removes it');
       expect(item!.sentence).not.toContain('worktree');
@@ -233,7 +254,7 @@ describe('cleanupHeldBy', () => {
   // Review 1585 N5: the one L1 edge the fold added, pinned.
   it('cleanupHeldBy imports L0 and only expiryReportStands (and its report type) from archivedExpiry', () => {
     const imports = parsedFile('server/src/cleanupHeldBy.ts').imports;
-    expect([...new Set(imports.map((i) => i.specifier))].sort()).toEqual(['../../shared/api.js', './archivedExpiry.js']);
+    expect([...new Set(imports.map((i) => i.specifier))].sort()).toEqual(['../../shared/api.js', './archivedExpiry.js', './heldByRead.js']);
     const edge = imports.filter((i) => i.specifier === './archivedExpiry.js');
     expect(edge.map((i) => ({ names: i.names, typeNames: i.typeNames }))).toEqual([{ names: ['expiryReportStands', 'ExpiryReport'], typeNames: ['ExpiryReport'] }]);
   });

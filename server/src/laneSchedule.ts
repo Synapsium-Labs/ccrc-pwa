@@ -159,6 +159,11 @@ export const TMP_SWEEP_CENSUS_MS = 5 * 60_000;
  *  re-exports it (D-7895). */
 export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
 
+/** The stuck verdict's lane (D-8071; spec 2026-11-04 §7, A45): a read-only pass that measures each claimant once and fills the
+ *  in-memory reader `RunVerdicts`. A minute, the census's own: a run's reason moves on the scale of an hour at the least, and
+ *  a verdict may lag by one pass. It adds no statement to the 2-second tick. */
+export const RUN_STUCK_SWEEP_MS = 60_000;
+
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
 
@@ -172,7 +177,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -303,6 +308,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The stale-archive arm (D-6643) starts due and keeps one pass at a time: its `sweeping` guard is this row's `skip`, with no
   // stuck-run age (a pass in flight was never abandoned). Its pass catches its own failure with its own sentence, so no warnKey.
   { name: 'staleArchive', cadenceMs: STALE_ARCHIVE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  // The stuck verdict (D-8071, spec 2026-11-04 §7, A45): READ-ONLY, one pass at a time, on the registry pass. Its pass catches
+  // its own failure with its own sentence, so no warnKey.
+  { name: 'runStuck', cadenceMs: RUN_STUCK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

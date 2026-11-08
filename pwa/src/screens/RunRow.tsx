@@ -17,9 +17,9 @@ import {
   type FleetSession, type RunSpend, type RunSummary, graphReadCount, unmeasuredFields,
 } from '../../../shared/api';
 import {
-  DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, childReclaimChip, childReclaimGone,
+  DISPATCH_GLYPH, RUN_GLYPH, childReclaimChip, childReclaimGone,
   childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel,
-  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState,
+  resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
@@ -165,7 +165,7 @@ export const RunRow = memo(function RunRow({
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
-      <span className="run-state">{RUN_WORD[state]}</span>
+      <span className="run-state">{runStateWord(run)}</span>
       {/* D-6170: the name is the programme's title and wave in words, never a
           workspace, a branch or a run number — those ride the row's `title`. */}
       <span className="run-name">{runRowName(run)}</span>

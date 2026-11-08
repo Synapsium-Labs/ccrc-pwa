@@ -8,10 +8,14 @@ beforeEach(() => { h = makeCcdHarness('ccrc-ccd-redrive-'); });
 afterEach(() => { h.cleanup(); });
 
 /** tmux, RECORDING: `capture-pane` answers `$PANE_TEXT`, everything else is logged. */
-const STUBS = `sleep() { :; };
+const TMUX_STUBS = `sleep() { :; };
   tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
-    case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
+    case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };`;
+const STUBS = `${TMUX_STUBS}
   _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
+/** Claude Code's limit dialog in the box's place (the box corpus, D-8116), read by the REAL box readers. */
+const DIALOG = (): string =>
+  fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'panes', 'box', 'rate-limit-dialog.ansi'), 'utf8');
 const sendKeys = (): string[] => h.calls().filter((l) => l.includes('send-keys'));
 const READY = '? for shortcuts\n❯ ';
 const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ';
@@ -24,6 +28,11 @@ describe('_inject_spawn_effort stands down on an armed auto-continue (D-2229)', 
   it('control: a ready pane gets /effort', () => {
     h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: READY });
     expect(sendKeys().some((k) => k.includes('-l /effort'))).toBe(true);
+  });
+  it('types nothing into an open dialog: no box on screen refuses (D-8116)', () => {
+    const err = h.sh(`${TMUX_STUBS} _inject_spawn_effort cc-test 2>&1`, { PANE_TEXT: DIALOG() });
+    expect(sendKeys()).toEqual([]);
+    expect(err).toContain('no input box on screen (a dialog is open), skipped /effort');
   });
 });
 
@@ -207,6 +216,12 @@ describe('_redrive_after_spawn', () => {
     h.sh(`${LISTPANES_RACE_STUBS} _redrive_after_spawn ${ID} cc-test`, { PANE_TEXT: READY });
     expect(sendKeys()).toEqual([]);
     expect(swapLog()).toMatch(/redrive-skip myid: pane went under \d+ columns during the redrive wait/);
+  });
+  it('types nothing into an open dialog, and says so (D-8116)', () => {
+    writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
+    h.sh(`${TMUX_STUBS} _redrive_after_spawn ${ID} cc-test`, { PANE_TEXT: DIALOG() });
+    expect(sendKeys()).toEqual([]);
+    expect(swapLog()).toMatch(/ redrive-skip myid: no input box on screen \(a dialog is open\)/);
   });
   it('types nothing over a draft in the box, and says so', () => {
     writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);

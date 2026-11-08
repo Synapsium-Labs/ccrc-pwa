@@ -68,7 +68,7 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
     const db = openCoordDb(plantedBefore('ccrc-mig-ledgers-open-'));
     expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
     expect(db.prepare('SELECT claimedBy, state FROM runs').all()).toEqual([{ claimedBy: 'lane-a', state: 'working' }]);
-    expect(db.prepare('SELECT slug, title FROM programs').all()).toEqual([{ slug: 'prog-a', title: 'Prog A' }]);
+    expect(db.prepare('SELECT slug, title FROM programs').all()).toEqual([{ slug: 'prog-a', title: 'Prog a' }]);
     db.close();
   });
 

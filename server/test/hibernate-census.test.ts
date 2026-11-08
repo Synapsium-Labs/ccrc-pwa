@@ -85,6 +85,9 @@ const CENSUS: readonly Row[] = [
   { source: 'stopped-compare', file: 'server/src/deadCoordinator.ts', hits: 1, stances: ['journal'],
     why: '`deadCoordinatorCrash`: a claimant still reading `stopped` is never counted; one whose wake failed reads '
       + '`orphan`, and `hibernate` in `DEAD_COORDINATOR_DELIBERATE_ACTS` makes it deliberate' },
+  { source: 'stopped-compare', file: 'server/src/coord/runStuck.ts', hits: 1, stances: ['consults'],
+    why: '`stuckCause` words a gone person\'s cause (`coordinator-stopped`, `worker-stopped`); it runs only after `claimantGone`, '
+      + 'which reads `hibernatedAt` before any dead reading, so a sleeper is asleep and never reaches a cause (D-7371)' },
   { source: 'stopped-compare', file: 'server/src/coord/collectTempRoot.ts', hits: 1, stances: ['other-meaning'],
     why: 'the collector\'s own lane state (`lane.kind === \'stopped\'`), not a session' },
   { source: 'tmux-verdict', file: 'server/src/coord/claims.ts', hits: 5, stances: ['held-awake'],
@@ -127,9 +130,11 @@ const CENSUS: readonly Row[] = [
     why: '`hibernatedSince`, the PWA\'s one reader of `hibernatedAt`: a row is asleep only while its pane is gone '
       + '(`paneGone`, D-7181) with the marker (both halves), so a crash is never woken and a stale marker on a live row is '
       + 'ignored' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/presence.ts', hits: 4, stances: ['definition'],
+  { source: 'presence-reader', file: 'pwa/src/fleet/presence.ts', hits: 5, stances: ['definition'],
     why: 'the PWA\'s one reader of the server\'s presence (D-7181): `presenceOf` reads `asleep` as the server sends it, '
-      + '`coordinatorPresence` spells it `hibernated` (never `dead`), and `paneGone` words the pane only' },
+      + '`coordinatorPresence` spells it `hibernated` (never `dead`), `paneGone` words the pane only, and `forgetHeldBack` '
+      + '(D-8111) is the Forget rule and its reasons, written once: a workspace row first, then `alive` running, `unknown` '
+      + 'doubt (never asleep), `asleep`, or `dead` with a marker asleep; `forgetOffered` is its null' },
   { source: 'dead-compare', file: 'pwa/src/fleet/presence.ts', hits: 1, stances: ['definition'],
     why: '`paneGone`, the pane predicate OA-C15 (a) keeps for sites that only word the pane: a sleeper\'s pane is gone, '
       + 'which is true, and the sites that must tell a sleep from a death read `presenceOf` or `hibernatedSince`' },
@@ -137,9 +142,10 @@ const CENSUS: readonly Row[] = [
     why: 'the session header\'s view (W2 S7a, D-5471; `SessionHeader` renders it) forces bucket `dead` for a dead stream and paints the ✕ lamp ("not running") with the word `exited` '
       + '(`headerStatusWord`, D-5545); a dead row with `hibernatedAt` (`hibernatedSince`) reads `hibernated` with the '
       + 'calm dot instead, so "not running" never sits above "Waking…"' },
-  { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 6, stances: ['consults', 'true-of-pane'],
-    why: 'Forget is offered on a row the server reads `dead` (`presenceOf`, D-7181), never on its `asleep` and never on '
-      + 'a row `hibernatedSince` reads asleep, which offers Wake session (ccd forget refuses it, D-5423); the notes word '
+  { source: 'presence-reader', file: 'pwa/src/fleet/SessionActionsSheet.tsx', hits: 5, stances: ['consults', 'true-of-pane'],
+    why: 'Forget session is offered only where `forgetOffered` says (presence.ts, D-8111, the rule the held-rows list '
+      + 'consults too): never on the server\'s `asleep` or on a row `hibernatedSince` reads asleep, which offers Wake '
+      + 'session (ccd forget refuses it, D-5423); the notes word '
       + 'the pane (`paneGone`): the narrow-spawn note on a gone pane is hidden on a sleeper, and the quota, narrow and '
       + 'wrapper notes speak of a live pane only' },
   { source: 'presence-reader', file: 'pwa/src/fleet/sessionFacts.ts', hits: 1, stances: ['consults'],
@@ -219,10 +225,14 @@ const NAMED: readonly { name: string; stances: readonly Stance[]; file: string; 
     why: 'removes `.hibernated`: a stopped row is never woken by mail' },
   { name: 'ccd cmd_ws_archive', stances: ['consults'], file: 'ccd/ccd', holds: (s) => /hibernat/.test(bashFn(s, 'cmd_ws_archive')),
     why: 'removes `.hibernated`: an archived row is never woken by mail' },
-  { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
-    holds: (s) => /const asleep = hibernatedSince\(session\) !== null/.test(s)
-      && /session\.workspace === null && presenceOf\(session\) === 'dead' && !asleep && \(\s*<Button[\s\S]*?Forget session/.test(s),
-    why: 'offered on a dead non-workspace row and hidden on a sleeper, which offers Wake (ccd forget refuses it)' },
+  { name: 'the PWA\'s Forget', stances: ['consults'], file: 'pwa/src/fleet/presence.ts',
+    holds: (s) => /export function forgetHeldBack\([^)]*\)[^{]*\{\s*if \(session\.workspace !== null\) return 'workspace';\s*const presence = presenceOf\(session\);\s*if \(presence === 'alive'\) return 'running';\s*if \(presence === 'unknown'\) return 'doubt';\s*if \(presence === 'asleep' \|\| hibernatedSince\(session\) !== null\) return 'asleep';\s*return null;\s*\}/.test(s)
+      && /export function forgetOffered\([^)]*\): boolean \{\s*return forgetHeldBack\(session\) === null;/.test(s),
+    why: 'the rule, written once (D-8111): offered on a dead non-workspace row and hidden on a sleeper, which offers Wake '
+      + '(ccd forget refuses it)' },
+  { name: 'the session sheet\'s Forget session', stances: ['consults'], file: 'pwa/src/fleet/SessionActionsSheet.tsx',
+    holds: (s) => /\{forgetOffered\(session\) && \(\s*<Button[\s\S]*?Forget session/.test(s),
+    why: 'gates its Forget session button on `forgetOffered`, so a sleeper offers Wake instead (D-8111)' },
   { name: 'the kickoff route', stances: ['wakes-first'], file: 'server/src/coord/kickoff.ts',
     holds: (s) => /export function queueProgramKickoff[\s\S]*?queueSystemMail\(/.test(s),
     why: 'queues system mail and never refuses a dead session: the mail lane wakes its recipient like any mail\'s' },

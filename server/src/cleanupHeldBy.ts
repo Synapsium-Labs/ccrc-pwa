@@ -1,79 +1,23 @@
 /**
  * The registry rows that hold a cleanup (cleanup un-wedge R2, spec 2026-11-04 §4.3). Ring L1, context C4: pure, no
- * I/O. It imports L0 (`shared/api.ts`) and one L1 predicate, `expiryReportStands` (`archivedExpiry.ts`, which imports
- * `heldByRowsOf` from here: a cycle of function references only, neither module calls the other at load).
+ * I/O. It imports L0 (`shared/api.ts`), the held-by reader's types from the leaf `heldByRead.ts` (L1, which imports L0
+ * alone), and one L1 predicate, `expiryReportStands` (`archivedExpiry.ts`, which does not import this file: Task C15,
+ * D-8111, moved the reader it took from here into the leaf).
  *
- * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents. This file
- * reads that pair (`heldByOf`), composes one item per holding row with the sentence that says what to do about it
- * (`cleanupHeldBy`), decides the row's one control (`cleanupHeldByAct`), and folds the children that only those rows
- * hold into the row's line (`withCleanupHeldBy`).
+ * ccd's rows rung adds `heldBy` and `heldByOwn` to each of the reclaim, expiry and collect audit documents, and
+ * `heldByRead.ts` reads that pair. This file composes one item per holding row with the sentence that says what to do
+ * about it (`cleanupHeldBy`), decides the row's one control (`cleanupHeldByAct`), and folds the children that only those
+ * rows hold into the row's line (`withCleanupHeldBy`).
  */
 import { HELD_BY_WORDS } from '../../shared/api.js';
 import { expiryReportStands, type ExpiryReport } from './archivedExpiry.js';
+import type { HeldByRead, HeldByWorkspace } from './heldByRead.js';
 import type {
   ChildReclaimAttention, CleanupHeldByAct, CleanupHeldByItem, CoordStatus, ExpiryAttention, FleetSession, HeldByWord,
   LcRefusalToken,
 } from '../../shared/api.js';
 
-/** ccd's measurement of a holding row's `workspace` registry field: no field, a workspace, or unreadable (or a link). */
-export type HeldByWorkspace = 'absent' | 'present' | 'unreadable';
-
-/** One holding row as ccd printed it. `workspace` is null when ccd's word is missing or outside the three. */
-export interface HeldByRow { readonly id: string; readonly word: HeldByWord; readonly workspace: HeldByWorkspace | null }
-
-/** What one audit document says about holding rows. `absent` is an older ccd, `not-reached` is a rung that did not
- *  run, `none` is a rung that ran and found no holding row, and `malformed` is a read the server does not trust. `own`
- *  is true when the child also had a fault of its own. */
-export type HeldByRead =
-  | { readonly kind: 'absent' } | { readonly kind: 'not-reached' } | { readonly kind: 'none' }
-  | { readonly kind: 'rows'; readonly rows: readonly HeldByRow[]; readonly own: boolean }
-  | { readonly kind: 'malformed' };
-
-/** The one `absent` read. */
-export const HELD_BY_ABSENT: HeldByRead = { kind: 'absent' };
-
-const HELD_BY_NOT_REACHED: HeldByRead = { kind: 'not-reached' };
-const HELD_BY_NONE: HeldByRead = { kind: 'none' };
-const HELD_BY_MALFORMED: HeldByRead = { kind: 'malformed' };
-const ROW_ID = /^[A-Za-z0-9._-]+$/;
-const WORKSPACE_WORDS: readonly string[] = ['absent', 'present', 'unreadable'];
 const PROBE_UNMEASURED: LcRefusalToken = 'probe-unmeasured';
-
-const has = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
-
-/** Reads `heldBy` and `heldByOwn` from a parsed audit document. A missing key is `absent`; one bad member makes the
- *  whole read `malformed`; `own` is everything but an explicit `false`, so an unclear answer fails safe. */
-export function heldByOf(doc: unknown): HeldByRead {
-  if (typeof doc !== 'object' || doc === null || Array.isArray(doc) || !has(doc, 'heldBy')) return HELD_BY_ABSENT;
-  const d = doc as Record<string, unknown>;
-  const raw = d['heldBy'];
-  if (raw === null) return HELD_BY_NOT_REACHED;
-  if (!Array.isArray(raw)) return HELD_BY_MALFORMED;
-  if (raw.length === 0) return HELD_BY_NONE;
-  const out: HeldByRow[] = [];
-  for (const m of raw as unknown[]) {
-    if (typeof m !== 'object' || m === null || Array.isArray(m)) return HELD_BY_MALFORMED;
-    const r = m as Record<string, unknown>;
-    const id = r['id'];
-    const word = r['word'];
-    if (typeof id !== 'string' || !ROW_ID.test(id)) return HELD_BY_MALFORMED;
-    if (typeof word !== 'string' || !(HELD_BY_WORDS as readonly string[]).includes(word)) return HELD_BY_MALFORMED;
-    const ws = r['workspace'];
-    out.push({
-      id, word: word as HeldByWord,
-      workspace: typeof ws === 'string' && WORKSPACE_WORDS.includes(ws) ? (ws as HeldByWorkspace) : null,
-    });
-  }
-  return { kind: 'rows', rows: out, own: d['heldByOwn'] !== false };
-}
-
-/** What a lane parser spreads onto its read: `{ heldBy }` only when the document NAMES rows, else nothing. Every other
- *  answer (absent, not-reached, none, malformed) contributes no item and folds nothing, exactly as no read does, so a
- *  read without rows keeps the shape it had before R2. */
-export function heldByRowsOf(doc: unknown): { readonly heldBy?: HeldByRead } {
-  const read = heldByOf(doc);
-  return read.kind === 'rows' ? { heldBy: read } : {};
-}
 
 /** True when the read names at least one row and says the child has no fault of its own: the one case whose item
  *  folds into the rows' lines. */
@@ -100,22 +44,24 @@ interface SentenceParts { readonly found: string; readonly remedy: (act: Cleanup
 
 const RECHECK_TAIL = 'Then check again.';
 
-/** The pace (reviews 1580 F1 and 1585 F1): a pass asks a held child only once its own backoff has run, one ask a minute
- *  fleet-wide, so it is usually minutes for a new hold and a few hours or more on the persistent tier. Nothing resets
- *  that backoff. The console's confirm words carry the same two phrases (`heldByRowsWords.ts`; a parity test holds them
- *  equal). */
-const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
+/** The pace (reviews 1580 F1, 1585 F1 and 1590 F1): a pass asks a held item only once its own backoff has run. Each
+ *  lane has its own pace (review 1590 N-e): the reclaim lane asks one child a minute fleet-wide and puts a child asked
+ *  before behind older asks, the expiry and collect lanes run a few audits a pass. So it is usually minutes for a new
+ *  hold, a few hours or more on the persistent tier, and longer when many items are held. Nothing resets that backoff.
+ *  The console's confirm words carry the same two phrases (`heldByRowsWords.ts`; a parity test holds them equal). */
+const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
-const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
+const HELD_PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
 
 /** Where the fleet state stands on a row: listed (then its workspace decides), not listed (a row ccd purged, often one
- *  just forgotten, or a partial registry entry the fleet state cannot build), or no fleet frame read yet. Each gets its
+ *  just forgotten, or a registry entry the fleet state cannot build or list: a partial one, or an id the registry
+ *  reader refuses that ccd's row id accepts, review 1590 N-b), or no fleet frame read yet. Each gets its
  *  own words, worded from what is measured (reviews 1580 F2 and 1585 F2). */
 type FleetStanding = 'listed' | 'missing' | 'unframed';
 
 const STANDING_REMEDY: Record<Exclude<FleetStanding, 'listed'>, string> = {
-  missing: `The fleet state does not list this row. The line clears as each item it held is checked again, ${HELD_PACE}. If it stays after that, a partial registry entry remains for this id; remove it by hand once its session has ended. ${HELD_PAUSED}`,
-  unframed: 'This row\'s state in the fleet has not been read yet, so only a re-check is offered. ' + RECHECK_TAIL,
+  missing: `The fleet state does not list this row. The line clears as each item it held is checked again, ${HELD_PACE}. If it stays after that, something in the registry still names this id that the fleet state cannot list (a partial entry, for one); a person removes it by hand once its session has ended. ${HELD_PAUSED}`,
+  unframed: 'This row\'s state in the fleet has not been read yet, so only a re-check is offered.',
 };
 
 /** One entry per word; a missing word is a compile error. */
@@ -124,7 +70,7 @@ const HELD_BY_SENTENCE: Record<HeldByWord, SentenceParts> = {
     found: 'Its folder is gone with no record, or a directory or link on its path cannot be searched.',
     remedy: (act) => act === 'forget'
       ? `Forgetting the row removes only its registry entry. The cleanup it blocked goes ahead, wherever no other row still holds it, when ccrc next checks what this row holds: ${HELD_PACE}. ${HELD_PAUSED}`
-      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If its folder still stands but a directory on its path cannot be searched, make that directory searchable, or restore a link on its path to its original target. '
+      : 'This row is a workspace, or its workspace field could not be read, so only a person removes it, once its session has ended. Where git still records it, use the scoped `git -C <main> worktree remove <path>`, never a repo-wide prune. If its folder still stands but a directory on its path cannot be searched, make that directory searchable. If a link on its path no longer leads where it did, restore it to its original target; never create a directory in a link\'s place. '
         + RECHECK_TAIL,
   },
   'not-plain': {

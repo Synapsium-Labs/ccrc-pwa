@@ -33,10 +33,10 @@ set -uo pipefail
 # hook-helpers-generated.test.ts fails on drift. Never edit between
 # the BEGIN and END lines by hand.
 # ── BEGIN GENERATED HOOK HELPERS (shared/hook-helpers.mjs; edit that, then regenerate) ──
-# ccrc:generated 1 sha256=0e823de72b94ef597ae7178f9be26de55df7d1080b03790c6b53dfa5056a0d51
+# ccrc:generated 1 sha256=d03f616c97a6de37395792d4d4bcdb403caccf3b29fe2d38767a591efb91dda8
 _hook_epoch_ms() {
   if [ -n "${EPOCHREALTIME:-}" ]; then
-    local s="${EPOCHREALTIME%%[.,]*}" f="${EPOCHREALTIME#*[.,]}"
+    local e="$EPOCHREALTIME" s f; s="${e%%[.,]*}" f="${e#*[.,]}"
     f="${f}000"; printf '%s%s' "$s" "${f:0:3}"
     return 0
   fi

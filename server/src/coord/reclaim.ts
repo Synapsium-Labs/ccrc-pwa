@@ -123,6 +123,12 @@ export async function measureClaimant(
   // The ladder is `readSession`'s (ARCH-47); this door keeps only its FAIL-SHUT POLICY over a fresh one-row read at the
   // act (D-1144): `dead` proceeds, so doubt is never `dead`, and a hibernated claimant is alive as any live one (D-5242).
   const { facts, sv } = await claimantFacts(deps, id, nowMs);
+  return verdictOfFacts(id, facts, sv);
+}
+
+/** The ladder's fail-shut policy over one reading's facts: `measureClaimant`'s body, split out so the stuck verdict's pass
+ *  (`runStuckPass.ts`) reads the registry row ONCE and takes both the verdict and the row's stamps from it (D-8071). */
+export function verdictOfFacts(id: string, facts: SessionFacts, sv: SessionVerdict | null): ClaimantVerdict {
   const lc = facts.lifecycle;
   const r = readSession(facts);
   switch (r.why) {
@@ -166,7 +172,7 @@ export async function measureClaimant(
  *  table derives each row's facts from this read, not from a hand-typed copy. */
 export async function claimantFacts(
   deps: Pick<ReclaimDeps, 'io' | 'cfg' | 'tmux'>, id: string, nowMs: number,
-): Promise<{ facts: SessionFacts; sv: SessionVerdict | null }> {
+): Promise<{ facts: SessionFacts; sv: SessionVerdict | null; record: ClaimantRecordStamps | null }> {
   const read = await readSessionRecord(deps.io, deps.cfg, id);
   let sv: SessionVerdict | null = null;
   let lc: SessionLifecycle | null = null;
@@ -183,7 +189,21 @@ export async function claimantFacts(
       turn: null,
     },
     sv,
+    // D-8071: the stamps the stuck verdict's causes and ages read (registry-native epoch SECONDS), from the same row.
+    record: read.kind === 'found'
+      ? { substrate: read.record.substrate, archivedAt: read.record.archivedAt, stoppedAt: read.record.stopped?.at ?? null,
+          supervisedAt: read.record.supervisedAt }
+      : null,
   };
+}
+
+/** The stamps of a registry row the stuck verdict reads beside the ladder's answer (D-8071; spec §7, A54, A56, A63). The
+ *  three times are epoch SECONDS, as the registry stores them; `substrate` is the supervisor's "I could not reach tmux". */
+export interface ClaimantRecordStamps {
+  readonly substrate: { readonly at: number; readonly text: string } | null;
+  readonly archivedAt: number | null;
+  readonly stoppedAt: number | null;
+  readonly supervisedAt: number | null;
 }
 
 /** THE DEAD PREDICATE, one function (D-5290): the dead-coordinator sweep's
