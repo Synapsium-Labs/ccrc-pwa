@@ -19,6 +19,7 @@ import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 import { itemView, waitingView } from './ledgersFixture';
+import { labelInName, shownText } from './labelInName';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/routes')>();
@@ -211,6 +212,11 @@ describe('the app bar (W2 Task S4b)', () => {
     act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
     const tab = within(primary()).getByRole('button', { name: 'Runs, 120 needs you' });
     expect(tab).toHaveTextContent(/99\+$/);
+    // Review 1643 F5 (desktop-polish Task C14, D-8110): no contract change. At such counts label in name is read on the tab's
+    // word, not on its pill: the word is in the name, and the printed "99" is not, by design (`badgePrint`).
+    const name = tab.getAttribute('aria-label')!;
+    expect(labelInName(tab.textContent!.replace(/99\+$/, ''), name)).toBe(true);
+    expect(labelInName(shownText(tab), name), 'the pill is read out of the check, by design').toBe(false);
   });
 
   // Under a coarse pointer the bar's icon doors were narrower than a finger (Settings 32 wide, the bell 28 square)

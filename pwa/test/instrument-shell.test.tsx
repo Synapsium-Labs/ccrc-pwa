@@ -575,6 +575,21 @@ describe('the desk top bar (desk-nav Task A)', () => {
     }
   });
 
+  // Review 1643 F5 (desktop-polish Task C14, D-8110): no contract change. At 100 or more the pill prints "99+" and the name
+  // carries the real count, by design (`badgePrint`), so label in name is read on the door's word, not on its pill.
+  it('at a count of 100 or more the pill prints 99+, the name the real count, and the word is in the name', () => {
+    stubAt(1280);
+    const items = Array.from({ length: 120 }, (_, i) => itemView({ id: i + 1 }));
+    act(() => useFleetStore.setState({ fleetFrameSeen: true, waiting: waitingView({ items }) }));
+    mount('/');
+    // 120 open items and the suite's own asking session: a three-digit count, whatever it is exactly.
+    const d = within(topBar()).getByRole('button', { name: /^Waiting on you, 1\d\d waiting on you$/ });
+    const name = d.getAttribute('aria-label')!;
+    expect(d.querySelector('.ins-door-count')).toHaveTextContent(/^99\+$/);
+    expect(labelInName(d.querySelector('.ins-door-word')!.textContent!, name)).toBe(true);
+    expect(labelInName(shownText(d), name), 'the pill is read out of the check, by design').toBe(false);
+  });
+
   it('the current door\'s underline is 2px of --accent on its bottom edge', () => {
     const rule = declsOf(".ins-door[aria-current='page']::after");
     expect(rule).toMatch(/content:\s*''/);

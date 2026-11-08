@@ -14,7 +14,13 @@ import { coordinatorOf, isRunClosed, runState, workerOf } from './runWords';
 /** A badge's printed cap, the one definition every badge reads (R32's F1): the accessible name carries the real number. */
 export const BADGE_PRINT_CAP = 99;
 
-/** What a badge prints for `n`: the number, or the cap and a plus past it. */
+/** What a badge prints for `n`: the number, or the cap and a plus past it.
+ *
+ *  By design, in all three skins (Instrument's top bar, Refined's tabs, the phone bar): at a count of 100 or more the pill
+ *  prints "99+" while the door's accessible name carries the real count ("Runs, 120 needs you"), so a pill never grows past
+ *  three characters and the name stays exact. Label in name is then read on the door's word, not on its pill: the word
+ *  is in the name and the printed "99" is not, and the label-in-name cases of each skin pin exactly that (review 1643 F5;
+ *  desktop-polish Task C14, D-8110). */
 export function badgePrint(n: number): string {
   return n > BADGE_PRINT_CAP ? `${BADGE_PRINT_CAP}+` : String(n);
 }
