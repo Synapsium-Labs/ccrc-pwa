@@ -381,7 +381,7 @@ _route_readback_transcript	C3
 _route_apply_check	C3
 _pane_box_plain	C3
 _pane_box_draft	C3
-_pane_box_has_content	C3
+_pane_box_read	C3
 _pane_external_import_gate	C3
 _pane_login_screen	C3
 _answer_two_option_dialog	C3

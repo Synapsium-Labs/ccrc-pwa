@@ -618,6 +618,12 @@ export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 
  *  off this comment. */
 export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
 
+/** Claude Code's input box as a pane draws it: the `❯` row between two `─` borders, chrome below. ccd reads a `❯` row
+ *  as the box only when it sits directly under a border (D-8116, `_pane_box_read`), so a pane that stands for an idle
+ *  or drafting session draws the box this way; a bare `❯` row with no border reads as no box (a dialog is open). */
+export const boxed = (text = '', below = '  ? for shortcuts'): string =>
+  `${'─'.repeat(24)}\n❯ ${text}\n${'─'.repeat(24)}${below ? `\n${below}` : ''}`;
+
 /** `WIDE_PANE` for a fixture that MODELS LIVENESS, and the reason it has to
  *  exist: a stub cannot answer `has-session` from `$HOME/pane-up` and report a
  *  200-column ACTIVE pane for that same session in the same breath. Real tmux

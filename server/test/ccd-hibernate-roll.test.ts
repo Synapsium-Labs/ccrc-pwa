@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, boxed } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -69,7 +69,7 @@ const marker = (): void => {
     turnAt: stopAt - 60_000, stopAt, bg: 0, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0,
     lostKinds: '', lostIds: '', crons: 0 }) + '\n');
 };
-const idle = (): void => { seed(); pane('❯ '); live('idle'); marker(); attached('0'); };
+const idle = (): void => { seed(); pane(boxed()); live('idle'); marker(); attached('0'); };
 
 const run = (args: string, extra = '', stubs = STUBS): { rc: number; err: string; out: string } => {
   const out = h.sh(`${stubs} ${extra} ( cmd_hibernate ${args} ) 2>"$HOME/err"; echo "rc=$?"`, { TMUX: '' });

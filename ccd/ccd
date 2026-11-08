@@ -19720,7 +19720,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1 box
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -19778,7 +19778,14 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # SPELLED OUT rather than left as the function's trailing exit status, because
   # the provenance has to be stamped on the success side only: `! cmd` as a tail
   # says the same thing about the rc and gives nowhere to write the word.
-  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
+  # NO BOX IS GO HERE, and only here (D-8116). The newest real row is THIS
+  # process's limit row (a carried-in one answered above), so an open dialog is
+  # Claude Code's own limit dialog, which it opens by itself: the swap carries
+  # the transcript, and the dialog holds nothing a person typed. A draft inside a
+  # bordered box still stands down. Left over: text typed before the dialog
+  # opened may sit hidden under it, and the swap does not carry it.
+  box=$(_pane_box_read "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")
+  [[ "$box" == draft ]] && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
 }
@@ -19802,7 +19809,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # non-empty box (a human is at the keyboard; Enter would submit THEIR text),
   # and the cooldown, which also keeps the box-not-empty line from repeating
   # every five seconds (D-2361).
-  local id="$1" t pane now last
+  local id="$1" t pane now last box why
   t=$(_tmux_t "$id")
   _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
@@ -19813,8 +19820,11 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
-  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "$(date '+%F %T') stale-skip $id: usage limit has reset but the input box is not empty [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
+  # An Enter on an open dialog picks its highlighted row (D-8116): no box refuses too.
+  box=$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")
+  if [[ "$box" != empty ]]; then
+    why="the input box is not empty"; [[ "$box" == absent ]] && why="no input box is on screen (a dialog is open)"
+    echo "$(date '+%F %T') stale-skip $id: usage limit has reset but $why [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
     return 0
   fi
   echo "$(date '+%F %T') stale-resume $id: usage limit has reset; pressing Enter for Claude Code's own continuation [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
@@ -20770,8 +20780,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # gate's verdict table is untouched), then the per-account and fleet-wide
   # slots order the arrivals. A slot that cannot be written fails OPEN.
   if ! _swap_stagger_off && _affinity_cur_serves "$id" "$wrapper" "$aff_verb" "$hard_blocked"; then
-    _pane_box_has_content "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)" \
-      && { _standdown_note "$id" draft; return 0; }
+    # No box on screen (a dialog is open) stands the move down too (D-8116).
+    case "$(_pane_box_read "$(tmux capture-pane -t "$(_tmux_t "$id")" -p -e 2>/dev/null)")" in
+      draft) _standdown_note "$id" draft; return 0 ;;
+      absent) _standdown_note "$id" no-box; return 0 ;;
+    esac
     _affinity_slot_take "$target"
     case $? in 1) _standdown_note "$id" stagger; return 0 ;; 2) _standdown_note "$id" stagger-unwritable ;; esac
   fi
@@ -20930,7 +20943,7 @@ _pane_statusline_seg() {   # pane-text glyph -> text of the statusline ROW's `<g
   # only where it OPENS a `│` segment of that row, and a LAST segment holding
   # Claude Code's `…` cut mark reads as nothing — a narrow pane clips the row at
   # its width, so that segment is a prefix. LC_ALL=C: byte comparisons against
-  # literal UTF-8, `_pane_box_has_content`'s idiom; mawk and gawk both measured.
+  # literal UTF-8, `_pane_box_read`'s idiom; mawk and gawk both measured.
   printf '%s\n' "$1" | LC_ALL=C awk -v g="$2" '
     { l = $0; sub(/^[ \t]+/, "", l); if (index(l, "👤 ") == 1) row = l }
     END {
@@ -21493,7 +21506,7 @@ _pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 w
 
 _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean idle turn boundary;
   # 1 with `KS_WHY` one of mid-turn / no-prompt / no-pane-pid / status-unreadable /
-  # not-idle / quiet-unmeasured / not-quiet / drafting and `KS_DETAIL` its sentence.
+  # not-idle / quiet-unmeasured / not-quiet / drafting / no-box and `KS_DETAIL` its sentence.
   #
   # `ctxnote` IS THE CALLER'S OWN MEASUREMENT, spliced into the sentences rather
   # than measured here: the compactor passes `ctx ${pct}%` and gets back byte for
@@ -21581,9 +21594,12 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
+  # No box on screen means a dialog took its place: a keystroke would answer it (D-8116).
   t=$(_tmux_t "$id")
-  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
-    && { KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1; }
+  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in
+    draft) KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1 ;;
+    absent) KS_WHY=no-box; KS_DETAIL="no input box on screen, a dialog is open${ctxnote:+, $ctxnote}"; return 1 ;;
+  esac
   return 0
 }
 
@@ -23404,9 +23420,10 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
 }
 
 # Two readings of the input box from one normalised pane: `_pane_box_draft`
-# keeps `draftOf`'s marker-row contract, while `_pane_box_has_content` asks the
-# safety question every synthesized ccd action needs — whether ANY box row is
-# occupied. Both share the dim/SGR normalizer, so those rules cannot drift.
+# keeps `draftOf`'s marker-row contract, while `_pane_box_read` asks the
+# safety question every synthesized ccd action needs — is the box empty, does
+# ANY box row hold text, or is there no box at all (D-8116). Both share the
+# dim/SGR normalizer, so those rules cannot drift.
 #
 # TWO corrections to the inline first-match, plain-space-anchored grep this
 # replaces, both measured live on 2026-08-14. (The old pattern is DESCRIBED
@@ -23476,31 +23493,51 @@ _pane_box_plain() {   # ANSI (`capture-pane -e`) pane-text on stdin -> dim ghost
   LC_ALL=C sed -E $'s/\033\\[0;(1;)?2(;[0-9;]*)?m/\033[2m/g; s/\033\\[(0;)?(1;)?2(;[0-9;]*)?m((\033\\[([13-9][0-9;]*|2|2[013-9;][0-9;]*|22[0-9][0-9;]*)m)|[^\033])*\033\\[(0[0-9;]*|22(;[0-9;]*)?)?m//g; s/\033\\[[0-9;]*m//g'
 }
 
-_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty
+_pane_box_draft() {   # ANSI (`capture-pane -e`) pane-text -> the box's own marker row, or empty; rc 2 when no box is on screen (D-8116)
+  # THE BOX IS THE BORDERED ONE (D-8116): the last `❯` row directly under a `─`
+  # border, the rule `_pane_outside_box` uses. A `❯` row anywhere else is an old
+  # turn (`❯ ccrc-mail: …`) or a slash command's echo (`❯ /rate-limit-options`)
+  # above an open dialog, and a dialog's own cursor row is indented. Taking the
+  # last `❯` row anywhere read those as a draft and stood a limit rescue down
+  # for as long as Claude Code's own limit dialog stayed open.
   printf '%s\n' "$1" \
     | _pane_box_plain \
-    | LC_ALL=C grep $'^\xe2\x9d\xaf' \
-    | tail -1 \
+    | LC_ALL=C awk '
+        function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
+        { if (index($0, "❯") == 1 && NR > 1 && border(prev)) row = $0; prev = $0 }
+        END { if (row == "") exit 2; print row }' \
     | LC_ALL=C sed -E $'s/^\xe2\x9d\xaf(\xc2\xa0| )*//; s/[[:space:]]*$//'
-  # A pane with no box at all is an EMPTY BOX, not an error: `grep` exits 1 on
-  # no match and this file runs under `set -o pipefail`, so without this the
-  # status of the pipeline would leak out as a failure the callers (which read
-  # the STDOUT, `[[ -n "$cur" ]]`) never asked about.
+  # NO BOX IS ITS OWN ANSWER, never an empty box: a dialog or menu has taken the
+  # box's place, or the capture never reached it, and nothing may be typed into
+  # either. `_pane_box_read` turns the status into its `absent`. PIPESTATUS
+  # reads the awk's own status, so no other stage's failure reads as no box.
+  (( PIPESTATUS[2] == 2 )) && return 2
   return 0
 }
 
-_pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any real box row is occupied (D-2457)
-  # `_pane_box_draft` deliberately answers only the marker row, matching
-  # `draftOf`. That is not enough before a synthesized action: a human can press
-  # Alt+Enter first, leaving an EMPTY marker row and real text on an indented
-  # continuation row. Scan from the LAST marker to the closing horizontal rule,
-  # exactly like server `hasContentBelowMarker`; chrome after the rule is not box
-  # content. The shared normalizer keeps dim ghost suggestions empty here too.
-  # Ask the marker-row reader first both to keep ONE rule for that row and so a
-  # test that stubs the seam beneath an injector still controls the full guard.
-  [[ -n "$(_pane_box_draft "$1")" ]] && return 0
-  printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
+_pane_box_read() {   # ANSI (`capture-pane -e`) pane-text -> `empty`, `draft` or `absent` (D-2457, D-8116)
+  # THREE ANSWERS, the shape of server `draftOfMeasured` (`present` / `absent`)
+  # with `hasContentBelowMarker`'s whole-box question folded in:
+  #   empty  — the bordered box is on screen and holds nothing a person typed;
+  #   draft  — it holds text, on the marker row or on a continuation row below
+  #            it (Alt+Enter leaves an EMPTY marker row above real text);
+  #   absent — no bordered box: a dialog or menu is open, or the capture missed
+  #            the box. Server `hasMenu` gives the same veto the other way
+  #            round: no menu while the prompt box shows.
+  # Every caller that types or presses keys refuses on `absent` as it does on
+  # `draft`: an Enter on Claude Code's limit dialog can pick "Switch to usage
+  # credits" or "Upgrade your plan". Only `_session_hard_blocked` goes over it.
+  # The marker row is asked first, so a test that stubs `_pane_box_draft`
+  # beneath a caller still controls the whole read.
+  local row rc
+  row=$(_pane_box_draft "$1"); rc=$?
+  (( rc == 2 )) && { echo absent; return 0; }
+  [[ -n "$row" ]] && { echo draft; return 0; }
+  # Scan from the bordered marker to the closing rule, exactly like server
+  # `hasContentBelowMarker`; chrome after the rule is not box content.
+  if printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
     function nonblank(s) { gsub(/[[:space:]]/, "", s); return s != "" }
+    function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
     function rule(s, n) {
       gsub(/[[:space:]]/, "", s)
       n = gsub(/─/, "", s)
@@ -23508,19 +23545,21 @@ _pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any re
     }
     {
       line = $0
-      if (index(line, "❯") == 1) {
+      if (index(line, "❯") == 1 && NR > 1 && border(prev)) {
         active = 1; found = 0
         sub(/^❯( | )*/, "", line)
         if (nonblank(line)) found = 1
-        next
+        prev = $0; next
       }
       if (active) {
-        if (rule(line)) { active = 0; next }
-        if (nonblank(line)) found = 1
+        if (rule(line)) active = 0
+        else if (nonblank(line)) found = 1
       }
+      prev = $0
     }
     END { exit(found ? 0 : 1) }
-  '
+  '; then echo draft; else echo empty; fi
+  return 0
 }
 
 _pane_external_import_gate() {   # pane text -> 0 iff Claude Code's external-CLAUDE.md-import dialog is UP (D-3108)
@@ -25632,9 +25671,11 @@ _inject_spawn_effort() {   # tmuxname [id] — apply the settle-time effort, onc
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
-  if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
-  fi
+  # No box on screen (a dialog is open) refuses too: the Enter would answer it (D-8116).
+  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in
+    draft) echo "ccd: input box not empty, skipped /effort $level" >&2; return 0 ;;
+    absent) echo "ccd: no input box on screen (a dialog is open), skipped /effort $level" >&2; return 0 ;;
+  esac
   sleep 1
   _typed_note "$id" effort "$level"   # the settle's keystroke, never the operator's choice (session-continuity §5.7)
   tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
@@ -25842,7 +25883,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
   # outside the last 8 lines while still being well inside a full capture, so widening this
   # function's window turns "redrive-skip … hard-blocked pane" into a silent, permanent stand-down
-  # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
+  # on precisely the sessions this fallback exists to rescue. `_pane_box_read` alone keeps
   # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
   local id="$1" t fromswap="${3:-0}" f i rc pane; t=$(_tmux_at "$2")
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
@@ -25877,8 +25918,10 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane went under ${READER_MIN_COLS} columns during the redrive wait (§6.3)" >> "$REG/swap.log"; return 0; }
   _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
-  _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
-    && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
+  case "$(_pane_box_read "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)")" in   # D-8116: no box refuses too
+    draft) echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0 ;;
+    absent) echo "$(date '+%F %T') redrive-skip $id: no input box on screen (a dialog is open)" >> "$REG/swap.log"; return 0 ;;
+  esac
   echo "$(date '+%F %T') redrive $id: the transcript's newest turn is the unsubmitted resume pair after ${REDRIVE_WAIT_S}s; typing the prompt [wrapper=$(_reg_get "$id" wrapper)]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "$(_resume_prompt_for "$id")"; sleep 1; tmux send-keys -t "$t" Enter   # D-5237: the prompt the flag carried
   return 0

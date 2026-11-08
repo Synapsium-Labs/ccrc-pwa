@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE, boxed } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 
@@ -298,7 +298,7 @@ describe('_spawn (wiring): skips /effort injection exactly when login-gated', ()
   });
 
   it('DOES send /effort keystrokes once the TUI is healthy (positive control — proves the harness would catch the previous test if the skip were dropped)', () => {
-    const calls = spawnAgainstPane('? for shortcuts');
+    const calls = spawnAgainstPane(boxed());
     expect(calls.some((c) => c.includes('/effort'))).toBe(true);
   });
 });

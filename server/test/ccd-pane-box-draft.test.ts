@@ -27,6 +27,7 @@ import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from 
 // an assertion, over the escape-carrying rows that are the entire reason the
 // two implementations can disagree.
 import { draftOf } from '../src/inject/send.js';
+import { hasMenu, stripSgr } from '../src/pane/dialog.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-box-draft-'); });
@@ -51,9 +52,10 @@ const paneRead = (command: string, pane: string): string => {
 };
 /** Runs `_pane_box_draft` over a pane and returns exactly what it echoed. */
 const draft = (pane: string): string => paneRead('_pane_box_draft "$1"', pane);
+/** Runs `_pane_box_read` over a pane: `empty`, `draft` or `absent` (D-8116). */
+const boxRead = (pane: string): string => paneRead('_pane_box_read "$1"', pane);
 /** Answers whether any real content occupies the marker or continuation rows. */
-const occupied = (pane: string): boolean =>
-  paneRead('_pane_box_has_content "$1" && printf yes || printf no', pane) === 'yes';
+const occupied = (pane: string): boolean => boxRead(pane) === 'draft';
 
 const pane = (boxRows: string[]): string =>
   ['earlier turn', `❯ an older submitted turn`, '● a reply', '─'.repeat(24),
@@ -78,8 +80,8 @@ describe('_pane_box_draft', () => {
     expect(draft(pane([`❯${NBSP}half a thought   `]))).toBe('half a thought');
   });
 
-  it('reads nothing from a pane with no box at all', () => {
-    expect(draft('just some output\nno marker here\n')).toBe('');
+  it('reads nothing from a pane with no box at all, and says so with rc 2 (D-8116)', () => {
+    expect(paneRead('_pane_box_draft "$1"; printf "rc=%s" "$?"', 'just some output\nno marker here\n')).toBe('rc=2');
   });
 
   // The separator is stripped as the WHOLE two-byte NBSP or a whole space, not
@@ -120,7 +122,7 @@ describe('_pane_box_draft', () => {
  * So the fix is both halves together, and the pin is parity with `draftOf`,
  * which has stripped `DIM_SPAN` and SGR since it shipped.
  */
-describe('_pane_box_has_content reads the whole input box (D-2457)', () => {
+describe('_pane_box_read reads the whole input box (D-2457)', () => {
   it('finds a draft below a blank marker row', () => {
     expect(occupied(pane([`❯${NBSP}`, '  half a sentence']))).toBe(true);
   });
@@ -195,9 +197,9 @@ describe('_pane_box_draft reads an ANSI capture, exactly as draftOf does', () =>
     // site resolves its own tmux target (`-t "$(_tmux "$id")"`), so a nested
     // `)"` sits mid-call, ahead of the real close — a class excluding `)`
     // truncates there and silently drops the trailing ` -e` from the match.
-    const calls = src.match(/_pane_box_has_content "\$\(tmux capture-pane.*\)"/g) ?? [];
-    // Six sites: the two injectors (`_auto_compact_check` and
-    // `_inject_spawn_effort`), `_redrive_after_spawn`, `_session_hard_blocked`,
+    const calls = src.match(/_pane_box_read "\$\(tmux capture-pane.*\)"/g) ?? [];
+    // Six sites: `_idle_for_keystroke` (the compactor's and the route applier's
+    // gate), `_inject_spawn_effort`, `_redrive_after_spawn`, `_session_hard_blocked`,
     // `_auto_stale_check`, and `_auto_swap_check`'s draft stand-down (D-6181).
     // Every one can destroy or submit the box, so every one must ask the
     // whole-box presence question rather than read row one.
@@ -231,4 +233,50 @@ describe("ccd's `_pane_box_draft` answers its column on every capture (D-5910)",
       expect(draft(readFileSync(path.join(boxDir, name), 'utf8'))).toBe(verdict._pane_box_draft);
     });
   }
+});
+
+/**
+ * D-8116: the third answer. A `❯` row is the box only when it sits directly under a `─` border (`_pane_outside_box`'s
+ * rule). Claude Code's own limit dialog takes the box's place and indents its cursor row, so the last `❯` row left on
+ * screen is an old turn or the dialog's echo. Read as a draft, that stood the limit rescue down for as long as the
+ * dialog stayed open.
+ */
+describe('D-8116: no bordered box is its own answer, `absent`', () => {
+  const boxDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes', 'box');
+  const capture = (name: string): string => readFileSync(path.join(boxDir, name), 'utf8');
+  const DIALOGS = ['rate-limit-dialog.ansi', 'rate-limit-dialog-mail-row.ansi'];
+
+  for (const name of DIALOGS) {
+    it(`${name}: the limit dialog reads absent, where the last-row rule read a draft`, () => {
+      const pane = capture(name);
+      expect(boxRead(pane)).toBe('absent');
+      expect(paneRead('_pane_box_draft "$1"; printf "rc=%s" "$?"', pane)).toBe('rc=2');
+      // The server agrees from the other side: a menu is up, and its marker-row read alone would take a stale row.
+      expect(hasMenu(stripSgr(pane))).toBe(true);
+      expect(draftOf(pane)).not.toBe('');
+    });
+  }
+
+  it('an old turn with no box under it reads absent, not its text', () => {
+    expect(boxRead('❯ ccrc-mail: a message is waiting\n  ⎿  You hit a limit\n')).toBe('absent');
+  });
+
+  it('a dialog cursor indented under its own border is not the box', () => {
+    expect(boxRead(`❯ /rate-limit-options\n\n${'─'.repeat(24)}\n  What do you want to do?\n  ❯ 1. Stop\n    2. Upgrade\n`)).toBe('absent');
+  });
+
+  it('a real draft in a bordered box still reads draft, with an old turn above it', () => {
+    expect(boxRead(pane(['❯ half a sentence']))).toBe('draft');
+    expect(boxRead(pane([`❯${NBSP}`]))).toBe('empty');
+  });
+
+  it("the corpus's `_pane_box_read` column holds on every capture", () => {
+    const column = (JSON.parse(readFileSync(path.join(boxDir, 'verdicts.json'), 'utf8')) as {
+      captures: Record<string, { _pane_box_read: string }>;
+    }).captures;
+    const files = readdirSync(boxDir).filter((f) => f.endsWith('.ansi')).sort();
+    expect(Object.keys(column).sort()).toEqual(files);
+    for (const name of files) expect(boxRead(capture(name)), name).toBe(column[name]!._pane_box_read);
+    for (const name of DIALOGS) expect(column[name]!._pane_box_read).toBe('absent');
+  });
 });
