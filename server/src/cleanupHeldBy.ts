@@ -53,12 +53,13 @@ const HELD_PACE = 'usually within minutes for a new hold; a few hours or more fo
 const HELD_PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
 
 /** Where the fleet state stands on a row: listed (then its workspace decides), not listed (a row ccd purged, often one
- *  just forgotten, or a partial registry entry the fleet state cannot build), or no fleet frame read yet. Each gets its
+ *  just forgotten, or a registry entry the fleet state cannot build or list: a partial one, or an id the registry
+ *  reader refuses that ccd's row id accepts, review 1590 N-b), or no fleet frame read yet. Each gets its
  *  own words, worded from what is measured (reviews 1580 F2 and 1585 F2). */
 type FleetStanding = 'listed' | 'missing' | 'unframed';
 
 const STANDING_REMEDY: Record<Exclude<FleetStanding, 'listed'>, string> = {
-  missing: `The fleet state does not list this row. The line clears as each item it held is checked again, ${HELD_PACE}. If it stays after that, a partial registry entry remains for this id; remove it by hand once its session has ended. ${HELD_PAUSED}`,
+  missing: `The fleet state does not list this row. The line clears as each item it held is checked again, ${HELD_PACE}. If it stays after that, something in the registry still names this id that the fleet state cannot list (a partial entry, for one); a person removes it by hand once its session has ended. ${HELD_PAUSED}`,
   unframed: 'This row\'s state in the fleet has not been read yet, so only a re-check is offered. ' + RECHECK_TAIL,
 };
 

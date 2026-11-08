@@ -213,8 +213,10 @@ describe('cleanupHeldBy', () => {
     for (const w of HELD_BY_WORDS) {
       const [item] = cleanupHeldBy([{ lane: 'reclaim', subject: 's', read: rows([row('row-a', w)]) }], noFleet);
       expect(item!.act).toBe('recheck');
-      expect(item!.sentence).toContain(`The fleet state does not list this row. The line clears as each item it held is checked again, ${PACE}. If it stays after that, a partial registry entry remains for this id; remove it by hand once its session has ended. ${PAUSED}`);
+      expect(item!.sentence).toContain(`The fleet state does not list this row. The line clears as each item it held is checked again, ${PACE}. If it stays after that, something in the registry still names this id that the fleet state cannot list (a partial entry, for one); a person removes it by hand once its session has ended. ${PAUSED}`);
       expect(item!.sentence).not.toContain('no longer registered');
+      // Review 1590 N-b: a partial entry is one cause, not the only one.
+      expect(item!.sentence).not.toContain('a partial registry entry remains');
       expect(item!.sentence).not.toContain('only a person removes it');
       expect(item!.sentence).not.toContain('worktree');
     }
