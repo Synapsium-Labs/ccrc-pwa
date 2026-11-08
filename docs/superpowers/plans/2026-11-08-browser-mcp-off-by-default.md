@@ -104,6 +104,15 @@ sessions on the machine are not counted).
 - **The doctor's match is by command line.** A process counts when its command line holds a configured server's key and
   `mcp` and it is not Claude Code itself (first word `claude`, or `--settings` / `deniedMcpServers` in its argv); a
   server whose command line names neither is not counted, and one that names both is, whatever it is.
+  Two shapes can raise a brief false WARN: a session's own shell command that names `mcp` and a server key (a grep or a
+  test of this code) sits under its Claude Code process, and a browser helper the server launched that is reparented
+  out of the server's tree on Linux would count its new parent. The second is not measured; check it at acceptance.
+- **The coordinator's manual route door is not gated for `browser`.** `POST /api/runs/:id/route` accepts the field
+  because it is writable, but unlike dispatch and the operator doors it does not check `browser-route-v1`: an older ccd
+  answers with its own unknown-field error, and the run journal records a route rung for a field that is not one.
+- **The session sheet's write runs the route applier.** It goes through `ccd route ... --apply`, so a session with a
+  class or effort already pending gets that keystroke typed when Browser is toggled, and a busy pane records a skip
+  note. The browser record itself is right.
 - **The doctor's ON counts every record that says on**, stopped, hibernated and archived rows included, not only the
   running sessions whose effective value is on. ON can only be too high, so a stale `on` record can hide a pane that
   really leaks a server (WARN is raised only when USING is above ON); it never raises a false WARN.
