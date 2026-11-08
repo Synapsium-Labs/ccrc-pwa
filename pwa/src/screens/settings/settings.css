@@ -227,3 +227,8 @@
    long token (`<account>/<slug>/<entry>`), so it wraps anywhere rather than push the card sideways at 360. */
 .transcript-work-top { display: grid; gap: calc(var(--pad-card) / 4); margin: 0; padding: 0; list-style: none; min-width: 0; }
 .transcript-work-top > li { overflow-wrap: anywhere; font-family: var(--family-mono); font-size: var(--fs-meta); }
+
+/* Automation's Worktrees left behind card (D-8114). Layout only: every word wears `.settings-note`. A worktree's line holds a
+   project, a name and a session id, long tokens, so it wraps anywhere rather than push the card sideways at 360. */
+.left-behind-keeps { display: grid; gap: calc(var(--pad-card) / 4); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.left-behind-keeps > li { overflow-wrap: anywhere; }
