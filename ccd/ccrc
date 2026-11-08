@@ -1393,8 +1393,19 @@ _timer_period_s() {   # <timer-file>
   fi
 }
 
+# ── _psi_avg10 <file> <some|full> — one PSI file's avg10 (D-7876, D-8122) ──
+# The one parser of a /proc/pressure/<resource> file: prints the `avg10` of the
+# named line (percent), rc 1 when the file is unreadable or has no such line.
+# `_psi_over` reads `some` through it, and the update sweep's pacing
+# (`_upd_sweep_over`) reads memory's `full` through it.
+_psi_avg10() {   # <file> <some|full> -> the line's avg10 on stdout; rc 1 when there is none
+  local v
+  v=$(awk -v w="$2" '$1 == w { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$1" 2>/dev/null)
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
 # ── _psi_over <max> <knob> — the host's pressure above <max> (D-7876) ─────
-# The one reader of the host's pressure, moved here from `ccrc test` (its heavy
+# The one reader of the host's pressure for holding work back, moved here from `ccrc test` (its heavy
 # queue's `_tpressure`) so the graph sweep, which sources this body, reads it the
 # same way: PSI `some avg10` (percent) of memory, then cpu, from
 # `$CCRC_PROC_ROOT/pressure/` (default /proc, a fixture root in the suites). rc 0
@@ -1407,8 +1418,7 @@ _psi_over() {   # <max> <knob> -> 0 while memory or cpu pressure is above <max>;
   PRESSURE_SAID=""
   for r in memory cpu; do
     [ -r "$root/pressure/$r" ] || continue
-    v=$(awk '$1 == "some" { for (i = 2; i <= NF; i++) if ($i ~ /^avg10=/) { sub(/^avg10=/, "", $i); print $i; exit } }' "$root/pressure/$r" 2>/dev/null)
-    [ -n "$v" ] || continue
+    v=$(_psi_avg10 "$root/pressure/$r" some) || continue
     if awk -v v="$v" -v m="$max" 'BEGIN { exit !(v + 0 > m + 0) }'; then PRESSURE_SAID="host $r pressure (avg10) is $v, above $knob=$max"; return 0; fi
   done
   return 1
@@ -25545,20 +25555,24 @@ _upd_sweep_knobs() {
   elif _mg_ok CCRC_SWEEP_PRESSURE_WAIT_S "$KNOB"; then SWB_WAIT_S="$KNOB"
   else echo "update: warning: CCRC_SWEEP_PRESSURE_WAIT_S must be $(_mg_says CCRC_SWEEP_PRESSURE_WAIT_S) (from $KNOB_FROM) — the sweep waits at most 300s on memory pressure" >&2; fi
   if ! _ccrc_knob CCRC_WAKE_PRESSURE_GATE warn; then echo "update: warning: $KNOB_WHY — the sweep waits on the warn level" >&2
-  else
+  elif _mg_ok CCRC_WAKE_PRESSURE_GATE "$KNOB"; then
     case "$KNOB" in
       warn) SWB_GATE_PCT=10 ;;
       critical) SWB_GATE_PCT=50 ;;
       off) SWB_GATE_PCT="" ;;
-      *) echo "update: warning: CCRC_WAKE_PRESSURE_GATE must be $(_mg_says CCRC_WAKE_PRESSURE_GATE) (from $KNOB_FROM) — the sweep waits on the warn level" >&2 ;;
     esac
-  fi
+  else echo "update: warning: CCRC_WAKE_PRESSURE_GATE must be $(_mg_says CCRC_WAKE_PRESSURE_GATE) (from $KNOB_FROM) — the sweep waits on the warn level" >&2; fi
   return 0
 }
 # `_upd_sweep_over <pct> <file>` — rc 0 while the file's `full avg10` is at or above <pct>; rc 1 below it, rc 2 when the
-# file has no such line.
+# file has no such line. It parses through `_psi_avg10`, the one PSI parser; it is not `_psi_over` because it asks a
+# different question: memory only, the `full` line (every task stalled, the level shared/pressure.ts's
+# PSI_WARN_FULL_PCT and PSI_CRITICAL_FULL_PCT name), and at-or-above, where `_psi_over` asks memory or cpu `some` above a
+# knob's maximum.
 _upd_sweep_over() {
-  awk -v t="$1" '$1 == "full" { split($2, a, "="); f = 1; exit !(a[2] + 0 >= t + 0) } END { if (!f) exit 2 }' "$2" 2>/dev/null
+  local v
+  v=$(_psi_avg10 "$2" full) || return 2
+  awk -v v="$v" -v t="$1" 'BEGIN { exit !(v + 0 >= t + 0) }'
 }
 _upd_sweep_sleep() { sleep "$1"; }   # THE SEAM: a test counts the wait instead of waiting it
 # `_upd_sweep_pace` — between two batches: while memory pressure is at the gate level, wait SWB_POLL_S and read it
@@ -25804,7 +25818,12 @@ _upd_sweep() {
       echo "update: warning: the post-restart set could not be listed (systemctl --user list-units \"claude-session@*\" --state=active --plain --no-legend failed, rc $arc) — no supervisor was verified." >&2
       # D-8122: a later batch is never restarted over a listing nobody read.
       [ "$((cs + ${#chunk[@]}))" -ge "${#todo[@]}" ] || echo "update: warning: sweep: $((${#todo[@]} - cs - ${#chunk[@]})) supervisor(s) in later batches were not restarted and keep running the PREVIOUS ccd (D-8122)" >&2
-      echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+      # D-8122: "every … was restarted" is true only of a sweep that was one batch; past that, say how many were.
+      if [ "$cs" -eq 0 ] && [ "${#chunk[@]}" -ge "${#todo[@]}" ]; then
+        echo "update: DEGRADED: every live claude-session@ supervisor was restarted, and none of them was verified by this sweep."
+      else
+        echo "update: DEGRADED: $((cs + ${#chunk[@]})) of ${#todo[@]} live claude-session@ supervisors were restarted ($((${#todo[@]} - cs - ${#chunk[@]})) were not, and keep running the PREVIOUS ccd); the last batch of ${#chunk[@]} was not verified by this sweep, the $cs before it were (D-8122)."
+      fi
       UPD_SWEEP_WORD="unverified: relist"   # R10k, D-5315
       return 0
     fi

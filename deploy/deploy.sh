@@ -1189,8 +1189,10 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # restarted CCRC_SWEEP_BATCH at a time (default 5), each batch verified before the next, and between batches the
   # sweep waits while /proc/pressure/memory `full avg10` is at or above the CCRC_WAKE_PRESSURE_GATE level (warn 10,
   # critical 50, off none), for at most CCRC_SWEEP_PRESSURE_WAIT_S over the sweep (default 300), then goes on with a
-  # warning. The three are read on the box through ccrc's own reader (`~/.local/libexec/ccrc/ccrc-settings.sh`, bash only); a
-  # box without it, or a login shell that is not bash, uses the defaults. A unit FAILED before the sweep is in no batch and is warned about after the last.
+  # warning. The three are read on the box through ccrc's own reader (`~/.local/libexec/ccrc/ccrc-settings.sh`, bash only)
+  # and checked by its `_mg_ok`, the check `ccrc settings` and `_upd_sweep_knobs` use; a box without it, or a login shell
+  # that is not bash, uses the defaults. A batch is a space-separated string, handed to try-restart through
+  # `$(printf ... $chunk)`: a command substitution is split by every POSIX shell and by zsh, where a bare `$chunk` is not. A unit FAILED before the sweep is in no batch and is warned about after the last.
   SWEEP_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && { listing=$(systemctl --user list-units "claude-session@*" --plain --no-legend) \
          || { echo "deploy: FAILED — systemctl --user list-units claude-session@* failed, so the supervisors to be checked could not be listed. REFUSING to sweep." >&2; exit 1; }; } \
@@ -1201,10 +1203,16 @@ cd ~/ccrc/agent && npm ci && npm run build \
        done \
     && echo "deploy: the tmux server currently lives in: $(cat /proc/$(pgrep -x "tmux: server")/cgroup 2>/dev/null | tr "\n" " ")" >&2 \
     && batch=5 && waitmax=300 && gate=10 \
-    && if [ -n "${BASH_VERSION:-}" ] && [ -r ~/.local/libexec/ccrc/ccrc-settings.sh ] && . ~/.local/libexec/ccrc/ccrc-settings.sh; then \
-         if _ccrc_knob CCRC_SWEEP_BATCH 5; then case "$KNOB" in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]) batch=$KNOB ;; *) echo "deploy: warning: CCRC_SWEEP_BATCH is not a whole number from 1 to 999 — restarting 5 at a time" >&2 ;; esac; fi; \
-         if _ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300; then case "$KNOB" in [0-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-3][0-9][0-9][0-9]) [ "$KNOB" -gt 3600 ] || waitmax=$KNOB ;; esac; fi; \
-         if _ccrc_knob CCRC_WAKE_PRESSURE_GATE warn; then case "$KNOB" in critical) gate=50 ;; off) gate="" ;; esac; fi; \
+    && if [ -n "${BASH_VERSION:-}" ] && [ -r ~/.local/libexec/ccrc/ccrc-settings.sh ] && . ~/.local/libexec/ccrc/ccrc-settings.sh && type _mg_ok >/dev/null 2>&1; then \
+         if ! _ccrc_knob CCRC_SWEEP_BATCH 5; then echo "deploy: warning: $KNOB_WHY — restarting 5 at a time" >&2; \
+         elif _mg_ok CCRC_SWEEP_BATCH "$KNOB"; then batch=$KNOB; \
+         else echo "deploy: warning: CCRC_SWEEP_BATCH must be $(_mg_says CCRC_SWEEP_BATCH) (from $KNOB_FROM) — restarting 5 at a time" >&2; fi; \
+         if ! _ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300; then echo "deploy: warning: $KNOB_WHY — waiting at most 300s on memory pressure" >&2; \
+         elif _mg_ok CCRC_SWEEP_PRESSURE_WAIT_S "$KNOB"; then waitmax=$KNOB; \
+         else echo "deploy: warning: CCRC_SWEEP_PRESSURE_WAIT_S must be $(_mg_says CCRC_SWEEP_PRESSURE_WAIT_S) (from $KNOB_FROM) — waiting at most 300s on memory pressure" >&2; fi; \
+         if ! _ccrc_knob CCRC_WAKE_PRESSURE_GATE warn; then echo "deploy: warning: $KNOB_WHY — waiting on the warn level" >&2; \
+         elif _mg_ok CCRC_WAKE_PRESSURE_GATE "$KNOB"; then case "$KNOB" in critical) gate=50 ;; off) gate="" ;; esac; \
+         else echo "deploy: warning: CCRC_WAKE_PRESSURE_GATE must be $(_mg_says CCRC_WAKE_PRESSURE_GATE) (from $KNOB_FROM) — waiting on the warn level" >&2; fi; \
        fi \
     && set -- $(printf "%s\n" "$listing" | awk "\$3 == \"active\" || \$3 == \"activating\" || \$3 == \"reloading\" {print \$1}") \
     && waited=0 && n=0 \
@@ -1217,7 +1225,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
              sleep 5; waited=$((waited + 5)); \
            done; \
          fi; \
-         systemctl --user try-restart $chunk || exit 1; \
+         systemctl --user try-restart $(printf "%s\n" $chunk) \
+           || { echo "deploy: FAILED — systemctl --user try-restart failed for the batch:$chunk. The supervisors state is now mixed; read: systemctl --user list-units claude-session@*" >&2; exit 1; }; \
          for u in $(systemctl --user list-units "claude-session@*" --state=active --plain --no-legend | awk "{print \$1}"); do \
            case " $chunk " in *" $u "*) bash ~/ccrc/deploy/verify-service.sh "$u" || exit 1 ;; esac; done; \
          n=$((n + 1)); \

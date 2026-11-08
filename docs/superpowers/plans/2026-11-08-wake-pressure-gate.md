@@ -33,8 +33,8 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
 
 1. **One memory gate for automatic wakes.** `wakeMemoryGate` (server/src/coord/wakeBudget.ts) is asked inside
    `FleetWatcher.wakeVerdictAt` for every `auto` wake, before the budget's window. While the node's pressure level is
-   at or above `CCRC_WAKE_PRESSURE_GATE` (warn, critical or off; default warn, PSI full at or above
-   `PSI_WARN_FULL_PCT`), or the session slice's headroom is below `CCRC_WAKE_HEADROOM_MIN_GIB` (default 3, derived
+   at or above `CCRC_WAKE_PRESSURE_GATE` (warn, critical or off; default warn, memory PSI `full avg10` at or above
+   `PSI_WARN_FULL_PCT`, `memoryLevelOf` in server/src/pressure.ts, which is what the sweep's wait reads too), or the session slice's headroom is below `CCRC_WAKE_HEADROOM_MIN_GIB` (default 3, derived
    from `CLAUDE_HEADROOM_GATE_BYTES`), the wake is refused for this pass. Nothing is recorded, no slot is taken and
    nothing is parked, so the next pass asks again.
    - The roll's skip reads `memory-gate:pressure-warn`, `memory-gate:pressure-critical` or `memory-gate:headroom-low`
@@ -57,11 +57,18 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
    avg10` is at or above the gate level, polling, for at most `CCRC_SWEEP_PRESSURE_WAIT_S` seconds over the whole
    sweep (default 300). After that bound it warns once and never waits again, so an update never hangs. No PSI
    file, or the gate set to `off`, means no wait. `deploy.sh` reads the three settings on the box through
-   `~/.local/libexec/ccrc/ccrc-settings.sh`, and the single-definition pin holds the two copies to the same
-   batching, reads, defaults and order.
-4. **Auto updates wait out a critical host.** `runDispatch` (server/src/update/converge.ts) notes an automatic move
-   to the box the pressure reading is of as `AUTO_PRESSURE_HELD_DETAIL` while `FleetHealth.psi` reads critical: no
-   lease, no op, and the update view shows the row's detail. A requested update is never held.
+   `~/.local/libexec/ccrc/ccrc-settings.sh` and checks them with its `_mg_ok` (now in that generated library), the
+   check `_upd_sweep_knobs` uses, and the single-definition pin holds the two copies to the same batching, reads,
+   checks, defaults and order. `deploy.sh` hands each batch to `try-restart` through a command substitution, which a
+   zsh login shell splits as bash does, and says which batch failed before it exits. `_upd_sweep_over` parses PSI
+   through `_psi_avg10`, the parser `_psi_over` now uses too, so ccd/ccrc keeps one PSI parser.
+4. **Auto updates wait out a critical host.** While `FleetHealth.psi` reads critical, `runDispatch`
+   (server/src/update/converge.ts) hands `planDispatch` an `autoHeld` predicate for the box that reading is of: the
+   fleet-role node over the link, or this server's own row in local mode. Its automatic move is held inside the plan
+   (`DispatchPlan.held`) and noted as `AUTO_PRESSURE_HELD_DETAIL`: no lease, no op, and the update view shows the
+   row's detail. The plan keeps looking, so an operator's request for a node that sorts after it is still sent. A
+   requested update is never held, and an automatic move to another linked node is not held by the fleet box's
+   pressure.
 5. **Settings.** The four keys are box settings (`CCRC_SETTINGS`, `BOX_SETTINGS_TABLE`, `BOX_SETTING_TABLE`, family
    `memory-gate`), shown in the console's box settings card, and documented in README's configuration table and
    deploy/ccrc.env.example.
@@ -73,7 +80,11 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
   wait and its bound, `critical`, `off` and no PSI file, and a failing batch that stops the sweep.
 - `wake-budget.test.ts`, `roll-wake-admission.test.ts`, `roll-lane.test.ts`, `mail-sweep.test.ts`: gated, ungated
   (asked) and fail-open wakes, the skip word and the `wake-pressure` gate.
-- `update-auto-dispatch.test.ts`: the held automatic move, the unheld requested one, warn holding nothing.
+- `update-auto-dispatch.test.ts`: the held automatic move, the unheld requested one, warn holding nothing, a held
+  fleet auto move with a server-node request behind it (the request is sent), and a linked non-fleet node unheld.
+- `ccrc-sweep-batches.test.ts` also: a relist that fails after the first batch, whose DEGRADED line counts the
+  restarted supervisors. `ccrc-settings-verb.test.ts`: the headroom default is `CLAUDE_HEADROOM_GATE_BYTES` in GiB in
+  ccrc, README and ccrc.env.example.
 - `host-pressure.test.ts`, `agent/test/pressure-op.test.ts`: the headroom reading and its reader.
 - The settings table, census, verb and corpus pins, and the console card's families.
 
@@ -82,8 +93,11 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
 - Box settings are shown in the console but written in `~/.ccrc/ccrc.env`, as every box setting is today.
 - The wake gate is read by the server and the sweep's pressure wait by the fleet box. On a two-box install each box
   reads `CCRC_WAKE_PRESSURE_GATE` from its own `ccrc.env`, so the two can differ.
-- The sweep reads `full avg10` alone; the wake gate reads the worst `full` share over both windows and both
-  resources (`worstFull`), as `FleetHealth.psi` does. The sweep's wait is a pacing aid, not the same judge.
+- The wake gate and the sweep's wait both read memory `full avg10`. The automatic update hold reads
+  `FleetHealth.psi`'s level instead (the worst `full` share over memory and io, both windows), as the spec asks, so
+  heavy io alone can hold an automatic update but not an automatic wake.
+- The update hold has one reading, the fleet link's box. A linked node other than the fleet-role one (a testbox
+  agent) is never held by it, and none of its own pressure is read either.
 - `WAKE_BURST` and `WAKE_WINDOW_MS` stay PR-only figures (open question 4 of the trace).
 - The macOS arm of `_upd_sweep` is unchanged: it already kicks one job at a time.
 - The future binary trigger (`ccd roll`, wave 2) does not exist yet. When it does, it should be admitted through the
@@ -91,6 +105,6 @@ A read-only trace of `main` at c6f05621c (file and symbol for every claim) found
 - The 2026-10-27 burst's cause is still unknown.
 - The box-settings corpus (`server/test/fixtures/box-settings/ok--*.json`) gained the four rows by hand, in the verb's
   row shape, on a macOS box; its regeneration case is Linux-only and re-checks them there. The `ccrc update` fixture
-  cases that pin the named restart (`UNIT_RESTART`) are Linux-only too.
+  cases that pin the named restart (`UNIT_RESTART`) are Linux-only too. Both must run on Linux CI before merge.
 - `deploy.sh` reads the settings only when the box's login shell is bash and ccrc's reader is installed; otherwise it
   uses the defaults.

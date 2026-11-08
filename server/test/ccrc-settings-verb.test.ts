@@ -22,6 +22,7 @@ import { stubFn } from './ccdStub.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
 import { BOX_SETTINGS_SHOWN, BOX_SETTING_REFUSAL_WORDS, BOX_SETTING_SPECS } from '../../shared/api.js';
 import { NODE_FILE_CAP_BYTES } from '../src/update/inventory.js';
+import { CLAUDE_HEADROOM_GATE_BYTES } from '../../shared/claudeVersion.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC = path.resolve(here, '..', '..', 'ccd', 'ccrc');
@@ -1142,6 +1143,18 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
       /_ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300 file;/,
     ]) expect(reads, String(re)).toMatch(re);
     expect(reads.match(/_ccrc_knob /g), 'fourteen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four); the two line readers are the owners\' own').toHaveLength(14);
+  });
+
+  // D-8122: the headroom floor's default is CLAUDE_HEADROOM_GATE_BYTES (the server's WAKE_HEADROOM_MIN_GIB_DEFAULT is
+  // derived from it); the console's default (ccrc's bash read) and the docs' default are held to it, not to a literal.
+  it('V9: CCRC_WAKE_HEADROOM_MIN_GIB\'s default is CLAUDE_HEADROOM_GATE_BYTES in GiB, in ccrc, the README and ccrc.env.example', () => {
+    const gib = CLAUDE_HEADROOM_GATE_BYTES / 2 ** 30;
+    expect(Number.isInteger(gib), 'the gate is a whole number of GiB').toBe(true);
+    expect(bodyOf('_set_reads')).toContain(`_ccrc_knob CCRC_WAKE_HEADROOM_MIN_GIB ${gib} file;`);
+    const readme = readFileSync(join(path.dirname(CCRC), '..', 'README.md'), 'utf8');
+    expect(readme).toContain(`| \`CCRC_WAKE_HEADROOM_MIN_GIB\` | server | Whole GiB, default ${gib} (spec decision 6)`);
+    const example = readFileSync(join(path.dirname(CCRC), '..', 'deploy', 'ccrc.env.example'), 'utf8');
+    expect(example).toContain(`MemAvailable). Default ${gib},\n# spec decision 6's figure`);
   });
 
   it('V9: cmd_settings and its _set_ helpers never name the warning arrays, _tb_load, _gr_knobs or `_slice_limit ` with a space', () => {

@@ -22,6 +22,8 @@ export const SETTINGS_LIB_FUNCTIONS = Object.freeze([
   '_keepalive_fresh_ok', '_keepalive_fresh_says', '_usage_days_ok', '_usage_days_says',
   // D-8121: ccd's spawn reads the two browser MCP settings through this library, so their checks ride it too.
   '_browser_mcp_default_ok', '_browser_mcp_default_says', '_browser_mcp_servers_default', '_browser_mcp_servers_ok', '_browser_mcp_servers_says',
+  // D-8122: deploy.sh's sweep checks the memory gate's settings with the shared `_mg_ok`, so it rides the library too.
+  '_mg_ok', '_mg_says',
 ]);
 
 const HEADER = [

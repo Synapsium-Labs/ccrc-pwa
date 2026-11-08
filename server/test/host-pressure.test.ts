@@ -17,7 +17,8 @@ import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
 import { PressureLane } from '../src/pressureLane.js';
 import {
-  EMPTY_PRESSURE, PRESSURE_EVIDENCE_MS, PRESSURE_INFLIGHT_STALL_MS, PRESSURE_SWEEP_MS, pressureBlock, pressureLevelOf,
+  EMPTY_PRESSURE, PRESSURE_EVIDENCE_MS, PRESSURE_INFLIGHT_STALL_MS, PRESSURE_SWEEP_MS, memoryLevelOf, memoryReadingOf, pressureBlock,
+  pressureLevelOf,
   type PressureState,
 } from '../src/pressure.js';
 import { readHostPressure, type HostPsi } from '../../shared/pressure.js';
@@ -98,6 +99,18 @@ describe('the lane on a scripted io and clock (#1170)', () => {
     expect(r.lane.memoryReading(), 'an agent that sent no headroom: null, never room').toEqual({ level: 'ok', headroomBytes: null });
     r.tick(PRESSURE_EVIDENCE_MS + 1);
     expect(r.lane.memoryReading(), 'too old to say anything').toEqual({ level: 'unmeasured', headroomBytes: null });
+  });
+
+  // Review fix (D-8122): the wake gate is a memory gate and reads what the sweep reads on the box: memory `full avg10`.
+  // Heavy io, or an avg60 still high after the 10-second window eased, raises the banner's level but not the gate's.
+  it('D-8122: the wake gate reads memory full avg10 alone; io and avg60 move only the banner', () => {
+    expect(memoryLevelOf(psi(0, 60)), 'io alone').toBe('ok');
+    expect(pressureLevelOf(psi(0, 60)), 'the banner still sees io').toBe('critical');
+    const eased: HostPsi = { ...psi(0), memory: { some: { avg10: 0, avg60: 30 }, full: { avg10: 2, avg60: 30 } } };
+    expect(memoryLevelOf(eased), 'avg60 alone').toBe('ok');
+    expect(memoryLevelOf(psi(10)), 'warn at PSI_WARN_FULL_PCT').toBe('warn');
+    expect(memoryLevelOf(psi(50)), 'critical at PSI_CRITICAL_FULL_PCT').toBe('critical');
+    expect(memoryReadingOf(held(psi(0, 60)), T).level).toBe('ok');
   });
 
   it('absent before the first ask; a reading lands; a later unanswered ask turns a high reading into host-pressure', async () => {

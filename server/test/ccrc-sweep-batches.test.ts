@@ -126,6 +126,18 @@ describe('the update sweep restarts in batches (D-8122)', () => {
     expect(r.stderr, 'a unit never restarted is not called unverified').not.toContain(`${UNITS[12]} was active before try-restart`);
   });
 
+  // Review fix: an unread relist after a batch stops the sweep, and the DEGRADED line counts what was restarted —
+  // "every … was restarted" is false when later batches never were.
+  it('a relist that fails after the first batch: the later batches are not restarted, and DEGRADED says how many were', () => {
+    const box = makeBox({ units: UNITS.map(healthy), batch: null, activeListingRc: 1 });
+    const r = runSweep(box, { timeout: 120_000 });
+    expect(r.code, r.stderr).toBe(0);
+    expect(restarts(calls(box))).toEqual([UNITS.slice(0, 5)]);
+    expect(r.stderr).toContain('update: warning: sweep: 25 supervisor(s) in later batches were not restarted and keep running the PREVIOUS ccd (D-8122)');
+    expect(r.stdout).toContain('update: DEGRADED: 5 of 30 live claude-session@ supervisors were restarted (25 were not, and keep running the PREVIOUS ccd); the last batch of 5 was not verified by this sweep, the 0 before it were (D-8122).');
+    expect(r.stdout).not.toContain('every live claude-session@ supervisor was restarted');
+  });
+
   it('five or fewer running units are one batch, with no batch line', () => {
     const box = makeBox({ units: UNITS.slice(0, 5).map(healthy), batch: null });
     const r = runSweep(box, { timeout: 120_000 });

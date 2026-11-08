@@ -833,7 +833,7 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
   // `_upd_sweep`'s reads and its wait live in its own helpers, so ccrc's text here is the Linux arm plus them.
   const ccrcHelpers = (): string => {
     const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
-    return ['_upd_sweep_knobs', '_upd_sweep_over', '_upd_sweep_pace'].map((n) => {
+    return ['_psi_avg10', '_upd_sweep_knobs', '_upd_sweep_over', '_upd_sweep_pace'].map((n) => {
       const m = new RegExp(`^${n}\\(\\) \\{[\\s\\S]*?\\n\\}`, 'm').exec(ccrc);
       expect(m, `ccd/ccrc has no ${n}`).toBeTruthy();
       return m![0];
@@ -845,7 +845,8 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
   it('D-8122: neither copy restarts with the glob; each restarts its batch by name', () => {
     for (const [name, text] of batchScopes()) {
       expect(text, `${name} still restarts every unit at once`).not.toContain('try-restart "claude-session@*"');
-      expect(text, name).toMatch(name === 'deploy.sh SWEEP_CMD' ? /systemctl --user try-restart \$chunk\b/ : /systemctl --user try-restart "\$\{chunk\[@\]\}"/);
+      // deploy.sh's batch is a string, split by a command substitution (zsh does not split a bare `$chunk`).
+      expect(text, name).toMatch(name === 'deploy.sh SWEEP_CMD' ? /systemctl --user try-restart \$\(printf "%s\\n" \$chunk\)/ : /systemctl --user try-restart "\$\{chunk\[@\]\}"/);
     }
   });
 
@@ -868,13 +869,22 @@ describe('the supervisor sweep — both copies carry the KillMode=process prefli
     for (const [name, text] of batchScopes()) {
       const deploy = name === 'deploy.sh SWEEP_CMD';
       const loop = text.indexOf(deploy ? 'while [ $# -gt 0 ]; do' : 'while :; do');
-      const restart = text.indexOf(deploy ? 'try-restart $chunk' : 'try-restart "${chunk[@]}"');
+      const restart = text.indexOf(deploy ? 'try-restart $(printf "%s\\n" $chunk)' : 'try-restart "${chunk[@]}"');
       const verify = text.indexOf(deploy ? 'verify-service.sh "$u"' : 'bash "$verify"', restart);
       const next = text.indexOf(deploy ? 'n=$((n + 1))' : 'cs=$((cs + SWB_BATCH))', verify);
       expect(loop, `${name}: the batch loop`).toBeGreaterThan(-1);
       expect([loop < restart, restart < verify, verify < next], `${name}: loop, restart, verify, next batch — in that order`).toEqual([true, true, true]);
       expect(text, `${name}: the pressure file`).toMatch(/\/pressure\/memory\b/);
-      expect(text, `${name}: full avg10`).toMatch(/\$1 == \\?"full\\?"/);
+      // ccrc parses through its one PSI parser, `_psi_avg10`; deploy.sh, which never sources ccd/ccrc, with its own awk.
+      expect(text, `${name}: full avg10`).toMatch(deploy ? /\$1 == \\"full\\"/ : /_psi_avg10 "\$2" full\b/);
+    }
+  });
+
+  it('D-8122: deploy.sh checks the settings with the shared _mg_ok, never its own patterns', () => {
+    for (const [name, text] of batchScopes()) {
+      for (const key of ['CCRC_SWEEP_BATCH', 'CCRC_SWEEP_PRESSURE_WAIT_S', 'CCRC_WAKE_PRESSURE_GATE']) {
+        expect(text, `${name}: ${key}`).toContain(`_mg_ok ${key} "$KNOB"`);
+      }
     }
   });
 });

@@ -80,8 +80,9 @@ export interface ConvergeDeps {
    *  is caught here. */
   recordMove: ((r: MoveFeedRecord) => void) | null;
   /** D-8122: the fleet host's pressure level now (`FleetHealth.psi`'s `level`), or null when the server holds none.
-   *  An AUTOMATIC move to the box that reading is of (over the link, or this box in local mode) is held while it reads
-   *  `critical`; a requested move never reads it. Absent: no hold (a harness that does not wire it, as before). */
+   *  An AUTOMATIC move to the box that reading is of (the fleet-role node over the link, or this server's own row in
+   *  local mode) is held inside the plan while it reads `critical` (`planDispatch`'s `autoHeld`), so a move after it
+   *  still goes; a requested move never reads it. Absent: no hold (a harness that does not wire it, as before). */
   hostPressure?: () => PressureLevel | null;
 }
 
@@ -303,7 +304,16 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
   }
   // (2) The plan, over rows read after those writes.
   const views = dispatchViewsFor(store);
-  const plan = planDispatch({ nodes: views, releases: store.releases() });
+  // D-8122: an AUTOMATIC move to the box `hostPressure` reads — the fleet-role node over the link, or this server's
+  // own row in local mode — is held while that box reads critical: the update's supervisor sweep is the last thing
+  // a thrashing box needs. Held inside the plan, so the next cleared move (an operator's request) still goes.
+  const critical = deps.hostPressure?.() === 'critical';
+  const autoHeld = critical
+    ? (v: DispatchNodeView): string | null =>
+      (deps.fleet === null ? v.row.agentOps === null : v.row.agentOps !== null && v.row.role === 'fleet')
+        ? AUTO_PRESSURE_HELD_DETAIL : null
+    : undefined;
+  const plan = planDispatch({ nodes: views, releases: store.releases(), ...(autoHeld !== undefined ? { autoHeld } : {}) });
   // (3) A request the node already runs is convergence, measured (D-3380).
   const settled: string[] = [];
   for (const m of plan.met) {
@@ -316,15 +326,14 @@ export async function runDispatch(deps: ConvergeDeps, now: number): Promise<Disp
     if (w.ok && w.changed) noted += 1;
   };
   for (const r of plan.refusals) note(r.nodeId, r.detail);
+  for (const h of plan.held) note(h.nodeId, h.detail);
   const done = (outcome: MoveOutcome | null): DispatchRunResult => ({ ran: true, expired, settled, noted, plan, outcome });
   const move = plan.move;
   if (move === null) return done(null);
   const view = views.find((v) => v.row.nodeId === move.nodeId);
   if (view === undefined) return done({ nodeId: move.nodeId, result: 'acquire-refused', why: 'unknown-node' });
-  // (5) A move that cannot be sent takes no lease: it is noted, and the request stands. D-8122: so is an automatic move
-  // over the link while the fleet host thrashes — the update's supervisor sweep is the last thing it needs.
-  const unsendable = unsendableDetail(deps, view, move)
-    ?? (move.source === 'auto' && (move.viaLink || deps.fleet === null) && deps.hostPressure?.() === 'critical' ? AUTO_PRESSURE_HELD_DETAIL : null);
+  // (5) A move that cannot be sent takes no lease: it is noted, and the request stands.
+  const unsendable = unsendableDetail(deps, view, move);
   if (unsendable !== null) {
     note(move.nodeId, unsendable);
     return done({ nodeId: move.nodeId, result: 'not-sent', detail: unsendable });

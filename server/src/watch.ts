@@ -1651,7 +1651,8 @@ export class FleetWatcher {
       runLocal: updateRunner ?? null,
       onAccepted: () => this.triggerInventory(),
       recordMove: (r) => { this.recordMoveFeed(r); },
-      hostPressure: () => this.pressureLane.memoryReading().level,
+      // D-8122: the update hold reads `FleetHealth.psi`'s own level (the banner's), not the wake gate's memory level.
+      hostPressure: () => this.pressureLane.block(true)?.level ?? null,
     }, Date.now());
   }
 

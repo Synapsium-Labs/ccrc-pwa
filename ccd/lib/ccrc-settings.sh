@@ -327,3 +327,23 @@ _browser_mcp_servers_ok() {
 _browser_mcp_servers_says() {
   printf '%s' 'a comma-separated list of MCP server names (letters, digits and . _ @ : -)'
 }
+
+_mg_ok() {
+  case "$1" in
+    CCRC_WAKE_PRESSURE_GATE) case "$2" in warn|critical|off) return 0 ;; *) return 1 ;; esac ;;
+    CCRC_WAKE_HEADROOM_MIN_GIB) [[ "$2" =~ ^(0|[123456789][0123456789]{0,3})$ ]] && [ "$2" -le 1024 ] ;;
+    CCRC_SWEEP_BATCH) [[ "$2" =~ ^[123456789][0123456789]{0,2}$ ]] ;;
+    CCRC_SWEEP_PRESSURE_WAIT_S) [[ "$2" =~ ^(0|[123456789][0123456789]{0,3})$ ]] && [ "$2" -le 3600 ] ;;
+    *) return 1 ;;
+  esac
+}
+
+_mg_says() {
+  case "$1" in
+    CCRC_WAKE_PRESSURE_GATE) printf '%s' 'warn, critical or off' ;;
+    CCRC_WAKE_HEADROOM_MIN_GIB) printf '%s' 'a whole number of GiB from 0 to 1024' ;;
+    CCRC_SWEEP_BATCH) printf '%s' 'a whole number from 1 to 999' ;;
+    CCRC_SWEEP_PRESSURE_WAIT_S) printf '%s' 'a whole number of seconds from 0 to 3600' ;;
+    *) return 1 ;;
+  esac
+}
