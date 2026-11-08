@@ -264,7 +264,9 @@ describe('Forget follows the session sheet\'s presence check', () => {
   it.each(others)('a row that is %s is offered Check again, never Forget', (_, sessions) => {
     expect(heldByRowControl(held(), sessions.find((x) => x.id === 'row-a'))).toBe('recheck');
     render(<HeldByRows sessions={sessions} coord={frame([held()])} />);
-    expect(screen.getByRole('button', { name: 'Check again — row-a…' })).toBeInTheDocument();
+    const b = screen.getByRole('button', { name: 'Check again — row-a…' });
+    // Review 1663 F3: the fleet switched the control from the server's act, so its visible words follow the switch too.
+    expect(labelInName(shownText(b), b.getAttribute('aria-label') ?? ''), `"${shownText(b)}" in its name`).toBe(true);
     expect(screen.queryByRole('button', { name: /forget/i })).toBeNull();
   });
 
