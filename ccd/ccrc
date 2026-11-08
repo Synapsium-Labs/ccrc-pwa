@@ -25949,6 +25949,9 @@ _upd_sweep() {
   local b a seen
   for b in ${before[@]+"${before[@]}"}; do
     seen=0
+    # D-8122: a unit in a batch the sweep stopped before was never restarted; the warning above names those.
+    for a in ${todo[@]+"${todo[@]:cs}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
+    [ "$seen" -eq 0 ] || continue
     for a in ${after[@]+"${after[@]}"} ${failed[@]+"${failed[@]}"}; do [ "$a" = "$b" ] && { seen=1; break; }; done
     [ "$seen" -eq 1 ] || echo "update: warning: $b was active before try-restart and is not active after it — this sweep did not verify it. On the box: systemctl --user status $b" >&2
   done

@@ -123,6 +123,7 @@ describe('the update sweep restarts in batches (D-8122)', () => {
     expect(restarts(calls(box)), 'batches 1 and 2 only').toEqual([UNITS.slice(0, 5), UNITS.slice(5, 10)]);
     expect(r.stderr).toContain('update: warning: sweep: a batch did not verify, so the next 20 supervisor(s) were not restarted and keep running the PREVIOUS ccd (D-8122)');
     expect(r.stdout).not.toContain(SWEEP_OK);
+    expect(r.stderr, 'a unit never restarted is not called unverified').not.toContain(`${UNITS[12]} was active before try-restart`);
   });
 
   it('five or fewer running units are one batch, with no batch line', () => {
