@@ -10,6 +10,7 @@ import {
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
 import { labelInName, shownText } from './labelInName';
+import { deadSession, fleetSession, hibernatedSession } from './fleetFixture';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -20,6 +21,8 @@ const held = (over: Partial<CleanupHeldByItem> = {}): CleanupHeldByItem => ({
 const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time';
 const PAUSED = 'Nothing is re-read while the cleanup is paused.';
 const frame = (list: unknown): unknown => ({ pause: 'clear', mail: 'clear', cleanupHeldBy: list });
+/** The rows these cases name, each listed dead with no workspace and not asleep: the session sheet's Forget check. */
+const DEAD = ['row-a', 'row-b', 'acct-a-demo', 'acct-b-demo'].map((id) => deadSession({ id }));
 const confirmBtn = (): HTMLElement => {
   const b = document.querySelector('.qc-actions .btn-primary');
   if (b === null) throw new Error('no confirm open');
@@ -28,7 +31,7 @@ const confirmBtn = (): HTMLElement => {
 
 describe('the held-rows list', () => {
   it('one line per row, with its word and the server\'s sentence', () => {
-    render(<HeldByRows coord={frame([held(), held({ rowId: 'row-b', word: 'not-plain', act: 'recheck', sentence: 'Not a plain checkout.' })])} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held(), held({ rowId: 'row-b', word: 'not-plain', act: 'recheck', sentence: 'Not a plain checkout.' })])} />);
     const list = screen.getByLabelText(CLEANUP_HELD_BY_LABEL);
     expect(within(list).getAllByRole('listitem')).toHaveLength(2);
     expect(within(list).getByText('row-a · gone-unrecorded')).toBeInTheDocument();
@@ -38,7 +41,7 @@ describe('the held-rows list', () => {
   });
 
   it('nothing renders for an absent field', () => {
-    const { container } = render(<HeldByRows coord={{ pause: 'clear', mail: 'clear' }} />);
+    const { container } = render(<HeldByRows sessions={DEAD} coord={{ pause: 'clear', mail: 'clear' }} />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -59,23 +62,23 @@ describe('the held-rows list', () => {
   });
 
   it('forget is offered only for gone-unrecorded with act forget', () => {
-    expect(heldByRowControl(held())).toBe('forget');
-    expect(heldByRowControl(held({ word: 'not-plain', act: 'forget' }))).toBe('recheck');
-    expect(heldByRowControl(held({ act: 'recheck' }))).toBe('recheck');
-    render(<HeldByRows coord={frame([held({ word: 'not-plain', act: 'forget' })])} />);
+    expect(heldByRowControl(held(), DEAD[0])).toBe('forget');
+    expect(heldByRowControl(held({ word: 'not-plain', act: 'forget' }), DEAD[0])).toBe('recheck');
+    expect(heldByRowControl(held({ act: 'recheck' }), DEAD[0])).toBe('recheck');
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ word: 'not-plain', act: 'forget' })])} />);
     expect(screen.getByRole('button', { name: 'Check again — row-a…' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /forget/i })).toBeNull();
   });
 
   it('a recheck line offers Check again', () => {
-    render(<HeldByRows coord={frame([held({ act: 'recheck' })])} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'recheck' })])} />);
     expect(screen.getByRole('button', { name: 'Check again — row-a…' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /forget/i })).toBeNull();
   });
 
   it('the tap opens the confirm and sends nothing', () => {
     const forget = vi.fn().mockResolvedValue(undefined);
-    render(<HeldByRows coord={frame([held()])} forget={forget} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held()])} forget={forget} />);
     expect(document.querySelector('.qc-actions')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Forget row row-a…' }));
     expect(document.querySelector('.qc-actions')).not.toBeNull();
@@ -83,7 +86,7 @@ describe('the held-rows list', () => {
   });
 
   it('the confirm names the row and what will happen', () => {
-    render(<HeldByRows coord={frame([held()])} forget={vi.fn()} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held()])} forget={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Forget row row-a…' }));
     expect(screen.getByText('Forget row-a?')).toBeInTheDocument();
     expect(screen.getByText(/Only the registry entry of row-a is removed/)).toBeInTheDocument();
@@ -94,7 +97,7 @@ describe('the held-rows list', () => {
 
   it('confirming forget sends the act with the row id the server named', async () => {
     const forget = vi.fn().mockResolvedValue(undefined);
-    render(<HeldByRows coord={frame([held({ rowId: 'row-a' }), held({ rowId: 'row-b' })])} forget={forget} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ rowId: 'row-a' }), held({ rowId: 'row-b' })])} forget={forget} />);
     fireEvent.click(screen.getByRole('button', { name: 'Forget row row-b…' }));
     expect(screen.getByText('Forget row-b?')).toBeInTheDocument();
     fireEvent.click(confirmBtn());
@@ -104,7 +107,7 @@ describe('the held-rows list', () => {
 
   it('confirming check again sends nothing and shows the checked-again note', () => {
     const forget = vi.fn().mockResolvedValue(undefined);
-    render(<HeldByRows coord={frame([held({ act: 'recheck', word: 'under-proc' })])} forget={forget} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'recheck', word: 'under-proc' })])} forget={forget} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     expect(screen.getByText('Check row-a again?')).toBeInTheDocument();
     expect(screen.getByText(/Nothing is sent and nothing changes for row-a/)).toBeInTheDocument();
@@ -115,20 +118,20 @@ describe('the held-rows list', () => {
 
   it('a refused forget goes to the toast', async () => {
     const forget = vi.fn().mockRejectedValue(new ApiError(502, { ok: false, stderr: 'is-a-workspace' }));
-    render(<><HeldByRows coord={frame([held()])} forget={forget} /><ToastHost /></>);
+    render(<><HeldByRows sessions={DEAD} coord={frame([held()])} forget={forget} /><ToastHost /></>);
     fireEvent.click(screen.getByRole('button', { name: 'Forget row row-a…' }));
     fireEvent.click(confirmBtn());
     expect(await screen.findByText(/Couldn't forget — is-a-workspace/)).toBeInTheDocument();
   });
 
   it('each button names its row', () => {
-    render(<HeldByRows coord={frame([held(), held({ rowId: 'row-b', act: 'recheck' })])} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held(), held({ rowId: 'row-b', act: 'recheck' })])} />);
     expect(screen.getByRole('button', { name: 'Forget row row-a…' })).toHaveTextContent('Forget row…');
     expect(screen.getByRole('button', { name: 'Check again — row-b…' })).toHaveTextContent('Check again…');
   });
 
   it('check again names the real pace and never once a minute', () => {
-    render(<HeldByRows coord={frame([held({ act: 'recheck' })])} forget={vi.fn()} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'recheck' })])} forget={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     expect(screen.getByText(new RegExp(`ccrc reads this row again when it next checks what it holds: ${PACE}\\. ${PAUSED}`))).toBeInTheDocument();
     fireEvent.click(confirmBtn());
@@ -142,7 +145,7 @@ describe('the held-rows list', () => {
       .map(([k]) => vi.spyOn(api as unknown as Record<string, () => unknown>, k).mockResolvedValue(undefined));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
     expect(spies.length).toBeGreaterThan(10);
-    render(<HeldByRows coord={frame([held({ word: 'not-plain', act: 'forget' })])} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ word: 'not-plain', act: 'forget' })])} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     expect(screen.getByText('Check row-a again?')).toBeInTheDocument();
     expect(screen.queryByText(/Forget row-a\?/)).toBeNull();
@@ -156,7 +159,7 @@ describe('the held-rows list', () => {
     const spies = Object.entries(api).filter(([, v]) => typeof v === 'function')
       .map(([k]) => vi.spyOn(api as unknown as Record<string, () => unknown>, k).mockResolvedValue(undefined));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
-    render(<HeldByRows coord={frame([held({ act: 'recheck', word: 'under-proc' })])} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'recheck', word: 'under-proc' })])} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     fireEvent.click(confirmBtn());
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
@@ -165,7 +168,7 @@ describe('the held-rows list', () => {
 
   it('a successful forget is toasted', async () => {
     const forget = vi.fn().mockResolvedValue(undefined);
-    render(<><HeldByRows coord={frame([held()])} forget={forget} /><ToastHost /></>);
+    render(<><HeldByRows sessions={DEAD} coord={frame([held()])} forget={forget} /><ToastHost /></>);
     fireEvent.click(screen.getByRole('button', { name: 'Forget row row-a…' }));
     fireEvent.click(confirmBtn());
     const t = await screen.findByText(/Forgot row-a\. The line clears as each item it held is checked again/);
@@ -174,29 +177,29 @@ describe('the held-rows list', () => {
   });
 
   it('the confirm does not reopen by itself when its row leaves and returns', () => {
-    const { rerender } = render(<HeldByRows coord={frame([held()])} forget={vi.fn()} />);
+    const { rerender } = render(<HeldByRows sessions={DEAD} coord={frame([held()])} forget={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Forget row row-a…' }));
     expect(document.querySelector('.qc-actions')).not.toBeNull();
-    rerender(<HeldByRows coord={frame([])} forget={vi.fn()} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([])} forget={vi.fn()} />);
     expect(document.querySelector('.qc-actions')).toBeNull();
-    rerender(<HeldByRows coord={frame([held()])} forget={vi.fn()} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([held()])} forget={vi.fn()} />);
     expect(document.querySelector('.qc-actions')).toBeNull();
   });
 
   it('the checked-again note clears when a new frame changes that row\'s line', () => {
     const line = held({ act: 'recheck', word: 'under-proc' });
-    const { rerender } = render(<HeldByRows coord={frame([line])} forget={vi.fn()} />);
+    const { rerender } = render(<HeldByRows sessions={DEAD} coord={frame([line])} forget={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     fireEvent.click(confirmBtn());
     expect(screen.getByText(CLEANUP_HELD_BY_RECHECKED)).toBeInTheDocument();
-    rerender(<HeldByRows coord={frame([{ ...line }])} forget={vi.fn()} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([{ ...line }])} forget={vi.fn()} />);
     expect(screen.getByText(CLEANUP_HELD_BY_RECHECKED), 'the same line keeps its note').toBeInTheDocument();
-    rerender(<HeldByRows coord={frame([{ ...line, holds: { reclaim: 2, expire: 0, collect: 1 } }])} forget={vi.fn()} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([{ ...line, holds: { reclaim: 2, expire: 0, collect: 1 } }])} forget={vi.fn()} />);
     expect(screen.queryByText(CLEANUP_HELD_BY_RECHECKED)).toBeNull();
   });
 
   it('each button keeps its visible words as one run in its name, for a multi-word id (D-7897)', () => {
-    render(<HeldByRows coord={frame([held({ rowId: 'acct-a-demo' }), held({ rowId: 'acct-b-demo', act: 'recheck' })])} />);
+    render(<HeldByRows sessions={DEAD} coord={frame([held({ rowId: 'acct-a-demo' }), held({ rowId: 'acct-b-demo', act: 'recheck' })])} />);
     const forget = screen.getByRole('button', { name: 'Forget row acct-a-demo…' });
     const recheck = screen.getByRole('button', { name: 'Check again — acct-b-demo…' });
     for (const b of [forget, recheck]) {
@@ -209,27 +212,62 @@ describe('the held-rows list', () => {
     const spies = Object.entries(api).filter(([, v]) => typeof v === 'function')
       .map(([k]) => vi.spyOn(api as unknown as Record<string, () => unknown>, k).mockResolvedValue(undefined));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
-    const { rerender } = render(<HeldByRows coord={frame([held({ act: 'recheck' })])} />);
+    const { rerender } = render(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'recheck' })])} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     expect(screen.getByText('Check row-a again?')).toBeInTheDocument();
-    rerender(<HeldByRows coord={frame([held({ act: 'forget' })])} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'forget' })])} />);
     expect(document.querySelector('.qc-actions'), 'the dialog closed').toBeNull();
     expect(screen.queryByText('Forget row-a?')).toBeNull();
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
-    rerender(<HeldByRows coord={frame([held({ act: 'recheck' })])} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([held({ act: 'recheck' })])} />);
     expect(document.querySelector('.qc-actions'), 'it does not reopen').toBeNull();
   });
 
   it('a checked-again note is dropped when the line differs, and does not return with the old line', () => {
     const line = held({ act: 'recheck', word: 'under-proc' });
-    const { rerender } = render(<HeldByRows coord={frame([line])} forget={vi.fn()} />);
+    const { rerender } = render(<HeldByRows sessions={DEAD} coord={frame([line])} forget={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again — row-a…' }));
     fireEvent.click(confirmBtn());
     expect(screen.getByText(CLEANUP_HELD_BY_RECHECKED)).toBeInTheDocument();
-    rerender(<HeldByRows coord={frame([{ ...line, holds: { reclaim: 2, expire: 0, collect: 1 } }])} forget={vi.fn()} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([{ ...line, holds: { reclaim: 2, expire: 0, collect: 1 } }])} forget={vi.fn()} />);
     expect(screen.queryByText(CLEANUP_HELD_BY_RECHECKED)).toBeNull();
-    rerender(<HeldByRows coord={frame([line])} forget={vi.fn()} />);
+    rerender(<HeldByRows sessions={DEAD} coord={frame([line])} forget={vi.fn()} />);
     expect(screen.queryByText(CLEANUP_HELD_BY_RECHECKED), 'the old line brings no note back').toBeNull();
+  });
+});
+
+// Task C15 (D-8111), review 1580 F9: Forget is offered only where the session sheet offers Forget session (the row
+// listed dead, with no workspace, and not asleep). Every other row gets the harmless Check again, whatever the server said.
+describe('Forget follows the session sheet\'s presence check', () => {
+  const others: [string, readonly ReturnType<typeof deadSession>[]][] = [
+    ['alive', [fleetSession({ id: 'row-a' })]],
+    ['asleep', [hibernatedSession(1_700_000_000_000, { id: 'row-a' })]],
+    ['in doubt', [deadSession({ id: 'row-a', presence: 'unknown' })]],
+    ['a workspace', [deadSession({ id: 'row-a', workspace: 'ws-a' })]],
+    ['not listed', [deadSession({ id: 'row-b' })]],
+  ];
+
+  it('a row listed dead, with no workspace and not asleep, is offered Forget', () => {
+    expect(heldByRowControl(held(), deadSession({ id: 'row-a' }))).toBe('forget');
+    render(<HeldByRows sessions={[deadSession({ id: 'row-a' })]} coord={frame([held()])} />);
+    expect(screen.getByRole('button', { name: 'Forget row row-a…' })).toBeInTheDocument();
+  });
+
+  it.each(others)('a row that is %s is offered Check again, never Forget', (_, sessions) => {
+    expect(heldByRowControl(held(), sessions.find((x) => x.id === 'row-a'))).toBe('recheck');
+    render(<HeldByRows sessions={sessions} coord={frame([held()])} />);
+    expect(screen.getByRole('button', { name: 'Check again — row-a…' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /forget/i })).toBeNull();
+  });
+
+  it('an open Forget closes, and nothing is sent, when the next frame lists the row alive', () => {
+    const forget = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<HeldByRows sessions={[deadSession({ id: 'row-a' })]} coord={frame([held()])} forget={forget} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Forget row row-a…' }));
+    expect(screen.getByText('Forget row-a?')).toBeInTheDocument();
+    rerender(<HeldByRows sessions={[fleetSession({ id: 'row-a' })]} coord={frame([held()])} forget={forget} />);
+    expect(document.querySelector('.qc-actions'), 'the dialog closed').toBeNull();
+    expect(forget).not.toHaveBeenCalled();
   });
 });

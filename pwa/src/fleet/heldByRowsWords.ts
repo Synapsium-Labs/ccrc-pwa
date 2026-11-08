@@ -6,6 +6,7 @@ import {
   CLEANUP_HELD_BY_ACTS, HELD_BY_WORDS, type CleanupHeldByAct, type CleanupHeldByItem,
 } from '../../../shared/api';
 import { isCount, isOneOf, isRecord } from '../lib/wire';
+import { forgetOffered, type ForgetFacts } from './presence';
 
 export const CLEANUP_HELD_BY_LABEL = 'rows holding the cleanup';
 
@@ -28,10 +29,13 @@ export function heldByRowsOf(coord: unknown): CleanupHeldByItem[] {
   return list.filter(isItem);
 }
 
-/** Which control a line gets. Forget ONLY for a gone-unrecorded row the server also says forget for; every other
- *  case is a re-check, so a server item that asks for forget on another word still gets the harmless control. */
-export function heldByRowControl(item: CleanupHeldByItem): CleanupHeldByAct {
-  return item.act === 'forget' && item.word === 'gone-unrecorded' ? 'forget' : 'recheck';
+/** Which control a line gets. Forget ONLY for a gone-unrecorded row the server also says forget for, and only where
+ *  the session sheet would offer Forget session: the fleet lists the row (`session`), and `forgetOffered` says it is
+ *  dead, no workspace and not asleep (Task C15, D-8111, review 1580 F9). Every other case is a re-check, so a server
+ *  item that asks for forget on another word, or for a row ccd would refuse, still gets the harmless control. */
+export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts | undefined): CleanupHeldByAct {
+  return item.act === 'forget' && item.word === 'gone-unrecorded' && session !== undefined && forgetOffered(session)
+    ? 'forget' : 'recheck';
 }
 
 /** The pace (reviews 1580 F1 and 1585 F1): ccrc asks a held item again only once its own backoff has run, one ask a

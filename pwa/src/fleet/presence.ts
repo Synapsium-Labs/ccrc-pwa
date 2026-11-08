@@ -68,3 +68,14 @@ export function coordinatorPresence(
 export function paneGone(session: Pick<FleetSession, 'status'>): boolean {
   return session.status === 'dead';
 }
+
+/** The facts the Forget door reads of one row. */
+export type ForgetFacts = Pick<FleetSession, 'workspace' | 'status'> & Partial<Pick<FleetSession, 'presence' | 'hibernatedAt'>>;
+
+/** THE FORGET DOOR'S RULE, written once (Task C15, D-8111, review 1580 F9): a row that is no workspace, whose presence is
+ *  the server's `dead` (doubt hides the door, OA-C15 (a), D-7181), and that is not asleep (`ccd forget` refuses a
+ *  sleeper, D-5423: wake it or stop it first). The session sheet's Forget session and the held-rows list's Forget both
+ *  ask here, so neither offers a forget that ccd would refuse as live, asleep or a workspace. */
+export function forgetOffered(session: ForgetFacts): boolean {
+  return session.workspace === null && presenceOf(session) === 'dead' && hibernatedSince(session) === null;
+}
