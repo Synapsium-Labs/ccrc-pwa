@@ -41,8 +41,13 @@ const processor = unified().use(remarkParse).use(remarkGfm).use(remarkAlerts).us
 
 /** Every status label chat's plugin writes over `src` (S1, S2 or S3), as its text and tone, in document order. */
 function pluginStatuses(src: string): { text: string; tone: string }[] {
+  return treeStatuses(processor.runSync(processor.parse(src)) as unknown as MdNode);
+}
+
+/** Every status label in a tree the plugin has run over, as `pluginStatuses` reads it. */
+function treeStatuses(tree: MdNode): { text: string; tone: string }[] {
   const out: { text: string; tone: string }[] = [];
-  const stack: MdNode[] = [processor.runSync(processor.parse(src)) as unknown as MdNode];
+  const stack: MdNode[] = [tree];
   while (stack.length > 0) {
     const n = stack.pop()!;
     const tone = n.data?.hProperties?.[MARK_ATTR.status];
@@ -226,6 +231,7 @@ describe('the clause and sentence boundaries, one row per guard (review 1592 F7)
     ['a "." with no space after it ends no sentence', 'Is CI green on docs/a.md?', []],
     ['a "?" with no space after it ends no sentence', 'CI green on a?b today.', [{ text: 'green', tone: 'ok' }]],
     ['the count after the colon is a whole word', 'tests passed: 0x of 12', [{ text: 'passed', tone: 'ok' }]],
+    ['(h) spaces may stand before the clause end after a zero', 'tests failed: 0 .', []],
   ])('%s', (_name, text, statuses) => {
     expect(statusesOf(text)).toEqual(statuses);
   });
@@ -265,13 +271,56 @@ describe('the check is linear in the text (review 1592 F1)', () => {
 
   it('through the plugin, one clause split into many text nodes is one pass too', () => {
     const src = repeat('CI green `x` ', 100_000);
+    // The parse is outside the timed region (review 1601 F6; desktop-polish Task C14): the plugins alone take about
+    // 6 to 21 ms here, and a scan per text node over its whole clause took about 2.7 s, so the bound sits far from both.
+    const tree = processor.parse(src);
     const t0 = performance.now();
-    const statuses = pluginStatuses(src);
+    const ran = processor.runSync(tree) as unknown as MdNode;
     const ms = performance.now() - t0;
-    expect(statuses.length).toBe(Math.ceil(100_000 / 'CI green `x` '.length));
-    // The parse is inside this bound too (about 0.15 s in all on the author's box), so it is wider. A scan per text
-    // node over its whole clause took about 2.8 s for the plugin alone.
-    expect(ms).toBeLessThan(BOUND_MS * 5);
+    expect(treeStatuses(ran).length).toBe(Math.ceil(100_000 / 'CI green `x` '.length));
+    expect(ms).toBeLessThan(BOUND_MS);
+  });
+
+  it('the check scales linearly: four times the text costs well under eight times the time (review 1601 F4 i)', () => {
+    // Many labels with one "?" at the very end: every label asks where its sentence ends. A quadratic check costs about
+    // sixteen times as much at 200k as at 50k; a linear one about four. The fastest of three runs each, so a pause
+    // for garbage collection does not count, and the 50k run is bounded first so a quadratic one fails fast.
+    const fastest = (length: number): number => {
+      const text = `${repeat('CI green ', length)}?`;
+      let best = Infinity;
+      for (let k = 0; k < 3; k += 1) {
+        const t0 = performance.now();
+        expect(statusesOf(text)).toEqual([]);
+        best = Math.min(best, performance.now() - t0);
+        expect(best).toBeLessThan(BOUND_MS);
+      }
+      return best;
+    };
+    const small = fastest(50_000);
+    const large = fastest(200_000);
+    expect(large / Math.max(small, 1)).toBeLessThan(8);
+  });
+
+  // Review 1601 F4 (g): each reset in `restart()` has a row. Names are registered in order (as the plugin and
+  // `markRuns` register them); the labels are asked out of order through the exported scan.
+  it.each<[string, string, ({ name: [number, number] } | { label: [number, number] })[], boolean[]]>([
+    ['a negator from a later clause does not stay (negatorAt)', 'CI green. No tests failed.', [
+      { label: [19, 25] }, { label: [3, 8] },
+    ], [true, false]],
+    ['the clause starts again from the text\'s start (clauseFrom, tokens, pending)', 'No tests failed. CI green.', [
+      { label: [20, 25] }, { label: [9, 15] },
+    ], [false, true]],
+    ['the names are walked again from the first (skip)', 'run 0 accepted. CI green, run 1 failed.', [
+      { name: [0, 5] }, { name: [26, 31] }, { label: [32, 38] }, { label: [6, 14] },
+    ], [false, false]],
+  ])('%s', (_name, text, steps, answers) => {
+    const scan = new LabelScan(text);
+    const got: boolean[] = [];
+    for (const step of steps) {
+      if ('name' in step) scan.name(...step.name);
+      else got.push(scan.withheld(...step.label));
+    }
+    expect(got).toEqual(answers);
   });
 
   it('a block\'s scan gives the same answers when asked out of order', () => {
@@ -310,6 +359,18 @@ describe('a negator or "?" in another text node of the same block counts (review
     ['a name in a reference link\'s text is a name', '[run 0][r] and CI passed\n\n[r]: http://example.com/x', [{ text: 'passed', tone: 'ok' }]],
     ['a <br> is a line break', 'No<br>CI green', [{ text: 'green', tone: 'ok' }]],
     ['a <br> in a table cell is a line break', '| a |\n|---|\n| No<br/>CI green |', [{ text: 'green', tone: 'ok' }]],
+  ])('%s', (_name, src, statuses) => {
+    expect(pluginStatuses(src)).toEqual(statuses);
+  });
+
+  // Review 1601 F4 (a) to (e): the plugin's guards, one row each.
+  it.each<[string, string, { text: string; tone: string }[]]>([
+    ['(a) a name in a later text node is placed at its offset', '**x** run 0 accepted', [{ text: 'accepted', tone: 'ok' }]],
+    ['(a) a name\'s offset never excuses a negator before it', 'No **run 5 failed**', []],
+    ['(b) a heading is one block', '# **No** tests failed', []],
+    ['(c) a table body cell is one block', '| a |\n|---|\n| **No** tests failed |', []],
+    ['(d) a hard break is a line break', 'No flakes\\\nCI green.', [{ text: 'green', tone: 'ok' }]],
+    ['(e) link text is read for its negators', '[No](http://example.com/x) tests failed.', []],
   ])('%s', (_name, src, statuses) => {
     expect(pluginStatuses(src)).toEqual(statuses);
   });

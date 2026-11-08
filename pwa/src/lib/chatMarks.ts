@@ -289,8 +289,10 @@ export interface Span {
 /** S3's withholding over one text (c-s3-negation): a text node's own, or, through the plugin, the flattened text of its
  *  whole block, so a negator or a `?` in a neighbouring text node counts (review 1592 F4). It reads, for each label,
  *  only the label's clause before it and its sentence after it. Labels are asked in order, so the scan only moves
- *  forward: one pass over the text, however many labels and text nodes it holds (review 1592 F1). A label asked
- *  before the last one restarts the scan, so the answer never depends on the order, only the cost does. */
+ *  forward: one pass over the text, however many labels and text nodes it holds (review 1592 F1). Names are
+ *  registered in order, as the plugin and `markRuns` find them; labels may be asked in any order. A label asked before
+ *  the last one restarts the scan, so for names registered in order the answer never depends on the order in which
+ *  labels are asked, only the cost does (review 1601 F5). */
 export class LabelScan {
   private readonly names: Span[] = [];
   private tokens = new RegExp(NEGATION_TOKEN.source, NEGATION_TOKEN.flags);
