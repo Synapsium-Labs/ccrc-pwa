@@ -625,6 +625,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` resolving to that engine on the `PATH` sessions get (read from each live session's environment, else the user manager's; `path` asks the same of `ccrc`, `ccd` and `ccrc-api`) |
 | `playwright` | every cached Playwright browser build, really launched offline with a throwaway profile: a build the loader refuses or one left incomplete is a WARN naming it, never a FAIL. SKIP with nothing cached or on a server box |
+| `browser-mcp` | the Claude Code processes running a browser MCP server that `CCRC_BROWSER_MCP_SERVERS` names (the distinct parents of each server's process tree, matched by the server key and `mcp` on the command line) against the sessions whose last spawn recorded `browser on` (`~/.cc-sessions/<id>.browsermcp`); a WARN when more run one than asked for, with the remedy: restart the idle sessions, arm Stop leftovers, or add the server's name to the list (D-8121). SKIP on a server-role box or with no session registry |
 | `history` | on a `fleet` or `both` box with the history sweep installed (SKIP elsewhere): the last tick and the index lag, the cap and free space, the journal, the export's due and overdue counts and a recovery in progress, each WARN and FAIL with its remedy, all read from `ccrc history status --json` |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
 | `test-slice`, `testbox` | the test slice's live memory, limits and heavy-run queue; the test box as the server decided it: its state and its switch, named separately, the box's queue depth and the tool versions that differ ("The test box", below) |
@@ -1229,7 +1230,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `settings [--json] [--write]` | what each of the 61 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
+| `settings [--json] [--write]` | what each of the 63 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
@@ -1366,8 +1367,13 @@ twenty-eight are the test box's own, read on the box from its root-owned `/etc/c
 line per key, and is how every other reader (the fleet agent's `testbox` op, the test service) gets them.
 One more is read by `ccrc doctor` alone, in `file` mode: `CCRC_CARRY_COPY_WARN_BYTES`, the `carry-copies` check's warn
 bound in bytes (default 10737418240, 10 GiB; see **Swap-carry copies and the dedupe sweep**).
+Two are read by `ccd` at every spawn, through the same generated library (D-8121; see **Browser MCP servers, off by
+default**): `CCRC_BROWSER_MCP_DEFAULT` (`on` or `off`, default `off`) decides whether a session with no `browser` route
+field starts the browser MCP servers, and `CCRC_BROWSER_MCP_SERVERS` names them (default
+`plugin:playwright:playwright,plugin:chrome-devtools-mcp:chrome-devtools`). A value ccd cannot use reads as its default,
+with a warning on the spawn's stderr; a running session keeps what it has until its next spawn.
 
-**Seeing a box's settings.** `ccrc settings` prints what each of the 61 settings a fleet or server node reads resolves to on this
+**Seeing a box's settings.** `ccrc settings` prints what each of the 63 settings a fleet or server node reads resolves to on this
 box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and
 whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
 are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
@@ -3695,6 +3701,8 @@ see "Fleet coordination" below.
 | `CCRC_AGENT_PORT` | agent | Listen port, default `7789`. |
 | `CCRC_SERVER_URL` | fleet box (`~/.ccrc/agent.env`) | Where this fleet's server answers (`http(s)://` or `ws(s)://`; its readers map `ws` to `http`). Not read by the agent process: `ccrc-api` (which the coordination skills call), `ccd-pool-sync`, `ccd-update-sync` and `notify.sh` read it, and none of them guesses an address: the first three refuse when it is absent; `notify.sh` takes `CCRC_ADDR` first, this key second and `ccrc.env`'s `CCRC_HOST`/`CCRC_PORT` last, and sends nothing if none resolves. `ccrc install --role fleet` writes it. |
 | `CCRC_PROJECTS_ROOT` | server + agent | Where project checkouts live, default `$HOME/projects` when the key is absent. The agent reads a bare `CCRC_PROJECTS_ROOT=` line (as both example files ship it) as absent too; the server does not — there it is an empty root, so delete the line or give it a value (`ccrc install` writes `$HOME/projects` into the `ccrc.env` it creates). In remote mode the server's value names a path on the **fleet** box. The agent's read whitelist admits this root, and the agent refuses to boot on a relative path, on `$HOME` or on an ancestor of it. `ccd` itself always uses `~/projects` and `~/worktrees`, with no override — on a box that keeps checkouts elsewhere, make `~/projects` a symlink to them. |
+| `CCRC_BROWSER_MCP_DEFAULT` | fleet box (`~/.ccrc/ccrc.env`), read by `ccd` at every spawn | `on` or `off`, default `off`: whether a session with no `browser` route field starts the browser MCP servers (D-8121; "Browser MCP servers, off by default", below). |
+| `CCRC_BROWSER_MCP_SERVERS` | fleet box (`~/.ccrc/ccrc.env`), read by `ccd` at every spawn | The Claude Code server names the `off` default denies, comma-separated; default `plugin:playwright:playwright,plugin:chrome-devtools-mcp:chrome-devtools`. |
 
 Server keys live in `~/.ccrc/ccrc.env`, agent keys in `~/.ccrc/agent.env` (the agent unit's
 `EnvironmentFile`); `ccrc install --role fleet` seeds only the agent token and `CCRC_SERVER_URL`,
@@ -6745,6 +6753,30 @@ or below it. Every outcome is one `pane-scope <id>: …` line in `~/.cc-sessions
 logs `would stop <unit> (<n> processes)`. The operator arms it in Settings › Automation › Stop leftovers
 (`POST /api/coord/pane-scope-stop`, session-only, which runs `ccd pane-scope-stop --state live|shadow`, the marker's
 one writer); `ccrc doctor`'s `pane-scope-stop` check names the mode.
+
+### Browser MCP servers, off by default
+
+ccrc manages one MCP decision for fleet sessions (D-8121): whether a session starts the browser MCP servers its
+account's config dir enables (the `playwright` and `chrome-devtools-mcp` plugins). Each costs a handful of processes per
+session whether or not it ever opens a browser, so the box default is **off**:
+
+- **The effective value** is the session's own `browser` routing field (`on` or `off`) when it has one, else
+  `CCRC_BROWSER_MCP_DEFAULT` (default `off`). It is written by `ccd route --session <id> --set browser=on` (a session may
+  turn its own on), by a dispatch's route (a coordinator passes `browser=on` for a worker that needs a browser), by the
+  session's ⋯ menu › Browser tools, and by the New session sheet's Browser field.
+- **At every spawn** (start, ensure, a swap's restart, a roll's wake), `ccd` merges
+  `{"deniedMcpServers":[{"serverName":…}]}` for the names in `CCRC_BROWSER_MCP_SERVERS` into the session's one
+  `--settings` when the value is `off`. Claude Code then starts none of those servers; the plugins' skills stay. Every
+  wrapper execs Claude Code, so this applies on every lane. `ccd` records what it applied in
+  `~/.cc-sessions/<id>.browsermcp`, which the console shows beside what the session asked for.
+- **A running session keeps what it has** until its next spawn: a change waits for a restart, and nothing restarts a
+  session for it. Hibernation ends the pane; with **Stop leftovers** on (Settings › Automation), it also stops the server
+  processes a pane leaves behind.
+- **Settings › Automation › Browser tools** shows the box default, the server list and how many running sessions use a
+  browser. `ccrc doctor`'s `browser-mcp` check counts the Claude Code processes that run a configured browser server
+  against the sessions whose last spawn applied `on`, and warns when more run one than asked for.
+- A server name is Claude Code's own, `plugin:<plugin name>:<server key>`, read from `claude -p`'s init event
+  (`mcp_servers`). The plugin name is the plugin's (`chrome-devtools-mcp`), not its manifest's display name.
 
 ### Swap-carry copies and the dedupe sweep
 

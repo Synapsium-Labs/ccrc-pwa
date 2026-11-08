@@ -96,7 +96,7 @@ run row's own `wave`.
 ## 2 — Dispatch a wave
 
 `POST /api/runs/:id/dispatch`
-`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"},"slug":"<child name>"}`
+`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…","browser":"on"},"slug":"<child name>"}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
 
@@ -222,8 +222,8 @@ held: the run is untouched, still `planned`. Omitting `items`, or sending
 rather than `0/0`.
 
 **`route` — the wave's placement, not a request.** `"route"` is an optional
-object of the FIVE writable fields — `class`, `effort`, `subagent`,
-`workflow`, `compact` — whose vocabularies `references/routing-matrix.md`
+object of the SIX writable fields — `class`, `effort`, `subagent`,
+`workflow`, `compact`, `browser` — whose vocabularies `references/routing-matrix.md`
 spells out; that matrix is what you derive it from (clause 13), never a
 taste call made at dispatch time. The server carries it to `ccd`: on wave
 1's `ws-add` argv for a fresh spawn, and for wave N ≥ 2 — a resumed
@@ -247,6 +247,15 @@ journals `route-omitted:no-route-default-cap`; a resumed wave with no `route` ke
 record; an empty `{}` is a passed route and is sent bare. The brief still names the routing in prose (clause 13) — this
 object is what carries that placement to the fleet, never a replacement
 for saying so.
+
+**`browser` — dispatch with `browser=on` when the task needs a browser** (D-8121). Fleet sessions start no browser
+MCP server (Playwright, Chrome DevTools) unless they ask for one: the box default is off. A wave whose work drives a
+browser — a UI check at three widths, a browser-leg test, a page to read through the browser tools — carries
+`"browser":"on"` in its route; every other wave leaves the field out (`off` is only for a box whose default is on). It
+applies at the worker's spawn, so a resumed wave N ≥ 2 that newly needs one takes it at that worker's next start, never
+mid-run. A ccd without `browser-route-v1` gets the rest of the route and the server journals
+`route-omitted:no-browser-route-cap`. A session that finds it needs a browser may turn its own on with
+`ccd route --session <own id> --set browser=on`; it applies at its next restart.
 
 **`child-omitted:no-child-argv-cap` — a fresh workspace that is not a
 child.** Every workspace a fresh dispatch mints is a CHILD of its run: the
