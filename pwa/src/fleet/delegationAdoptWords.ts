@@ -53,7 +53,7 @@ export const DELEGATION_ADOPT_REFUSAL_TEXT: Readonly<Record<DelegationAdoptOnRef
   'fleet-switch-missing': 'The fleet box has no switch for this yet, so it cannot be changed until its ccrc is updated.',
   'fleet-audit-missing': 'The fleet box cannot check whether a worktree changed, so it would keep every finished worktree. '
     + 'Update the fleet box first.',
-  'sign-in-unarmed': 'Turning this on needs sign-in to be armed on this server, and you to be signed in. Nothing was changed.',
+  'sign-in-unarmed': 'Turning this on needs sign-in to be armed on this server, and you to be signed in.',
 };
 
 const MODE_LINE: Readonly<Record<DelegationAdoptionHealth['mode'], string>> = {

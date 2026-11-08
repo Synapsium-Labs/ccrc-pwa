@@ -1,7 +1,8 @@
 // Settings › Automation › Worktrees left behind (D-8114), in a real Chrome over the production build, at 360, 390, 1280 and
 // 1920 in both skins. `test/delegation-adopt-section.test.tsx` holds the card's behaviour in jsdom; this file holds what only
 // an engine can say: the card in shadow with a full list of long names, then with the sheet open, then with a refusal shown
-// (the fleet box's change check missing), nothing in the card or on the page overflowing sideways, and the two choices
+// (the fleet box's change check missing), then a server whose sign-in is dark (`sign-in-unarmed`, review 1665 N6), nothing in
+// the card or on the page overflowing sideways, and the two choices
 // reached and picked: Keep them only after the sheet's confirm, Do not keep at once, each write answered by the stub below.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. `GET`/`POST /api/coord/delegation-adopt` answer from
@@ -28,7 +29,7 @@ const DOOR = '/api/coord/delegation-adopt';
 /** Fifty worktrees with the longest names the card is likely to meet: one long token each, which must wrap, not push. */
 const KEEPS: DelegationAdoptionKeep[] = Array.from({ length: 50 }, (_, i) => ({
   project: 'project-with-a-rather-long-name', worktree: `agent-a${String(i).padStart(2, '0')}-0123456789abcdef0123456789abcdef`,
-  path: `/work/project-a/worktrees/agent-${i}`, parent: 'session-0123456789abcdef0123456789abcdef',
+  parent: 'session-0123456789abcdef0123456789abcdef',
   ...(i % 2 === 0 ? { changes: { dirty: true, aheadOfBase: i, branchAheadOfBase: i % 3 === 0 ? 'no-branch' as const : 1 } } : {}),
 }));
 const SHADOW: DelegationAdoptView = {
@@ -39,6 +40,9 @@ const NO_CHECK: DelegationAdoptView = {
   ...SHADOW, caps: { verb: 'present', audit: 'absent' }, refused: { on: 'fleet-audit-missing', off: null },
   adoption: { ...SHADOW.adoption!, mode: 'unmeasured', wouldAdopt: 0, keeps: undefined },
 };
+
+/** A server whose sign-in is dark: the view reads whole, with on refused for the caller (review 1665 N6). */
+const DARK: DelegationAdoptView = { ...SHADOW, refused: { on: 'sign-in-unarmed', off: null } };
 
 const FIXTURE: AppFixture = {
   api: {
@@ -149,6 +153,11 @@ describe('Settings › Automation › Worktrees left behind at every width, in b
         fits(await measure());
         const shots = process.env.CCRC_SHOTS;
         if (shots) fs.mkdirSync(shots, { recursive: true });
+        /** The viewport, with one line of the card scrolled to its middle. */
+        const viewAt = async (text: string, file: string): Promise<void> => {
+          await section.getByText(text).evaluate((e) => { e.scrollIntoView({ block: 'center' }); });
+          await page.screenshot({ path: path.join(shots!, file) });
+        };
         if (shots) await section.screenshot({ path: path.join(shots, `delegation-adopt-shadow-${view.skin}-${view.width}.png`) });
 
         // Keep them asks first: the sheet opens, nothing is sent, and the radio stays where the server put it.
@@ -193,6 +202,20 @@ describe('Settings › Automation › Worktrees left behind at every width, in b
         expect(await off.isDisabled()).toBe(false);
         fits(await measure());
         if (shots) await section.screenshot({ path: path.join(shots, `delegation-adopt-refused-${view.skin}-${view.width}.png`) });
+        // The section's own picture is mostly the list; this one is the viewport with the refusal line in it.
+        if (shots) await viewAt(delegationAdoptRefusedLine(T.on, 'fleet-audit-missing'), `delegation-adopt-refused-view-${view.skin}-${view.width}.png`);
+
+        // Sign-in dark: the view still reads whole (the switch, the list), and Keep them is refused in the card's own words.
+        current = DARK;
+        await page.reload();
+        await expect.poll(() => section.getByText(delegationAdoptRefusedLine(T.on, 'sign-in-unarmed')).isVisible(), { timeout: 20_000 }).toBe(true);
+        expect(await off.isChecked(), 'a dark server\'s view did not read').toBe(true);
+        expect(await on.isDisabled(), 'a refused choice is offered').toBe(true);
+        expect(await off.isDisabled()).toBe(false);
+        expect(await section.getByRole('listitem').count(), 'the list is not drawn whole').toBe(50);
+        fits(await measure());
+        if (shots) await section.screenshot({ path: path.join(shots, `delegation-adopt-signin-${view.skin}-${view.width}.png`) });
+        if (shots) await viewAt(delegationAdoptRefusedLine(T.on, 'sign-in-unarmed'), `delegation-adopt-signin-view-${view.skin}-${view.width}.png`);
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();
