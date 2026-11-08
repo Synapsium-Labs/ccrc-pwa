@@ -19,7 +19,7 @@ import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 import { itemView, waitingView } from './ledgersFixture';
-import { labelInName, shownText } from './labelInName';
+import { labelInName } from './labelInName';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/routes')>();
@@ -216,7 +216,7 @@ describe('the app bar (W2 Task S4b)', () => {
     // word, not on its pill: the word is in the name, and the printed "99" is not, by design (`badgePrint`).
     const name = tab.getAttribute('aria-label')!;
     expect(labelInName(tab.textContent!.replace(/99\+$/, ''), name)).toBe(true);
-    expect(labelInName(shownText(tab), name), 'the pill is read out of the check, by design').toBe(false);
+    // No whole-text false pin: this skin joins the word and count with no space, so it would be vacuous (review 1689 F9).
   });
 
   // Under a coarse pointer the bar's icon doors were narrower than a finger (Settings 32 wide, the bell 28 square)

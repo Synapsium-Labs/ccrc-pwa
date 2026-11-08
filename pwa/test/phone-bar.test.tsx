@@ -12,7 +12,7 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { fleetSession } from './fleetFixture';
 import { itemView, waitingView } from './ledgersFixture';
-import { labelInName, shownText } from './labelInName';
+import { labelInName } from './labelInName';
 import { declValue, ruleIn } from './cssRule';
 
 vi.mock('../src/lib/push', () => ({
@@ -135,7 +135,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       const name = door.getAttribute('aria-label')!;
       expect(door.querySelector('.phone-bar-count')).toHaveTextContent(/^99\+$/);
       expect(labelInName(door.querySelector('.phone-bar-word')!.textContent!, name)).toBe(true);
-      expect(labelInName(shownText(door), name), 'the pill is read out of the check, by design').toBe(false);
+      // No whole-text false pin: this skin joins the word and count with no space, so it would be vacuous (review 1689 F9).
     });
 
     it('on a fleet with no sessions the Accounts and Inbox doors are there, the durable doors to both (D-161, D-2)', () => {
