@@ -105,7 +105,8 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
   });
 
   it('a run that is not loaded says runNotLoadedLine(1527) once the frame and the archive read have answered', async () => {
-    expect(runNotLoadedLine(1527)).toBe('Run 1527 is not among the runs loaded here.');
+    // The line names the way to older pages and where it sits (review 1586 A4; desktop-polish Task C14, D-8110).
+    expect(runNotLoadedLine(1527)).toBe('Run 1527 is not among the runs loaded here. Show older, at the end of Finished, loads older runs.');
     const b = board(runsRunHref(1527), [run(1526)]);
     await waitFor(() => expect(b.reads).toHaveLength(1));
     await b.reads[0]!.resolve({ runs: [closed(900, 60_000)] });

@@ -421,9 +421,11 @@ export function resumeNote(
 export const FINISHED_FOLD = 20;
 
 /** What the board says when a run named by `/runs?run=<id>` (chat reading Task L, D-8062) is in neither the live frame nor the
- *  archive pages read so far: it may be older than the pages loaded, or no run at all. */
+ *  archive pages read so far: it may be older than the pages loaded, or no run at all. Its second sentence names the way to
+ *  older pages and where it sits, the foot of Finished, behind any "Show N more" (review 1586 A4; desktop-polish Task C14,
+ *  D-8110). */
 export function runNotLoadedLine(id: number): string {
-  return `Run ${id} is not among the runs loaded here.`;
+  return `Run ${id} is not among the runs loaded here. Show older, at the end of Finished, loads older runs.`;
 }
 
 /** The step of the clock a FINISHED row reads, in ms (D-6442). Every readout on
