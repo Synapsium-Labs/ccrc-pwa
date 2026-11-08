@@ -40,6 +40,10 @@ import type { ProjectPoolWire } from './api.js';
  *  its `origin` when it is the declared default rather than central"). */
 export type PoolOrigin = 'central' | 'declared';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const POOL_ORIGIN_MAP: Record<PoolOrigin, true> = { central: true, declared: true };
+export const POOL_ORIGINS: readonly PoolOrigin[] = Object.keys(POOL_ORIGIN_MAP) as PoolOrigin[];
+
 /**
  * The account side of the rule, as STATES rather than a bare name — wave 1
  * Task 5. `tagged`/`untagged` are the two states `accountPool: string | null`

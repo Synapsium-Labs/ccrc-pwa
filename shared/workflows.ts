@@ -13,9 +13,18 @@
  *  the three final words are Claude Code's own summary `status`. */
 export type WorkflowState = 'running' | 'completed' | 'failed' | 'killed';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const WORKFLOW_STATE_MAP: Record<WorkflowState, true> = { running: true, completed: true, failed: true, killed: true };
+export const WORKFLOW_STATES: readonly WorkflowState[] = Object.keys(WORKFLOW_STATE_MAP) as WorkflowState[];
+
 /** An agent's state, from its key's LAST journal line: `started` → running,
  *  `result` → done, `failed` → failed. */
 export type WorkflowAgentState = 'running' | 'done' | 'failed';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const WORKFLOW_AGENT_STATE_MAP: Record<WorkflowAgentState, true> = { running: true, done: true, failed: true };
+export const WORKFLOW_AGENT_STATES: readonly WorkflowAgentState[] =
+  Object.keys(WORKFLOW_AGENT_STATE_MAP) as WorkflowAgentState[];
 
 export interface WorkflowAgentView {
   /** The label the script gave the agent; null when neither the journal line
@@ -73,3 +82,10 @@ export const WORKFLOW_AGENTS_MAX = 120;
  *  server's measured table (`server/src/workflows/controls.ts`), never this
  *  bundle's: `shared/` ships in the PWA, so the table does not live here. */
 export type WorkflowControlAct = 'stop-run' | 'stop-agent' | 'skip-agent';
+
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const WORKFLOW_CONTROL_ACT_MAP: Record<WorkflowControlAct, true> = {
+  'stop-run': true, 'stop-agent': true, 'skip-agent': true,
+};
+export const WORKFLOW_CONTROL_ACTS: readonly WorkflowControlAct[] =
+  Object.keys(WORKFLOW_CONTROL_ACT_MAP) as WorkflowControlAct[];

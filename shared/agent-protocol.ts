@@ -820,6 +820,10 @@ export function isTokenVerbMissing(detail: string | null | undefined): boolean {
  *  nothing to the PWA's bundle unless the PWA starts importing this file. */
 export type ReadFailure = 'absent' | 'unreadable';
 
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const READ_FAILURE_MAP: Record<ReadFailure, true> = { absent: true, unreadable: true };
+export const READ_FAILURES: readonly ReadFailure[] = Object.keys(READ_FAILURE_MAP) as ReadFailure[];
+
 /** The largest `maxBytes` one `readFrom` may carry — the per-call ceiling of the delegation spool reader (wave 3). A
  *  bound on the REQUEST, declared once so the agent that enforces it and the two server adapters that refuse before
  *  the wire agree on the number. */
