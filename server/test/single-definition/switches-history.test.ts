@@ -880,10 +880,12 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     expect(holdersOf(NAME), 'a line of shell outside ccd/ccd, the hook and its installer names it — a writer in waiting')
       .toEqual(['ccd/ccd', 'ccd/install-session-hooks.sh', 'ccd/session-hook.sh']);
     // Review 1659 F12: as wide as the row it replaced. EVERY code line of ccd/ccd that names it, however a path to it is spelled
-    // (`"$REG"/delegation-adopt` too), is one of the verb's own: its definition, usage check, marker and staging lines, its
-    // dispatcher arm, its `ccd caps` token and the usage list. A reader or writer anywhere else in ccd/ccd is red.
+    // (`"$REG"/delegation-adopt` too), is one of the verb's own: the direct-entry guard that starts it protected, its definition,
+    // usage check, marker and staging lines, its dispatcher arm, its `ccd caps` token and the usage list. A reader or writer anywhere else in ccd/ccd is red.
     const ccd = codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '');
     const OWN: readonly [string, RegExp][] = [
+      // Review 1665 N1: the body's direct-entry guard names the verb to start it protected, as it names ws-lease-mark.
+      ['direct-entry guard', /^if \[\[ "\$\{BASH_SOURCE\[0\]\}" == "\$\{0\}" \]\] && \{ \[\[ .*\|\| "\$\{1-\}" == ws-lease-mark \|\| "\$\{1-\}" == ws-lease-audit \|\| "\$\{1-\}" == delegation-adopt \]\] \\$/],
       ['caps token', /^ {2}echo delegation-adopt {3}# D-8112: /],
       ['definition', /^cmd_delegation_adopt\(\) \{ {3}# ccd delegation-adopt --state on\|off — /],
       ['usage check', /^ {2}\[\[ \$# -eq 2 && \$1 == --state \]\] \|\| die "usage: ccd delegation-adopt --state on\|off"$/],
