@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DocsHead, headLayoutFor } from '../src/docs/DocsHead';
+import { DocsHead, fullHeadFormFor, headLayoutFor } from '../src/docs/DocsHead';
 import { DOCS_HEAD_TEXT, fillSentence, shortCommit } from '../src/docs/docsText';
 import type { DocsLoaders } from '../src/docs/failures';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -222,6 +222,37 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     open('/docs', f);
     await waitFor(() => expect(rowOrder()).toEqual(['docs-back', 'docs-crumbs']));
     expect(head().querySelector('.docs-truth')).toBeNull();
+  });
+
+  it('the via sentence, the one part of the line that may be cut, carries its whole words in its title (F2)', async () => {
+    atWidth(1280);
+    open('/docs/demo/specs/a.md', fakeLoaders());
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const via = head().querySelector<HTMLElement>(':scope > .docs-truth .docs-truth-via');
+    expect(via?.textContent).not.toBe('');
+    expect(via?.getAttribute('title')).toBe(via?.textContent);
+  });
+
+  it.each([
+    ['a project', '/docs/demo'],
+    ['a section', '/docs/demo/specs'],
+    ['a directory', '/docs/demo/specs/d/'],
+  ])('below 600 px %s draws the head as main draws it: the crumbs row, the truth line, then the actions in words (F2(b))', async (_what, url) => {
+    atWidth(412);
+    open(url, fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'd/x.md')] })) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.copyCommit });
+    expect(document.querySelector('.docs-full'), 'no desk head below 600 px').toBeNull();
+    expect([...head().children].map((c) => c.className)).toEqual(['docs-head-bar', 'docs-truth', 'docs-actions']);
+    expect([...row().children].map((c) => c.className.split(' ')[0])).toEqual(['docs-back', 'docs-crumbs']);
+    const gh = within(head()).getByRole('link', { name: DOCS_HEAD_TEXT.github });
+    expect(gh.textContent, 'main\'s words').toBe(DOCS_HEAD_TEXT.github);
+    expect(gh.getAttribute('aria-label')).toBeNull();
+    expect(head().querySelector('.docs-action-words')).toBeNull();
+  });
+
+  it('fullHeadFormFor: the row at 600 px and wider, main\'s stacked head below it (F2(b))', () => {
+    expect(fullHeadFormFor(false)).toBe('row');
+    expect(fullHeadFormFor(true)).toBe('stacked');
   });
 
   it('every fact the truth line says, it still says: the ref, the commit, copy commit, how the ref was chosen and the chip', async () => {

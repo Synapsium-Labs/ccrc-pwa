@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { atBlock, declValue, effectiveValue, ruleIn, stripComments } from './cssRule';
+import { atBlock, declValue, declaredValues, effectiveValue, ruleIn, stripComments } from './cssRule';
 
 const docsCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'docs.css'), 'utf8');
 const ROW = '.docs-full > .docs-head-bar';
@@ -89,34 +89,39 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(outside).not.toMatch(/\.docs-action-words\s*[,{]/);
   });
 
-  it('the truth line is one line at --docs-line-h, and so are its chip and its copy button', () => {
+  it('the truth line is one line at --docs-line-h when its facts fit, and wraps onto a second line when they do not; it clips nothing (F2)', () => {
     const truth = ruleIn(docsCss, TRUTH);
     expect(declValue(truth, 'display')).toBe('flex');
+    expect(declValue(truth, 'flex-wrap')).toBe('wrap');
     expect(declValue(truth, 'white-space')).toBe('pre');
-    expect(declValue(truth, 'overflow')).toBe('hidden');
     expect(declValue(truth, 'min-height')).toBe('var(--docs-line-h)');
+    expect(declaredValues(docsCss, TRUTH, 'overflow'), 'the line clips nothing').toEqual([]);
     for (const sel of [`${TRUTH} .docs-fresh`, `${TRUTH} .docs-copy`]) {
       expect(declValue(ruleIn(docsCss, sel), 'min-height'), sel).toBe('var(--docs-line-h)');
     }
     // The commit and copy commit keep a space between them: a whitespace-only text run is not rendered in a flex line.
     expect(effectiveValue(docsCss, `${TRUTH} .docs-copy`, 'margin-inline-start')).toBe('1ch');
-    // The line clips at its edges, so its two controls draw the ring inside their boxes.
-    expect(declValue(ruleIn(docsCss, `${TRUTH} :focus-visible`), 'outline-offset')).toBe('-2px');
   });
 
-  it('the via sentence gives way first; the freshness chip and the commit never give way', () => {
-    expect(declValue(ruleIn(docsCss, `${TRUTH} > *`), 'flex')).toBe('none');
+  it('every fact keeps its place: none shrinks, none is wider than the line, and a long one wraps inside itself (F2)', () => {
+    const each = ruleIn(docsCss, `${TRUTH} > *`);
+    expect(declValue(each, 'flex')).toBe('none');
+    expect(declValue(each, 'max-width')).toBe('100%');
+    for (const sel of ['.docs-truth-ref', '.docs-truth-relation', '.docs-truth-source', '.docs-truth-dangling', '.docs-fresh']) {
+      expect(effectiveValue(docsCss, `${TRUTH} > ${sel}`, 'white-space'), sel).toBe('normal');
+      expect(declaredValues(docsCss, `${TRUTH} > ${sel}`, 'text-overflow'), `${sel} is never cut`).toEqual([]);
+    }
+  });
+
+  it('only the via sentence gives way, to an ellipsis, from a small basis up to its whole words (F2)', () => {
     const via = ruleIn(docsCss, `${TRUTH} > .docs-truth-via`);
-    expect(declValue(via, 'min-width')).toBe('0');
+    expect(shrinkOf(via)).toBeGreaterThan(0);
+    expect(declValue(via, 'max-width')).toBe('max-content');
+    expect(declValue(via, 'overflow')).toBe('hidden');
     expect(declValue(via, 'text-overflow')).toBe('ellipsis');
-    for (const sel of ['.docs-truth-ref', '.docs-truth-relation', '.docs-truth-source']) {
-      expect(shrinkOf(via), `via before ${sel}`).toBeGreaterThan(shrinkOf(ruleIn(docsCss, `${TRUTH} > ${sel}`)));
-    }
-    // The chip and the commit sit in no rule that lets them shrink: they take the `> *` rule's `flex: none` alone.
-    const shrinking = stripComments(docsCss).match(/[^{}]*\{[^{}]*flex:\s*0\s+[1-9]/g) ?? [];
-    for (const sel of ['.docs-fresh', '.docs-truth-commit', '.docs-copy']) {
-      expect(shrinking.filter((r) => r.includes(sel)), sel).toEqual([]);
-    }
+    // No other part of the line sits in a rule that lets it shrink: only the via sentence gives way.
+    const shrinking = (stripComments(docsCss).match(/[^{}]*\{[^{}]*flex:\s*\d+\s+[1-9]/g) ?? []).filter((r) => r.includes('.docs-truth'));
+    expect(shrinking.map((r) => r.slice(0, r.indexOf('{')).trim())).toEqual([`${TRUTH} > .docs-truth-via`]);
   });
 
   it('no rule keys on a viewport width: the one max-width block is the reader layout\'s, and there is no min-width block', () => {

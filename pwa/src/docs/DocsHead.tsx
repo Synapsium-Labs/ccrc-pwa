@@ -357,6 +357,16 @@ export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation): He
   return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';
 }
 
+/** How the full header is drawn (desk-nav Part B, D-8101; fix round 1, F2(b)): at 600 CSS px and wider, the desk head's
+ *  one row and dense line (`row`); under the compact width, where only a listing or the index draws the full header,
+ *  the stacked header main drew (`stacked`): the crumbs row, the truth line, then the actions in words. Part B is the
+ *  head at 600 px and wider, so below it nothing changes. */
+export type FullHeadForm = 'row' | 'stacked';
+
+export function fullHeadFormFor(compactWidth: boolean): FullHeadForm {
+  return compactWidth ? 'stacked' : 'row';
+}
+
 /** The Page details button's dot (phone-header refinement (f)), from the freshness chip's state: `ok` a good fetch, `warn`
  *  never fetched, `failed` a failed fetch, re-list or refresh, or a stale lock. `warn` and `failed` draw the same
  *  attention colour, as the picked mockup does; the button's name tells them apart. `null` has one meaning: no dot (no
@@ -453,6 +463,9 @@ function TruthLine(p: {
   const counts: Record<string, number> = {};
   const localLead = c === null ? null : ref.side === 'origin' ? c.behind : c.ahead;
   const originLead = c === null ? null : ref.side === 'origin' ? c.ahead : c.behind;
+  // How the ref was chosen. The desk line may cut it to an ellipsis (desk-nav Part B, fix round 1, F2), so its title
+  // carries the whole sentence.
+  const via = fillSentence(VIA_SENTENCE[ref.via], ref.requested === null ? {} : { requested: ref.requested });
   if (localLead !== null) counts['ahead'] = localLead;
   if (originLead !== null) counts['behind'] = originLead;
   let leaf: ReactNode = null;
@@ -484,7 +497,7 @@ function TruthLine(p: {
       <span className="docs-truth-ref" title={ref.served}>{servedRefText(ref)}</span>{SEP}
       <code className="docs-truth-commit" title={ref.commit}>{shortCommit(ref.commit)}</code>{' '}
       <CopyCommit key={ref.commit} commit={ref.commit} />{SEP}
-      <span className="docs-truth-via">{fillSentence(VIA_SENTENCE[ref.via], ref.requested === null ? {} : { requested: ref.requested })}</span>
+      <span className="docs-truth-via" title={via}>{via}</span>
       {withRelation && (
         <>
           {SEP}
@@ -638,27 +651,30 @@ function ShareAction(p: {
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
  *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. The full head draws them in its
  *  row (desk-nav Part B, D-8101): GitHub, Share, Export and Open committed version each an icon beside its words. */
-function Actions(p: ActionInputs): ReactNode {
+function Actions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
   const { page, tree, file } = p;
+  const row = p.form === 'row';
   const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
-      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} row />}
+      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} row={row} />}
       {share.s !== 'absent' && (
-        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row />
+        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row={row} />
       )}
       {exported.s !== 'absent' && page.kind === 'path' && (
         <ExportAction
           key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
-          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} row
+          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} row={row}
         />
       )}
-      {committedHref !== null && (
-        <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted}>
-          <RowFace icon="file-text" words={DOCS_HEAD_TEXT.openCommitted} />
-        </DocsPageLink>
-      )}
+      {committedHref !== null && (row
+        ? (
+          <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted}>
+            <RowFace icon="file-text" words={DOCS_HEAD_TEXT.openCommitted} />
+          </DocsPageLink>
+        )
+        : <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>)}
     </div>
   );
 }
@@ -743,19 +759,39 @@ export function DocsHead(p: {
   }
   // The full head (desk-nav Part B, D-8101): one row of back, the crumbs and the actions, then the truth line as one dense
   // line, then the plain-view note and "Updated to". `docs-full` scopes docs.css's row and dense-line rules to this head,
-  // so the compact head's panel, which draws the same truth line and link actions, keeps its own layout.
+  // so the compact head's panel, which draws the same truth line and link actions, keeps its own layout. Under the
+  // compact width a listing keeps the stacked header main drew (fix round 1, F2(b)).
   const listed = tree !== null && page.kind !== 'index' ? { tree, page } : null;
+  const actionInputs = {
+    file: visit.file, leafImage: p.leafImage ?? null, exportBody: p.exportBody ?? null, pageStore: p.pageStore ?? null,
+    exportAssets: p.exportAssets ?? null, onPlainView: p.onPlainView ?? null,
+  };
+  if (fullHeadFormFor(compactWidth) === 'stacked') {
+    return (
+      <header className="docs-head">
+        <div className="docs-head-bar">
+          <BackButton page={page} />
+          <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
+        </div>
+        {listed !== null && (
+          <>
+            <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
+            <Actions form="stacked" page={listed.page} tree={listed.tree} {...actionInputs} />
+            {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+          </>
+        )}
+        {visit.updatedTo !== null && (
+          <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
+        )}
+      </header>
+    );
+  }
   return (
     <header className="docs-head docs-full">
       <div className="docs-head-bar">
         <BackButton page={page} />
         <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-        {listed !== null && (
-          <Actions
-            page={listed.page} tree={listed.tree} file={visit.file} leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null}
-            pageStore={p.pageStore ?? null} exportAssets={p.exportAssets ?? null} onPlainView={p.onPlainView ?? null}
-          />
-        )}
+        {listed !== null && <Actions form="row" page={listed.page} tree={listed.tree} {...actionInputs} />}
       </div>
       {listed !== null && (
         <>

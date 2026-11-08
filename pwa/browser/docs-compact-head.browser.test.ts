@@ -489,33 +489,118 @@ describe('the desk head (desk-nav Part B)', () => {
     }, DEEP_TREE, DEEP);
   }, 120_000);
 
-  it('600 x 960 under a mouse: the truth line is dense there too, and nothing scrolls sideways', async () => {
+  it('600 x 960 under a mouse: the truth line is dense there too, on at most two lines (its facts wrap rather than clip, F2), and nothing scrolls sideways', async () => {
     await at({ width: 600, height: 960, skin: REFINED, pointer: 'fine' }, async ({ page }) => {
       const f = await measure(page);
       const r = await rowFigure(page);
       console.log(`PHH-FIGURE refined 600x960 mouse ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
       expect(r.fine, 'a mouse').toBe(true);
-      expect(r.truth!.height, 'the dense line').toBeLessThanOrEqual(DENSE + 0.5);
-      expect(r.truth!.bottom - r.head!.top, 'the head').toBeLessThanOrEqual(HEAD_MAX);
+      expect(r.truth!.height, 'two dense lines at most').toBeLessThanOrEqual(2 * DENSE + 0.5);
+      expect(r.truth!.bottom - r.head!.top, 'the head').toBeLessThanOrEqual(HEAD_MAX + DENSE);
       expect(r.words.every((w) => w.shown && !w.cut), 'every action shows its words').toBe(true);
       expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
     }, DEEP_TREE, DEEP);
   }, 120_000);
 
   it('a row narrower than the container query hides the action words, and each action keeps its name', async () => {
-    // A listing keeps the full head at every width, so a phone's directory page is where the row is that narrow.
+    // No leaf at 600 px or wider has a row under the query's 530 px in either skin, so the head is narrowed here by hand
+    // to 500 px: the container query keys on the row's own width, whatever narrows it.
+    await at({ width: 1280, height: 800, skin: REFINED }, async ({ page }) => {
+      await page.evaluate(() => { (document.querySelector('.docs-head.docs-full') as HTMLElement).style.width = '500px'; });
+      const r = await rowFigure(page);
+      console.log(`PHH-FIGURE refined 1280x800 narrowed-row ${JSON.stringify({ rowW: r.rowW, words: r.words, controls: r.controls.map((c) => c.name) })}`);
+      expect(r.rowW).toBeLessThan(530);
+      expect(r.words.length).toBe(3);
+      expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
+      expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]));
+    });
+  }, 120_000);
+
+  it('412 x 915: a listing below 600 px draws the head as main draws it, its figure equal to the base (F2(b))', async () => {
     const app = await openView({ width: 412, height: 915, skin: REFINED }, DEEP_TREE, DEEP);
     try {
       await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${LONG_DIR}/`, { waitUntil: 'load' });
-      await app.page.waitForFunction(() => document.querySelector('.docs-head-bar .docs-actions .docs-share') !== null, undefined, { timeout: 30_000 });
-      const r = await rowFigure(app.page);
-      console.log(`PHH-FIGURE refined 412x915 listing-row ${JSON.stringify({ rowW: r.rowW, words: r.words, controls: r.controls.map((c) => c.name) })}`);
-      expect(r.words.length).toBeGreaterThan(0);
-      expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
-      expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share]));
-      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+      await app.page.waitForFunction(() => document.querySelector('.docs-head .docs-actions') !== null, undefined, { timeout: 30_000 });
+      const got = await app.page.evaluate(async () => {
+        await document.fonts.ready;
+        const head = document.querySelector('.docs-head');
+        const top = (sel: string): number => document.querySelector(sel)?.getBoundingClientRect().top ?? Number.NaN;
+        const h = head?.getBoundingClientRect();
+        return {
+          full: document.querySelector('.docs-full') !== null,
+          kids: [...(head?.children ?? [])].map((c) => c.className),
+          headTop: h?.top ?? Number.NaN, headH: h?.height ?? Number.NaN,
+          bar: top('.docs-head-bar'), truth: top('.docs-truth'), actions: top('.docs-head > .docs-actions'),
+        };
+      });
+      console.log(`PHH-FIGURE refined 412x915 listing ${JSON.stringify(got)}`);
+      expect(got.full, 'no desk head below 600 px').toBe(false);
+      expect(got.kids).toEqual(['docs-head-bar', 'docs-truth', 'docs-actions']);
+      // The base (main at 435773d66) measured this listing's head at 224.5 px, its truth line at 92.5 and its actions at
+      // 188.5, from a head top of 8.
+      expect({ headH: got.headH, truth: got.truth - got.headTop, actions: got.actions - got.headTop }, 'the base\'s figure')
+        .toEqual({ headH: 224.5, truth: 84.5, actions: 180.5 });
       expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  // Fix round 1, F2: the states whose truth line is longest. A failed fetch's chip carries its sentence and the last good
+  // fetch's age; a diverged local branch carries the relation in the warning tone; a dangling origin/HEAD adds its note.
+  // At each width every fact lies wholly inside the head, and the line never scrolls: it wraps rather than clip.
+  const FAILED_DEEP = ((): ReturnType<typeof treeOk> => {
+    const base = DEEP_TREE;
+    const MIN = 60_000;
+    return { ...base, freshness: { ...base.freshness, stamp: { okAgeMs: 179 * MIN, attemptAgeMs: 4 * MIN, lastOutcome: 'fetch-transport', okCommit: COMMIT_A } } };
+  })();
+  const DIVERGED_DEEP = ((): ReturnType<typeof treeOk> => ({
+    ...DEEP_TREE,
+    ref: { ...DEEP_TREE.ref, requested: 'lane-a', served: 'refs/heads/lane-a', name: 'lane-a', side: 'local', via: 'local', relation: 'diverged', counterpart: { ahead: 2, behind: 3 } },
+  }))();
+  const DANGLING_DEEP = ((): ReturnType<typeof treeOk> => ({
+    ...DEEP_TREE,
+    ref: { ...DEEP_TREE.ref, via: 'default:origin-main', tried: [{ ref: 'refs/remotes/origin/feat-a', result: 'dangling' }] },
+  }))();
+  const LONG_LINES = [
+    ['a failed fetch', FAILED_DEEP, ''],
+    ['a diverged branch', DIVERGED_DEEP, '?ref=lane-a'],
+    ['a dangling origin/HEAD', DANGLING_DEEP, ''],
+  ] as const;
+  const LINE_CASES = LONG_LINES.flatMap(([what, tree, query]) =>
+    [INSTRUMENT, REFINED].flatMap((skin) => ([[600, 960], [768, 1024], [1280, 800]] as const).map(([w, h]) => [what, skin, w, h, tree, query] as const)));
+
+  it.each(LINE_CASES)('%s, %s, %i x %i under a mouse: every fact of the truth line lies inside the head, and the line clips nothing (F2)', async (what, skin, width, height, tree, query) => {
+    const app = await openView({ width, height, skin, pointer: 'fine' }, tree, DEEP);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${DEEP}${query}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-full > .docs-truth .docs-fresh') !== null, undefined, { timeout: 30_000 });
+      const got = await app.page.evaluate(async () => {
+        await document.fonts.ready;
+        const head = document.querySelector('.docs-head.docs-full')!.getBoundingClientRect();
+        const line = document.querySelector('.docs-full > .docs-truth') as HTMLElement;
+        const facts = [...line.children].map((e) => {
+          const b = e.getBoundingClientRect();
+          return { cls: e.className, text: e.textContent ?? '', left: b.left, right: b.right, top: b.top, bottom: b.bottom, cut: (e as HTMLElement).scrollWidth > (e as HTMLElement).clientWidth + 0.5 };
+        });
+        return {
+          head: { left: head.left, right: head.right, top: head.top, bottom: head.bottom },
+          lineScroll: line.scrollWidth, lineClient: line.clientWidth, lineH: line.getBoundingClientRect().height, facts,
+          classes: facts.map((f) => f.cls),
+        };
+      });
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} long-line ${what} ${JSON.stringify({ lineH: got.lineH, scroll: got.lineScroll, client: got.lineClient })}`);
+      expect(got.lineScroll, `${what}: the line does not scroll`).toBe(got.lineClient);
+      for (const f of got.facts) {
+        expect(f.left, `${f.cls} inside the head`).toBeGreaterThanOrEqual(got.head.left - 0.5);
+        expect(f.right, `${f.cls} inside the head`).toBeLessThanOrEqual(got.head.right + 0.5);
+        expect(f.top, `${f.cls} inside the head`).toBeGreaterThanOrEqual(got.head.top - 0.5);
+        expect(f.bottom, `${f.cls} inside the head`).toBeLessThanOrEqual(got.head.bottom + 0.5);
+        if (!f.cls.includes('docs-truth-via')) expect(f.cut, `${f.cls} is never cut`).toBe(false);
+      }
+      const need = what === 'a failed fetch' ? '.docs-fresh' : what === 'a diverged branch' ? 'docs-truth-relation' : 'docs-truth-dangling';
+      expect(got.classes.some((c) => c.includes(need.replace('.', ''))), `${what}: its fact is drawn`).toBe(true);
     } finally {
       await app.ctx.close();
     }

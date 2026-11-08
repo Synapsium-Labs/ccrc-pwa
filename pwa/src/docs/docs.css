@@ -154,12 +154,15 @@
    crumbs at their floor when folded (the `…` button and two crumbs at a tap and a separator each, about 164), and the
    widest actions with their words (GitHub, Share and "Export (plain view)", 313) come to about 529, so the words hide
    below 530. A leaf at 600 has a 584 px row; a listing on a phone, which keeps the full head, has a narrower one.
-   THE LINE. One line at `--docs-line-h` (tokens.css: the tap floor, 28 px under a fine pointer), and so are the chip
-   and copy commit inside it. Its parts are flex items that never shrink, except the words that can: the via sentence
-   first, then the relation, the source and the served ref, each cut with an ellipsis; the commit, copy commit and the
-   freshness chip never give way. `white-space: pre` keeps the ` · ` separators' spaces, which a flex item would drop;
-   the one space that is a text run of its own, between the commit and copy commit, is not rendered in a flex container
-   at all, so the button's margin stands in for it (one `ch`, the mono space).
+   THE LINE (fix round 1, F2: it hides no fact). One line at `--docs-line-h` (tokens.css: the tap floor, 28 px under a
+   fine pointer) when its facts fit, and so are the chip and copy commit inside it; when they do not fit it wraps onto
+   a second line, and it clips nothing. Only the via sentence gives way, to an ellipsis, from a small basis up to its
+   whole words, which its `title` carries. Every other part (the served ref, the commit, copy commit, the relation, the
+   source, the badge, the size, the dangling-HEAD note and the freshness chip) keeps its whole words: none shrinks,
+   none is wider than the line, and one longer than a line (a failed chip's sentence) wraps inside itself on a line of
+   its own. `white-space: pre` keeps the ` · ` separators' spaces, which a flex item would drop; the one space that is a
+   text run of its own, between the commit and copy commit, is not rendered in a flex container at all, so the
+   button's margin stands in for it (one `ch`, the mono space).
    GROUNDS. Nothing here paints a ground or sets an ink: the row and the line inherit the head's, as before. — */
 .docs-full { gap: var(--sp-1); }
 .docs-full > .docs-head-bar { container: docs-head / inline-size; flex-wrap: wrap; }
@@ -181,17 +184,18 @@
   .docs-action-words { display: none; }
 }
 .docs-full > .docs-truth {
-  display: flex; align-items: center; min-height: var(--docs-line-h);
-  white-space: pre; overflow: hidden;
+  display: flex; flex-wrap: wrap; align-items: center; min-height: var(--docs-line-h);
+  white-space: pre;
 }
-.docs-full > .docs-truth > * { flex: none; }
-.docs-full > .docs-truth > .docs-truth-via { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.docs-full > .docs-truth > .docs-truth-relation { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.docs-full > .docs-truth > .docs-truth-source { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.docs-full > .docs-truth > .docs-truth-ref { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.docs-full > .docs-truth > * { flex: none; max-width: 100%; }
+.docs-full > .docs-truth > .docs-truth-ref, .docs-full > .docs-truth > .docs-truth-relation,
+.docs-full > .docs-truth > .docs-truth-source, .docs-full > .docs-truth > .docs-truth-dangling,
+.docs-full > .docs-truth > .docs-fresh { white-space: normal; }
+.docs-full > .docs-truth > .docs-truth-via {
+  flex: 1 1 12ch; min-width: 0; max-width: max-content; overflow: hidden; text-overflow: ellipsis;
+}
 .docs-full > .docs-truth .docs-fresh, .docs-full > .docs-truth .docs-copy { min-height: var(--docs-line-h); }
 .docs-full > .docs-truth .docs-copy { margin-inline-start: 1ch; }
-.docs-full > .docs-truth :focus-visible { outline-offset: -2px; }
 
 /* The quiet lines: the notes, loading words, the index head, "Formatting…". */
 .docs-note, .docs-loading, .docs-index-head, .doc-formatting {
