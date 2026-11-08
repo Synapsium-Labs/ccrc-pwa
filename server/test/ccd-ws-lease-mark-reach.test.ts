@@ -115,7 +115,7 @@ describe('delegation-adopt through the installed direct entry, on the real body'
     expect(fs.existsSync(marker())).toBe(false);
   }, 60_000);
 
-  it('DELEGATION-ADOPT --state on with BASHOPTS=nocasematch raises nothing: started protected, it matches no verb', () => {
+  it('DELEGATION-ADOPT --state on with BASHOPTS=nocasematch exits non-zero and leaves no marker, while the exact verb raises it', () => {
     de = installDirectEntry(h.home);
     for (const verb of ['DELEGATION-ADOPT', 'Delegation-Adopt']) {
       const r = direct([verb, '--state', 'on'], { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' });

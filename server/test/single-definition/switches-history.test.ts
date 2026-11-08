@@ -885,7 +885,8 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     const ccd = codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '');
     const OWN: readonly [string, RegExp][] = [
       // Review 1665 N1: the body's direct-entry guard names the verb to start it protected, as it names ws-lease-mark.
-      ['direct-entry guard', /^if \[\[ "\$\{BASH_SOURCE\[0\]\}" == "\$\{0\}" \]\] && \{ \[\[ .*\|\| "\$\{1-\}" == ws-lease-mark \|\| "\$\{1-\}" == ws-lease-audit \|\| "\$\{1-\}" == delegation-adopt \]\] \\$/],
+      // Review 1669 C1: its middle is the guard's own grammar, `"${1-}" == <verb> ||` alternations and nothing else.
+      ['direct-entry guard', /^if \[\[ "\$\{BASH_SOURCE\[0\]\}" == "\$\{0\}" \]\] && \{ \[\[ (?:"\$\{1-\}" == [a-z-]+ \|\| )*"\$\{1-\}" == ws-lease-mark \|\| "\$\{1-\}" == ws-lease-audit \|\| "\$\{1-\}" == delegation-adopt \]\] \\$/],
       ['caps token', /^ {2}echo delegation-adopt {3}# D-8112: /],
       ['definition', /^cmd_delegation_adopt\(\) \{ {3}# ccd delegation-adopt --state on\|off — /],
       ['usage check', /^ {2}\[\[ \$# -eq 2 && \$1 == --state \]\] \|\| die "usage: ccd delegation-adopt --state on\|off"$/],
@@ -900,6 +901,16 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
       kinds(ccd).indexOf(a) - kinds(ccd).indexOf(b)));
     expect(kinds(['  [[ -e "$REG"/delegation-adopt ]] && live=1']), 'CONTROL: a reader spelled with a quoted $REG is not the verb\'s')
       .toEqual(['NOT THE VERB\'S: [[ -e "$REG"/delegation-adopt ]] && live=1']);
+    // Review 1669 C1: a write of the marker planted inside the real guard line, first in its alternation or beside
+    // ws-lease-mark, is not the verb's.
+    const guard = ccd.find((l) => l.startsWith('if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ ') && l.includes(NAME)) ?? '';
+    expect(kinds([guard]), 'CONTROL: the real guard line is the verb\'s').toEqual(['direct-entry guard']);
+    const write = '-z "$(: > "$REG"/delegation-adopt)" || ';
+    for (const planted of [guard.replace('{ [[ ', `{ [[ ${write}`),
+      guard.replace('"${1-}" == ws-lease-mark', `${write}"\${1-}" == ws-lease-mark`)]) {
+      expect(planted, 'the plant landed in the guard line').not.toBe(guard);
+      expect(kinds([planted]), 'CONTROL: a write planted in the guard line is not the verb\'s').toEqual([`NOT THE VERB'S: ${planted.trim()}`]);
+    }
     for (const f of ['ccd/install-session-hooks.sh', 'ccd/session-hook.sh']) {
       const lines = codeLines(BASH.find((b) => rel(b) === f) ?? '').filter((l) => l.includes(NAME));
       expect(lines.length, `${f} forbids the verb`).toBeGreaterThan(0);
@@ -916,5 +927,30 @@ describe('delegation PR7, PR8b: the adoption marker has exactly one writer, ccd 
     const holders = ALL.filter((f) => stallCode(f).includes('DELEGATION_ADOPT_MARKER')).map(rel).sort();
     expect(holders).toEqual(['server/src/coord/delegation-adopt-switch.ts', 'server/src/coord/delegationAdoptStep.ts', DEFINER]);
     for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+
+  it('no non-shell file under ccd/ or deploy/ names it on a code line but ccd-entry.py\'s protected-verb tuple', () => {
+    // Review 1669 A2: the precedents' row (pane-scope-stop, testbox-remote), with one exact allowance: the launcher's
+    // `is_protected` tuple names the verb to start it protected (review 1665 N1). Nothing wider is allowed.
+    const ALLOWED: readonly [string, string][] = [['ccd/ccd-entry.py',
+      "    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):"]];
+    const strays = (file: string, lines: string[]): string[] => lines
+      .filter((l) => !/^\s*(#|\/\/|\*|\/\*)/.test(l) && l.includes(NAME))
+      .filter((l) => !ALLOWED.some(([f, a]) => f === file && a === l)).map((l) => `${file}: ${l.trim()}`);
+    // A git-ignored `__pycache__` holds Python's compiled copy of ccd-entry.py (written when a suite imports it), not a source.
+    const nonShell = (dir: string): string[] => readdirSync(dir).filter((e) => e !== '__pycache__').flatMap((e) => {
+      const p = path.join(dir, e);
+      return statSync(p).isDirectory() ? nonShell(p) : (BASH.includes(p) || p.endsWith('.md') ? [] : [p]);
+    });
+    const others = bashRoots.flatMap(nonShell);
+    expect(others.length, 'the walk reached the non-shell files').toBeGreaterThan(40);
+    const text = (f: string): string[] => readFileSync(f, 'utf8').split('\n');
+    expect(others.flatMap((f) => strays(rel(f), text(f)))).toEqual([]);
+    for (const [f, a] of ALLOWED) expect(text(path.join(ccrcRoot, f)).filter((l) => l === a), `${f} still holds its allowed line, once`).toHaveLength(1);
+    const writer = "open(os.path.join(REG, 'delegation-adopt'), 'w').close()";
+    expect(strays('ccd/adopt_writer.py', ['import os', writer]), 'CONTROL: a Python writer in a new file under ccd/ is seen')
+      .toEqual([`ccd/adopt_writer.py: ${writer}`]);
+    expect(strays('ccd/ccd-entry.py', [ALLOWED[0][1], `    ${writer}`]), 'CONTROL: a Python writer beside the allowed line is seen')
+      .toEqual([`ccd/ccd-entry.py: ${writer}`]);
   });
 });
