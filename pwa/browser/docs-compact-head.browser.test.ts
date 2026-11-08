@@ -12,10 +12,12 @@
 //   - on a leaf under a 46-character directory in a ref view, the ref still has room on the first line (the directory
 //     gives way first), and the badge is inside the label;
 //   - Page details opens the truth line under the row, and Escape closes it with focus back on the button.
-// At 599 the head is still the row; at 600, 768 and 1280 it is the full header, as before (its truth line on the page,
-// its crumbs folded below the desk width), and the phone turned sideways (915 x 412, a touch screen) is a desk width that
-// keeps the full header too: that case records what it costs. Every case prints its figures on a `PHH-FIGURE` line for
-// the plan's Results.
+// At 599 the head is still the row; at 600 and wider it is the full head, which desk-nav Part B (D-8101) makes one row
+// (back, the crumbs, the actions) over one dense truth line: the title's figure and the head's height at 1280 under a
+// mouse, the row on one line, the crumbs giving way before any action's words, the words hidden under the container
+// query with each action keeping its name, no sideways scroll, and a touch laptop (1280 x 800 and a phone turned
+// sideways, 915 x 412) keeping the 44 px floor. Every case prints its figures on a `PHH-FIGURE` line for the plan's
+// Results.
 //
 // The figure is the iframe's top in the page plus the doc title's top inside the frame (Playwright's frame evaluation),
 // at the frame's scroll 0, once the reader is up ("Formatting…" gone, no fallback note) and both documents' fonts have
@@ -116,11 +118,17 @@ async function answerDocs(app: OpenedApp, tree = COMMITTED_TREE, leaf = NAME): P
   });
 }
 
-interface View { readonly width: number; readonly height: number; readonly skin: string; readonly touch?: boolean }
+interface View {
+  readonly width: number; readonly height: number; readonly skin: string; readonly touch?: boolean;
+  /** `fine`: a mouse at any width (the context opens at a desk width, with no touch, and is then resized). */
+  readonly pointer?: 'fine';
+}
 
-/** A context at `view` (a touch screen below 900 px, or when `touch` asks), its `/api/docs` answering `tree`. */
+/** A context at `view` (a touch screen below 900 px, or when `touch` asks; a mouse when `pointer` is `fine`), its
+ *  `/api/docs` answering `tree`. */
 async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
-  const app = await openApp(browser!, { width: view.width, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
+  const opened = view.pointer === 'fine' ? Math.max(view.width, 900) : view.width;
+  const app = await openApp(browser!, { width: opened, skin: view.skin, theme: 'light', touch: view.touch }, { api: {}, fleetFrames: [] });
   await app.page.setViewportSize({ width: view.width, height: view.height });
   await answerDocs(app, tree, leaf);
   return app;
@@ -130,9 +138,9 @@ async function openView(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise
  *  came up: the figure is about the reader page. One re-open on a fallback, D-7958: the reader's start watchdog (2 s for a
  *  small document) can pass on a loaded runner, so a `fallback` re-navigates the same page once, and says so on the
  *  console; a second `fallback`, a timeout and every other outcome throw as before. */
-async function openLeaf(view: View): Promise<OpenedApp> {
-  const app = await openView(view);
-  const url = `${server!.origin}/docs/${PROJECT}/${SECTION}/${NAME}`;
+async function openLeaf(view: View, tree = COMMITTED_TREE, leaf = NAME): Promise<OpenedApp> {
+  const app = await openView(view, tree, leaf);
+  const url = `${server!.origin}/docs/${PROJECT}/${SECTION}/${leaf}`;
   const start = async (): Promise<unknown> => {
     await app.page.goto(url, { waitUntil: 'load' });
     const up = await app.page.waitForFunction((note) => {
@@ -187,8 +195,8 @@ async function measure(page: Page): Promise<Figure> {
 }
 
 /** Opens the leaf at `view`, runs `check`, asks that the page threw nothing, and closes the context whatever happens. */
-async function at(view: View, check: (app: OpenedApp) => Promise<void>): Promise<void> {
-  const app = await openLeaf(view);
+async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
+  const app = await openLeaf(view, tree, leaf);
   try {
     await check(app);
     expect(app.errors, 'no page error').toEqual([]);
@@ -358,29 +366,173 @@ describe('a phone draws one console row above the reader (refinements (a), (i))'
   }, 120_000);
 });
 
-describe('a tablet and a desktop keep the full header (refinement (b))', () => {
+
+/** The desk head's figure (desk-nav Part B, D-8101): at 1280 x 800 under a mouse, the doc title's top in the page. The
+ *  base measured 378 in Refined, with a head of three 44 px rows and their gaps; the head is now one row and one dense
+ *  line, and this tree measured 310 in Instrument and 306 in Refined. The reader frame's own bar (101 px to the title
+ *  inside the frame) stays until the library take-up moves it into the head row, so the pin is this tree's figure: the
+ *  next 10 px step above 310 (departure b-before-take-up). */
+const DESK_TITLE_MAX = 320;
+/** The head itself, from the top of `.docs-head` to the bottom of the truth line, under a mouse at 1280: the row (one tap),
+ *  the 4 px gap and the dense line (28 px) is 76. */
+const HEAD_MAX = 80;
+/** The dense line's height under a mouse (`--docs-line-h` inside `@media (pointer: fine)`). */
+const DENSE = 28;
+/** A leaf three directories down, so the row has middle crumbs to give way. */
+const DEEP = `${LONG_DIR}/${NAME}`;
+const DEEP_TREE = treeOk({ entries: [entry(SECTION, DEEP, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
+
+interface Box { readonly top: number; readonly bottom: number; readonly left: number; readonly right: number; readonly height: number; readonly mid: number }
+interface Control extends Box { readonly name: string }
+interface RowFigure {
+  readonly head: Box | null; readonly row: Box | null; readonly truth: Box | null; readonly back: Box | null; readonly here: Box | null;
+  readonly commit: Box | null; readonly chip: Box | null; readonly controls: readonly Control[]; readonly truthControls: readonly Control[];
+  readonly words: readonly { readonly text: string; readonly shown: boolean; readonly cut: boolean }[];
+  readonly fine: boolean; readonly scrollW: number; readonly innerW: number; readonly folded: boolean; readonly crumbCut: boolean;
+  readonly rowW: number;
+}
+
+/** The full head's geometry, read in the page. */
+async function rowFigure(page: Page): Promise<RowFigure> {
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const box = (e: Element | null | undefined): Box | null => {
+      if (e === null || e === undefined) return null;
+      const b = e.getBoundingClientRect();
+      return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, height: b.height, mid: (b.top + b.bottom) / 2 };
+    };
+    const control = (e: Element): Control => ({ name: e.getAttribute('aria-label') ?? e.textContent ?? '', ...box(e)! });
+    const head = document.querySelector('.docs-head.docs-full');
+    const row = head?.querySelector(':scope > .docs-head-bar') ?? null;
+    const truth = head?.querySelector(':scope > .docs-truth') ?? null;
+    const shown = (e: Element): boolean => getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().width > 0;
+    return {
+      head: box(head), row: box(row), truth: box(truth), back: box(row?.querySelector('.docs-back')),
+      here: box(row?.querySelector('.docs-crumb-here')), commit: box(truth?.querySelector('.docs-truth-commit')),
+      chip: box(truth?.querySelector('.docs-fresh')),
+      controls: row === null ? [] : [...row.querySelectorAll('button, a')].filter(shown).map(control),
+      truthControls: truth === null ? [] : [...truth.querySelectorAll('button')].filter(shown).map(control),
+      words: row === null ? [] : [...row.querySelectorAll('.docs-action-words')].map((w) => ({
+        text: w.textContent ?? '', shown: shown(w), cut: w.scrollWidth > w.clientWidth + 0.5,
+      })),
+      fine: matchMedia('(pointer: fine)').matches,
+      scrollW: document.documentElement.scrollWidth, innerW: innerWidth,
+      folded: row?.querySelector('.docs-crumbs-more') !== null && row?.querySelector('.docs-crumbs-more') !== undefined,
+      crumbCut: row === null ? false : [...row.querySelectorAll('.docs-crumb, .docs-crumb-here')].some((c) => c.scrollWidth > c.clientWidth + 0.5),
+      rowW: row?.getBoundingClientRect().width ?? Number.NaN,
+    };
+  });
+}
+
+describe('the desk head (desk-nav Part B)', () => {
+  it.each([INSTRUMENT, REFINED])(`1280 x 800, %s: the title is at most ${DESK_TITLE_MAX} px down, the head at most ${HEAD_MAX}`, async (skin) => {
+    await at({ width: 1280, height: 800, skin }, async ({ page }) => {
+      const f = await measure(page);
+      const r = await rowFigure(page);
+      const headH = r.truth!.bottom - r.head!.top;
+      console.log(`PHH-FIGURE ${skin} 1280x800 desk ${JSON.stringify({ ...f, headH, fine: r.fine })}`);
+      expect(f.head).toBe('full');
+      expect(r.fine, 'a mouse').toBe(true);
+      expect(f.frameScroll, 'the frame is at its top').toBe(0);
+      expect(headH, 'the head, from its top to the bottom of the truth line').toBeLessThanOrEqual(HEAD_MAX);
+      expect(f.above, 'px above the title').toBeLessThanOrEqual(DESK_TITLE_MAX);
+    });
+  }, 120_000);
+
+  it.each([INSTRUMENT, REFINED])('1280 x 800, %s: the row is one line, and the truth line one dense line holding its chip and commit', async (skin) => {
+    await at({ width: 1280, height: 800, skin }, async ({ page }) => {
+      const r = await rowFigure(page);
+      console.log(`PHH-FIGURE ${skin} 1280x800 row ${JSON.stringify({ row: r.row, truth: r.truth, controls: r.controls.map((c) => [c.name, c.height]) })}`);
+      expect(r.controls.map((c) => c.name)).toEqual([DOCS_HEAD_TEXT.back, 'Docs', PROJECT, SECTION, DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]);
+      for (const c of [...r.controls, r.here!]) {
+        expect(Math.abs(c.mid - r.back!.mid), `${'name' in c ? c.name : 'the page crumb'} on the row's line`).toBeLessThanOrEqual(1);
+      }
+      expect(r.row!.height, 'the row is one tap tall').toBeLessThanOrEqual(TAP + 0.5);
+      expect(r.words.every((w) => w.shown && !w.cut), 'every action shows its words').toBe(true);
+      expect(r.truth!.height, 'the dense line').toBeLessThanOrEqual(DENSE + 0.5);
+      for (const [what, b] of [['the chip', r.chip], ['the commit', r.commit]] as const) {
+        expect(b, what).not.toBeNull();
+        expect(b!.top, what).toBeGreaterThanOrEqual(r.truth!.top - 0.5);
+        expect(b!.bottom, what).toBeLessThanOrEqual(r.truth!.bottom + 0.5);
+        expect(b!.left, what).toBeGreaterThanOrEqual(r.truth!.left - 0.5);
+        expect(b!.right, what).toBeLessThanOrEqual(r.truth!.right + 0.5);
+      }
+    });
+  }, 120_000);
+
+  it('at 600 the crumbs give way first: the middle crumbs are cut while every action keeps its words', async () => {
+    await at({ width: 600, height: 960, skin: REFINED }, async ({ page }) => {
+      const r = await rowFigure(page);
+      console.log(`PHH-FIGURE refined 600x960 deep-row ${JSON.stringify({ rowW: r.rowW, folded: r.folded, crumbCut: r.crumbCut, words: r.words })}`);
+      expect(r.folded || r.crumbCut, 'the middle crumbs give way').toBe(true);
+      expect(r.words.length).toBe(3);
+      expect(r.words.every((w) => w.shown && !w.cut), 'every action keeps its words').toBe(true);
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+    }, DEEP_TREE, DEEP);
+  }, 120_000);
+
   it.each([
     [600, 960, true],
     [768, 1024, true],
     [1280, 800, false],
-  ] as const)('%i x %i: the full header, its truth line and View on GitHub on the page; crumbs folded: %s', async (width, height, folded) => {
+  ] as const)('%i x %i: the full head, no sideways scroll; crumbs folded: %s', async (width, height, folded) => {
     await at({ width, height, skin: REFINED }, async ({ page }) => {
       const f = await measure(page);
-      console.log(`PHH-FIGURE refined ${width}x${height} ${JSON.stringify(f)}`);
+      const r = await rowFigure(page);
+      console.log(`PHH-FIGURE refined ${width}x${height} ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
       expect(await page.locator('.docs-more').count()).toBe(0);
       expect(await page.locator('.docs-truth').isVisible()).toBe(true);
-      expect(await page.locator('.docs-actions').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
-      expect(await page.locator('.docs-crumbs-more').count()).toBe(folded ? 1 : 0);
-    });
+      expect(await page.locator('.docs-head-bar .docs-actions').getByRole('link', { name: DOCS_HEAD_TEXT.github }).isVisible()).toBe(true);
+      expect(r.folded).toBe(folded);
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+    }, DEEP_TREE, DEEP);
   }, 120_000);
 
-  it('915 x 412, a phone turned sideways: a desk width, so the full header, as today; the figure records its cost (refinement (b))', async () => {
-    await at({ width: 915, height: 412, skin: REFINED, touch: true }, async ({ page }) => {
+  it('600 x 960 under a mouse: the truth line is dense there too, and nothing scrolls sideways', async () => {
+    await at({ width: 600, height: 960, skin: REFINED, pointer: 'fine' }, async ({ page }) => {
       const f = await measure(page);
-      console.log(`PHH-FIGURE refined 915x412 ${JSON.stringify(f)}`);
+      const r = await rowFigure(page);
+      console.log(`PHH-FIGURE refined 600x960 mouse ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
       expect(f.head).toBe('full');
-      expect(await page.locator('.docs-more').count()).toBe(0);
+      expect(r.fine, 'a mouse').toBe(true);
+      expect(r.truth!.height, 'the dense line').toBeLessThanOrEqual(DENSE + 0.5);
+      expect(r.truth!.bottom - r.head!.top, 'the head').toBeLessThanOrEqual(HEAD_MAX);
+      expect(r.words.every((w) => w.shown && !w.cut), 'every action shows its words').toBe(true);
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+    }, DEEP_TREE, DEEP);
+  }, 120_000);
+
+  it('a row narrower than the container query hides the action words, and each action keeps its name', async () => {
+    // A listing keeps the full head at every width, so a phone's directory page is where the row is that narrow.
+    const app = await openView({ width: 412, height: 915, skin: REFINED }, DEEP_TREE, DEEP);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${LONG_DIR}/`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-head-bar .docs-actions .docs-share') !== null, undefined, { timeout: 30_000 });
+      const r = await rowFigure(app.page);
+      console.log(`PHH-FIGURE refined 412x915 listing-row ${JSON.stringify({ rowW: r.rowW, words: r.words, controls: r.controls.map((c) => c.name) })}`);
+      expect(r.words.length).toBeGreaterThan(0);
+      expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
+      expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share]));
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it.each([
+    [1280, 800],
+    [915, 412],
+  ] as const)('a touch laptop keeps the floor: %i x %i under a coarse pointer, every control in the row and the truth line one tap tall', async (width, height) => {
+    await at({ width, height, skin: REFINED, touch: true }, async ({ page }) => {
+      const f = await measure(page);
+      const r = await rowFigure(page);
+      console.log(`PHH-FIGURE refined ${width}x${height} touch ${JSON.stringify({ ...f, headH: r.truth!.bottom - r.head!.top, fine: r.fine })}`);
+      expect(f.head).toBe('full');
+      expect(r.fine, 'a coarse pointer').toBe(false);
+      for (const c of [...r.controls, ...r.truthControls]) expect(c.height, c.name).toBeGreaterThanOrEqual(TAP - 0.5);
+      expect(r.truth!.height, 'the line keeps the floor').toBeGreaterThanOrEqual(TAP - 0.5);
     });
   }, 120_000);
 });
