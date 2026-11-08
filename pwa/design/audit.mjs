@@ -1422,6 +1422,11 @@ export const OPACITY_REGISTRY = {
   '.docs-compact-bar .docs-action:disabled 0.35': {
     noText: 'WCAG 1.4.3 exempts inactive controls; a waiting Share or Export icon, whose words are its accessible name and an unfaded line in the Page details panel',
   },
+  // The desk Docs head's row (desk-nav Part B, D-8101, fix round 1 F3): Share or Export while it waits for the leaf. Its
+  // icon is aria-hidden and its words stay in its name; the compact bar's fade above is the same, for the same reason.
+  '.docs-full .docs-action:disabled 0.35': {
+    noText: 'WCAG 1.4.3 exempts inactive controls; a waiting Share or Export in the desk row, whose name carries its words (Share: Updating to …, Export: …)',
+  },
   '.pending-actions .pending-send-it:disabled 0.6': {
     noText: 'WCAG 1.4.3 exempts inactive controls; the button is disabled while its own Enter is in flight, and while the desk\'s inline ask card holds sends (D-6326, R96)',
   },

@@ -179,7 +179,12 @@
 .docs-full .docs-actions { flex: 0 1 auto; min-width: 0; margin-inline-start: auto; flex-wrap: wrap; }
 .docs-full .docs-actions > * { flex: none; }
 .docs-full .docs-actions > .docs-action-note { flex: none; }
-.docs-full .docs-action { gap: var(--sp-1); white-space: nowrap; text-decoration: none; }
+.docs-full .docs-action { gap: var(--sp-1); white-space: nowrap; }
+/* An action drawn as an icon beside its words reads as a button and drops the link underline; one drawn as text alone
+   keeps it. A disabled Share or Export (waiting for the leaf) is dimmed as the compact bar dims it, never recoloured
+   (fix round 1, F3; registered in design/audit.mjs's OPACITY_REGISTRY beside the compact bar's). */
+.docs-full .docs-action:has(> .docs-action-words) { text-decoration: none; }
+.docs-full .docs-action:disabled { opacity: 0.35; }
 @container docs-head (width < 530px) {
   .docs-action-words { display: none; }
 }

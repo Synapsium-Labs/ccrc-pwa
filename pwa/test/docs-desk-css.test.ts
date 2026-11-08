@@ -74,6 +74,20 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(declValue(ruleIn(docsCss, '.docs-full .docs-action'), 'gap')).toBe('var(--sp-1)');
   });
 
+  it('a disabled Share or Export in the row is dimmed as the compact bar dims it, never recoloured (F3)', () => {
+    const off = ruleIn(docsCss, '.docs-full .docs-action:disabled');
+    expect(declValue(off, 'opacity')).toBe('0.35');
+    expect(declValue(off, 'color')).toBeNull();
+  });
+
+  it('only an action drawn as an icon beside its words drops the underline; one drawn as text alone keeps it (F3)', () => {
+    expect(declValue(ruleIn(docsCss, '.docs-full .docs-action'), 'text-decoration'), 'the row\'s actions keep the shared underline').toBeNull();
+    expect(declValue(ruleIn(docsCss, '.docs-full .docs-action:has(> .docs-action-words)'), 'text-decoration')).toBe('none');
+    const undecorated = (stripComments(docsCss).match(/[^{}]*\{[^{}]*text-decoration:\s*none[^{}]*\}/g) ?? [])
+      .map((r) => r.slice(0, r.indexOf('{')).trim()).filter((sel) => sel.includes('.docs-full'));
+    expect(undecorated).toEqual(['.docs-full .docs-action:has(> .docs-action-words)']);
+  });
+
   it('GitHub\'s may-differ note in the row is a marker: it never shrinks, and its words are not drawn (F1)', () => {
     const mark = ruleIn(docsCss, '.docs-full .docs-actions > .docs-action-note');
     expect(declValue(mark, 'flex')).toBe('none');
