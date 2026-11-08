@@ -8331,8 +8331,23 @@ and the caller holds a session, before anything is read; then with `fleet-caps-u
 Two hand steps. Before rolling the fleet box below the release that ships the verb, switch adoption off at the door: once the verb is
 gone the door refuses `off` too, and the lane keeps adopting while the file stands. If the door or the verb is already gone, remove
 `~/.cc-sessions/delegation-adopt` on the fleet box by hand. And a directory standing in the switch's place reads `set` while neither
-arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box. The Settings card in front of the
-door follows in a later release.
+arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box.
+
+### The switch's card: Settings › Automation › Worktrees left behind
+
+The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
+after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
+(the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
+only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
+each with what the change check measured or that none was read, at most 50 and then "and N more". It polls once a minute.
+
+**Keep them** asks first: a confirmation names how many worktrees the last pass listed (or says the card cannot tell) and that the
+session that started each agent is mailed, and nothing is sent before it is confirmed. **Do not keep** goes at once; its note says
+that worktrees already kept stay held back from the disk sweep until their hold ends. A choice the GET says would be refused is
+disabled, with the refusal in the card's own words, `sign-in-unarmed` included (turning it on needs sign-in armed and a signed-in
+operator), and a refused write says the same and re-reads. On a server without the door the card says it is not available there.
+The switch ships off, and the lane stays in shadow until the operator turns it on here.
 
 ## Contributing
 
