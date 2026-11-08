@@ -1093,6 +1093,14 @@ export const ROUTE_ARGV_CAP = 'route-argv-v1';
  *  `route-omitted:no-route-default-cap`. ccd's `echo route-default-v1` is the other spelling. */
 export const ROUTE_DEFAULT_CAP = 'route-default-v1';
 
+/** The `ccd caps` token that says `browser` is a routing field this box takes (D-8121): `route --set browser=on|off`,
+ *  `--route browser=…` on the minting verbs, and the spawn's composition of the browser MCP servers' denial from it. An
+ *  older ccd refuses the field BY NAME on both paths ("unknown routing field"), so a server that does not see this token
+ *  sends none: the operator's doors answer 501 and a dispatch drops the field and journals
+ *  `route-omitted:no-browser-route-cap`. Read with `capSupported` (null refuses). ccd's `echo browser-route-v1` and
+ *  `ccdCapTokens.ts` are the other spellings. */
+export const BROWSER_ROUTE_CAP = 'browser-route-v1';
+
 /** The `ccd caps` token that says this box parses `--child <runId>` on
  *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
  *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec

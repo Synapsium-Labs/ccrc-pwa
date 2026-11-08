@@ -16,7 +16,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { clearSender } from '../src/inject/send.js';
 import type { Runner } from '../src/exec.js';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -387,5 +387,33 @@ describe('a dispatch with no route gets its run kind\'s row (D-6794)', () => {
     expect(await h.dispatch()).toMatchObject({ ok: true });
     expect(h.calls.filter((c) => c[0] === 'route')).toEqual([]);
     expect(readFileSync(field, 'utf8')).toBe('fable');
+  });
+});
+
+describe('the browser route field (D-8121): sent only to a box that takes it', () => {
+  it('a box with browser-route-v1 gets `--route browser=on` on the minting argv', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-browser'], ccdVerbs: [...DEFAULT_VERBS, BROWSER_ROUTE_CAP] });
+    expect(await h.dispatch({ class: 'opus', browser: 'on' })).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv.join(' ')).toContain('--route browser=on');
+    expect(argv.join(' ')).toContain('--route class=opus');
+    expect(h.events()).not.toContain('route-omitted:no-browser-route-cap');
+  });
+
+  it('a box without it gets the rest of the route, and the omission is journalled', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-browser-old'] });
+    expect(await h.dispatch({ class: 'opus', browser: 'on' })).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv.join(' ')).not.toContain('browser');
+    expect(argv.join(' ')).toContain('--route class=opus');
+    expect(h.events()).toContain('route-omitted:no-browser-route-cap');
+  });
+
+  it('a route of browser alone on a box without it sends no route at all', async () => {
+    const h = await harness({ wave: 1, wsAddCreates: ['demo-browser-only'] });
+    expect(await h.dispatch({ browser: 'on' })).toMatchObject({ ok: true });
+    const argv = h.calls.find((c) => c[0] === 'ws-add')!;
+    expect(argv.join(' ')).not.toContain('browser');
+    expect(h.events()).toContain('route-omitted:no-browser-route-cap');
   });
 });

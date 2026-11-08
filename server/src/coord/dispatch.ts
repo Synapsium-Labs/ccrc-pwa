@@ -8,7 +8,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { fieldMeasured, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
-  CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
+  BROWSER_ROUTE_CAP, CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_DEFAULT_CAP, capSupported, ccdCan, sweepDec, type ActorFlags,
 } from '../ccdargv.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -21,7 +21,7 @@ import {
 import { queueSystemMail } from './rundefsTx.js';
 import { WAVE_BRIEF_SUBJECT } from './briefwatch.js';
 import {
-  SPAWN_NOT_RECORDED, armEventDetail,
+  SPAWN_NOT_RECORDED, armEventDetail, routeForBrowserCap,
   type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
@@ -538,11 +538,16 @@ export async function dispatchRun(
     held: (project, keys) => coord.heldLandingIntents(project, keys),
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
-  const { run, body, itemTitles, routeFields, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
+  const { run, body, itemTitles, routeFields: plannedRoute, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
   // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
   const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
     caps: () => capsMeasured(coord) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
+  // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
+  // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.
+  const browserCap = routeForBrowserCap(plannedRoute, capSupported(deps.fleetState, BROWSER_ROUTE_CAP));
+  if (browserCap.dropped) coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-browser-route-cap');
+  const routeFields = browserCap.route;
 
   // ONE MEASUREMENT, SPENT TWICE — the dispatch's own dec, hoisted above the
   // fresh-spawn branch because BOTH of this function's ccd writes are the same
