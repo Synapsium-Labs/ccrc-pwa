@@ -3,18 +3,14 @@
 // Each line is the kind's word, the claimant (or, for the circuit breaker, every claimant it holds) and the sentence.
 // Nothing renders when the list is empty or the server predates it.
 import type { ReactNode } from 'react';
-import { AttentionList } from './AttentionList';
-import { deadCoordinatorAttentionOf, deadCoordinatorKindWord } from './deadCoordinatorWords';
+import { AttentionList, attentionLines } from './AttentionList';
+import { deadCoordinatorAttentionOf } from './deadCoordinatorWords';
 
 export function DeadCoordinatorAttention({ coord }: { coord: unknown }): ReactNode {
   return (
     <AttentionList
       label="coordinators the cleanup is reporting"
-      lines={deadCoordinatorAttentionOf(coord).map((a) => ({
-        key: `${a.kind}:${a.claimants.join(',')}`,
-        who: [`${deadCoordinatorKindWord(a.kind)} · ${a.claimants.join(', ')}`],
-        sentence: a.sentence,
-      }))}
+      lines={attentionLines(deadCoordinatorAttentionOf(coord))}
     />
   );
 }

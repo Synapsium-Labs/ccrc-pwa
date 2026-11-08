@@ -20,16 +20,16 @@
 // one control whose tap only opens a confirm). Rule 4 says the human does not tend sub-workspaces; this tells them
 // what is costing disk, and asks nothing. The sentences are the SERVER's — the
 // PWA renders them and maps no token. A collapsed line names its children after
-// the server's sentence; the PWA counts nothing itself. The two item shapes are
-// told apart by `sessionId`, the field the reader checks: every single item has
-// one, and a collapsed line is rebuilt by the reader with none.
+// the server's sentence; the PWA counts nothing itself. The reader returns
+// `AttentionRow`s, the shape the other two lanes' readers return, and
+// `attentionLines` turns all three into lines.
 import type { ReactNode } from 'react';
 import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from './childReclaimWords';
 import { useMarkerToggle } from './useMarkerToggle';
 import { programmeWave, type ChildRunContext } from './runWords';
-import { AttentionList } from './AttentionList';
+import { AttentionList, attentionLines } from './AttentionList';
 import { HeldByRows } from './HeldByRows';
 import { ExpiryAttention } from './ExpiryAttention';
 import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
@@ -91,18 +91,7 @@ export function ChildReclaimBanner({
       </div>
       <AttentionList
         label="children reclamation could not clean up"
-        lines={attention.map((a) => (!('sessionId' in a)
-          ? {
-            key: `kept-many ${a.word}`,
-            who: a.members.map((m) => who(m.runId, m.sessionId)),
-            sentence: a.sentence,
-            sentenceFirst: true,
-          }
-          : {
-            key: a.sessionId,
-            who: [a.runId === null ? a.sessionId : who(a.runId, a.sessionId)],
-            sentence: a.sentence,
-          }))}
+        lines={attentionLines(attention, (s) => (s.runId === null ? s.sessionId : who(s.runId, s.sessionId)))}
       />
       {/* Cleanup un-wedge R2: the registry rows holding the cleanup, above the expiry lane's list, each line with its one confirmed control. */}
       <HeldByRows coord={coord} />

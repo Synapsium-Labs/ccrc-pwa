@@ -5,7 +5,7 @@
 // for case, because the row must behave exactly as its neighbour does.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
-import type { ChildReclaimAttention, CoordCapsView, CoordStatus } from '../../shared/api';
+import type { AttentionRow, ChildReclaimAttention, CoordCapsView, CoordStatus } from '../../shared/api';
 import { ChildReclaimBanner } from '../src/fleet/ChildReclaimBanner';
 import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
@@ -35,6 +35,17 @@ const item = (over: Partial<Extract<ChildReclaimAttention, { kind: 'terminal' }>
   kind: 'terminal', sessionId: 'ccrc-pwa-quiet-basin', runId: 41, token: 'tree-unreadable',
   sentence: 'ccrc could not read this worktree, so it cannot prove nothing here would be lost. Nothing was removed.',
   at: Date.now() - 60_000, ...over,
+});
+
+/** The `AttentionRow` the child lane's reader makes of a single child, and of a collapsed kept line. */
+const childRow = (a: { sessionId: string; runId: number | null; sentence: string }): AttentionRow => ({
+  lane: 'child-reclaim', key: a.sessionId, kind: null, who: [[{ sessionId: a.sessionId, runId: a.runId }]],
+  sentence: a.sentence, sentenceFirst: false,
+});
+const keptManyRow = (a: { word: string; sentence: string; members: readonly { sessionId: string; runId: number }[] }):
+  AttentionRow => ({
+  lane: 'child-reclaim', key: `kept-many ${a.word}`, kind: null,
+  who: a.members.map((m) => [{ sessionId: m.sessionId, runId: m.runId }]), sentence: a.sentence, sentenceFirst: true,
 });
 
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
@@ -324,7 +335,7 @@ describe('the two tolerant readers', () => {
     expect(childReclaimAttentionOf({ childReclaimAttention: 'nope' })).toEqual([]);
     const good = item();
     expect(childReclaimAttentionOf({ childReclaimAttention: [good, { sessionId: 7 }, null, { ...good, runId: '41' }] }))
-      .toEqual([good]);
+      .toEqual([childRow(good)]);
   });
 
   // The case above never isolates any ONE of
@@ -337,9 +348,9 @@ describe('the two tolerant readers', () => {
     const badSessionId = { ...good, sessionId: 7 };
     const badSentence = { sessionId: good.sessionId, runId: good.runId };   // no `sentence` at all
     const badRunId = { ...good, runId: '41' };
-    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badSessionId] })).toEqual([good]);
-    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badSentence] })).toEqual([good]);
-    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badRunId] })).toEqual([good]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badSessionId] })).toEqual([childRow(good)]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badSentence] })).toEqual([childRow(good)]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [good, badRunId] })).toEqual([childRow(good)]);
   });
 
   // Only the fields the renderer reads are required —
@@ -347,7 +358,7 @@ describe('the two tolerant readers', () => {
   // count the moment a future server dropped a field this row never shows.
   it('childReclaimAttentionOf accepts a member with no token or at — the renderer never reads either', () => {
     const bare = { sessionId: 'ccrc-pwa-bare-item', runId: null, sentence: 'a sentence with no token or at' };
-    expect(childReclaimAttentionOf({ childReclaimAttention: [bare] })).toEqual([bare]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [bare] })).toEqual([childRow(bare)]);
   });
 
   // `kind` is ADDITIVE on the wire (spec §5.9): a server older than the arms
@@ -356,7 +367,7 @@ describe('the two tolerant readers', () => {
   it('an item from a server older than the arms (no `kind`) still renders its sentence', () => {
     const { kind: _kind, ...older } = item();
     expect(_kind).toBe('terminal');
-    expect(childReclaimAttentionOf({ childReclaimAttention: [older] })).toEqual([older]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [older] })).toEqual([childRow(older)]);
     const store = makeStore();
     seen(store, coord({ childReclaimAttention: [older as unknown as ChildReclaimAttention] }));
     render(<ChildReclaimBanner store={store} />);
@@ -436,7 +447,7 @@ describe('the collapsed kept line', () => {
     expect(whoOf(rows[0]!)).toEqual([`run #171 · ${one.sessionId}`]);
     expect(rows[0]!.querySelector('.child-reclaim-sentence')?.textContent).toBe(one.sentence);
     expect(rows[0]!.textContent).not.toContain(one.word);
-    expect(childReclaimAttentionOf({ childReclaimAttention: [one] })).toEqual([one]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [one] })).toEqual([childRow(one)]);
   });
 
   // (iii)
@@ -521,11 +532,11 @@ describe('the collapsed kept line', () => {
     const keptKind = { ...good, kind: 'kept' };
     const noKind = { word: good.word, sentence: good.sentence, members: good.members };
     for (const bad of [noMembers, allBad, noWord, noSentence, membersNotArray, keptKind, noKind]) {
-      expect(childReclaimAttentionOf({ childReclaimAttention: [good, bad] })).toEqual([good]);
+      expect(childReclaimAttentionOf({ childReclaimAttention: [good, bad] })).toEqual([keptManyRow(good)]);
     }
     // A member wrong in only its sessionId is dropped alone.
     const oneBadId = { ...good, members: [{ sessionId: 7, runId: 1 }, ...good.members] };
-    expect(childReclaimAttentionOf({ childReclaimAttention: [oneBadId] })).toEqual([good]);
+    expect(childReclaimAttentionOf({ childReclaimAttention: [oneBadId] })).toEqual([keptManyRow(good)]);
   });
 });
 
@@ -564,7 +575,8 @@ describe('the one cleanup switch (wave 3b)', () => {
   it('the one reader: an absent field reads as no items, a malformed member is dropped alone, an unknown kind is "reported"', () => {
     expect(expiryAttentionOf(coord())).toEqual([]);
     expect(expiryAttentionOf({ expiryAttention: [{ sessionId: 'a', kind: 'held', sentence: 's' }, { sessionId: 7 }] }))
-      .toEqual([{ sessionId: 'a', kind: 'held', sentence: 's' }]);
+      .toEqual([{ lane: 'expiry', key: 'a', kind: 'held', who: [[{ sessionId: 'a', runId: null }]], sentence: 's',
+        sentenceFirst: false }]);
     const store = makeStore();
     seen(store, { ...coord(), expiryAttention: [{ sessionId: 'x', kind: 'newer-kind', sentence: 's' }] });
     render(<ChildReclaimBanner store={store} />);
@@ -601,7 +613,8 @@ describe('the dead-coordinator lane’s list (workspace lifecycle wave 4)', () =
     expect(deadCoordinatorAttentionOf(coord())).toEqual([]);
     expect(deadCoordinatorAttentionOf({ deadCoordinatorAttention: [
       { kind: 'stuck', claimants: ['a'], sentence: 's' }, { kind: 'stuck', claimants: [7], sentence: 's' }, { kind: 'stuck' }] }))
-      .toEqual([{ kind: 'stuck', claimants: ['a'], sentence: 's' }]);
+      .toEqual([{ lane: 'dead-coordinator', key: 'stuck:a', kind: 'stuck', who: [[{ sessionId: 'a', runId: null }]],
+        sentence: 's', sentenceFirst: false }]);
     const store = makeStore();
     seen(store, { ...coord(), deadCoordinatorAttention: [{ kind: 'newer-kind', claimants: ['x'], sentence: 's' }] });
     render(<ChildReclaimBanner store={store} />);

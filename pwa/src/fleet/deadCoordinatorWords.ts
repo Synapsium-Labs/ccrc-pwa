@@ -3,7 +3,7 @@
 // ITS OWN FILE, beside `expiryWords.ts` and sharing nothing with it: three populations ride one frame and render in one
 // row (the fleet's one cleanup switch), and each list stays its own. The sentence is the SERVER's — the claimant, why it
 // reads crashed, since when, and what an armed lane would end — and the PWA renders it and maps nothing.
-import type { DeadCoordinatorAttention } from '../../../shared/api';
+import type { AttentionRow, DeadCoordinatorAttention } from '../../../shared/api';
 
 /** What the row says before the claimants and the server's sentence, by kind. A kind from a newer server reads as
  *  `reported`. */
@@ -28,10 +28,14 @@ const isDeadCoordinator = (a: unknown): a is RenderedDeadCoordinator => {
     && Array.isArray(o.claimants) && o.claimants.every((c) => typeof c === 'string');
 };
 
-/** THE ONE READER of `CoordStatus.deadCoordinatorAttention`. An absent field (an older server) reads as no items, and
- *  a malformed member is dropped on its own rather than taking the list with it. */
-export function deadCoordinatorAttentionOf(coord: unknown): RenderedDeadCoordinator[] {
+/** THE ONE READER of `CoordStatus.deadCoordinatorAttention`, as `AttentionRow`s keyed by kind and claimants, every
+ *  claimant one name together. An absent field (an older server) reads as no rows, and a malformed member is dropped
+ *  on its own rather than taking the list with it. */
+export function deadCoordinatorAttentionOf(coord: unknown): AttentionRow[] {
   if (typeof coord !== 'object' || coord === null) return [];
   const list = (coord as { deadCoordinatorAttention?: unknown }).deadCoordinatorAttention;
-  return Array.isArray(list) ? list.filter(isDeadCoordinator) : [];
+  return Array.isArray(list) ? list.filter(isDeadCoordinator).map((a) => ({
+    lane: 'dead-coordinator', key: `${a.kind}:${a.claimants.join(',')}`, kind: a.kind,
+    who: [a.claimants.map((c) => ({ sessionId: c, runId: null }))], sentence: a.sentence, sentenceFirst: false,
+  })) : [];
 }
