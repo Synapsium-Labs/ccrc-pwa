@@ -1,7 +1,8 @@
 {
   "columns": {
     "draftOfMeasured": "server/src/inject/send.ts: the measured box read, {box, draft}; draft is the last marker row only",
-    "_pane_box_draft": "ccd/ccd: the last marker row's text, or empty; null where the capture asks it nothing (it has no absent verdict)"
+    "_pane_box_draft": "ccd/ccd: the bordered box's marker row text, or empty; null where the capture has no bordered box (that answer is rc 2, read in the `_pane_box_read` column)",
+    "_pane_box_read": "ccd/ccd (D-8116): the whole-box read every ccd keystroke guard asks: empty, draft (any box row holds text), or absent (no bordered box: a dialog or menu is open, or the capture missed the box)"
   },
   "captures": {
     "placeholder-dim.ansi": {
@@ -9,146 +10,199 @@
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "placeholder-dim-combined.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "placeholder-dim22.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "placeholder-dim-after-reset.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "placeholder-dim-mid-reset.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "draft-one-line.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "fix the flaky retry test in the queue module"
       },
-      "_pane_box_draft": "fix the flaky retry test in the queue module"
+      "_pane_box_draft": "fix the flaky retry test in the queue module",
+      "_pane_box_read": "draft"
     },
     "draft-multi-line.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "first line of the draft"
       },
-      "_pane_box_draft": "first line of the draft"
+      "_pane_box_draft": "first line of the draft",
+      "_pane_box_read": "draft"
     },
     "draft-paste-chip.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "[Pasted text #4]"
       },
-      "_pane_box_draft": "[Pasted text #4]"
+      "_pane_box_draft": "[Pasted text #4]",
+      "_pane_box_read": "draft"
     },
     "draft-image-chip.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "[Image #5]"
       },
-      "_pane_box_draft": "[Image #5]"
+      "_pane_box_draft": "[Image #5]",
+      "_pane_box_read": "draft"
     },
     "stranded-clear.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "/clear"
       },
-      "_pane_box_draft": "/clear"
+      "_pane_box_draft": "/clear",
+      "_pane_box_read": "draft"
     },
     "box-taller-than-capture.ansi": {
       "draftOfMeasured": {
         "box": "absent"
       },
-      "_pane_box_draft": null
+      "_pane_box_draft": null,
+      "_pane_box_read": "absent"
     },
     "box-capped-tall.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "tall draft line 42"
       },
-      "_pane_box_draft": "tall draft line 42"
+      "_pane_box_draft": "tall draft line 42",
+      "_pane_box_read": "draft"
     },
     "empty-nbsp.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "stash-after-cs.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "stash-held-with-text.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "second thing typed"
       },
-      "_pane_box_draft": "second thing typed"
+      "_pane_box_draft": "second thing typed",
+      "_pane_box_read": "draft"
     },
     "stash-held-during-turn.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": ""
       },
-      "_pane_box_draft": ""
+      "_pane_box_draft": "",
+      "_pane_box_read": "empty"
     },
     "stash-restored.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "half typed operator note"
       },
-      "_pane_box_draft": "half typed operator note"
+      "_pane_box_draft": "half typed operator note",
+      "_pane_box_read": "draft"
     },
     "stash-restored-multi-line.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "first line of a note"
       },
-      "_pane_box_draft": "first line of a note"
+      "_pane_box_draft": "first line of a note",
+      "_pane_box_read": "draft"
     },
     "stash-restored-paste-chip.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "first line of a note[Pasted text #1 +30 lines]"
       },
-      "_pane_box_draft": "first line of a note[Pasted text #1 +30 lines]"
+      "_pane_box_draft": "first line of a note[Pasted text #1 +30 lines]",
+      "_pane_box_read": "draft"
     },
     "stash-clear-restored.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "first line of a note[Pasted text #1 +30 lines]"
       },
-      "_pane_box_draft": "first line of a note[Pasted text #1 +30 lines]"
+      "_pane_box_draft": "first line of a note[Pasted text #1 +30 lines]",
+      "_pane_box_read": "draft"
     },
     "stash-draft.ansi": {
       "draftOfMeasured": {
         "box": "present",
         "draft": "half typed operator note"
       },
-      "_pane_box_draft": "half typed operator note"
+      "_pane_box_draft": "half typed operator note",
+      "_pane_box_read": "draft"
+    },
+    "rate-limit-dialog.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "/rate-limit-options"
+      },
+      "_pane_box_draft": null,
+      "_pane_box_read": "absent"
+    },
+    "rate-limit-dialog-mail-row.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": "ccrc-mail: 1 new message waiting; read it with the mail command"
+      },
+      "_pane_box_draft": null,
+      "_pane_box_read": "absent"
+    },
+    "cc291-model-picker-220x50-full.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": "",
+      "_pane_box_read": "absent"
+    },
+    "cc291-model-default-switch-120x30.ansi": {
+      "draftOfMeasured": {
+        "box": "present",
+        "draft": ""
+      },
+      "_pane_box_draft": "",
+      "_pane_box_read": "absent"
     }
   }
 }

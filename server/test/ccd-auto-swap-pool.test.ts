@@ -106,7 +106,7 @@ const seed = (): void => {
  *  that logs instead of running systemd-run. */
 const AFFINITY = `
   tmux() { ${WIDE_PANE} case "\${1:-}" in
-             capture-pane) printf '%s\\n' "❯ " ;;
+             capture-pane) printf '%s\\n' "────────────────────────" "❯ " "────────────────────────" ;;   # the bordered box (D-8116)
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };

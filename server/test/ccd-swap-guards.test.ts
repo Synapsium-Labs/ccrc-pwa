@@ -26,7 +26,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, boxed } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -120,7 +120,7 @@ const manual = (args: string, env: NodeJS.ProcessEnv = { TMUX: '' }, extra = '')
 describe('an automatic affinity swap re-runs its idle gate at the act', () => {
   /** Returns the prior \`lastswap\` it seeded, computed once (a second re-computation races the clock). */
   const decideIdle = (extra = ''): string => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     const prev = String(nowS() - 5000);
     fs.writeFileSync(regPath('lastswap'), prev);
     decide(extra);
@@ -140,7 +140,7 @@ describe('an automatic affinity swap re-runs its idle gate at the act', () => {
   });
 
   it('with no lastswap before the decision, a re-queue removes the one the decision stamped', () => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     decide();
     expect(h.reg(ID, 'lastswap')).not.toBeNull();
     live('claude', 'busy');
@@ -167,7 +167,7 @@ describe('an automatic affinity swap re-runs its idle gate at the act', () => {
 // ── the degrade stamp moves to the act ───────────────────────────────────────
 describe('the degrade stamp is written at the act, after the gates', () => {
   it('the decision carries the rung into the unit and stamps nothing itself', () => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     decide(RUNG);
     const s = detached()[0] ?? '';
     expect(s).toMatch(/CCD_SWAP_DFROM=fable/);
@@ -177,7 +177,7 @@ describe('the degrade stamp is written at the act, after the gates', () => {
   });
 
   it('a re-queued swap decided with a rung leaves no degraded stamp and no route row', () => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     decide(RUNG);
     live('claude', 'busy');
     act(RUNG);
@@ -187,7 +187,7 @@ describe('the degrade stamp is written at the act, after the gates', () => {
   });
 
   it('a swap that proceeds is stamped once, before _operator_choice_keep', () => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     decide(RUNG);
     act(`${RUNG} ${KEEP_PROBE}`);
     expect(h.reg(ID, 'degraded')).toBe('opus');
@@ -196,7 +196,7 @@ describe('the degrade stamp is written at the act, after the gates', () => {
   });
 
   it('a stamp that cannot be written stands still: lastswap restored, nothing stopped', () => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     fs.writeFileSync(regPath('lastswap'), '1000');
     decide(RUNG);
     fs.mkdirSync(regPath('degraded'));
@@ -262,7 +262,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
 
   it('banner gone and the transcript verdict negative: rescue-cancel, prior bytes back, nothing stopped', () => {
     decideRescue();
-    pane('❯ ');
+    pane(boxed());
     act();
     expect(swapLog()).toContain(`rescue-cancel ${ID}: no longer blocked (negative)`);
     expect(stopped()).toBe(false);
@@ -278,7 +278,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
   it('a cancel whose prior was ABSENT removes the row', () => {
     decideRescue(null);
     expect(fs.readFileSync(regPath('rescueprev'), 'utf8')).toBe(`${decidedTs()} absent\n`);
-    pane('❯ ');
+    pane(boxed());
     act();
     expect(swapLog()).toContain('rescue-cancel');
     expect(fs.existsSync(limitsFile())).toBe(false);
@@ -288,7 +288,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     decideRescue();
     const marker = path.join(reg(), 'gpt-authdead');
     fs.writeFileSync(marker, `${nowS()} rescue-401`);
-    pane('❯ ');
+    pane(boxed());
     act();
     expect(swapLog()).toContain('rescue-cancel');
     expect(fs.existsSync(marker)).toBe(true);
@@ -298,7 +298,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     decideRescue();
     const newer = `{"five":100,"seven":0,"ts":${Number(decidedTs()) + 7}}`;
     fs.writeFileSync(limitsFile(), newer);
-    pane('❯ ');
+    pane(boxed());
     act();
     expect(swapLog()).toContain('rescue-cancel');
     expect(fs.readFileSync(limitsFile(), 'utf8')).toBe(newer);
@@ -317,7 +317,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
       isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
       quotaLimits: { status: 'rejected', resetsAt: at + 3600, rateLimitType: 'five_hour' },
     })}\n`);
-    pane('❯ ');
+    pane(boxed());
     act(`_pane_born() { echo ${nowS() - 30}; };`);
     expect(swapLog()).toMatch(new RegExp(`rescue-cancel ${ID}: no longer blocked \\((negative|carried-in)\\)`));
     expect(swapLog()).not.toContain('rescue-backoff');
@@ -332,7 +332,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
     decideRescue();
     const marker = path.join(reg(), 'gpt-authdead');
     fs.writeFileSync(marker, `${nowS()} rescue-401`);
-    pane('❯ half a sentence');
+    pane(boxed('half a sentence'));
     fs.writeFileSync(regPath('tscan'), `${nowS()} 1`);
     act();
     expect(swapLog()).toContain(`rescue-backoff ${ID}: draft`);
@@ -345,7 +345,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
 
   it('a fresh stale-press at the act backs off and undoes nothing', () => {
     decideRescue();
-    pane('❯ ');
+    pane(boxed());
     fs.writeFileSync(regPath('stalepress'), `${nowS()}`);
     act();
     expect(swapLog()).toContain(`rescue-backoff ${ID}: stalepress`);
@@ -366,7 +366,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
 
   it('an unmeasurable pane proceeds as decided and undoes nothing, over a transcript with earlier replies', () => {
     const tx = decideRescue(PRIOR, true);
-    pane('❯ ');
+    pane(boxed());
     fs.writeFileSync(path.join(h.home, 'narrow'), '');
     // Something after the decision, so the offset is read at all (an unchanged size answers no before it).
     fs.appendFileSync(tx, '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 429"}]}}\n');
@@ -378,7 +378,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
 
   it('still blocked, but the transcript gained an assistant entry since the decision: back off', () => {
     const tx = decideRescue();
-    pane('❯ ');
+    pane(boxed());
     fs.writeFileSync(regPath('tscan'), `${nowS()} 1`);
     fs.appendFileSync(tx, '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n');
     act();
@@ -390,7 +390,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
 
   it('still blocked, and the only new entry is an API error: proceed (earlier replies before the decision do not count)', () => {
     const tx = decideRescue(PRIOR, true);
-    pane('❯ ');
+    pane(boxed());
     fs.writeFileSync(regPath('tscan'), `${nowS()} 1`);
     fs.appendFileSync(tx, '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 429"}]}}\n');
     act();
@@ -402,7 +402,7 @@ describe('a rescue re-confirms the block at the act, on a measured answer only',
 // ── the manual arm ───────────────────────────────────────────────────────────
 describe('a manual swap needs --interrupt over a busy session, and refuses an unreadable one', () => {
   it('busy, no flag: session-busy, the pane untouched, no .choicekept', () => {
-    seed('claude'); pane('❯ '); live('claude', 'busy');
+    seed('claude'); pane(boxed()); live('claude', 'busy');
     const r = manual(`${ID} claude-d`);
     expect(r.rc).not.toBe(0);
     expect(r.err).toMatch(/^ccd: session-busy: /);
@@ -412,20 +412,20 @@ describe('a manual swap needs --interrupt over a busy session, and refuses an un
   });
 
   it('busy, --interrupt: proceeds', () => {
-    seed('claude'); pane('❯ '); live('claude', 'busy');
+    seed('claude'); pane(boxed()); live('claude', 'busy');
     const r = manual(`--interrupt ${ID} claude-d`);
     expect(r.rc).toBe(0);
     expect(h.reg(ID, 'wrapper')).toBe('claude-d');
   });
 
   it('idle: proceeds without the flag', () => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     expect(manual(`${ID} claude-d`).rc).toBe(0);
     expect(h.reg(ID, 'wrapper')).toBe('claude-d');
   });
 
   it('an unreadable status refuses status-unknown, and --interrupt does not override it', () => {
-    seed('claude'); pane('❯ '); noLive('claude');
+    seed('claude'); pane(boxed()); noLive('claude');
     const a = manual(`${ID} claude-d`);
     expect(a.rc).not.toBe(0);
     expect(a.err).toMatch(/^ccd: status-unknown: /);
@@ -444,7 +444,7 @@ describe('the detach path', () => {
   };
 
   it('a busy session swapping itself without --interrupt is refused synchronously, never detached', () => {
-    seed('claude'); pane('❯ '); live('claude', 'busy');
+    seed('claude'); pane(boxed()); live('claude', 'busy');
     const r = manual(`${ID} claude-d`, inside());
     expect(r.rc).not.toBe(0);
     expect(r.err).toMatch(/session-busy/);
@@ -453,7 +453,7 @@ describe('the detach path', () => {
   });
 
   it('with --interrupt the re-run carries the flag, and running it inline proceeds', () => {
-    seed('claude'); pane('❯ '); live('claude', 'busy');
+    seed('claude'); pane(boxed()); live('claude', 'busy');
     const env = inside();
     const r = manual(`--interrupt ${ID} claude-d`, env);
     expect(r.out).toMatch(/detached:/);
@@ -463,7 +463,7 @@ describe('the detach path', () => {
   });
 
   it('a refusal inside the detached re-run is logged and notified, never through _swap_refuse', () => {
-    seed('claude'); pane('❯ '); noLive('claude');
+    seed('claude'); pane(boxed()); noLive('claude');
     fs.writeFileSync(regPath('lastswap'), '1234');
     const r = manual(`--interrupt ${ID} claude-d`, { TMUX: '', CCD_SWAP_DETACHED: '1' });
     expect(r.rc).toBe(1);
@@ -475,7 +475,7 @@ describe('the detach path', () => {
   });
 
   it('swap-self from inside a busy session detaches with --interrupt and the job proceeds', () => {
-    seed('claude'); pane('❯ '); live('claude', 'busy');
+    seed('claude'); pane(boxed()); live('claude', 'busy');
     const env = inside();
     const out = h.sh(`${STUBS} cmd_swap_self claude-d`, env);
     expect(out).toMatch(/detached:/);
@@ -497,7 +497,7 @@ describe('ccd caps', () => {
 // held: a session on a blocked account is still evacuated.
 describe('a woken row takes no affinity swap for SWAP_COOLDOWN (D-5242)', () => {
   const arrange = (wokeAgoS: number | null): void => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     fs.writeFileSync(regPath('lastswap'), String(nowS() - 5000));
     if (wokeAgoS !== null) fs.writeFileSync(regPath('woke'), String(nowS() - wokeAgoS));
   };
@@ -544,7 +544,7 @@ describe('an affinity move waits while the turn marker reports background work',
   const marker = (m: Mark = {}): void => { fs.writeFileSync(regPath('turn.json'), `${markerLine(m)}\n`); };
   const aged = (p: string, s: number): void => { const t = new Date(ago(s)); fs.utimesSync(p, t, t); };
   const arrange = (m: Mark | null = {}): void => {
-    seed('claude'); pane('❯ '); live('claude', 'idle');
+    seed('claude'); pane(boxed()); live('claude', 'idle');
     if (m !== null) marker(m);
   };
   const deferLines = (): string[] => swapLog().split('\n').filter((l) => /swap-defer /.test(l));

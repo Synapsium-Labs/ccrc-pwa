@@ -1472,7 +1472,7 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
   const TICK = `sleep() { :; };
     tmux() { echo "tmux $*" >> "$HOME/tmux-calls"
       case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
-      case "$1" in list-panes) printf '%s\\n' 424242 ;; capture-pane) printf '%s\\n' '? for shortcuts' '❯ ' ;; esac
+      case "$1" in list-panes) printf '%s\\n' 424242 ;; capture-pane) printf '%s\\n' '────────────────────────' '❯ ' '────────────────────────' '  ? for shortcuts' ;; esac
       return 0; };`;
   const tick = (sid: string): string => {
     const dir = path.join(h.home, '.claude', 'sessions');

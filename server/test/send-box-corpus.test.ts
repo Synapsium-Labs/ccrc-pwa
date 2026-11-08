@@ -25,17 +25,28 @@
  *    measured), so this pins the spec's named encoding for any reader handed raw terminal output.
  * D-6007: `box-taller-than-capture` is the fleet's measured 2026-09-18 shape (`send.test.ts`'s
  * `BOX_TALLER_THAN_THE_WINDOW`: the marker row scrolled out of the 50-row window) with its text made neutral.
+ * D-8116: `rate-limit-dialog` and `rate-limit-dialog-mail-row` are MODELLED, not recorded: `empty-nbsp`'s banner rows,
+ * then a limit message under the turn it hit and Claude Code's own `/rate-limit-options` dialog in the box's place,
+ * shaped on the real slash-command dialogs in `fixtures/panes/` (`cc291-model-picker-*`: an echo `❯ /…` row above
+ * a bordered dialog whose cursor row is indented). One keeps the echo; the other keeps only the `❯ ccrc-mail: …` turn
+ * the limit hit. ccd's third column, `_pane_box_read`, reads both `absent`. Both leave out the box and statusline,
+ * so they hold only a dialog that hides the box. `cc291-model-picker-220x50-full` and
+ * `cc291-model-default-switch-120x30` are RECORDED (copied verbatim from `fixtures/panes/`, Claude Code 2.1.291): the
+ * /model picker and its footerless `Switch model?` dialog drawn OVER a bare `❯` box and the statusline. Their marker
+ * row is that bare box row, so this column reads `{box: 'present', draft: ''}`, and `_pane_box_read` reads `absent`
+ * off the dialog's cursor row (`_pane_box_dialog`).
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { draftOfMeasured, type BoxRead } from '../src/inject/send.js';
+import { hasMenu, stripSgr } from '../src/pane/dialog.js';
 
 const boxDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes', 'box');
 const capture = (name: string): string => readFileSync(path.join(boxDir, name), 'utf8');
 
-interface Verdict { draftOfMeasured: BoxRead; _pane_box_draft: string | null }
+interface Verdict { draftOfMeasured: BoxRead; _pane_box_draft: string | null; _pane_box_read: 'empty' | 'draft' | 'absent' }
 const VERDICTS = (JSON.parse(readFileSync(path.join(boxDir, 'verdicts.json'), 'utf8')) as {
   captures: Record<string, Verdict>;
 }).captures;
@@ -84,6 +95,14 @@ describe('the box reader corpus (D-5910)', () => {
     expect(draftOfMeasured(capture('box-taller-than-capture.ansi'))).toEqual({ box: 'absent' });
     // The 2.1.303 row cap keeps a marker in view, so that shape is present and non-empty: it refuses as a draft.
     expect(draftOfMeasured(capture('box-capped-tall.ansi'))).toEqual(VERDICTS['box-capped-tall.ansi']!.draftOfMeasured);
+  });
+
+  it('the limit dialog captures: hasMenu answers first, so the stale row draftOfMeasured reads never reaches a send (D-8116)', () => {
+    for (const n of names('rate-limit-dialog')) {
+      expect(hasMenu(stripSgr(capture(n))), n).toBe(true);
+      expect(draftOfMeasured(capture(n)), n).toEqual(VERDICTS[n]!.draftOfMeasured);
+    }
+    expect(names('rate-limit-dialog')).toHaveLength(2);
   });
 
   it('`empty-nbsp` reads empty', () => {
