@@ -494,9 +494,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 37 of 37 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 38 of 38 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(37);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(38);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {

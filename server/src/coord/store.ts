@@ -206,6 +206,12 @@ export interface PrLineageEntry { pr: number; branch: string; prbranch?: string;
 /** One `gone_since` row (D-8071): the first pass of this spell that read the person gone, and the latest. Epoch ms. */
 export interface GoneAnchor { readonly firstGoneAt: number; readonly lastGoneAt: number }
 
+/** One closed run whose claimant has not been told (D-8073, spec §11.7): `run_close_untold`'s row. */
+export interface UntoldRow {
+  readonly runId: number; readonly program: string; readonly wave: number; readonly waveOf: number | null;
+  readonly claimant: string; readonly cause: string; readonly detail: string | null; readonly at: number;
+}
+
 export interface RunRow extends RunSummary {
   prLineage: PrLineageEntry[]; coordProject: string | null;
   sessionBornAt: number | null; sessionBornFor: string | null;
@@ -3112,6 +3118,9 @@ export class CoordStore {
       // watcher's `divergence.claim-orphan` is the alarm for the close that
       // never got here.
       this.releaseClaimsForRun(input.runId, Date.now());
+      // D-8073 (spec §11.7): an operator or sweep close owes its claimant one word, written here so it cannot be lost to a
+      // crash and deleted only by the transaction that queues the notice (`untoldPass`).
+      if (input.causedBy === 'operator' || input.causedBy === 'sweep') this.writeUntold(input.runId, input.causedBy, input.detail ?? null);
       // D-51's program-retirement check, run inside the SAME transaction:
       // the run just closed already reads as terminal to this COUNT, because
       // the write above is visible to a later read within one `tx()`.
@@ -3120,6 +3129,28 @@ export class CoordStore {
       }
       return finalAdv;
     });
+  }
+
+  /** The `untold` row of a run just closed by `causedBy`, from the run's own claimant; none for a run with no claimant. Runs
+   *  inside `closeRun`'s transaction and opens none. */
+  private writeUntold(runId: number, cause: string, detail: string | null): void {
+    const r = this.db.prepare('SELECT program, wave, waveOf, claimedBy FROM runs WHERE id = ?').get(runId) as
+      { program: string; wave: number; waveOf: number | null; claimedBy: string | null } | undefined;
+    if (r === undefined || r.claimedBy === null) return;
+    this.db.prepare('INSERT OR REPLACE INTO run_close_untold (runId, program, wave, waveOf, claimant, cause, detail, at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(runId, r.program, r.wave, r.waveOf, r.claimedBy, cause, detail, Date.now());
+  }
+
+  /** Every closed run whose claimant has not been told, oldest close first (D-8073, spec §11.7). */
+  untoldRows(): UntoldRow[] {
+    return this.db.prepare('SELECT runId, program, wave, waveOf, claimant, cause, detail, at FROM run_close_untold ORDER BY at, runId')
+      .all() as unknown as UntoldRow[];
+  }
+
+  /** Delete the `untold` rows of these runs. Opens no transaction: the notice's own holds it (D-8073). */
+  deleteUntold(runIds: readonly number[]): void {
+    const del = this.db.prepare('DELETE FROM run_close_untold WHERE runId = ?');
+    for (const id of runIds) del.run(id);
   }
 
   /**
@@ -6472,10 +6503,10 @@ export class CoordStore {
 
   /** A new `queued` delivery. `revivedFrom` (D-5914, migration 40) is the parked delivery this one revives, written
    *  here at INSERT and never updated; only `queueHeir`, for `reviveParkedDeliveries`, passes one. */
-  queueDelivery(mailId: number, toId: string, envelope: string, revivedFrom: number | null = null): { id: number } {
+  queueDelivery(mailId: number, toId: string, envelope: string, revivedFrom: number | null = null, wake: 'never' | null = null): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail_deliveries (mailId, toId, state, envelope, revivedFrom) VALUES (?, ?, ?, ?, ?)',
-    ).run(mailId, toId, 'queued', envelope, revivedFrom);
+      'INSERT INTO mail_deliveries (mailId, toId, state, envelope, revivedFrom, wake) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(mailId, toId, 'queued', envelope, revivedFrom, wake);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -6616,7 +6647,7 @@ export class CoordStore {
                                 attempts: number; lastError: string | null; envelope: string;
                                 deliveredAt: number | null; ingestedAt: number | null;
                                 lastGate: string | null; gateSince: number | null;
-                                parkedAt: number | null; parkReason: string | null; parkBox: string | null }[] {
+                                parkedAt: number | null; parkReason: string | null; parkBox: string | null; wake: string | null }[] {
     return this.db.prepare(
       // `lastError` (Task 409) is the row's INCOMING failure — what it already
       // carried before this sweep touched it — which is how `sweepMail` tells
@@ -6627,7 +6658,7 @@ export class CoordStore {
       // of gate, and reading the row again at write time would race the sweep
       // against itself on exactly the rows it is deciding about.
       'SELECT id, mailId, toId, attempts, lastError, envelope, deliveredAt, ingestedAt, ' +
-      'lastGate, gateSince, parkedAt, parkReason, parkBox FROM mail_deliveries ' +
+      'lastGate, gateSince, parkedAt, parkReason, parkBox, wake FROM mail_deliveries ' +
       "WHERE (state = 'queued' AND nextAttemptAt <= ?) " +
       "OR (state = 'delivered' AND MAX(COALESCE(ingestedAt, 0), COALESCE(deliveredAt, 0)) + ? <= ? " +
       'AND nextAttemptAt <= ?) ' +
@@ -6636,7 +6667,7 @@ export class CoordStore {
                     lastError: string | null; envelope: string;
                     deliveredAt: number | null; ingestedAt: number | null;
                     lastGate: string | null; gateSince: number | null;
-                    parkedAt: number | null; parkReason: string | null; parkBox: string | null }[];
+                    parkedAt: number | null; parkReason: string | null; parkBox: string | null; wake: string | null }[];
   }
 
   /**

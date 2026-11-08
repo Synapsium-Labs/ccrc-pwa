@@ -3530,6 +3530,22 @@ describe('sweepMail: a hibernated recipient is woken, never parked (D-5242)', ()
     expect(row.state).toBe('queued');
   });
 
+  it('it never asks a wake: a runs-closed notice (wake never) to a hibernated recipient is held, with no ensure and no budget spent (D-8073)', async () => {
+    const h = harness({ hasSession: false });
+    const coord = store(h.home);
+    const c = ccdRec();
+    const { w } = await primedWatcher(h, coord, { runCcd: c.runCcd });
+    seedHibernated(h.home, ID, UUID);
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    coord.db.prepare("UPDATE mail_deliveries SET wake = 'never' WHERE id = ?").run(id);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls)).toEqual([]);
+    expect(deliveryRow(coord, id)).toMatchObject({ state: 'queued', lastGate: 'hibernated', attempts: 0 });
+    queueTestDelivery(coord, ID, ENVELOPE);
+    advance(PAST_SWEEP_MS); await w.sweepMail();
+    expect(ensures(c.calls), 'the held notice spent no budget, so ordinary mail still wakes').toEqual([ID]);
+  });
+
   it('a marker that gives no time, beside a stop stamp, wakes the same way and never parks (D-8067)', async () => {
     const h = harness({ hasSession: false });
     const coord = store(h.home);
