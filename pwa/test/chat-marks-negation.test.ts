@@ -4,9 +4,11 @@
 // keeps the mark, when:
 //   - a negator (`STATUS_NEGATORS`: no, none, not, never, nothing, 0, zero) stands before the status word in its
 //     clause, before the subject or between the two. A word is read whole, joined by `.`, `-` or `/` (`v0.0.1003`,
-//     `no-op`), and a recognised name's own words are not negators (`run 0`);
+//     `no-op`), and a recognised name's own words are not negators (`run 0`). A joined zero count is one ("0/12",
+//     "0-0", "0.0", "No/none": review 1601 F1, desktop-polish Task C14);
 //   - right after the status word, behind a colon, its count is zero: `0`, `zero` or `none`, followed by the clause's
-//     end, "of N" or "/N" ("passed: 0 of 12");
+//     end, "of N" or "out of N" (N a number or a number word), "(of N)", "/N" with or without spaces, `%` or a dash
+//     clause ("passed: 0 of 12", "failed: 0 — all good": review 1601 F2);
 //   - the status word's sentence ends in "?".
 // A clause ends at `.`, `!`, `?`, `;`, `,` or `:` followed by a space or the end, or at a line break; a sentence at
 // `.`, `!` or `?` followed by a space or the end, or at a line break. Through the plugin, the text of the same block
@@ -125,6 +127,42 @@ describe('the after-colon arm reads a count of zero only (review 1592 F2)', () =
     ['CI green: no failures', { text: 'green', tone: 'ok' }],
     ['tests passed: none skipped', { text: 'passed', tone: 'ok' }],
     ['tests passed: 0.5 of the time', { text: 'passed', tone: 'ok' }],
+  ])('%s keeps its label', (text, status) => {
+    expect(statusesOf(text)).toEqual([status]);
+  });
+});
+
+describe('a zero count joined or spaced carries no label (review 1601 F1, F2; desktop-polish Task C14, D-8110)', () => {
+  it.each<[string]>([
+    // F1: a joined token that is a zero count, `0`, `zero` or `none` then `/` and a number, or zero words joined.
+    ['0/12 tests passed'],
+    ['0/3 checks passed'],
+    ['Zero/12 tests passed'],
+    ['0-0 tests passed'],
+    ['0.0 tests failed'],
+    ['No/none tests failed'],
+    // F2: the follow-set behind the colon.
+    ['tests passed: 0 / 12'],
+    ['tests passed: 0 out of 12'],
+    ['tests passed: 0%'],
+    ['tests passed: 0 of twelve'],
+    ['tests passed: 0 (of 12)'],
+    ['tests failed: 0 — all good'],
+  ])('%s: no label', (text) => {
+    expect(statusesOf(text)).toEqual([]);
+  });
+
+  it.each<[string, { text: string; tone: string }]>([
+    ['0.5% of tests failed', { text: 'failed', tone: 'fail' }],
+    ['v0.0.1003 is live and CI green', { text: 'green', tone: 'ok' }],
+    ['docs/no.md merged', { text: 'merged', tone: 'merged' }],
+    ['On Node 0.10 tests passed', { text: 'passed', tone: 'ok' }],
+    ['0.0.1 tests passed', { text: 'passed', tone: 'ok' }],
+    ['the no-op build passed', { text: 'passed', tone: 'ok' }],
+    ['not-yet CI green', { text: 'green', tone: 'ok' }],
+    ['tests passed: 0.5% of the time', { text: 'passed', tone: 'ok' }],
+    ['tests passed: none skipped', { text: 'passed', tone: 'ok' }],
+    ['tests passed: 0 offline', { text: 'passed', tone: 'ok' }],
   ])('%s keeps its label', (text, status) => {
     expect(statusesOf(text)).toEqual([status]);
   });

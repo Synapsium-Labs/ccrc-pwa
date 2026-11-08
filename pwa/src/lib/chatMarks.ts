@@ -191,11 +191,40 @@ const SENTENCE_END = /[.!?](?=\s|$)|\n/g;
  *  text's end, or a line break), or a whole word, digits included, with any `.`, `-` or `/` joining it to more word
  *  characters (`10`, `v0.0.1003`, `no-op`, `docs/no.md` are each one word; review 1592 F3). */
 const NEGATION_TOKEN = /([.!?;,:](?=\s|$)|\n)|[\p{L}\p{M}\p{N}_]+(?:[.\-/][\p{L}\p{M}\p{N}_]+)*/gu;
-/** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N", "/N" or
- *  the clause's end ("passed: 0 of 12", "failed: none."; review 1592 F2). */
-const ZERO_COUNT_AFTER = /\s*:\s*(?:0|zero|none)(?:\s+of\s+\p{N}|\/\p{N}|(?=[^\S\n]*(?:[.!?;,:](?=\s|$)|\n|$)))/iuy;
+/** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2). */
+const NUMBER_WORDS = [
+  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen',
+  'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty',
+  'seventy', 'eighty', 'ninety', 'hundred', 'thousand',
+];
+/** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N" or
+ *  "out of N" (N in digits or a number word), "(of N)", "/N" with or without spaces, `%`, a dash clause, or the clause's
+ *  end ("passed: 0 of 12", "failed: none.", "passed: 0 / 12", "failed: 0 — all good"; reviews 1592 F2 and 1601 F2). */
+const ZERO_COUNT_AFTER = new RegExp(
+  '\\s*:\\s*(?:0|zero|none)(?:'
+    + `\\s+(?:out\\s+)?of\\s+(?:\\p{N}|${NUMBER_WORDS.join('|')})`
+    + '|[^\\S\\n]*\\(\\s*(?:out\\s+)?of\\s+\\p{N}'
+    + '|[^\\S\\n]*\\/[^\\S\\n]*\\p{N}'
+    + '|%'
+    + '|(?=[^\\S\\n]*(?:[.!?;,:](?=\\s|$)|\\n|$)|[^\\S\\n]*[\u2014\u2013]|[^\\S\\n]+-[^\\S\\n]))',
+  'iuy',
+);
 
-const isNegator = (word: string): boolean => STATUS_NEGATORS.includes(word.toLowerCase());
+/** The zero words a joined zero count over a total starts with ("0/12"; review 1601 F1). */
+const ZERO_WORDS: readonly string[] = ['0', 'zero', 'none'];
+/** Whether one scanned word is a negator: one of `STATUS_NEGATORS`, or a joined token that is a zero count, its parts
+ *  all negators ("0-0", "0.0", "no/none") or a zero word over a number ("0/12", "Zero/12"). Any other joined token is
+ *  one word that is not a negator, so `0.5%`, `v0.0.1003`, `docs/no.md` and `no-op` keep their labels (review 1592 F3;
+ *  review 1601 F1). */
+const isNegator = (word: string): boolean => {
+  const w = word.toLowerCase();
+  if (STATUS_NEGATORS.includes(w)) return true;
+  const parts = w.split(/[.\-/]/);
+  if (parts.length < 2) return false;
+  if (parts.every((p) => STATUS_NEGATORS.includes(p))) return true;
+  const [count, total] = parts;
+  return parts.length === 2 && ZERO_WORDS.includes(count!) && w.charAt(count!.length) === '/' && /^\p{N}+$/u.test(total!);
+};
 
 /** Where a recognised name stands, in the scanned text's offsets. */
 interface Span {
