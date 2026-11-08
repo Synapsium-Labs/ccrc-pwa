@@ -38,9 +38,10 @@ export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts |
     ? 'forget' : 'recheck';
 }
 
-/** The pace (reviews 1580 F1 and 1585 F1): ccrc asks a held item again only once its own backoff has run, one ask a
- *  minute fleet-wide. Nothing here resets it or asks the server. The server's sentences carry the same two phrases
- *  (`server/src/cleanupHeldBy.ts`); a parity test holds them equal. */
+/** The pace (reviews 1580 F1, 1585 F1 and 1590 F1): ccrc asks a held item again only once its own backoff has run, at
+ *  each lane's own pace (review 1590 N-e: the reclaim lane asks one child a minute fleet-wide; the expiry and collect
+ *  lanes run a few audits a pass). Nothing here resets it or asks the server. The server's sentences carry the same two
+ *  phrases (`server/src/cleanupHeldBy.ts`); a parity test holds them equal. */
 const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
 const HELD_PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
@@ -72,7 +73,7 @@ export const CLEANUP_HELD_BY_RECHECKED =
   `Checked again against the latest status; nothing was sent. ccrc reads this row again when it next checks what it holds: ${HELD_PACE}. ${HELD_PAUSED}`;
 
 /** The toast after a forget the server accepted: the row is gone from the registry, and its line stays until the
- *  children it held are asked again. */
+ *  items it held (child workspaces, archived workspaces and temp roots) are checked again. */
 export const heldByRowForgot = (rowId: string): string =>
   `Forgot ${rowId}. The line clears as each item it held is checked again, ${HELD_PACE}. ${HELD_PAUSED}`;
 

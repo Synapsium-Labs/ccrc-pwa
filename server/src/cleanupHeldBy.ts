@@ -44,10 +44,11 @@ interface SentenceParts { readonly found: string; readonly remedy: (act: Cleanup
 
 const RECHECK_TAIL = 'Then check again.';
 
-/** The pace (reviews 1580 F1 and 1585 F1): a pass asks a held child only once its own backoff has run, one ask a minute
- *  fleet-wide, so it is usually minutes for a new hold and a few hours or more on the persistent tier. Nothing resets
- *  that backoff. The console's confirm words carry the same two phrases (`heldByRowsWords.ts`; a parity test holds them
- *  equal). */
+/** The pace (reviews 1580 F1, 1585 F1 and 1590 F1): a pass asks a held item only once its own backoff has run. Each
+ *  lane has its own pace (review 1590 N-e): the reclaim lane asks one child a minute fleet-wide and puts a child asked
+ *  before behind older asks, the expiry and collect lanes run a few audits a pass. So it is usually minutes for a new
+ *  hold, a few hours or more on the persistent tier, and longer when many items are held. Nothing resets that backoff.
+ *  The console's confirm words carry the same two phrases (`heldByRowsWords.ts`; a parity test holds them equal). */
 const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
 const HELD_PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
