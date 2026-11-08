@@ -494,7 +494,7 @@ describe('migration 45 — gone_since', () => {
     expect(statements).toHaveLength(1);
     expect(statements[0]).toMatch(/^CREATE TABLE gone_since \(personId TEXT NOT NULL PRIMARY KEY, firstGoneAt INTEGER NOT NULL, lastGoneAt INTEGER NOT NULL\)$/);
   });
-  it('steps a file one version below it to this entry and takes a fresh file there', () => {
+  it('steps a file one version below it forward to the newest entry and takes a fresh file there', () => {
     const p = path.join(mkTmp('ccrc-stuck-mig-'), '.ccrc', 'coord.db');
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
@@ -502,7 +502,7 @@ describe('migration 45 — gone_since', () => {
     raw.exec(`PRAGMA user_version = ${ENTRY}`);
     raw.close();
     const stepped = openCoordDb(p);
-    expect((stepped.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(ENTRY + 1);
+    expect((stepped.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(MIGRATIONS.length);
     expect(stepped.prepare("SELECT name FROM sqlite_master WHERE name = 'gone_since'").get()).toBeDefined();
     stepped.close();
   });
