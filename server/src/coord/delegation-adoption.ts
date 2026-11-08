@@ -208,7 +208,10 @@ export function adoptionCarrierReads(input: Omit<AdoptionInput, 'carriers'>, las
 
 /** An audit answer held between passes: the generation it measured, and when it was read. */
 export interface HeldLeaseAudit { generation: number; answer: LeaseAuditAnswer; at: string }
-const definite = (a: LeaseAuditAnswer): boolean => a.ok && typeof a.changed === 'boolean';
+/** A DEFINITE audit answer: one that read and says `changed: true` or `false`. The one definition (review 1659 F1): the decider holds
+ *  only these, and the adoption switch's list (`delegation-adopt-switch.ts#adoptionKeepsOf`) names a tree's changes only from these. */
+export const definite = (a: LeaseAuditAnswer): a is Extract<LeaseAuditAnswer, { ok: true }> & { changed: boolean } =>
+  a.ok && typeof a.changed === 'boolean';
 /**
  * The audit answers the decider is fed this pass, and the answers held for the next (review 1587 F3, A8; D-8057 amended). Fed: `unsupported`
  * on a box without `lease-audit-v1`; else this pass's own answer at the lease's generation, whatever it says (rule 7 counts one that is not

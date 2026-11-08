@@ -932,15 +932,16 @@ describe('the pane scope marker keeps one reader and one writer, and the two act
   });
 });
 
-// Delegation broker wave 5, PR7 (Task 5.7.1, W5-X1): the adoption marker is declared ONCE, in its switchboard row, hand-only.
-describe('delegation PR7: DELEGATION_ADOPT_MARKER is one hand-only switchboard row (W5-X1)', () => {
-  it('declared once, in shared/switches.ts, with a hand-only C5 row that defaults to shadow', () => {
+// Delegation broker wave 5, PR7 (Task 5.7.1, W5-X1): the adoption marker is declared ONCE, in its switchboard row; since PR8b
+// (D-8112) its writer is ccd's `delegation-adopt` verb behind the operator's door, no longer hand-only.
+describe('delegation PR7, PR8b: DELEGATION_ADOPT_MARKER is one switchboard row, written by its verb (W5-X1, D-8112)', () => {
+  it('declared once, in shared/switches.ts, with a C5 row that defaults to shadow and names its one writer', () => {
     const DEF = /\bexport\s+const\s+DELEGATION_ADOPT_MARKER\s*=\s*'delegation-adopt'/;
     expect(ALL.filter((f) => DEF.test(stallCode(f))).map(rel)).toEqual(['shared/switches.ts']);
     const row = (SWITCHES as Record<string, { storage: unknown; writer: string; owner: string; default: string }>)['delegation-adopt'];
     expect(row, 'the switchboard has no delegation-adopt row').toBeDefined();
     expect(row!.storage).toEqual({ marker: 'delegation-adopt' });
-    expect(row!.writer).toBe('hand-only');
+    expect(row!.writer).toBe('ccd delegation-adopt, through POST /api/coord/delegation-adopt');
     expect(row!.owner).toBe('C5');
     expect(row!.default).toMatch(/^absent: shadow/);
   });

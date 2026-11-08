@@ -331,12 +331,26 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     expect(writersOf('mail-disabled')).toEqual([]);
   });
 
-  // Delegation broker wave 5, PR7 (Task 5.7.1, W5-X2): the adoption marker is hand-only; no file in server/src, shared, ccd, agent/src
-  // or deploy writes it (the operator touches it on the fleet box after reading the shadow's would-adopt counts).
-  it('delegation-adopt: hand-only, no writer in the tree (W5-X2)', () => {
-    expect(SWITCHES['delegation-adopt'].writer).toBe('hand-only');
+  // Delegation broker wave 5, PR7 (Task 5.7.1, W5-X2), re-pointed by PR8b (D-8112): the adoption marker has ONE writer in the
+  // tree, ccd's `delegation-adopt` verb, reached only through `POST /api/coord/delegation-adopt` (the operator's session-gated switch).
+  // No other file in server/src, shared, ccd, agent/src or deploy writes it.
+  it('delegation-adopt: one writer, ccd\'s delegation-adopt verb (W5-X2, D-8112)', () => {
+    expect(SWITCHES['delegation-adopt'].writer).toBe('ccd delegation-adopt, through POST /api/coord/delegation-adopt');
     expect(constsOf('delegation-adopt'), 'CONTROL: the switchboard defines it').toEqual(['DELEGATION_ADOPT_MARKER']);
-    expect(writersOf('delegation-adopt')).toEqual([]);
+    expect(writersOf('delegation-adopt')).toEqual(['ccd/ccd:cmd_delegation_adopt']);
+  });
+
+  it('delegation-adopt: the server reaches the verb only through its CCD_ARGV row (D-8112)', () => {
+    const verb = /(['"])delegation-adopt\1/;
+    const holders = ALL.filter((f) => rel(f).startsWith('server/src/') && verb.test(stallCode(f))).map(rel).sort();
+    expect(holders).toEqual(['server/src/ccdargv.ts']);
+    const lines = stallCode(path.join(ccrcRoot, 'server/src/ccdargv.ts')).split('\n');
+    const at = lines.findIndex((l) => /^export const CCD_ARGV\s*=\s*\{/.test(l));
+    const end = lines.findIndex((l, i) => i > at && /^\}/.test(l));
+    const uses = lines.flatMap((l, i) => (/argv\(\[(['"])delegation-adopt\1/.test(l) ? [i] : []));
+    expect(uses.length, 'one argv spells the verb').toBe(1);
+    expect(uses[0]!, 'the delegation-adopt argv is spelled outside CCD_ARGV').toBeGreaterThan(at);
+    expect(uses[0]!).toBeLessThan(end);
   });
 
   // D-6785 (PR landing in ccrc, stage 1): the checks lane's two markers are rows of the switchboard with writer

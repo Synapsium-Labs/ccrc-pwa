@@ -956,10 +956,16 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
   ['ws-lease-audit', /\bws-lease-audit\b|\bcmd_ws_lease_audit\b|\blease-audit-v1\b/, [
     'ccd/ccd', 'ccd/lib/delegation-lease.sh', 'ccd/ccd-entry.py', 'agent/src/whitelist.ts', 'server/src/ccdargv.ts',
     'server/src/remote/runner.ts', 'shared/api.ts',
-    'server/src/coord/delegation-adoption.ts', 'server/src/coord/delegationAdoptStep.ts']],   // PR7: the adoption step composes the audit
+    'server/src/coord/delegation-adoption.ts', 'server/src/coord/delegationAdoptStep.ts',   // PR7: the adoption step composes the audit
+    // PR8b (D-8113): the adoption switch's door refuses `on` on a box without the audit's word, and its wire comment names it.
+    'server/src/coord/delegation-adopt-switch.ts', 'shared/delegation-adopt.ts']],
   ['ws-add --base', /\bws-add-base(?:-v1)?\b|ws-add\s+--base/, ['ccd/ccd', 'server/src/ccdargv.ts']],
   ['delegation/leases', /delegation\/leases/, ['ccd/lib/delegation-lease.sh', 'server/src/coord/delegationCarrierMark.ts']],
-  ['delegation-adopt', /delegation-adopt/, ['shared/switches.ts', 'server/src/coord/delegation-adoption.ts', 'server/src/coord/delegationAdoptStep.ts']],   // PR7
+  ['delegation-adopt', /delegation-adopt/, ['shared/switches.ts', 'server/src/coord/delegation-adoption.ts', 'server/src/coord/delegationAdoptStep.ts',   // PR7
+    // PR8b (D-8112): the marker's one writer, its grant and argv row, the forbidden-verb lists, and the door with its L0 and L1 halves.
+    'ccd/ccd', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh', 'agent/src/whitelist.ts', 'server/src/ccdargv.ts',
+    'server/src/coord/approvalguard.ts', 'shared/api.ts', 'server/src/coord/routes.ts', 'server/src/coord/delegation-adopt-switch.ts',
+    'shared/delegation-adopt.ts', 'shared/refusal.ts']],
   ['promotesLease', /\bpromotesLease\b/, []],
 ];
 const STILL_CLOSED = /\bws-lease-clean\b|\bcmd_ws_lease_clean\b|\blease-clean(?:-v1|-live)?\b|cleanup-queue/i;
@@ -1278,7 +1284,7 @@ describe('8. the closed scope census', () => {
       const family = caps.filter((c) => /(^|-)lease|delegation|adopt|carrier/i.test(c));
       expect(family).toContain('delegation-events-v1');
       for (const c of family) {
-        expect(['delegation-events-v1', 'lease-mark-v1', 'lease-mark-lock-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1'], c).toContain(c);
+        expect(['delegation-events-v1', 'lease-mark-v1', 'lease-mark-lock-v1', 'ws-lease-mark', 'lease-audit-v1', 'ws-lease-audit', 'ws-add-base-v1', 'orphan-lease-v1', 'delegation-adopt'], c).toContain(c);   // PR8b: the adoption switch's verb (D-8112)
       }
     } finally { h.cleanup(); }
     expect(DELEGATION_EVENTS_CAP).toBe('delegation-events-v1');
@@ -1420,15 +1426,19 @@ describe('8. the closed scope census', () => {
       // another verb, is still red.
       const W5_LEASE_DOORS = ['├── /api/leases/:lease/retain (POST)', '├── /api/leases/:lease/resolve (POST)', '├── /api/leases/:lease/operator-retain (POST)'];
       expect(routes.split('\n').filter((l) => W5_LEASE_DOORS.includes(l)).sort(), 'the three lease doors exist').toEqual([...W5_LEASE_DOORS].sort());
+      // Wave 5 PR8b opens the adoption switch's door BY NAME, by its exact printed line (D-8112): the operator's switch and its read.
+      const W5_SWITCH_DOOR = ['├── /api/coord/delegation-adopt (GET, HEAD, POST)'];
+      expect(routes.split('\n').filter((l) => W5_SWITCH_DOOR.includes(l)), 'the adoption switch door exists').toEqual(W5_SWITCH_DOOR);
       expect(routes.split('\n').filter((l) => /(^|[/:\-\s])leases?\b|adopt|promot|retain|resolve|carrier|cleanup/i.test(l) && !OTHER_SENSE.includes(l)
-        && !W5_LEASE_DOORS.includes(l)), 'no later wave\'s route').toEqual([]);
+        && !W5_LEASE_DOORS.includes(l) && !W5_SWITCH_DOOR.includes(l)), 'no later wave\'s route').toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_SENSE.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_SENSE);
       expect(routes.split('\n').filter((l) => /coordinators/.test(l))).toEqual(['├── /api/coordinators/:session/intent (POST)']);
       // A journal in another sense: D-6861's `GET /api/coord/shadow-journal` reads what the unarmed disk lanes would have done.
       // It touches no lease, checkpoint or delegation journal, and it is listed by its exact printed line, so a second
       // `journal` route, or this one under another verb, is still red.
       const OTHER_JOURNAL = ['├── /api/coord/shadow-journal (GET, HEAD)'];
-      expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l) && !OTHER_JOURNAL.includes(l))).toEqual([]);
+      expect(routes.split('\n').filter((l) => /delegation|journal|checkpoint|spool/i.test(l) && !OTHER_JOURNAL.includes(l)
+        && !W5_SWITCH_DOOR.includes(l))).toEqual([]);
       expect(routes.split('\n').filter((l) => OTHER_JOURNAL.includes(l)), 'the exemption names a route that exists').toEqual(OTHER_JOURNAL);
     } finally { await app.close(); }
     // `POST /api/runs` takes no lease to promote, and no source names the verb a promotion would call

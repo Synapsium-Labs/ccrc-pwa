@@ -1537,3 +1537,22 @@ describe('delegation wave 5 PR8: the lease door vocabulary is declared once, in 
     expect(readFileSync(path.join(ccrcRoot, 'shared', 'refusal.ts'), 'utf8')).toMatch(/^\s*\.\.\.LEASE_DOOR_REFUSALS,$/m);
   });
 });
+
+// Delegation broker wave 5, PR8b (D-8113, D-8114): the adoption switch door's refusal words and the caps word, declared ONCE in
+// `shared/delegation-adopt.ts` (the PWA reads them and cannot import a `server/src/coord` module), each type derived.
+describe('delegation wave 5 PR8b: the adoption switch vocabulary is declared once, in shared/delegation-adopt.ts', () => {
+  it('DELEGATION_ADOPT_REFUSALS is declared exactly once, the refusal type is derived and spread, and the caps union has its map', async () => {
+    const decl = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(decl(/^\s*(?:export\s+)?(?:const|let|var)\s+DELEGATION_ADOPT_REFUSALS\b/m)).toEqual(['shared/delegation-adopt.ts']);
+    expect(decl(/^\s*(?:export\s+)?type\s+DelegationAdoptRefusal\b\s*=/m)).toEqual(['shared/delegation-adopt.ts']);
+    // The caps union's derived list lands with its one reader, the Settings card, in PR8c (review 1659 F6): until then, none.
+    expect(decl(/^\s*(?:export\s+)?(?:const|let|var)\s+DELEGATION_ADOPT_CAPS\b/m)).toEqual([]);
+    expect(decl(/^\s*(?:export\s+)?(?:const|let|var)\s+DELEGATION_ADOPT_CAP_MAP\b/m)).toEqual(['shared/delegation-adopt.ts']);
+    expect(decl(/^\s*(?:export\s+)?type\s+DelegationAdoptCap\b\s*=/m)).toEqual(['shared/delegation-adopt.ts']);
+    const src = readFileSync(path.join(ccrcRoot, 'shared', 'delegation-adopt.ts'), 'utf8');
+    expect(src).toMatch(/^export type DelegationAdoptRefusal = keyof typeof DELEGATION_ADOPT_REFUSALS;$/m);
+    const { DELEGATION_ADOPT_REFUSALS } = await import('../../../shared/delegation-adopt.js');
+    expect(Object.keys(DELEGATION_ADOPT_REFUSALS)).toEqual(['fleet-caps-unmeasured', 'fleet-switch-missing', 'fleet-audit-missing']);
+    expect(readFileSync(path.join(ccrcRoot, 'shared', 'refusal.ts'), 'utf8')).toMatch(/^\s*\.\.\.DELEGATION_ADOPT_REFUSALS,$/m);
+  });
+});

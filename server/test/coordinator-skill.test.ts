@@ -830,6 +830,9 @@ describe('the coordinator skill: linkage', () => {
       // D-7994: the sweep's two switches, the operator's and session-gated: no coordinator's door.
       'GET /api/coord/scope-sweep',
       'POST /api/coord/scope-sweep',
+      // D-8112: the adoption switch and its read, the operator's gate (O5-7 (a)) and session-gated: no coordinator's door.
+      'GET /api/coord/delegation-adopt',
+      'POST /api/coord/delegation-adopt',
       // THE QUESTION DOOR FAMILY (W3 Q3f, D-7030; the coordinator's ruling of 2026-10-28, slug q3f-skill-exempt; named exception 3): one
       // route the skill corpus does not name. The claimant's two, `POST /api/questions/:id/rule` and `/release`, left this
       // list when the client moved onto them behind the `questions-v1` cap word (K5 Q3j, D-7322): the ask lane and the
@@ -1951,6 +1954,13 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // route and of the bare verb (ccd has no caller auth, so `ccd pane-scope-stop` from a shell is the shorter door).
     expect(`${allSkillText}\nPOST /api/coord/pane-scope-stop\n`, 'CONTROL: a planted mention is seen').toContain('pane-scope-stop');
     expect(allSkillText).not.toContain('pane-scope-stop');
+  });
+
+  it('never names the adoption switch, its verb or its door — a coordinator is a top-level session the forbidden-verb guard does not reach (D-8112)', () => {
+    // Review 1665 N4, the pane-scope stop's row mirrored: a coordinator runs with permissions bypassed, so `FORBIDDEN_CCD_VERBS`
+    // never fires for it; the convention, this row and the door's sign-in rule are what hold. The verb and the route alike.
+    expect(`${allSkillText}\nPOST /api/coord/delegation-adopt\n`, 'CONTROL: a planted mention is seen').toContain('delegation-adopt');
+    expect(allSkillText).not.toContain('delegation-adopt');
   });
 
   it('never names the roll-idle settings door — a door that would tell a coordinator how to turn off its own roll onto the current release (D-7453)', () => {

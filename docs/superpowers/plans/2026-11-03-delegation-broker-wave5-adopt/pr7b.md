@@ -3,7 +3,8 @@
 Run 1612, delegation broker wave 5. PR7 (#2396, S3: adoption, the digest and the reminder) landed after three review rounds;
 its third review, 1609, found one important gap and nine minor ones, every one in the safe direction (a wrong 7-day hold, never
 a removal). The coordinator's rulings on that review are the whole scope of this PR. Adoption stays shadow: nothing in the tree
-writes `$REG/delegation-adopt`, and arming it is the operator's, by hand, after this PR rolls out.
+writes `$REG/delegation-adopt`, and arming it is the operator's, by hand, after this PR rolls out. (Amended in place by PR8b,
+D-8112: the marker's one writer is now `ccd delegation-adopt`, behind the operator's door, `POST /api/coord/delegation-adopt`.)
 
 **Ledger.** Defined in the plan's "Deviations found": D-8092 (adoption's liveness is the row's `presence`; the breaker's memory
 keeps `status`, F1), D-8093 (rule 3 asks PR6's equality, F8) and D-8094 (the interfaces PR9 and PR10 consume, after F5, F9 and

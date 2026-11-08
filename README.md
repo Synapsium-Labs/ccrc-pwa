@@ -3838,7 +3838,7 @@ general remote-shell:
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
   `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
-  `coord-pause`, `reclaim-pause` and `scope-sweep-busy` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
+  `coord-pause`, `reclaim-pause`, `scope-sweep-busy` and `delegation-adopt` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
   `ws-rename`'s flag guards a different hazard: the verb destroys nothing, but it is the first whose argv the server builds
@@ -3850,7 +3850,7 @@ general remote-shell:
   can either come back, or a gated verb lose its flag, by accident:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
-  (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`,
+  (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`, `delegation-adopt`,
   `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
@@ -8308,6 +8308,31 @@ while the root does not resolve (remote mode) that includes every main checkout,
 - **No lease transition in wave 3.** A later answer that disagrees with a rung-4 lease (a rung-3 link to another parent, or a registry
   row or `.child` naming the tree) files one final `conflicting` attempt (`rungs-disagree`) in the checkpoint only, and nothing
   re-links the tree; the lease stays `linked`, and a leased tree is outside the health's verdict counts.
+
+## The adoption switch (the delegation broker's wave 5)
+
+The delegation lane keeps a changed worktree whose delegated work has ended, and mails its owner, only while
+`~/.cc-sessions/delegation-adopt` exists; without it the lane only records what it would keep (D-8112..D-8114). That file has one
+writer in the tree, `ccd delegation-adopt --state on|off`, which the server runs through the agent's whitelist and the installed
+direct entry (it starts under `bash -p`, as `ws-lease-mark` does) from `GET`/`POST /api/coord/delegation-adopt`, the operator's
+door: session-only, no box token, and never a session's verb (the child hook and the child deny file stop a child; for a top-level
+session it is a convention). The verb is the tree's one writer; a session that writes the file directly is not stopped, as for
+every `$REG` marker, and never touching `~/.cc-sessions` is the rule that holds.
+
+The GET answers the switch (`set`, `clear` or `unmeasurable`), whether the fleet box's `ccd caps` lists the verb and
+`lease-audit-v1`, what turning it on or off would be refused with for the caller that asks, and the lane's last pass (null when that
+pass counted nothing) with the worktrees it would keep, or kept: at most 50 named and the rest counted, each with its project,
+worktree and parent session, and what the change check measured when its answer was definite. Lane memory only: a restart empties
+the list until the next pass. The POST takes `{on: boolean}`. `on` is refused with `sign-in-unarmed` (403) unless sign-in is armed
+and the caller holds a session, before anything is read; then with `fleet-caps-unmeasured` (503) when the caps did not read,
+`fleet-switch-missing` (501) when the fleet box's ccd has no verb, and `fleet-audit-missing` (409) when it lacks `lease-audit-v1`.
+`off` is refused only with `fleet-switch-missing`. A refusal runs nothing. A change is one record-only feed row.
+
+Two hand steps. Before rolling the fleet box below the release that ships the verb, switch adoption off at the door: once the verb is
+gone the door refuses `off` too, and the lane keeps adopting while the file stands. If the door or the verb is already gone, remove
+`~/.cc-sessions/delegation-adopt` on the fleet box by hand. And a directory standing in the switch's place reads `set` while neither
+arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box. The Settings card in front of the
+door follows in a later release.
 
 ## Contributing
 

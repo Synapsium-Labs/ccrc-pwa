@@ -90,6 +90,9 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       // Delegation broker wave 5 (W5-G12): the read-only lease audit rides its own `['ws-lease-audit','--lease']` and starts
       // under `bash -p`, as its writer does.
       [['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1'], true],
+      // Delegation broker wave 5 PR8b (D-8112, review 1665 N1): the adoption switch's writer rides `['delegation-adopt','--state']` and
+      // starts under `bash -p`, as ws-lease-mark does.
+      [['delegation-adopt', '--state', 'on'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;

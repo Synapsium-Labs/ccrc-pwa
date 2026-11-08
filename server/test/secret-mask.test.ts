@@ -1222,7 +1222,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
   const EXEMPT: Record<string, string> = {
     '/api/auth/passkeys': 'passkey ids and labels the operator set',
     '/api/auth/status': 'the auth state',
-    '/api/fleet/health': "the mirror's counters",
+    '/api/fleet/health': "the mirror's counters, and the delegation lane's would-keep list (each tree's project, worktree name and parent session, D-8114): no session text",
     '/api/push/key': 'the VAPID public key',
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
     '/api/sessions/:id/commands': "the session's command files' names",
@@ -1234,6 +1234,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/dispatch-abandon': "the dead-dispatch switch's choice and bound (D-7319)",
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
+    '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
     '/api/approvals/:id/ruling': 'a signed ruling read by the fleet box (a mask would break the signature); its input is shape-redacted at write',
     '/api/approvals/key': 'a public key',

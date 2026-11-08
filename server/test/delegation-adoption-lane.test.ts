@@ -1075,3 +1075,47 @@ describe('PR7b (review 1609): presence, a retraction kept while unbuilt, cuts th
     expect([row[0]!.body, first].map((t) => /\bleft\b/.test(t)), 'never "left ... changed" unless it answered changed: true').toEqual([word === 'changed', word === 'changed']);
   }, ROW_MS);
 });
+
+// Delegation broker wave 5 PR8b (D-8114): the list of worktrees the last pass would keep, or kept, rides the health's `adoption` as lane
+// memory (written by the step each pass, never journalled or checkpointed), so the operator can read what turning it on would do.
+describe('PR8b: the last pass names the worktrees it would keep, or kept (D-8114)', () => {
+  it('shadow: the pass that would keep names the worktree, its parent and what the audit measured; nothing is journalled for it', async () => {
+    const { w, durable, lease } = await leased();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (let n = 0; n < 9; n += 1) await pass(w, at(n));
+    expect(health(w)).toMatchObject({ mode: 'shadow', wouldAdopt: 1 });
+    expect(health(w)?.keeps).toEqual({ items: [{ project: 'demo', worktree: 'wt-x', parent: OWNER,
+      changes: { dirty: false, aheadOfBase: 1, branchAheadOfBase: 'no-branch' } }], more: 0 });
+    expect(JSON.stringify(durable.state().checkpoint), 'the list is lane memory: no checkpoint member names it').not.toMatch(/keeps/);
+    expect(leaseOf(durable, lease.leaseId).disposition).toBe('ephemeral');
+  }, ROW_MS);
+
+  it('live: the pass that keeps it names it too; a pass that keeps nothing serves no list', async () => {
+    const { w, durable, lease } = await leased();
+    touch(w, 'delegation-adopt');
+    const next = await passesUntilKept(w, durable, lease.leaseId, 0);
+    expect(health(w)).toMatchObject({ mode: 'live', adopted: 1 });
+    expect(health(w)?.keeps?.items.map((i) => [i.project, i.worktree, i.parent])).toEqual([['demo', 'wt-x', OWNER]]);
+    await pass(w, at(next));
+    expect(health(w)?.keeps, 'the next pass keeps nothing new, so it names nothing').toBeUndefined();
+  }, ROW_MS);
+
+  // Review 1659 F11: the list is pushed only after an adoption APPLIED, while `adopted` counts the pass's adopt decisions, so a
+  // refused or already-applied transition leaves the list shorter than `adopted`.
+  for (const out of [{ kind: 'refused', refusal: 'carrier-behind', detail: 'fixture refusal' },
+    { kind: 'unchanged', generation: 2, state: 'ephemeral' }] as const) {
+    it(`live: an adopt decision whose transition answers ${out.kind} is counted in adopted but is not on the list`, async () => {
+      const { w, durable, lease } = await leased();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      for (let n = 0; n < 9; n += 1) await pass(w, at(n));
+      expect(health(w)?.keeps?.items.map((i) => i.worktree), 'CONTROL: shadow names it').toEqual(['wt-x']);
+      const door = vi.spyOn(durable, 'transitionLease').mockResolvedValue({ ...out, leaseId: lease.leaseId } as never);
+      touch(w, 'delegation-adopt');
+      let n = 9;
+      while (door.mock.calls.length === 0 && n < 14) await pass(w, at(n++));
+      expect(door.mock.calls.length, 'the live pass asked the door').toBeGreaterThan(0);
+      expect(health(w)).toMatchObject({ mode: 'live', adopted: 1 });
+      expect(health(w)?.keeps, 'not applied, so not kept').toBeUndefined();
+    }, ROW_MS);
+  }
+});

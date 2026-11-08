@@ -1,6 +1,8 @@
 // `ws-lease-mark` (and, from PR2, `ws-lease-audit`, W5-G12) sits behind the privileged direct-entry check (delegation broker wave 5, W5-G4, as `ws-shed-deps` does, D-7278): the installed launcher (`ccd/ccd-entry.py`'s
 // `is_protected`, a case-folding superset) starts it with `-p`, and the body's own entry guard refuses an unprivileged explicit
-// bash. One table run against both, in the style of `ccd-ws-collect-reach.test.ts`. FIXTURE HOME ONLY: every launcher is a
+// bash. One table run against both, in the style of `ccd-ws-collect-reach.test.ts`. PR8b (D-8112; review 1665 N1): the adoption switch's
+// writer `delegation-adopt` sits behind the same boundary, in the same table, so a case-folded spelling a child might reach through an
+// inherited `nocasematch` starts protected and matches no verb. FIXTURE HOME ONLY: every launcher is a
 // fixture install under the harness HOME, and no argv here reaches a removal — a protected shape is refused at entry or started
 // over an echo body.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -58,9 +60,12 @@ const SHAPES: ReadonlyArray<readonly [string, readonly string[]]> = [
   // W5-G12 (PR2): the read-only audit starts protected as its writer does.
   ['ws-lease-audit alone', ['ws-lease-audit']],
   ['ws-lease-audit with its lease', ['ws-lease-audit', '--lease', '0f8e6a8c-1b2d-4c3e-9f00-0123456789ab', '--generation', '1', '--holders']],
+  // PR8b (D-8112, review 1665 N1): the adoption switch's one writer, protected as ws-lease-mark is.
+  ['delegation-adopt alone', ['delegation-adopt']],
+  ['delegation-adopt on', ['delegation-adopt', '--state', 'on']],
 ];
 
-describe('ws-lease-mark and ws-lease-audit are protected shapes at both classifiers', () => {
+describe('ws-lease-mark, ws-lease-audit and delegation-adopt are protected shapes at both classifiers', () => {
   it('the body refuses an unprivileged explicit bash at entry — nothing runs', () => {
     for (const argv of SHAPES.map(([, a]) => a)) {
       const b = bash([], argv);
@@ -85,9 +90,39 @@ describe('ws-lease-mark and ws-lease-audit are protected shapes at both classifi
     expect(echoed().flags.includes('p')).toBe(true);
     expect(direct(['Ws-Lease-Audit', '--lease', 'x'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
     expect(echoed().flags.includes('p')).toBe(true);
-    for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark'], ['ws-lease-auditx'], ['caps', 'ws-lease-audit']]) {
+    expect(direct(['DELEGATION-ADOPT', '--state', 'on'], { BASHOPTS: 'nocasematch' }).code).toBe(0);
+    expect(echoed().flags.includes('p')).toBe(true);
+    for (const argv of [['ws-lease-markx'], ['caps', 'ws-lease-mark'], ['ws-lease-auditx'], ['caps', 'ws-lease-audit'],
+      ['delegation-adoptx'], ['caps', 'delegation-adopt']]) {
       expect(direct(argv).code).toBe(0);
       expect(echoed().flags.includes('p'), argv.join(' ')).toBe(false);
     }
+  }, 60_000);
+});
+
+// PR8b (D-8112; review 1665 N1): the REAL body behind the rendered launcher. The switch still works through it, and a case-folded
+// spelling under an inherited `nocasematch` starts under `-p`, where the dispatcher compares exactly and matches no verb.
+describe('delegation-adopt through the installed direct entry, on the real body', () => {
+  const marker = (): string => path.join(h.home, '.cc-sessions', 'delegation-adopt');
+
+  it('on and off still work through the launcher', () => {
+    de = installDirectEntry(h.home);
+    const on = direct(['delegation-adopt', '--state', 'on']);
+    expect([on.code, on.stdout.trim()], on.stderr).toEqual([0, 'on']);
+    expect(fs.lstatSync(marker()).isFile()).toBe(true);
+    const off = direct(['delegation-adopt', '--state', 'off']);
+    expect([off.code, off.stdout.trim()], off.stderr).toEqual([0, 'off']);
+    expect(fs.existsSync(marker())).toBe(false);
+  }, 60_000);
+
+  it('DELEGATION-ADOPT --state on with BASHOPTS=nocasematch exits non-zero and leaves no marker, while the exact verb raises it', () => {
+    de = installDirectEntry(h.home);
+    for (const verb of ['DELEGATION-ADOPT', 'Delegation-Adopt']) {
+      const r = direct([verb, '--state', 'on'], { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' });
+      expect(r.code, `${verb}: ${r.stderr.slice(0, 200)}`).not.toBe(0);
+      expect(fs.existsSync(marker()), `${verb} raised the switch`).toBe(false);
+    }
+    expect(direct(['delegation-adopt', '--state', 'on']).code, 'CONTROL: the exact verb raises it').toBe(0);
+    expect(fs.existsSync(marker())).toBe(true);
   }, 60_000);
 });

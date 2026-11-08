@@ -99,6 +99,9 @@ import { landingEjectionAsk } from './landingLine.js';
 import type { LandingEjectionKind } from '../../../shared/landingLine.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { scopeSweepViewOf, type ScopeSweepView } from '../../../shared/scope-sweep.js';
+import { delegationAdoptionHealthOf } from '../../../shared/api.js';
+import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt.js';
+import { delegationAdoptSignInRefusal, delegationAdoptViewOf } from './delegation-adopt-switch.js';
 import { checksModeAt } from './landing.js';
 import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
 import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
@@ -2820,6 +2823,57 @@ export function registerCoordRoutes(
       notice({ kind: 'coord', sessionId: '', title: 'scope sweep busy arm changed', runId: null,
         body: `stopping a dead session's busy scopes: ${before.busy} -> ${after.busy}; by ${actor}` },
       'record-only', { degraded: 'scope sweep busy switch written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...after });
+  });
+
+  /** `GET`/`POST /api/coord/delegation-adopt` (D-8112, D-8113, D-8114): the operator's door over the delegation
+   *  lane's adoption switch. The GET answers the marker from one registry listing, the two capabilities the rule reads from the fleet
+   *  box's measured `ccd caps`, what a tap of each direction would be refused with, and the lane's last pass (its counts and the
+   *  bounded list of worktrees it would keep), all decided in L1 (`delegation-adopt-switch.ts`). The POST takes `{on: boolean}` and
+   *  nothing else; it refuses with the rule's word and changes nothing, or runs `ccd delegation-adopt --state on|off` through the
+   *  agent's whitelist, the marker's one writer, and answers the view read after the verb ran. Session-gated when `CCRC_AUTH` is
+   *  armed, no box token (`coord-pause-route.test.ts`'s `SESSION_ONLY`): the operator's gate (O5-7 (a)), never a coordinator's.
+   *  Open dark, with the collect-lane door's stricter refusal (review 1659 F2): `on` answers 403 `sign-in-unarmed` unless sign-in is
+   *  armed and the caller holds a session, because arming fleet-wide adoption needs a signed-in operator; `off` stays open. The
+   *  route measures that and L1 decides on it, only after the body parses, so an empty body answers the same dark and armed (the
+   *  gate's property sweep), and before any I/O, as collect-lane refuses `live` (review 1665 N8). A change is a record-only feed row naming the actor. No `notConfigured` arm: the verb touches no
+   *  coordination row. */
+  const signedInOf = (req: FastifyRequest): boolean => deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
+  const delegationAdoptNow = async (signedIn: boolean): Promise<DelegationAdoptView> => {
+    const read = await deps.io.readdirMeasured(deps.cfg.registryDir);
+    const health = watcher?.currentDelegationHealth();
+    return delegationAdoptViewOf(read.ok ? read.entries : null, deps.fleetState?.ccdVerbs ?? null,
+      health === undefined ? null : delegationAdoptionHealthOf(health), signedIn);
+  };
+  app.get('/api/coord/delegation-adopt', async (req, reply) => reply.code(200).send({ ok: true, ...await delegationAdoptNow(signedInOf(req)) }));
+
+  app.post('/api/coord/delegation-adopt', async (req, reply) => {
+    const body = req.body as { [K in keyof DelegationAdoptRequest]?: unknown } | null | undefined;
+    if (typeof body !== 'object' || body === null || Object.keys(body).join() !== 'on' || typeof body.on !== 'boolean') {
+      return refuseRoute(reply, 'bad-request', { detail: 'the body is {on: boolean} and nothing else' });
+    }
+    const request: DelegationAdoptRequest = { on: body.on };
+    const signedIn = signedInOf(req);
+    const unsigned = delegationAdoptSignInRefusal(request.on, signedIn);
+    if (unsigned !== null) return refuseRoute(reply, unsigned, { detail: 'turning adoption on needs a signed-in operator' });
+    const before = await delegationAdoptNow(signedIn);
+    const refusal = before.refused[request.on ? 'on' : 'off'];
+    if (refusal !== null) return refuseRoute(reply, refusal, { detail: `the fleet box's ccd caps: switch ${before.caps.verb}, check ${before.caps.audit}` });
+    // The exec path's verb gate (`verb-gate.test.ts` pins one at every `CCD_ARGV` call site; review 1659 F4). It reads the same
+    // caps list the rule just read, and no I/O can run between, so it never refuses what the rule let through: it is the census's gate,
+    // not a re-check. With caps unread it permits (`verbRow`), which is what lets `off` through, as the rule wants.
+    if (!ccdCan(deps.fleetState, 'delegationAdopt')) return refuseRoute(reply, 'fleet-switch-missing');
+    const res = await deps.runCcd(CCD_ARGV.delegationAdopt(request.on ? 'on' : 'off'));
+    // D-6840: the not-ran arm FIRST: a verb that never ran said nothing, so its forged code is not read as its refusal.
+    if (res.ran === false) return refuseRoute(reply, 'fleetFailed', { detail: notRanSentence('ccd delegation-adopt', res) });
+    if (!res.ok) return refuseRoute(reply, 'fleetFailed', { stderr: res.stderr });
+    const after = await delegationAdoptNow(signedIn);
+    if (before.state !== after.state && deps.notifyLog) {
+      const actor = deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off';
+      notice({ kind: 'coord', sessionId: '', title: 'delegation keep switch changed', runId: null,
+        body: `keeping finished delegated worktrees: ${before.state} -> ${after.state}; by ${actor}` },
+      'record-only', { degraded: 'delegation keep switch written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...after });
   });
