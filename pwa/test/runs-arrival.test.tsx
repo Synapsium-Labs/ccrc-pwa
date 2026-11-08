@@ -41,7 +41,7 @@ const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {
 const NO_SPEND = (): Promise<RunSpend> => new Promise(() => {});
 
 /** One archive read the test settles by hand. */
-interface Read { readonly before: number | undefined; resolve(a: RunsPageAnswer): Promise<void> }
+interface Read { readonly before: number | undefined; resolve(a: RunsPageAnswer): Promise<void>; reject(): Promise<void> }
 
 /** The board, mounted at `search`, with a live frame of `live` (none: no frame yet) and archive reads the test answers. `held`:
  *  archive pages the store already holds from an earlier mount. */
@@ -52,8 +52,12 @@ function board(search: string, live: RunSummary[] | null, strict = false, held: 
     if (held !== null) store.setState({ runPages: { runs: held, nextBefore: null, at: Date.now() } });
   });
   const reads: Read[] = [];
-  const loadRuns = vi.fn((_limit: number, before?: number): Promise<RunsPageAnswer> => new Promise((res) => {
-    reads.push({ before, resolve: async (a) => { await act(async () => { res(a); }); } });
+  const loadRuns = vi.fn((_limit: number, before?: number): Promise<RunsPageAnswer> => new Promise((res, rej) => {
+    reads.push({
+      before,
+      resolve: async (a) => { await act(async () => { res(a); }); },
+      reject: async () => { await act(async () => { rej(new Error('read failed')); }); },
+    });
   }));
   navigate(search);
   const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
@@ -128,6 +132,12 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
     await waitFor(() => expect(b.reads).toHaveLength(1));
     await b.reads[0]!.resolve({ runs: [] });
     expect(notLoaded(1527)).toBeNull();
+    // The first runs frame arrives AFTER the archive answered (a cold deep link: the archive can be the faster source): it
+    // lacks the run, and the line is then said, with no re-read to wait for (chat reading Task L review 1606 F4; desktop-polish
+    // Task C14, D-8110).
+    act(() => { b.store.setState({ runs: [run(1526)], runsFrameSeen: true }); });
+    expect(b.reads).toHaveLength(1);
+    expect(notLoaded(1527)).not.toBeNull();
   });
 
   // Review 1586 F4: the arrived run closes while its own page is open. The live frame drops it, the archive re-read goes out, and
@@ -179,6 +189,25 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
     await b.reads[mounted]!.resolve({ runs: [closed(1527, 1_000)] });
     expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
     expect(line.inserted()).toBe(0);
+    line.stop();
+  });
+
+  // Review 1606 F3 (desktop-polish Task C14, D-8110): J1 in its swap form. One run leaves the frame as another joins, so the frame
+  // does not shrink: the run that was arrived at is gone all the same, and no render says it is not loaded.
+  it('when the arrived run leaves as another joins the frame (the frame does not shrink), no line is inserted', async () => {
+    const b = board(runsRunHref(1527), [run(1527)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    await b.reads[0]!.resolve({ runs: [run(1527)] });
+    expect(b.scrolled()).toEqual([rowOf(1527)]);
+    const line = watchLine(1527);
+    act(() => { b.store.setState({ runs: [run(1600, { sessionId: 'sess-b', workspace: 'ws-b' })] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    expect(line.inserted()).toBe(0);
+    await b.reads[1]!.resolve({ runs: [closed(1527, 1_000), run(1600, { sessionId: 'sess-b', workspace: 'ws-b' })] });
+    expect(rowOf(1527)).toHaveAttribute('data-arrived', 'true');
+    expect(b.scrolled()).toHaveLength(1);
+    expect(line.inserted()).toBe(0);
+    expect(notLoaded(1527)).toBeNull();
     line.stop();
   });
 
@@ -272,14 +301,41 @@ describe('RunsScreen arrives at ?run=<n> (chat reading Task L, D-8062)', () => {
     expect(notLoaded(1527)).not.toBeNull();
   });
 
+  // Review 1606 F2 (desktop-polish Task C14, D-8110): the mount's read is still out when the arrived run leaves the frame, and the
+  // re-read issued after the vanish FAILS first. The older mount read then lands: it started before the run left, so it must
+  // not turn the failure back into an answer the line can rest on.
+  it('an older read landing after a newer failed re-read does not say the line', async () => {
+    const b = board(runsRunHref(1527), [run(1527)]);
+    await waitFor(() => expect(b.reads).toHaveLength(1));
+    act(() => { b.store.setState({ runs: [] }); });
+    await waitFor(() => expect(b.reads).toHaveLength(2));
+    await b.reads[1]!.reject();
+    expect(notLoaded(1527)).toBeNull();
+    await b.reads[0]!.resolve({ runs: [] });
+    expect(notLoaded(1527)).toBeNull();
+  });
+
   // Review 1586 F4: a mount over archive pages the store already holds re-reads them; a run they lack is said missing only once
-  // this mount's own read has answered.
+  // this mount's own read has answered. Review 1606 F5 (desktop-polish Task C14, D-8110): and no commit from the mount on shows the
+  // line, however briefly (it is inside a subtree added whole, so the observer reads each added and removed node's text).
   it('over pages the store holds, a run they lack is said missing only once this mount\'s read answers', async () => {
+    const text = runNotLoadedLine(1527);
+    let changes = 0;
+    const count = (records: MutationRecord[]): void => {
+      for (const r of records) for (const node of [...r.addedNodes, ...r.removedNodes]) if ((node.textContent ?? '').includes(text)) changes += 1;
+    };
+    const obs = new MutationObserver(count);
+    obs.observe(document.body, { childList: true, subtree: true });
     const b = board(runsRunHref(1527), [run(1526)], false, [closed(900, 60_000)]);
     await waitFor(() => expect(b.reads).toHaveLength(1));
+    count(obs.takeRecords());
+    expect(changes).toBe(0);
     expect(notLoaded(1527)).toBeNull();
     await b.reads[0]!.resolve({ runs: [closed(900, 60_000)] });
     expect(notLoaded(1527)).not.toBeNull();
+    count(obs.takeRecords());
+    obs.disconnect();
+    expect(changes).toBe(1);
   });
 
   // Review 1586 F6: the line answers a followed link with no focus move, so it is announced.

@@ -158,10 +158,16 @@ export function useColdRuns(
   // mark, so a rejection from a read older than an applied one cannot set
   // `error` over the newer answer. A rejection does NOT advance the mark: it
   // carries no reading to be newer than, so a newer success still wins over an
-  // older error in either arrival order, and an older success still lands after
-  // a newer failure (the freshest answer there is).
+  // older error in either arrival order, and an older success still lands its rows
+  // after a newer failure (the freshest answer there is), though not its `ok` (below).
+  //
+  // A newer SETTLED failure also holds `state` at `error` against an older success landing after it (review 1606 F2; desktop-
+  // polish Task C14, D-8110): that older read started before whatever the newer one was issued for (a run leaving the frame),
+  // so it may not turn the failure back into an answer the board speaks from. Its ROWS still land, as before (the freshest
+  // rows there are); only a read newer than the failure clears the error. `failed` is the newest sequence that settled so.
   const issued = useRef(0);
   const applied = useRef(0);
+  const failed = useRef(0);
   const loadCold = (): Promise<void> => {
     const seq = ++issued.current;
     setReading(true);
@@ -190,10 +196,14 @@ export function useColdRuns(
           store.getState().setRunPages({ ...next, at: Date.now() });
           setCold(next.runs);
         }
-        setColdState('ok');
+        if (seq > failed.current) setColdState('ok');
       })
       // A failed read changes only `state`: the rows, and the stored pages, stay (never a fold to empty).
-      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); })
+      .catch(() => {
+        if (!aliveRef.current || seq <= applied.current) return;
+        failed.current = Math.max(failed.current, seq);
+        setColdState('error');
+      })
       .finally(settled);
   };
 
