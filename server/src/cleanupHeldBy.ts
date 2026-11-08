@@ -50,7 +50,7 @@ const RECHECK_TAIL = 'Then check again.';
  *  equal). */
 const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
-const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
+const HELD_PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
 
 /** Where the fleet state stands on a row: listed (then its workspace decides), not listed (a row ccd purged, often one
  *  just forgotten, or a partial registry entry the fleet state cannot build), or no fleet frame read yet. Each gets its

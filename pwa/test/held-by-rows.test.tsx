@@ -19,7 +19,7 @@ const held = (over: Partial<CleanupHeldByItem> = {}): CleanupHeldByItem => ({
   holds: { reclaim: 3, expire: 0, collect: 1 }, act: 'forget', ...over,
 });
 const PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
-const PAUSED = 'Nothing is re-read while the cleanup is paused.';
+const PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
 const frame = (list: unknown): unknown => ({ pause: 'clear', mail: 'clear', cleanupHeldBy: list });
 /** The rows these cases name, each listed dead with no workspace and not asleep: the session sheet's Forget check. */
 const DEAD = ['row-a', 'row-b', 'acct-a-demo', 'acct-b-demo'].map((id) => deadSession({ id }));
@@ -138,6 +138,8 @@ describe('the held-rows list', () => {
     expect(screen.getByText(CLEANUP_HELD_BY_RECHECKED)).toHaveTextContent(PACE);
     expect(screen.getByText(CLEANUP_HELD_BY_RECHECKED)).toHaveTextContent(PAUSED);
     expect(screen.queryByText(/once a minute|next pass/)).toBeNull();
+    // Review 1590 N-a: the confirm says it re-reads the latest status, so its pause clause never says nothing is re-read.
+    expect(screen.queryByText(/Nothing is re-read/)).toBeNull();
   });
 
   it('a forget act on another word confirms as a check again and calls no api at all', () => {

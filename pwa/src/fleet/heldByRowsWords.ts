@@ -43,7 +43,7 @@ export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts |
  *  (`server/src/cleanupHeldBy.ts`); a parity test holds them equal. */
 const HELD_PACE = 'usually within minutes for a new hold; a few hours or more for what has been failing a long time; longer when many items are held';
 /** Said wherever a re-read is promised: the paused lanes read nothing. */
-const HELD_PAUSED = 'Nothing is re-read while the cleanup is paused.';
+const HELD_PAUSED = 'ccrc reads nothing again while the cleanup is paused.';
 
 export const CLEANUP_HELD_BY_CONTROL: Record<CleanupHeldByAct, {
   button: string; confirmLabel: string;
