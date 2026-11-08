@@ -62,6 +62,11 @@
  * `runs.claimedBy` implements spec:291-292's multi-coordinator non-goal: one
  * coordinator per program, and a second one refuses rather than arbitrating.
  */
+import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
+
+// The close-columns fill (entry 44) reads RunState's terminal set from its one home, never spelled as a literal tuple.
+const TERMINAL_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+
 export const MIGRATIONS: readonly string[] = [
   // ── 1: user_version 0 -> 1 ────────────────────────────────────────────────
   `
@@ -2279,11 +2284,11 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE runs ADD COLUMN closedBy TEXT;
   ALTER TABLE runs ADD COLUMN closeDetail TEXT;
   UPDATE runs SET
-    closedBy = (SELECT e.causedBy FROM run_events e WHERE e.runId = runs.id AND e.toState IN ('done', 'failed')
+    closedBy = (SELECT e.causedBy FROM run_events e WHERE e.runId = runs.id AND e.toState IN ${TERMINAL_STATES_SQL}
                   AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1),
-    closeDetail = (SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.toState IN ('done', 'failed')
+    closeDetail = (SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.toState IN ${TERMINAL_STATES_SQL}
                   AND e.causedBy IN ('coordinator', 'operator', 'sweep') ORDER BY e.id DESC LIMIT 1)
-    WHERE state IN ('done', 'failed');
+    WHERE state IN ${TERMINAL_STATES_SQL};
   `,
   // ── 45: user_version 44 -> 45 ─────────────────────────────────────────────
   // The stuck verdict's own clock for a person with no other stored time (D-8071; spec 2026-11-04 §7, A63, n3):
