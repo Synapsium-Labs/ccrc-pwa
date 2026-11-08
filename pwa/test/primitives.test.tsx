@@ -560,8 +560,8 @@ describe('Door', () => {
   // Desk-nav Task A review 1646 A4 (desktop-polish Task C14, D-8110): an empty glyph span still took the 5px gap, so
   // Instrument's wordmark sat 9px right of the lanes row's edge (measured in Chromium at 1280 and 1920, both palettes).
   it('a null glyph renders no glyph span, so the word starts at the door\'s own padding', () => {
-    render(<Door glyph={null} aria-label="Fleet, the way home">ccrc</Door>);
-    const el = screen.getByRole('button', { name: 'Fleet, the way home' });
+    render(<Door glyph={null} aria-label="ccrc, Fleet, the way home">ccrc</Door>);
+    const el = screen.getByRole('button', { name: 'ccrc, Fleet, the way home' });
     expect(el.querySelector('[aria-hidden="true"]')).toBeNull();
     expect(el.firstChild?.nodeType).toBe(Node.TEXT_NODE);
     expect(el).toHaveTextContent('ccrc');

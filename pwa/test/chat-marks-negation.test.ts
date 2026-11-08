@@ -121,6 +121,8 @@ describe('a sentence end reads its closers (review 1592 F5; desktop-polish Task 
     ['a question inside parentheses', '(Has #651 merged?)', []],
     ['a "?" before a closing parenthesis', 'Has #651 merged?)', []],
     ['a "?" before a closing quote', 'Has #651 merged?"', []],
+    ['a "?" before a curly single closer', 'Has #651 merged?’', []],
+    ['a "?" before a curly double closer', 'Has #651 merged?”', []],
     ['a "?!" run', 'Is #651 merged?!', []],
     ['a "!?" run', 'Is #651 merged!?', []],
     // A closer before a space and a capital ends the sentence, so the next sentence's "?" does not reach back.
@@ -185,6 +187,7 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     ['tests passed: 0%'],
     ['tests passed: 0 of twelve'],
     ['tests passed: 0 (of 12)'],
+    ['tests passed: 0 (out of 12)'],
     ['tests failed: 0 — all good'],
   ])('%s: no label', (text) => {
     expect(statusesOf(text)).toEqual([]);
