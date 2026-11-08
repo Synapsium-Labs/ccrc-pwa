@@ -135,7 +135,8 @@ describe('a sentence end reads its closers (review 1592 F5; desktop-polish Task 
     ['an aside inside a question', 'Is CI green (on main) today?', []],
     ['an aside at the end of a question', 'Is CI green (see the log)?', []],
     ['a full stop inside an aside ends nothing outside it', 'Is CI green (see run 3.) on main?', []],
-    ['an unclosed aside hides its marks', 'CI green (see the log? on main.', [{ text: 'green', tone: 'ok' }]],
+    ['an unclosed aside does not hide its question', 'CI green (see the log? on main.', []],
+    ['an unclosed emoticon does not hide its question', 'Is CI green :( or not?', []],
     ['an unspaced dash ends nothing', 'Is CI green—or red?', []],
     ['a line break ends an aside too', 'CI green (see the log\nthen) is it out?', [{ text: 'green', tone: 'ok' }]],
     // The cost of the spaced dash, named in Task C14's note: a question split by one reads its first half alone.

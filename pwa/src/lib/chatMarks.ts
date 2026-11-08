@@ -194,7 +194,7 @@ const isSpace = (c: string): boolean => c !== '' && /\s/.test(c);
  *  `)` or `]` followed by a space and a capital letter ("(#651 merged) Is it out?"); at a spaced dash; or at a line
  *  break. It is a question when its run holds a `?` ("Is #651 merged?!", "(Has #651 merged?)"). Brackets nest: an end
  *  inside a `(` or `[` that opens after the label is the aside's own, not the label's ("#651 merged (why?) and
- *  shipped."), and an aside left open hides every end after it. A line break ends every aside. One pass forward to find
+ *  shipped."); an aside left open does not hide a following question. A line break ends every aside. One pass forward to find
  *  the marks and one back to answer every offset, so a block of many labels costs one pass. */
 function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
   // Text that is not prose (inline code, link text, raw html; review 1601 F3) holds no mark: it reads as letters.
@@ -236,7 +236,7 @@ function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
     if (m === 1 || m === 2) ask = m === 2 ? 1 : 0;
     else if (m === 6) { after.length = 0; ask = 0; }
     else if (m === 4 || m === 5) { if (m === 5) ask = 0; after.push(ask); }
-    else if (m === 3) ask = after.pop() ?? 0;
+    else if (m === 3) ask = after.length ? after.pop()! : ask;
     asks[i] = ask;
   }
   return asks;
