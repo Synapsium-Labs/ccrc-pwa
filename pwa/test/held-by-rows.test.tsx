@@ -248,6 +248,8 @@ describe('Forget follows the session sheet\'s presence check', () => {
   const others: [string, readonly ReturnType<typeof deadSession>[]][] = [
     ['alive', [fleetSession({ id: 'row-a' })]],
     ['asleep', [hibernatedSession(1_700_000_000_000, { id: 'row-a' })]],
+    // Review 1663 F2: the D-7371 shape, a hibernated orphan the server reads `dead`, where only the not-asleep part decides.
+    ['asleep under a dead presence', [deadSession({ id: 'row-a', presence: 'dead', hibernatedAt: 1_700_000_000_000 })]],
     ['in doubt', [deadSession({ id: 'row-a', presence: 'unknown' })]],
     ['a workspace', [deadSession({ id: 'row-a', workspace: 'ws-a' })]],
     ['not listed', [deadSession({ id: 'row-b' })]],
