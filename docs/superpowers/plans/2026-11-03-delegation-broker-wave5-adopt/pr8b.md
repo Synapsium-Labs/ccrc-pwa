@@ -85,7 +85,7 @@ Every site `git grep` finds for `pane-scope-stop`, `scope-sweep-busy` and `coord
 | `server/src/coord/routes.ts`, `auth-gate.test.ts` and `gate.ts`'s counts, `coord-pause-route.test.ts`'s `SESSION_ONLY`, CLAUDE.md's door sentence | mirrored |
 | `coordinator-skill.test.ts`: the unnamed-door list, and the pane-scope stop's forbid-mention row | mirrored. The door list sits beside the scope-sweep pair, as the leave agreed with the landing-order 5g run allowed. The forbid-mention row (the corpus never names the verb or its door, with a CONTROL) came in fix round 2, once #2453 had merged and released that file (review 1665 N4): a coordinator is a top-level session with permissions bypassed, so `FORBIDDEN_CCD_VERBS` never fires for it, and the convention, this row and the door's sign-in rule are what hold |
 | `secret-mask.test.ts`'s unmasked-read list | mirrored |
-| `shared/switches.ts`, `switches.test.ts`, `switches-history.test.ts` | mirrored, the no-writer pins re-pointed |
+| `shared/switches.ts`, `switches.test.ts`, `switches-history.test.ts` | mirrored, the no-writer pins re-pointed. Since fix round 3 (review 1669 A2) `switches-history` also carries the precedents' row that no non-shell file under `ccd/` or `deploy/` names the marker on a code line, with one exact allowance, `ccd/ccd-entry.py`'s protected-verb tuple, and its guard row is bounded to the guard's own grammar (C1) |
 | `shared/scope-sweep.ts` (the L0 view) | mirrored as `shared/delegation-adopt.ts` |
 | The PWA card and its wiring and tests (`ScopeSweepSection.tsx` and its siblings) | moves with the card, to PR8c (the split) |
 | README's whitelist sentences | mirrored |
@@ -113,11 +113,23 @@ Every site `git grep` finds for `pane-scope-stop`, `scope-sweep-busy` and `coord
 - W4-U27's older-server render (`pwa/test/older-server-render.test.tsx`): with no card in this PR no PWA file reads the new member,
   and `keeps` is optional and additive, so the render cannot change; re-run alone at the tip all the same, green (F12).
 - Main was merged once, after #2453 (landing order 5g) merged first, as the leave agreed with that run asks of the second to land;
-  no conflict, and the route and census counts held on the merged tree, so none changed.
+  no conflict, and the route and census counts held on the merged tree, so none changed. Fix round 3 merged main a second time, as
+  ruled, because #2470's two run-record routes conflicted in `auth-gate.test.ts`'s counts: every count was re-derived from main's
+  figures plus this PR's two gated, non-exempt routes (`coord/routes.ts` 66, the table 190, the HTTP half 187: 117 gated, 70 exempt),
+  and `gate.ts`'s docstring, which both sides had left at 185, now says 187. Every other count both sides touch held.
 - The precedents' history split CLAUDE.md, the session hook and the installer into a rules-only change, at an external review
   gate's request. This PR keeps them in, because the brief and R1 ask for them here.
 - The adoption switch's staging file `$REG/.delegation-adopt.<pid>.tmp` joins the R-3 boundary paragraph in `ccd/ccd`, whose cardinal
   `ccd-account-auth.test.ts` derives (twenty-two), as `scope-sweep-busy`'s did.
+
+## For review
+
+- The switch suite's real-verb row runs the verb under `bash -p` with six startup variables removed, where the launcher's protected
+  start removes fifteen; the row's probe (the verb raises and lowers the marker) stands as it is (review 1669 A4).
+- Carried to the programme ledger (review 1669 A5, ruled): the door keeps `pane-scope-stop`'s shape here, with no re-read after
+  `ran:false` and the actor's feed row only on a measured change, so after a timed-out `on` the GET still shows the switch's
+  position but who moved it can be missing; whether a switch door must record its actor when the verb may have run is a
+  question for every such door at once.
 
 ## Measurements
 
@@ -134,10 +146,11 @@ measured from the user's thread count:
 | M6 the list unbounded (the 51st served) | `delegation-adopt-switch.ts` | R3's bound row (1 of 33) |
 | M7 the card's confirmation skipped | PWA card | moved to PR8c with the card (13 of 53 card rows, measured before the split) |
 
-Every figure above was measured again at fix round 2's code (review 1665 N15). Fix round 1's and fix round 2's own mutants are in the
+Every figure above was measured again at fix round 2's code (review 1665 N15), and M1 to M4 again on fix round 3's merged tip,
+unchanged. Fix round 1's and fix round 2's own mutants are in the
 report's FR1 and FR2 tables.
 
-**Growth** over the merge base `12ce1ba7e` at fix round 2's code (`growthCheck.ts#netGrowth`, code lines): `ccd/ccd` +20,
-`server/src/coord/routes.ts` +36;
+**Growth** over the merge base `12ce1ba7e` at fix round 2's code, and again over fix round 3's merge base `c6f05621c`
+(`growthCheck.ts#netGrowth`, code lines): `ccd/ccd` +20, `server/src/coord/routes.ts` +36;
 `server/src/watch.ts` +0, `server/src/coord/store.ts` +0, `ccd/session-hook.sh` +0 (two lines changed in place). The PR adds new files
 under `server/src/coord/` and `shared/`, which waives the listed files; none passes 40 either way. `GROWTH_CHECK=1` growth-check green.
