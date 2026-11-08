@@ -344,12 +344,28 @@ describe('Finished reads find, in close order (§8.2.3, F10, F18)', () => {
       expect(within(g).getByText('Could not reach the server — finished runs may exist that are not shown.')).toBeInTheDocument();
     });
 
+    it('Finished answering before the frame and the paged read never claims "No runs open."; the board reads Loading', async () => {
+      const { store } = board({ frame: false, loadRuns: NEVER, loadFinished: async () => answer([]) });
+      await flush();
+      expect(screen.queryByText('No runs open.')).toBeNull();
+      expect(screen.getByText('Loading…')).toBeInTheDocument();
+      act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+      expect(screen.getByText('No runs open.')).toBeInTheDocument();
+    });
+
+    it('closed rows answering before the frame and the paged read do not hide that open runs are still unread', async () => {
+      board({ frame: false, loadRuns: NEVER, loadFinished: async () => answer([hit(3)]) });
+      await flush();
+      expect(finishedIds()).toEqual([]);
+      expect(screen.getByText('Loading…')).toBeInTheDocument();
+    });
+
     it('a held Finished answer is a signal even when its re-read fails', async () => {
       let n = 0;
       const { store } = board({ frame: false, loadRuns: NEVER, loadFinished: async () => { n += 1; if (n > 1) throw new Error('down'); return answer([hit(3)]); } });
       await flush();
-      expect(finishedIds()).toEqual([3]);
       act(() => { store.setState({ runs: [run(9)], runsFrameSeen: true }); });
+      expect(finishedIds()).toEqual([3]);
       act(() => { store.setState({ runs: [] }); });                // a close: Finished is read again, and the read fails
       await flush();
       expect(finishedIds()).toEqual([3]);

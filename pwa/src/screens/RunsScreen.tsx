@@ -417,8 +417,8 @@ function RunsBoard({
   //
   // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now: a failed re-read over
   // stored pages keeps its rows, and must not swap the board for "Could not reach the server".
-  const finishedAnswered = fin.rows !== null || finishedState === 'ok' || finishedState === 'older';
-  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null && !finishedAnswered;
+  // Finished answering says nothing about whether runs are OPEN (its `find` is a closed-only read), so it does not end this window.
+  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
   // composition is pinned at exactly two network calls
