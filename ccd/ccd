@@ -23578,12 +23578,17 @@ _pane_box_dialog() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff a dialog's 
   # when a border closes the slot above it (both cc291 shapes draw one) or a
   # footer (`Esc to cancel`, `Enter to confirm`/`Enter to select`) sits in it
   # beside the cursor. With neither, an indented `❯ 1.` is a reply quoting one.
+  # A REPLY QUOTING A WHOLE DIALOG must still leave the box empty: its quoted
+  # rule is indented under the `●`, so only a column-0 rule bounds a slot, and
+  # a slot holding conversation (`●`, `✻`, `⎿`) is a reply, never a dialog,
+  # whatever cursor, rule or footer it quotes.
   printf '%s\n' "$1" | _pane_box_plain | LC_ALL=C awk '
     function border(s) { gsub(/[ \t]/, "", s); return s ~ /^──/ }
     {
-      if (index($0, "❯") == 1 && NR > 1 && border(prev)) dlg = s_cur && (s_ruled || s_foot)
-      if (border($0)) { s_ruled = ruled; s_cur = cur; s_foot = foot; ruled = 1; cur = 0; foot = 0 }
+      if (index($0, "❯") == 1 && NR > 1 && border(prev)) dlg = s_cur && !s_talk && (s_ruled || s_foot)
+      if ($0 ~ /^──/) { s_ruled = ruled; s_cur = cur; s_foot = foot; s_talk = talk; ruled = 1; cur = 0; foot = 0; talk = 0 }
       else {
+        if ($0 ~ /^(●|✻)/ || $0 ~ /^[ \t]*⎿/) talk = 1
         if ($0 ~ /^[ \t]+❯( | |\t)*[0-9]+\./) cur = 1
         if (index($0, "Esc to cancel") || index($0, "Enter to confirm") || index($0, "Enter to select")) foot = 1
       }

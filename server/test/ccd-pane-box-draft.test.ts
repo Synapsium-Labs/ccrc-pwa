@@ -280,8 +280,8 @@ describe('D-8116: no bordered box is its own answer, `absent`', () => {
 
   const rule = '─'.repeat(24);
   const box = [rule, `❯${NBSP}`, rule, '  👤 team·max'];
-  it('a footer beside an indented cursor row opens a dialog even with no border above it', () => {
-    const dlg = ['● a reply', '  Pick one', '  ❯ 1. Switch to usage credits', '    2. Stop',
+  it('a footer beside an indented cursor row opens a dialog even with its border scrolled off the capture', () => {
+    const dlg = ['  Pick one', '  ❯ 1. Switch to usage credits', '    2. Stop',
       '  Enter to confirm · Esc to cancel'];
     expect(boxRead([...dlg, ...box].join('\n') + '\n')).toBe('absent');
   });
@@ -289,6 +289,20 @@ describe('D-8116: no bordered box is its own answer, `absent`', () => {
   it('a reply quoting a cursor row, with no border or footer around it, leaves the box empty', () => {
     const quote = ['● The menu looks like this:', '  ❯ 1. Yes, switch', '    2. No, go back', '  Done.'];
     expect(boxRead([...quote, ...box].join('\n') + '\n')).toBe('empty');
+  });
+
+  // A reply quoting a dialog's capture is the idle shape this fleet's sessions leave on screen most: read absent, it
+  // took every keystroke away from an idle session. Its quoted rule is indented, and the slot holds conversation.
+  const quoted = ['● Here is what the pane showed:', `  ${'─'.repeat(18)}`, '    ❯ 1. Stop and wait for limit to reset',
+    '      2. Upgrade your plan', '✻ Worked for 3s'];
+  const idleBox = [rule, '❯ ', rule, '? for shortcuts'];
+  it('a reply quoting a whole dialog, its indented rule included, leaves the box empty', () => {
+    expect(boxRead([...quoted, ...idleBox].join('\n') + '\n')).toBe('empty');
+  });
+
+  it('a reply quoting a dialog with its footer, and no rule, leaves the box empty', () => {
+    const withFoot = [...quoted.slice(0, 1), ...quoted.slice(2, 4), '    Enter to confirm · Esc to cancel', quoted[4]!];
+    expect(boxRead([...withFoot, ...idleBox].join('\n') + '\n')).toBe('empty');
   });
 
   it('a dialog in scrollback above an older box does not reach the box below it', () => {

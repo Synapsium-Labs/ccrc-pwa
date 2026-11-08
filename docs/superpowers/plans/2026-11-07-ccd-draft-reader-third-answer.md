@@ -37,6 +37,12 @@ the box stays `empty`. A draft still reads `draft` under a dialog, so the limit 
 `hasMenu` has the same blind spot, because its `promptBoxShowing` veto fires on this shape. Mirroring the server
 would not have caught it.
 
+A reply that quotes a whole dialog must still leave an idle box `empty`, or no keystroke caller would ever act on that
+session while the reply stays on screen. Sessions here often quote pane captures of exactly that kind, cursor row,
+rule and footer included. So only a rule at column 0 bounds the rows the check reads, because a reply's quoted rows
+are indented under its `●`. Rows holding conversation (`●`, `✻`, `⎿`) are a reply and never a dialog. Both 2.1.291
+captures fit: their dialog rule starts at column 0, and nothing but the dialog sits between it and the box.
+
 | Caller | empty | draft | absent |
 |---|---|---|---|
 | `_session_hard_blocked` (the limit swap) | rescue | stand down, `draft` | rescue |
