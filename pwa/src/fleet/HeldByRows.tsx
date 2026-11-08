@@ -13,7 +13,7 @@ import { api, failedTo } from '../lib/api';
 import { AttentionList } from './AttentionList';
 import {
   CLEANUP_HELD_BY_CONTROL, CLEANUP_HELD_BY_LABEL, CLEANUP_HELD_BY_RECHECKED, heldByRowControl, heldByRowForgot,
-  heldByRowLine, heldByRowsOf, heldByRowWho,
+  heldByRowLine, heldByRowsOf, heldByRowWho, heldByRowWhyNotForget,
 } from './heldByRowsWords';
 
 export function HeldByRows(
@@ -71,6 +71,9 @@ export function HeldByRows(
           sentence: item.sentence,
           control: (
             <>
+              {heldByRowWhyNotForget(item, listed.get(item.rowId)) !== null && (
+                <span className="child-reclaim-sentence">{heldByRowWhyNotForget(item, listed.get(item.rowId))}</span>
+              )}
               <Button variant="quiet" size="fit" aria-label={CLEANUP_HELD_BY_CONTROL[controlOf(item)].ariaLabel(item.rowId)}
                 onClick={() => setOpen({ rowId: item.rowId, act: controlOf(item) })}>
                 {CLEANUP_HELD_BY_CONTROL[controlOf(item)].button}

@@ -5,7 +5,7 @@ import { cleanup, render, screen, fireEvent, waitFor, within } from '@testing-li
 import type { CleanupHeldByItem } from '../../shared/api';
 import { HeldByRows } from '../src/fleet/HeldByRows';
 import {
-  CLEANUP_HELD_BY_LABEL, CLEANUP_HELD_BY_RECHECKED, heldByRowControl, heldByRowsOf,
+  CLEANUP_HELD_BY_LABEL, CLEANUP_HELD_BY_RECHECKED, heldByRowControl, heldByRowsOf, heldByRowWhyNotForget,
 } from '../src/fleet/heldByRowsWords';
 import { ApiError, api } from '../src/lib/api';
 import { ToastHost } from '@ccrc/ui';
@@ -280,3 +280,32 @@ describe('Forget follows the session sheet\'s presence check', () => {
     expect(forget).not.toHaveBeenCalled();
   });
 });
+
+// Review 1663 F1 (the coordinator's ruling): the server's act stays the authority, so when the fleet switches a forget
+// act to Check again, a line under the server's sentence says why.
+describe('a forget act the fleet holds back says why', () => {
+  const RUNNING = 'Forget is not offered while the fleet lists this session as running.';
+  const ASLEEP = 'Forget is not offered while the fleet lists this session as asleep; wake it or check again.';
+  const DOUBT = 'Forget is not offered while the fleet cannot tell whether it is running.';
+  const why: [string, ReturnType<typeof deadSession>, string][] = [
+    ['running', fleetSession({ id: 'row-a' }), RUNNING],
+    ['asleep', hibernatedSession(1_700_000_000_000, { id: 'row-a' }), ASLEEP],
+    ['asleep under a dead presence', deadSession({ id: 'row-a', presence: 'dead', hibernatedAt: 1_700_000_000_000 }), ASLEEP],
+    ['in doubt', deadSession({ id: 'row-a', presence: 'unknown' }), DOUBT],
+  ];
+
+  it.each(why)('a row the fleet lists as %s carries its line', (_, session, line) => {
+    expect(heldByRowWhyNotForget(held(), session)).toBe(line);
+    render(<HeldByRows sessions={[session]} coord={frame([held()])} />);
+    expect(screen.getByText(line)).toBeInTheDocument();
+  });
+
+  it('no line shows when the act and the control agree', () => {
+    render(<HeldByRows sessions={[deadSession({ id: 'row-a' }), deadSession({ id: 'row-b' })]}
+      coord={frame([held(), held({ rowId: 'row-b', act: 'recheck' })])} />);
+    expect(screen.queryByText(/Forget is not offered/)).toBeNull();
+    expect(heldByRowWhyNotForget(held(), deadSession({ id: 'row-a' }))).toBeNull();
+    expect(heldByRowWhyNotForget(held({ act: 'recheck' }), fleetSession({ id: 'row-a' }))).toBeNull();
+  });
+});
+

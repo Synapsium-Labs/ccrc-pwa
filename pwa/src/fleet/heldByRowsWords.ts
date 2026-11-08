@@ -6,7 +6,8 @@ import {
   CLEANUP_HELD_BY_ACTS, HELD_BY_WORDS, type CleanupHeldByAct, type CleanupHeldByItem,
 } from '../../../shared/api';
 import { isCount, isOneOf, isRecord } from '../lib/wire';
-import { forgetOffered, type ForgetFacts } from './presence';
+import { forgetOffered, presenceOf, type ForgetFacts } from './presence';
+import { hibernatedSince } from './hibernated';
 
 export const CLEANUP_HELD_BY_LABEL = 'rows holding the cleanup';
 
@@ -36,6 +37,27 @@ export function heldByRowsOf(coord: unknown): CleanupHeldByItem[] {
 export function heldByRowControl(item: CleanupHeldByItem, session: ForgetFacts | undefined): CleanupHeldByAct {
   return item.act === 'forget' && item.word === 'gone-unrecorded' && session !== undefined && forgetOffered(session)
     ? 'forget' : 'recheck';
+}
+
+/** Why a forget act shows Check again (review 1663 F1, the coordinator's ruling): the server's act stays the authority,
+ *  and when the fleet's listing of the row holds Forget back, one line under the server's sentence says why. */
+export const HELD_BY_FORGET_HELD_BACK = {
+  running: 'Forget is not offered while the fleet lists this session as running.',
+  asleep: 'Forget is not offered while the fleet lists this session as asleep; wake it or check again.',
+  doubt: 'Forget is not offered while the fleet cannot tell whether it is running.',
+} as const;
+
+/** The line for a forget act the console turned into Check again because of the row's presence, or `null` when the act
+ *  and the control agree, or when the switch is not about presence (a listed workspace, or a row the fleet does not
+ *  list, where the server's frame and the console's disagree for a moment). Asleep is read first, both halves:
+ *  the server's `asleep`, or a dead row `hibernatedSince` reads asleep (D-7371). */
+export function heldByRowWhyNotForget(item: CleanupHeldByItem, session: ForgetFacts | undefined): string | null {
+  if (item.act !== 'forget' || session === undefined || heldByRowControl(item, session) !== 'recheck') return null;
+  const presence = presenceOf(session);
+  if (presence === 'asleep' || hibernatedSince(session) !== null) return HELD_BY_FORGET_HELD_BACK.asleep;
+  if (presence === 'alive') return HELD_BY_FORGET_HELD_BACK.running;
+  if (presence === 'unknown') return HELD_BY_FORGET_HELD_BACK.doubt;
+  return null;
 }
 
 /** The pace (reviews 1580 F1, 1585 F1 and 1590 F1): ccrc asks a held item again only once its own backoff has run, at
