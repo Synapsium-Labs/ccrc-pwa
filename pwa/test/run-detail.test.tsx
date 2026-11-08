@@ -190,6 +190,7 @@ describe('the Who and Pull requests facts', () => {
     const store = mk();
     act(() => { store.setState({ sessions: [{ id: 'worker-a', pr: { number: 12, url: 'https://example.test/o/r/pull/12' } }] as never, fleetFrameSeen: true }); });
     const push = vi.spyOn(history, 'pushState');
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
     render(<RunDetailScreen id={410} store={store} />);
     const link = await screen.findByRole('link', { name: '#12' });
     expect(link).toHaveAttribute('href', 'https://example.test/o/r/pull/12');
@@ -197,6 +198,7 @@ describe('the Who and Pull requests facts', () => {
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     fireEvent.click(link);
     expect(push).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith('https://example.test/o/r/pull/12', '_blank', 'noopener,noreferrer');
   });
 });
 

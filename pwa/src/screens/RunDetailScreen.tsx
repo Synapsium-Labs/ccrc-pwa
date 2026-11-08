@@ -20,6 +20,7 @@ import {
 import { api, ApiError } from '../lib/api';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { inAppClick } from '../fleet/settingsText';
+import { openExternal } from '../lib/markdown';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { coordinatorPresence, type CoordinatorPresence } from '../fleet/presence';
@@ -181,7 +182,7 @@ function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
                 <dd>
                   {f.parts.map((p, i) => p.href === undefined ? <span key={i}>{p.text}</span> : (
                     p.external === true
-                      ? <TextLink key={i} href={p.href}>{p.text}</TextLink>
+                      ? <TextLink key={i} href={p.href} onClick={(e) => openExternal(e, p.href)}>{p.text}</TextLink>
                       : <TextLink key={i} href={p.href} onClick={inAppClick(p.href)}>{p.text}</TextLink>
                   ))}
                 </dd>
