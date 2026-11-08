@@ -1,7 +1,7 @@
 /* The run board's search (`RunFind`, D-8072; spec 2026-11-04 §8.3). Skin tokens only; no `.run` rule, and nothing here lives in
    `instrument.css` or `refined.css`. The box is sticky under the header on a phone. Every link keeps the tap floor, text wraps,
    nothing is ellipsised. */
-.rf-box { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 var(--sp-3); position: sticky; top: 0; z-index: 1; background: var(--bg-page); padding-block: var(--sp-1); }
+.rf-box { display: grid; gap: var(--sp-1); margin: var(--sp-2) 0 var(--sp-3); position: sticky; top: var(--head-h); z-index: 1; background: var(--bg-page); padding-block: var(--sp-1); }
 .rf-label { font-size: var(--fs-xs); color: var(--ink-secondary); }
 .rf-results { display: grid; gap: var(--sp-3); min-width: 0; }
 .rf-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }

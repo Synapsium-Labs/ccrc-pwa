@@ -142,6 +142,30 @@ describe('the box', () => {
     expect(screen.getByText('There is no run 9999.')).toBeInTheDocument();
   });
 
+  it('a failed read on a number says only that it could not search, never that there is no run', async () => {
+    vi.spyOn(api, 'findRuns').mockRejectedValue(new TypeError('offline'));
+    mount(board());
+    type('410');
+    await settle();
+    expect(screen.getByText('Could not search closed runs. Showing open runs only.')).toBeInTheDocument();
+    expect(screen.queryByText(/There is no run/)).toBeNull();
+  });
+
+  it('clearing restores a pane the board was scrolled in, read before the swap', async () => {
+    vi.spyOn(api, 'findRuns').mockImplementation(NEVER);
+    mount(board([open({ id: 11 })]));
+    const pane = screen.getByLabelText('Find a run').closest('.rf-box')!.parentElement!;
+    pane.style.overflowY = 'auto';
+    Object.defineProperty(pane, 'scrollHeight', { value: 2000, configurable: true });
+    Object.defineProperty(pane, 'clientHeight', { value: 500, configurable: true });
+    let top = 340;
+    Object.defineProperty(pane, 'scrollTop', { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+    type('lane');
+    top = 0; // the short results page clamps the scroller
+    type('');
+    expect(top).toBe(340);
+  });
+
   it('the read failing keeps the open runs and says so', async () => {
     vi.spyOn(api, 'findRuns').mockRejectedValue(new TypeError('offline'));
     mount(board([open({ id: 11 })]));

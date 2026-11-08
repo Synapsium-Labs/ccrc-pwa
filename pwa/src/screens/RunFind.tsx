@@ -107,9 +107,6 @@ export function RunFindResults({ q, store = useFleetStore }: { q: string; store?
           {number !== null ? RUN_FIND_WORDS.noRun(number) : RUN_FIND_WORDS.noMatch(q.trim())}
         </EmptyState>
       )}
-      {none && failed && number !== null && (
-        <EmptyState data-state="ok" role="status">{RUN_FIND_WORDS.noRun(number)}</EmptyState>
-      )}
     </div>
   );
 }

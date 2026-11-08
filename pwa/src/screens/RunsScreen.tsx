@@ -77,6 +77,15 @@ import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
 import { useColdRuns, type PagedLoader } from './useColdRuns';
 
 
+/** The board's scroll place: the nearest scrolling ancestor of the search box (the desktop pane), else the document. */
+function readBoardScroll(): { scroller: HTMLElement | null; top: number } {
+  for (let el = document.getElementById(RUN_FIND_ID)?.parentElement ?? null; el !== null; el = el.parentElement) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return { scroller: el, top: el.scrollTop };
+  }
+  return { scroller: null, top: window.scrollY };
+}
+
 export function RunsScreen({
   store = useFleetStore,
   loadRuns = loadColdRunsPage,
@@ -218,18 +227,24 @@ export function RunsScreen({
     const held = heldQuery ?? '';
     setFindText((t) => (t.trim() === held ? t : held));
   }, [heldQuery]);
+  // Clearing the query restores the board with its folds (they live in this component) and the place it was scrolled to. The
+  // place is read in `typeFind`, before the swap: once the short results page has rendered the browser has already clamped it.
+  // The phone scrolls the document and the desktop a pane, so the scroller is found from the box.
+  const scrollWas = useRef<{ scroller: HTMLElement | null; top: number } | null>(null);
   const typeFind = (text: string): void => {
+    if (text.trim() !== '' && findText.trim() === '') scrollWas.current = readBoardScroll();
     setFindText(text);
     const t = text.trim();
     navigate(t === '' ? '/runs' : `/runs?${new URLSearchParams({ q: t })}`, { replace: true });
   };
   const finding = findText.trim() !== '';
-  // Clearing the query restores the board with its folds (they live in this component) and the place it was scrolled to.
-  const scrollWas = useRef<number | null>(null);
   const wasFinding = useRef(finding);
   useEffect(() => {
-    if (finding && !wasFinding.current) scrollWas.current = window.scrollY;
-    if (!finding && wasFinding.current && scrollWas.current !== null) window.scrollTo(0, scrollWas.current);
+    if (!finding && wasFinding.current && scrollWas.current !== null) {
+      const { scroller, top } = scrollWas.current;
+      if (scroller !== null) scroller.scrollTop = top;
+      else window.scrollTo(0, top);
+    }
     wasFinding.current = finding;
   }, [finding]);
   // `/` focuses the box, outside a text field.
