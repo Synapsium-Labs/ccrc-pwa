@@ -48,3 +48,5 @@
   .runs-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--sp-4); align-items: start; }
   .runs-detail-pane { position: sticky; top: var(--head-h); max-height: calc(100dvh - var(--head-h)); overflow-y: auto; padding: var(--sp-3) var(--gutter) var(--sp-4) 0; }
 }
+
+.rd-head > p.rd-wait a.rd-wait-link { display: inline-flex; align-items: center; min-height: var(--tap-min); text-decoration: underline; text-underline-offset: 2px; }

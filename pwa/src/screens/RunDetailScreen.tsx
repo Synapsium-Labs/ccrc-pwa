@@ -5,14 +5,14 @@
 // FIVE READS, EACH ITS OWN. The run and its trail come from `GET /api/runs/:id/record`, which is stored rows and answers with
 // the agent link down. Spend and unread mail come from `GET /api/runs/:id`, the work items from `/items`, the suite and checks
 // from `/signals`, and the programme's pinned spec from its Goals. A slow or failed read leaves out its own fact and delays
-// nothing else. Only the record's failure is the page's: 404 says "There is no run N.", any other says "Could not load this
+// nothing else. Only the record's failure is the page's: a 404 `unknown-run` says "There is no run N.", any other says "Could not load this
 // run. Try again.".
 //
 // THE HEADER IS A SUPERSET OF THE ROW: every element `RunRow` draws is drawn here from the same readers, so a card, a row and
 // this page cannot disagree about a run (D-5545).
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, PageScaffold, Section, TextLink, cn } from '@ccrc/ui';
+import { Button, PageScaffold, Section, TextLink, cn, useNow } from '@ccrc/ui';
 import {
   graphReadCount, unmeasuredFields,
   type FleetSession, type RunRecordAnswer, type RunSpend, type RunSummary,
@@ -29,7 +29,7 @@ import { runSpendLine } from '../fleet/runSpendWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, childReclaimTitle, coordinatorOf, crossingNote, dispatchStalledTitle,
-  dispatchWindow, itemTallyLabel,
+  dispatchWindow, itemTallyLabel, anyDispatchPending, runWaitLine,
   resumeNote, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
 } from '../fleet/runWords';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
@@ -63,6 +63,14 @@ const readItems = (id: number): Promise<{ done: number; total: number }> =>
   api.runItems(id).then((a) => ({ done: a.items.filter((i) => i.state === 'done').length, total: a.items.length }));
 const readSignals = (id: number) => api.runSignals(id);
 
+/** Only the server's own `unknown-run` answer means the run does not exist. An older server answers an unmatched `/api` path with
+ *  404 `not-found`, which is a missing route and reads as a failed load. */
+function isUnknownRun(e: unknown): boolean {
+  if (!(e instanceof ApiError) || e.status !== 404) return false;
+  const body = e.body;
+  return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'unknown-run';
+}
+
 function useRecord(id: number): { state: Record_; retry: () => void } {
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<Record_>({ kind: 'loading' });
@@ -71,7 +79,7 @@ function useRecord(id: number): { state: Record_; retry: () => void } {
     setState({ kind: 'loading' });
     api.runRecord(id).then(
       (answer) => { if (live) setState({ kind: 'ok', answer }); },
-      (e: unknown) => { if (live) setState(e instanceof ApiError && e.status === 404 ? { kind: 'missing' } : { kind: 'failed' }); },
+      (e: unknown) => { if (live) setState(isUnknownRun(e) ? { kind: 'missing' } : { kind: 'failed' }); },
     );
     return () => { live = false; };
   }, [id, attempt]);
@@ -119,6 +127,7 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
   const verdict = worker === null ? null : spawnVerdictChip(worker);
   const degraded = worker === null ? [] : unmeasuredFields(worker);
   const graphReads = worker === null ? null : graphReadCount(worker);
+  const waitLine = runWaitLine(run, nowMs);
   return (
     <header className="rd-head">
       <p className="rd-kind-word">{run.kind === 'review' ? 'review' : 'work'}</p>
@@ -149,6 +158,11 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
         <p className="rd-dispatch" title={dispatchStalledTitle(spawn.elapsedMs)}>
           <span aria-hidden="true">{DISPATCH_GLYPH.stalled}</span>{DISPATCH_STALLED_WORDS}
         </p>
+      )}
+      {waitLine !== null && (
+        run.blockedBy != null
+          ? <p className="rd-wait"><a className="rd-wait-link" href={runPath(run.blockedBy)} onClick={inAppClick(runPath(run.blockedBy))}>{waitLine}</a></p>
+          : <p className="rd-wait">{waitLine}</p>
       )}
       <p className="rd-chips">
         <LastSpawnChip chip={verdict} />
@@ -243,11 +257,16 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const { state, retry } = useRecord(id);
   const sessions = store((s) => s.sessions);
   const frameSeen = store((s) => s.fleetFrameSeen);
-  const run = state.kind === 'ok' ? state.answer.run : null;
+  const liveRuns = store((s) => s.runs);
+  const recordRun = state.kind === 'ok' ? state.answer.run : null;
+  // The live runs frame wins for an open run, so a page beside the board cannot disagree with its row (D-5545); a closed run
+  // is not in the frame and keeps the record's.
+  const run = recordRun === null ? null : liveRuns.find((r) => r.id === recordRun.id) ?? recordRun;
+  const now = useNow(run !== null && anyDispatchPending([run]) ? 1_000 : 30_000);
   const side = useSide(id, readRun);
   const items = useSide(id, readItems);
   const signals = useSide(id, readSignals);
-  const specHref = useSpecHref(run);
+  const pinnedSpec = useSpecHref(run);
   const [liftOpen, setLiftOpen] = useState(false);
   const title = `Run ${id}`;
   if (state.kind === 'loading') {
@@ -279,7 +298,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const programmeHref = programmeIsOpenable(run.program) ? programmePath(run.program) : null;
   const lead = closeLeadLine(run);
   const groups = runFacts({
-    run, reviewedBy: state.answer.reviewedBy, fmt: runWhen, programmeHref, specHref, runHref: (n) => runPath(n),
+    run, reviewedBy: state.answer.reviewedBy, fmt: runWhen, programmeHref, specHref: pinnedSpec, runHref: (n) => runPath(n),
     coordinator: coordinatorFactWord(run.coordinatorGone, presence), worker: worker === null ? null : coordinatorWord(coordinatorPresence(worker.id, worker, frameSeen)),
     pr: pr !== null && pr.number !== null ? { text: `#${pr.number}`, href: pr.url !== null && /^https:\/\//.test(pr.url) ? pr.url : null } : null,
     ...(items === undefined ? {} : { items }),
@@ -289,7 +308,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   });
   return (
     <Frame pane={pane} title={title} q={q}>
-      <Header run={run} worker={worker} nowMs={Date.now()} />
+      <Header run={run} worker={worker} nowMs={now} />
       {lead !== null && <p className="rd-close">{lead}</p>}
       <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} />
       <Facts groups={groups} />

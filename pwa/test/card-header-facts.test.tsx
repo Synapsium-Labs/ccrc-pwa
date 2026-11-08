@@ -481,7 +481,7 @@ describe('a run row and its page header', () => {
     } as unknown as RunSummary;
     const row = render(<ul><RunRow run={run} nowMs={NOW} session={null} coordSession={null} frameSeen={false} programHasOpenRun
       onAbandon={() => {}} onResume={() => {}} /></ul>);
-    const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-resumed, .run-warn-item')]
+    const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-resumed, .run-warn-item, .run-wait')]
       .map((e) => e.textContent ?? '');
     row.unmount();
     // Neither the lamp's word nor a marker is optional in this case: the row draws them, so the header must.

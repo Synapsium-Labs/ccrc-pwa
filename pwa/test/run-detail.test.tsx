@@ -211,6 +211,32 @@ describe('the states', () => {
     expect(screen.getByRole('link', { name: 'Back to Runs' })).toHaveAttribute('href', '/runs');
   });
 
+  it('a server without the record route (404 not-found) reads as a failed load, not a missing run', async () => {
+    reads(run());
+    vi.spyOn(api, 'runRecord').mockRejectedValue(new ApiError(404, { error: 'not-found' }));
+    render(<RunDetailScreen id={410} store={mk()} />);
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not load this run. Try again.');
+    expect(screen.queryByText('There is no run 410.')).toBeNull();
+  });
+
+  it('the header draws the row\'s waits-on line', async () => {
+    const r = run({ state: 'awaiting-review', waitsOn: 'reviewer' } as Partial<RunSummary>);
+    reads(r);
+    render(<RunDetailScreen id={410} store={mk()} />);
+    expect(await screen.findByText('Waits on a reviewer.')).toBeInTheDocument();
+  });
+
+  it('an open run follows the live runs frame', async () => {
+    const r = run({ state: 'working' } as Partial<RunSummary>);
+    reads(r);
+    const store = mk();
+    render(<RunDetailScreen id={410} store={store} />);
+    await screen.findByText('Programme A');
+    expect(document.querySelector('.rd-state')?.textContent).not.toBe('awaiting review');
+    act(() => { store.setState({ runs: [{ ...r, state: 'awaiting-review', waitsOn: 'reviewer' } as RunSummary], runsFrameSeen: true }); });
+    expect(await screen.findByText('Waits on a reviewer.')).toBeInTheDocument();
+  });
+
   it('Could not load this run. Try again. on ApiTimeout', async () => {
     reads(run());
     const rec = vi.spyOn(api, 'runRecord').mockRejectedValueOnce(new ApiTimeout('/api/runs/410/record', 20_000));
