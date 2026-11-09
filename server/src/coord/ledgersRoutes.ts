@@ -335,6 +335,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
    *  `dismiss` reads that, so the context says what is true. */
   const move = (coord: CoordStore, reply: FastifyReply, item: ItemRow, act: 'confirm' | 'return' | 'withdraw', note: string | null, byId: string | null = null) => {
     // A withdrawn end request tells its asker, in the move's own transaction (A22). The coordinator's own request tells nobody.
+    if (act === 'withdraw' && isActing(coord, item.id)) return refuseRoute(reply, 'not-open', { detail: ACT_IN_FLIGHT_DETAIL(item.id) });
     const ending = act === 'withdraw' && isEndRunAction(item.action) ? item.action : null;
     const asker = ending !== null && item.raisedBy !== byId ? item.raisedBy : null;
     const res = asker !== null && ending !== null
@@ -530,6 +531,14 @@ export const SECRET_BODY_LIMIT = SECRET_VALUE_MAX * 6 + 1024;
  *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
 export const SLOT_WAIT_MS = 30_000;
 
+/** The end-request items whose Abandon run is in flight, per store. The abandon's fleet act awaits before it commits, and
+ *  the coordinator's withdraw and the operator's decline take no coordination hold, so while an item is in this set both
+ *  refuse it: the asker is never told "Nothing was ended" about a run the operator is ending (D-8076). */
+const actingItems = new WeakMap<CoordStore, Set<number>>();
+const isActing = (coord: CoordStore, id: number): boolean => actingItems.get(coord)?.has(id) === true;
+const ACT_IN_FLIGHT_DETAIL = (id: number): string => `item ${id} is being acted on: the operator's Abandon run is in progress`;
+const RUN_ABANDONED_NOTE = 'The operator abandoned the run.';
+
 /** Why an operator's `act` or `decline` cannot take an item, or null: it must be open (`nextItemState`'s word), not held (the
  *  operator never saw a held item), and carry an `end-run` action, the one verb that may abandon today. */
 function endRunItemRefusal(item: ItemRow, act: 'act' | 'decline', now: number): { why: RouteRefusal; detail: string } | null {
@@ -619,6 +628,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (item.kind === 'secret') {
       return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.useSecretRoute, { detail: 'a secret is given on its own route; it never rides a tick' });
     }
+    // An item that carries an action is answered by `act` or `decline` alone; a tick would strand it in `checking`, where both are refused.
+    if (isEndRunAction(item.action)) return refuseRoute(reply, 'not-open', { detail: `item ${id} is ended with Abandon run or Keep the run, not ticked` });
+    if (item.heldUntil !== null && item.heldUntil > deps.now()) return refuseRoute(reply, 'not-open', { detail: `item ${id} is held and is not yet on the operator's list` });
     const verdict = nextItemState(item.state, 'tick', 'operator', { programmeHasOpenRun: false });
     if (!verdict.ok) return refuseRoute(reply, verdict.why, { detail: `item ${id} is ${item.state}, not open` });
     const given = body['answer'];
@@ -669,11 +681,28 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
         deps.bus.emit('waiting');
         return deps.sendClose(reply, { ok: true, id: runId, state: read.run.state as 'done' | 'failed', released: false, childReclaim: 'not-queued' });
       }
-      const outcome = await abandon(runId, `abandon:requested:${id}`);
-      if (!outcome.ok) return deps.sendClose(reply, outcome);
-      coord.moveItem(id, 'act', 'operator', {}, deps.now(), { programmeHasOpenRun: true });
-      deps.bus.emit('waiting');
-      return deps.sendClose(reply, outcome);
+      // Held from the check above to the move below: a withdraw or a decline in between is refused (`isActing`).
+      const holds = actingItems.get(coord) ?? new Set<number>();
+      actingItems.set(coord, holds);
+      holds.add(id);
+      try {
+        const outcome = await abandon(runId, `abandon:requested:${id}`);
+        if (!outcome.ok) return deps.sendClose(reply, outcome);
+        let moved = coord.moveItem(id, 'act', 'operator', {}, deps.now(), { programmeHasOpenRun: true });
+        // The run is abandoned either way. A refused move is mended with a settle; an item the mender already closed is fine;
+        // anything else is a fault the operator is told about, never a silent success.
+        if (!moved.ok && coord.itemById(id)?.state !== 'done') {
+          moved = coord.moveItem(id, 'settle', 'ccrc', { note: RUN_ABANDONED_NOTE }, deps.now(), { programmeHasOpenRun: true });
+          if (!moved.ok) {
+            deps.bus.emit('waiting');
+            return refuseRoute(reply, 'write-failed', { detail: `run ${runId} was abandoned, but item ${id} could not be closed (${moved.why}); it settles on the next read` });
+          }
+        }
+        deps.bus.emit('waiting');
+        return deps.sendClose(reply, outcome);
+      } finally {
+        holds.delete(id);
+      }
     });
   });
 
@@ -692,6 +721,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const now = deps.now();
     const refusal = endRunItemRefusal(item, 'decline', now);
     if (refusal !== null) return refuseRoute(reply, refusal.why, { detail: refusal.detail });
+    if (isActing(coord, id)) return refuseRoute(reply, 'not-open', { detail: ACT_IN_FLIGHT_DETAIL(id) });
     const action = item.action as { runId: number };
     const res = coord.moveItemWithMail(id, 'decline', 'operator', {}, now, { programmeHasOpenRun: true }, (moved) => {
       const mail = endRequestEndedMail(moved, action.runId, 'declined');

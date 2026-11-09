@@ -55,6 +55,11 @@ export function askNotifyAt(heldAt: number): number {
   return heldAt + ASK_GRACE_MS;
 }
 
+/** The coordinator-first window in whole seconds, for a mail's words: the one reader a sentence takes instead of the constant. */
+export function askGraceSeconds(): number {
+  return Math.round(ASK_GRACE_MS / 1000);
+}
+
 /** D-5441 (`approval-countdown-window-60s`, the operator's ruling of 2026-10-18): the coordinator's window on a
  *  permission prompt that carries Claude Code's unattended auto-deny countdown (the main thread and foreground
  *  subagents; the deny was measured at about 120 s on 2.1.300, after which a hook's allow was ignored). Then the hook

@@ -161,6 +161,8 @@ function moveItemInTx(
   if (row === null) return { ok: false, why: 'unknown-item' };
   const verdict = nextItemState(row.state, act, actor, ctx);
   if (!verdict.ok) return verdict;
+  // An item that carries an action ends by `act`, `decline`, `withdraw` or `settle`; a tick, confirm or return would strand it.
+  if (isEndRunAction(row.action) && (act === 'tick' || act === 'confirm' || act === 'return')) return { ok: false, why: 'not-open' };
   const closes = verdict.to === 'done' || verdict.to === 'withdrawn' || verdict.to === 'dismissed';
   const answer = act === 'tick' && fields.answer !== undefined ? fields.answer : row.answer;
   const note = act === 'return' && fields.note !== undefined ? fields.note : row.note;

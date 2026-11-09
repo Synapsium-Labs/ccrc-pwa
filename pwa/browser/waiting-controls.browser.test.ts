@@ -149,6 +149,28 @@ describe.each(SKINS)('the controls on /waiting in %s', (skin) => {
     }
   }
 
+  for (const width of [1280, 1470, 1920] as const) {
+    it(`the list beside an open item at ${width}: the controls sit under the row in the column, whatever the viewport`, async () => {
+      const { ctx, page, errors } = await open(skin, PALETTES[0]!, width, '/waiting/2', '.wl-beside .wl-acts');
+      try {
+        expect(await page.evaluate(sideways), 'sideways scroll').toBe(0);
+        const rows = [
+          ['an end-run row', await page.evaluate(boxesOf, '.wl-beside .wl-item[data-item="1"]')],
+          ['a review cap row', await page.evaluate(boxesOf, '.wl-beside .wl-capitem[data-run="101"]')],
+        ] as const;
+        for (const [name, b] of rows) {
+          expect(b, `${name} carries its controls`).not.toBeNull();
+          expect(b!.acts.top, `${name}: below the row, not beside it`).toBeGreaterThanOrEqual(b!.row.bottom - 0.5);
+          // The row keeps the column's width, so its words do not break one to a line.
+          expect(b!.row.right - b!.row.left, `${name}: the row is not squeezed`).toBeGreaterThan(240);
+        }
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+
   for (const width of [360, 1280] as const) {
     it(`the sheets at ${width}: Abandon run, Keep the run and Lift cap each open inside the viewport with their answers reachable`, async () => {
       const { ctx, page, errors } = await open(skin, PALETTES[0]!, width, '/waiting', '.wl-acts');

@@ -14,6 +14,7 @@ import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { KeepRunSheet, type KeepRunTarget } from '../fleet/KeepRunSheet';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
 import { capWaiting } from '../fleet/reviewCapWords';
+import { workerOf } from '../fleet/runWords';
 import './ledgers.css';
 
 /** The controls' words, once. */
@@ -48,7 +49,7 @@ export function useItemActs(sessions: readonly FleetSession[] | null = null, onA
   const sheets = (
     <>
       <AbandonSheet run={abandon?.run ?? null} {...(abandon === null ? {} : { itemId: abandon.item })}
-                    workspaceChild={abandonChildOf(sessions?.find((s) => s.id === abandon?.run.sessionId))}
+                    workspaceChild={abandonChildOf(abandon === null || sessions === null ? undefined : workerOf(abandon.run, new Map(sessions.map((s) => [s.id, s] as const))) ?? undefined)}
                     onClose={() => setAbandon(null)} {...(onActed === undefined ? {} : { onDone: onActed })} />
       <KeepRunSheet target={keep} onClose={() => setKeep(null)} {...(onActed === undefined ? {} : { onDone: onActed })} />
       <LiftCapSheet run={lift} onClose={() => setLift(null)} />

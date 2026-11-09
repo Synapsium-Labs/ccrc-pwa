@@ -482,6 +482,16 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
     expect(within(row.closest('li')!).getByRole('button', { name: 'Lift cap' })).toBeTruthy();
   });
 
+  it('the list beside an item acts on nothing while the fleet rows are not heard: its controls are drawn disabled', () => {
+    const store = rig();
+    act(() => store.setState({ fleetFrameSeen: false, runsFrameSeen: true, runs: [runFixture(12, 'coord', 'w-12', { reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null } })] }));
+    history.replaceState(null, '', '/waiting/4');
+    render(<ItemListColumn param="4" store={store} fleet={<section aria-label="Fleet stand-in" />} />);
+    const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
+    const lift = within(beside.querySelector<HTMLElement>('[data-run="12"]')!.closest('li')!).getByRole('button', { name: 'Lift cap' });
+    expect(lift.hasAttribute('disabled') || lift.getAttribute('aria-disabled') === 'true').toBe(true);
+  });
+
   it('an item the list does not hold (recently cleared, gone) keeps the list it was opened from beside it, nothing marked', () => {
     columnAt(`/waiting/9?from=${encodeURIComponent('programme:prog-a')}`, 9);
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });

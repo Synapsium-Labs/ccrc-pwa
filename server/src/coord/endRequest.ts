@@ -11,7 +11,7 @@
 // WHICH LINE THE ITEM ENDS IN. The item's `why` is the asker's words and then, as its last line, one of the three origins
 // (`EndRequestLine`), so the console reads the origin from the item without a column of its own.
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { ASK_GRACE_MS, askNotifyAt } from '../askwindow.js';
+import { askGraceSeconds, askNotifyAt } from '../askwindow.js';
 import { refuseRoute } from '../refuse.js';
 import { END_REQUEST_REFUSALS, LEDGER_ROUTE_REFUSALS, type EndRequestRefusal } from '../../../shared/refusal.js';
 import { TERMINAL_RUN_STATES, type RunState, type StuckReason } from '../../../shared/api.js';
@@ -144,7 +144,7 @@ export function endRequestRun(deps: EndRequestDeps, runId: number, askerId: stri
   };
   const id = deps.coord.raiseItemWithMail(input, now, actor, (itemId) => {
     if (mailTo === null) return null;
-    const mail = endRequestAskMail({ itemId, runId, runName: endRequestRunName(run), askerId, why, graceMs: ASK_GRACE_MS });
+    const mail = endRequestAskMail({ itemId, runId, runName: endRequestRunName(run), askerId, why, graceSeconds: askGraceSeconds() });
     return insertSystemMailTx(deps.coord, null, { fromId: 'operator', toId: mailTo, runId: null, kind: 'status', subject: mail.subject, body: mail.body });
   });
   return { ok: true, id, line: decision.line, heldUntil: decision.heldUntil };

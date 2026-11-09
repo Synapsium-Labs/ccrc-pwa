@@ -283,8 +283,13 @@ function ItemNav({ id, back, place, left, title }: {
  *  frame places the stack under its bar (Refined) draws it there, and none here: one stack is mounted at any width. */
 export function ItemListColumn({ param, fleet, store = useFleetStore }: { param: string | null; fleet: ReactNode; store?: FleetStore }): ReactNode {
   const groups = useGroups(store);
+  const view = store((s) => s.waiting);
+  const saved = store((s) => s.waitingSaved);
+  const deviceRows = store((s) => s.sessions);
   const { runs, sessions } = useHeard(store);
   const { acts, sheets } = useItemActs(sessions);
+  // The rows' controls open on live data only, as `WaitingRoute` decides it for the list: the rows heard, or the device's.
+  const actsEnabled = actsOpen(listSource({ view, sessions }, saved, deviceRows));
   const named = useOpenedFrom();
   const settled = useSettledList(named, groups);
   const set = useFrameSet();
@@ -303,7 +308,7 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
         {drawnGroups.map((g) => (
           <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={id}
                      hue={g.program === null ? null : hues.get(g.program) ?? null}
-                     rowActs={{ acts, runs, enabled: true }}
+                     rowActs={{ acts, runs, enabled: actsEnabled }}
                      onOpenItem={(next) => navigate(itemPath(next, list))} onOpenSession={(sid) => navigate(sessionPath(sid))} />
         ))}
       </aside>

@@ -254,6 +254,12 @@
 .wl-banners:has(> .banner-slot > *, > .banner-more) { padding: calc(var(--sp-3) + var(--safe-top)) var(--sp-4) 0; }
 .wl-beside .wl-item { grid-template-columns: minmax(0, 1fr); }
 .wl-beside .wl-item .wl-meta { justify-items: start; }
+/* The column is 320 to 420 wide in both skins, so the controls of an end-request row or a cap row sit under it, not beside it,
+   whatever the viewport (the media query above reads the viewport; this reads the place). */
+.wl-beside .wl-li[data-acts='true'] { grid-template-columns: minmax(0, 1fr); }
+.wl-beside .wl-acts { justify-content: flex-start; }
+.wl-beside .wl-capitem { grid-template-columns: minmax(0, 1fr); }
+.wl-beside .wl-capitem .wl-meta { justify-items: start; }
 .wl-beside .wl-item[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--accent); }
 
 /* The programme view (desktop-polish PL5b, D-7713; the prototype's view 2): the programme's head, Goals on one side and its

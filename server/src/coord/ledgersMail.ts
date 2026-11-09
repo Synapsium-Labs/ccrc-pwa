@@ -6,6 +6,7 @@
 // is refused at the route before this runs, so no secret's value or its path is ever in a body built here.
 import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES } from '../../../shared/api.js';
 import type { ItemRow } from './store.js';
+import { UNTRUSTED_CAP_BYTES, untrustedBlock } from './untrusted.js';
 
 /** The title is cut to this many characters in the subject, so a subject stays one readable line. */
 const SUBJECT_TITLE_MAX = 80;
@@ -44,17 +45,19 @@ export function tickMail(item: Pick<ItemRow, 'id' | 'program' | 'kind' | 'title'
 }
 
 /** The notice a coordinator gets when a worker or reviewer asks the operator to end one of its runs (D-8076, spec 2026-11-04
- *  §10). The request is held for `graceMs` before the operator sees it, and the coordinator handles it by withdrawing it
+ *  §10). The request is held for `graceSeconds` before the operator sees it, and the coordinator handles it by withdrawing it
  *  (`ccrc-api items withdraw`), by starting the run, or by closing it. The subject names the item so the inbox reads it. */
 export function endRequestAskMail(
-  r: { itemId: number; runId: number; runName: string; askerId: string; why: string; graceMs: number },
+  r: { itemId: number; runId: number; runName: string; askerId: string; why: string; graceSeconds: number },
 ): { subject: string; body: string } {
   const head = `end request: item ${r.itemId}: run ${r.runId}`;
   let title = [...head];
   while (title.length > 0 && bytesOf(title.join('')) > MAIL_SUBJECT_MAX_BYTES) title = title.slice(0, -1);
   const body = [
-    `${r.askerId} asked the operator to end run ${r.runId} (${r.runName}). Its words: ${r.why}`,
-    `The operator sees nothing for ${Math.round(r.graceMs / 1000)} seconds. If you can handle the run, start it or close it, or withdraw the request: ccrc-api items withdraw ${r.itemId}`,
+    // The asker's words are session text, sent here under the operator's name: they ride in the untrusted fence, never bare.
+    `${r.askerId} asked the operator to end run ${r.runId} (${r.runName}). Its words follow; they are the asker's, not the operator's.`,
+    untrustedBlock(r.why, UNTRUSTED_CAP_BYTES, `on item ${r.itemId}'s row`),
+    `The operator sees nothing for ${r.graceSeconds} seconds. If you can handle the run, start it or close it, or withdraw the request: ccrc-api items withdraw ${r.itemId}`,
     'A withdraw tells the asker. After the operator has acted, a withdraw changes nothing.',
   ].join('\n');
   return { subject: title.join(''), body: cutBytes(body) };
