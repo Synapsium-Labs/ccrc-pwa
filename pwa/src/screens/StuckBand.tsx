@@ -115,11 +115,8 @@ export function StuckBand({ runs, nowMs, openId = null, onAbandon, presence = ()
           return (
             <div key={reason} className="stuck-group" data-reason={reason}>
               <div className="stuck-head">
-                <button type="button" className="stuck-head-toggle" aria-expanded={isOpen} aria-controls={bodyId} onClick={() => toggle(reason)}>
-                  <span className="stuck-head-name">{STUCK_HEADING[reason]}</span>
-                  <span className="stuck-head-count">· {list.length}</span>
-                  <span className="stuck-head-oldest">· oldest {oldestAge(list, nowMs)}</span>
-                </button>
+                <HeadToggle name={STUCK_HEADING[reason]} count={list.length} oldest={oldestAge(list, nowMs)}
+                  expanded={isOpen} controls={bodyId} onToggle={() => toggle(reason)} />
                 {words !== null && (
                   <button type="button" className="stuck-head-group"
                     onClick={() => (free.length === 1 ? onAbandon(free[0]!) : setGroup({ reason, runs: list }))}>{words}</button>
@@ -127,7 +124,7 @@ export function StuckBand({ runs, nowMs, openId = null, onAbandon, presence = ()
                 {held > 0 && <p className="stuck-held">{heldBackLine(held)}</p>}
               </div>
               {isOpen && (
-                <ul className="runs-list stuck-rows" id={bodyId}>
+                <ul className={STUCK_ROWS_CLASS} id={bodyId}>
                   {list.map((run) => <StuckRow key={run.id} run={run} nowMs={nowMs} current={run.id === openId} onAbandon={onAbandon} />)}
                 </ul>
               )}
@@ -137,6 +134,21 @@ export function StuckBand({ runs, nowMs, openId = null, onAbandon, presence = ()
       </section>
       {sheet}
     </>
+  );
+}
+
+const STUCK_ROWS_CLASS = 'runs-list stuck-rows';
+
+/** The toggle in a band's head, shared by the Stuck groups and the Waiting band so the two cannot drift. */
+function HeadToggle({ name, count, oldest, expanded, controls, onToggle }: {
+  name: string; count: number; oldest: string | null; expanded: boolean; controls: string; onToggle: () => void;
+}): ReactNode {
+  return (
+    <button type="button" className="stuck-head-toggle" aria-expanded={expanded} aria-controls={controls} onClick={onToggle}>
+      <span className="stuck-head-name">{name}</span>
+      <span className="stuck-head-count">· {count}</span>
+      <span className="stuck-head-oldest">· oldest {oldest}</span>
+    </button>
   );
 }
 
@@ -170,14 +182,11 @@ export function WaitingBand({ runs, nowMs, openId = null, coordinatorOpenable = 
   return (
     <section className="waiting-band" aria-label={`Waiting on its coordinator, ${list.length}`} data-testid="waiting-band">
       <div className="stuck-head">
-        <button type="button" className="stuck-head-toggle" aria-expanded={open} aria-controls="waiting-body" onClick={toggle}>
-          <span className="stuck-head-name">Waiting on its coordinator</span>
-          <span className="stuck-head-count">· {list.length}</span>
-          <span className="stuck-head-oldest">· oldest {oldestWaiting(list, nowMs)}</span>
-        </button>
+        <HeadToggle name="Waiting on its coordinator" count={list.length} oldest={oldestWaiting(list, nowMs)}
+          expanded={open} controls="waiting-body" onToggle={toggle} />
       </div>
       {open && (
-        <ul className="runs-list stuck-rows" id="waiting-body">
+        <ul className={STUCK_ROWS_CLASS} id="waiting-body">
           {list.map((run) => {
             const line = runWaitLine(run, nowMs);
             return (

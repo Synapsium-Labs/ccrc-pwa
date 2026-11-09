@@ -176,8 +176,8 @@ const CENSUS: readonly Row[] = [
     why: 'that read: the server\'s `asleep`, spelled `hibernated`, opens no Resume door' },
   { source: 'dead-compare', file: 'pwa/src/fleet/runWords.ts', hits: 1, stances: ['other-meaning'],
     why: '`coordinatorGoneOf` takes the server\'s `coordinatorGone` first and falls back to a `CoordinatorPresence` its caller hands in (D-7181): that word spells a sleeper `hibernated`, so `dead` there is never a sleeper' },
-  { source: 'presence-reader', file: 'pwa/src/screens/RunsScreen.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
-    why: 'the abandon sheet\'s `abandonPresence` reads `coordinatorPresence` (D-7181): a sleeper reads `hibernated`, never gone' },
+  { source: 'presence-reader', file: 'pwa/src/screens/RunsScreen.tsx', hits: 2, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
+    why: 'the abandon sheet\'s `abandonPresence` and the Stuck band\'s `presence` prop both read `coordinatorPresence` (D-7181, D-8074): a sleeper reads `hibernated`, never gone' },
   { source: 'dead-compare', file: 'pwa/src/screens/RunDetailScreen.tsx', hits: 1, stances: ['consults'], via: 'pwa/src/fleet/presence.ts',
     why: 'the run page\'s Who facts (`coordinatorFactWord`) take the server\'s `coordinatorGone` first and fall back to '
       + '`coordinatorPresence` (D-7181), which answers a sleeper `hibernated`, never `dead`' },
