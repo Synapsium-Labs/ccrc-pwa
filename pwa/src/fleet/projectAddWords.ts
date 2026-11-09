@@ -176,8 +176,9 @@ export function projectAddedText(name: string, source: ProjectAddSource): string
 
 /** What the new-session sheet's project search offers to ADD, beside the projects it matches:
  *  - `clone`: the search reads as a GitHub repository (`parseGithubRepo`) no project here was measured to be. `name` is
- *    the project's (the repo's own), or `null` when the form must ask for one: the repo's name is not one a new project
- *    may take (`.github`), or a project of that name is here and was measured to be another repository.
+ *    the project's: the repo's own, or `<owner>-<repo>` when a project of the repo's name is here and was measured to
+ *    be another repository; `null` when neither is a name a new project may take and is free (`.github`), so the form
+ *    must ask for one.
  *  - `existing`: the search reads as a repository a project here was measured to be (its `repo` slug, `repoLabel`), or,
  *    where no slug was measured, a project of the repo's name; the sheet shows that project.
  *  - `empty`: the search is a name a new project may take and no project's name contains it.
@@ -204,9 +205,12 @@ export function projectSearchOffer(query: string, rows: readonly ProjectOfferRow
     const name = deriveProjectName(repo);
     const namesake = name === null ? undefined : rows.find((r) => same(r.name, name));
     if (namesake === undefined) return { kind: 'clone', repo, name };
-    // A namesake measured to be another repository: the clone needs a name of its own. One with no measured slug is
-    // taken for this repository, as the operator most likely made it from it.
-    return repoLabel(namesake.repo) !== null ? { kind: 'clone', repo, name: null } : { kind: 'existing', name: namesake.name };
+    // A namesake with no measured slug is taken for this repository, as the operator most likely made it from it.
+    if (repoLabel(namesake.repo) === null) return { kind: 'existing', name: namesake.name };
+    // One measured to be another repository: the clone takes the owner's name too, or asks when that is no free name.
+    const owned = `${repo.owner}-${repo.repo}`;
+    const free = isNewProjectName(owned) && !rows.some((r) => same(r.name, owned));
+    return { kind: 'clone', repo, name: free ? owned : null };
   }
   const needle = q.toLowerCase();
   if (!isNewProjectName(q) || rows.some((r) => r.name.toLowerCase().includes(needle))) return null;

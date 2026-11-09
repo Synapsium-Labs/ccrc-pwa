@@ -185,10 +185,37 @@ describe('an add that outlives its form', () => {
     };
   };
 
-  it('holds Back while an add runs (the plane\'s `addingProject`), and frees it when none does', async () => {
+  it('offers no add while one runs: no New project row, no search offer', async () => {
     await open([[proj('alpha')]], { adding: true });
     await screen.findByText('alpha');
-    fireEvent.click(screen.getByRole('button', { name: PROJECT_ADD_TEXT.open }));
+    expect(newProjectRow()).toBeNull();
+    search('example/new-thing');
+    expect(screen.queryByRole('button', { name: /^Clone / })).toBeNull();
+  });
+
+  it('a clone whose name a project of another repository holds takes the owner\'s name, in one tap', async () => {
+    const { add } = await open([[{ ...proj('api'), repo: { state: 'named', slug: 'other/api' } }]]);
+    await screen.findByText('api');
+    search('third/api');
+    fireEvent.click(screen.getByRole('button', { name: /Clone third\/api/ }));
+    await waitFor(() => expect(add).toHaveBeenCalledWith({ source: 'github', repo: 'third/api', name: 'third-api' }));
+  });
+
+  it('holds Back while an add runs (the plane\'s `addingProject`), and frees it when none does', async () => {
+    const d = deferred();
+    const store = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { store.setState({ conn: 'open', sessions: [], roster }); });
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [proj('alpha')] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    const sheet = (adding: boolean) => (
+      <NewSessionSheet open onClose={vi.fn()} fleet={store} addProject={d.add} addingProject={adding} />
+    );
+    const r = render(sheet(false));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    await screen.findByText('alpha');
+    search('fresh');
+    fireEvent.click(screen.getByRole('button', { name: /Create empty project fresh/ }));
+    r.rerender(sheet(true));
     expect(screen.getByRole('button', { name: new RegExp(PROJECT_ADD_TEXT.back) })).toBeDisabled();
     cleanup();
     await open([[proj('alpha')]]);

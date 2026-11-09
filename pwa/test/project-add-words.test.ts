@@ -248,8 +248,9 @@ describe('projectSearchOffer', () => {
     ];
     // Cloned under another name: that project, not a second clone.
     expect(projectSearchOffer('https://github.com/ACME/api', rows)).toEqual({ kind: 'existing', name: 'api-work' });
-    // A namesake measured to be another repository: a clone, under a name the form asks for.
-    expect(projectSearchOffer('third/api', rows)).toMatchObject({ kind: 'clone', name: null, repo: { owner: 'third', repo: 'api' } });
+    // A namesake measured to be another repository: a clone under the owner's name too, or none when that is taken.
+    expect(projectSearchOffer('third/api', rows)).toMatchObject({ kind: 'clone', name: 'third-api', repo: { owner: 'third', repo: 'api' } });
+    expect(projectSearchOffer('third/api', [...rows, { name: 'Third-API' }])).toMatchObject({ kind: 'clone', name: null });
     // A namesake nobody measured is taken for this repository.
     expect(projectSearchOffer('acme/web', rows)).toEqual({ kind: 'existing', name: 'web' });
   });

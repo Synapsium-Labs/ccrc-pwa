@@ -310,7 +310,10 @@ export function NewSessionSheet({
   const needle = query.trim().toLowerCase();
   // A search that reads as a repository, or as a new name, offers to add it (`projectSearchOffer`); one whose repository
   // is already a project here shows that project, which the name match below would not find.
-  const offer = addProject === undefined || shown === null ? null : projectSearchOffer(query, shown);
+  // No add is offered while one runs (one at a time, `useProjectRows.addProject`): its project is not in the list yet,
+  // so the list would offer the same add, into a form that cannot send.
+  const canAdd = addProject !== undefined && !addingProject;
+  const offer = !canAdd || shown === null ? null : projectSearchOffer(query, shown);
   const matching =
     offer?.kind === 'existing' ? ordered.filter((p) => p.name === offer.name)
       : needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
@@ -382,10 +385,9 @@ export function NewSessionSheet({
     adding: addingProject,
     onAdded: (added, dismissed) => {
       toast(projectAddedText(added.name, added.source));
-      // The list is re-read either way, so a sheet still open never offers to add what it just added. A closed sheet's
-      // re-read does nothing (the fetch runs only while open), and its next opening reads afresh.
-      setListEpoch((n) => n + 1);
+      // Dismissed means the sheet was closed (Back is held while an add runs), and its next opening reads afresh.
       if (dismissed) return;
+      setListEpoch((n) => n + 1);
       setAdding(false);
       setQuery('');
       setPendingPick(added.name);
@@ -661,7 +663,7 @@ export function NewSessionSheet({
             empty={offerText === null && inPool.length === 0 && otherPool.length === 0}
           >
               {offerText !== null && <AddRow glyph="+" title={offerText.title} detail={offerText.detail} onPick={takeOffer} />}
-              {addProject !== undefined && offerText === null && needle === '' && (
+              {canAdd && offerText === null && needle === '' && (
                 <AddRow glyph="+" title={PROJECT_ADD_TEXT.open} onPick={openAdd} />
               )}
               {inPool.map((candidate) => (
