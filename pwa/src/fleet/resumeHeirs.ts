@@ -3,6 +3,7 @@
 // fleet's sessions and its frame flag, and `coordinatorPresence` decides alive.
 import type { FleetSession } from '../../../shared/api';
 import { coordinatorPresence } from './presence';
+import { coordinatorRole } from './sessionFacts';
 import { sessionLabel } from './sessionLabel';
 
 /** A live coordinator of the programme's project that could take the programme over: its session id and the name it shows. */
@@ -14,7 +15,7 @@ export function resumeHeirs(
   // The claimant being replaced is no heir; the set keeps this a membership test, not a run-to-session match (ARCH-61).
   const replaced: ReadonlySet<string> = new Set(claimedBy === null ? [] : [claimedBy]);
   return sessions
-    .filter((s) => s.role === 'coordinator' && s.project === project && !replaced.has(s.id)
+    .filter((s) => coordinatorRole(s) && s.project === project && !replaced.has(s.id)
       && coordinatorPresence(s.id, s, frameSeen) === 'alive')
     .map((s) => ({ id: s.id, name: sessionLabel(s) }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
