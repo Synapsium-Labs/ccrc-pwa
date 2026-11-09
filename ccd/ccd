@@ -19324,7 +19324,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
       && ! _authdead "$home" && _avail "$home" \
-      && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; }; then   # D-8123: a wake move wants MEASURED room only, so an unmeasured home is not "recovered"
+      && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; } \
+      && { [[ -z "$force" ]] || [[ -n "$(_limit_score "$home")" ]]; }; then   # D-8123: a wake move wants MEASURED room only, and a FORCED rescue ranks an unmeasured home in the loop below (after every measured account with room), never ahead of it; the unforced affinity return home is unchanged
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
       # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling

@@ -219,7 +219,7 @@ describe('CCD_RESCUE_MEASURED_ONLY in _swap_target', () => {
     const out = h.sh(`export CCD_RESCUE_MEASURED_ONLY=1; out=$(_swap_target ${ID} claude-a claude 1 0); echo "$out rc=$?"`, env());
     expect(out).toBe('claude-b rc=0');
     const unset = h.sh(`out=$(_swap_target ${ID} claude-a claude 1 0); echo "$out rc=$?"`, env());
-    expect(unset).toBe('claude rc=0');   // today: the unmeasured home wins the forced rescue
+    expect(unset).toBe('claude-b rc=0');   // D-8123 Task 3: a forced rescue ranks an unmeasured home after measured room
   });
 });
 
