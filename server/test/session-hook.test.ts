@@ -9517,6 +9517,19 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(readState().state).toBe('done');
   });
 
+  // W3-1 Task 1C, commit 1: the bytes the spool append writes, which the factoring into `_hook_history_spool_append`
+  // must leave exactly as they are. The whole file, not a parsed line: the fence's two LFs are part of the contract.
+  it('S12 (W3-1 pin): the file holds exactly the fenced lines, byte for byte: a leading LF, the JSON, a trailing LF, once per append', () => {
+    plantSpool();
+    const env = { ...SCRUB, CCRC_SESSION_GENERATION: '', BASH_ENV: epochEnv('1700000000.123456') };
+    const stop = `\n{"v":1,"ev":"Stop","id":"${ID}","sid":"${SID}","ts":1700000000123}\n`;
+    const post = `\n{"v":1,"ev":"PostCompact","id":"${ID}","sid":"${SID}","trig":"auto","ts":1700000000123}\n`;
+    expect(runFull({ hook_event_name: 'Stop', session_id: SID }, env)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe(stop);
+    runFull({ hook_event_name: 'PostCompact', trigger: 'auto', session_id: SID }, env);
+    expect(fs.readFileSync(spoolFile(), 'utf8')).toBe(stop + post);
+  });
+
   it('S14: SessionStart(compact) writes no line; startup, resume, clear and fork (ruled Q16, W1-B2) write one each, each carrying src', async () => {
     plantSpool();
     run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
@@ -10466,6 +10479,50 @@ describe('history scope marker: PreCompact records whose context is compacting (
     cardOff();                                            // the unset arm's own scope run answers rc 1 too
     expect(runFull(pre(path.join(home, 'missing.jsonl')), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
     expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  // W3-1 Task 1C, commit 1: pins the factoring of `_hook_history_scope`'s unset arm into `_hook_history_scope_verdict`
+  // could change. The unset arm (compact-card-off: the card returns before scoping) is the one the factoring moves.
+  it('S16 (W3-1 pin): an ambiguous verdict is written as ambiguous, on the card\'s path and on the unset arm alike, exit 0 and silent', () => {
+    plantScope();
+    // two live subagents: the scope rule's own overlap, with no card-side set file involved
+    const two = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }, { id: 'a2', lines: [tl.user('z')], age: LIVE }] });
+    expect(runFull(pre(two.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+    fs.rmSync(marker());
+    cardOff();                                            // the unset arm: the block parses the payload and scopes itself
+    expect(runFull(pre(two.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect([read().scope, read().sid]).toEqual(['ambiguous', SID]);
+    // one live subagent beside a LIVE parent: ambiguous by the parent's own liveness
+    fs.rmSync(marker());
+    const live = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: LIVE,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    expect(runFull(pre(live.transcript, 'auto'), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('ambiguous');
+  });
+
+  it('S16 (W3-1 pin): an empty transcript_path writes no marker, exit 0 and silent, on the card\'s path and on the unset arm alike', () => {
+    plantScope();
+    plantSession({ sid: SID, lines: [tl.user('x')] });
+    expect(runFull(pre('', 'manual', { transcript_path: '' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    cardOff();
+    expect(runFull(pre('', 'manual', { transcript_path: '' }), HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+    // the key absent altogether reads as the same empty path
+    const { transcript_path: _gone, ...bare } = pre('', 'manual') as Record<string, unknown>;
+    expect(runFull(bare, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(marker())).toBe(false);
+  });
+
+  it('S16 (W3-1 pin): an absent trigger on the unset arm is read as auto — one live subagent beside a quiet parent is subagent', () => {
+    plantScope(); cardOff();
+    const { transcript } = plantSession({ sid: SID, lines: [tl.user('x')], parentAge: DEAD,
+      subagents: [{ id: 'a1', lines: [tl.user('y')], age: LIVE }] });
+    const { trigger: _gone, ...bare } = pre(transcript, 'auto') as Record<string, unknown>;
+    expect(runFull(bare, HISTORY_HOOK_SCRUB)).toEqual({ stdout: '', stderr: '' });
+    expect(read().scope).toBe('subagent');
   });
 
   it('an undecided verdict empties a fresh main marker this psid left, and creates nothing where none was', () => {
