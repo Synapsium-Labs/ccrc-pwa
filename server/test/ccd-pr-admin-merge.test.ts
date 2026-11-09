@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { AM_GH_STUB, HEAD_A, amCaller, amFixture, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
+import { AM_GH_STUB, AM_PROT_NONE, HEAD_A, HEAD_B, amCaller, amCheckRun, amFixture, amProt, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-am-'); });
@@ -156,5 +156,261 @@ describe('the gate before GitHub', () => {
     const src = ccdSource();
     expect(src).toMatch(/^ {2}pr-admin-merge\) shift; cmd_pr_admin_merge "\$@" ;;$/m);
     expect(src).toMatch(/\|pr-open\|pr-admin-merge\|pr-state\|/);
+  });
+});
+
+describe('the reads', () => {
+  const ARGV = GOOD;
+  const READS = [
+    'api repos/owner-a/repo-a',
+    'pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision',
+    'api --paginate repos/owner-a/repo-a/rules/branches/main',
+    'api graphql',
+    'api -i repos/owner-a/repo-a/branches/main/protection',
+    'api --paginate repos/owner-a/repo-a/pulls/42/reviews',
+    `api --paginate repos/owner-a/repo-a/commits/${HEAD_A}/check-runs?filter=latest`,
+    `api --paginate repos/owner-a/repo-a/commits/${HEAD_A}/status`,
+  ];
+  /** The gh calls, each cut to the words that name the read (the GraphQL call carries its query text). */
+  const calls = (): string[] => h.ghCalls().map((c) => (c.startsWith('api graphql') ? 'api graphql' : c));
+  const refused = (argv: string = ARGV): string => {
+    const r = amRun(h, argv);
+    expect(r.code, r.stdout).toBe(2);
+    expect(r.stdout.trim().split('\n'), 'exactly one line on stdout').toHaveLength(1);
+    expect(h.ghCalls().some((c) => c.startsWith('pr merge')), 'no merge is ever attempted').toBe(false);
+    return r.stdout.trim();
+  };
+  const journaled = (reason: string): void => {
+    expect(swapLog(h).at(-1)).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=${reason}$`));
+  };
+  beforeEach(() => { amCaller(h, 'demo-quiet-basin'); });
+
+  it('refuses not-admin when permissions.admin is false, before any other read', () => {
+    amFixture(h, { repo: { permissions: { admin: false } } });
+    expect(refused()).toBe("REFUSED not-admin: the fleet's GitHub identity is not an admin of owner-a/repo-a");
+    expect(h.ghCalls()).toEqual(['api repos/owner-a/repo-a']);
+    journaled('not-admin');
+  });
+
+  it('a missing admin flag or a missing method setting is unreadable, never false', () => {
+    amFixture(h, { repo: { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true } });
+    expect(refused()).toBe('REFUSED unreadable: the repository read');
+    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: true } });
+    expect(refused()).toBe('REFUSED unreadable: the repository read');
+    amFixture(h, { repo: { permissions: { admin: 'true' }, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true } });
+    expect(refused()).toBe('REFUSED unreadable: the repository read');
+    journaled('unreadable');
+  });
+
+  it('refuses a base with a merge_queue rule', () => {
+    amFixture(h, { rules: [{ type: 'merge_queue', parameters: { merge_method: 'SQUASH' } }] });
+    expect(refused()).toBe('REFUSED merge-queue: main has a merge queue (a merge_queue rule); the queue lands it');
+    expect(calls(), 'the rules read is the last').toEqual(READS.slice(0, 3));
+    journaled('merge-queue');
+  });
+
+  it('refuses a base GraphQL names a mergeQueue for, with no rule in the rules read', () => {
+    amFixture(h, { mq: { data: { repository: { mergeQueue: { id: 'MQ_x' } } } } });
+    expect(refused()).toBe("REFUSED merge-queue: main has a merge queue (GitHub's mergeQueue read); the queue lands it");
+    expect(calls()).toEqual(READS.slice(0, 4));
+    const gql = h.ghCalls().find((c) => c.startsWith('api graphql'))!;
+    expect(gql, 'the values are -f arguments, never interpolated into the query').toContain('-f o=owner-a -f r=repo-a -f b=main');
+    expect(gql).not.toMatch(/query=[^ ]*owner-a/);
+  });
+
+  it('refuses when the mergeQueue read fails', () => {
+    amFixture(h, { mq: null });
+    expect(refused()).toBe('REFUSED unreadable: the merge queue read');
+    amFixture(h, { mq: { errors: [{ message: 'nope' }], data: { repository: null } } });
+    expect(refused()).toBe('REFUSED unreadable: the merge queue read');
+    amFixture(h, { mq: { data: { repository: { id: 'R_x' } } } });
+    expect(refused(), 'an answer with no mergeQueue field is not "no queue"').toBe('REFUSED unreadable: the merge queue read');
+  });
+
+  it('a base with a slash is read with its slash encoded', () => {
+    amFixture(h, { pr: { state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'release/1.x', reviewDecision: '' } });
+    refused();
+    expect(h.ghCalls()[2]).toBe('api --paginate repos/owner-a/repo-a/rules/branches/release%2F1.x');
+  });
+
+  it('refuses a draft', () => {
+    amFixture(h, { pr: { state: 'OPEN', isDraft: true, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '' } });
+    expect(refused()).toBe('REFUSED draft: the PR is a draft');
+    expect(calls()).toEqual(READS.slice(0, 2));
+    journaled('draft');
+  });
+
+  it('refuses a PR that is not OPEN', () => {
+    for (const state of ['MERGED', 'CLOSED']) {
+      amFixture(h, { pr: { state, isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '' } });
+      expect(refused()).toBe(`REFUSED not-open: the PR is ${state}`);
+    }
+    journaled('not-open');
+  });
+
+  it('refuses when the PR head is not the bound sha', () => {
+    amFixture(h, { pr: { state: 'OPEN', isDraft: false, headRefOid: HEAD_B, baseRefName: 'main', reviewDecision: '' } });
+    expect(refused()).toBe(`REFUSED not-at-head: the PR head is ${HEAD_B}`);
+    expect(calls()).toEqual(READS.slice(0, 2));
+    journaled('not-at-head');
+  });
+
+  it('a PR answer with an unusable head, base or state is unreadable', () => {
+    const ok = { state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '' };
+    for (const bad of [{ ...ok, headRefOid: 'abc' }, { ...ok, baseRefName: '-x' }, { ...ok, baseRefName: 'a b' },
+      { ...ok, baseRefName: 'main\n' }, { ...ok, state: 'open' }, { ...ok, isDraft: 'false' }, { ...ok, reviewDecision: 7 }]) {
+      amFixture(h, { pr: bad });
+      expect(refused(), JSON.stringify(bad)).toBe('REFUSED unreadable: the PR read');
+    }
+  });
+
+  it('refuses protection-unreadable when classic protection answers 403 to an admin read', () => {
+    for (const code of [401, 403]) {
+      amFixture(h, { protection: amProt(code, { message: 'Resource not accessible by personal access token' }, 'Forbidden') });
+      fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+      expect(refused()).toBe(`REFUSED protection-unreadable: branch protection answered ${code} to an admin read: the token does not carry admin now`);
+      expect(calls()).toEqual(READS.slice(0, 5));
+    }
+    journaled('protection-unreadable');
+  });
+
+  it('classic protection: a 404 that is not "Branch not protected" is unreadable, a 200 adds its required checks and linear history', () => {
+    amFixture(h, { protection: amProt(404, { message: 'Not Found' }, 'Not Found') });
+    expect(refused()).toBe('REFUSED unreadable: the branch protection read');
+    amFixture(h, { required: [], protection: amProt(200, { required_status_checks: { strict: true, contexts: ['lint'], checks: [{ context: 'lint', app_id: -1 }] } }, 'OK'),
+      runs: { total_count: 1, check_runs: [amCheckRun('lint', 'in_progress', null)] } });
+    expect(refused(), 'the classic contexts are required too').toBe('REFUSED checks-not-green: lint=pending');
+    amFixture(h, { required: [], protection: amProt(200, { required_status_checks: { contexts: ['lint'] }, required_linear_history: { enabled: true } }, 'OK'),
+      runs: { total_count: 1, check_runs: [amCheckRun('lint')] }, repo: { permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: false } });
+    expect(refused(), 'linear history removes merge; nothing else is allowed').toBe('REFUSED method-none: no merge method is allowed on main of owner-a/repo-a');
+  });
+
+  it('refuses a standing changes-requested review, by summary or by a reviewer\'s latest review', () => {
+    const pr = (reviewDecision: string) => ({ state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision });
+    amFixture(h, { pr: pr('CHANGES_REQUESTED') });
+    expect(refused()).toBe('REFUSED changes-requested: reviewDecision=CHANGES_REQUESTED');
+    amFixture(h, { reviews: [{ id: 11, state: 'CHANGES_REQUESTED', user: { id: 7 } }, { id: 12, state: 'COMMENTED', user: { id: 7 } }] });
+    expect(refused(), 'a later comment does not clear a request').toBe('REFUSED changes-requested: reviews=11');
+    amFixture(h, { pr: pr('CHANGES_REQUESTED'), reviews: [{ id: 15, state: 'CHANGES_REQUESTED', user: null }, { id: 11, state: 'CHANGES_REQUESTED', user: { id: 7 } }] });
+    expect(refused(), 'a deleted account is its own identity').toBe('REFUSED changes-requested: reviewDecision=CHANGES_REQUESTED reviews=11,15');
+    journaled('changes-requested');
+    amFixture(h, { reviews: [{ id: 11, state: 'CHANGES_REQUESTED', user: { id: 7 } }, { id: 13, state: 'APPROVED', user: { id: 7 } }] });
+    expect(refused(), 'an approval by the same reviewer replaces the request: this rung passes').toMatch(/^REFUSED (?!changes-requested)/);
+    amFixture(h, { reviews: [{ id: 11, state: 'CHANGES_REQUESTED', user: { id: 7 } }, { id: 13, state: 'DISMISSED', user: { id: 7 } }] });
+    expect(refused(), 'a dismissal clears it too').toMatch(/^REFUSED (?!changes-requested)/);
+  });
+
+  it('checks-not-green names each required check that is not success: pending, skipped, neutral, missing, red', () => {
+    amFixture(h, {
+      required: ['build', 'lint', 'docs', 'e2e', 'unit'],
+      runs: { total_count: 4, check_runs: [amCheckRun('build', 'in_progress', null), amCheckRun('lint', 'completed', 'skipped'),
+        amCheckRun('docs', 'completed', 'neutral'), amCheckRun('unit', 'completed', 'failure')] },
+    });
+    expect(refused()).toBe('REFUSED checks-not-green: build=pending, docs=neutral, e2e=missing, lint=skipped, unit=red');
+    expect(calls()).toEqual(READS);
+    journaled('checks-not-green');
+  });
+
+  it('red beats pending, and cancelled, timed_out and a null conclusion are red; a run with a success and a skipped run is skipped', () => {
+    amFixture(h, {
+      required: ['a', 'b', 'c', 'd'],
+      runs: { total_count: 6, check_runs: [amCheckRun('a', 'completed', 'cancelled'), amCheckRun('a', 'in_progress', null),
+        amCheckRun('b', 'completed', 'timed_out'), amCheckRun('c', 'completed', null),
+        amCheckRun('d', 'completed', 'success'), amCheckRun('d', 'completed', 'skipped')] },
+    });
+    expect(refused()).toBe('REFUSED checks-not-green: a=red, b=red, c=red, d=skipped');
+  });
+
+  it('an App-pinned required name is judged on that App\'s runs only, and a status never stands in for it', () => {
+    const rules = [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build', integration_id: 42 }] } }];
+    // another App's run of the same name does not count
+    amFixture(h, { rules, runs: { total_count: 1, check_runs: [amCheckRun('build', 'completed', 'success', 7)] } });
+    expect(refused()).toBe('REFUSED checks-not-green: build=missing');
+    // a status of the same context does not stand in for the pinned App's run
+    amFixture(h, { rules, runs: { total_count: 0, check_runs: [] }, statuses: { state: 'success', statuses: [{ context: 'build', state: 'success' }] } });
+    expect(refused()).toBe('REFUSED checks-not-green: build=missing');
+    // the pinned App's own run is what counts (this rung passes)
+    amFixture(h, { rules, runs: { total_count: 1, check_runs: [amCheckRun('build', 'completed', 'success', 42)] } });
+    expect(refused()).toMatch(/^REFUSED (?!checks-not-green)/);
+    // a pinned name wins over the same name unpinned in the classic list
+    amFixture(h, { rules, protection: amProt(200, { required_status_checks: { contexts: ['build'] } }, 'OK'),
+      runs: { total_count: 1, check_runs: [amCheckRun('build', 'completed', 'success', 7)] } });
+    expect(refused()).toBe('REFUSED checks-not-green: build=missing');
+  });
+
+  it('a commit status satisfies an unpinned required context', () => {
+    amFixture(h, { runs: { total_count: 0, check_runs: [] }, statuses: { state: 'success', statuses: [{ context: 'build', state: 'success' }] } });
+    expect(refused()).toMatch(/^REFUSED (?!checks-not-green)/);
+    amFixture(h, { runs: { total_count: 0, check_runs: [] }, statuses: { state: 'failure', statuses: [{ context: 'build', state: 'failure' }] } });
+    expect(refused()).toBe('REFUSED checks-not-green: build=red');
+    amFixture(h, { runs: { total_count: 0, check_runs: [] }, statuses: { state: 'pending', statuses: [{ context: 'build', state: 'pending' }] } });
+    expect(refused()).toBe('REFUSED checks-not-green: build=pending');
+  });
+
+  it('an empty required set is green: the check runs and statuses are not read', () => {
+    amFixture(h, { rules: [], required: [] });
+    refused();
+    expect(calls()).toEqual(READS.slice(0, 6));
+  });
+
+  it('all rungs green: every read is made once, in the order of the contract, and no merge is made', () => {
+    amFixture(h);
+    refused();
+    expect(calls()).toEqual(READS);
+    for (const c of h.ghCalls()) expect(c).not.toMatch(/--admin/);
+  });
+
+  it('refuses rebase-only and an empty method set', () => {
+    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: false, allow_squash_merge: false, allow_rebase_merge: true } });
+    expect(refused()).toBe('REFUSED rebase-only: only a rebase merge is allowed on main; the door does not rebase-merge');
+    amFixture(h, { repo: { permissions: { admin: true }, allow_merge_commit: false, allow_squash_merge: false, allow_rebase_merge: false } });
+    expect(refused()).toBe('REFUSED method-none: no merge method is allowed on main of owner-a/repo-a');
+    // a pull_request rule that names only rebase and squash, over a repository that allows merge and squash
+    amFixture(h, { rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['rebase'] } }] });
+    expect(refused(), 'the intersection of the settings and the rule is empty').toBe('REFUSED method-none: no merge method is allowed on main of owner-a/repo-a');
+    amFixture(h, { rules: [{ type: 'pull_request', parameters: { allowed_merge_methods: ['Squash', 'REBASE'] } }],
+      repo: { permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: true } });
+    expect(refused(), 'rules are lower-cased; squash is cut by the setting, leaving only rebase').toBe('REFUSED rebase-only: only a rebase merge is allowed on main; the door does not rebase-merge');
+    journaled('rebase-only');
+  });
+
+  it('merge is dropped under linear history, from a rule too, leaving squash', () => {
+    amFixture(h, { rules: [{ type: 'required_linear_history' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }] });
+    refused();
+    expect(calls()).toEqual(READS);   // squash is allowed: the reads all pass and the method is not a refusal
+    amFixture(h, { rules: [{ type: 'required_linear_history' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }],
+      repo: { permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: false, allow_rebase_merge: false } });
+    expect(refused()).toBe('REFUSED method-none: no merge method is allowed on main of owner-a/repo-a');
+  });
+
+  it('an unreadable answer at every read is unreadable naming that read, never a pass', () => {
+    type K = 'repo' | 'pr' | 'rules' | 'mq' | 'protection' | 'reviews' | 'runs' | 'statuses';
+    const cases: Array<[K, string, unknown[]]> = [
+      ['repo', 'the repository read', [null, '', '{"a":1}{"b":2}', '[]', 'not json']],
+      ['pr', 'the PR read', [null, '', '{"a":1}{"b":2}', '[]', 'not json']],
+      ['rules', 'the rules read', [null, '', '{}', '[1]', '[{"type":"required_status_checks","parameters":{}}]', '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":""}]}}]']],
+      ['mq', 'the merge queue read', [null, '', '{"data":{"repository":{"mergeQueue":null}}}{"data":{"repository":{"mergeQueue":null}}}', '[]']],
+      ['protection', 'the branch protection read', [null, '{}', 'HTTP/2.0 500 Server Error\n\n{}\n', amProt(200, [], 'OK'), amProt(200, 'not json', 'OK'), amProt(200, { required_status_checks: { contexts: 'build' } }, 'OK')]],
+      ['reviews', 'the reviews read', [null, '', '{}', '[{"id":1,"state":"WAT","user":{"id":2}}]', '[{"id":1,"state":"APPROVED"}]']],
+      ['runs', 'the check runs read', [null, '', '[]', '{"check_runs":{}}', '{"check_runs":[1]}']],
+      ['statuses', 'the commit statuses read', [null, '', '[]', '{"statuses":{}}', '{"statuses":[1]}']],
+    ];
+    for (const [key, what, answers] of cases) {
+      for (const a of answers) {
+        amFixture(h, { [key]: a } as never);
+        const out = refused();
+        // `[{"id":1,"state":"APPROVED"}]` has no user: a deleted account, which is VALID; it is not part of this table
+        if (key === 'reviews' && a === '[{"id":1,"state":"APPROVED"}]') continue;
+        expect(out, `${key}: ${JSON.stringify(a)}`).toBe(`REFUSED unreadable: ${what}`);
+      }
+    }
+    journaled('unreadable');
+  });
+
+  it('prints nothing GitHub wrote: no login, review body or check text reaches a line', () => {
+    amFixture(h, { reviews: [{ id: 11, state: 'CHANGES_REQUESTED', user: { id: 7, login: 'secret-login' }, body: 'secret-body' }],
+      required: ['build'], runs: { total_count: 1, check_runs: [{ ...amCheckRun('build', 'completed', 'failure'), output: { title: 'secret-title' } }] } });
+    refused();
+    expect(fs.readFileSync(reg('swap.log'), 'utf8')).not.toMatch(/secret-/);
   });
 });

@@ -12487,6 +12487,212 @@ _am_caller() {   # the caller is a coordinator: named by the pane, no child mark
     fi
   fi
 }
+# ── the reads (every one a GET, each judged before the next is made) ───────────────────────────────────────────────
+# Each read is bounded (AM_GH_TIMEOUT), its answer must be exactly the JSON shape named for it before any field is read
+# (the verdict's rule: jq's exit status follows only the last of several values), and a failure of any kind is
+# `unreadable: <which read>`, never a pass. Nothing printed here is GitHub's free text: a refusal names a required check,
+# a number, a method or a base the door already validated.
+AM_GH_TIMEOUT=8
+AM_OUT=""; AM_ALLOW='[]'; AM_METHOD=""; AM_CHECKS=""
+_AM_ONE_OBJ='length == 1 and (.[0] | type) == "object"'
+_AM_PAGES_ARR='length > 0 and all(.[]; type == "array")'
+_AM_PAGES_RUNS='length > 0 and all(.[]; type == "object" and (.check_runs | type) == "array" and all(.check_runs[]; type == "object"))'
+_AM_PAGES_STATUS='length > 0 and all(.[]; type == "object" and (.statuses | type) == "array" and all(.statuses[]; type == "object"))'
+# The rules read: every page an array of rule objects; the two rule types whose parameters are read are typed here, and
+# every required-check entry is a named object (a name with a control character is refused, so it cannot reach a line).
+_AM_RULES_OK='
+  def rsc: .parameters.required_status_checks;
+  def meth: .parameters.allowed_merge_methods;
+  length > 0 and all(.[]; type == "array")
+  and all(.[][]; type == "object" and (.type | type) == "string"
+    and (if .type | IN("required_status_checks", "pull_request") then (.parameters | type) == "object" else true end))
+  and all(.[][] | select(.type == "required_status_checks");
+        (rsc | type) == "array"
+        and all(rsc[]; type == "object" and (.context | type) == "string" and (.context | length) > 0
+          and ((.context | test("[[:cntrl:]]")) | not) and ((.integration_id | type) | IN("null", "number"))))
+  and all(.[][] | select(.type == "pull_request");
+        (.parameters | has("allowed_merge_methods") | not) or ((meth | type) == "array" and all(meth[]; type == "string")))'
+# The classic protection read: one object; the required contexts and the app-pinned checks typed, as the rules'.
+_AM_PROT_OK='
+  .[0] as $p | (
+    ($p.required_status_checks // {}) as $rs
+    | ($rs | type) == "object"
+    and (($rs.checks // []) | type) == "array"
+    and all(($rs.checks // [])[]; type == "object" and (.context | type) == "string" and (.context | length) > 0
+      and ((.context | test("[[:cntrl:]]")) | not) and ((.app_id | type) | IN("null", "number")))
+    and (($rs.contexts // []) | type) == "array"
+    and all(($rs.contexts // [])[]; type == "string" and length > 0 and ((test("[[:cntrl:]]")) | not))
+    and ((($p.required_linear_history // {}) | type) == "object"))'
+# The repository: admin first (a non-admin answer needs nothing else), then the three merge-method settings, each a
+# boolean (a missing one is unreadable, never false).
+_AM_REPO_JQ='
+  if (.permissions.admin | type) != "boolean" then "unreadable"
+  elif .permissions.admin == false then "not-admin"
+  elif ([.allow_merge_commit, .allow_squash_merge, .allow_rebase_merge] | all(type == "boolean")) | not then "unreadable"
+  else "ok " + ([(if .allow_merge_commit then "merge" else empty end), (if .allow_squash_merge then "squash" else empty end),
+                 (if .allow_rebase_merge then "rebase" else empty end)] | tojson) end'
+# The PR: state, draft, head, base and the review decision, typed before they are read out as five words.
+_AM_PR_JQ='
+  if (.state | IN("OPEN", "CLOSED", "MERGED")) and (.isDraft | type) == "boolean"
+     and (.headRefOid | type) == "string" and (.headRefOid | test("\\A[0-9a-f]{40}\\z"))
+     and (.baseRefName | type) == "string" and (.baseRefName | test("\\A[A-Za-z0-9._/-]+\\z"))
+     and (.baseRefName | startswith("-") | not)
+     and ((.reviewDecision == null) or ((.reviewDecision | type) == "string" and (.reviewDecision | test("\\A[A-Z_]*\\z"))))
+  then "ok \(.state) \(.isDraft) \(.headRefOid) \(.baseRefName) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)"
+  else "unreadable" end'
+# The reviews: every entry validated whole, then per identity the latest APPROVED, CHANGES_REQUESTED or DISMISSED review
+# (COMMENTED and PENDING neither clear nor replace one); the requests that stand are the review ids of the identities
+# whose kept review requests changes. An entry with no user is a deleted account: its identity is its own review id.
+# Only numbers come out. There is no ignore key: the door never passes over a request.
+_AM_REVIEWS_JQ='
+  def sint: type == "number" and . == floor and . > 0 and . <= 9007199254740991;
+  if all(.[][]; type == "object" and (.id | sint)
+       and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING"))
+       and (.user == null or (.user.id | sint)))
+  then [.[][] | {id, state, user: (if .user == null then null else {id: .user.id} end)}]
+       | [reduce .[] as $e ({}; if $e.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
+              then .[if $e.user == null then "r:\($e.id)" else "u:\($e.user.id)" end] = $e else . end)
+          | .[] | select(.state == "CHANGES_REQUESTED") | .id] | unique | join(",")
+  else error("malformed") end'
+# The required set: the rules'(with their App, integration_id) and the classic protection's (checks with app_id, where
+# -1 is any App, and bare contexts). An App-pinned name keeps its App; the same name unpinned is the same requirement.
+_AM_REQ_JQ='
+  def pin: if . == null or . == -1 then null else . end;
+  [($rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[] | {context, app: (.integration_id | pin)}),
+   ($prot.required_status_checks.checks[]? | {context, app: (.app_id | pin)}),
+   ($prot.required_status_checks.contexts[]? | {context: ., app: null})]
+  | unique | . as $all
+  | map(select(.app != null or (.context as $c | all($all[]; .context != $c or .app == null))))'
+# Each required name judged on the head's check runs and statuses ARRAY (never the combined state), in this order of
+# precedence: red, pending, neutral, skipped, missing. Green only when at least one exists and every run is completed with
+# conclusion success and every status is success. An App-pinned name is judged on that App's runs only and no status
+# stands in for it. `ok <name:success,...>` or `bad <name=word, ...>`.
+_AM_JUDGE_JQ='
+  def runs($x): [$cr[] | select(.name == $x.context and ($x.app == null or .app == $x.app))];
+  def sts($x): if $x.app == null then [$st[] | select(.context == $x.context)] else [] end;
+  def word($x): runs($x) as $r | sts($x) as $s
+    | if ($r | length) + ($s | length) == 0 then "missing"
+      elif any($r[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))
+           or any($s[]; .state | IN("failure", "error")) then "red"
+      elif any($r[]; .status != "completed") or any($s[]; .state != "success") then "pending"
+      elif any($r[]; .conclusion == "neutral") then "neutral"
+      elif any($r[]; .conclusion == "skipped") then "skipped"
+      else "success" end;
+  [$q[] | {n: .context, w: word(.)}] | sort_by(.n) as $j
+  | if ($j | length) == 0 then "ok none-required"
+    elif all($j[]; .w == "success") then "ok " + ([$j[] | "\(.n):success"] | join(","))
+    else "bad " + ([$j[] | select(.w != "success") | "\(.n)=\(.w)"] | join(", ")) end'
+# The method set: the repository's three settings, cut by every pull_request rule that names its methods (absent names
+# all three), and without merge under linear history (a rule or classic protection).
+_AM_METHOD_JQ='
+  ($al) as $a
+  | reduce ($rules[] | select(.type == "pull_request") | .parameters | select(has("allowed_merge_methods"))
+            | .allowed_merge_methods | map(ascii_downcase)) as $lim ($a; . - (. - $lim))
+  | if any($rules[]; .type == "required_linear_history") or ($prot.required_linear_history.enabled == true)
+    then . - ["merge"] else . end
+  | if index("merge") != null then "merge" elif index("squash") != null then "squash"
+    elif index("rebase") != null then "rebase-only" else "method-none" end'
+
+_am_unreadable() { _am_refuse "$AM_WHO" unreadable "$1"; }
+_am_read() {   # <what> <jq shape> <gh args...> -> AM_OUT = the answer, exactly the shape named, else unreadable naming <what>
+  local what="$1" shape="$2" rc=0
+  shift 2
+  AM_OUT=$(_plat_timeout "$AM_GH_TIMEOUT" gh "$@" 2>/dev/null) || rc=$?
+  (( rc == 0 )) || _am_unreadable "$what"
+  jq -se "$shape" <<<"$AM_OUT" >/dev/null 2>&1 || _am_unreadable "$what"
+}
+_am_protection() {   # <enc base> -> AM_OUT = the classic protection object, or `null` when the branch has none
+  local out rc=0 first code body
+  out=$(_plat_timeout "$AM_GH_TIMEOUT" gh api -i "repos/$AM_REPO/branches/$1/protection" 2>/dev/null) || rc=$?
+  # gh exits 1 for a 4xx and still prints the headers and the body; any other status (a timeout) reads nothing.
+  (( rc == 0 || rc == 1 )) || _am_unreadable "the branch protection read"
+  out=${out//$'\r'/}
+  first=${out%%$'\n'*}
+  [[ "$first" =~ ^HTTP/[0-9.]+\ ([0-9]{3})($|\ ) ]] || _am_unreadable "the branch protection read"
+  code="${BASH_REMATCH[1]}"
+  [[ "$out" == *$'\n\n'* ]] || _am_unreadable "the branch protection read"
+  body="${out#*$'\n\n'}"
+  case "$code" in
+    200) jq -se "$_AM_ONE_OBJ and ($_AM_PROT_OK)" <<<"$body" >/dev/null 2>&1 || _am_unreadable "the branch protection read"
+         AM_OUT=$(jq -c . <<<"$body" 2>/dev/null) || _am_unreadable "the branch protection read" ;;
+    404) jq -se "$_AM_ONE_OBJ and (.[0].message == \"Branch not protected\")" <<<"$body" >/dev/null 2>&1 \
+           || _am_unreadable "the branch protection read"
+         AM_OUT=null ;;
+    401|403) _am_refuse "$AM_WHO" protection-unreadable "branch protection answered $code to an admin read: the token does not carry admin now" ;;
+    *) _am_unreadable "the branch protection read" ;;
+  esac
+}
+_am_reads() {   # -> AM_METHOD and AM_CHECKS when every condition holds; otherwise a REFUSED line and exit 2
+  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead base dec enc rules prot cr st req ids
+  # 1. the repository: admin, and the methods it allows
+  _am_read "the repository read" "$_AM_ONE_OBJ" api "repos/$repo"
+  v=$(jq -r "$_AM_REPO_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
+  case "$v" in
+    not-admin) _am_refuse "$AM_WHO" not-admin "the fleet's GitHub identity is not an admin of $repo" ;;
+    'ok '*)    AM_ALLOW="${v#ok }" ;;
+    *)         _am_unreadable "the repository read" ;;
+  esac
+  # 2. the PR itself
+  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json state,isDraft,headRefOid,baseRefName,reviewDecision
+  v=$(jq -r "$_AM_PR_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
+  [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
+  read -r _ state draft phead base dec <<<"$v"
+  [[ "$state" == OPEN ]]  || _am_refuse "$AM_WHO" not-open "the PR is $state"
+  [[ "$draft" == false ]] || _am_refuse "$AM_WHO" draft "the PR is a draft"
+  [[ "$phead" == "$sha" ]] || _am_refuse "$AM_WHO" not-at-head "the PR head is $phead"
+  enc="${base//\//%2F}"
+  # 3. the rules on the base: a merge queue refuses; the required checks, the methods and linear history are kept
+  _am_read "the rules read" "$_AM_RULES_OK" api --paginate "repos/$repo/rules/branches/$enc"
+  rules=$(jq -sc '[.[][]]' <<<"$AM_OUT") || _am_unreadable "the rules read"
+  jq -e 'any(.[]; .type == "merge_queue")' <<<"$rules" >/dev/null 2>&1 \
+    && _am_refuse "$AM_WHO" merge-queue "$base has a merge queue (a merge_queue rule); the queue lands it"
+  # 4. GitHub's own word for a queue on that branch, which a repository can have with no rule in the read above
+  _am_read "the merge queue read" \
+    'length == 1 and (.[0] | type) == "object" and (.[0].errors == null) and (.[0].data.repository | type) == "object" and (.[0].data.repository | has("mergeQueue"))' \
+    api graphql -f 'query=query($o:String!,$r:String!,$b:String!){repository(owner:$o,name:$r){mergeQueue(branch:$b){id}}}' \
+    -f "o=${repo%%/*}" -f "r=${repo#*/}" -f "b=$base"
+  if [[ $(jq -sr '.[0].data.repository.mergeQueue | if . == null then "none" else "queue" end' <<<"$AM_OUT" 2>/dev/null) == queue ]]; then
+    _am_refuse "$AM_WHO" merge-queue "$base has a merge queue (GitHub's mergeQueue read); the queue lands it"
+  fi
+  # 5. classic protection: the required checks and linear history
+  _am_protection "$enc"
+  prot="$AM_OUT"
+  # 6. a standing request for changes, by the PR's decision or by a reviewer's latest review
+  _am_read "the reviews read" "$_AM_PAGES_ARR" api --paginate "repos/$repo/pulls/$pr/reviews"
+  ids=$(jq -sr "$_AM_REVIEWS_JQ" <<<"$AM_OUT" 2>/dev/null) || _am_unreadable "the reviews read"
+  if [[ "$dec" == CHANGES_REQUESTED || -n "$ids" ]]; then
+    v=""
+    [[ "$dec" == CHANGES_REQUESTED ]] && v="reviewDecision=CHANGES_REQUESTED"
+    [[ -z "$ids" ]] || v="${v:+$v }reviews=$ids"
+    _am_refuse "$AM_WHO" changes-requested "$v"
+  fi
+  # 7. every required check, on the exact head
+  req=$(jq -nc --argjson rules "$rules" --argjson prot "$prot" "$_AM_REQ_JQ" 2>/dev/null) || _am_unreadable "the rules read"
+  if [[ "$req" == '[]' ]]; then
+    AM_CHECKS="none-required"
+  else
+    _am_read "the check runs read" "$_AM_PAGES_RUNS" api --paginate "repos/$repo/commits/$sha/check-runs?filter=latest"
+    cr=$(jq -sc '[.[].check_runs[] | {name, status, conclusion, app: ((.app // {}) | .id)}]' <<<"$AM_OUT" 2>/dev/null) \
+      || _am_unreadable "the check runs read"
+    _am_read "the commit statuses read" "$_AM_PAGES_STATUS" api --paginate "repos/$repo/commits/$sha/status"
+    st=$(jq -sc '[.[].statuses[] | {context, state}]' <<<"$AM_OUT" 2>/dev/null) || _am_unreadable "the commit statuses read"
+    v=$(jq -nr --argjson q "$req" --argjson cr "$cr" --argjson st "$st" "$_AM_JUDGE_JQ" 2>/dev/null) || _am_unreadable "the check runs read"
+    case "$v" in
+      'ok '*)  AM_CHECKS="${v#ok }" ;;
+      'bad '*) _am_refuse "$AM_WHO" checks-not-green "${v#bad }" ;;
+      *)       _am_unreadable "the check runs read" ;;
+    esac
+  fi
+  # 8. the method: a merge commit when one is allowed, a squash only when it is the only way, never a rebase
+  v=$(jq -nr --argjson rules "$rules" --argjson prot "$prot" --argjson al "$AM_ALLOW" "$_AM_METHOD_JQ" 2>/dev/null) \
+    || _am_unreadable "the rules read"
+  case "$v" in
+    merge|squash) AM_METHOD="$v" ;;
+    rebase-only)  _am_refuse "$AM_WHO" rebase-only "only a rebase merge is allowed on $base; the door does not rebase-merge" ;;
+    method-none)  _am_refuse "$AM_WHO" method-none "no merge method is allowed on $base of $repo" ;;
+    *)            _am_unreadable "the rules read" ;;
+  esac
+}
 cmd_pr_admin_merge() {   # ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>
   # Fixed arity, no getopt loop and no "$@" passthrough, as `cmd_pr_open` has: pflag is last-wins, so a passthrough would
   # let a caller override -R, the head pin or the merge flags the door sets itself.
@@ -12512,10 +12718,11 @@ cmd_pr_admin_merge() {   # ccd pr-admin-merge --repo <owner/repo> --pr <n> --hea
   esac
   _am_caller
 
-  # The GitHub reads and the merge follow (the next change). Until they are built the door cannot prove a thing, so it
-  # refuses after the one read that names the repository: a gate that stops short is closed, never open.
-  _plat_timeout 20 gh api "repos/$repo" >/dev/null 2>&1 || true
-  _am_refuse "$AM_WHO" unreadable "the repository read is not built yet"
+  _am_reads
+
+  # The merge and its read-back follow (the next change). Until they are built the door cannot prove a thing, so it
+  # refuses after every check has passed: a gate that stops short is closed, never open.
+  _am_refuse "$AM_WHO" unproven "the merge is not built yet (method=$AM_METHOD checks=$AM_CHECKS)"
 }
 
 # ── reap guards ────────────────────────────────────────────────────
