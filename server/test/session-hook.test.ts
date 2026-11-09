@@ -9379,8 +9379,13 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(end).toBeGreaterThan(start);
     expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
     expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
-    const code = s1Code(src.slice(start, end));
-    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
+    // W3-1 Task 1C: the write moved into `_hook_history_spool_append`, which sits right above the block; its body is read with the block.
+    const fnBody = hookFnBody(src, '_hook_history_spool_append');
+    expect(fnBody, '_hook_history_spool_append is not defined in the hook').not.toBeNull();
+    expect(src.indexOf('\n_hook_history_spool_append() {'), 'the append function sits above the block').toBeLessThan(start);
+    const code = s1Code(`${fnBody!}\n${src.slice(start, end)}`);
+    expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$1"`);
+    expect(code, 'the block no longer appends through the function').toContain('_hook_history_spool_append "$_hs"');
     // FR4 (review 353 F2): every arm of the string pin, each under its own label. STRING_ROWS plants a form for each arm.
     for (const [arm, check] of S1_STRING_ARMS) expect(check(code), arm).toBeNull();
   });
@@ -9837,8 +9842,11 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   /** Bash keywords and builtins the block may run. None of them forks. */
   const SPOOL_BUILTINS: ReadonlySet<string> = new Set(['if', 'then', 'elif', 'else', 'fi', 'case', 'esac', '[[', '((', 'printf', 'read', 'return', 'true']);
   /** The hook functions the block calls. Each body is scanned too, against the builtins alone. */
-  const SPOOL_FUNCS = ['_ct_read'] as const;
-  const spoolBlock = (src: string): string => src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'));
+  const SPOOL_FUNCS = ['_ct_read', '_hook_history_spool_append'] as const;
+  /** The block's code as the S1 pins read it: the block, behind the body of `_hook_history_spool_append` (W3-1 Task 1C: the gate and
+   *  the append moved out of the block into that tail function, which the block calls with its built line). */
+  const spoolBlock = (src: string): string =>
+    `${hookFnBody(src, '_hook_history_spool_append') ?? ''}\n${src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'))}`;
   const hookFnBody = (src: string, name: string): string | null => new RegExp(`^${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)^\\}`, 'm').exec(src)?.[1] ?? null;
   const A = '_hs_g="${CCRC_SESSION_GENERATION:-}"';
   const T = "_hs+='}'";

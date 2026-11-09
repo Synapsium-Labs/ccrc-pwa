@@ -24,12 +24,18 @@ const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
 const ID = 'demo-quiet-basin';
 const SID = '7d0c3f5e-1a2b-4c3d-8e9f-0a1b2c3d4e5f';
 
-/** The history spool block's one append line: the trimmed line of the block that starts `[[` and names `$_hs_p`. */
+/** The history spool's one append line: the trimmed line of `_hook_history_spool_append`'s body that starts `[[` and names
+ *  `$_hs_p`. The block itself holds none (it calls the function), so a re-inlined or a second append reds here. */
 const historyAppendLine = (): string => {
   const src = SRC();
-  const block = src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'));
-  const lines = block.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('[[') && l.includes('"$_hs_p"'));
-  expect(lines, 'one append line in the history spool block').toHaveLength(1);
+  const appendLines = (text: string): string[] => text.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('[[') && l.includes('"$_hs_p"'));
+  const start = src.indexOf('\n_hook_history_spool_append() {');
+  expect(start, '_hook_history_spool_append is not defined in the hook').toBeGreaterThan(-1);
+  const lines = appendLines(src.slice(start, src.indexOf('\n}\n', start)));
+  expect(lines, 'one append line in the history spool append function').toHaveLength(1);
+  const block = src.slice(src.indexOf('# >>> history-spool (spec 2026-10-05 §5.1)'), src.indexOf('# <<< history-spool'))
+    .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  expect(appendLines(block), 'no append line in the history spool block: it appends through the function').toHaveLength(0);
   return lines[0]!;
 };
 /** The leading `[[ … ]]` of an append line: the guard its write waits on. */
@@ -84,7 +90,7 @@ describe('the history spool append under a drain that renames the file away (D-7
       '  ( until [[ -e "$stop" ]]; do [[ -e "$_hs_p" ]] || : >> "$_hs_p"; done ) &',
       '  i=0 refused=0',
       '  until [[ -e "$stop" ]]; do',
-      '    i=$((i + 1)); _hs="L$i"',
+      '    i=$((i + 1)); _hs="L$i"; set -- "$_hs"',
       mode === 'guard' ? `    ${code} || refused=$((refused + 1))` : `    ${code}`,
       '  done',
       '  wait',
@@ -144,6 +150,7 @@ describe('the history spool append writes only through the descriptor it opened 
   /** A BASH_ENV whose DEBUG trap acts once, on the first command after the spool guard (the first command naming
    *  `-L "$_hs_p"`): `link` puts a symlink to T_OUT at the spool path, `drain` renames the spool file to T_OUT. */
   const TRAP = [
+    'set -T',
     '_t_s=0 _t_n=\'-L "$_hs_p"\'',
     'trap \'case $_t_s in',
     '  0) [[ $BASH_COMMAND == *"$_t_n"* ]] && _t_s=1 ;;',

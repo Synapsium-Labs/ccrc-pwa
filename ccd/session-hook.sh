@@ -3638,6 +3638,13 @@ if [[ -z "$tmsub" && -e "$REG/$id.generation" ]]; then
   esac
   if [[ -n "$tmkind" ]]; then hts="${hcat:-$(_hook_epoch_ms)}"; _hook_turn_mark "$tmkind" || true; fi
 fi
+# THE GATE AND THE APPEND, AS ONE TAIL FUNCTION (W3-1 Task 1C). It sits right above the spool block, not in it: the
+# block's S1 pins scan the block as straight-line code and each function it calls as a body of its own. It appends
+# the one fenced line to `$_hs_p` under the D-4418 and D-7503 rules the block's comment states, silent, and answers
+# 0 on every path.
+_hook_history_spool_append() {   # <json> -> one fenced line appended to $_hs_p when it is a regular file or absent
+  [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$1" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
+}
 # >>> history-spool (spec 2026-10-05 §5.1)
 # THE HISTORY SPOOL LINE (ccrc history spec 2026-10-05 §5.1, W1-B1): one fenced,
 # text-free JSON line appended to ~/.ccrc/history/spool/<id>.jsonl, which
@@ -3719,7 +3726,7 @@ if [[ -z "$paid" && -d "$HOME/.ccrc/history/spool" && ! -L "$HOME/.ccrc/history/
       _hs+=",\"ts\":${_hs_s}${_hs_f:0:3}"
     fi
     _hs+='}'
-    [[ ! ( -L "$_hs_p" || -d "$_hs_p" || -p "$_hs_p" || -S "$_hs_p" || -b "$_hs_p" || -c "$_hs_p" ) ]] && { { [[ ! ( -p /dev/fd/9 || -S /dev/fd/9 || -c /dev/fd/9 || -b /dev/fd/9 || -d /dev/fd/9 ) && ! -L "$_hs_p" ]] && { printf '\n%s\n' "$_hs" >&9; }; } 9>>"$_hs_p"; } 2>/dev/null || true
+    _hook_history_spool_append "$_hs"
   fi
 fi
 # <<< history-spool
@@ -6057,13 +6064,20 @@ if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
 # (D-5054 (history-scope-marker-hardening)). A hookstate write or a jq compose
 # that fails exits above, after the early line emptied any older marker, so it
 # leaves an empty marker or none: the fail-closed direction.
+# THE UNSET ARM, AS ITS OWN FUNCTION (W3-1 Task 1C): the payload's transcript path and trigger through one jq, then
+# the scope rule. It sets `CS_SCOPE` as a global through `_hook_compact_scope` and answers that rule's rc (1 = nothing
+# may be said, `CS_SCOPE` empty), which `_hook_history_scope` ignores and a later reader may not.
+_hook_history_scope_verdict() {   # -> CS_SCOPE (global) ; rc of _hook_compact_scope
+  local tp="" trig=""
+  { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
+  _hook_compact_scope "$tp" "$trig"
+}
 _hook_history_scope() {   # -> scope/<id> = "<scope> <psid> <ms>" when decided; silent
-  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms="" tp="" trig=""
+  local f="$HISTORY_SCOPE_DIR/$id" scope="" ms=""
   (( ${#id} <= 224 )) || return 0
   [[ "$psid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 0
   if [[ -z "${CS_SCOPE+x}" ]]; then
-    { { read -r tp; read -r trig; } < <(jq -r '(.transcript_path // "" | tostring), (.trigger // "auto" | tostring)' <<<"$payload" 2>/dev/null); } 2>/dev/null
-    _hook_compact_scope "$tp" "$trig" || true
+    _hook_history_scope_verdict || true
   fi
   scope="${CS_SCOPE-}"
   [[ -n "$scope" ]] || return 0
