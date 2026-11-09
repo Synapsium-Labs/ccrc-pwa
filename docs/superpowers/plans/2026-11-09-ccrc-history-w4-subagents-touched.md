@@ -34,7 +34,13 @@
 
 **Authority, in order:** the addendum's rulings and its "Already approved" list (A1 to A11), then the spec, then `main`. The addendum's section 4 lists the canonical-spec amendments and §8.4 departures its rulings need; they are the coordinator's, in a docs PR, and are cited here, not re-listed.
 
-**Base.** Every anchor below was re-measured by content, read-only, from source, at `origin/main` `ec07e0bdfc32f39af243c76543722c2c3c513556`. The three inputs are unchanged there since `a760833a62738fbec4ea9f57fea2605bc0d77e1b`, where the brief cut them. Fix round 1 (review 1726) re-read every anchor it touches at `origin/main` `e933f1ec7c440302b08df450d42fd407d3d12e35`: no cited path under `ccd/history`, `ccd/compact-card.mjs`, `ccd/session-hook.sh`, `shared/lifecycle.ts`, `server/src/workflows`, the single-definition helpers or the history tests changed, and the changes to `ccd/ccrc` and `README.md` touch neither the history help paragraph nor the writing verbs' sentence. W3-1 had not landed at the base: its carries and `nodeRangeText` are absent (below). A line number is never cited; each task re-finds its anchor by the symbol or quoted content named, and a moved line is a corrected prediction, never a stop.
+**Base.** Every anchor below was re-measured by content, read-only, from source, at `origin/main` `ec07e0bdfc32f39af243c76543722c2c3c513556`. The three inputs are unchanged there since `a760833a62738fbec4ea9f57fea2605bc0d77e1b`, where the brief cut them. Fix round 1 (review 1726) re-read every anchor it touches at `origin/main` `e933f1ec7c440302b08df450d42fd407d3d12e35`: no cited path under `ccd/history`, `ccd/compact-card.mjs`, `ccd/session-hook.sh`, `shared/lifecycle.ts`, `server/src/workflows`, the single-definition helpers or the history tests changed, and the changes to `ccd/ccrc` and `README.md` touch neither the history help paragraph nor the writing verbs' sentence. Fix round 2 (review 1728) re-read every anchor it touches at `origin/main` `0ec5e6381f5ad8e6fa44a58b0401abf1d6b521e0`:
+- in `sweep.mjs`: `walkTranscripts`, `discoverTranscriptsWithin`, `candidateFiles`, `tickStmts`' `behindPaths` and `behindRows`, `behindFiles`, `behindStats`, `ingestScanDue`, `newBudget`, `makeIngestCtx`, `ingestTick`, `importEvidence` and `importApply`;
+- in `lib.mjs`: `parseOpVerbArgs`' `import` arm, `COMMON_READ_OPTIONS`, `READ_OPTIONS` and `deriveHealth`;
+- `store.mjs`' `createStore` and `openWriter`, and `history-ingest.test.ts`' `openFixtureStore`;
+- README's writing-verbs sentence.
+
+Nothing under `ccd/history` changed after `e933f1ec7`, and README's changes since then do not touch that sentence. W3-1 had not landed at the base: its carries and `nodeRangeText` are absent (below). A line number is never cited; each task re-finds its anchor by the symbol or quoted content named, and a moved line is a corrected prediction, never a stop.
 
 ## Global Constraints
 
@@ -46,7 +52,12 @@
 - **Claims are whole paths, measured when the work starts.** Run `ccrc-api claims list --project ccrc-pwa` at the wave's start and claim every path of the task group, all or nothing. A path another run holds is mailed to its holder through the 409's `mailHint`, and is edited only after it is released or handed over. A claims line in this plan is not permission.
 - **The ingest arming marker has no writer in the tree** (P15 (b)): `~/.ccrc/history/agents-on` (name: build question `history-w4-agents-on-marker-name`), defined once as `SWITCHES.agentsOn` in `lib.mjs`, read by the sweep only, named in `switches-history.test.ts`'s `HOLDERS` and `KEYS`, and added to the `history-switches` lifecycle root. No test, step or tool sets it on a live node.
 - **The pause order** (P5): subagent capture pauses at 90% of the store cap, counted `capture_paused_agents_at_cap`, with a doctor WARN, while main capture continues to the cap; at the cap or below the floor, all capture pauses as today (§9.3). `capture_paused_agents_at_cap` does not join W1's `capture_paused_*` kill rule, and the 90% WARN is its watch: the coordinator's ruling under P5 (2026-11-09, fix round 1), which the operator may override.
-- **One admitted set for subagent files.** A subagent file is ingested only when its parent session's uuid is one the main arm would ingest: a uuid in `knownUuids` (a confirmed epoch's uuid, or a `$REG/*.uuid` of the UUID grammar), of which the tick's hinted uuids are a subset. The tick ingests the post-install files of that set, and `import --agents --apply` the pre-install ones (Task 1F; departure `history-w4-agent-import-known-parents-only`).
+- **One admitted set for subagent files, literally one.** A subagent file is ingested only when its parent session's uuid is in `knownUuids` (a confirmed epoch's uuid, or a `$REG/*.uuid` of the UUID grammar), of which the tick's hinted uuids are a subset. The tick ingests the post-install files of that set, and `import --agents --apply` the pre-install ones. The import uses `knownUuids` too, never `importEvidence`'s wider map: a parent known only through that wider evidence (a `$REG/<id>.compactions` line) is not admitted until a plain `import --apply` has confirmed its epoch (Task 1F; departure `history-w4-agent-import-known-parents-only`, the coordinator's ruling in fix round 2).
+- **Only the two gated arms read a subagent file** (the coordinator's ruling in fix round 2, review 1728 F1: filter, not gate). They are the scan tick's agent arm (Task 1C) and `activeAgentRows` (Task 1E). Each is ruled by `decideAgentIngest`, so the marker, `history-off` and the 90% pause reach both, and each binds by the file's `(uuid, agent key)`. Every other route selects main rows only (`agent_id = ''`):
+  - the hinted walk and `indexedTranscripts` pass no agent sink;
+  - `behindPaths`, and so `behindFiles`, select main rows only;
+  - `activeRows` already does.
+  `behindRows` follows `behindFiles`, as `behindStats`' doc requires ("counted the way behindFiles selects them", D-4309), so a subagent row that no route reads never holds `files_behind` above 0. A stored subagent row left short of its size, whose parent is not active, waits for the next scan tick. While its node is disarmed or paused it waits unread.
 - **The census's withholding rules** (P11, P12, P17 to P19): no share prints while `K > 0`, while `identity_collision > 0`, or while either partition sum fails; every share is a range, `L / den` to `(L + M) / den`; acceptance reads the lower end of `D − T` against 95%, and no canonical share exists until P12 (b) is measured on the installed version or its fallback, (c), takes over. The census never turns an unknown into a zero.
 - **Values, verbatim from the addendum:**
 
@@ -63,7 +74,14 @@
   | `touched` caps | 10,000 candidate rows per query (all selects together); 20 rows by default, `--limit` up to `GREP_LIMIT_MAX` (100) |
   | `touched` cost (P9, P13) | p95 under 2 s on a fixture of the measured `node_refs` row count |
 
-- **Every test, typecheck, mutant and measurement** runs through `ccrc test -- …`, from the package directory, in the foreground, with `--maxWorkers=2` and a Bash timeout of at least 600,000 ms, on fixture HOMEs only (`makeCcdHarness`, `tmpHelpers.ts`, `historyFixtures.ts`, `historyHelpers.ts`), with fixture accounts `lane-a` and `lane-b`. Scratch stays under the session's temp root. Mutants run through `ccd/coordinator-skill/references/mutation-run.py`. This drafting wave ran none of them.
+- **Every test, typecheck, mutant and measurement** runs through `ccrc test -- …`, from the package directory, in the foreground, with `--maxWorkers=2` and a Bash timeout of at least 600,000 ms, on fixture HOMEs only (`makeCcdHarness`, `tmpHelpers.ts`, `historyFixtures.ts`, `historyHelpers.ts`), with fixture accounts `lane-a` and `lane-b`. Scratch stays under the session's temp root. This drafting wave ran none of them.
+- **How a mutant runs** (the programme's practice, stated once; review 1728 F7). `ccd/coordinator-skill/references/mutation-run.py` mutates Python only, so it is not used for these `.mjs`, `.ts` and bash mutants. Run one mutant at a time, in this order:
+  1. Save a copy of the file under the session's temp root, and record its sha256.
+  2. Make one in-place edit.
+  3. Run the named case through `ccrc test --`, bounded by `timeout -k` and a process cap (`ulimit -u`), and record it red.
+  4. Restore from the saved copy, never with `git checkout`. Check the result byte for byte against the copy with `cmp`, and its sha256 against the recorded one.
+
+  An edit to a file outside the PR's claims, such as Task 2's to `card.mjs`, is a mutant only: it is restored this way and never committed. Each task's "Mutants" line names the edit and the case that kills it.
 - **Growth.** Each PR that edits `ccd/ccrc` (W4-1, W4-3 and W4-4) runs `cd server && GROWTH_CHECK=1 ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/growth-check.test.ts` in its gate: `ccd/ccrc` is in `GROWTH_FILES`, under `GROWTH_LIMIT` (40 net code lines). A waiver counts only once committed.
 - **Every PR's doc guards**, after `git fetch origin main`, sequentially from `server/`: `deviation-refs`, `dtbd`, `citations`, `anchors`, `topology-clean`, then `single-definition`.
 - **Departures.** None is numbered here. Each is listed by slug under "Build questions and proposed departures", and the coordinator numbers any it approves at build time. A departure found while building is reported as an unnumbered slug. A task's notes for the ledger go in a new file under `docs/superpowers/plans/2026-11-09-ccrc-history-w4-subagents-touched/`, never in the ledger or an existing plan.
@@ -73,7 +91,7 @@
 
 These are five inputs the addendum implies but no pin exercises, most likely first. Each names the task that owns its test.
 1. **An `mtime` exactly equal to the install record.** P6 says post-install is "at or after" the record. A file stamped in the same millisecond must be ingested, and the census must place it in `Q` or `Ad`, never `P`. Owned by Task 1C, test `an mtime equal to the install record is post-install`.
-2. **A scan tick whose budget runs out inside one session's `subagents/`.** The files not yet reached must wait for the next scan tick with their cursors intact, and nothing half-listed may be counted in `K` or as refused. The census, which runs the walk unbudgeted, must see the whole tree. Owned by Task 1C, test `a budget cut inside subagents/ resumes and counts nothing unentered`.
+2. **A scan tick whose walk is cut inside one session's `subagents/`.** The files not yet reached must wait for the next scan tick with their cursors intact, and nothing half-listed may be counted as unentered or refused. The census passes no `stop` to the walk, so it sees the whole tree. Owned by Task 1C, test `a walk cut inside subagents/ resumes and counts nothing unentered`. The cut comes from the test seam `ctx.agentStop` (Task 1C), which the agent arm asks before each entry. The run budget is a shared clock and byte count, and once it is spent the tick ingests nothing more, so it cannot leave exactly two files read.
 3. **A parent stored from another home.** After a swap, a subagent's parent main transcript may be stored only from the other home's copy. The decode reads the store, not the path, so the unit can still be `L`. Owned by Task 1H, test `a parent stored from another home still resolves`.
 4. **A `touched` argument that holds `_`.** `foo_bar.ts` must not match `fooXbar.ts`: every `LIKE` pattern escapes `%`, `_` and `\`. (A `%` cannot reach a query: `classifyRef`'s path patterns admit only `[\w./-]`, so such an argument is `bad-args`.) Owned by Task 4A, test `a query's _ matches only itself`.
 5. **An id prefix that `--agents` makes ambiguous.** A node-id prefix unique among main nodes may collide with a subagent node's. Prefix uniqueness is computed within the scope (§8.2), so without `--agents` it resolves as today, and with it the answer is the ambiguity exit. Owned by Task 3, test `a node-id prefix unique without --agents is ambiguous with it`.
@@ -89,10 +107,12 @@ These are five inputs the addendum implies but no pin exercises, most likely fir
 | `walkTranscripts(homes, take, stop = null)` is not exported, returns `false` when `stop()` fired, calls `take({path, uuid, home})`, lists `<home>/projects` and each project directory with `readdirSync` (a linked project directory is listed), and skips an unlistable one silently. `discoverTranscriptsWithin` cuts it by budget; an incomplete walk leaves `scan_discover_ms` unset, so the next scan tick walks from the top | `sweep.mjs` `walkTranscripts`, `discoverTranscriptsWithin`, `SCAN_META` | Task 1C extends it with a fourth parameter, `agents`, and pins today's output first. Transcript discovery is budget-cut, not rotating (build question `history-w4-agent-scan-not-rotating`) |
 | `bindFile` binds by `(dev, ino, source_key)` through `planFileRead`, which retires when the path's uuid differs from the row's, when both birth times exist and differ, or, with a birth time missing, when the first-line sha differs; a shrink or a tail-sha change rescans | `sweep.mjs` `bindFile`; `lib.mjs` `planFileRead` | Task 1D widens the identity check to the `(uuid, agent_id)` key |
 | `activeRows` selects `agent_id = ''`, `source_key = ''`, `status = 'live'` for the registered uuids; `activeFiles` stats them through `decideActiveRead` up to `ACTIVE_STAT_MAX` (256) | `sweep.mjs` `activeRows`, `activeFiles`; `lib.mjs` `ACTIVE_STAT_MAX`, `decideActiveRead` | P3's active-parent arm is a sibling statement over `agent_id <> ''` (Task 1E) |
-| The `sweep.mjs` carries are not done: `activeFiles` adds `fileIds.add(row.fileId)` before the `seen` check, the cap, the budget and the stat (review 1065 F4); it runs `activeRows` with `'[]'` when no uuid is registered (F10). `activeFiles` is private and reached through the exported `candidateFiles(db, ctx, scan = false)`; it already takes `ctx.activeStat` and `ctx.activeStatMax` as seams. `activeRows` is a prepared statement cached per database object in `tickStmts` | `sweep.mjs` `activeFiles`, `candidateFiles`, `tickStmts` | Task 1A takes both through those seams, unless W3-1 lands them first. The add before the `seen` check is also the alias dedupe: a file taken this tick under one alias skips its others (review 1726, A1) |
+| The `sweep.mjs` carries are not done: `activeFiles` adds `fileIds.add(row.fileId)` before the `seen` check, the cap, the budget and the stat (review 1065 F4); it runs `activeRows` with `'[]'` when no uuid is registered (F10). `activeFiles` is private and reached through the exported `candidateFiles(db, ctx, scan, sideScan = scan, budget = null)`; it already takes `ctx.activeStat` and `ctx.activeStatMax` as seams. `activeRows` is a prepared statement cached per database object in `tickStmts` | `sweep.mjs` `activeFiles`, `candidateFiles`, `tickStmts` | Task 1A takes both through those seams, unless W3-1 lands them first. The add before the `seen` check is also the alias dedupe: a file taken this tick under one alias skips its others (review 1726, A1) |
 | The `lib.mjs` carry is not done: `MARK_CHECK_GLOSS.budget` reads "the run budget was spent before its next batch, ingest first", and its block comment still says "its starvation behind ingest is accepted". `MARK_CHECK_GLOSS` is module-private; its one reader is `markCheckDetail`, so the gloss reaches a test only through `deriveHealth`'s `export-marks-unchecked` detail, pinned in `history-lib.test.ts`'s case "a check that stopped WARNs export-marks-unchecked, naming its last word, …" | `lib.mjs` `MARK_CHECK_GLOSS`, `markCheckDetail` | Task 1A takes it through that case, unless W3-1 lands it first |
 | `planRun` decides `pause`: `at-cap` at `sizeBytes >= capBytes(capGb)`, else `low-disk`. The counters are literals in `sweep.mjs`: `capture_paused_at_cap`, `capture_paused_low_disk` | `lib.mjs` `planRun`, `capBytes`, `capOf`; `sweep.mjs` | P5's 90% arm joins `planRun` (Task 1E) |
 | The tick discovers main transcripts for the hinted uuids (`hintedUuids`: a draining id's two newest confirmed epochs and its `$REG/<id>.uuid`), the stored files behind (`behindFiles`), between scans a registered session's changed files (`activeFiles`), and at a scan tick every `knownUuids` uuid's files (a confirmed epoch's, and every `$REG/*.uuid`). `candidateFiles` calls the walk twice per tick, `discover(hinted)` and, at a scan tick, `discover(known)`; `indexedTranscripts` walks a third time for its cache. `import --apply` maps from evidence (`importEvidence`) and lists the unmapped, never ingesting them | `sweep.mjs` `candidateFiles`, `knownUuids`, `hintedUuids`, `indexedTranscripts`, `importApply` | the one admitted set is `knownUuids` (Global Constraints); only the scan tick's `discover(known)` passes the agent arm (Task 1C) |
+| `tickStmts`' `behindPaths` selects every live `source_key = ''` row with `size > offset`, with no `agent_id` filter. `behindFiles` hands each as a bare `{path, uuid, home}` on every tick, before the active and scan arms, and `bindFile` binds it through `ensureTranscript(uuid)`, the main row. `behindRows`, which `behindStats` counts for `files_behind` and `last_zero_behind_ms`, selects the same rows; its doc says it counts them "the way behindFiles selects them" (D-4309) | `sweep.mjs` `tickStmts`, `behindFiles`, `behindStats` | Task 1C filters both statements to `agent_id = ''` (Global Constraints, "Only the two gated arms") |
+| The run budget is `newBudget(now, { maxMs, maxBytes, chunkBytes })`, one per tick, shared by discovery and ingest. `discoverTranscriptsWithin` passes the walk `() => !budgetLeft(budget)` as `stop`, asked before each `projects/` and slug listing. A cut walk answers `complete: false`, so `scan_discover_ms` stays unset and the next tick is a scan again (`ingestScanDue`). In-process cases drive one tick as `ingestTick(db, makeIngestCtx(home, homes, nowMs, ids), newBudget())` over a store from `createStore(home)` and `openWriter(dbFile)` | `sweep.mjs`; `store.mjs`; `history-ingest.test.ts` `openFixtureStore` | the test helpers of Task 1C, and its `ctx.agentStop` seam |
 | Doctor's words are decided in `lib.mjs` `deriveHealth`: FAIL `at-cap`, FAIL `capture-paused-low-disk`, WARN `cap-near` from `CAP_WARN_PCT` (80) of the cap until `at-cap`, WARN `breaker-open`, with `HEALTH_WORDS` and `HEALTH_REMEDIES`. `ccd/ccrc-doctor-checks` `_check_history` relays every word `history status --json` gives, FAIL or WARN, with no list of words of its own | `lib.mjs` `deriveHealth`; `ccd/ccrc-doctor-checks` `_check_history` | P5's WARN is a `deriveHealth` row and needs no doctor-checks edit; Task 1E Step 6 re-measures that. From 90% to the cap it stands beside `cap-near` (Task 1E) |
 | §10.7's W1 kill rule names "a `capture_paused_*` counter keeps rising for more than 6 h". No code holds it: it is the operator's watch | spec §10.7; no hit for it in `ccd/history` | the new counter's name matches that pattern (Task 1E Step 6; build question `history-w4-agents-pause-and-kill-rule`) |
 | `WRITING_FORMS`, an object keyed by form: `import-apply` (not irreversible), `import-session-apply` (irreversible), and the prune, doctor and recall-off forms. `formOf(op, args)` takes the raw argv and tests `args.includes(flag)`: `import` without `--apply` is `null`, a dry run, and with `--session` or `--file` it is `import-session-apply`, else `import-apply`. `parseOpVerbArgs`' `import` arm reads `--apply`, `--session`, `--file` only. `OP_OF_VERB` (`cli.mjs`) and `OP_VERBS`, `OP_HANDLERS`, `OP_DRY_RUNS` (`sweep.mjs`) name the ops | `lib.mjs`; `cli.mjs`; `sweep.mjs` `opPass` | Tasks 1F and 1G add `import --agents` and `census` |
@@ -111,7 +131,7 @@ These are five inputs the addendum implies but no pin exercises, most likely fir
 | `entries` has `type`, a nullable `ts_ms`, `tool_name` (the first named `tool_use`, assistant rows only), and `entries_ts (transcript_pk, ts_ms)`; `blobOverDecodeCap(rawLen)` answers true, refuse, when `rawLen` is over `BLOB_DECODE_MAX` (16 MiB) or not a number | `store.mjs`; `lib.mjs` | the census's two lookups (Task 1G) |
 | `nodes` has `session_pk`, `transcript_pk`, `kind`, `earliest_ms`, `latest_ms`, `gist`; there is no family column | `store.mjs` | `touched` prints the family as `runTree` does (Task 4B) |
 | `ccd/ccrc` `_usage_history_paragraph` lists `status`, `grep\|describe\|expand\|tree`, `import\|prune\|reparse` and the doctor flags | `ccd/ccrc` | Tasks 1F, 1G, 3 and 4B add a phrase each |
-| The skill has no verb list: the verbs are in "3. The ladder" and the scope flags in "5. Scope". README's section is "Session history: lossless recall", whose writing-verb sentence ends "… and `import --session <id> --file <path> --apply` also need a terminal outside every `cc-*` pane." | `ccd/history-skill/SKILL.md`; `README.md` | Tasks 1F, 3 and 4B edit those places, found by content |
+| The skill has no verb list: the verbs are in "3. The ladder" and the scope flags in "5. Scope". README's section is "Session history: lossless recall". Its writing-verbs sentence begins "The writing verbs are the operator's: `import`, `prune --older-than <age>` (30 days at least) and `reparse`, each a dry run unless `--apply`, …". A separate sentence, "… and `import --session <id> --file <path> --apply` also need a terminal outside every `cc-*` pane.", is the terminal rule | `ccd/history-skill/SKILL.md`; `README.md` | Tasks 1F, 3 and 4B edit those places, found by content |
 | The shim passes the rostered homes after `--` and is the one lock taker (`flock -n 9`; an op pass exits 75 when held) | `ccd/ccd-history-sweep` | the census verb runs through it, so it holds the lock while it runs (Task 1I measures how long) |
 
 ## Order and PR split
@@ -126,12 +146,12 @@ flowchart LR
   W1 -. "every shipping merge may cut a prerelease" .-> PR["main's releases keep moving"]
   B4["A8: B4 re-measured live<br/>on that node"] --> MK["the operator sets<br/>that node's agents-on"]
   CP51["CP-51's W2 state measured<br/>and closed by the operator"] --> MK
-  W4 --> MK
+  W4 -. "recommended, asked at arming" .-> MK
   MK --> CEN["the census on that node"]
   M1["act M1: P12 (b) on<br/>the installed version"] --> CEN
   CEN --> AC["CP-73: the lower end of D minus T<br/>at 95% or more"]
 ```
-*Figure 1. The order. The four PRs merge in the addendum's order, and none waits on a live measurement but W4-4's ordered cap, which waits on act M3. A node first ingests subagent text when the operator sets its marker, after A8 and CP-51's state are measured there. P15 (b) leaves the timing to the operator, per node; this plan recommends arming no node before W4-4 has merged and been released there, a question asked at arming, not now (Later). Acceptance needs the census on the armed nodes and P12's predicate settled by act M1, the one act that gates a canonical share.*
+*Figure 1. The order. The four PRs merge in the addendum's order, and none waits on a live measurement but W4-4's ordered cap, which waits on act M3. A node first ingests subagent text when the operator sets its marker, after A8 and CP-51's state are measured there. P15 (b) leaves the timing to the operator, per node. The dashed edge from W4-4 is a recommendation, not a gate: this plan recommends arming no node before W4-4 has merged and been released there, a question asked at arming, not now (Later). The solid edges into the marker, A8 and CP-51's state, are gates. Acceptance needs the census on the armed nodes and P12's predicate settled by act M1, the one act that gates a canonical share.*
 
 | PR | Tasks | Claims (whole paths, measured at the wave's start; tests under `server/test/`) | Pins | Rulings it carries |
 |---|---|---|---|---|
@@ -156,7 +176,7 @@ None of these gates W4-1's merge. Two kinds. **Coordinator acts** read the insta
 | M3 | the coordinator, read-only; under W4-4 (Task 4C). It sets the fixture for P9's and P13's p95, and holds TC20 and TC23's order until then | the fixture size for P9 and P13 | `SELECT count(*) FROM node_refs` on each session-hosting node's store, opened read-only | the count per node, the date, the store size | none: Task 4C does not run, TC20 and TC23's order stay `.todo`, and the unordered cap with its sentence ships (P13's fallback) |
 | F1 | the W4-1 worker, Task 1B Step 1 | P10's arm | read-only, from source: does the shipped tree (`build-release.sh`'s `PATHSPEC`, `install.sh`'s layout under `~/ccrc`) and `deploy/deploy.sh`'s fallback push carry `shared/` beside `ccd/`, so that `ccd/history/*.mjs` can import `../../shared/workflow-ids.mjs` | the paths read and the answer, in the PR body | the recorded copy in `lib.mjs` with SA17's parity pin |
 | F2 | the W4-1 worker, Task 1I | the census's duration and decode cost | the census on a fixture of G14's size: 1,454 subagent transcripts with metas, their parents' candidate rows, on fixture homes | wall time p50 and p95 over 5 runs, decodes performed, peak RSS, fixture bytes | none needed; a p95 above the sweep timer's 2-minute interval is raised as a build question before the merge, because the census holds the writer's lock |
-| F3 | the W4-1 worker, Task 1E Step 6 | P5: whether doctor-checks needs an edit, and whether the new counter joins W1's kill rule | read `_check_history` and §10.7's kill rule | the reading, in the PR body | none |
+| F3 | the W4-1 worker, Task 1E Step 6 | P5: whether doctor-checks needs an edit for the new WARN. The kill rule is not asked: the coordinator ruled under P5 that the counter does not join it (Global Constraints) | read `_check_history` | the reading, in the PR body, beside the ruling as Task 1E Step 6 records it | none |
 | F4 | the W4-4 worker, Task 4C, after M3 | P9's 2 s p95 for `touched`, and P13's ordered cap | `touched` against a fixture store of M3's largest `node_refs` count, cold and warm, 20 runs per query shape | p50, p95, the query plan, fixture bytes | over 2 s: P13 keeps the unordered cap; P9's schema options come back only as new proposals |
 
 ## Carried constraints this plan owns
@@ -232,7 +252,7 @@ The rulings each PR carries are the PR table's last column. Each task names the 
 
 ## Task group W4-1: the walk, ingest, the pause order, the marker gate, the import form and the census
 
-**Claims, pins, failure rows and rulings:** the PR table's W4-1 row and the two placement tables above. **Gate:** `GROWTH_CHECK=1` growth-check (it edits `ccd/ccrc`); every doc guard. **Mutants:** listed per task, each killed by the named case, run with `mutation-run.py`.
+**Claims, pins, failure rows and rulings:** the PR table's W4-1 row and the two placement tables above. **Gate:** `GROWTH_CHECK=1` growth-check (it edits `ccd/ccrc`); every doc guard. **Mutants:** listed per task, each killed by the named case, each run as Global Constraints' "How a mutant runs" says.
 
 ### Task 1A: The carries, and today's walk pinned
 
@@ -242,7 +262,7 @@ The rulings each PR carries are the PR table's last column. Each task names the 
 
 **Interfaces:** no export is added; each case reaches the code through what the base already exports.
 - `discoverTranscripts(homes, uuids)` (exported) drives the unexported `walkTranscripts`.
-- `candidateFiles(db, ctx, scan = false, sideScan = false, budget = null)` (exported) reaches the private `activeFiles` on a non-scan tick, with its existing seams `ctx.activeStat: (path: string) => Stat` (a counting stub records each path it is asked) and `ctx.activeStatMax: number`.
+- `candidateFiles(db, ctx, scan, sideScan = scan, budget = null)` (exported; `scan` has no default, and `sideScan` defaults to `scan`) reaches the private `activeFiles` on a non-scan tick, with its existing seams `ctx.activeStat: (path: string) => Stat` (a counting stub records each path it is asked) and `ctx.activeStatMax: number`.
 - `countAll(db: DatabaseSync, needle: string): { db: DatabaseSync, calls: () => number }`, a helper in `history-sweep.test.ts`: a `Proxy` over `db` whose `prepare` wraps the statement whose SQL contains `needle` and counts its `.all` calls, passing every other member through. `tickStmts` caches per database object, so the proxy gets fresh statements. The needle for `activeRows` is `"t.agent_id = '' AND f.source_key = ''"`.
 - `deriveHealth(h)` (exported) reaches the module-private `MARK_CHECK_GLOSS` through its `export-marks-unchecked` detail.
 - Produces nothing new. The characterization case is the baseline Task 1C must keep green.
@@ -354,37 +374,90 @@ it('one run-id grammar (P10): the shared holder is the one definer', () => {
 **Interfaces:**
 - Consumes: Task 1B's grammar and `agentKey`; `UUID_RE`; `bindFile(db, f, nowMs)`.
 - Produces:
-  - `walkTranscripts(homes, take, stop = null, agents = null)`, where `agents` is `{ take(e: AgentWalkEntry): void } | null`. With `null` it is today's walk exactly (Task 1A's case);
+  - `walkTranscripts(homes, take, stop = null, agents = null)`, where `agents` is an `AgentSink | null`. With `null` it is today's walk exactly (Task 1A's case);
+  - `AgentSink` (`lib.d.mts`): `{ take(e: AgentWalkEntry): void, stop: ((taken: number) => boolean) | null }`. Before each entry of `subagents/` and of a run directory, the agent arm asks the walk's `stop()`, then `sink.stop(taken)` when it is not `null`. `taken` counts the `file` entries handed to `sink.take` so far in this walk. Either answering true ends the walk, which answers `false`. Asking `stop()` per entry is new: at the base it is asked only before each `projects/` and slug listing;
+  - `ctx.agentStop: ((taken: number) => boolean) | undefined`, a test seam on the ingest context (an injected dependency, never an environment variable). `makeIngestCtx` leaves it unset. `candidateFiles` builds the scan tick's sink with `stop: ctx.agentStop ?? null`. A walk it cuts is cut as a budget cut is: `complete: false`, `scan_discover_ms` left unset, and the next tick a scan. The run budget is untouched, so the tick still ingests the entries handed over before the cut;
+  - `behindPaths` and `behindRows` (`tickStmts`) gain `t.agent_id = ''` (`behindRows` gains the join to `transcripts` it needs). So `behindFiles` hands main rows only, and `behindStats` counts what `behindFiles` selects (Global Constraints, "Only the two gated arms");
   - `AgentWalkEntry` (`lib.d.mts`): `{ type: 'file', home, slug, uuid, runId: string | null, id: string | null, path, verdict: 'admit' | 'refuse', reason: AgentFileReason | null, mtimeMs: number }`, `{ type: 'companion', home, slug, uuid, runId: string | null, role: 'meta' | 'journal', id: string | null, path }`, or `{ type: 'unentered', home, level: AgentLevel, reason: AgentDirReason, path }`. Paths stay in memory; nothing prints them;
   - `SWITCHES.agentsOn = '.ccrc/history/agents-on'`, armed only when it is a regular, non-link file;
   - `INSTALL_META = 'agents_since_ms'`; `decideInstallRecord({ existing: number | null, nowMs: number }): number | null`: the first W4 tick, armed or not, writes `nowMs`, and every later tick writes nothing (`existing` stands). That is the addendum's predicate, ruled with P6, kept by the coordinator in fix round 1; `isPreInstall(mtimeMs: number, sinceMs: number | null): boolean`, true when `sinceMs === null` or `mtimeMs < sinceMs`;
   - `decideAgentIngest({ armed: boolean, historyOff: boolean, pause: string | null, admitted: boolean, preInstall: boolean, parentKnown: boolean }): boolean`, `parentKnown` meaning the parent's uuid is in `knownUuids` (Global Constraints, "One admitted set");
+  - the marker read and the install record sit in `ingestTick`, before `candidateFiles`, so an in-process tick reaches both. `ctx.agentsPause: 'at-90' | null` is set by `tick()` from `planRun`'s answer (Task 1E); `makeIngestCtx` sets it `null`;
   - `discoverTranscripts(homes, uuids, agents = null)` and `discoverTranscriptsWithin(homes, uuids, budget, agents = null)` pass `agents` to the walk, keeping an agent entry only when its session uuid is in `uuids`. Of the walk's three callers per tick, only `candidateFiles`' scan-tick `discover(known)` passes it, and only when armed; `discover(hinted)` and `indexedTranscripts` pass `null`, so their answers are today's. The census's op arm (Task 1H) calls `walkTranscripts` itself, unfiltered;
   - `ensureAgentTranscript(db, uuid: string, key: string, runId: string | null): number` (`sweep.mjs`), the agent row's writer; `planFileRead` compares the path's `(uuid, agent key)` with the row's, so a file under another key is retired as a recycled inode, as on main.
 
-- [ ] **Step 1: Write the failing tests** in `history-agents-ingest.test.ts`, over `historyAgentFixtures.ts`' `plantAgentTree(home, { slug, uuid, agents, runs }, { sinceMs })` (each agent: id, rows, meta, `atMs`; each run: id, agents, journal). How a fixture times its files against the install record, per case:
-  - with `sinceMs` given, it seeds `agents_since_ms = sinceMs` in the fixture store's `meta` before the first tick, so the tick keeps it (`decideInstallRecord` writes only when none exists), and it stamps each agent file's mtime with `utimesSync` at `sinceMs + atMs`. A post-install file has `atMs >= 0` (`+60_000` unless a case says otherwise), a pre-install one `atMs < 0`;
-  - a case that pins the record itself seeds nothing and drives the tick's clock (`ctx.nowMs`).
+- [ ] **Step 1: Define the test helpers once, in `historyAgentFixtures.ts`** (review 1728, F2). Every case in `history-agents-ingest.test.ts`, `history-census.test.ts` and `history-derive.test.ts` uses them, and no case defines its own tick:
 
-  So SA22's agent file sits after the record (`atMs: +60_000`), and the unarmed tick that precedes arming writes no row whatever the clock: mutant (a), the walk run with no marker, writes one there. SA1, SA3 and Review Focus 2 plant post-install files the same way.
+```ts
+export type Arm = 'none' | 'file';
+export const noMarker: Arm = 'none';   // tick() removes ~/.ccrc/history/agents-on first
+export const armed: Arm = 'file';      // tick() plants it as a regular file first
+/** The marker as a regular file, a link to a regular file, or a directory; 'none' removes it. */
+export function plantMarker(box: HistoryBox, kind: 'file' | 'link' | 'dir' | 'none'): void;
+export const T0: number;               // a fixed epoch in ms, on a whole second
+export interface TickOpts {
+  nowMs?: number;                      // ctx.nowMs. Default: the previous tick's + 60_000; the first tick's is T0 + 60_000
+  scan?: boolean;                      // true: meta scan_discover_ms deleted first, so ingestScanDue answers true (a scan tick);
+                                       // false: set to nowMs first, so the tick is not a scan; omitted: the store's own clock
+  agentStop?: (taken: number) => boolean;   // ctx.agentStop, this task's seam
+  agentsPause?: 'at-90' | null;             // ctx.agentsPause, as tick() sets it from planRun (Task 1E). Default null
+}
+export interface AgentRig {
+  box: HistoryBox;
+  db: DatabaseSync;
+  /** One ingestTick(db, { ...makeIngestCtx(box.home, box.homes, nowMs, ids), agentStop, agentsPause }, newBudget()).
+   *  `arm` null leaves the marker as it stands. Answers what ingestTick answers. */
+  tick(arm?: Arm | null, o?: TickOpts): Promise<unknown>;
+}
+/** makeHistoryBox(prefix), then a store created and opened in this process, as history-ingest.test.ts' openFixtureStore
+ *  does it (store.createStore(home), store.openWriter(dbFile)). */
+export function agentRig(prefix: string): Promise<AgentRig>;
+export interface AgentSpec { id: string; rows: object[]; meta?: object | 'absent' | 'oversized' | 'malformed'; atMs?: number }
+export interface TreeSpec {
+  slug: string; uuid: string; agents: AgentSpec[];
+  runs?: Array<{ id: string; agents: AgentSpec[]; journal?: 'file' | 'fifo' }>;
+  /** How the parent's uuid is known. Default 'registered': $REG/<id>.uuid names it, with a fixture id such as lane-a-s1.
+   *  'epoch': a confirmed epoch in the store instead. 'compactions': only a $REG/<id>.compactions line names its transcript,
+   *  importEvidence's wider evidence (Task 1F). 'unknown': neither. */
+  parent?: 'registered' | 'epoch' | 'compactions' | 'unknown';
+}
+/** The parent's main transcript <uuid>.jsonl under the slug, and its session directory <uuid>/subagents/…, under `home`
+ *  (default the rig's first account home). Answers each agent file's path by key. */
+export function plantAgentTree(rig: AgentRig, spec: TreeSpec, o?: { sinceMs?: number; home?: string }): Record<string, string>;
+// Read-only probes over the rig's store, one statement each:
+export function agentRows(db: DatabaseSync): number;            // transcripts with agent_id <> ''
+export function agentKeys(db: DatabaseSync): string[];          // their agent_id, sorted
+export function runIdsOf(db: DatabaseSync): string[];           // their workflow_run_id, non-null, sorted
+export function mainRows(db: DatabaseSync): unknown[];          // transcripts with agent_id = '', with their entry counts
+export function offsetOf(db: DatabaseSync, path: string): number;   // ingest_files.offset of the row file_paths names
+export function counterNames(db: DatabaseSync): string[];       // every counter name the store holds
+```
+
+  How a fixture times its files against the install record, per case:
+  - with `sinceMs` given, `plantAgentTree` seeds `agents_since_ms = sinceMs` in the store's `meta` before the first tick, so the tick keeps it (`decideInstallRecord` writes only when none exists), and it stamps each agent file's mtime with `utimesSync` at `sinceMs + atMs`. A post-install file has `atMs >= 0` (`+60_000` unless a case says otherwise), a pre-install one `atMs < 0`;
+  - a case that pins the record itself seeds nothing and drives the clock through `nowMs`.
+
+  So SA22's agent file sits after the record, and the unarmed tick before arming writes no row whatever the clock: mutant (a), the walk run with no marker, writes one there. Every case that needs the agent arm runs a scan tick, `scan: true` or a store whose own clock makes one, because only the scan tick's `discover(known)` enters it. SA1, SA3 and Review Focus 1 and 2 plant post-install files with a known parent in the same way.
+- [ ] **Step 2: Write the failing tests** in `history-agents-ingest.test.ts`. Each case makes its own rig and tree; the snippets show the ticks and the assertions.
 
 ```ts
 it('SA22 ingest arming (P15 (b)): no marker, no subagent file read and no subagent row', async () => {
-  await tick(noMarker);
-  expect(count(db, "SELECT count(*) n FROM transcripts WHERE agent_id <> ''")).toBe(0);
+  await tick(noMarker, { scan: true });
+  expect(agentRows(db)).toBe(0);
   expect(mainRows(db)).toEqual(mainRowsOfABaselineWithNoSubagents);
-  plantMarker(home, 'link'); await tick(); expect(agentRows(db)).toBe(0);  // a link is not armed
-  plantMarker(home, 'file'); await tick(); expect(agentRows(db)).toBe(1);
+  plantMarker(box, 'link'); await tick(null, { scan: true }); expect(agentRows(db)).toBe(0);  // a link is not armed
+  plantMarker(box, 'file'); await tick(null, { scan: true }); expect(agentRows(db)).toBe(1);
   // and switches-history.test.ts: HOLDERS has ['agents-on', ['ccd/history/lib.mjs']], KEYS has 'agentsOn'
 });
 it('SA1 journal excluded: one row, and the journal never opened', async () => {
-  // run directory: journal.jsonl is a FIFO with no writer, so opening it would block; the case is bounded at 10 s
-  await tick(armed);
+  // run directory: journal.jsonl is a FIFO with no writer (journal: 'fifo'), so opening it would block; bounded at 10 s
+  await tick(armed, { scan: true });
   expect(agentKeys(db)).toEqual([`${RUN}/a`]);
 });
 it('SA3 workflow identity: two runs, one agent id, two rows', async () => {
-  expect(agentKeys(db).sort()).toEqual([`${RUN_A}/x`, `${RUN_B}/x`]);
-  expect(runIdsOf(db).sort()).toEqual([RUN_A, RUN_B]);
+  await tick(armed, { scan: true });
+  expect(agentKeys(db)).toEqual([`${RUN_A}/x`, `${RUN_B}/x`]);
+  expect(runIdsOf(db)).toEqual([RUN_A, RUN_B]);
 });
 it('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
   // parity: the two gate lines of _hook_compact_scope, found by content, run under bash per name, with CCRC_ID_MAX=128
@@ -395,38 +468,56 @@ it('SA34 one walker, and the hook\'s id shape (P20 (a))', () => {
   expect(listersOfSubagents()).toEqual(['sweep.mjs walkTranscripts']);
 });
 it('an mtime equal to the install record is post-install (Review Focus 1)', async () => {
-  plantAgentTree(home, tree({ atMs: 0 }), { sinceMs: T0 }); await tick(armed);
+  // plantAgentTree(rig, tree({ atMs: 0 }), { sinceMs: T0 })
+  await tick(armed, { scan: true });
   expect(agentRows(db)).toBe(1);
 });
 it('the first W4 tick writes agents_since_ms, armed or not, and no later tick moves it (P6)', async () => {
   await tick(noMarker, { nowMs: T0 }); expect(getMeta(db, 'agents_since_ms')).toBe(String(T0));
-  await tick(armed, { nowMs: T0 + 3_600_000 }); expect(getMeta(db, 'agents_since_ms')).toBe(String(T0));
+  await tick(armed, { nowMs: T0 + 3_600_000, scan: true }); expect(getMeta(db, 'agents_since_ms')).toBe(String(T0));
 });
-it('a budget cut inside subagents/ resumes and counts nothing unentered (Review Focus 2)', async () => {
-  await tick(armed, { budgetFiles: 2 });   // a session holding five agent files
-  expect(agentRows(db)).toBe(2);
-  await tick(armed, { scan: true });
+it('a walk cut inside subagents/ resumes and counts nothing unentered (Review Focus 2)', async () => {
+  // one session holding five post-install agent files and no metas
+  await tick(armed, { scan: true, agentStop: (taken) => taken >= 2 });
+  expect(agentRows(db)).toBe(2);                        // the two handed over before the cut, read under an unspent budget
+  expect(getMeta(db, 'scan_discover_ms')).toBeNull();   // a cut walk leaves the scan unmarked
+  await tick(armed);                                    // so the store's own clock makes this tick a scan again
   expect(agentRows(db)).toBe(5);
-  expect(unenteredOf(lastWalk)).toEqual([]);
+  expect(counterNames(db).filter((n) => n.startsWith('agent_'))).toEqual([]);   // no unentered or refused figure at a tick
+});
+it('a stored short subagent row is read only through a gated arm (review 1728, F1)', async () => {
+  // an armed scan tick stores agent file a whole; then three rows are appended to it, and the fixture sets its
+  // ingest_files.size to the file's new size with its offset unchanged: the state a budget-cut read leaves
+  const at = offsetOf(db, aPath);
+  await tick(noMarker, { scan: false }); await tick(noMarker, { scan: true });
+  expect(offsetOf(db, aPath)).toBe(at);                // disarmed: not read, behindFiles hands main rows only
+  expect(behindStats(db, box.homes).files).toBe(0);    // and the lag does not count it
+  await tick(armed, { scan: false });                  // armed, but its parent is not active: it waits for the scan tick
+  expect(offsetOf(db, aPath)).toBe(at);
+  await tick(armed, { scan: true });                   // the scan tick's agent arm reads it, under its own key
+  expect(offsetOf(db, aPath)).toBe(statSync(aPath).size);
+  expect(agentKeys(db)).toEqual(['a']);
 });
 it('no subagents/ and no projects root add nothing', async () => { /* failure rows 1 and 2: no row, no entry */ });
-it('history-off reads no subagent file', async () => { /* failure row 26: marker set, history-off present: no read */ });
-it('a subagent of a session the main arm does not ingest is not ingested', async () => { /* parent uuid in no confirmed epoch and no $REG/*.uuid */ });
-it('only the scan tick\'s known-uuid walk enters the agent arm', async () => { /* a non-scan tick lists no subagents/; indexedTranscripts\' answer is unchanged */ });
-it('a file older than the install record is not ingested by a tick', async () => { /* P6; SA12 and SA18 pin the rest */ });
+it('history-off reads no subagent file', async () => { /* failure row 26: marker set, history-off present, scan tick: no read */ });
+it('a subagent of a session the main arm does not ingest is not ingested', async () => { /* parent: 'unknown', armed scan tick: no row */ });
+it('only the scan tick\'s known-uuid walk enters the agent arm', async () => { /* scan: false lists no subagents/; indexedTranscripts\' answer is unchanged */ });
+it('a file older than the install record is not ingested by a tick', async () => { /* P6, armed scan tick; SA12 and SA18 pin the rest */ });
 ```
 
+  Task 1E adds the paused row to the F1 case, between the disarmed rows and the armed ones: `await tick(armed, { scan: true, agentsPause: 'at-90' })` leaves `offsetOf(db, aPath)` at `at`.
+
   In `lifecycle.test.ts`, the root pin becomes `'~/.ccrc/history-off, ~/.ccrc/history-max-gb, ~/.ccrc/history/headless-on, ~/.ccrc/history/agents-on'`. If W3-3 has landed, the expected root is the root on `main` with `, ~/.ccrc/history/agents-on` appended (the switch-region ruling).
-- [ ] **Step 2: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-agents-ingest.test.ts test/lifecycle.test.ts test/single-definition/switches-history.test.ts`. Expected: FAIL, no subagent row is ever written and `SWITCHES` has no `agentsOn`.
-- [ ] **Step 3: Implement the walk's agent arm** inside `walkTranscripts`, run only when `agents` is not `null`:
+- [ ] **Step 3: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-agents-ingest.test.ts test/lifecycle.test.ts test/single-definition/switches-history.test.ts`. Expected: FAIL, no subagent row is ever written and `SWITCHES` has no `agentsOn`.
+- [ ] **Step 4: Implement the walk's agent arm** inside `walkTranscripts`, run only when `agents` is not `null`:
   - It `lstat`s each level from the projects root down and asks `decideAgentDir`; a level it does not enter yields one `unentered` entry and nothing below it. Main's own reading of the root and the project directories is unchanged.
   - A session directory is a project-directory entry whose name matches `UUID_RE`, with no `.jsonl`.
   - In `subagents/` and in each run directory it lists the names sorted, as main does, classifies each with `classifyAgentName`, `lstat`s each candidate, and asks `decideAgentFile` with `runOk = RUN_ID_RE.test(runName)` (always true in `subagents/`). It never opens a file.
-  - It calls `stop()` before each entry, so a budget cut leaves the rest for the next scan tick.
-- [ ] **Step 4: Implement the first ingest.** The tick reads the marker and writes the install record through `decideInstallRecord`; `candidateFiles` passes `agents` to its scan-tick `discover(known)` only, and only when armed, and appends the admitted entries after the tick's main files when `decideAgentIngest` says so; `bindFile` binds them through `ensureAgentTranscript`, with `workflow_run_id` from the path. Add `agentsOn` to `SWITCHES`, `HOLDERS` and `KEYS`, the three Task 1B vocabularies to the O14 list, and the marker to the `history-switches` root.
+  - Before each entry it asks the walk's `stop()`, then `agents.stop(taken)` (the `AgentSink` contract above). A budget cut or a seam cut leaves the rest for the next scan tick.
+- [ ] **Step 5: Implement the first ingest.** `ingestTick` reads the marker and writes the install record through `decideInstallRecord`, before `candidateFiles`; `behindPaths` and `behindRows` gain `t.agent_id = ''`; `candidateFiles` passes `agents` to its scan-tick `discover(known)` only, and only when armed, and appends the admitted entries after the tick's main files when `decideAgentIngest` says so; `bindFile` binds them through `ensureAgentTranscript`, with `workflow_run_id` from the path. Add `agentsOn` to `SWITCHES`, `HOLDERS` and `KEYS`, the three Task 1B vocabularies to the O14 list, and the marker to the `history-switches` root.
   - The install record is the addendum's: the first W4 tick writes it, armed or not (ruled, `history-w4-install-record-at-arming`: keep). What arming then ingests is the backlog written between install and arming, which the census shows as that node's `Q` before the marker is set (Later).
-- [ ] **Step 5: Run them: all pass, and Task 1A's characterization case still passes.** Mutants: (a) the walk run with no marker (SA22's CONTROL); (b) every `*.jsonl` admitted (SA1's CONTROL); (c) a bare `<ID>` key (SA3's CONTROL); (d) a census-side `readdirSync` of `subagents/` and a widened class (SA34's CONTROLs); (e) `isPreInstall` as `mtimeMs <= sinceMs` (Review Focus 1); (f) the arm entered for a linked project directory (the characterization case and SA19 in 1H); (g) `decideInstallRecord` rewriting an existing record (the record case); (h) the agent arm passed by `discover(hinted)` too (the scan-tick case).
-- [ ] **Step 6: Commit** `feat(history): the subagent walk and its first ingest, behind the arming marker (W4 addendum P6, P15, P20)`.
+- [ ] **Step 6: Run them: all pass, and Task 1A's characterization case still passes.** Mutants: (a) the walk run with no marker (SA22's CONTROL); (b) every `*.jsonl` admitted (SA1's CONTROL); (c) a bare `<ID>` key (SA3's CONTROL); (d) a census-side `readdirSync` of `subagents/` and a widened class (SA34's CONTROLs); (e) `isPreInstall` as `mtimeMs <= sinceMs` (Review Focus 1); (f) the arm entered for a linked project directory (SA19's linked-project row, in 1H: the census's walk passes an agent sink, so the arm runs there); (g) `decideInstallRecord` rewriting an existing record (the record case); (h) the agent arm passed by `discover(hinted)` too (the scan-tick case); (i) the `agent_id` filter dropped from `behindPaths` (the F1 case's disarmed rows: the offset moves); (j) the filter dropped from `behindRows` (the F1 case's `behindStats` row); (k) `agents.stop` never asked (Review Focus 2: five rows at the first tick).
+- [ ] **Step 7: Commit** `feat(history): the subagent walk and its first ingest, behind the arming marker (W4 addendum P6, P15, P20)`.
 
 ### Task 1D: The meta, its lifecycle, `agent_type`, and several holdings (P17)
 
@@ -475,10 +566,10 @@ it('SA25 identical copies: two file rows, one transcript, a membership in each, 
 
 **Interfaces:**
 - Produces:
-  - `AGENTS_PAUSE_SHARE = 0.9`; `planRun`'s answer gains `agentsPause: 'at-90' | null`, set when no `pause` stands and `sizeBytes >= AGENTS_PAUSE_SHARE * capBytes(capGb)`;
+  - `AGENTS_PAUSE_SHARE = 0.9`; `decideAgentsPause({ armed: boolean, pause: string | null, sizeBytes: number, capBytes: number }): 'at-90' | null`, the one rule: `'at-90'` when armed, no other pause stands (`pause` null: neither at the cap nor below the floor), and `sizeBytes >= AGENTS_PAUSE_SHARE * capBytes`; else `null`. `planRun`'s input gains `agentsArmed` and its answer `agentsPause`, from this decider; the pass hands that answer to `tick()`, which sets `ictx.agentsPause` on the ingest context it builds with `makeIngestCtx` (Task 1C);
   - the counter `capture_paused_agents_at_cap`, bumped once per tick that withholds an admitted subagent file, whose cursor does not move;
-  - `deriveHealth`: a WARN word `agents-paused-at-cap`, with its `HEALTH_REMEDIES` row ("subagent capture is paused at 90% of the store cap and main capture continues: prune, or raise ~/.ccrc/history-max-gb"), decided from the same size and cap that decide `at-cap`, in `HEALTH_WORDS` beside `cap-near`. From 90% to the cap both WARNs stand: `cap-near` says capture will pause at the cap, `agents-paused-at-cap` that subagent capture already has. Neither suppresses the other, and at the cap `at-cap` FAILs and `cap-near` stops, as today, while `agents-paused-at-cap` stops too, since every capture is then paused;
-  - `activeAgentRows`: `activeRows`' columns with `t.agent_id <> ''`, for the uuids whose main file this tick's `activeFiles` took. They are stated with what is left of `ACTIVE_STAT_MAX` after the tick's main files, so main files take precedence (P3's addition). A subagent file not yet stored waits for a scan tick (build question `history-w4-active-agents-stored-only`).
+  - `deriveHealth`: a WARN word `agents-paused-at-cap`, with its `HEALTH_REMEDIES` row ("subagent capture is paused at 90% of the store cap and main capture continues: prune, or raise ~/.ccrc/history-max-gb"), in `HEALTH_WORDS` beside `cap-near`. It is decided where the pause applies (review 1728, A3): by `decideAgentsPause`, from `h.agentsArmed` (the status read tests the marker as the tick does: a regular, non-link file at `SWITCHES.agentsOn`), the standing pause `deriveHealth` already reads (`h.capturePause`, `''` when none stands, passed as `null`), and the size and cap that decide `at-cap`. So it never fires on an unarmed node, and never under a low-disk pause. From 90% to the cap both WARNs stand: `cap-near` says capture will pause at the cap, `agents-paused-at-cap` that subagent capture already has. Neither suppresses the other, and at the cap `at-cap` FAILs and `cap-near` stops, as today, while `agents-paused-at-cap` stops too, since every capture is then paused;
+  - `activeAgentRows`: `activeRows`' columns with `t.agent_id <> ''`, for the uuids whose main file this tick's `activeFiles` took. They are stated with what is left of `ACTIVE_STAT_MAX` after the tick's main files, so main files take precedence (P3's addition). Each row carries its `agent_id` and `workflow_run_id`, is ruled by `decideAgentIngest` (so the marker, `history-off` and `ctx.agentsPause` reach it), and binds by its `(uuid, agent key)` through `ensureAgentTranscript`. A subagent file not yet stored waits for a scan tick (build question `history-w4-active-agents-stored-only`).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -492,18 +583,26 @@ it('SA10 read cadence (P3)', async () => {
   expect(readThisTick(agentPath)).toBe(false);
 });
 it('SA11 pause order (P5)', async () => {
-  // fixture cap 1 GB (history-max-gb), store sized to 90%: main rows ingested, subagent cursors unmoved
+  // armed; fixture cap 1 GB (history-max-gb), store sized to 90%: main rows ingested, subagent cursors unmoved
   expect(mainCursorMoved).toBe(true); expect(agentCursor(db)).toBe(before);
   expect(counter(db, 'capture_paused_agents_at_cap')).toBe(1);
   expect(statusWords(home)).toEqual(expect.arrayContaining([{ level: 'WARN', word: 'agents-paused-at-cap' }, { level: 'WARN', word: 'cap-near' }]));
   // at 100%: both paused, at-cap FAIL as today
 });
-it.each([[0.9, 'at-90'], [0.9 - 1e-9, null], [1, null]])('planRun\'s agents arm at share %s', (share, want) => { /* at 1.0 pause is at-cap */ });
+it('agents-paused-at-cap is decided where the pause applies (review 1728, A3)', () => {
+  // the store at 90% of the cap
+  expect(words(deriveHealth({ ...h90, agentsArmed: false }))).not.toContain('agents-paused-at-cap');   // unarmed: no pause
+  expect(words(deriveHealth({ ...h90, agentsArmed: true, capturePause: 'low-disk' }))).not.toContain('agents-paused-at-cap');
+  expect(words(deriveHealth({ ...h90, agentsArmed: true }))).toContain('agents-paused-at-cap');
+});
+// and the F1 case of Task 1C gains its paused row: an armed scan tick with agentsPause 'at-90' leaves the stored
+// short subagent row's offset unmoved
+it.each([[0.9, 'at-90'], [0.9 - 1e-9, null], [1, null]])('planRun\'s agents arm at share %s', (share, want) => { /* armed; at 1.0 pause is at-cap */ });
 ```
 
 - [ ] **Step 2: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-agents-ingest.test.ts test/history-lib.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the `planRun` arm, the counter, the WARN, and `activeAgentRows` after the main rows.
-- [ ] **Step 4: Run them: all pass.** Mutants: (a) subagent files read before main ones (SA10's CONTROL: a main file left unread); (b) the 90% arm removed (SA11: subagent cursor moves); (c) the share as `>` (the boundary row); (d) `agents-paused-at-cap` kept at the cap (SA11's 100% row expects `at-cap` alone of the three).
+- [ ] **Step 4: Run them: all pass.** Mutants: (a) subagent files read before main ones (SA10's CONTROL: a main file left unread); (b) the 90% arm removed (SA11: subagent cursor moves); (c) the share as `>` (the boundary row); (d) `agents-paused-at-cap` kept at the cap (SA11's 100% row expects `at-cap` alone of the three); (e) the WARN decided from size and cap alone, not through `decideAgentsPause` (the A3 case's unarmed and low-disk rows); (f) `ctx.agentsPause` left out of `decideAgentIngest`'s inputs at the scan tick's agent arm (Task 1C's F1 case, its paused row).
 - [ ] **Step 5: Commit** `feat(history): subagent read cadence and the 90% pause (W4 addendum P3, P5)`.
 - [ ] **Step 6: Re-measure P5 (act F3), read-only, from source.** Read `ccd/ccrc-doctor-checks` `_check_history` and confirm it relays every `status --json` word without a list of its own, so the WARN needs no edit there. If it lists words, stop: that file is outside W4-1's claims, and the edit is asked for. Then state, in the PR body and in the task note `docs/superpowers/plans/2026-11-09-ccrc-history-w4-subagents-touched/w4-1.md`, that `capture_paused_agents_at_cap` matches §10.7's `capture_paused_*` by name and does not join W1's kill rule, the 90% WARN being its watch: the coordinator's ruling under P5 (fix round 1), which the operator may override.
 
@@ -518,8 +617,8 @@ it.each([[0.9, 'at-90'], [0.9 - 1e-9, null], [1, null]])('planRun\'s agents arm 
   - `WRITING_FORMS` row `import-agents-apply`: op `import`, not irreversible, not binding (P6's ruling);
   - `formOf(op, args)` keeps its argv signature: `formOf('import', ['--agents', '--apply'])` is `'import-agents-apply'`, tested before the `--session`/`--file` branch; `formOf('import', ['--agents'])` is `null`, a dry run;
   - `parseOpVerbArgs('import', …)` reads `--agents` (bool); `--agents` beside `--session` or `--file` refuses `bad-args`;
-  - `importAgentsDryRun(P, homes, out)`: prints `{ files, bytes, storeBytesLow, storeBytesHigh, skipped: { 'parent-unknown': n, 'post-install': n, refused: n } }`, the store size at §9.3's 0.4 and 0.55 ratios, and the files the apply would skip by reason; it writes nothing;
-  - `importAgentsApply(db, ctx, P, args)`: ingests the admissible pre-install subagent files of the rostered homes whose parent's uuid is in `knownUuids`, the one admitted set the tick uses post-install (Global Constraints), through Task 1C's bind path, under `history-off` and the 90% pause like any capture. That is fewer than the addendum's "every admissible pre-install subagent file" (departure `history-w4-agent-import-known-parents-only`, ruled by the coordinator in fix round 1 to be stated so). It does not read the arming marker: the form is the operator's own act (build question `history-w4-import-ignores-marker`).
+  - `importAgentsDryRun(P, homes, out)`: prints `{ files, bytes, storeBytesLow, storeBytesHigh, skipped: { 'parent-unconfirmed': n, 'parent-unknown': n, 'post-install': n, refused: n } }`, the store size at §9.3's 0.4 and 0.55 ratios, and the files the apply would skip, by reason; it writes nothing. `parent-unconfirmed` counts files whose parent uuid `importEvidence` maps but `knownUuids` does not hold (in practice, a parent named only by a `$REG/<id>.compactions` line). When it is above 0, the dry run prints the remedy: "run `ccrc history import --apply` first: it confirms these parents' epochs, and `import --agents --apply` then admits their subagent files". `parent-unknown` counts the files no evidence maps;
+  - `importAgentsApply(db, ctx, P, args)`: ingests the admissible pre-install subagent files of the rostered homes whose parent's uuid is in `knownUuids`, through Task 1C's bind path, under `history-off` and the 90% pause like any capture. That is literally the tick's admitted set (Global Constraints), never `importEvidence`'s wider map: a parent known only through that map is skipped as `parent-unconfirmed` until a plain `import --apply` has confirmed its epoch. That is fewer than the addendum's "every admissible pre-install subagent file" (departure `history-w4-agent-import-known-parents-only`, ruled by the coordinator in fix round 1 to be stated so). It does not read the arming marker: the form is the operator's own act (build question `history-w4-import-ignores-marker`).
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -528,21 +627,34 @@ it('SA12 no backfill (P6)', async () => {
   // a subagent file older than the install record
   await tick(armed); expect(agentRows(db)).toBe(0);
   const r = await op(['import', '--agents']);   // the dry run; a second file whose parent is unknown is skipped
-  expect(r.json).toMatchObject({ files: 1, bytes: size, skipped: { 'parent-unknown': 1, 'post-install': 0, refused: 0 } });
+  expect(r.json).toMatchObject({ files: 1, bytes: size, skipped: { 'parent-unconfirmed': 0, 'parent-unknown': 1, 'post-install': 0, refused: 0 } });
   expect(storeBytesAndMtime(home)).toEqual(before);
 });
 it('SA32 the import writing form (P6)', async () => {
   expect(WRITING_FORMS['import-agents-apply']).toMatchObject({ op: 'import', irreversible: false });
   expect(await cli(['import', '--agents', '--apply'], { CLAUDECODE: '1' })).toMatchObject({ exit: 2, word: 'apply-in-session' });
   expect(await cli(['import', '--agents', '--apply'], { historyOff: true })).toMatchObject({ exit: 2, word: 'history-off' });
-  expect(await cli(['import', '--agents', '--session', 's', '--file', 'f'])).toMatchObject({ exit: 2, word: 'bad-args' });
+  // only the combination refuses: a valid id and a <uuid>.jsonl file, which parse without --agents (review 1728, F8)
+  const pair = ['--session', 'lane-a-s1', '--file', `${projectDir}/${UUID}.jsonl`];
+  expect(parseOpVerbArgs('import', pair)).toMatchObject({ ok: true });
+  expect(parseOpVerbArgs('import', ['--agents', ...pair])).toEqual({ ok: false, reason: 'bad-args' });
+  expect(await cli(['import', '--agents', ...pair])).toMatchObject({ exit: 2, word: 'bad-args' });
   expect(await cli(['import', '--agents', '--apply'], { isTTY: false })).toMatchObject({ exit: 0 });   // no terminal needed
+});
+it('a parent known only through importEvidence waits for a plain import --apply (review 1728, F9)', async () => {
+  // a pre-install subagent file whose parent is named only by $REG/<id>.compactions (plantAgentTree parent: 'compactions')
+  const r = await op(['import', '--agents']);
+  expect(r.json).toMatchObject({ skipped: { 'parent-unconfirmed': 1 } });
+  expect(r.stdout).toContain('run `ccrc history import --apply` first');
+  await op(['import', '--agents', '--apply']); expect(agentRows(db)).toBe(0);
+  await op(['import', '--apply']);             // confirms the parent's epoch: knownUuids now holds it
+  await op(['import', '--agents', '--apply']); expect(agentRows(db)).toBe(1);
 });
 ```
 
 - [ ] **Step 2: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-op.test.ts test/history-lib.test.ts test/history-agents-ingest.test.ts`. Expected: FAIL, `--agents` is `bad-args`.
-- [ ] **Step 3: Implement** the row, the argument, the dry run and the apply. In `_usage_history_paragraph`, `import|prune|reparse` becomes `import [--agents]|prune|reparse`. In README, the sentence that names `import`, `prune` and `reparse` as dry runs unless `--apply` gains `import --agents` beside `import`; the terminal sentence is unchanged, since the form is not irreversible.
-- [ ] **Step 4: Run them: all pass, then growth-check armed** (Global Constraints). Mutants: the row left out of `WRITING_FORMS` (SA32's CONTROL: the apply runs inside a session); `--agents` with `--session` accepted (SA32's `bad-args` row); the tick's `isPreInstall` test dropped, so a pre-install file is ingested by a tick (SA12's tick row; SA18's `P` row in 1H dies to it too); the dry run ingesting what it counts (SA12's unchanged-store row).
+- [ ] **Step 3: Implement** the row, the argument, the dry run and the apply. In `_usage_history_paragraph`, `import|prune|reparse` becomes `import [--agents]|prune|reparse`. In README, the writing-verbs sentence, "The writing verbs are the operator's: `import`, `prune --older-than <age>` (30 days at least) and `reparse`, each a dry run unless `--apply`, …", gains `import --agents` beside `import`. The terminal sentence ("… also need a terminal outside every `cc-*` pane.") is unchanged, since the form is not irreversible.
+- [ ] **Step 4: Run them: all pass, then growth-check armed** (Global Constraints). Mutants: the row left out of `WRITING_FORMS` (SA32's CONTROL: the apply runs inside a session); `--agents` with `--session` accepted (SA32's `parseOpVerbArgs` row with `--agents`, whose argv parses without it); the apply admitting by `importEvidence`'s map instead of `knownUuids` (the F9 case: a row at the first apply); the tick's `isPreInstall` test dropped, so a pre-install file is ingested by a tick (SA12's tick row; SA18's `P` row in 1H dies to it too); the dry run ingesting what it counts (SA12's unchanged-store row).
 - [ ] **Step 5: Commit** `feat(history): import --agents, the operator's subagent import with a dry-run forecast (W4 addendum P6)`.
 
 ### Task 1G: The census's deciders (P11, P12, P17, P18, P19)
@@ -569,7 +681,7 @@ flowchart TD
 - Produces, each pure, with its types:
   - `CENSUS_PARTS = ['R', 'P', 'Q', 'Ad']`, `CENSUS_VERDICTS = ['L', 'U', 'M', 'X']`, `CENSUS_COLUMNS = ['D-T', 'D', 'E', 'Ad']` (`D-T` first, the one ever called canonical), `CENSUS_REASONS` (`meta-conflict`, `meta-unread:<cause>`, `parent-not-stored`, `no-timed-row`, `decode-bound`, `over-cap`, `undecodable`, `parent-behind`, `parent-copy-unbound`, `parent-untimed`); each added to the O14 vocabulary list;
   - `LINK_WINDOW_MS = 15 * 60 * 1000`, `LINK_DECODE_MAX = 64`;
-  - `censusPart({ hasRow: boolean, listed: number, admissibleMtimes: number[], sinceMs: number | null }): 'Ad' | 'P' | 'Q' | 'R' | 'G'`. `G` when `hasRow` and nothing is listed; otherwise `Ad`, then `P` (every admissible holding pre-install), then `Q`, then `R` (P18 (a)'s precedence);
+  - `censusPart({ hasRow: boolean, listed: number, admissibleMtimes: number[], sinceMs: number | null }): 'Ad' | 'P' | 'Q' | 'R' | 'G'`. `G` when `hasRow` and nothing is listed; otherwise `Ad` when `hasRow`; then, only when the unit has an admissible holding (`admissibleMtimes.length > 0`, the addendum's "an admissible holding" for `P` and `Q`), `P` when every admissible holding is pre-install, else `Q`; otherwise `R`, so a unit whose every listed holding is refused is `R` whatever `sinceMs` is (P18 (a)'s precedence; review 1728, A1);
   - `metaEvidence({ stored: string | null, reads: MetaRead[] }): { link: string } | { none: true } | { unknown: string }`, the P17 (c) column of the addendum's meta table, a stored link that no longer equals the reads being `meta-conflict`;
   - `ParentSearch = { outcome: 'match' } | { outcome: 'none', complete: true } | { outcome: 'none', complete: false, cause: 'parent-behind' | 'parent-copy-unbound' | 'parent-untimed' } | { outcome: 'unmeasured', cause: 'parent-not-stored' | 'no-timed-row' | 'decode-bound' | 'over-cap' | 'undecodable' }`;
   - `linkVerdict({ meta, parent: ParentSearch }): { v: 'L' | 'U' | 'M' | 'X', reason: string | null }`, the P19 (b) column of the parent table: `X` only for `{ none: true }`; an unknown meta is `M` whatever the parent says;
@@ -581,7 +693,7 @@ flowchart TD
   - `censusWithheld({ K: number, collisions: number, sumsOk: boolean }): string[]`, the reasons a share is withheld, empty when none;
   - `holdingShape(lists: string[][]): 'single' | 'identical' | 'prefix' | 'fork' | 'disjoint'`, from each bound holding's ordered entry uuids (stored memberships; hardlinks are one file row, so `single`).
 
-- [ ] **Step 1: Write the failing tests**, one table per decider, with the addendum's rows as the data: the meta table's P17 (c) column, the parent table's P19 (b) column, the membership table's five rows by four columns, `holdingShape` over the shapes of section 3.1, `unboundExtra([{ bound: 1, unbound: 1 }, { bound: 0, unbound: 2 }])` equal to 2, and `shareRange({ L: 2, M: 1, den: 4, extraLow: 2 })` equal to `{ lo: 2 / 6, hi: 3 / 4 }`.
+- [ ] **Step 1: Write the failing tests**, one table per decider, with the addendum's rows as the data: the meta table's P17 (c) column, the parent table's P19 (b) column, the membership table's five rows by four columns, `censusPart` with an all-refused unit (`admissibleMtimes: []`) answering `R` under `sinceMs` null and under a record, `holdingShape` over the shapes of section 3.1, `unboundExtra([{ bound: 1, unbound: 1 }, { bound: 0, unbound: 2 }])` equal to 2, and `shareRange({ L: 2, M: 1, den: 4, extraLow: 2 })` equal to `{ lo: 2 / 6, hi: 3 / 4 }`.
 - [ ] **Step 2: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-lib.test.ts`. Expected: FAIL, not defined.
 - [ ] **Step 3: Implement** the deciders.
 - [ ] **Step 4: Run them: all pass.** The mutants are Task 1H's, run end to end.
@@ -601,7 +713,7 @@ flowchart TD
   - `agentToolSearch(db, parentUuid: string, t0: number): ParentSearch`: the parent's main transcript (`agent_id = ''`), assistant rows with `tool_name IS NOT NULL` and `ts_ms` in `[t0 − 15 min, t0]` through `entries_ts`, newest first, then its untimed named-tool rows, together at most 64 decodes; each body's `tool_use` blocks tested by id, as `toolUseInputPath` does; a body over `blobOverDecodeCap` is `over-cap`. The window is complete when every holding of the parent is bound (the walk's main list against `file_paths`) and read past the window's end (a stored row of that holding timed after it, or the holding read to its end at the last tick);
   - `workflowLookup(db, parentUuid: string, runId: string, window: [number, number]): ParentSearch`: the parent's `type = 'user'` rows in the window, nearest its anchor first, at most 64 decodes, each `tool_result` block's text (a string or its `text` items) tested for the run id as a whole token; one verdict per `(session, runId)` per census;
   - `CensusReport`: `{ units: { D, R, P, Q, Ad, L, U, M, X, I, G: { notFound, unknown } }, byKind: { agent: Units, workflow: { a: Units, b: Units | 'unavailable', c: Units } }, K: Array<{ level, reason, n }>, beside: { holdings, physical, holdingUnbound: Record<cause, n>, refusedSinceStored, shapes: Record<shape, n>, companions: { meta, journal }, agentMetaOrphan, agentFileRefused: Record<reason, n>, identityCollision, qParentUnknown }, sums: { ok, failed }, shares: Record<column, { lo, hi, den }> | null, withheld: string[], canonical: { lo, hi } | null }`. Text prints these counts and ranges, one group per line, and never a path or a message's text;
-  - `ccrc history census [--json]`: `OP_OF_VERB.census = 'census'`; `formOf('census', …)` is `null` (never a writing form), so it runs inside a session too, through the shim, holding the writer's lock; `parseOpVerbArgs('census', …)` takes `--json` only. The op arm answers exit 9 with no store, opens the store read-only as the read verbs do, runs `walkTranscripts(homes, takeMain, null, { take })` unbudgeted, hands both lists and `readAgentMeta` to `runCensus`, and exits 0 whatever it withholds. Exits: lib's `EXIT` only (0, 2, 4, 5, 6, 9, 1);
+  - `ccrc history census [--json]`: `OP_OF_VERB.census = 'census'`; `formOf('census', …)` is `null` (never a writing form), so it runs inside a session too, through the shim, holding the writer's lock; `parseOpVerbArgs('census', …)` takes `--json` only. The op arm answers exit 9 with no store, opens the store read-only as the read verbs do, runs `walkTranscripts(homes, takeMain, null, { take, stop: null })` with no `stop` and no seam, so it walks the whole tree, hands both lists and `readAgentMeta` to `runCensus`, and exits 0 whatever it withholds. Exits: lib's `EXIT` only (0, 2, 4, 5, 6, 9, 1);
   - `beside.qParentUnknown` counts the units of `Q` whose parent's uuid is not in `knownUuids`, so no tick or import will ingest them. They stay in `Q` and in `D − T`, P11's denominator unchanged; the figure shows how much of the gap they are (ruled by the coordinator in fix round 1, `history-w4-census-unmapped-parents`);
   - the workflow predicate: `deps.predicate` is `null` until act M1, so (b) prints `unavailable` and `canonical` is `null`. Setting it after M1 is a follow-up change of one constant, with SA14's (b) rows (Later).
 
@@ -627,14 +739,20 @@ it('SA14 workflow predicate (P12): (a) and (c) each counted only where they hold
 it.todo('SA14 (b): a tool_result naming the run inside the window → L; outside → U; 65 candidates, match last → M; over cap → M; two agents of one run → one lookup');
 it('SA19 unentered directories, every level', async () => {
   // subagents a link; a workflows/<run> a regular file; subagents/ mode 000 (skipped as root); the projects root a link;
-  // a project directory unlistable; a session directory a link; a session-id entry a regular file
+  // a project directory unlistable; a session directory a link; a session-id entry a regular file; and a linked project
+  // directory whose session directory holds subagents/agent-x.jsonl (review 1728, F4): K gains
+  // { level: 'project', reason: 'link', n: 1 }, agent-x is no unit and is never read, and the linked project's main
+  // transcript is still listed, as main lists it today
   expect(r.K).toEqual(expect.arrayContaining([{ level: 'subagents', reason: 'link', n: 1 } /* , … one per case */]));
   expect(r.shares).toBeNull(); expect(r.withheld).toContain('K');
 });
 it('SA23 the census verb writes nothing and answers lib\'s exits', async () => {
+  // the store holds no agents_since_ms row: the fixture deletes it after its seeding ticks (review 1728, F6),
+  // so a census that ran decideInstallRecord would write one
   const before = storeFingerprint(home);   // bytes, mtime, user_version, and every file under ~/.ccrc/history
   expect((await cli(['census', '--json'])).exit).toBe(0);
   expect(storeFingerprint(home)).toEqual(before);
+  expect(getMeta(openStoreRO(box), 'agents_since_ms')).toBeNull();
   expect(WRITING_FORMS).not.toHaveProperty('census');
   expect((await cli(['census'], { noStore: true })).exit).toBe(9);
   expect((await cli(['census'], { lockHeld: true })).exit).toBe(4);
@@ -656,10 +774,10 @@ it('Q of an unknown parent is reported apart, inside D minus T', async () => {
   - SA6: `readAgentMeta` reading past `META_MAX_BYTES`, so the oversized meta reads whole and the unit leaves `M`;
   - SA15: `agentToolSearch` answering `{ outcome: 'none', complete: true }` for a parent with no stored main transcript, so the unit reads `U`;
   - SA18: `inColumn('D-T', 'Ad', true)` answering true, so the imported unit enters `D − T`; its `P` row also dies to 1F's `isPreInstall` mutant;
-  - SA23: the census arm opening the store read-write and running `decideInstallRecord`, so the store's bytes and mtime move;
+  - SA23: the census arm opening the store read-write and running `decideInstallRecord`, which writes `agents_since_ms` into SA23's store (seeded with none), so the store's bytes and mtime move and the record is no longer null;
   - the unknown-parent case: `qParentUnknown` counted out of `Q`, so the first sum fails.
 
-  And the section 5 CONTROLs and the plan's own: `P` left out of `D`, an imported unit kept in `P`, a meta read as a candidate, the deleted row's unit in `Ad` (SA13's four CONTROLs); placement treated as `linked` under (b) (SA14's, held with its `.todo` rows); an unentered directory's files counted 0 (SA19's); each listed path a unit (SA21's); the shorter holding read as conflicting (SA26's); copies read for disjoint holdings (SA29's); an unbound holding skipped (SA30's); a row placed by both rules (SA31's); a NULL link read as `X` whatever its cause (SA28's); an incomplete window read as complete (SA33's); `readdirSync` added to `census.mjs` (SA34's, in 1C's file); the 64-decode bound removed (SA2's 65th match).
+  And the section 5 CONTROLs and the plan's own: `P` left out of `D`, an imported unit kept in `P`, a meta read as a candidate, the deleted row's unit in `Ad` (SA13's four CONTROLs); placement treated as `linked` under (b) (SA14's, held with its `.todo` rows); an unentered directory's files counted 0 (SA19's); Task 1C's mutant (f), the arm entered for a linked project directory (SA19's linked-project row); each listed path a unit (SA21's); the shorter holding read as conflicting (SA26's); copies read for disjoint holdings (SA29's); an unbound holding skipped (SA30's); a row placed by both rules (SA31's); a NULL link read as `X` whatever its cause (SA28's); an incomplete window read as complete (SA33's); `readdirSync` added to `census.mjs` (SA34's, in 1C's file); the 64-decode bound removed (SA2's 65th match).
 - [ ] **Step 5: Commit** `feat(history): ccrc history census, the read-only parent-link census (W4 addendum P11, P12, P16 to P19)`.
 
 ### Task 1I: The census's cost on a fixture of G14's size (act F2)
@@ -715,7 +833,7 @@ it('SA27 forked copies and a true conflict', () => {
 
 - [ ] **Step 2: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-derive.test.ts`. Expected: SA7, SA8 and SA27 FAIL: no subagent leaf is derived at the base. SA9 may pass vacuously at the base, since no steer writer exists before W3-1; its mutant proves it.
 - [ ] **Step 3: Implement** `leafPolicy` and its two uses. If SA9 shows that `card.mjs` acts on a subagent boundary, stop: `card.mjs` is outside W4-2's claims, and the edit is asked for.
-- [ ] **Step 4: Run them: all pass.** Mutants: the receipt lookup kept for subagent leaves (SA7); subagent slots admitted to fan-in (SA8); `card.mjs`'s `agent_id = ''` filter removed, in memory (SA9); only the newest copy's body kept (SA27's CONTROL).
+- [ ] **Step 4: Run them: all pass.** Mutants: the receipt lookup kept for subagent leaves (SA7); subagent slots admitted to fan-in (SA8); `card.mjs`'s `agent_id = ''` filter removed, a mutant edit restored as Global Constraints says and never committed (SA9); only the newest copy's body kept (SA27's CONTROL).
 - [ ] **Step 5: Commit** `feat(history): subagent leaves on their own chain, with no receipt (W4 addendum P2)`.
 
 ---
@@ -744,9 +862,13 @@ it.each(['grep', 'describe', 'expand', 'tree'])('AG1 %s hides a subagent row wit
 });
 // AG2 sits in switches-history.test.ts beside the O14 vocabulary block, over helpers.ts' existing `HISTORY_MJS`
 // (every .mjs under ccd/history) and `rel`; `holdersOf(needle: string)` reads bash files only, so it is not used.
+// It counts declarations, not files (review 1728, A2): a read option is declared as `'--x': readOpt(`, so the import
+// arm's op flag `'--agents': 'bool'` (Task 1F) is not one, and a second read-option declaration inside lib.mjs reds.
+const AGENTS_READ_DECL = /'--agents'\s*:\s*readOpt\(/g;
 it('AG2 one flag list: --agents is declared once, and every read verb derives it', () => {
-  expect(HISTORY_MJS.filter((f) => /'--agents'\s*:/.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['ccd/history/lib.mjs']);
-  for (const v of READ_VERBS) expect(Object.keys(readOptionsOf(v))).toContain('--agents');
+  const decls = HISTORY_MJS.flatMap((f) => [...readFileSync(f, 'utf8').matchAll(AGENTS_READ_DECL)].map(() => rel(f)));
+  expect(decls).toEqual(['ccd/history/lib.mjs']);
+  for (const v of READ_VERBS) expect(Object.keys(READ_OPTIONS[v].options)).toContain('--agents');
 });
 it('a node-id prefix unique without --agents is ambiguous with it (Review Focus 5)', async () => { /* the scope's own prefix rule */ });
 it('the skill says when to pass --agents', () => { expect(skill).toContain(AGENTS_SKILL_LINE); });
@@ -755,7 +877,7 @@ it('the skill says when to pass --agents', () => { expect(skill).toContain(AGENT
   `AGENTS_SKILL_LINE`, the sentence added to "5. Scope": "Pass `--agents` when what you need may sit in a subagent's or a workflow agent's own work, such as a delegated search or review whose result the main thread only summarised; without it every verb reads the main thread only."
 - [ ] **Step 3: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-recall.test.ts test/history-lib.test.ts test/history-skill.test.ts test/single-definition/switches-history.test.ts`. Expected: FAIL, `--agents` is `bad-args`.
 - [ ] **Step 4: Implement** the option, the scope's flag, the filter, the mark, the usage line (`[--agents]` on the read-verbs line), `_usage_history_paragraph`'s `grep|describe|expand|tree [--agents]`, and the skill's line.
-- [ ] **Step 5: Run them: all pass, then growth-check armed.** Mutants: the filter dropped from one verb's select (AG1, per verb); a second `'--agents'` declaration in `recall.mjs` (AG2); the scope's prefix rule computed over every transcript (Review Focus 5).
+- [ ] **Step 5: Run them: all pass, then growth-check armed.** Mutants: the filter dropped from one verb's select (AG1, per verb); a second `'--agents': readOpt(…)` declaration, in `recall.mjs` and, separately, a second one inside `lib.mjs` (AG2, each); the scope's prefix rule computed over every transcript (Review Focus 5).
 - [ ] **Step 6: Commit** `feat(history): --agents on the read verbs, and the skill's line on when to pass it (W4 addendum P7)`.
 
 ---
@@ -805,14 +927,14 @@ it('a query\'s _ matches only itself (Review Focus 4)', () => {
 **Interfaces:**
 - Consumes: Task 4A; `loadGraph`, `GRAPH_MAX_BYTES`, `resolveToken`'s rule through `loadGraph`'s `index`; W4-3's `--agents`; `isoOf`'s range text as `tree` prints it.
 - Produces:
-  - `READ_OPTIONS.touched = { options: { '--limit': int 1..GREP_LIMIT_MAX }, defaults: { limit: TOUCHED_LIMIT_DEFAULT }, positional: one }`, so `READ_VERBS` includes `touched` (TC17) and its comment's "`touched` joins in W4" is retired;
+  - `READ_OPTIONS.touched = { options: { ...COMMON_READ_OPTIONS, '--limit': readOpt('int', 'limit', { min: 1, max: GREP_LIMIT_MAX }) }, defaults: { limit: TOUCHED_LIMIT_DEFAULT }, positional: one }`, the shape `grep`'s entry has, so `--agents` reaches it through `COMMON_READ_OPTIONS`, so `READ_VERBS` includes `touched` (TC17) and its comment's "`touched` joins in W4" is retired;
   - `runTouched(rc, a)` (`recall.mjs`): the roots are the in-scope epochs' distinct `cwd_real`, else `cwd`; each root's graph is `<root>/graphify-out/graph.json` through `loadGraph`, and any throw (absent, over 96 MiB, malformed, no nodes or links) is "no graph" for that root. A symbol query reads the symbol select always, and with a graph adds a file query per `source_file` whose nodes carry `label === symbol` (build question `history-w4-touched-graph-labels`). The selects are section 3.5's, verbatim, under one cap of 10,000 rows together; each candidate is split, normalised against its node's epoch, matched, grouped and ranked, then cut at `--limit`;
   - `TOUCHED_ORDERED_CAP = false`: while false, the selects are unordered and a capped answer prints `TOUCHED_CAPPED_NOTE`; Task 4C sets it only on its measurement (P13);
   - text: one header line per root, `touched <file> (graph | no graph)`, then one line per row, `<node id> <node kind> <earliest>..<latest> <family> <match> [refs <kind>/<origin>[ line <N-M>][ symbol <s>], …] <first gist sentence, redacted, at most 120 chars>`, with `agent:<agent_id>` on a subagent node (shown only under `--agents`), `(+k not shown)` after a cut, and `TOUCHED_DISCLOSURE` always last;
   - `--json`: an array of `{ nodeId, nodeKind, earliestMs, latestMs, family, match, refs: [{ kind, value, origin, line, symbol }], gist, agentId, file }`, with `note: TOUCHED_DISCLOSURE` at the top level, and `candidatesCapped: true` with its sentence when the cap was hit;
   - the skill's ladder gains: "`touched <path|symbol>` lists the nodes whose stored refs name a file, newest first; it sees only the refs kept, so an empty answer does not mean the file was never touched." README's read-verb paragraph gains `touched` and `--agents`; `_usage_history_paragraph` gains `touched`.
 
-- [ ] **Step 1: Write the failing tests**, one per pin, from section 5: TC1 (no `graph.json`: a path answers from refs; `touched someSymbol` answers from `path:symbol` refs only), TC2 (two files whose graph nodes carry label `foo` → two groups), TC4 (25 matches at limit 20 → 20 rows and `(+5 not shown)`), TC5 (store bytes, mtime and `user_version` unchanged; nothing under `graphify-out/` written), TC6 (a `model`-origin-only ref listed), TC7 (a graph over `GRAPH_MAX_BYTES`: symbol queries fall back as TC1, path queries answer), TC8 (`--project` and `--workspace` together → exit 2), TC9 (a subagent node hidden without `--agents`, listed with `agent:<id>` with it), TC15 (every answer, empty ones included, ends with the disclosure; `--json` carries it as `note`), TC16 (10,001 candidates → the cap line; `candidatesCapped`), TC17 (`READ_VERBS` includes `touched`), TC18 (`/root/server/test/foo.test.ts`, kind `test`, origin `tool_use`, root `/root` → listed, `exact`), TC21 (no header carries a sha, with or without a graph), TC22 (a graph labelling one file `foo`, and a ref `ccd/y.mjs:foo` in an unlabelled file → both nodes listed), TC23 (no graph, 10,001 `path:symbol` refs naming `foo` → the cap line; its order assertion `.todo` until Task 4C), plus `a malformed graph answers as no graph` (failure row 28) and `touched answers the read verbs' store exits` (failure row 32).
+- [ ] **Step 1: Write the failing tests**, one per pin, from section 5: TC1 (no `graph.json`: a path answers from refs; `touched someSymbol` answers from `path:symbol` refs only), TC2 (two files whose graph nodes carry label `foo` → two groups), TC4 (25 matches at limit 20 → 20 rows and `(+5 not shown)`), TC5 (store bytes, mtime and `user_version` unchanged; nothing under `graphify-out/` written), TC6 (a `model`-origin-only ref listed), TC7 (a graph over `GRAPH_MAX_BYTES`: symbol queries fall back as TC1, path queries answer), TC8 (`--project` and `--workspace` together → exit 2), TC9 (a subagent node hidden without `--agents`, listed with `agent:<id>` with it), TC15 (every answer, empty ones included, ends with the disclosure; `--json` carries it as `note`), TC16 (a symbol query with a graph, so two selects read: 6,000 `path:symbol` refs naming `foo` from the symbol select and 4,001 refs of the file the graph labels `foo` from its file select, 10,001 together and neither select over 10,000 alone → the cap line; `candidatesCapped`; review 1728, F5), TC17 (`READ_VERBS` includes `touched`), TC18 (`/root/server/test/foo.test.ts`, kind `test`, origin `tool_use`, root `/root` → listed, `exact`), TC21 (no header carries a sha, with or without a graph), TC22 (a graph labelling one file `foo`, and a ref `ccd/y.mjs:foo` in an unlabelled file → both nodes listed), TC23 (no graph, 10,001 `path:symbol` refs naming `foo` → the cap line; its order assertion `.todo` until Task 4C), plus `a malformed graph answers as no graph` (failure row 28) and `touched answers the read verbs' store exits` (failure row 32).
 - [ ] **Step 2: Run them.** `cd server && ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/history-touched.test.ts test/history-skill.test.ts test/history-lib.test.ts`. Expected: FAIL, `touched` is not a read verb.
 - [ ] **Step 3: Implement** the verb, its runner and usage line, and the three text edits.
 - [ ] **Step 4: Run them: all pass, then growth-check armed.** Mutants: only `tool_use` admitted (TC6's CONTROL); `test` dropped from the candidate kinds (TC18's CONTROL); the symbol select skipped when a graph loads (TC22's CONTROL); the cut line omitted (TC4); the disclosure omitted on an empty answer (TC15); a write under `graphify-out/` (TC5). For the pins whose section 5 row names no CONTROL (review 1726, F3):
@@ -821,7 +943,7 @@ it('a query\'s _ matches only itself (Review Focus 4)', () => {
   - TC7: `loadGraph` called with no byte bound, so the oversized fixture graph (which carries label `foo` nodes) loads and the symbol answer gains its label's files;
   - TC8: `runTouched` reading `--project` and ignoring `--workspace` instead of `decideScope`'s refusal, so the pair answers exit 0;
   - TC9: the `--agents` filter dropped from `touched`'s node select, so the subagent node shows without the flag;
-  - TC16: the cap applied per select, not to every select together, so the cap line does not print at 10,001 rows split across two selects; and `candidatesCapped` left out of `--json`;
+  - TC16: the cap applied per select, not to every select together, so TC16's split fixture (6,000 and 4,001) prints no cap line; and `candidatesCapped` left out of `--json`;
   - TC17: `READ_VERBS` spelled as a literal array without `touched`, so the derived list lacks it;
   - TC21: the header printing the parsed graph's `built_at_commit` when present (P14's alternative);
   - TC23: the symbol select's rows left out of the cap's count, so no cap line prints for 10,001 `path:symbol` refs.
@@ -883,7 +1005,7 @@ These are unnumbered. The coordinator rules each, and numbers any departure it a
 - `history-w4-sa27-in-w4-2`: SA27 moves from W4-1 to W4-2, a departure from section 8's pin split. At the base `derive.mjs` reads `agent_id = ''` only, so `transcript_forked` and a subagent leaf's span exist only once W4-2 widens derive.
 - `history-w4-agents-pause-and-kill-rule`, **ruled by the coordinator under P5** (fix round 1), which the operator may override: `capture_paused_agents_at_cap` matches §10.7's "a `capture_paused_*` counter keeps rising for more than 6 h" by name, but it does not join W1's kill rule. It rises by design while main capture continues, and `history-off` would stop main capture too, the opposite of P5's aim; the 90% WARN is its watch. Task 1E Step 6 records it.
 - `history-w4-census-unmapped-parents`, **ruled by the coordinator** (fix round 1): a subagent whose parent's uuid is not in `knownUuids` is admissible but never ingested, by a tick or the import, so it stays `Q`, inside `D − T`, counted not linked. The census reports those units apart (`beside.qParentUnknown`), with P11's denominator unchanged.
-- `history-w4-agent-import-known-parents-only`, a departure from the addendum's line 430, stated by the coordinator's ruling in fix round 1: the tick and the import admit one set. Measured at the base, the tick discovers main transcripts only for `knownUuids` (a confirmed epoch's uuid or a `$REG/*.uuid`) and the hinted subset, and `import --apply` ingests only evidence-mapped files. So `import --agents --apply` ingests the pre-install subagent files of parents in `knownUuids`, fewer than "every admissible pre-install subagent file", and its dry run counts what it skips by reason (`parent-unknown`, `post-install`, `refused`).
+- `history-w4-agent-import-known-parents-only`, a departure from the addendum's line 430. The coordinator ruled in fix round 1 that the tick and the import admit one set, and in fix round 2 that the set is literally one. The tick discovers main transcripts only for `knownUuids` (a confirmed epoch's uuid or a `$REG/*.uuid`) and its hinted subset. `import --agents --apply` admits a pre-install subagent file only when its parent's uuid is in `knownUuids` too. Main's own `import --apply` maps by `importEvidence`, which is wider: it also maps a transcript a `$REG/<id>.compactions` line names, and confirms that uuid's epoch. So a parent known only through that wider evidence is not admitted by `import --agents --apply` until a plain `import --apply` has confirmed its epoch. The dry run counts those files apart, as `parent-unconfirmed`, and prints that remedy; it counts the rest of what it skips by reason (`parent-unknown`, `post-install`, `refused`). The import therefore admits fewer than "every admissible pre-install subagent file".
 - `history-w4-import-ignores-marker`: `import --agents --apply` does not read the arming marker: it is the operator's own act, refused in a session and under `history-off`, and paused at 90% like any capture.
 - `history-w4-touched-graph-labels`: a symbol matches a graph node's `label`. A5 names `loadLabels` and `fileFacts`, which read community labels; `touched`'s output (section 3.5) carries none of their facts, so it calls neither.
 - `history-w4-suffix-without-graph`: section 3.5 says a bare-basename ref never matches without a graph, and does not say whether a relative ref of two segments or more may then match by suffix. Proposed: it does, since only uniqueness among graph files needs the graph and a multi-segment suffix is far less ambiguous; ruled otherwise, `matchRef` answers `null` without a graph.
@@ -897,6 +1019,12 @@ These are unnumbered. The coordinator rules each, and numbers any departure it a
 - The addendum, approved by the operator on 2026-11-09 (item 121), with every row of its decision table ruled: P1 to P9 and P11 to P19 by the operator (items 92 to 94), P10 and P20 by the coordinator (the programme ledger), P20 (a)'s text amended on 2026-11-09 to the five listers.
 - The switch-region ruling of 2026-11-08 (review 1690, F3), quoted under Global Constraints.
 - The PR split W4-1 to W4-4 and each PR's claims, pins and rulings, as section 8 gives them, but SA27 (build question `history-w4-sa27-in-w4-2`).
+- The coordinator's rulings of fix round 2 (review 1728, 2026-11-09):
+  - only the two gated arms read a subagent file, and `behindPaths` and `behindFiles` select main rows only (filter, not gate);
+  - the test helpers are defined once;
+  - Review Focus 2's cut comes from a seam on the walk's stop, asked per entry;
+  - the import's admitted set is literally `knownUuids`, with `parent-unconfirmed` and its remedy in the dry run;
+  - every `.mjs`/`.ts` mutant runs by the in-place practice in Global Constraints, never `mutation-run.py`.
 - The coordinator's rulings of fix round 1 (review 1726, 2026-11-09): the install record stays the first W4 tick's (P6's predicate); `capture_paused_agents_at_cap` does not join W1's kill rule, under P5, the operator able to override; the tick and the import admit one set, `knownUuids` parents, the import's narrowing stated as a departure; the census reports `Q` of an unknown parent apart, P11's denominator unchanged; arming's timing stays the operator's, asked at arming.
 
 ### Waiting on you
