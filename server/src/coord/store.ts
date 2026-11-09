@@ -21,6 +21,8 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
+import { linkingAll, linkingOf, recordReading, setLinking } from './linkingStore.js';
+import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
@@ -5194,6 +5196,26 @@ export class CoordStore {
   /** D-8125: a coordinator allows three more review rounds (`reviewCapStore.ts`). */
   liftReviewCapByCoordinator(i: Parameters<typeof liftReviewCapByCoordinator>[1]): CoordLiftResult {
     return liftReviewCapByCoordinator(this.db, i);
+  }
+
+  /** D-8147: the operator's team key and override for a project (`linkingStore.ts`). */
+  setLinking(project: string, w: LinkingWriteBody, by: string, at: number): void {
+    setLinking(this.db, project, w, by, at);
+  }
+
+  /** D-8147: the sweep's visibility reading for a project (`linkingStore.ts`). */
+  recordLinkingReading(project: string, r: ProjectLinkingWire['measured']): void {
+    recordReading(this.db, project, r);
+  }
+
+  /** D-8147: one project's linking facts; a project with no row reads unmeasured. */
+  linkingOf(project: string): ProjectLinkingWire {
+    return linkingOf(this.db, project);
+  }
+
+  /** D-8147: every stored project's linking facts in one query. */
+  linkingAll(): Map<string, ProjectLinkingWire> {
+    return linkingAll(this.db);
   }
 
   /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */

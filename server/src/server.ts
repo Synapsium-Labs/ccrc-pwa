@@ -79,6 +79,8 @@ import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectRea
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
+import { registerLinkingRoutes } from './linking/routes.js';
+import { UNSET_LINKING } from './coord/linkingStore.js';
 import { createAccountGate } from './accounts/gate.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { AuthAttempts } from './accounts/attempts.js';
@@ -2112,6 +2114,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
   });
+  // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
+  registerLinkingRoutes(app, {
+    coord: deps.coord, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+  });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
@@ -2976,11 +2982,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const repos = watcher?.currentProjectRepos() ?? new Map<string, ProjectRepoWire>();
     const repoCell = (p: ProjectRow): Pick<ProjectRow, 'repo'> =>
       ({ repo: repos.get(p.name) ?? { state: 'unmeasured' } });
+    // D-8147: every project's linking facts from ONE read of `project_linking`; a project with no row reads unmeasured.
+    // No coordination store, or one that cannot be read, leaves the key off the wire (an older server's shape).
+    let linked: ReturnType<CoordStore['linkingAll']> | undefined;
+    try { linked = deps.coord?.linkingAll(); } catch { linked = undefined; }
+    const linkingCell = (p: ProjectRow): Pick<ProjectRow, 'linking'> =>
+      linked === undefined ? {} : { linking: linked.get(p.name) ?? UNSET_LINKING };
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
       return {
         ...listed,
-        projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p) })),
+        projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p), ...linkingCell(p) })),
         ...servedAge,
       };
     }
@@ -3000,7 +3012,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         } catch {
           floor = 'unmeasurable';
         }
-        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p) };
+        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p), ...linkingCell(p) };
       }),
       ...servedAge,
     };
