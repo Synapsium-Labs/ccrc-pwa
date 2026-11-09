@@ -30,6 +30,13 @@ import argparse, csv, datetime, glob, json, os, re, sys
 IDLE_NUDGE = "Continue with your open tasks. If you were waiting for the operator's answer, say so in one line and stop."
 RESUME_PREFIX = 'Continue from where you left off.'
 MAIL_FENCE = 'ccrc-mail'
+# The head of `server/src/coord/envelope.ts`'s renderMailNudge, the plain-text prompt the mail lane TYPES into a
+# session (the fenced envelope reaches a session only as a fetched tool result). Bound by measure-autonomy.test.ts.
+MAIL_NUDGE_HEAD = 'ccrc-mail: you have new mail.'
+# Other user rows the harness writes that no operator typed: a background-task or subagent completion, a message from
+# another session, a slash-command echo and its output, an interrupt marker.
+HARNESS_HEADS = ('<task-notification>', 'Another Claude session', '<command-name>', '<command-message>',
+                 '<local-command-stdout>', '<local-command-stderr>', '<local-command-caveat>', '[Request interrupted')
 # `server/src/idlenudge.ts`'s TURN_END_SUBTYPES: the system rows that follow an `end_turn` assistant row.
 TURN_END_SUBTYPES = ('stop_hook_summary', 'turn_duration')
 QUESTION_TAIL = 700
@@ -204,13 +211,19 @@ def tool_results_only(r):
 def is_mail(r):
     head, _ = text_of(r)
     m = re.match(r'^(`{3,})' + re.escape(MAIL_FENCE) + r'\s*(?:\n|$)', head.lstrip())
-    return m is not None
+    return m is not None or head.lstrip().startswith(MAIL_NUDGE_HEAD)
+
+
+def is_harness_row(r):
+    head, _ = text_of(r)
+    return head.lstrip().startswith(HARNESS_HEADS)
 
 
 def is_system_nudge(r):
     whole = whole_text(r)
     head, _ = text_of(r)
-    return (whole is not None and whole.strip() == IDLE_NUDGE) or head.lstrip().startswith(RESUME_PREFIX)
+    return ((whole is not None and whole.strip() == IDLE_NUDGE) or head.lstrip().startswith(RESUME_PREFIX)
+            or is_harness_row(r))
 
 
 def mk_wait(session, started, ended, kind, excerpt):
@@ -220,7 +233,7 @@ def mk_wait(session, started, ended, kind, excerpt):
 
 def question_waits(rows, session=''):
     """A finished main-thread turn whose last 700 characters hold a `?`, counted only when the next user row is typed
-    by the operator (not a mail wake, a system nudge, a compaction summary or a meta row). Span: the turn's end to
+    by the operator (not a mail wake, a system nudge, a harness-written row (task completion, cross-session message, slash-command echo, interrupt marker), a compaction summary or a meta row). Span: the turn's end to
     that prompt."""
     waits = []
     cur_mid, cur_tail = None, ''

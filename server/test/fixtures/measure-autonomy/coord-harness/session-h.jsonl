@@ -1,0 +1,18 @@
+{"type": "user", "uuid": "h-u-1", "timestamp": "2026-11-02T09:00:00.000Z", "message": {"role": "user", "content": "start"}}
+{"type": "assistant", "uuid": "h-a-2", "timestamp": "2026-11-02T09:01:00.000Z", "message": {"id": "h-m-3", "role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Skill", "input": {"skill": "ccrc-coordinator"}}], "stop_reason": "tool_use"}}
+{"type": "assistant", "uuid": "h-a-4", "timestamp": "2026-11-02T09:02:00.000Z", "message": {"id": "h-m-5", "role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ccrc-api runs open --program demo --wave 1"}}], "stop_reason": "tool_use"}}
+{"type": "assistant", "uuid": "h-a-10", "timestamp": "2026-11-02T11:00:00.000Z", "message": {"id": "h-m-10", "role": "assistant", "content": [{"type": "text", "text": "Shall I go on?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "h-s-10", "timestamp": "2026-11-02T11:00:00.000Z"}
+{"type": "user", "uuid": "h-u-10", "timestamp": "2026-11-02T11:30:00.000Z", "message": {"role": "user", "content": "<task-notification>\n<summary>Background task finished</summary>\n</task-notification>"}}
+{"type": "assistant", "uuid": "h-a-11", "timestamp": "2026-11-02T12:00:00.000Z", "message": {"id": "h-m-11", "role": "assistant", "content": [{"type": "text", "text": "Shall I go on?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "h-s-11", "timestamp": "2026-11-02T12:00:00.000Z"}
+{"type": "user", "uuid": "h-u-11", "timestamp": "2026-11-02T12:30:00.000Z", "message": {"role": "user", "content": "Another Claude session sent you a message: hello"}}
+{"type": "assistant", "uuid": "h-a-12", "timestamp": "2026-11-02T13:00:00.000Z", "message": {"id": "h-m-12", "role": "assistant", "content": [{"type": "text", "text": "Shall I go on?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "h-s-12", "timestamp": "2026-11-02T13:00:00.000Z"}
+{"type": "user", "uuid": "h-u-12", "timestamp": "2026-11-02T13:30:00.000Z", "message": {"role": "user", "content": "<command-name>/compact</command-name>\n<command-message>compact</command-message>"}}
+{"type": "assistant", "uuid": "h-a-13", "timestamp": "2026-11-02T14:00:00.000Z", "message": {"id": "h-m-13", "role": "assistant", "content": [{"type": "text", "text": "Shall I go on?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "h-s-13", "timestamp": "2026-11-02T14:00:00.000Z"}
+{"type": "user", "uuid": "h-u-13", "timestamp": "2026-11-02T14:30:00.000Z", "message": {"role": "user", "content": "<local-command-stdout>Compacted</local-command-stdout>"}}
+{"type": "assistant", "uuid": "h-a-14", "timestamp": "2026-11-02T15:00:00.000Z", "message": {"id": "h-m-14", "role": "assistant", "content": [{"type": "text", "text": "Shall I go on?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "h-s-14", "timestamp": "2026-11-02T15:00:00.000Z"}
+{"type": "user", "uuid": "h-u-14", "timestamp": "2026-11-02T15:30:00.000Z", "message": {"role": "user", "content": "[Request interrupted by user]"}}
