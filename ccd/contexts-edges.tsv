@@ -201,6 +201,7 @@ _typed_note -> _reg_set
 _wake_ceiling_move -> _svc_run_detached
 _watchdog_one -> _pane_measurable
 _watchdog_one -> _transcript_path
+_watchdog_one -> _wd_operator_hold_to
 _watchdog_resume_here -> _end_record
 _watchdog_resume_here -> _svc_run_detached
 _watchdog_resume_run -> _operator_choice_keep

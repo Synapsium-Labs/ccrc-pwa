@@ -539,6 +539,7 @@ _swap_watchdog_act_gate	C1
 _watchdog_resume_run	C1
 _watchdog_resume_here	C1
 _watchdog_hold	C1
+_wd_operator_hold_to	C1
 _watchdog_one	C1
 cmd_limit_watchdog	C1
 _hold_is_programme	C4

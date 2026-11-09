@@ -445,6 +445,21 @@ describe('no account has measured room', () => {
     expect(lines('class-gate-dropped')).toHaveLength(1);
     expect(dispatches()).toEqual([expect.stringMatching(/ -> claude-a watchdog$/)]);
   });
+
+  it('the dropped gate keeps the usage-credits guard: a fable session is moved with the degrade to opus, any other class with none', () => {
+    const stubs = (cls: string): string => `_route_peek_to() { printf -v "$1" ''; [[ "$3" == class ]] && printf -v "$1" ${cls}; return 0; };
+      _rescue_target() { if [[ "\${CCD_CLASS_GATE_OFF:-}" == 1 ]]; then echo claude-a; return 0; fi; return 5; };
+      _dispatch_swap() { echo "dispatch $1 $2 $3 dfrom=$6 dto=$7" >> "$HOME/ccd-calls"; };`;
+    seed(); fleet();
+    pass(BANNER, T0);
+    pass(BANNER, T0 + 300, stubs('fable'));
+    expect(lines('class-gate-dropped')).toHaveLength(1);
+    expect(dispatches()).toEqual([`dispatch ${ID} claude-a watchdog dfrom=fable dto=opus`]);
+    seed(IDS[1]); h.sh(`_reg_set ${IDS[1]} wrapper claude`);
+    pass(BANNER, T0 + 400, stubs('opus'));
+    pass(BANNER, T0 + 700, stubs('opus'));
+    expect(dispatches().filter((l) => l.includes(IDS[1]))).toEqual([`dispatch ${IDS[1]} claude-a watchdog dfrom= dto=`]);
+  });
 });
 
 describe('the holds the rulings do not name stay', () => {

@@ -88,6 +88,20 @@ describe('a limit-blocked session with an undecidable class window', () => {
     expect(keystrokes()).toEqual([]);
   });
 
+  it('a fable session keeps the usage-credits guard: the move carries the degrade to opus (an opus session carries none)', () => {
+    const fable = (cls: string): string => `${CLASS_UNMEASURED}
+      _route_peek_to() { printf -v "$1" ''; [[ "$3" == class ]] && printf -v "$1" ${cls}; return 0; };
+      _dispatch_swap() { echo "dispatch $1 -> $2 $3 dfrom=$6 dto=$7" >> "$HOME/ccd-calls"; };`;
+    seed(); blockNow();
+    tick(PROMPT, fable('fable'));
+    expect(lines('class-gate-dropped')).toHaveLength(1);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue dfrom=fable dto=opus`]);
+    h.sh(': > "$HOME/ccd-calls"');
+    h.sh(`rm -f "$HOME/.cc-sessions/${ID}.lastswap"`);
+    tick(PROMPT, fable('opus'));
+    expect(dispatches()).toEqual([expect.stringMatching(/^dispatch lane-a-project-a -> claude-[a-z] rescue dfrom= dto=$/)]);   // the second pick may differ: the first move left its own marks
+  });
+
   it('hard-blocked, class window undecidable and nobody has room even without the gate: stranded as today', () => {
     seed(); blockNow();
     fs.writeFileSync(path.join(h.home, '.cc-limits', 'claude-a.json'), JSON.stringify({ five: 100, seven: 100, ts: now() }));

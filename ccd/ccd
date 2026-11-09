@@ -20756,6 +20756,11 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     if [[ "$crc" -eq 0 && -n "$ctarget" ]]; then
       echo "$(date '+%F %T') class-gate-dropped $id: class window undecidable; rescuing without the class gate" >> "$REG/swap.log"
       target="$ctarget"; strc=0
+      # THE FABLE SHARE CEILING IS THE USAGE-CREDITS GUARD, and dropping the gate drops it too: a fable session landed on a
+      # lane whose share nobody measured could bill every turn. So the move carries the degrade a measured refusal would
+      # (fable -> the rung below) and the landing composes that class; any other class has no such guard to keep.
+      _route_peek_to dfrom "$id" class
+      if [[ "$dfrom" == fable ]]; then dto=$(_class_below "$dfrom"); else dfrom=""; fi
     fi
   fi
   if [[ "$strc" -ge 2 ]]; then
@@ -31398,6 +31403,9 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     target=$(CCD_CLASS_GATE_OFF=1 CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
     if [[ "$trc" -eq 0 && -n "$target" ]]; then
       echo "$(date '+%F %T') class-gate-dropped $id: class window undecidable; rescuing without the class gate" >> "$REG/swap.log"
+      # The Fable share ceiling goes with the gate (see `_auto_swap_check`'s retry): the move carries fable -> the rung below.
+      _route_peek_to dfrom "$id" class
+      if [[ "$dfrom" == fable ]]; then dto=$(_class_below "$dfrom"); else dfrom=""; fi
     fi
   fi
   if [[ "$trc" -eq 6 ]]; then
