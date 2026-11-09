@@ -168,6 +168,8 @@ describe('the item view', () => {
     // The coordinator-only routes' words; the operator routes (tick, dismiss, the list) name every other one.
     const COORDINATOR_ONLY: readonly string[] = [
       LEDGER_ROUTE_REFUSALS.notYourProgramme, LEDGER_ROUTE_REFUSALS.badSpecPath, LEDGER_ROUTE_REFUSALS.badInShort,
+      // The goals routes' definition-of-done words (D-8126) are the coordinator's, never an operator door's.
+      LEDGER_ROUTE_REFUSALS.badDoneWhen, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling,
       'wrong-actor', // an operator's own tick and dismiss are never the wrong actor
     ];
     const operatorCodes = [...Object.values(LEDGER_ROUTE_REFUSALS), ...ITEM_MOVE_REFUSALS].filter((c) => !COORDINATOR_ONLY.includes(c));
