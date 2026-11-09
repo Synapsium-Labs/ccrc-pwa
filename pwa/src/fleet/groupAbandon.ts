@@ -5,6 +5,7 @@
 // L4 composition: it drives the abandon route through the fetch adapter and reads the single sheet's error sentence.
 import type { RunSummary, StuckReason } from '../../../shared/api';
 import { ApiError, isRegistryUnmeasurable } from '../lib/api';
+import { refusalText } from '../lib/refusalWords';
 import { abandonErrorText, type AbandonAnswer } from './AbandonSheet';
 import type { CoordinatorPresence } from './presence';
 import { coordinatorGoneOf, isRunClosed } from './runWords';
@@ -44,11 +45,12 @@ export interface GroupDeps {
 type CallEnd =
   | { kind: 'closed' } | { kind: 'refused'; sentence: string; stop: boolean } | { kind: 'no-answer' };
 
+/** The one refusal code that means the run had already closed, read through `refusalText` (ARCH-13b). */
+const ALREADY_CLOSED: Readonly<Record<'bad-transition', string>> = { 'bad-transition': 'already closed' };
+
 function endOf(err: unknown): CallEnd {
   if (!(err instanceof ApiError)) return { kind: 'no-answer' };
-  const body = err.body;
-  const code = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
-  if (err.status === 409 && code === 'bad-transition') return { kind: 'closed' };
+  if (err.status === 409 && refusalText(err, ALREADY_CLOSED) !== null) return { kind: 'closed' };
   const said = abandonErrorText(err);
   const sentence = said.lead === null ? said.text : `${said.lead} ${said.text}`;
   return { kind: 'refused', sentence, stop: err.status === 501 || err.status === 502 || isRegistryUnmeasurable(err) };
