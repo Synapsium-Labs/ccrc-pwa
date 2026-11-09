@@ -186,11 +186,20 @@ describe('Settings › Automation › Worktrees left behind at every width, in b
         await expect.poll(() => on.isChecked(), { timeout: 10_000 }).toBe(true);
         await expect.poll(() => on.isDisabled(), { timeout: 10_000 }).toBe(false);
         expect(await section.getByText(T.asked).count()).toBe(0);
+        // Review 1699 R2-1: once the settled view reaches the card through the Settings frame, the focus is the radio it checks,
+        // so Space there re-asks for what stands instead of sending the opposite choice.
+        await expect.poll(() => on.evaluate((e) => e === document.activeElement), { timeout: 10_000 }).toBe(true);
 
-        // And back from the keyboard: Do not keep asks nothing.
+        // And back from the keyboard: Do not keep asks nothing; its write is held too, and the focus follows the new reading.
+        hold = held();
         await on.focus();
         await page.keyboard.press('ArrowUp');
+        await expect.poll(() => section.getByText(T.asked).isVisible(), { timeout: 10_000 }).toBe(true);
+        hold = null;
+        answer();
         await expect.poll(() => off.isChecked(), { timeout: 10_000 }).toBe(true);
+        await expect.poll(() => off.isDisabled(), { timeout: 10_000 }).toBe(false);
+        await expect.poll(() => off.evaluate((e) => e === document.activeElement), { timeout: 10_000 }).toBe(true);
         expect(posts).toEqual([{ on: true }, { on: false }]);
 
         // A refusal shown: the fleet box's change check is missing, so Keep them cannot be chosen, and the card says why.

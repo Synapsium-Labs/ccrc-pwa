@@ -5,6 +5,9 @@
 // THE OPERATOR'S WORDS ARE "keep a worktree", "kept" and "the change check" (W4-U10, D-7845). No exported string here, and
 // no string an exported function returns, says the broker's own names for these things or claims anything is happening
 // now (the word itself included, review 1693 F10): `delegation-adopt-section.test.tsx` collects them all and holds the census.
+// The one exception is ruled (review 1693 F9): a failed write that is not one of the door's words is said by the ccd write
+// reader (`verbWriteFailure`), which relays the server's detail as the precedent cards relay it; that detail is the server's
+// data, not this card's words.
 import {
   delegationAdoptionKeepsOf, isMarkerState, type DelegationAdoptionHealth, type DelegationAdoptionKeep,
 } from '../../../shared/api';
@@ -36,12 +39,15 @@ export const DELEGATION_ADOPT_TEXT = {
   unmeasured: PANE_SCOPE_STOP_TEXT.unmeasurable,
   unread: 'This could not be read.',
   stale: SCOPE_SWEEP_TEXT.stale,
-  nothingCounted: 'The server has not counted any worktrees since it started.',
+  nothingCounted: 'No pass has counted a worktree yet, or the last pass counted nothing.',
   noList: 'The last pass served no list of worktrees.',
   noChanges: 'No change check was read for this worktree.',
   confirmTitle: 'Keep worktrees?',
   confirmLabel: 'Keep worktrees',
-  confirmCannotCount: 'The server has not counted any worktrees since it started, so this card cannot say how many this would keep.',
+  confirmCannotCount: 'No pass has counted a worktree yet, or the last pass counted nothing, so this card cannot say how many this '
+    + 'would keep.',
+  confirmUntilNextPass: 'The last pass did not count what turning this on would keep, so this card cannot say how many until the '
+    + 'next pass.',
   confirmMail: 'The session that started each agent is mailed about its worktree. A kept worktree stays held back from the '
     + 'disk sweep until its hold ends.',
   ...VERB_WRITE_TEXT,
@@ -51,7 +57,7 @@ export const DELEGATION_ADOPT_TEXT = {
  *  the L0 type, so a new word is a compile error here until it has a sentence. The server's own detail names its internals and is
  *  never shown. */
 export const DELEGATION_ADOPT_REFUSAL_TEXT: Readonly<Record<DelegationAdoptOnRefusal, string>> = {
-  'fleet-caps-unmeasured': 'The fleet box did not report what it can do, so nothing can be changed until it does. Try again shortly.',
+  'fleet-caps-unmeasured': 'The fleet box did not report what it can do, so this cannot be turned on until it does. Try again shortly.',
   'fleet-switch-missing': 'The fleet box has no switch for this yet, so it cannot be changed until its ccrc is updated.',
   'fleet-audit-missing': 'The fleet box cannot check whether a worktree changed, so it would keep every finished worktree. '
     + 'Update the fleet box first.',
@@ -59,7 +65,7 @@ export const DELEGATION_ADOPT_REFUSAL_TEXT: Readonly<Record<DelegationAdoptOnRef
 };
 
 const MODE_LINE: Readonly<Record<DelegationAdoptionHealth['mode'], string>> = {
-  live: 'The last pass kept worktrees. The counts are from that pass.',
+  live: 'Keeping was on at the last pass. The counts are from that pass.',
   shadow: 'Not keeping yet. The last pass only recorded the worktrees it would keep.',
   suspended: 'Paused. The server is holding off until its own check clears.',
   unmeasured: 'The server could not read whether it keeps worktrees at the last pass.',
@@ -170,13 +176,15 @@ export function delegationAdoptKeepsMore(n: number): string {
 
 const are = (n: number): string => `${n} ${n === 1 ? 'is' : 'are'}`;
 
-/** The confirm sheet's words (review 1693 F8, ruled): how many worktrees turning this on would keep, the same figure the counts
- *  line shows for the last pass (`wouldAdopt`), whether or not a list was served; that the card cannot tell only when the lane
- *  has counted nothing (`adoption` null); when the list leaves some off, how many it lists and how many it does not; and that
- *  the owners are mailed. */
+/** The confirm sheet's words (review 1693 F8, review 1699 R2-4, ruled): when the last pass ran in shadow, how many worktrees
+ *  turning this on would keep, the same figure the counts line shows (`wouldAdopt`), whether or not a list was served, and, when
+ *  the list leaves some off, how many it lists and how many it does not. In any other mode the last pass did not count that (in
+ *  live mode it counts what it kept, and the list is what was kept), so the sheet says the card cannot tell until the next pass
+ *  and lists nothing. With `adoption` null no pass counted anything. Every sheet says the owners are mailed. */
 export function delegationAdoptConfirm(adoption: DelegationAdoptionHealth | null): { title: string; consequence: string[]; confirmLabel: string } {
   const T = DELEGATION_ADOPT_TEXT;
   if (adoption === null) return { title: T.confirmTitle, consequence: [T.confirmCannotCount, T.confirmMail], confirmLabel: T.confirmLabel };
+  if (adoption.mode !== 'shadow') return { title: T.confirmTitle, consequence: [T.confirmUntilNextPass, T.confirmMail], confirmLabel: T.confirmLabel };
   const keeps = delegationAdoptionKeepsOf(adoption);
   const count = `This would keep ${plural(adoption.wouldAdopt, 'worktree', 'worktrees')}, the count from the last pass.`;
   const listed = keeps !== null && keeps.more > 0

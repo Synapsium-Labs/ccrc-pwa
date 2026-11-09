@@ -24,6 +24,7 @@ import {
 } from '../src/fleet/delegationAdoptWords';
 import { ApiError, api } from '../src/lib/api';
 import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
+import { renderSettings } from './settingsHost';
 
 function Polled(): ReactNode {
   return <DelegationAdoptSection poll={useDelegationAdoptView()} />;
@@ -367,6 +368,28 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(c.consequence.join(' ')).not.toMatch(/\d+ worktrees?/);
   });
 
+  it('live, suspended, unmeasured: the last pass did not count what this would keep, so the sheet cannot tell until the next pass and lists nothing (review 1699 R2-4)', () => {
+    for (const mode of ['live', 'suspended', 'unmeasured'] as const) {
+      const s = said(health({ mode, adopted: 3, wouldAdopt: 0, keeps: { items: TWO, more: 5 } }));
+      expect(s, mode).toContain(T.confirmUntilNextPass);
+      expect(s, mode).not.toMatch(/listed on this card/);
+      expect(s, mode).not.toMatch(/\d+ worktrees?/);
+      expect(s, mode).toMatch(/mail/i);
+    }
+    expect(said(health({ mode: 'shadow', wouldAdopt: 7, keeps: { items: TWO, more: 5 } }))).toMatch(/This would keep 7 worktrees\b/);
+  });
+
+  it('the words speak of the last pass and the mode, and a refusal of on speaks of on only (review 1699 R2-5, R2-6, R2-7)', () => {
+    for (const w of [T.nothingCounted, T.confirmCannotCount]) {
+      expect(w).not.toMatch(/since it started/);
+      expect(w).toMatch(/last pass counted nothing/);
+    }
+    expect(delegationAdoptModeLine(health({ mode: 'live', adopted: 0 }))).not.toMatch(/kept worktrees/);
+    expect(delegationAdoptModeLine(health({ mode: 'live' }))).toMatch(/at the last pass/);
+    expect(REFUSAL['fleet-caps-unmeasured']).not.toMatch(/nothing can be changed/);
+    expect(REFUSAL['fleet-caps-unmeasured']).toMatch(/cannot be turned on/);
+  });
+
   it('the card\'s own sheet, would keep 0 and no list: it opens saying 0 worktrees (F8)', async () => {
     owned(view({ adoption: health({ wouldAdopt: 0 }) }));
     fireEvent.click(radio(T.on));
@@ -420,6 +443,58 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(REFUSAL['fleet-audit-missing']));
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(radio(T.off));
+  });
+
+  it('through the Settings frame (SettingsDataProvider, as shipped): after the confirm and the settle, the focus is the radio the new reading checks (review 1699 R2-1)', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(view());
+    const w = deferred();
+    vi.spyOn(api, 'setDelegationAdopt').mockReturnValue(w.promise);
+    try {
+      renderSettings('automation');
+      await waitFor(() => expect(radio(T.off).checked).toBe(true));
+      radio(T.on).focus();   // a tap focuses the radio it lands on; fireEvent.click does not
+      await tapOnAndConfirm();
+      await flush();
+      await act(async () => { w.resolve(view({ state: 'set' })); });
+      await waitFor(() => expect(radio(T.on).checked).toBe(true));
+      await flush();
+      expect(document.activeElement).toBe(radio(T.on));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('focus moved outside the card while the write is in flight stays there after the settle (review 1699 R2-2)', async () => {
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(view());
+    const w = deferred();
+    vi.spyOn(api, 'setDelegationAdopt').mockReturnValue(w.promise);
+    render(<><Polled /><button type="button">elsewhere</button></>);
+    await waitFor(() => expect(radio(T.off).checked).toBe(true));
+    await tapOnAndConfirm();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
+    elsewhere.focus();
+    await act(async () => { w.resolve(view({ state: 'set' })); });
+    await waitFor(() => expect(radio(T.on).checked).toBe(true));
+    await flush();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it('a reply that reads the marker unmeasurable: the focus lands on a line with text (the unmeasured note), and no empty element is focusable (review 1699 R2-3)', async () => {
+    vi.spyOn(api, 'delegationAdopt').mockResolvedValue(view());
+    vi.spyOn(api, 'setDelegationAdopt').mockResolvedValue(view({ state: 'unmeasurable' }));
+    render(<Polled />);
+    await waitFor(() => expect(radio(T.off).checked).toBe(true));
+    await tapOnAndConfirm();
+    await waitFor(() => expect(screen.getByText(T.unmeasured)).toBeInTheDocument());
+    await flush();
+    const active = document.activeElement as HTMLElement;
+    expect(active).not.toBe(document.body);
+    expect(active.textContent?.trim()).not.toBe('');
+    expect(active).toHaveTextContent(T.unmeasured);
+    const card = screen.getByRole('region', { name: T.title });
+    for (const el of card.querySelectorAll<HTMLElement>('[tabindex="-1"]')) expect(el.textContent?.trim(), el.outerHTML).not.toBe('');
   });
 
   it('confirming sends {on:true} once and the reply is what the card then shows', async () => {

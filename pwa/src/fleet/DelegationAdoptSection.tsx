@@ -5,8 +5,9 @@
 // arms the switch but an operator's confirmed tap.
 //
 // TURNING IT ON ASKS FIRST. A tap on "Keep them" opens a confirm sheet (`QuickConfirm`) that names how many worktrees the last
-// pass listed (or that the card cannot tell) and that their owners are mailed; the write goes out only from the sheet's
-// confirm. "Do not keep" asks nothing.
+// pass would keep when it ran in shadow (in any other mode, or before any pass, it says the card cannot tell), how many of them
+// the card lists when the list leaves some off, and that their owners are mailed; the write goes out only from the sheet's
+// confirm, and not when the card's current view refuses it. "Do not keep" asks nothing.
 //
 // THE WAIT is `ScopeSweepSection`'s: the checked radio is the server's reading, never the tap, and an unmeasured marker
 // checks neither; a confirmed tap holds the choice with its line on screen, `COORD_CONFIRM_MS` bounds that hold, and the
@@ -88,28 +89,48 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
 
   useEffect(() => clearTimer, []);
 
-  // After a tap, once its write settles (or a refusal closed the sheet), the focus comes back into the card (review 1693 F4):
-  // to the checked answer when it can be chosen, otherwise to the card's status lines. The sheet's own give-back targets the
-  // radio that opened it, which is disabled while the write is in flight, so without this the focus falls to the page.
-  const refocus = useRef(false);
+  // After a tap, once its write settles (or a refusal closed the sheet), the focus comes back into the card (review 1693 F4).
+  // The sheet's own give-back targets the radio that opened it, which is disabled while the write is in flight, so without
+  // this the focus falls to the page.
+  // - It waits for the settled view (review 1699 R2-1): in the shipped app the view reaches the card through the Settings
+  //   frame one commit after the write settles, so a good reply's refocus waits until the card's reading is the reply's.
+  //   It then focuses the radio whose value is that reading, never one read as `:checked` before the view arrived: Space on
+  //   the radio that stood before the write would send the opposite choice.
+  // - It moves the focus only from nowhere, the page, or this card (review 1699 R2-2, workbench-tabs' guard): an operator
+  //   who went elsewhere while the write was in flight stays there.
+  // - With no enabled radio for the reading it focuses a line of the card's that holds text (review 1699 R2-3): the result
+  //   line, else the refusal line, else the unmeasured note. None of them is ever empty.
+  // `'current'`: focus for the reading the card shows now. `{until}`: wait until the card's reading is `until`.
+  const refocus = useRef<'current' | { readonly until: DelegationAdoptChoice | null } | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
+  const refusalRefs = useRef<Partial<Record<DelegationAdoptChoice, HTMLParagraphElement | null>>>({});
+  const unmeasuredRef = useRef<HTMLParagraphElement | null>(null);
   useEffect(() => {
-    if (!refocus.current || asked !== null || confirming) return;
-    refocus.current = false;
-    const checked = document.querySelector<HTMLInputElement>(`input[name="${RADIO_NAME}"]:checked`);
-    (checked !== null && !checked.disabled ? checked : statusRef.current)?.focus({ preventScroll: true });
-  }, [asked, confirming]);
+    const want = refocus.current;
+    if (want === null || asked !== null || confirming) return;
+    if (want !== 'current' && want.until !== reading) return;   // the settled view has not reached the card yet
+    refocus.current = null;
+    const radios = document.querySelectorAll<HTMLInputElement>(`input[name="${RADIO_NAME}"]`);
+    const card = radios[0]?.closest('section') ?? null;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && (card === null || !card.contains(active))) return;
+    const radio = [...radios].find((r) => r.value === reading && !r.disabled);
+    const status: HTMLElement | null = statusRef.current;
+    const refusal: HTMLElement | null = reading === null ? null : refusalRefs.current[reading] ?? null;
+    const textLine = status ?? refusal ?? refusalRefs.current.on ?? refusalRefs.current.off ?? unmeasuredRef.current;
+    (radio ?? textLine)?.focus({ preventScroll: true });
+  }, [asked, confirming, reading]);
 
   const choose = (choice: DelegationAdoptChoice): void => {
     if (asked !== null) return;   // the disabled fieldset stops a finger; this stops a second call
     // The view the card shows now, not the one the sheet opened over (review 1693 F3): a choice it refuses sends nothing, the
     // sheet closes and the refusal line stays on screen.
     if (view.refused[choice] !== null) {
-      refocus.current = true;
+      refocus.current = 'current';
       setConfirming(false);
       return;
     }
-    refocus.current = true;
+    refocus.current = null;
     line.clear();
     spokenOf.current = null;
     setAsked(choice);
@@ -117,6 +138,7 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
     tap.current = mine;
     timer.current = setTimeout(() => {
       timer.current = null;
+      refocus.current = 'current';
       setAsked(null);
       line.say(T.unconfirmed);
       reload();
@@ -133,11 +155,13 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
         if (!answered()) return;
         const reply = answer === 'unreadable' ? null : asDelegationAdoptView(answer);
         if (reply === null) {
+          refocus.current = 'current';
           line.say(UNCONFIRMED_TEXT);
           reload();
           return;
         }
         const stands = delegationAdoptChecked(reply);
+        refocus.current = { until: stands };
         if (stands === choice || stands === null) line.clear();
         else {
           spokenOf.current = stands;
@@ -147,6 +171,7 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
       },
       (err: unknown) => {
         if (!answered()) return;
+        refocus.current = 'current';
         const failed = delegationAdoptFailure(err);
         line.say(failed.text, failed.tone);
         reload();
@@ -173,7 +198,7 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
   return (
     <>
       {stale && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
-      {delegationAdoptUnmeasured(view) && <p className={SETTINGS_AMBER_NOTE}>{T.unmeasured}</p>}
+      {delegationAdoptUnmeasured(view) && <p ref={unmeasuredRef} tabIndex={-1} className={SETTINGS_AMBER_NOTE}>{T.unmeasured}</p>}
       <p className={SETTINGS_NOW_CLASS.note}>{delegationAdoptModeLine(adoption)}</p>
       {adoption !== null && <p className={SETTINGS_NOW_CLASS.note}>{delegationAdoptCountsLine(adoption)}</p>}
       <p className={SETTINGS_NOW_CLASS.note}>{delegationAdoptCapLine('verb', view.caps.verb)}</p>
@@ -189,12 +214,22 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
           { value: 'on', label: T.on, note: T.onNote, disabled: refused.on !== null, describedBy: refused.on === null ? undefined : onId },
         ]}
       />
-      {refused.on !== null && <p id={onId} className={SETTINGS_AMBER_NOTE}>{delegationAdoptRefusedLine(T.on, refused.on)}</p>}
-      {refused.off !== null && <p id={offId} className={SETTINGS_AMBER_NOTE}>{delegationAdoptRefusedLine(T.off, refused.off)}</p>}
-      <div ref={statusRef} tabIndex={-1}>
-        {asked !== null && <p className="settings-note" role="status">{T.asked}</p>}
-        <ResultLine line={line.line} />
-      </div>
+      {refused.on !== null && (
+        <p id={onId} ref={(el) => { refusalRefs.current.on = el; }} tabIndex={-1} className={SETTINGS_AMBER_NOTE}>
+          {delegationAdoptRefusedLine(T.on, refused.on)}
+        </p>
+      )}
+      {refused.off !== null && (
+        <p id={offId} ref={(el) => { refusalRefs.current.off = el; }} tabIndex={-1} className={SETTINGS_AMBER_NOTE}>
+          {delegationAdoptRefusedLine(T.off, refused.off)}
+        </p>
+      )}
+      {(asked !== null || line.line !== null) && (
+        <div ref={statusRef} tabIndex={-1}>
+          {asked !== null && <p className="settings-note" role="status">{T.asked}</p>}
+          <ResultLine line={line.line} />
+        </div>
+      )}
       {adoption !== null && (
         keeps === null ? (
           <p className="settings-note">{T.noList}</p>
