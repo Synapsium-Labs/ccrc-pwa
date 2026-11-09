@@ -1203,10 +1203,23 @@ Test `server/test/measure-autonomy.test.ts`.
   2026-10-29 move), so the first days of the window are thin. Read M1 and M2's baseline as the committed script's
   figures above; §10's 680 h and 611 stay as the spec's original, differently-taken, reading and are not a
   comparison base.
+- **Per-file `is_coordinator` checked and ruled out as the cause (2026-11-09, fleet box, read-only, same window, run
+  as the account that owns the transcripts: 17,440 files).** The suspicion was that a coordinator whose skill load or
+  run open sits in an earlier file (a restart, a new session id) is judged non-coordinator in its later file. Files
+  were grouped by shared message id and uuid (the swap-copy identity, transitively), and a file counted as a
+  coordinator when any file of its group is one. That adds 0 files: 15 coordinator files by `is_coordinator`, 15 in
+  coordinator groups, 12 groups; the waits are identical (123 typed-reply, 44 dialogs). Loosening the test does not
+  close the gap either: the skill or the declared intent alone reads 32 files (127 typed-reply waits, 269.65 h; the
+  same 44 dialogs), and run-open or skill or intent reads 41 files with the same figures. Only reading every
+  transcript moves the dialog count (208, 11 over an hour, 41.28 h), and that is the worker dialogs the census
+  excludes by design. So the per-file test is not why M1 and M2 sit far below §10; the gap stays unreconciled and the
+  baseline above stays the committed script's own figures. (An earlier run as a user who cannot read most of the
+  files saw 668 of them and the same 123 and 44, so check the reading account's file count against the 17,000-odd
+  before trusting a census.)
 - M3, M4 and M6 over the coordination database (`items`, `sample --n 30 --seed 1`, `score`): not yet taken. The
   coordination database lives on the server box, which this builder may not reach, and the sample's parts need a
   reviewer's classing against §3 and §5. A task owner with server-box access takes them; A1-4 is not complete
-  until they are written here.
+  until they are written here. (Re-checked: the fleet box holds only test-run copies of the database, no live one.)
 
 ### Waiting on you
 
