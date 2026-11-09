@@ -32,6 +32,7 @@ import { RUNS_PAGE_LIMIT_MAX, reclaimAttentionRunIds } from './runsPage.js';
 import { parseRunFind } from './runFind.js';
 import { runRecordTrail } from './runRecord.js';
 import { withLastMoves, withVerdicts } from './runWire.js';
+import { createRunVerdicts } from './runVerdicts.js';
 import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
@@ -3085,6 +3086,26 @@ export function registerCoordRoutes(
     const parsed = parseRunFind(req.query as Record<string, unknown>);
     if (parsed === null) return refuseRoute(reply, 'bad-request');
     return deps.coord.findRuns(parsed);
+  });
+
+  /** D-8075 (spec 2026-11-04 §11.6): `GET /api/programmes?since=<ms>`, one row per programme from one aggregate statement,
+   *  with the stuck pass's answers folded in from `RunVerdicts`. SESSION ONLY: not in the gate's box-token exemptions. `since`
+   *  is the operator's local midnight as the PWA computes it, clamped to the last 48 hours; absent reads the last 24 hours. */
+  app.get('/api/programmes', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const raw = (req.query as { since?: unknown }).since;
+    const now = Date.now();
+    let since = now - 24 * 3_600_000;
+    if (raw !== undefined) {
+      const n = typeof raw === 'string' && /^(0|[1-9][0-9]{0,15})$/.test(raw) ? Number(raw) : null;
+      if (n === null || !Number.isSafeInteger(n)) return refuseRoute(reply, 'bad-request');
+      since = n;
+    }
+    try {
+      return deps.coord.readProgrammes({ since, now }, watcher?.runVerdicts ?? createRunVerdicts());
+    } catch (err) {
+      return refuseRoute(reply, 'runs-unreadable', { detail: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,

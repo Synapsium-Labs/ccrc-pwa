@@ -24,6 +24,8 @@ import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
+import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
+import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
 // policy — the house port pattern. This read exists to feed that policy and
@@ -156,7 +158,7 @@ import {
   type NotifyEvent, type PeerDeliverable, type ProgramState,
   type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
-  type RunSummary, type RunFindAnswer, type RunHit,
+  type RunSummary, type RunFindAnswer, type RunHit, type ProgrammesAnswer,
   type SetAccountPoolsRefuseCode,
   type UpdateChannel,
   type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
@@ -3954,6 +3956,14 @@ export class CoordStore {
 
   findRuns(parsed: RunFindParsed): RunFindAnswer {
     return runFindQuery(this.db, parsed, { terminalStatesSql: TERMINAL_RUN_STATES_SQL });
+  }
+
+  /** `GET /api/programmes` (D-8075, spec §11.6): one row per programme from one aggregate statement. The query is
+   *  `programmesRead.ts`'s; this delegate hands it the terminal-state list and the last-moves read. */
+  readProgrammes(opts: { since: number; now: number }, verdicts: RunVerdicts): ProgrammesAnswer {
+    return readProgrammesQuery(this.db, opts, {
+      terminalStatesSql: TERMINAL_RUN_STATES_SQL, verdicts, runLastMoves: (ids) => this.runLastMoves(ids),
+    });
   }
 
   /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
