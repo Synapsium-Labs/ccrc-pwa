@@ -114,6 +114,12 @@ describe('ccd forget', () => {
   it.each([
     ['unreadable (mode 000)', (f: string) => { fs.writeFileSync(f, 'demo\n'); fs.chmodSync(f, 0o000); }],
     ['a directory', (f: string) => { fs.mkdirSync(f); }],
+    // Review 1724 F3: the old `_reg_get` read a link as "" (its `! -L` test), so forget went on; `_reg_read_to` refuses it.
+    ['a symlink', (f: string) => {
+      const target = path.join(h.home, 'workspace-target');
+      fs.writeFileSync(target, 'demo\n');
+      fs.symlinkSync(target, f);
+    }],
   ])('refuses when the workspace field is %s: workspace-unreadable, the row untouched', (_n, plant) => {
     const id = deadWrapperSession('sess-a');
     const field = path.join(h.home, '.cc-sessions', `${id}.workspace`);
@@ -127,7 +133,8 @@ describe('ccd forget', () => {
       expect(fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '', 'nothing was unsupervised or killed')
         .not.toMatch(/unsupervise|kill-session/);
     } finally {
-      if (fs.statSync(field).isFile()) fs.chmodSync(field, 0o644);
+      // On reverted code the purge removes the field, so a bare stat here would throw over the assertion's message.
+      if (fs.existsSync(field) && fs.lstatSync(field).isFile()) fs.chmodSync(field, 0o644);
     }
   });
 
