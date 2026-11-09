@@ -158,8 +158,9 @@
    boxes, as the compact row's do. GitHub's
    may-differ note is a marker (`≠`) whose words are its `title`, a screen reader's text and the link's description,
    so it takes no room from the crumbs. On a line of their own, if the actions are still wider than the row, they wrap
-   among themselves rather than run past the head (no measured state needs it); GitHub's refusal, the one long
-   sentence among them, is cut with an ellipsis there, its whole words in its `title`. Every crumb carries its whole name in its `title` too.
+   among themselves rather than run past the head (no measured state needs it). GitHub's refusal, the one long
+   sentence among them, gives way before the page's name does: it shortens to an ellipsis from a `12ch` floor, its
+   whole words in its `title`, so a wider window never shows less of the name in that state either (review 1704 F2). Every crumb carries its whole name in its `title` too.
    THE QUERY'S WIDTH, measured in Chrome (docs-compact-head.browser.test.ts): back (44) and the row's two 4 px gaps, the
    crumbs at their floor when folded (the `…` button and two crumbs at a tap and a separator each, about 164), and the
    widest actions with their words (GitHub, Share and "Export (plain view)", 313) come to about 529, so the words hide
@@ -183,7 +184,9 @@
      `Crumbs`' inline style always outranks it with the number it draws: the count stays written once, in `Crumbs`, and
      the token is still one a stylesheet defines (css-vars.test.ts). Without the inline style the floor is three's. */
   --docs-crumbs-n: initial;
-  flex: 1 1 calc(var(--docs-crumbs-n, 3) * (var(--tap-min) + 1ch + 2 * var(--sp-1)) + 1ch - var(--sp-1));
+  /* The crumbs take the row's spare room first (a grow a hundred thousand times anything else's): only GitHub's refusal
+     grows beside them, and it gets what is left once the crumbs stand at their whole words (review 1704 F2). */
+  flex: 100000 1 calc(var(--docs-crumbs-n, 3) * (var(--tap-min) + 1ch + 2 * var(--sp-1)) + 1ch - var(--sp-1));
   min-width: 0; max-width: max-content; overflow: hidden;
 }
 .docs-full .docs-crumbs ol { flex-wrap: nowrap; justify-content: flex-end; }
@@ -198,7 +201,15 @@
 .docs-full .docs-actions { flex: 0 1 auto; min-width: 0; margin-inline-start: auto; flex-wrap: wrap; }
 .docs-full .docs-actions > * { flex: none; }
 .docs-full .docs-actions > .docs-action-note { flex: none; }
-.docs-full .docs-actions > .docs-action-off { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* GitHub's refusal, the one long sentence among the actions, gives way before the page's name does (review 1704 F2):
+   `contain: inline-size` keeps its words out of the actions' own width, so the row breaks its line on a floor of
+   `12ch` and not on the whole sentence, and the actions then grow into what the crumbs leave. The sentence ends in an
+   ellipsis, its whole words in its `title`, against the icons beside it. */
+.docs-full .docs-actions:has(> .docs-action-off) { flex-grow: 1; }
+.docs-full .docs-actions > .docs-action-off {
+  flex: 1 1 12ch; min-width: 12ch; contain: inline-size; text-align: end;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .docs-full .docs-action { gap: var(--sp-1); white-space: nowrap; }
 /* An action drawn as an icon beside its words reads as a button and drops the link underline; one drawn as text alone
    keeps it. A disabled Share or Export (waiting for the leaf) is dimmed as the compact bar dims it, never recoloured

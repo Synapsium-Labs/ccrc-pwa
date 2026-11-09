@@ -767,6 +767,42 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 300_000);
 
+  // Review 1704 F2 (Task C16, D-8139): in GitHub's refusal state the sentence gives way (an ellipsis from a small basis,
+  // its whole words in its `title`) before the page's name does, so a wider window never shows less of the name here
+  // either. Before, the sentence (439 px) never shrank: the actions wrapped to a line of their own below about 1100 px,
+  // handing the name a whole line, and the name dropped from whole to six characters one pixel wider; at 768 it showed
+  // six characters on one line. From 900 the desk sidebar takes its column, so the row is narrower at 900 (544 px in
+  // Instrument) than at 768 (752): the sweep is monotonic from 900, as the draft's is, and 768 shows the whole name.
+  const REFUSAL_SWEEP = [768, ...SWEEP.filter((w) => w <= 1320)];
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => (['fine', 'coarse'] as const).map((pointer) => [skin, pointer] as const)))("GitHub's refusal, %s, a %s pointer, at 768 and 900 to 1320 px in 20 px steps: a wider window never shows less of the name (review 1704 F2)", async (skin, pointer) => {
+    const view: View = pointer === 'fine' ? { width: 768, height: 800, skin, pointer } : { width: 768, height: 800, skin, touch: true };
+    const app = await openRow(view, REFUSED_DEEP, 'main');
+    try {
+      const seen: [number, number, string][] = [];
+      let whole768 = false;
+      for (const w of REFUSAL_SWEEP) {
+        await app.page.setViewportSize({ width: w, height: 800 });
+        const r = await rowState(app.page);
+        if (w === 768) whole768 = r.nameWhole;
+        seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`]);
+        expect(r.scrollW, `no sideways scroll at ${w}`).toBeLessThanOrEqual(r.innerW);
+      }
+      console.log(`PHH-FIGURE ${skin} ${pointer} sweep refusal-name ${JSON.stringify(seen)}`);
+      expect(whole768, "the page's whole name at 768").toBe(true);
+      for (let i = 2; i < seen.length; i++) {
+        expect(seen[i]![1], `the name at ${seen[i]![0]} against ${seen[i - 1]![0]}`).toBeGreaterThanOrEqual(seen[i - 1]![1] - 0.5);
+      }
+      const off = await app.page.evaluate(() => {
+        const e = document.querySelector('.docs-full .docs-action-off') as HTMLElement;
+        return { title: e.title, text: e.textContent ?? '' };
+      });
+      expect(off.title, 'the sentence keeps its whole words in its title').toBe(off.text);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 300_000);
+
   const CRUMB_STATES = [
     ["GitHub's refusal", REFUSED_DEEP, 'main'],
     ['a modified draft, deep, on a long branch', DRAFT_LONG, LONG_BRANCH],

@@ -43,7 +43,10 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     // `--docs-crumbs-n` is the number of crumbs drawn, the `…` button counted (`Crumbs`), each a tap beside its separator,
     // with the gaps between them and the page's own one more character.
     const floor = 'calc(var(--docs-crumbs-n,3)*(var(--tap-min)+1ch+2*var(--sp-1))+1ch-var(--sp-1))';
-    expect(declValue(crumbs, 'flex')?.replace(/\s+/g, ''), 'grow from the floor, never shrink under it on a shared line').toBe(`11${floor}`);
+    // They grow first: a grow a hundred thousand times the only other grower's (GitHub's refusal, review 1704 F2).
+    const [grow, shrink, ...basis] = (declValue(crumbs, 'flex') ?? '').trim().split(/\s+/);
+    expect([grow, shrink], 'grow first from the floor, never shrink under it on a shared line').toEqual(['100000', '1']);
+    expect(basis.join(''), 'the floor is the basis').toBe(floor);
     // The floor is the basis, not a minimum: a short path takes no more room than its words (max-content).
     expect(declValue(crumbs, 'max-width')).toBe('max-content');
     expect(declValue(crumbs, 'min-width')).toBe('0');
@@ -96,10 +99,13 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(undecorated).toEqual(['.docs-full .docs-action:has(> .docs-action-words)']);
   });
 
-  it('GitHub\'s refusal in the row shortens with an ellipsis, so it never runs past the row (F5)', () => {
+  it('GitHub\'s refusal in the row shortens with an ellipsis before the page\'s name does, so it never runs past the row (F5; review 1704 F2)', () => {
     const off = ruleIn(docsCss, '.docs-full .docs-actions > .docs-action-off');
-    expect(declValue(off, 'flex')).toBe('0 1 auto');
-    expect(declValue(off, 'min-width')).toBe('0');
+    // A floor of 12ch, its words kept out of the actions' own width, and it grows into what the crumbs leave.
+    expect(declValue(off, 'flex')).toBe('1 1 12ch');
+    expect(declValue(off, 'min-width')).toBe('12ch');
+    expect(declValue(off, 'contain')).toBe('inline-size');
+    expect(declValue(ruleIn(docsCss, '.docs-full .docs-actions:has(> .docs-action-off)'), 'flex-grow')).toBe('1');
     expect(declValue(off, 'overflow')).toBe('hidden');
     expect(declValue(off, 'text-overflow')).toBe('ellipsis');
     expect(declValue(off, 'white-space')).toBe('nowrap');
