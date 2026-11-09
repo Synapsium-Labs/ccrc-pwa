@@ -227,7 +227,7 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.proj-pending, .proj-work': META,
     // A worktree line's controls and the sentence a refused or unread act leaves (delegation broker wave 5, PR10), in the line's own role.
     '.proj-work-controls': META,
-    '.fleet-archived-row, .fleet-runs-row, .fleet-add-project-row': META,
+    '.fleet-archived-row, .fleet-runs-row': META,
     '.archive-size': META,
     '.accounts-projection': META,
     // The Accounts card's state words (accounts plan Task A2, D-7718): the roll-up, the lamp and the trouble sentences.

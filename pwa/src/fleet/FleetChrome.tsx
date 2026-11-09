@@ -38,6 +38,10 @@ export interface FleetChrome {
   setArchiveAllFor: (project: string | null) => void;
   newOpen: boolean;
   setNewOpen: (open: boolean) => void;
+  /** The project the new-session sheet opens on (picked once an account is), or none: the Add project toast's
+   *  "Start session" sets it. */
+  newProject: string | null;
+  setNewProject: (project: string | null) => void;
   /** Which project's `+` sheet is open (named workspaces S7), or none. */
   addWorkspaceFor: string | null;
   setAddWorkspaceFor: (project: string | null) => void;
@@ -64,6 +68,7 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   useWaitingRefetch(store);
   const [archiveAllFor, setArchiveAllFor] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [newProject, setNewProject] = useState<string | null>(null);
   const [addWorkspaceFor, setAddWorkspaceFor] = useState<string | null>(null);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [reapId, setReapId] = useState<string | null>(null);
@@ -73,9 +78,9 @@ export function FleetChromeProvider({ store, children }: { store: FleetStore; ch
   // changes only when something a consumer reads did.
   const value = useMemo<FleetChrome>(() => ({
     store, health, updates, projects, actions, archiveAll,
-    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, addWorkspaceFor, setAddWorkspaceFor,
+    archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, newProject, setNewProject, addWorkspaceFor, setAddWorkspaceFor,
     addProjectOpen, setAddProjectOpen, reapId, setReapId,
-  }), [store, health, updates, projects, actions, archiveAll, archiveAllFor, newOpen, addWorkspaceFor, addProjectOpen, reapId]);
+  }), [store, health, updates, projects, actions, archiveAll, archiveAllFor, newOpen, newProject, addWorkspaceFor, addProjectOpen, reapId]);
   return <FleetChromeContext.Provider value={value}>{children}</FleetChromeContext.Provider>;
 }
 

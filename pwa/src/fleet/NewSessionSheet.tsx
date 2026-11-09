@@ -21,11 +21,20 @@
 // ever sent (`nameDoorReason`). A workspace create answers its session's id, so that success closes the sheet and
 // opens the session at once, with no toast; an answer this build cannot read names no id, so it keeps the toast and the
 // close (and only a sheet still the same one closes: a dismissed sheet says it started and leaves the parent alone).
+//
+// ADDING A PROJECT FROM HERE (add-project spec 2026-11-04 §2, as redrawn). Step 2 is where an operator finds the project
+// they want is missing, so it adds one in place, with `AddProjectForm`'s form (the fleet screen's sheet shares it): a
+// "New project" row at the head of the list opens the form in the sheet's body, and a search that reads as a GitHub
+// repository, or as a new name nothing matches (`projectSearchOffer`), offers that add as a row, which fills the form
+// and sends it in one tap. A success returns to the list, re-reads it, and picks the new project; so does a sheet opened
+// on a project (`initialProject`, the fleet's Add project toast's "Start session"), once an account is chosen. A project
+// picked that way is never a crossing one: a crossing pick is the operator's own, so it is left behind the disclosure.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { Button, Select, Sheet, toast } from '@ccrc/ui';
+import { Button, ListRow, Select, Sheet, toast } from '@ccrc/ui';
+import type { ProjectAddBody } from '../../../shared/projectAdd';
 import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText, failedTo } from '../lib/api';
 import { navigate } from '../lib/router';
@@ -49,7 +58,9 @@ import { ProjectPicker } from './ProjectPicker';
 import { liveIdsIn, liveMainCheckoutIn, startedSessionFor } from './startProgramPolicy';
 import { NAME_FIELD_CLASS, WorkspaceNameField } from './WorkspaceNameField';
 import { useNamePreview } from './useNamePreview';
-import { loadProjects } from './useProjectRows';
+import { loadProjects, type ProjectAddOutcome } from './useProjectRows';
+import { useProjectAddForm } from './AddProjectForm';
+import { PROJECT_ADD_TEXT, projectAddedText, projectOfferText, projectSearchOffer } from './projectAddWords';
 import { addRefusalText, classifyAddError } from './workspaceAddWords';
 import { LINEAR_SETTINGS_PATH, confirmLabel, nameDoorReason } from './workspaceNameWords';
 import { AUTOMATIC_CLASS } from './classWords';
@@ -100,7 +111,27 @@ export interface NewSessionSheetProps {
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
   fleet?: FleetStore;
+  /** The project to pick once an account is, or none. */
+  initialProject?: string | null;
+  /** `useProjectRows.addProject`, for the inline add. Absent: the sheet offers no add. */
+  addProject?: (body: ProjectAddBody) => Promise<ProjectAddOutcome>;
+  /** Whether a project add is in flight. */
+  addingProject?: boolean;
 }
+
+/** A row of the project list that ADDS rather than picks: the list's own row (`proj-row`'s grid), a glyph, what a tap
+ *  does, and what it makes. */
+function AddRow({ glyph, title, detail, onPick }: { glyph: string; title: string; detail?: string; onPick: () => void }): ReactNode {
+  return (
+    <ListRow className="proj-row proj-row--add" onClick={onPick}>
+      <span className="proj-glyph" aria-hidden="true">{glyph}</span>
+      <span className="proj-name">{title}</span>
+      {detail !== undefined && <span className="proj-dir">{detail}</span>}
+    </ListRow>
+  );
+}
+
+const NO_ADD = async (): Promise<ProjectAddOutcome> => ({ kind: 'busy' });
 
 /** One field of the optional routing row: a label over a select.
  *
@@ -134,6 +165,9 @@ export function NewSessionSheet({
   open,
   onClose,
   fleet = useFleetStore,
+  initialProject = null,
+  addProject,
+  addingProject = false,
 }: NewSessionSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
@@ -157,6 +191,13 @@ export function NewSessionSheet({
   const [showOther, setShowOther] = useState(false);
   const [list, setList] = useState<ProjectRow[] | null>(null); // null = loading
   const [listError, setListError] = useState<string | null>(null);
+  // Bumped to re-read the list (after an inline add), on top of the read every opening makes.
+  const [listEpoch, setListEpoch] = useState(0);
+  // Step 2's body: the project list, or the inline add's form.
+  const [adding, setAdding] = useState(false);
+  // A project to pick by name once the list holds it and an account is chosen: the sheet's `initialProject`, or the one
+  // an inline add just made.
+  const [pendingPick, setPendingPick] = useState<string | null>(null);
   // The routing row's three fields (routing spec, slice 4, Task 6). Each is
   // '' (unset) until the operator picks one; unset means the request carries
   // no `route` key at all, so an operator who never touches this row starts
@@ -183,11 +224,12 @@ export function NewSessionSheet({
    *  happening rather than imply it is nearly done. */
   const [slow, setSlow] = useState(false);
 
-  // Fetch the project list the moment the sheet opens so step 2 is instant.
+  // Fetch the project list the moment the sheet opens so step 2 is instant, and again after an inline add. A re-read keeps
+  // the list it has until the answer lands, so the rows do not blink.
   useEffect(() => {
     if (!open) return undefined;
     let cancelled = false;
-    setList(null);
+    if (listEpoch === 0) setList(null);
     setListError(null);
     loadProjects().then(
       (r) => {
@@ -200,7 +242,11 @@ export function NewSessionSheet({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, listEpoch]);
+
+  useEffect(() => {
+    if (open) setPendingPick(initialProject);
+  }, [open, initialProject]);
 
   // An unmount is a dismissal too: the wait's clock and its fleet subscription go with it, and nothing navigates.
   useEffect(() => () => {
@@ -235,6 +281,9 @@ export function NewSessionSheet({
     setNotice(null);
     setStarting(false);
     setSlow(false);
+    setAdding(false);
+    setPendingPick(null);
+    setListEpoch(0);
   }, [open]);
 
   // Registry projects first, most recently active on top; the rest keep the
@@ -259,8 +308,12 @@ export function NewSessionSheet({
           return (rb ?? -1) - (ra ?? -1);
         });
   const needle = query.trim().toLowerCase();
+  // A search that reads as a repository, or as a new name, offers to add it (`projectSearchOffer`); one whose repository
+  // is already a project here shows that project, which the name match below would not find.
+  const offer = addProject === undefined || shown === null ? null : projectSearchOffer(query, shown.map((p) => p.name));
   const matching =
-    needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
+    offer?.kind === 'existing' ? ordered.filter((p) => p.name === offer.name)
+      : needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
   // At step 2 the account is fixed, so split the projects that account may take.
   // An absent or undecidable project pool is offered plainly; only a measured
   // mismatch requires disclosure and an explicit crossing override.
@@ -309,6 +362,44 @@ export function NewSessionSheet({
     setProject(candidate);
     setNotice(null);
   };
+
+  // The pending pick lands once there is an account (the pool split needs one) and the list holds the project. A
+  // crossing project is not picked for the operator: the disclosure opens on it, and the pick stays theirs.
+  useEffect(() => {
+    if (pendingPick === null || wrapper === null || shown === null) return;
+    const row = shown.find((candidate) => candidate.name === pendingPick);
+    if (row === undefined) return;
+    setPendingPick(null);
+    if (isCrossing(row)) setShowOther(true);
+    else pickProject(row);
+  }, [pendingPick, wrapper, shown]);
+
+  // THE INLINE ADD: `AddProjectForm`'s form in step 2's body. A success goes back to the list, re-reads it and picks the
+  // new project; one that lands after the form went away (the sheet closed, or Back) is said, and picks nothing.
+  const addForm = useProjectAddForm({
+    active: open && adding,
+    add: addProject ?? NO_ADD,
+    adding: addingProject,
+    onAdded: (added, dismissed) => {
+      toast(projectAddedText(added.name, added.source));
+      if (dismissed) return;
+      setAdding(false);
+      setQuery('');
+      setPendingPick(added.name);
+      setListEpoch((n) => n + 1);
+    },
+  });
+  const openAdd = (): void => {
+    setAdding(true);
+    setNotice(null);
+  };
+  const takeOffer = (): void => {
+    if (offer === null || offer.kind === 'existing') return;
+    openAdd();
+    if (offer.kind === 'empty') addForm.fill({ source: 'empty', repo: '', name: offer.name }, { send: true });
+    else addForm.fill({ source: 'github', repo: query.trim(), name: offer.name ?? '' }, { send: offer.name !== null });
+  };
+  const offerText = offer === null || offer.kind === 'existing' ? null : projectOfferText(offer);
 
   // THE NAME DOOR (S8). A crossing project or an account a workspace never starts on closes it: the field is
   // disabled with its sentence, the preview asks nothing, and the start below is today's, whatever was typed.
@@ -475,7 +566,11 @@ export function NewSessionSheet({
       title="Start a session"
       // THE CONFIRM IS PINNED (the sheets' own footer, D-5932), not the last thing in a scrolling body: with the name
       // field, its preview and the routing row it fell below the fold at 360 and 390 wide. Step 1 has no confirm.
-      footer={wrapper === null ? undefined : (
+      footer={wrapper === null ? undefined : adding ? (
+        <div className={NAME_FIELD_CLASS.confirmRow}>
+          <Button variant="primary" disabled={addingProject} onClick={addForm.submit}>{addForm.confirmLabel}</Button>
+        </div>
+      ) : (
         <div className={NAME_FIELD_CLASS.confirmRow}>
           <Button variant="primary" disabled={!canStart || project === null} onClick={() => void start()}>
             <span className={NAME_FIELD_CLASS.confirmLabel}>
@@ -518,6 +613,14 @@ export function NewSessionSheet({
             )}
           </div>
         </>
+      ) : adding ? (
+        // The inline add (see the head of this file): the way back to the list, then the form. The account stays chosen.
+        <div className="grid gap-2">
+          <button type="button" className="acct-change" onClick={() => setAdding(false)}>
+            <span aria-hidden="true">‹</span> {PROJECT_ADD_TEXT.back}
+          </button>
+          {addForm.fields}
+        </div>
       ) : (
         // LOCKED WHILE THE REQUEST IS IN FLIGHT: a disabled fieldset disables every control inside it (the change link, the
         // search, the project rows, the three selects), so nothing the request was built from can change under it.
@@ -552,8 +655,12 @@ export function NewSessionSheet({
             onQuery={setQuery}
             list={shown}
             listError={shownError}
-            empty={inPool.length === 0 && otherPool.length === 0}
+            empty={offerText === null && inPool.length === 0 && otherPool.length === 0}
           >
+              {offerText !== null && <AddRow glyph="+" title={offerText.title} detail={offerText.detail} onPick={takeOffer} />}
+              {addProject !== undefined && offerText === null && needle === '' && (
+                <AddRow glyph="+" title={PROJECT_ADD_TEXT.open} onPick={openAdd} />
+              )}
               {inPool.map((candidate) => (
                 <ProjectRowButton
                   key={candidate.workdir}

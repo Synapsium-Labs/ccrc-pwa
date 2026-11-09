@@ -6,8 +6,8 @@
 // header's Docs, Account and Mail doors, which the base drew and today's head does not: they open places the phone's bottom
 // bar holds (desktop-polish PL10, D-7952; the Account door's name had changed to lead with its word, D-7897, before it went),
 // the programme box's title, which is now a door into its programme view, wrapped round the base's same title span (PL10, D26
-// amended), and the Add project row at the foot of each fleet list (add-project spec 2026-11-04 §2), which the base
-// predates; nothing else is removed or rewritten. The file renders the world ONCE: React's
+// amended), and the projects head over each fleet screen's list with its New project door (add-project spec 2026-11-04 §2,
+// as redrawn), which the base predates; nothing else is removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
 // differently from the capture's single render.
 import { createHash } from 'node:crypto';
@@ -46,8 +46,9 @@ const renumberIds = (html: string): string => {
     return `_r_${seen.get(id)}_`;
   });
 };
-/** The Add project row (add-project spec 2026-11-04 §2), once under each fleet list; its class list is `BareRow`'s. */
-const ADD_PROJECT_ROW = /<button type="button" class="[^"]*\bfleet-add-project-row"><span aria-hidden="true">\+ <\/span>Add project<\/button>/g;
+/** The projects head (add-project spec 2026-11-04 §2, as redrawn), once over each fleet screen's list: named "Projects"
+ *  over the shared cards, the New project door alone over Instrument's table. Its button's class list is `Button`'s. */
+const PROJECTS_HEAD = /<div class="fleet-projects-head [^"]*">(?:<h2 class="[^"]*">Projects<\/h2>)?<button type="button" class="[^"]*"><svg[^>]*>[\s\S]*?<\/svg>New project<\/button><\/div>/g;
 
 describe('an older server: no delegation frame, the base\'s fleet (delegation broker wave 4)', () => {
   it('W4-U27: origin/main\'s frame sequence renders unavailable, the base\'s markup, and no delegation word', () => {
@@ -69,8 +70,9 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       expect(html.match(HEAD_DOORS), `${view}: today's head draws no door to a bar place`).toBeNull();
       // Each box's title is a door today, round the very span the base drew.
       expect(html.match(TITLE_DOOR)?.length ?? 0, `${view}: one title door per box`).toBe(baseline.views[view].split('class="pg-title"').length - 1);
-      expect((html.match(ADD_PROJECT_ROW) ?? []).length, `${view}: one Add project row per fleet list`).toBe(count(baseline.views[view], LIST));
-      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(ADD_PROJECT_ROW, '');
+      // The Instrument view renders the skin's table alone, outside `FleetScreen`, so it draws no head.
+      expect((html.match(PROJECTS_HEAD) ?? []).length, `${view}: one projects head per fleet screen`).toBe(view === 'instrument' ? 0 : 1);
+      const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '');
       expect(old, `${view}: no other delegation attribute`).not.toContain('data-delegation');
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {
         expect(html, `${view}: no "${word}"`).not.toContain(word);

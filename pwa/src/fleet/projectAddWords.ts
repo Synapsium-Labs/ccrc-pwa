@@ -12,16 +12,27 @@ import { ApiError } from '../lib/apiError';
 import { refusalText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
 import {
-  deriveProjectName, isNewProjectName, parseGithubRepo, PROJECT_NAME_MAX, type ProjectAddBody, type ProjectAddSource,
+  deriveProjectName, isNewProjectName, parseGithubRepo, PROJECT_NAME_MAX, type GithubRepo, type ProjectAddBody,
+  type ProjectAddSource,
 } from '../../../shared/projectAdd';
 import type { ProjectAddRefusal, RouteRefusal } from '../../../shared/refusal';
 import { BAD_REQUEST_TEXT } from './workspaceAddWords';
 
 /** The sheet's labels. Short words only: a sentence lives in one of the tables below, once. */
 export const PROJECT_ADD_TEXT = {
-  /** The row on the fleet screen, the sheet's title and its confirm. */
+  /** The doors: the fleet screen's projects head, the first-run panel, the new-session sheet's row, the palette. */
+  open: 'New project',
+  /** The fleet screen's head over its project list, which carries the door. */
+  projectsHead: 'Projects',
+  /** The form's confirm. */
   add: 'Add project',
+  /** The sheet's title. */
+  title: 'Add a project',
   eyebrow: 'new project',
+  /** The new-session sheet's way back from its inline form to its project list. */
+  back: 'Back to projects',
+  /** The success toast's action: a session in the project just added. */
+  startSession: 'Start session',
   source: 'Start from',
   github: 'From GitHub',
   empty: 'Empty',
@@ -154,15 +165,45 @@ export function projectAddRefusalText(err: unknown, source: ProjectAddSource): s
 }
 
 /** The success toast. An empty project can take a session in its main checkout at once, but no workspace until it has
- *  a GitHub `origin` (ccd's `ws-add` needs `origin/HEAD`), so its toast says both. On a fleet with no sessions yet the
- *  screen is the first-run panel, which draws no project cards, so nothing on screen shows the new project: the toast
- *  says where to start a session in it (the panel's own button). */
-export function projectAddedText(name: string, source: ProjectAddSource, opts: { firstRun?: boolean } = {}): string {
-  if (opts.firstRun === true) {
-    const start = `Added project ${name}. Tap Start a session to work in it.`;
-    return source === 'empty' ? `${start} It can take workspaces once it has a GitHub remote.` : start;
-  }
+ *  a GitHub `origin` (ccd's `ws-add` needs `origin/HEAD`), so its toast says both. Where to start that session is the
+ *  toast's own action (`PROJECT_ADD_TEXT.startSession`), or the new-session sheet the project was added from. */
+export function projectAddedText(name: string, source: ProjectAddSource): string {
   return source === 'empty'
     ? `Added project ${name}. It can take a session now, and workspaces once it has a GitHub remote.`
     : `Added project ${name}`;
+}
+
+/** What the new-session sheet's project search offers to ADD, beside the projects it matches:
+ *  - `clone`: the search reads as a GitHub repository (`parseGithubRepo`), and the project it would make is not here
+ *    yet. `name` is the project's (the repo's own), or `null` when the repo's name is not one a new project may take
+ *    (`.github`), so the form must ask for one.
+ *  - `existing`: the search reads as a repository whose project is already here; the sheet shows that project.
+ *  - `empty`: the search is a name a new project may take and no project's name contains it.
+ *  `null`: nothing to offer (a blank search, or one that matches a project by name). */
+export type ProjectSearchOffer =
+  | { kind: 'clone'; repo: GithubRepo; name: string | null }
+  | { kind: 'existing'; name: string }
+  | { kind: 'empty'; name: string }
+  | null;
+
+export function projectSearchOffer(query: string, names: readonly string[]): ProjectSearchOffer {
+  const q = query.trim();
+  if (q === '') return null;
+  const repo = parseGithubRepo(q);
+  if (repo !== null) {
+    const name = deriveProjectName(repo);
+    return name !== null && names.includes(name) ? { kind: 'existing', name } : { kind: 'clone', repo, name };
+  }
+  const needle = q.toLowerCase();
+  if (!isNewProjectName(q) || names.some((n) => n.toLowerCase().includes(needle))) return null;
+  return { kind: 'empty', name: q };
+}
+
+/** An offer row's two lines: what a tap does, and what it makes. */
+export function projectOfferText(offer: Exclude<ProjectSearchOffer, null | { kind: 'existing' }>): { title: string; detail: string } {
+  if (offer.kind === 'empty') return { title: `Create empty project ${offer.name}`, detail: 'A new git repository on the fleet box' };
+  const title = `Clone ${offer.repo.owner}/${offer.repo.repo}`;
+  return offer.name === null
+    ? { title, detail: "From GitHub. Its name can't be a project's, so give it one" }
+    : { title, detail: `From GitHub, as project ${offer.name}` };
 }
