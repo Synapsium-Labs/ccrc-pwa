@@ -96,7 +96,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-one clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -125,7 +125,7 @@ const CONTRACT = [
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
   // Landing-order wave 1 (spec 2026-09-23 §5.1). Its two apostrophes are the straight ones in `wave's`, from main's
   // ledger-branch rule, which the fix-round-5 merge brought in, and in `merge train's`, from the train-landing proof.
-  // Each is escaped in this literal and typed straight in SKILL.md, so a curly spelling there reds this pin. The whole line is pinned too, in the test after "carries all twenty".
+  // Each is escaped in this literal and typed straight in SKILL.md, so a curly spelling there reds this pin. The whole line is pinned too, in the test after "carries all twenty-one".
   // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
   // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is
   // never used (spec §11, ruling 5 of 2026-10-25).
@@ -143,10 +143,13 @@ const CONTRACT = [
   // Programme ledgers PL7 (D-7715), operator-approved text. Its two apostrophes are straight, in `operator's` and `spec's`; its two
   // double quotes are escaped here and typed straight in SKILL.md.
   "The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and a `decide` item names the option this session recommends and why it beats each alternative, a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own \"Waiting on you\" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.",
+  // Coordinator autonomy default, clause 21 (D-8126, operator-approved words 2026-11-09). Its apostrophes are straight, in `programme's`;
+  // it names the SAFETY rule class and never a destructive verb, and the client verbs, never a route.
+  "This session decides by default and keeps going. It stops a thread of work only for a decision or act only the operator can make — an irreversible or outward-facing act (a SAFETY-listed destructive or live-box act, publishing, messaging people), spend beyond plan (usage credits, paid services, new accounts), a change to the programme's goals, scope or definition of done, or credentials and access — or when it is physically blocked after its self-healing has been tried: no account has room, the box is out of disk or memory after its own cleanup and the memory gate, an external service is down after retries with backoff, or a repository or tool is beyond its rights. Before asking the operator anything else, it reads the programme's goals and definition of done (`ccrc-api goals show <slug>`, the ledger, the spec), decides, records the call with `ccrc-api calls record` — a design-level call as `big`, which the operator sees and may overturn, every other call as `routine` — and continues in the same turn. A parked thread never parks the programme: it raises the item and works every unblocked thread, and ends its turn only when none is left or its children hold the work. It never opens an AskUserQuestion dialog on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty clauses verbatim', () => {
+  it('carries all twenty-one clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -201,7 +204,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These twenty sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These twenty-one sentences" (SKILL.md), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -216,7 +219,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -236,12 +239,12 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These twenty sentences").
+    // SKILL.md states it once in its own words ("These twenty-one sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
     // 5 discussion) from counting as a hit.
-    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines|sentences)\b/g)]
+    const stated = [...skill.matchAll(/\b([a-z]+(?:-[a-z]+)?) (?:clauses|lines|sentences)\b/g)]
       .map((m) => m[1]!).filter((w) => WORDS.includes(w));
     expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
       .toBeGreaterThanOrEqual(1);
@@ -257,7 +260,7 @@ describe('the coordinator skill: its contract', () => {
       const text = readFileSync(path.join(root, rel), 'utf8');
       let hits = 0;
       for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
-        const m = /\b([a-z]+)\s+clauses\b/.exec(text.slice(i, i + 160));
+        const m = /\b([a-z]+(?:-[a-z]+)?)\s+clauses\b/.exec(text.slice(i, i + 160));
         expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
         expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
           .toBe(COUNT_WORD);
@@ -631,7 +634,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(20);
+    expect(CONTRACT).toHaveLength(21);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
