@@ -1,6 +1,9 @@
 # ccrc history W4: subagent history and `touched` (spec addendum)
 
-**Spec** · 2026-10-29 · Status: Draft, for the operator's approval · Owner: the operator approves; the programme's coordinator drafts · Linear: none · Related: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.6: §6.2, §7.4, §8.2, §9.3, §9.15, §10.4, §10.6 item 5, §10.7), `docs/superpowers/programs/ccrc-history.md` (Stage 7, CP-70 to CP-73), `docs/superpowers/plans/2026-10-29-ccrc-history-w3-steering.md` (W3, independent of this)
+**Spec** · 2026-10-29 · Status: Approved by the operator, 2026-11-09 (item 121) · Owner: the operator approves; the programme's coordinator drafts · Linear: none · Related: `docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md` (rev 3.6: §6.2, §7.4, §8.2, §9.3, §9.15, §10.4, §10.6 item 5, §10.7), `docs/superpowers/programs/ccrc-history.md` (Stage 7, CP-70 to CP-73), `docs/superpowers/plans/2026-10-29-ccrc-history-w3-steering.md` (W3, independent of this)
+
+> [!NOTE]
+> **Approved on 2026-11-09.** The operator approved this addendum on 2026-11-09 (programme item 121), after review 1702. The caution box below was written before that approval. Its "held draft" and "is not approved", and every line in it that waits for this addendum's approval, describe the addendum before it. The approval authorises this document's merge and the drafting of the W4 plan (CP-71), with its own independent review; no W4 implementation starts before that plan is accepted. Every other gate in the box stands as written, W1-B4 live before any subagent capture and the operator's ingest arming marker among them.
 
 > [!CAUTION]
 > **A held draft. It authorises nothing.** It was drafted under CP-70 and is not approved. On 2026-11-08 the operator (items 92 to 94) and the coordinator (the programme ledger) ruled every row of its decision table. The rulings select options. They approve neither this addendum nor any plan.
@@ -29,7 +32,7 @@
   - the transcripts of subagents and workflow agents join the lossless store, each linked to its parent;
   - a read-only `ccrc history touched <path|symbol>` verb that names the history nodes whose refs name a file.
 - **What this addendum does.** It turns spec §10.4's five bullets into decisions a plan can be built from: the link and how it is resolved, the census and its populations, the scan rules for subagent boundaries, `touched`'s matching, output and ranking, what growth does to the cap, file ownership, a pin table, a failure table and a PR split.
-- **Approved, ruled and proposed are kept apart.** Section 2 lists what the operator has already approved, with its source. Section 4's decision table lists every choice, P1 to P20, and each is now ruled: the operator ruled P1 to P9 and P11 to P19 (items 92 to 94), and the coordinator ruled P10 and P20 (the programme ledger), on 2026-11-08. Each row gives the option chosen, who ruled and where, the options not chosen, its PR and its consumer. The rest of the design stays a proposal until the operator approves this addendum.
+- **Approved, ruled and proposed are kept apart.** Section 2 lists what the operator has already approved, with its source. Section 4's decision table lists every choice, P1 to P20, and each is now ruled: the operator ruled P1 to P9 and P11 to P19 (items 92 to 94), and the coordinator ruled P10 and P20 (the programme ledger), on 2026-11-08. Each row gives the option chosen, who ruled and where, the options not chosen, its PR and its consumer. The rest of the design was a proposal until the operator approved this addendum on 2026-11-09 (item 121).
 - **What the rulings settled:**
   - P5: subagent capture pauses first, at 90% of the store cap, with a doctor WARN, while main history keeps capturing up to the cap;
   - P6: no automatic backfill of past subagent text. An operator import with a dry-run forecast brings it in, through a new bulk writing form, `import-agents-apply`, which is not irreversible, like `import-apply`. No such form exists today (section 3.6);
@@ -658,7 +661,7 @@ This section says how W4 would be shown to work, and what stays unproven until i
 
 ### Waiting on you
 
-- Approval of this addendum (A11, CP-70). W2 PASS is no longer its prerequisite (the 2026-11-02 ruling). The rulings of 2026-11-08 select its options; they do not approve it.
+- Nothing from this addendum now. The operator approved it on 2026-11-09 (item 121; A11, CP-70), after review 1702. The W4 plan and your ingest arming marker are under Later.
 
 ### Later
 
