@@ -19760,7 +19760,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # A cached 1 keeps a strand verdict stable until the next scan, but the DRAFT
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
-  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1 box narrow=""
+  local id="$1" pane="$2" last now scan scan_ts scan_verdict verdict=0 born lrc=1 box narrow="" cap menu=""
   # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
   # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
   # write ` via=transcript`, which was sound only while this function had exactly
@@ -19799,14 +19799,23 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
     # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
     # both still reports the older, more specific detector.
-    _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
+    # THE MENU'S BANNER (D-8123): while Claude Code's rate-limit menu is up the banner sits above it, outside the tick's
+    # `tail -8`, so this rung reads the whole visible pane then (`_pane_limit_capture_to`) and `menu` is remembered for
+    # the cache below. The pane text the rest of the function sees is still the tail: `_pane_hard_blocked` never reads
+    # the conversation.
+    _pane_limit_capture_to cap "$id" "$pane"
+    _pane_limit_menu "$cap" && menu=1
+    _pane_limit_banner "$cap" && { _pane_carried_in "$id" banner "$cap" && { HARD_BLOCK_NO=carried-in; HARD_BLOCK_EV=banner; return 1; }; HARD_BLOCK_VIA=banner; return 0; }
     grep -q "esc to interrupt" <<<"$pane" && { HARD_BLOCK_NO=running; return 1; }
   fi
   _now_s_to now; _reg_get_to last "$id" stalepress   # D-4961: the clock seam; D-4963: a builtin read, no subshell
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && { HARD_BLOCK_NO=stalepress; return 1; }
   _reg_get_to scan "$id" tscan   # D-4963: a builtin read, no subshell (tick-diet spec §6.4)
   scan_ts="${scan%% *}"; scan_verdict="${scan#* }"
-  if [[ "$scan_ts" =~ ^[0-9]+$ && "$scan_verdict" =~ ^[01]$ \
+  # THE VERDICT CACHE IS NOT REUSED WHILE THE MENU IS UP (D-8123): the menu is a limit sign, so a 30 s old negative is the
+  # very answer that kept a limited session on its menu for half a minute. The fresh scan below still writes its answer
+  # back. (A banner on screen never reaches this line: the pane rungs above answered it.)
+  if [[ -z "$menu" && "$scan_ts" =~ ^[0-9]+$ && "$scan_verdict" =~ ^[01]$ \
         && $((now - scan_ts)) -lt "$TRANSCRIPT_ARM_INTERVAL" ]]; then
     verdict="$scan_verdict"
   else
@@ -19830,6 +19839,34 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   [[ "$box" == draft ]] && { HARD_BLOCK_NO=draft; HARD_BLOCK_EV=transcript; return 1; }
   HARD_BLOCK_VIA=transcript; _hard_block_dated "$id"
   return 0
+}
+
+_pane_limit_menu() {   # pane text -> success iff Claude Code's rate-limit menu is up (D-8123)
+  # THE MENU OPENS BY ITSELF when a limit lands and pushes the banner above it out of the tick's `tail -8`. It is Claude
+  # Code's own question, `What do you want to do?`, over a numbered list whose cursor row (`❯ 1. Stop and wait for limit
+  # to reset`) names one of its options. BOTH must be on the text: the question alone could be prose, and a cursor row
+  # alone could be any other list. If Claude Code rewords the menu this stops matching and detection falls back to the
+  # transcript rung within TRANSCRIPT_ARM_INTERVAL, with no key sent either way (the plan's known limits). The menu is
+  # never answered: the rescue ends the session and resumes it on another account, because an Enter or a digit here can
+  # pick "Switch to usage credits".
+  # BUILTINS ONLY, no process: `_session_hard_blocked` asks this on every tick's pane, and the steady tick's fork budget
+  # (`ccd-tick-budget.test.ts`) counts every `grep` a healthy session pays.
+  local _re=$'(^|\n)[[:space:]]*❯[[:space:]]*[0-9]+\\.[[:space:]]+(Stop and wait for limit to reset|Switch to usage credits)'
+  [[ "$1" == *"What do you want to do?"* && "$1" =~ $_re ]]
+}
+
+_pane_limit_capture_to() {   # var id tail -> var = the whole visible pane iff the rate-limit menu is on it, else tail unchanged (D-8123)
+  # ONE EXTRA `capture-pane -p`, and only when the tick's tail shows the menu's footer or its question row; every other
+  # tick pays two builtin glob tests and no process. `tail` is what the caller already read (`tail -8`): the whole pane is
+  # returned ONLY when `_pane_limit_menu` holds on it, so the banner above an auto-opened menu is reachable while text in
+  # the conversation, with no menu up, never is. The caller asks only the specific current-banner pattern of the result
+  # (`_pane_limit_banner`); the broad `_pane_hard_blocked` stays on the tail.
+  local _v="$1" _id="$2" _tail="$3" _full
+  if [[ "$_tail" == *"Enter to confirm · Esc to cancel"* || "$_tail" == *"What do you want to do?"* ]]; then
+    _full=$(tmux capture-pane -t "$(_tmux_t "$_id")" -p 2>/dev/null)
+    if _pane_limit_menu "$_full"; then printf -v "$_v" '%s' "$_full"; return 0; fi
+  fi
+  printf -v "$_v" '%s' "$_tail"
 }
 
 _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
