@@ -4,14 +4,19 @@
 // test that ticks and ends without draining them leaves them running, and they `console.warn` after the file's last
 // test: vitest's worker sends each console write over its rpc, and one that lands while the worker closes fails a
 // shard whose every test passed ("EnvironmentTeardownError: Closing rpc while onUserConsoleLog was pending"). The
-// remedy is `quietAtTestEnd` (or `quietWatcher`, or a drain the file does itself) in `laneQuiet.ts`.
+// remedy is `quietAtTestEnd` (or `quietWatcher`, or `drainWatcher` in the file's own teardown) in `laneQuiet.ts`.
 //
-// WHAT THIS PINS: a file whose text builds a watcher also names one of the quieting calls, or stands on `EXEMPT` with
-// its reason. `EXEMPT` may only shrink: its size is pinned, an entry whose file no longer builds a watcher or now
-// quiets one goes red until it is removed, and a new builder that quiets nothing goes red until it does.
-// WHAT IT CANNOT SEE: whether every watcher in a file is quieted (one named call passes the file), and a watcher built
-// in a rig file another file imports (the rig file is the one that must quiet it). Text, not parse: a comment that
-// names a quieting call would pass a file, which review sees.
+// WHAT THIS PINS: a file whose text builds a watcher also names one of the TEARDOWN forms (`QUIETS`), or stands on
+// `EXEMPT` with its reason. `EXEMPT` may only shrink: its size is pinned, an entry whose file no longer builds a watcher
+// or now quiets one goes red until it is removed, and a new builder that quiets nothing goes red until it does.
+// `closeDelegation()` and `drainTick()` are not teardown forms: each is partial (the first leaves the server-caps beat
+// and the inventory run, the second the delegation lane), and either can sit in the middle of one case, so a file that
+// names only them is exempt as a partial quiet (review 1724 F1: such a mid-test call passed `asks-sweep.test.ts` at
+// `df772b392` while no case quieted its fixture's watcher, the second cause CI found).
+// WHAT IT CANNOT SEE: whether every watcher in a file is quieted (one named form passes the file), whether the form
+// runs at a test's end (a `drainWatcher` call can sit mid-test too), and a watcher built in a rig file another file
+// imports (the rig file is the one that must quiet it). Text, not parse: a comment that names a quieting call would
+// pass a file, which review sees.
 //
 // The exemptions are the files a recorder run found writing nothing to the console after their last test on
 // 2026-11-09 (C17's note, `docs/superpowers/plans/2026-10-22-desktop-polish/c17.md`, has the method and the counts).
@@ -23,7 +28,8 @@ import { fileURLToPath } from 'node:url';
 const TEST_ROOT = path.dirname(fileURLToPath(import.meta.url));
 /** Spelled in two halves so this file is not a builder by its own needle. */
 const BUILDS = new RegExp(['new Fleet', 'Watcher\\('].join(''));
-const QUIETS = /\b(quietAtTestEnd|quietWatcher|drainWatcher|drainTick|closeDelegation)\(/;
+/** The teardown forms (see the header): `closeDelegation(` and `drainTick(` are partial, so they are not here. */
+const QUIETS = /\b(quietAtTestEnd|quietWatcher|drainWatcher)\(/;
 
 /** Every `.ts` file under `server/test`, relative to it, sorted. `node_modules` and fixture trees are not entered. */
 function testFiles(): string[] {
@@ -43,6 +49,8 @@ function testFiles(): string[] {
 const MEASURED = 'builds a watcher and wrote nothing after its last test in the 2026-11-09 recorder run';
 const RIG = 'a rig: every test file that imports it wrote nothing after its last test in the 2026-11-09 recorder run';
 const HELD = MEASURED + '; held by another programme\'s claim when C17 ran, so not edited';
+/** Review 1724 F1: the file names only a partial quiet, which the census counted until fix round 1. Not measured late. */
+const PARTIAL = (call: string): string => `partial quiet: ${call}`;
 
 /** Files that build a watcher and quiet none, each with why that is allowed today. May only shrink. */
 const EXEMPT: Record<string, string> = {
@@ -69,11 +77,22 @@ const EXEMPT: Record<string, string> = {
   'claim-sweep.test.ts': MEASURED,
   'claimantClientFixture.ts': RIG,
   'claims-no-hold.test.ts': MEASURED,
+  'collectLaneFixture.ts': PARTIAL('drainTick(), in a rig'),
   'coord-abandon.test.ts': MEASURED,
+  'coordinator-intent-route.test.ts': PARTIAL('closeDelegation()'),
   'ctx-pressure.test.ts': MEASURED,
   'dead-coordinator-lane.test.ts': MEASURED,
   'dead-dispatch-characterization.test.ts': MEASURED,
   'dead-dispatch-lane.test.ts': MEASURED,
+  'delegation-adoption-corpus.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-adoption-lane.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-carrier-lane.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-compaction-lane.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-frame.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-pass-timing.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-sweep-clock.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-watch.test.ts': PARTIAL('closeDelegation()'),
+  'delegation-wave3.integration.test.ts': PARTIAL('closeDelegation(); held by another programme\'s claim, so not edited'),
   'deliverability-parity.test.ts': MEASURED,
   'deps-shed-watcher.test.ts': MEASURED,
   'dialog.test.ts': MEASURED,
@@ -100,8 +119,10 @@ const EXEMPT: Record<string, string> = {
   'mail-delivery-characterization.test.ts': MEASURED,
   'mail-sweep.test.ts': MEASURED,
   'name-sweep.test.ts': MEASURED,
+  'orphan-tree-beat-ready.test.ts': PARTIAL('closeDelegation()'),
   'pr-sweep.test.ts': MEASURED,
   'projects-route-cache.test.ts': MEASURED,
+  'push-copy.test.ts': PARTIAL('closeDelegation()'),
   'questions-clock-pin.test.ts': MEASURED,
   'questions-instances.test.ts': MEASURED,
   'questions-sequence-pin.test.ts': MEASURED,
@@ -142,8 +163,10 @@ const EXEMPT: Record<string, string> = {
   'usage-sweep-lane.test.ts': MEASURED,
   'watcherTeardown.test.ts': MEASURED,
 };
-/** The pinned size of `EXEMPT`: lower it when an entry goes; raising it is a decision a reviewer sees. */
-const EXEMPT_CEILING = 95;
+/** The pinned size of `EXEMPT`: lower it when an entry goes; raising it is a decision a reviewer sees. Raised once, from
+ *  95 by the 13 partial quiets (fix round 1 of C17, review 1724 F1): a correction of what the census measured, not a
+ *  new loud builder. It only falls from here. */
+const EXEMPT_CEILING = 108;
 
 describe('every test that builds a FleetWatcher quiets it, or is exempt with its reason (D-8140)', () => {
   const files = testFiles();
@@ -158,6 +181,16 @@ describe('every test that builds a FleetWatcher quiets it, or is exempt with its
   it('a builder quiets its watcher, or stands on EXEMPT', () => {
     const loud = builders.filter((f) => !QUIETS.test(text.get(f)!) && !(f in EXEMPT));
     expect(loud, 'build a watcher, quiet none, and are not exempt: register quietAtTestEnd (laneQuiet.ts)').toEqual([]);
+  });
+
+  it('a partial or mid-test call does not quiet a file; a teardown form does (review 1724 F1)', () => {
+    const build = 'const w = new Fleet' + 'Watcher(deps, bus, 10_000);';
+    const midTest = `it('x', async () => { ${build} await w.tick(); await w.closeDelegation(); });`;
+    expect(BUILDS.test(midTest), 'the sample builds a watcher').toBe(true);
+    expect(QUIETS.test(midTest), 'a mid-test closeDelegation() alone').toBe(false);
+    expect(QUIETS.test(midTest.replace('w.closeDelegation()', 'drainTick(w)')), 'a drainTick() alone').toBe(false);
+    expect(QUIETS.test(`afterEach(() => w.closeDelegation()); ${midTest}`), 'closeDelegation() in afterEach').toBe(false);
+    expect(QUIETS.test(midTest.replace(build, `const w = quietAtTestEnd(${build.slice(10, -1)});`)), 'quietAtTestEnd').toBe(true);
   });
 
   it('EXEMPT only shrinks: every entry still builds a watcher and still quiets none, and its size is pinned', () => {
