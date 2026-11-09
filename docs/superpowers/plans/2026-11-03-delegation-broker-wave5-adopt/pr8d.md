@@ -34,6 +34,10 @@ everything it needs. The words pass `literal-census`, `plain-words` and the card
   "would keep 4" (and no `4` at all), does carry the next-pass sentence, and still names kept, waiting and unchanged;
 - shadow, would keep 4: the counts line still carries "would keep 4" and no next-pass words.
 
+A third row pins the sheet's sentences outside shadow word for word (modes unmeasured, live and suspended, each with the mail
+sentence), as literals: the sheet's two "cannot say" sentences are now built from the phrases the counts line shares, and the row
+proves they render exactly as on main. It passes against main's words module and against this one.
+
 Red first at main (ec07e0bdf): the three unmeasured rows failed (`expected 'Last pass: kept 1, would keep 4, wait…' not to match
 /would keep 4/`), and the shadow row passed. Green after the change: 83 of 83 in the file. FR4's F4 row (the sheet at mode
 unmeasured, would keep 4) passes unchanged.
@@ -49,8 +53,17 @@ and restored with its sha256 checked:
 | the figure shown in every mode, the next-pass words kept | 3 red (the three unmeasured rows) |
 | the next-pass words dropped, the figure still hidden | 3 red (the three unmeasured rows) |
 | the figure hidden in every mode | 2 red (the shadow row, and review 1693 F8's "would keep 0" row) |
+| the shared "cannot say" phrase reworded | 4 red (the three unmeasured rows and the sheet's word-for-word row) |
+| the shared "would keep" phrase reworded | 4 red (the three unmeasured rows and the sheet's word-for-word row) |
 
 ## Out of scope, untouched
 
 The sheet, the mode line, the list, the confirm path, focus and refocus, the hook, `lib/api.ts`, the server side of the door, every
 Rider item and PR9. No file under `server/src`, `ui/` or `agent/`; no `shared/switches.ts`.
+
+## Owed to README
+
+README.md was held by another programme's run's claim for the whole of this PR, so the README's card paragraph is not changed
+here (the coordinator's ruling). The sentence owed, in "The switch's card: Settings › Automation › Worktrees left behind":
+"with every count" becomes "with every count, but for the would-keep figure after a pass that could not read everything it
+needs, where it says the card cannot say how many until the next pass".

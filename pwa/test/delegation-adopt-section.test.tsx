@@ -414,6 +414,19 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(s).toMatch(/mail/i);
   });
 
+  // Item 131 (PR8d): the sheet's two "cannot say" sentences are now built from the phrases the counts line shares, so this row
+  // pins what the sheet renders, word for word as before the split, in modes unmeasured, live and suspended.
+  it('the sheet\'s sentences outside shadow, word for word, after the phrases they share with the counts line were split out (item 131)', () => {
+    const unread = 'The last pass could not read everything it needs, so this card cannot say how many until the next pass.';
+    const uncounted = 'The last pass did not count what turning this on would keep, so this card cannot say how many until the next pass.';
+    const mail = 'The session that started each agent is mailed about its worktree. A kept worktree stays held back from the disk '
+      + 'sweep until its hold ends.';
+    const sheet = (mode: DelegationAdoptionHealth['mode']): string[] => delegationAdoptConfirm(health({ mode, wouldAdopt: 4 })).consequence;
+    expect(sheet('unmeasured')).toEqual([unread, mail]);
+    expect(sheet('live')).toEqual([uncounted, mail]);
+    expect(sheet('suspended')).toEqual([uncounted, mail]);
+  });
+
   it('the words speak of the last pass and the mode, and a refusal of on speaks of on only (review 1699 R2-5, R2-6, R2-7)', () => {
     for (const w of [T.nothingCounted, T.confirmCannotCount]) {
       expect(w).not.toMatch(/since it started/);
