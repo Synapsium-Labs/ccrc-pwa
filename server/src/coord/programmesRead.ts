@@ -173,14 +173,21 @@ function lastMoveOf(gs: readonly GroupRow[], openIds: readonly number[], moveOf:
   return best;
 }
 
-/** How a programme with no open run ended, from its WORK runs alone (A26). Null with no work run. */
+/** How a programme with no open run ended, from its WORK runs alone (A26). Null with no work run. The ending is judged from each
+ *  wave's newest work run, the pick `wavesOf` makes: a wave whose first attempt failed and whose retry finished is done, and a
+ *  superseded attempt gives neither `neverStarted` nor `closedBy`. */
 function endingOf(gs: readonly GroupRow[]): ProgrammeEnding | null {
   const work = gs.filter((g) => g.kind === 'work');
   if (work.length === 0) return null;
-  const waves = new Set(work.map((g) => g.wave)).size;
-  const failed = work.filter((g) => g.state === 'failed');
+  const newestOf = new Map<number, GroupRow>();
+  for (const g of work) {
+    const cur = newestOf.get(g.wave);
+    if (cur === undefined || g.maxId > cur.maxId) newestOf.set(g.wave, g);
+  }
+  const waves = newestOf.size;
+  const failed = [...newestOf.values()].filter((g) => g.state === 'failed');
   if (failed.length === 0) return { outcome: 'complete', waves, neverStarted: 0, closedBy: null };
-  const neverStarted = failed.filter((g) => g.closeDetail === NEVER_STARTED_DETAIL).reduce((n, g) => n + g.n, 0);
+  const neverStarted = failed.filter((g) => g.closeDetail === NEVER_STARTED_DETAIL).length;
   const newest = failed.reduce((a, b) => ((b.lastClosed ?? 0) > (a.lastClosed ?? 0) ? b : a));
   const closedBy = newest.closedBy !== null && CLOSED_BY.includes(newest.closedBy) ? (newest.closedBy as RunClosedBy) : null;
   return { outcome: 'ended', waves, neverStarted, closedBy };

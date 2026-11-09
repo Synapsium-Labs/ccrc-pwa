@@ -49,12 +49,35 @@ function derivedRow(slug: string, open: readonly RunSummary[]): ProgrammeRow {
   };
 }
 
+/** The row with its last move raised to the newest move the live frame holds for the programme's open runs. */
+function withFrameMove(row: ProgrammeRow, open: readonly RunSummary[]): ProgrammeRow {
+  let best = row.lastMoveAt;
+  for (const r of open) {
+    const t = runLastMove(r);
+    if (t !== null && (best === null || t > best)) best = t;
+  }
+  return best === row.lastMoveAt ? row : { ...row, lastMoveAt: best };
+}
+
+/** Whether a body is a `GET /api/programmes` answer: a partial one reads as no answer, never as a crash (D-8075). */
+export function isProgrammesAnswer(a: unknown): a is ProgrammesAnswer {
+  if (typeof a !== 'object' || a === null) return false;
+  const o = a as { programmes?: unknown; closedToday?: unknown };
+  const c = o.closedToday as { operator?: unknown; sweep?: unknown; coordinator?: unknown } | null | undefined;
+  return Array.isArray(o.programmes) && typeof c === 'object' && c !== null
+    && typeof c.operator === 'number' && typeof c.sweep === 'number' && typeof c.coordinator === 'number';
+}
+
 /** The cards: one per programme the live frame holds an open run of, each with the read's row when it has one. A programme
  *  with a gone coordinator has a card too, because the cards come from runs and not from coordinators. */
 export function openCards(open: readonly RunSummary[], answer: ProgrammesAnswer | null): CardProgramme[] {
   const rows = new Map((answer?.programmes ?? []).map((p) => [p.slug, p] as const));
   return runsByProgram(open).map(({ program, runs }) => {
-    const row = rows.get(program) ?? derivedRow(program, runs);
+    const read = rows.get(program);
+    // The read is a snapshot taken when a run's state last changed; the live frame carries each run's newer `lastMoveAt` (D-7334)
+    // without any state change, so the card's last move is the newer of the two, or a worker moving inside one long state
+    // would read as stalled.
+    const row = read === undefined ? derivedRow(program, runs) : withFrameMove(read, runs);
     const named = programmeTitle(program, runs);
     return { row, open: runs, title: named !== program || row.title.trim() === '' ? named : row.title };
   });
@@ -144,6 +167,7 @@ export function usePrograms(
     try {
       const a = await readRef.current(localMidnight(nowRef.current()));
       if (mine !== issued.current) return;
+      if (!isProgrammesAnswer(a)) { setState('older'); setTimedOut(false); return; }
       setAnswer(a);
       setState('ok');
       setTimedOut(false);

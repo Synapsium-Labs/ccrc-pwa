@@ -6,7 +6,7 @@ import type { FleetSession, ProgrammeEnding, RunStuck, RunSummary } from '../../
 import { navigate } from '../src/lib/router';
 import { clearScreenCache } from '../src/lib/screenCache';
 import { ProgrammeCard, cardLine } from '../src/screens/ProgrammeCard';
-import { endingWords, openCards, quietSplit, sortCards, QUIET_AFTER_MS, type CardProgramme } from '../src/screens/usePrograms';
+import { endingWords, isProgrammesAnswer, openCards, quietSplit, sortCards, QUIET_AFTER_MS, type CardProgramme } from '../src/screens/usePrograms';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { itemView, waitingView } from './ledgersFixture';
 import { RunsScreen, programmeRow, programmesAnswer } from './runs-board';
@@ -39,6 +39,22 @@ const cardOf = (open: RunSummary[], rowOver: Parameters<typeof programmeRow>[1] 
 };
 const draw = (card: CardProgramme, over: { quietMs?: number | null; paused?: boolean; needs?: number } = {}) =>
   render(<ul><ProgrammeCard card={card} nowMs={NOW} quietMs={over.quietMs ?? null} paused={over.paused ?? false} needs={over.needs ?? 0} /></ul>);
+
+describe('the live frame moves the card', () => {
+  it('a run that moved inside one state raises the read\'s last move', () => {
+    const card = cardOf([run(1, { lastMoveAt: NOW - 60_000 })], { lastMoveAt: NOW - 2 * H });
+    expect(card.row.lastMoveAt).toBe(NOW - 60_000);
+  });
+  it('the read stands when the frame holds nothing newer', () => {
+    const card = cardOf([run(1, { lastMoveAt: NOW - 3 * H })], { lastMoveAt: NOW - 2 * H });
+    expect(card.row.lastMoveAt).toBe(NOW - 2 * H);
+  });
+  it('a partial answer reads as no answer', () => {
+    expect(isProgrammesAnswer({})).toBe(false);
+    expect(isProgrammesAnswer({ ok: true, programmes: [] })).toBe(false);
+    expect(isProgrammesAnswer({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } })).toBe(true);
+  });
+});
 
 describe('the card', () => {
   it('is lamp and word, the name, and one context line of wave counts and the last move', () => {

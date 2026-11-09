@@ -106,6 +106,15 @@ describe('GET /api/programmes', () => {
     expect(r.waves.failed).toBe(2);
   });
 
+  it('a wave whose retry finished done does not make the programme read as ended', async () => {
+    seed({ wave: 1, state: 'done', closedBy: 'coordinator' });
+    seed({ wave: 2, state: 'failed', closedBy: 'sweep', closeDetail: 'abandon:never-started', closedAt: NOW - 3 * HOUR });
+    seed({ wave: 2, state: 'done', closedBy: 'coordinator', closedAt: NOW - HOUR });
+    const r = row((await read()).body);
+    expect(r.ending).toEqual({ outcome: 'complete', waves: 2, neverStarted: 0, closedBy: null });
+    expect(r.waves.failed).toBe(0);
+  });
+
   it('the wave counts put each wave in one group and reviews nest', async () => {
     seed({ wave: 1, state: 'done' });
     seed({ wave: 2, state: 'awaiting-review' });
