@@ -172,6 +172,16 @@ coordinator cites it by path; you do nothing different.
   `<new>^{tree}`. If any step fails, it is a move.
 - **The plan the brief names cannot be resolved**: report and stop. Never
   substitute `HEAD` or a checkout for an immutable coordinate.
+- **The run you review can never finish and cannot be closed.** Ask the operator to end it, naming the run under review;
+  asking is all a reviewer does. The coordinator is asked first, and you are told by mail if the request is withdrawn or kept:
+
+  ```bash
+  API="$HOME/.local/bin/ccrc-api"
+  "$API" runs end-request <run id> --json - <<JSON
+  {"byId":"$id","byUuid":"$uuid","why":"<what stops the run, in your words>"}
+  JSON
+  ```
+
 - **You cannot reach the server**: stop, say so in your pane. Nothing is done
   by hand.
 - **A `review-done-unmeasured` mail arrives** (a server mail whose body opens

@@ -2824,7 +2824,21 @@ export class CoordStore {
     this.db.prepare(
       'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(runId, now, from, to, causedBy, detail ?? null);
+    this.settleEndRequests(runId, from, to, causedBy, detail, now);
     return { ok: true as const, from, to };
+  }
+
+  /** D-8076 (spec 2026-11-04 §10): a planned run starting or any run ending handles the run's open end requests, in the
+   *  transition's own transaction, so no seam that moves a run (close, abandon, a sweep, a dispatch) can leave one behind.
+   *  The operator's own act (`abandon:requested:<item>`) is left to the act, which closes its item itself. */
+  private settleEndRequests(runId: number, from: string, to: RunState, causedBy: string, detail: string | undefined, now: number): void {
+    const ended = (TERMINAL_RUN_STATES as readonly string[]).includes(to);
+    if (!ended && !(from === 'planned' && to !== 'planned')) return;
+    if (detail?.startsWith('abandon:requested:') === true) return;
+    const note = ended
+      ? (causedBy === 'operator' ? 'The run was closed by you.' : causedBy === 'coordinator' ? 'Handled by its coordinator.' : 'The run closed.')
+      : 'Handled by its coordinator.';
+    ledgers.settleEndRequestsInTx(this.db, runId, note, now);
   }
 
   /**
@@ -10434,6 +10448,16 @@ export class CoordStore {
   moveItem(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }): ItemMoveResult { return ledgers.moveItem(this.db, id, act, actor, fields, now, ctx); }
   /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
   tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
+  /** A raise and its mail in ONE transaction; `queue` gets the new id and inserts the system mail (it opens no transaction). Returns the id. */
+  raiseItemWithMail<T>(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T): number { return ledgers.raiseItemWithMail(this.db, input, now, actor, queue).id; }
+  /** One move and its mail in ONE transaction (the withdraw and decline of an end request tell the asker, A22). */
+  moveItemWithMail<T>(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }, queue: (item: ItemRow) => T) { return ledgers.moveItemWithMail(this.db, id, act, actor, fields, now, ctx, queue); }
+  /** The run's open end request (held or not), or null; at most one is ever raised (`already-asked`). */
+  openEndRequestOf(runId: number): ItemRow | null { return ledgers.openEndRequestsOf(this.db, runId)[0] ?? null; }
+  /** The run's newest end request that ended in a decline or a withdraw (A24), or null. */
+  lastEndedEndRequest(runId: number) { return ledgers.lastEndedEndRequest(this.db, runId); }
+  /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
+  reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
   setSpecPin(program: string, specPath: string, inShort: string, now: number): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now); }

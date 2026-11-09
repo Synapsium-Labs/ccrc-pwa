@@ -464,6 +464,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/items/:id/blocking',
     'box-token machine lane, box token and attribution checked. The coordinator marks an item blocking, or lowers it; the item ' +
     'must belong to a programme the caller claims'],
+  ['POST /api/runs/:id/end-request',
+    'box-token machine lane, box token and attribution checked. A session asks the operator to end a run it cannot close: the ' +
+    "run's coordinator, its worker or the worker of a review run of it (403 `not-yours` for anyone else, by the attributed " +
+    'claimant and never by project). It only asks; the act is the operator\'s and no session can reach it'],
   ['POST /api/programmes/:slug/spec',
     'box-token machine lane, box token and attribution checked. The coordinator pins the operator-approved spec and the copy of ' +
     'its In short to its own programme (`isSpecPath` bounds the path)'],

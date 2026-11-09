@@ -119,6 +119,7 @@ import {
 import { noticeSink, type NoticeSink } from '../notice.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
+import { endRequestHandler } from './endRequest.js';
 import { readOperatorSecretMeta } from './ledgersSecrets.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
@@ -2068,6 +2069,24 @@ export function registerCoordRoutes(
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
+  });
+
+  /**
+   * `POST /api/runs/:id/end-request` (D-8076; spec 2026-11-04 §10): a session ASKS the operator to end a run it cannot close.
+   * Box token, then attribution; the coordinator, the run's worker or a review run's worker may ask, anyone else is refused
+   * `not-yours`. It only ever raises an item for the operator (`endRequest.ts`); the act that ends a run is the operator's
+   * and no session can reach it. Not behind `coordMutex`: the read, the decision and the write are one synchronous unit.
+   */
+  app.post('/api/runs/:id/end-request', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/runs/:id/end-request')) return;
+    return endRequestHandler({
+      coord: deps.coord, now: () => Date.now(), requireAttribution, changed: () => { bus.emit('waiting'); },
+      verdictOf: (runId) => {
+        const v = watcher?.runVerdicts.of(runId) ?? null;
+        return v === null ? null : { reason: v.stuck?.reason ?? null, coordinatorGone: v.coordinatorGone };
+      },
+    }, req, reply);
   });
 
   /**

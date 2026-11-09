@@ -327,7 +327,8 @@ describe('the scanner is looking at something', () => {
     // 66 since `GET`/`POST /api/coord/delegation-adopt` (D-8112, the delegation lane's adoption switch): session-gated, NOT EXEMPT,
     // no box token.
     // 67 since D-8075's `GET /api/programmes` (spec 2026-11-04 §11.6): session-gated, NOT EXEMPT, no box token.
-    expect(scanRoutes('coord/routes.ts').length).toBe(67);
+    // 68 since D-8076's `POST /api/runs/:id/end-request`: a box-token machine lane IN EXEMPT (box token and attribution, no cookie).
+    expect(scanRoutes('coord/routes.ts').length).toBe(68);
     // 5 in `update/routes.ts` (update-management W2, design 2026-09-20 §12):
     // `GET /api/updates`, `POST /api/updates/intent`, `POST /api/updates/refresh`
     // and `POST /api/updates/ack`, session-only and NOT EXEMPT, plus the
@@ -563,7 +564,8 @@ describe('the scanner is looking at something', () => {
     // checked; the HTTP half 189 -> 190, the gated count stays 118, the exempt-HTTP count 70 -> 71.
     // 194 since `POST /api/linear/proxy/issues/:id/links` (D-8141): a box-token lane IN EXEMPT; the HTTP half 190 -> 191, the gated
     // count stays 118, the exempt-HTTP count 71 -> 72.
-    expect(ROUTES.length).toBe(194);
+    // 195 since D-8076's `POST /api/runs/:id/end-request`: a box-token lane IN EXEMPT: the HTTP half 191 -> 192, the exempt-HTTP count 72 -> 73.
+    expect(ROUTES.length).toBe(195);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -889,6 +891,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/advance',
       'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch',
+      'POST /api/runs/:id/end-request',
       'POST /api/runs/:id/items',
       'POST /api/runs/:id/review-rounds',
       'POST /api/runs/:id/route',
@@ -921,7 +924,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-eight box-token lanes in EXEMPT are those coord routes, and sixty-three with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and sixty-four with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -986,7 +989,7 @@ describe('EXEMPT is complete in both directions', () => {
       // W3 Q3f (D-7030): the question family's claimant pair, box-token lanes like the four doors they share cores with.
       'POST /api/questions/:id/release', 'POST /api/questions/:id/rule',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
-      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items', 'POST /api/runs/:id/route',
+      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/end-request', 'POST /api/runs/:id/items', 'POST /api/runs/:id/route',
       // TB9 (D-7554): the test box's sync takes the box token as the fallback, the `GET /api/runs` shape (its read is above).
       'POST /api/testbox/tools-sync',
     ]);

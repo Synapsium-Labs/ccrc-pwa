@@ -321,6 +321,18 @@ from one workspace into another unless the operator asked for that copy.
   lane backs off from either; after 6 attempts it parks the delivery, still
   queued and unread, until your pane frees. Answer the menu, or send or pop
   your own stash.
+- **The run can never finish and you cannot close it.** Ask the operator to end it; asking is all a worker does, and
+  you never end the run yourself. Say why in your own words (a worker's request waits three minutes for the coordinator
+  to answer it first, and you are told by mail if it is withdrawn or kept):
+
+  ```bash
+  "$API" runs end-request <run id> --json - <<JSON
+  {"byId":"$id","byUuid":"$uuid","why":"<what stops the run, in your words>"}
+  JSON
+  ```
+
+  A second request for the same run is refused `already-asked`, and a repeat after the answer is refused
+  `recently-asked` for 24 hours unless the reason has changed.
 - **A rejection arrives as mail**, kind `answer`, subject `rejected: <code>` —
   the coordinator submitted your fingerprint, the server re-measured it, and it
   did not hold. The code is the whole message; read it before you touch

@@ -9,9 +9,9 @@
 // Everything here is keyed on the programme's SLUG (spec §3.4). The moves are decided by `nextItemState` in
 // `shared/ledgers.ts` and by nothing in this file: `moveItemInTx` is THE ONLY WRITER of `operator_items.state`.
 import type { DatabaseSync } from 'node:sqlite';
-import type { MailDeliveryState } from '../../../shared/api.js';
+import type { MailDeliveryState, StuckReason } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, nextItemState, parseItemAction, recommendationOf,
+  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, isEndRunAction, nextItemState, parseItemAction, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
@@ -91,23 +91,40 @@ function writeItemEvent(db: DatabaseSync, itemId: number, at: number, act: ItemE
  *  new id. `actor` is who the `raise` event names: the coordinator for its own item, `ccrc` for one the server wrote on
  *  another session's behalf (A18). */
 export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number {
+  checkRaise(input);
+  return tx(db, () => raiseItemInTx(db, input, now, actor));
+}
+
+/** `raiseItem`'s vocabulary checks, thrown before any transaction opens. */
+function checkRaise(input: RaiseItemInput): void {
   if (!ITEM_KINDS.includes(input.kind)) throw new RangeError(`raiseItem: kind ${String(input.kind)} is not an item kind`);
   if (!NEEDED_BY_LEVELS.includes(input.neededBy)) throw new RangeError(`raiseItem: neededBy ${String(input.neededBy)} is not a level`);
   if (input.kind === 'decide' && recommendationOf(input) === null) {
-    throw new RangeError('raiseItem: a decide item names the option it recommends and why');
+    throw new RangeError('raiseItem: a decide item needs a recommended option and the reason it beats the others');
   }
-  return tx(db, () => {
-    const res = db.prepare(
-      'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +
-      "secretSlot, state, raisedAt, recommended, recommendedWhy, action, heldUntil) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
-    ).run(input.program, input.runId, input.raisedBy, input.kind, input.title, input.why, JSON.stringify(input.how),
-      input.options === null ? null : JSON.stringify(input.options), input.neededBy, input.soonLabel, input.secretSlot, now,
-      input.recommended ?? null, input.recommendedWhy ?? null,
-      input.action === undefined || input.action === null ? null : JSON.stringify(input.action), input.heldUntil ?? null);
-    const id = Number(res.lastInsertRowid);
-    writeItemEvent(db, id, now, 'raise', actor, null);
-    return id;
-  });
+}
+
+/** The insert and its `raise` event, inside a transaction the CALLER holds (`tx` does not nest). */
+function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc'): number {
+  const res = db.prepare(
+    'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +
+    "secretSlot, state, raisedAt, recommended, recommendedWhy, action, heldUntil) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+  ).run(input.program, input.runId, input.raisedBy, input.kind, input.title, input.why, JSON.stringify(input.how),
+    input.options === null ? null : JSON.stringify(input.options), input.neededBy, input.soonLabel, input.secretSlot, now,
+    input.recommended ?? null, input.recommendedWhy ?? null,
+    input.action === undefined || input.action === null ? null : JSON.stringify(input.action), input.heldUntil ?? null);
+  const id = Number(res.lastInsertRowid);
+  writeItemEvent(db, id, now, 'raise', actor, null);
+  return id;
+}
+
+/** `raiseItem` and a mail in ONE transaction (the pattern of `tickWithMail`): `queue` gets the new id and inserts the system
+ *  mail; a throw from it rolls the item back. `queue` must open no transaction of its own. */
+export function raiseItemWithMail<T>(
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T,
+): { id: number; mail: T } {
+  checkRaise(input);
+  return tx(db, () => { const id = raiseItemInTx(db, input, now, actor); return { id, mail: queue(id) }; });
 }
 
 export function itemById(db: DatabaseSync, id: number): ItemRow | null {
@@ -173,6 +190,63 @@ export function tickWithMail<T>(db: DatabaseSync, id: number, answer: string | n
     if (!moved.ok) return moved;
     return { ok: true, item: moved.item, mail: queue(moved.item) };
   });
+}
+
+/** A move of one item and a mail in ONE transaction, for a move that tells somebody (the end request's withdraw and decline,
+ *  A22). `queue` gets the moved item and inserts the system mail; a refused move never calls it, and a throw from it rolls
+ *  the move back. `queue` must open no transaction of its own. */
+export function moveItemWithMail<T>(
+  db: DatabaseSync, id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null },
+  now: number, ctx: { programmeHasOpenRun: boolean }, queue: (item: ItemRow) => T,
+): { ok: true; item: ItemRow; mail: T } | Extract<ItemMoveResult, { ok: false }> {
+  return tx(db, () => {
+    const moved = moveItemInTx(db, id, act, actor, fields, now, ctx);
+    if (!moved.ok) return moved;
+    return { ok: true, item: moved.item, mail: queue(moved.item) };
+  });
+}
+
+/** The end-request items of a run that still wait (`open` or `checking`), held or not, oldest first. Raw: the hold is
+ *  `itemsFor`'s filter alone, so a withdraw and a settle still reach a held item. */
+export function openEndRequestsOf(db: DatabaseSync, runId: number): ItemRow[] {
+  const states = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
+  return (db.prepare(
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE runId = ? AND action IS NOT NULL AND state IN (${states}) ORDER BY id`,
+  ).all(runId) as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => isEndRunAction(i.action));
+}
+
+/** The newest end request of a run that ended in a decline or a withdraw: who asked, when it ended and the reason it was
+ *  raised under (A24). An item settled `done` is not one. */
+export function lastEndedEndRequest(db: DatabaseSync, runId: number): { askerId: string; at: number; stuckReason: StuckReason | null } | null {
+  const rows = db.prepare(
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE runId = ? AND action IS NOT NULL AND state IN ('withdrawn', 'dismissed') ` +
+    'ORDER BY closedAt DESC, id DESC',
+  ).all(runId) as unknown as ItemRowRaw[];
+  for (const r of rows) {
+    const item = itemRowOf(r);
+    if (isEndRunAction(item.action) && item.closedAt !== null) {
+      return { askerId: item.raisedBy, at: item.closedAt, stuckReason: item.action.stuckReason };
+    }
+  }
+  return null;
+}
+
+/** The sessions of the review runs of a run (any state), each once: the workers who may ask to end the run they review. */
+export function reviewWorkersOf(db: DatabaseSync, runId: number): string[] {
+  const rows = db.prepare("SELECT DISTINCT sessionId FROM runs WHERE kind = 'review' AND reviews = ? AND sessionId IS NOT NULL ORDER BY id")
+    .all(runId) as unknown as { sessionId: string }[];
+  return rows.map((r) => r.sessionId);
+}
+
+/** A run started or ended, so its open end requests are handled: each moves `settle` (ccrc, open or checking to done) with
+ *  `note`, inside the transaction the CALLER holds. The move is `moveItemInTx`'s, the only writer of the state. */
+export function settleEndRequestsInTx(db: DatabaseSync, runId: number, note: string, now: number): number {
+  let settled = 0;
+  for (const item of openEndRequestsOf(db, runId)) {
+    const res = moveItemInTx(db, item.id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
+    if (res.ok) settled += 1;
+  }
+  return settled;
 }
 
 /** The coordinator marks an item blocking (work has stopped on it) or lowers it. Raising records the level it replaced

@@ -4417,3 +4417,39 @@ describe('the coordinator links every ticketed PR from the Linear side (D-8141)'
     for (const text of [skill, lifecycle, linearSkill]) expect(text).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
   });
 });
+
+// D-8076 (spec 2026-11-04 §10): a session ASKS the operator to end a run it cannot close. The act is the operator's and is
+// unreachable from a session, so no corpus teaches it: the route is named only through its client verb, and the word
+// `abandon` never stands beside the request.
+describe('the skills teach end-request as asking', () => {
+  const workerSkill = readFileSync(path.join(root, 'ccd/worker-skill/SKILL.md'), 'utf8');
+  const reviewerSkill = readFileSync(path.join(root, 'ccd/reviewer-skill/SKILL.md'), 'utf8');
+  const section = (text: string, from: string): string => {
+    const i = text.indexOf(from);
+    expect(i, `${from} is gone from the corpus`).toBeGreaterThanOrEqual(0);
+    const rest = text.slice(i + from.length);
+    const j = rest.search(/\n## |\n- \*\*/);
+    return from + (j < 0 ? rest : rest.slice(0, j));
+  };
+
+  it('end-request is taught as asking, and the client has its row', () => {
+    expect(clientRoutes().map((c) => c.key)).toContain('runs.end-request');
+    const lifecycle = refs('wave-lifecycle.md');
+    expect(lifecycle).toContain('If a run can never finish and you cannot close it, ask the operator to end it.');
+    expect(lifecycle).toContain('runs end-request <run id> --json -');
+    expect(workerSkill).toContain('"$API" runs end-request <run id> --json -');
+    expect(reviewerSkill).toContain('"$API" runs end-request <run id> --json -');
+  });
+
+  it('abandon does not appear beside it', () => {
+    const spans = [
+      section(refs('wave-lifecycle.md'), '## A run that can never finish'),
+      section(workerSkill, '- **The run can never finish and you cannot close it.**'),
+      section(reviewerSkill, '- **The run you review can never finish'),
+    ];
+    for (const span of spans) {
+      expect(span).toContain('end-request');
+      expect(span, 'the request is taught as asking, never as the act').not.toMatch(/abandon/i);
+    }
+  });
+});

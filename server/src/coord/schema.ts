@@ -2380,7 +2380,7 @@ export const MIGRATIONS: readonly string[] = [
   `,
   // ── 49: user_version 48 -> 49 ─────────────────────────────────────────────
   // An item that asks carries its own control (D-8076; spec 2026-11-04 §10, A18 to A21): `operator_items.action` is the
-  // typed action the server wrote for it (JSON, `{verb:'end-run', runId, stuckReason}` today) and `operator_items.heldUntil`
+  // typed action the server wrote for it (JSON: an end-run verb with the run id and its stuck reason, today) and `operator_items.heldUntil`
   // is the time before which `itemsFor` leaves it out, the coordinator-first hold. Their ONE writer is `raiseItem`
   // (`ledgersStore.ts`), from a server caller; `parseRaise` never carries either, so a coordinator cannot attach an action
   // to an ordinary item. Both read NULL for every item raised before this entry.

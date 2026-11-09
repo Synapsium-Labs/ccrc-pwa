@@ -63,6 +63,10 @@ export const ITEM_TRANSITIONS: Readonly<Record<ItemAct, {
  *  `end-run`: the operator's `act` abandons the run and `decline` keeps it. `stuckReason` is the reason the run was stuck
  *  under when the request was raised, so a later request can tell a changed reason from a repeat. */
 export type ItemAction = { verb: 'end-run'; runId: number; stuckReason: StuckReason | null };
+/** The `end-run` action, and the one place its verb is spelled for the readers that ask which action an item carries. */
+export type EndRunAction = Extract<ItemAction, { verb: 'end-run' }>;
+export const isEndRunAction = (a: ItemAction | null): a is EndRunAction => a !== null && a.verb === 'end-run';
+export const endRunAction = (runId: number, stuckReason: StuckReason | null): EndRunAction => ({ verb: 'end-run', runId, stuckReason });
 /** Reads a stored action column; null when it is not an `ItemAction`. The one reader of the column's JSON. */
 export function parseItemAction(text: string): ItemAction | null {
   let v: unknown;

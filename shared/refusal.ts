@@ -180,6 +180,12 @@ export type ReviewRoundsRefusal = (typeof REVIEW_ROUNDS_REFUSALS)[keyof typeof R
 const REVIEW_ROUNDS_WORDS: ReadonlySet<string> = new Set(Object.values(REVIEW_ROUNDS_REFUSALS));
 /** Whether `word` is one of the review-rounds door's own words (the mail-routes code census admits them through this). */
 export const isReviewRoundsRefusal = (word: string): word is ReviewRoundsRefusal => REVIEW_ROUNDS_WORDS.has(word);
+/** The end-request route's own words (D-8076; spec 2026-11-04 §10): a session that is not the run's claimant, its worker or a
+ *  review run's worker (`not-yours`), a run that already has an open request (`already-asked`, the item named in `detail`),
+ *  and the same asker again inside 24 hours of a decline or a withdraw (`recently-asked`). A closed run is the generic
+ *  `run-closed`. Box-facing, so the console has no sentence for them. */
+export const END_REQUEST_REFUSALS = { notYours: 'not-yours', alreadyAsked: 'already-asked', recentlyAsked: 'recently-asked' } as const;
+export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_REQUEST_REFUSALS];
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -195,6 +201,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | ItemMoveRefusal | LedgerRouteRefusal
   // The coordinator's review-rounds door (D-8125): its two words of its own.
   | ReviewRoundsRefusal
+  // The end-request route (D-8076): its three words of its own.
+  | EndRequestRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
@@ -371,6 +379,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // Desktop-polish PL10 (D-7952): CHOSEN, not measured. 400: the item's text is what the coordinator sent, theirs to fix (it
   // writes the repository path instead), as `bad-spec-path`.
   [LEDGER_ROUTE_REFUSALS.outsideDocLink]: 400,
+  // The end-request route (D-8076): CHOSEN, not measured. 403 for a session that is no party to the run (the family of
+  // `not-owner`); 409 for a request already open and for one repeated inside the 24 hours (the family of `duplicate`).
+  [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

@@ -29,12 +29,12 @@ import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusa
 import {
   ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
-  earlierTickBlocks, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  earlierTickBlocks, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale, nextItemState, outsideDocLink, secretAnswer, secretTailOf,
   type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
-import { itemMailSubject, tickMail } from './ledgersMail.js';
+import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
@@ -325,8 +325,16 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
 
   /** A move by the coordinator. The programme has an open run by construction (`claimsProgramme` held), and only
    *  `dismiss` reads that, so the context says what is true. */
-  const move = (coord: CoordStore, reply: FastifyReply, item: ItemRow, act: 'confirm' | 'return' | 'withdraw', note: string | null) => {
-    const res = coord.moveItem(item.id, act, 'coordinator', act === 'return' ? { note } : {}, deps.now(), { programmeHasOpenRun: true });
+  const move = (coord: CoordStore, reply: FastifyReply, item: ItemRow, act: 'confirm' | 'return' | 'withdraw', note: string | null, byId: string | null = null) => {
+    // A withdrawn end request tells its asker, in the move's own transaction (A22). The coordinator's own request tells nobody.
+    const ending = act === 'withdraw' && isEndRunAction(item.action) ? item.action : null;
+    const asker = ending !== null && item.raisedBy !== byId ? item.raisedBy : null;
+    const res = asker !== null && ending !== null
+      ? coord.moveItemWithMail(item.id, act, 'coordinator', {}, deps.now(), { programmeHasOpenRun: true }, (moved) => {
+        const mail = endRequestEndedMail(moved, ending.runId, 'withdrawn');
+        return insertSystemMailTx(coord, null, { fromId: 'coordinator', toId: asker, runId: null, kind: 'status', subject: mail.subject, body: mail.body });
+      })
+      : coord.moveItem(item.id, act, 'coordinator', act === 'return' ? { note } : {}, deps.now(), { programmeHasOpenRun: true });
     if (!res.ok) return refuseRoute(reply, res.why, { detail: `item ${item.id} cannot be ${act === 'return' ? 'returned' : act === 'confirm' ? 'confirmed' : 'withdrawn'} from here` });
     changed();
     return reply.code(200).send({ ok: true });
@@ -372,7 +380,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (head === null) return;
     const item = ownedItem(coord, reply, head);
     if (item === null) return;
-    return move(coord, reply, item, 'withdraw', null);
+    return move(coord, reply, item, 'withdraw', null, head.byId);
   });
 
   app.post('/api/items/:id/blocking', async (req, reply) => {

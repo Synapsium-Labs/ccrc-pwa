@@ -1492,8 +1492,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the sixty-three machine lanes the
-fleet host reaches (thirty-eight box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the sixty-four machine lanes the
+fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
@@ -5213,7 +5213,7 @@ otherwise lower the level in Settings, or on the fleet box touch
 `mail-gate-strict` (busy delivery) or `stall-watch-disabled` (the whole lane).
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
-`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`) — but **not** the
+`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`, `/:id/end-request`) — but **not** the
 operator doors `/api/runs/:id/abandon` and `/api/runs/:id/reclaim`, which carry
 no box token by design (D-282), any more than `/api/coord/pause` or
 `/api/claims/:id/break` do — `GET /api/mail?to=<id>` and

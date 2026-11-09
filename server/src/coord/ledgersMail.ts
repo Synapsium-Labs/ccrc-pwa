@@ -42,3 +42,43 @@ export function tickMail(item: Pick<ItemRow, 'id' | 'program' | 'kind' | 'title'
   if (bytes > MAIL_BODY_MAX_BYTES) return { ok: false, bytes, limit: MAIL_BODY_MAX_BYTES };
   return { ok: true, subject: itemMailSubject(item), body };
 }
+
+/** The notice a coordinator gets when a worker or reviewer asks the operator to end one of its runs (D-8076, spec 2026-11-04
+ *  §10). The request is held for `graceMs` before the operator sees it, and the coordinator handles it by withdrawing it
+ *  (`ccrc-api items withdraw`), by starting the run, or by closing it. The subject names the item so the inbox reads it. */
+export function endRequestAskMail(
+  r: { itemId: number; runId: number; runName: string; askerId: string; why: string; graceMs: number },
+): { subject: string; body: string } {
+  const head = `end request: item ${r.itemId}: run ${r.runId}`;
+  let title = [...head];
+  while (title.length > 0 && bytesOf(title.join('')) > MAIL_SUBJECT_MAX_BYTES) title = title.slice(0, -1);
+  const body = [
+    `${r.askerId} asked the operator to end run ${r.runId} (${r.runName}). Its words: ${r.why}`,
+    `The operator sees nothing for ${Math.round(r.graceMs / 1000)} seconds. If you can handle the run, start it or close it, or withdraw the request: ccrc-api items withdraw ${r.itemId}`,
+    'A withdraw tells the asker. After the operator has acted, a withdraw changes nothing.',
+  ].join('\n');
+  return { subject: title.join(''), body: cutBytes(body) };
+}
+
+/** What the asker is told when an end request it raised ends without the run ending: the coordinator withdrew it, or the
+ *  operator kept the run. Sent in the move's own transaction (A22), to the asker, and never to a coordinator about its own. */
+export function endRequestEndedMail(
+  item: Pick<ItemRow, 'id'>, runId: number, how: 'withdrawn' | 'declined',
+): { subject: string; body: string } {
+  const verdict = how === 'withdrawn' ? 'Its coordinator withdrew it, so it is handled.' : 'The operator kept the run.';
+  return {
+    subject: `end request: item ${item.id}: run ${runId} ${how}`,
+    body: [
+      `Your request to end run ${runId} was ${how}. ${verdict}`,
+      'Nothing was ended. Ask again only if the reason has changed: a repeat is refused for 24 hours.',
+    ].join('\n'),
+  };
+}
+
+/** A body cut to `MAIL_BODY_MAX_BYTES` on a code-point boundary: the asker's words are bounded at the route, not for the mail. */
+function cutBytes(body: string): string {
+  if (bytesOf(body) <= MAIL_BODY_MAX_BYTES) return body;
+  let chars = [...body];
+  while (chars.length > 0 && bytesOf(chars.join('')) > MAIL_BODY_MAX_BYTES) chars = chars.slice(0, -64);
+  return chars.join('');
+}
