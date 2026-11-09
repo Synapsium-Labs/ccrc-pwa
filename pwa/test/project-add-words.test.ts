@@ -217,7 +217,7 @@ describe('projectAddedText', () => {
 });
 
 describe('projectSearchOffer', () => {
-  const names = ['alpha', 'ccrc-pwa', 'repo'];
+  const names = [{ name: 'alpha' }, { name: 'ccrc-pwa' }, { name: 'repo' }];
 
   it('a blank search offers nothing', () => {
     expect(projectSearchOffer('', names)).toBeNull();
@@ -237,6 +237,21 @@ describe('projectSearchOffer', () => {
 
   it('a repository whose project is already here shows that project instead', () => {
     expect(projectSearchOffer('example/repo', names)).toEqual({ kind: 'existing', name: 'repo' });
+    expect(projectSearchOffer('example/Repo', names)).toEqual({ kind: 'existing', name: 'repo' });
+  });
+
+  it('the repository a project was measured to be decides, whatever the project is called', () => {
+    const rows = [
+      { name: 'api-work', repo: { state: 'named', slug: 'acme/api' } as const },
+      { name: 'api', repo: { state: 'named', slug: 'other/api' } as const },
+      { name: 'web', repo: { state: 'unmeasured' } as const },
+    ];
+    // Cloned under another name: that project, not a second clone.
+    expect(projectSearchOffer('https://github.com/ACME/api', rows)).toEqual({ kind: 'existing', name: 'api-work' });
+    // A namesake measured to be another repository: a clone, under a name the form asks for.
+    expect(projectSearchOffer('third/api', rows)).toMatchObject({ kind: 'clone', name: null, repo: { owner: 'third', repo: 'api' } });
+    // A namesake nobody measured is taken for this repository.
+    expect(projectSearchOffer('acme/web', rows)).toEqual({ kind: 'existing', name: 'web' });
   });
 
   it('a repository whose name cannot be a project\'s is offered with no name, for the form to ask', () => {
@@ -267,7 +282,7 @@ describe('projectOfferText', () => {
 
   it('a clone with no name says one is needed, and an empty project says what it makes', () => {
     expect(projectOfferText({ kind: 'clone', repo: { owner: 'example', repo: '.github', url: '' }, name: null }).detail)
-      .toMatch(/give it one/);
+      .toMatch(/under a name you give it/);
     expect(projectOfferText({ kind: 'empty', name: 'fresh-idea' }))
       .toEqual({ title: 'Create empty project fresh-idea', detail: 'A new git repository on the fleet box' });
   });

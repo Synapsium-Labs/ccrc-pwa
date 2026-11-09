@@ -16,6 +16,7 @@ import {
   type ProjectAddSource,
 } from '../../../shared/projectAdd';
 import type { ProjectAddRefusal, RouteRefusal } from '../../../shared/refusal';
+import { repoLabel, type ProjectRepoWire } from '../../../shared/api';
 import { BAD_REQUEST_TEXT } from './workspaceAddWords';
 
 /** The sheet's labels. Short words only: a sentence lives in one of the tables below, once. */
@@ -174,28 +175,41 @@ export function projectAddedText(name: string, source: ProjectAddSource): string
 }
 
 /** What the new-session sheet's project search offers to ADD, beside the projects it matches:
- *  - `clone`: the search reads as a GitHub repository (`parseGithubRepo`), and the project it would make is not here
- *    yet. `name` is the project's (the repo's own), or `null` when the repo's name is not one a new project may take
- *    (`.github`), so the form must ask for one.
- *  - `existing`: the search reads as a repository whose project is already here; the sheet shows that project.
+ *  - `clone`: the search reads as a GitHub repository (`parseGithubRepo`) no project here was measured to be. `name` is
+ *    the project's (the repo's own), or `null` when the form must ask for one: the repo's name is not one a new project
+ *    may take (`.github`), or a project of that name is here and was measured to be another repository.
+ *  - `existing`: the search reads as a repository a project here was measured to be (its `repo` slug, `repoLabel`), or,
+ *    where no slug was measured, a project of the repo's name; the sheet shows that project.
  *  - `empty`: the search is a name a new project may take and no project's name contains it.
- *  `null`: nothing to offer (a blank search, or one that matches a project by name). */
+ *  `null`: nothing to offer (a blank search, or one that matches a project by name).
+ *  Names and slugs compare ignoring case: GitHub's are, and a second checkout that differs only in case is a mistake. */
 export type ProjectSearchOffer =
   | { kind: 'clone'; repo: GithubRepo; name: string | null }
   | { kind: 'existing'; name: string }
   | { kind: 'empty'; name: string }
   | null;
 
-export function projectSearchOffer(query: string, names: readonly string[]): ProjectSearchOffer {
+/** The fields of a project row the offer reads. */
+export interface ProjectOfferRow { name: string; repo?: ProjectRepoWire }
+
+export function projectSearchOffer(query: string, rows: readonly ProjectOfferRow[]): ProjectSearchOffer {
   const q = query.trim();
   if (q === '') return null;
+  const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
   const repo = parseGithubRepo(q);
   if (repo !== null) {
+    const slug = `${repo.owner}/${repo.repo}`;
+    const cloned = rows.find((r) => { const label = repoLabel(r.repo); return label !== null && same(label, slug); });
+    if (cloned !== undefined) return { kind: 'existing', name: cloned.name };
     const name = deriveProjectName(repo);
-    return name !== null && names.includes(name) ? { kind: 'existing', name } : { kind: 'clone', repo, name };
+    const namesake = name === null ? undefined : rows.find((r) => same(r.name, name));
+    if (namesake === undefined) return { kind: 'clone', repo, name };
+    // A namesake measured to be another repository: the clone needs a name of its own. One with no measured slug is
+    // taken for this repository, as the operator most likely made it from it.
+    return repoLabel(namesake.repo) !== null ? { kind: 'clone', repo, name: null } : { kind: 'existing', name: namesake.name };
   }
   const needle = q.toLowerCase();
-  if (!isNewProjectName(q) || names.some((n) => n.toLowerCase().includes(needle))) return null;
+  if (!isNewProjectName(q) || rows.some((r) => r.name.toLowerCase().includes(needle))) return null;
   return { kind: 'empty', name: q };
 }
 
@@ -204,6 +218,6 @@ export function projectOfferText(offer: Exclude<ProjectSearchOffer, null | { kin
   if (offer.kind === 'empty') return { title: `Create empty project ${offer.name}`, detail: 'A new git repository on the fleet box' };
   const title = `Clone ${offer.repo.owner}/${offer.repo.repo}`;
   return offer.name === null
-    ? { title, detail: "From GitHub. Its name can't be a project's, so give it one" }
+    ? { title, detail: 'From GitHub, under a name you give it' }
     : { title, detail: `From GitHub, as project ${offer.name}` };
 }

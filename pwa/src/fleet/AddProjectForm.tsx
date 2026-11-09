@@ -107,7 +107,8 @@ export function useProjectAddForm({ active, add, adding, onAdded }: ProjectAddFo
   const submit = (): void => { void send(form); };
   const fill = (next: ProjectAddForm, opts: { send?: boolean } = {}): void => {
     setForm(next);
-    setNamed(next.name.trim() !== '');
+    // A name the repository suggests is not one typed by hand: it keeps following the repository.
+    setNamed(next.name.trim() !== '' && next.name !== prefillName(next.repo));
     setShown(NO_HINTS);
     setRefusal(null);
     if (opts.send === true) void send(next);

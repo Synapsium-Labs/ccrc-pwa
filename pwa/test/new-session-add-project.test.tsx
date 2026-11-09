@@ -32,7 +32,9 @@ interface Opened {
 /** Mounts the sheet with `lists` as the successive `/api/projects` answers (the last repeats), and picks team·max. */
 const open = async (
   lists: ProjectRow[][],
-  opts: { add?: (body: ProjectAddBody) => Promise<ProjectAddOutcome>; initialProject?: string; withAdd?: boolean } = {},
+  opts: {
+    add?: (body: ProjectAddBody) => Promise<ProjectAddOutcome>; initialProject?: string; withAdd?: boolean; adding?: boolean;
+  } = {},
 ): Promise<Opened> => {
   const store = createFleetStore({ makeSocket: fakeSocket });
   act(() => { store.setState({ conn: 'open', sessions: [], roster }); });
@@ -53,6 +55,7 @@ const open = async (
         onClose={vi.fn()}
         fleet={store}
         initialProject={opts.initialProject ?? null}
+        addingProject={opts.adding ?? false}
         {...(opts.withAdd === false ? {} : { addProject: add })}
       />
     </>,
@@ -171,3 +174,57 @@ describe('a sheet opened on a project', () => {
     expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled();
   });
 });
+
+describe('an add that outlives its form', () => {
+  /** An add that answers when `settle` is called. */
+  const deferred = (): { add: (body: ProjectAddBody) => Promise<ProjectAddOutcome>; settle: (name: string) => void } => {
+    let resolve: (o: ProjectAddOutcome) => void = () => {};
+    return {
+      add: () => new Promise<ProjectAddOutcome>((r) => { resolve = r; }),
+      settle: (name) => resolve({ kind: 'added', answer: { ok: true, name, source: 'empty' } }),
+    };
+  };
+
+  it('holds Back while an add runs (the plane\'s `addingProject`), and frees it when none does', async () => {
+    await open([[proj('alpha')]], { adding: true });
+    await screen.findByText('alpha');
+    fireEvent.click(screen.getByRole('button', { name: PROJECT_ADD_TEXT.open }));
+    expect(screen.getByRole('button', { name: new RegExp(PROJECT_ADD_TEXT.back) })).toBeDisabled();
+    cleanup();
+    await open([[proj('alpha')]]);
+    await screen.findByText('alpha');
+    fireEvent.click(screen.getByRole('button', { name: PROJECT_ADD_TEXT.open }));
+    expect(screen.getByRole('button', { name: new RegExp(PROJECT_ADD_TEXT.back) })).toBeEnabled();
+  });
+
+  it('a sheet closed mid-add says the add, re-opens at step 1 with no form and picks nothing', async () => {
+    const d = deferred();
+    const store = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { store.setState({ conn: 'open', sessions: [], roster }); });
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [proj('alpha'), proj('fresh')] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    const sheet = (isOpen: boolean) => (
+      <>
+        <ToastHost />
+        <NewSessionSheet open={isOpen} onClose={vi.fn()} fleet={store} addProject={d.add} addingProject={false} />
+      </>
+    );
+    const r = render(sheet(true));
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    await screen.findByText('alpha');
+    fireEvent.click(screen.getByRole('button', { name: PROJECT_ADD_TEXT.open }));
+    fireEvent.click(screen.getByLabelText(PROJECT_ADD_TEXT.empty));
+    fireEvent.change(screen.getByLabelText(PROJECT_ADD_TEXT.name), { target: { value: 'fresh' } });
+    fireEvent.click(screen.getByRole('button', { name: PROJECT_ADD_TEXT.add }));
+    r.rerender(sheet(false));
+    await act(async () => { d.settle('fresh'); });
+    expect(await screen.findByText(projectAddedText('fresh', 'empty'))).toBeInTheDocument();
+    r.rerender(sheet(true));
+    expect(await screen.findByRole('button', { name: /team·max/ })).toBeInTheDocument();
+    expect(screen.queryByLabelText(PROJECT_ADD_TEXT.name)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /team·max/ }));
+    await screen.findByText('fresh');
+    expect(screen.getByRole('button', { name: 'Choose a project' })).toBeDisabled();
+  });
+});
+

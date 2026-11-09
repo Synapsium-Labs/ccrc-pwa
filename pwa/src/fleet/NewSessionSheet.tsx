@@ -310,7 +310,7 @@ export function NewSessionSheet({
   const needle = query.trim().toLowerCase();
   // A search that reads as a repository, or as a new name, offers to add it (`projectSearchOffer`); one whose repository
   // is already a project here shows that project, which the name match below would not find.
-  const offer = addProject === undefined || shown === null ? null : projectSearchOffer(query, shown.map((p) => p.name));
+  const offer = addProject === undefined || shown === null ? null : projectSearchOffer(query, shown);
   const matching =
     offer?.kind === 'existing' ? ordered.filter((p) => p.name === offer.name)
       : needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
@@ -382,11 +382,13 @@ export function NewSessionSheet({
     adding: addingProject,
     onAdded: (added, dismissed) => {
       toast(projectAddedText(added.name, added.source));
+      // The list is re-read either way, so a sheet still open never offers to add what it just added. A closed sheet's
+      // re-read does nothing (the fetch runs only while open), and its next opening reads afresh.
+      setListEpoch((n) => n + 1);
       if (dismissed) return;
       setAdding(false);
       setQuery('');
       setPendingPick(added.name);
-      setListEpoch((n) => n + 1);
     },
   });
   const openAdd = (): void => {
@@ -616,7 +618,8 @@ export function NewSessionSheet({
       ) : adding ? (
         // The inline add (see the head of this file): the way back to the list, then the form. The account stays chosen.
         <div className="grid gap-2">
-          <button type="button" className="acct-change" onClick={() => setAdding(false)}>
+          {/* Held while an add runs: its answer belongs to this form, and the list behind it would offer the same add. */}
+          <button type="button" className="acct-change" disabled={addingProject} onClick={() => setAdding(false)}>
             <span aria-hidden="true">‹</span> {PROJECT_ADD_TEXT.back}
           </button>
           {addForm.fields}

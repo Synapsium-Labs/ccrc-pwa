@@ -653,6 +653,11 @@
   column-gap: var(--sp-2);
   row-gap: 2px;
 }
+/* The list scrolls, so it clips: a row as wide as the list would lose its whole focus ring (`FOCUS_RING`'s outline sits
+   outside the box). Drawn inside the row instead, so a keyboard user sees which row Enter acts on. */
+.proj-list > .proj-row:focus-visible {
+  outline-offset: -2px;
+}
 .proj-row--selected {
   background: var(--accent-tint);
   border-radius: var(--r-md);
