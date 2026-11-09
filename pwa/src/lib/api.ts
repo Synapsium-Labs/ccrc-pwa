@@ -551,6 +551,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts?.crossPool === true ? { crossPool: true } : {}),
         ...(opts?.interrupt === true ? { interrupt: true } : {}),
       }),
+    /** D-8123: the operator's "Wait until reset" choice on a session the limit watchdog found no account for
+     *  (`FleetSession.limitWait`). `POST /api/sessions/:id/limit-wait`, no body; `409 not-waiting` when the record closed
+     *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
+    limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.

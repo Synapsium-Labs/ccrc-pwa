@@ -19,6 +19,10 @@ export const KIND_WORD: Readonly<Record<ItemKind, string>> = {
   decide: 'Decide', do: 'Do', value: 'Give a value', secret: 'Give a secret',
 };
 export const QUESTION_WORD = 'Question';
+/** D-8123: a session on a usage limit that no account has room to take. The kind chip, the pills and the summary's word. */
+export const LIMIT_WORD = 'Usage limit';
+export const LIMIT_PILL_WORD = 'No account has room';
+export const LIMIT_WAITING_PILL_WORD = 'Waiting for reset';
 
 /** The spec's exact labels (plan Global Constraints). */
 export const CHECKING_WORD = 'Checking…';
@@ -71,6 +75,10 @@ export function itemPills(item: ItemView): Pill[] {
   return [needed];
 }
 
+/** The pill a limit row wears: stopped with no room, or waiting for the reset the operator chose. A pill says it in words. */
+export const limitPill = (l: LimitRow): Pill =>
+  l.waiting ? { tone: 'soon', word: LIMIT_WAITING_PILL_WORD } : { tone: 'blocking', word: LIMIT_PILL_WORD };
+
 /** A session asking the operator something: one row, never tickable (it is answered in its own session). */
 export interface QuestionRow { readonly sessionId: string; readonly program: string | null; readonly title: string; readonly at: number }
 
@@ -87,10 +95,44 @@ export function questionRows(sessions: readonly FleetSession[], runs: readonly R
   }));
 }
 
-/** What the Waiting on you door counts: the open items (sent-back ones included) plus the question rows. An item being
- *  checked is the coordinator's, so it does not count (spec §2). */
-export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[]): number =>
-  waitingCount(items) + questions.length;
+/** A session on a usage limit that the watchdog found no account for (D-8123; `FleetSession.limitWait`): one row, with its own
+ *  controls (`LimitWaitRow`). It carries the session itself, because "Swap to…" opens the swap sheet for it. */
+export interface LimitRow {
+  readonly sessionId: string;
+  readonly program: string | null;
+  readonly title: string;
+  /** Epoch ms the limit sign began. */
+  readonly since: number;
+  /** Epoch ms the limit resets, or `null` when neither the banner nor the account's window states one. */
+  readonly reset: number | null;
+  /** The account the session is stopped on. */
+  readonly account: string;
+  /** The operator chose "Wait until reset". */
+  readonly waiting: boolean;
+  readonly session: FleetSession;
+}
+
+/** The sessions whose `limitWait` stands, oldest first, each filed under its programme as a question is (`sessionProgramme`).
+ *  An item the operator must act on is never hidden (the rollup ruling), so every count a question joins, these join. `runs` may
+ *  be left out: a row is then filed under no programme. */
+export function limitRows(sessions: readonly FleetSession[], runs: readonly RunSummary[] = []): LimitRow[] {
+  const out: LimitRow[] = [];
+  for (const s of sessions) {
+    const w = s.limitWait;
+    if (w === null || w === undefined) continue;
+    out.push({
+      sessionId: s.id, program: sessionProgramme(s, runs), title: sessionLabel(s),
+      since: w.since, reset: w.reset, account: w.account, waiting: w.waiting, session: s,
+    });
+  }
+  return out.sort((a, b) => a.since - b.since || a.sessionId.localeCompare(b.sessionId));
+}
+
+/** What the Waiting on you door counts: the open items (sent-back ones included) plus the question rows and the sessions on a
+ *  usage limit with no account to take them (D-8123). An item being checked is the coordinator's, so it does not count (spec
+ *  §2). `limits` defaults to none, so a caller that has no fleet rows asks the sum it always did. */
+export const waitingTotal = (items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = []): number =>
+  waitingCount(items) + questions.length + limits.length;
 
 /** The chip's number for `program`, off what the fleet store holds: "waiting on you" as spec §2 defines it once, the programme's
  *  open items (sent-back ones included, one being checked not) plus the questions its sessions ask, summed by `waitingTotal`,
@@ -117,8 +159,11 @@ export const openRunsOf = (program: string, runs: readonly RunSummary[]): RunSum
 export const programmeIsLive = (program: string, runs: readonly RunSummary[] | null): boolean =>
   runs === null || openRunsOf(program, runs).length > 0;
 
-/** One line of the list: an item, or a session's question. */
-export type Row = { readonly kind: 'item'; readonly item: ItemView } | { readonly kind: 'question'; readonly question: QuestionRow };
+/** One line of the list: an item, a session's question, or a session on a usage limit with no account to take it (D-8123). */
+export type Row =
+  | { readonly kind: 'item'; readonly item: ItemView }
+  | { readonly kind: 'question'; readonly question: QuestionRow }
+  | { readonly kind: 'limit'; readonly limit: LimitRow };
 
 export interface ProgrammeGroup {
   /** The programme's slug, or `null` for questions of sessions that are in none. */
@@ -131,35 +176,41 @@ export interface ProgrammeGroup {
 }
 
 /** The list grouped by programme: programmes with a blocking item first, then by slug, "Not in a programme" last. Within a
- *  group the open blocking items come first, then the session questions, then the rest in `orderItems` order. */
-export function groupByProgramme(items: readonly ItemView[], questions: readonly QuestionRow[]): ProgrammeGroup[] {
-  const slugs = new Set<string | null>([...items.map((i) => i.program), ...questions.map((q) => q.program)]);
+ *  group the open blocking items come first, then the sessions stopped on a usage limit (D-8123: a stopped session is the most
+ *  urgent thing a session can ask), then the session questions, then the rest in `orderItems` order. */
+export function groupByProgramme(
+  items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = [],
+): ProgrammeGroup[] {
+  const slugs = new Set<string | null>([...items.map((i) => i.program), ...questions.map((q) => q.program), ...limits.map((l) => l.program)]);
   const groups: ProgrammeGroup[] = [];
   for (const program of slugs) {
     const mine = orderItems(items.filter((i) => i.program === program));
     const asks = questions.filter((q) => q.program === program).sort((a, b) => a.at - b.at || a.sessionId.localeCompare(b.sessionId));
+    const stopped = limits.filter((l) => l.program === program);
     const isBlocking = (i: ItemView): boolean => i.state === 'open' && i.neededBy === 'blocking';
     const rows: Row[] = [
       ...mine.filter(isBlocking).map((item): Row => ({ kind: 'item', item })),
+      ...stopped.map((limit): Row => ({ kind: 'limit', limit })),
       ...asks.map((question): Row => ({ kind: 'question', question })),
       ...mine.filter((i) => !isBlocking(i)).map((item): Row => ({ kind: 'item', item })),
     ];
-    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingTotal(mine, asks) });
+    groups.push({ program, rows, blocking: mine.some(isBlocking), waiting: waitingTotal(mine, asks, stopped) });
   }
   const key = (g: ProgrammeGroup): string => g.program ?? '￿';
   return groups.sort((a, b) => Number(b.blocking) - Number(a.blocking) || key(a).localeCompare(key(b)));
 }
 
 /** The summary line's counts, in the order the screen prints them. */
-export interface SummaryCounts { blocking: number; questions: number; soon: number; checking: number; cameBack: number }
+export interface SummaryCounts { blocking: number; questions: number; limits: number; soon: number; checking: number; cameBack: number }
 
-export function summaryCounts(items: readonly ItemView[], questions: readonly QuestionRow[]): SummaryCounts {
+export function summaryCounts(items: readonly ItemView[], questions: readonly QuestionRow[], limits: readonly LimitRow[] = []): SummaryCounts {
   // Each open item is counted once: one that came back is counted as that, whatever its needed-by says.
   const open = items.filter((i) => i.state === 'open');
   const fresh = open.filter((i) => !cameBack(i));
   return {
     blocking: fresh.filter((i) => i.neededBy === 'blocking').length,
     questions: questions.length,
+    limits: limits.length,
     soon: fresh.filter((i) => i.neededBy === 'soon').length,
     checking: items.filter((i) => i.state === 'checking').length,
     cameBack: open.length - fresh.length,
@@ -174,6 +225,7 @@ export function shownSummary(groups: readonly ProgrammeGroup[]): SummaryCounts {
   return summaryCounts(
     rows.flatMap((r) => (r.kind === 'item' ? [r.item] : [])),
     rows.flatMap((r) => (r.kind === 'question' ? [r.question] : [])),
+    rows.flatMap((r) => (r.kind === 'limit' ? [r.limit] : [])),
   );
 }
 
@@ -184,6 +236,7 @@ export function summaryWords(c: SummaryCounts): { tone: PillTone; text: string }
   const out: { tone: PillTone; text: string }[] = [];
   if (c.blocking > 0) out.push({ tone: 'blocking', text: `${c.blocking} blocking now` });
   if (c.questions > 0) out.push({ tone: 'ask', text: plural(c.questions, 'question from a session', 'questions from sessions') });
+  if (c.limits > 0) out.push({ tone: 'blocking', text: plural(c.limits, 'session on a usage limit', 'sessions on a usage limit') });
   if (c.soon > 0) out.push({ tone: 'soon', text: `${c.soon} needed soon` });
   if (c.checking > 0) out.push({ tone: 'checking', text: `${c.checking} being checked` });
   if (c.cameBack > 0) out.push({ tone: 'bounced', text: `${c.cameBack} came back` });

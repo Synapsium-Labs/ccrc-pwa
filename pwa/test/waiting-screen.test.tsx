@@ -312,3 +312,40 @@ describe('the spec one tap away on the combined list', () => {
     expect(screen.queryByText('Spec'), 'no dead Spec word (review 1466 F15)').toBeNull();
   });
 });
+
+// D-8123 (limit-swap-autofix Task 11): a session on a usage limit that no account has room to take is a row of the list,
+// beside an item and a question, in its programme's group, with its own controls, and it counts.
+describe('a session on a usage limit with no account to take it', () => {
+  const stuck = (id: string, over: object = {}) => fleetSession({
+    id, title: `Worker ${id}`, wrapper: 'lane-a', home: 'lane-a',
+    limitWait: { since: NOW - 12 * MIN, reset: null, account: 'lane-a', waiting: false, ...over },
+  });
+
+  it('draws one row with both controls, in the combined list, and counts it in the summary', () => {
+    open({ sessions: [stuck('project-a-w1')] });
+    const row = screen.getByTestId('limit-wait-row');
+    expect(row.textContent).toContain('Worker project-a-w1 is on a usage limit and no account has room');
+    expect(within(row).getAllByRole('button').map((b) => b.textContent)).toEqual(['No account has room yet', 'Wait until the limit resets']);
+    expect(screen.getByLabelText('Summary').textContent).toContain('1 session on a usage limit');
+    expect(screen.queryByText('Nothing needs you.')).toBeNull();
+  });
+
+  it('is filed under its programme, beside that programme\'s items, and the side rail counts it', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a', sessionId: 'project-a-w1' })];
+    open({
+      runs, sessions: withRunBinding([stuck('project-a-w1')], runs),
+      view: waitingView({ items: [itemView({ id: 1, program: 'prog-a', title: 'An item' })] }),
+    });
+    const group = screen.getByRole('region', { name: /prog-a/ });
+    expect(within(group).getByTestId('limit-wait-row')).toBeTruthy();
+    expect(within(group).getByText('An item')).toBeTruthy();
+    expect(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-a/ }).textContent).toContain('2');
+  });
+
+  it('opens nothing when the row itself is tapped: it is not an item, its controls are its own', () => {
+    const { onOpenItem, onOpenSession } = open({ sessions: [stuck('project-a-w1')] });
+    fireEvent.click(screen.getByTestId('limit-wait-row'));
+    expect(onOpenItem).not.toHaveBeenCalled();
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+});

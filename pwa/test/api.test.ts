@@ -981,6 +981,16 @@ describe('account pools', () => {
     ]);
   });
 
+  it('limitWait(id) posts the operator\'s wait choice to the session\'s limit-wait door with no body (D-8123)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.limitWait('a b');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/a%20b/limit-wait');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
   it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);

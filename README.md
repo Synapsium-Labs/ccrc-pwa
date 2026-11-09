@@ -1380,6 +1380,9 @@ Two are the limit rescue's (D-8123): `CCRC_RESCUE_SOLO_JITTER_S` (0 to 120; defa
 that is the only swap in flight, and `CCRC_LIMIT_WATCHDOG_MIN` (0 to 1440; default 5, 0 turns it off) is how many minutes a
 live session may show a limit sign with no swap before the fleet limit watchdog forces the rescue. `ccd` reads both in its
 own process, through the settings library.
+When no account has measured room for a stopped session, the watchdog records that, and the console's Waiting on you page shows a
+row for the session with its own two controls: Swap to… (the accounts that have room, updating as limits arrive) and Wait until
+reset at the time the limit ends. Neither sends a key to the terminal.
 
 **Seeing a box's settings.** `ccrc settings` prints what each of the 69 settings a fleet or server node reads resolves to on this
 box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and

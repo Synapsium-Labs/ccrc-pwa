@@ -29,6 +29,9 @@ import {
 } from './accountPicker';
 import './fleet.css';
 
+/** The narrowed picker's sentence (`only`, D-8123) when none of the named accounts is left to offer. */
+export const NO_ROOM_NOTE = 'No account has room right now.';
+
 /** An account picker's sentence when every other lane is switched off; the Move sessions sheet says the same. */
 export const ALL_SWITCHED_OFF = 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
 
@@ -83,6 +86,11 @@ export interface SwapSheetProps {
   onClose: () => void;
   /** Injectable for tests; defaults to the app-wide fleet store. */
   fleet?: FleetStore;
+  /** D-8123: narrows the target list to these accounts. The Waiting on you row for a session on a usage limit passes the
+   *  accounts with MEASURED room (`accountsWithMeasuredRoom`), so the sheet offers a place the session can actually run.
+   *  It only ever REMOVES targets: an id the roster does not offer stays unoffered. Absent, the list is the ordinary one.
+   *  A narrowed list that comes up empty says so in its own words (`NO_ROOM_NOTE`), not as the ordinary emptiness. */
+  only?: readonly string[];
 }
 
 export function SwapSheet({
@@ -90,6 +98,7 @@ export function SwapSheet({
   open,
   onClose,
   fleet = useFleetStore,
+  only,
 }: SwapSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const asleep = session.status !== undefined && hibernatedSince({ status: session.status, hibernatedAt: session.hibernatedAt }) !== null;
@@ -161,7 +170,7 @@ export function SwapSheet({
   // A lane the probe condemned is in BOTH — it is offered, marked and unranked.
   const switchedOff = disabledWrappers(accounts);
   const others = pickableWrappers(roster, sessions).filter((w) => w !== session.wrapper);
-  const wrappers = others.filter((w) => !switchedOff.includes(w));
+  const wrappers = others.filter((w) => !switchedOff.includes(w) && (only === undefined || only.includes(w)));
   const emptiness = pickerEmptiness(others, wrappers);
   // No pools frame is a distinct condition from a measured untagged project.
   // `splitByPool` answers that absence permissively: all candidates remain
@@ -180,7 +189,9 @@ export function SwapSheet({
       ? null
       : emptiness === 'none-known'
         ? 'No other account to move this session to yet.'
-        : ALL_SWITCHED_OFF;
+        : only !== undefined
+          ? NO_ROOM_NOTE
+          : ALL_SWITCHED_OFF;
 
   const move = (wrapper: string, cross: boolean, interrupt: boolean): void => {
     // The flag belongs to the selected row, not to the sheet generally. A
