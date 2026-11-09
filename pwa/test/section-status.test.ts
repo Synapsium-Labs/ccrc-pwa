@@ -18,7 +18,7 @@ const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
   collect: { view: collectView('live'), failure: null, reload: noop, settle: noop },
   dispatchAbandon: { view: null, failure: null, reload: noop, settle: noop },
   scopeSweep: { view: null, failure: null, reload: noop, settle: noop },
-  delegationAdopt: { view: null, failure: null, reload: noop, settle: noop },
+  delegationAdopt: { view: null, failure: null, reload: () => 0, landed: 0, settle: noop },
   testbox: { view: null, failure: null, reload: noop },
   linear: { view: null, failure: null, reload: noop, settle: noop },
   pause: { kind: 'read', marker: 'clear' },

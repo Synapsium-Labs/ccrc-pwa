@@ -64,7 +64,7 @@ const flush = async (): Promise<void> => { await act(async () => { await Promise
 
 /** A card on a poll the case owns: `show` is a read landing. */
 function owned(first: DelegationAdoptView): { poll: DelegationAdoptPoll; show: (v: DelegationAdoptView) => void } {
-  const poll: DelegationAdoptPoll = { view: first, failure: null, reload: vi.fn(), settle: vi.fn() };
+  const poll: DelegationAdoptPoll = { view: first, failure: null, reload: vi.fn(() => 0), landed: 0, settle: vi.fn() };
   const { rerender } = render(<DelegationAdoptSection poll={poll} />);
   return { poll, show: (v) => { rerender(<DelegationAdoptSection poll={{ ...poll, view: v }} />); } };
 }
@@ -131,7 +131,7 @@ describe('the read: the card says what the lane says (D-8114)', () => {
   });
 
   it('a failed poll keeps the last reading and says it may be out of date', () => {
-    render(<DelegationAdoptSection poll={{ view: view(), failure: 'failed', reload: vi.fn(), settle: vi.fn() }} />);
+    render(<DelegationAdoptSection poll={{ view: view(), failure: 'failed', reload: vi.fn(() => 0), landed: 0, settle: vi.fn() }} />);
     expect(screen.getByText(T.stale)).toBeInTheDocument();
     expect(radio(T.off).checked).toBe(true);
   });
@@ -368,8 +368,8 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(c.consequence.join(' ')).not.toMatch(/\d+ worktrees?/);
   });
 
-  it('live, suspended, unmeasured: the last pass did not count what this would keep, so the sheet cannot tell until the next pass and lists nothing (review 1699 R2-4)', () => {
-    for (const mode of ['live', 'suspended', 'unmeasured'] as const) {
+  it('live, suspended: the last pass did not count what this would keep, so the sheet cannot tell until the next pass and lists nothing (review 1699 R2-4)', () => {
+    for (const mode of ['live', 'suspended'] as const) {
       const s = said(health({ mode, adopted: 3, wouldAdopt: 0, keeps: { items: TWO, more: 5 } }));
       expect(s, mode).toContain(T.confirmUntilNextPass);
       expect(s, mode).not.toMatch(/listed on this card/);
@@ -377,6 +377,16 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
       expect(s, mode).toMatch(/mail/i);
     }
     expect(said(health({ mode: 'shadow', wouldAdopt: 7, keeps: { items: TWO, more: 5 } }))).toMatch(/This would keep 7 worktrees\b/);
+  });
+
+  it('unmeasured, would keep 4: the sheet says the last pass could not read whether keeping was on, names no figure and never says the pass did not count (review 1703 F4)', () => {
+    const s = said(health({ mode: 'unmeasured', wouldAdopt: 4, keeps: { items: TWO, more: 2 } }));
+    expect(s).toContain(T.confirmUnreadPass);
+    expect(s).not.toMatch(/did not count/);
+    expect(s).not.toMatch(/\d+ worktrees?|\b4\b/);
+    expect(s).not.toMatch(/listed on this card/);
+    expect(s).toMatch(/until the next pass/);
+    expect(s).toMatch(/mail/i);
   });
 
   it('the words speak of the last pass and the mode, and a refusal of on speaks of on only (review 1699 R2-5, R2-6, R2-7)', () => {
@@ -479,6 +489,58 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     await waitFor(() => expect(radio(T.on).checked).toBe(true));
     await flush();
     expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it('an answer after the bound makes no refocus request: a later reading moves nothing (review 1703 F2)', async () => {
+    vi.useFakeTimers();
+    const w = deferred();
+    vi.spyOn(api, 'setDelegationAdopt').mockReturnValue(w.promise);
+    const { show } = owned(view());
+    fireEvent.click(radio(T.on));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: T.confirmLabel }));
+    act(() => { vi.advanceTimersByTime(COORD_CONFIRM_MS); });
+    expect(screen.getByRole('status')).toHaveTextContent(T.unconfirmed);
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => { w.resolve(view({ state: 'set' })); });
+    show(view({ state: 'set' }));
+    await flush();
+    expect(radio(T.on).checked).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('a poll that shows the chosen reading while the write is in flight still ends in one refocus, on the radio (review 1703 F3)', async () => {
+    const w = deferred();
+    vi.spyOn(api, 'setDelegationAdopt').mockReturnValue(w.promise);
+    const { show } = owned(view());
+    await tapOnAndConfirm();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    (document.activeElement as HTMLElement | null)?.blur();   // a browser blurs the radio the held fieldset disables
+    show(view({ state: 'set' }));
+    await flush();
+    expect(document.activeElement).toBe(radio(T.on));
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => { w.resolve(view({ state: 'set' })); });
+    await flush();
+    expect(document.activeElement, 'the answer after the reading refocused a second time').toBe(document.body);
+  });
+
+  it('a rejected write, then a re-read whose view refuses the reading\'s choice: the focus waits for that view and lands on a line with text, never on a radio it disables (review 1703 F6)', async () => {
+    vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(500, { ok: false, error: 'internal' }));
+    const poll: DelegationAdoptPoll = { view: view(), failure: null, reload: vi.fn(() => 7), landed: 6, settle: vi.fn() };
+    const { rerender } = render(<DelegationAdoptSection poll={poll} />);
+    await tapOnAndConfirm();
+    await flush();
+    await waitFor(() => expect(poll.reload).toHaveBeenCalledTimes(1));
+    const refusing = view({ caps: { verb: 'absent', audit: 'present' }, refused: { on: 'fleet-switch-missing', off: 'fleet-switch-missing' } });
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: refusing, landed: 7 }} />);
+    await flush();
+    expect(radio(T.off).disabled).toBe(true);
+    const active = document.activeElement as HTMLElement;
+    expect(active).not.toBe(document.body);
+    expect(active.tagName, 'the focus is on a radio the re-read disabled').not.toBe('INPUT');
+    expect(active.textContent?.trim()).not.toBe('');
+    expect(screen.getByRole('region', { name: T.title }).contains(active)).toBe(true);
   });
 
   it('a reply that reads the marker unmeasurable: the focus lands on a line with text (the unmeasured note), and no empty element is focusable (review 1699 R2-3)', async () => {
@@ -687,6 +749,7 @@ describe('WORDS CENSUS (W4-U10, D-7845): the card says keep, kept and the change
       ...modes.map((mode) => [delegationAdoptModeLine(health({ mode })), delegationAdoptCountsLine(health({ mode })), delegationAdoptKeepsHeading(mode)]),
       delegationAdoptModeLine(null),
       ...(['verb', 'audit'] as const).flatMap((w) => caps.map((c) => delegationAdoptCapLine(w, c))),
+      delegationAdoptRefusedLine(T.on, 'sign-in-unarmed'),
       ...Object.keys(DELEGATION_ADOPT_REFUSALS).flatMap((w) => [
         delegationAdoptRefusedLine(T.on, w as keyof typeof DELEGATION_ADOPT_REFUSALS),
         delegationAdoptRefusedLine(T.off, w as keyof typeof DELEGATION_ADOPT_REFUSALS),

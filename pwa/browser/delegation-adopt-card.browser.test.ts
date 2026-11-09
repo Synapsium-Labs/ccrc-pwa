@@ -6,7 +6,8 @@
 // reached and picked: Keep them only after the sheet's confirm, Do not keep at once, each write answered by the stub below.
 //
 // The app answers from a fixture (`browser/app.ts`): no server, no ccd. `GET`/`POST /api/coord/delegation-adopt` answer from
-// one stored view that starts in shadow with the switch off. Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary>
+// one stored view that starts in shadow with the switch off. The second block holds where the focus lands once a write settles
+// against the answer's timing (review 1703 F1 and F6): a server answers in tens of ms, inside the confirm sheet's exit. Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary>
 // ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/delegation-adopt-card.browser.test.ts )`.
 // `CCRC_SHOTS=<a directory>` keeps one picture per view.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -230,5 +231,176 @@ describe('Settings › Automation › Worktrees left behind at every width, in b
         await ctx.close();
       }
     }, 90_000);
+  }
+});
+
+/** A server whose ccd has no keep switch: both choices refused (`fleet-switch-missing`), so every radio is disabled. */
+const NO_SWITCH: DelegationAdoptView = {
+  ...SHADOW, caps: { verb: 'absent', audit: 'present' }, refused: { on: 'fleet-switch-missing', off: 'fleet-switch-missing' },
+};
+
+/** Where the focus is: the element, whether it is inside the card's section, and the text it holds (a radio's is its label's). */
+interface Focus { tag: string; value: string | null; inCard: boolean; text: string }
+
+// Review 1703 F1, F2, F3 and F6 (one mechanism, ruled): one confirmed write makes one refocus request, which fires once when the
+// write settles; focus inside the card's own confirm sheet, while it is open or leaving, is nowhere, so the request waits until the
+// sheet is gone. jsdom has no exit animation and a held write answers after the sheet has gone, so only these rows see the sheet's
+// exit. `answer` is how long the stub waits before it answers each POST: 0 ms and 150 ms land inside the exit; `held` answers
+// only once the sheet has gone.
+describe('the focus once a write settles, against the answer\'s timing (D-8114; review 1703 F1, F6)', () => {
+  const FOCUS_VIEWS: readonly AppView[] = [{ skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: INSTRUMENT, theme: 'light', width: 1280 }];
+  type Answer = number | 'held';
+  type Reply = 'ok' | 'unmeasurable' | 'reject' | 'reject-refusing';
+  async function card(view: AppView, reply: Reply, answer: Answer) {
+    const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
+    let current: DelegationAdoptView = SHADOW;
+    const posts: unknown[] = [];
+    let release: () => void = () => undefined;
+    let gate: Promise<void> | null = null;
+    await ctx.route(`**${DOOR}`, async (r) => {
+      const req = r.request();
+      if (req.method() === 'POST') {
+        const body = req.postDataJSON() as { on: boolean };
+        posts.push(body);
+        if (answer === 'held') {
+          gate = new Promise((done) => { release = done; });
+          await gate;
+        } else if (answer > 0) await new Promise((done) => { setTimeout(done, answer); });
+        if (reply === 'reject' || reply === 'reject-refusing') {
+          if (reply === 'reject-refusing') current = NO_SWITCH;   // the re-read the rejection asks for refuses the reading's choice
+          return r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'internal' }) });
+        }
+        current = reply === 'unmeasurable' ? { ...current, state: 'unmeasurable' } : { ...current, state: body.on ? 'set' : 'clear' };
+      }
+      return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, ...current }) });
+    });
+    await page.goto(server!.origin + '/settings/automation');
+    const section = page.getByRole('region', { name: T.title });
+    const off = section.getByRole('radio', { name: T.off });
+    const on = section.getByRole('radio', { name: T.on });
+    await expect.poll(() => off.isChecked(), { timeout: 20_000 }).toBe(true);
+    const sheet = page.getByRole('dialog');
+    const focus = (): Promise<Focus> => page.evaluate((name): Focus => {
+      const a = document.activeElement as HTMLElement | null;
+      const cardOf = document.querySelector(`input[name="${name}"]`)?.closest('section') ?? null;
+      const text = a instanceof HTMLInputElement ? [...(a.labels ?? [])].map((l) => l.textContent ?? '').join(' ') : a?.textContent ?? '';
+      return {
+        tag: a?.tagName ?? 'null', value: a instanceof HTMLInputElement ? a.value : null,
+        inCard: cardOf !== null && a !== null && cardOf.contains(a), text: text.trim(),
+      };
+    }, 'settings-delegation-adopt');
+    /** Keep them, then its sheet's confirm; resolves once the sheet has gone (a held write is answered first). */
+    const keep = async (): Promise<void> => {
+      await on.click();
+      await sheet.getByRole('button', { name: T.confirmLabel }).click();
+      await expect.poll(() => sheet.count(), { timeout: 10_000 }).toBe(0);
+      if (answer === 'held') {
+        await expect.poll(() => gate !== null, { timeout: 10_000 }).toBe(true);
+        release();
+      }
+    };
+    /** The focus once it has settled: polled until `ok` holds, then read once more after a pause, so a late move shows. */
+    const settled = async (ok: (f: Focus) => boolean): Promise<Focus> => {
+      await expect.poll(async () => ok(await focus()), { timeout: 5_000 }).toBe(true);
+      await page.waitForTimeout(400);
+      return focus();
+    };
+    return {
+      ctx, page, errors, posts, section, on, off, sheet, keep, focus, settled,
+      release: () => { release(); }, show: (v: DelegationAdoptView) => { current = v; },
+    };
+  }
+
+  for (const view of FOCUS_VIEWS) {
+    for (const answer of [0, 150, 'held'] as const) {
+      it(`${named(view)}: answered at ${answer === 'held' ? 'held' : `${answer} ms`}, Keep them then Do not keep: the focus is the radio of the settled reading`, async () => {
+        const c = await card(view, 'ok', answer);
+        try {
+          await c.keep();
+          await expect.poll(() => c.on.isChecked(), { timeout: 10_000 }).toBe(true);
+          const kept = await c.settled((f) => f.value === 'on');
+          expect(kept, 'Keep them: the focus is not the radio of the settled reading').toMatchObject({ tag: 'INPUT', value: 'on', inCard: true });
+          await c.off.click();
+          if (answer === 'held') {
+            await expect.poll(() => c.posts.length, { timeout: 10_000 }).toBe(2);
+            await c.page.waitForTimeout(100);
+            c.release();
+          }
+          await expect.poll(() => c.off.isChecked(), { timeout: 10_000 }).toBe(true);
+          const left = await c.settled((f) => f.value === 'off');
+          expect(left, 'Do not keep: the focus is not the radio of the settled reading').toMatchObject({ tag: 'INPUT', value: 'off', inCard: true });
+          expect(c.posts).toEqual([{ on: true }, { on: false }]);
+          expect(c.errors).toEqual([]);
+        } finally {
+          await c.ctx.close();
+        }
+      }, 60_000);
+    }
+
+    it(`${named(view)}: answered at 0 ms with the marker unread: the focus is the unmeasured note`, async () => {
+      const c = await card(view, 'unmeasurable', 0);
+      try {
+        await c.keep();
+        await expect.poll(() => c.section.getByText(T.unmeasured).isVisible(), { timeout: 10_000 }).toBe(true);
+        const f = await c.settled((x) => x.text === T.unmeasured);
+        expect(f).toMatchObject({ inCard: true, text: T.unmeasured });
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
+
+    it(`${named(view)}: Keep them rejected at 0 ms: the focus is inside the card, on an element that holds text, never BODY`, async () => {
+      const c = await card(view, 'reject', 0);
+      try {
+        await c.keep();
+        await expect.poll(() => c.section.getByRole('status').count(), { timeout: 10_000 }).toBe(1);
+        const f = await c.settled((x) => x.inCard);
+        expect(f.tag).not.toBe('BODY');
+        expect(f.inCard).toBe(true);
+        expect(f.text, 'the focused element holds no text').not.toBe('');
+        expect(await c.off.isChecked()).toBe(true);
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
+
+    for (const answer of [0, 600] as const) {
+      it(`${named(view)}: Keep them rejected at ${answer} ms, and the re-read refuses both choices: the focus is a line with text, never a disabled radio or BODY (F6)`, async () => {
+        const c = await card(view, 'reject-refusing', answer);
+        try {
+          await c.keep();
+          await expect.poll(() => c.off.isDisabled(), { timeout: 10_000 }).toBe(true);
+          const f = await c.settled((x) => x.inCard);
+          expect(f.tag, 'the focus is on a radio the re-read disabled').not.toBe('INPUT');
+          expect(f.inCard).toBe(true);
+          expect(f.text, 'the focused element holds no text').not.toBe('');
+          expect(c.errors).toEqual([]);
+        } finally {
+          await c.ctx.close();
+        }
+      }, 60_000);
+    }
+
+    it(`${named(view)}: the sheet is open when a re-read refuses Keep them, and the operator confirms: nothing is sent and the focus comes back inside the card`, async () => {
+      const c = await card(view, 'ok', 0);
+      try {
+        await c.on.click();
+        await expect.poll(() => c.sheet.isVisible(), { timeout: 10_000 }).toBe(true);
+        c.show(DARK);
+        await c.page.evaluate(() => { document.dispatchEvent(new Event('visibilitychange')); });   // the page clock's re-poll
+        const line = delegationAdoptRefusedLine(T.on, 'sign-in-unarmed');
+        await expect.poll(() => c.page.evaluate((t) => document.body.textContent?.includes(t) ?? false, line), { timeout: 10_000 }).toBe(true);
+        await c.sheet.getByRole('button', { name: T.confirmLabel }).click();
+        await expect.poll(() => c.sheet.count(), { timeout: 10_000 }).toBe(0);
+        const f = await c.settled((x) => x.inCard);
+        expect(f).toMatchObject({ tag: 'INPUT', value: 'off', inCard: true });
+        expect(c.posts).toEqual([]);
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
   }
 });

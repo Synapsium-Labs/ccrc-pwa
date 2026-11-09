@@ -153,8 +153,8 @@ function SettingsReads({ onView }: { onView: (view: SettingsPageView | null) => 
     [ss.view, ss.failure, ss.reload, ss.settle]);
   const da = useDelegationAdoptView();
   const delegationAdopt = useMemo<DelegationAdoptPoll>(
-    () => ({ view: da.view, failure: da.failure, reload: da.reload, settle: da.settle }),
-    [da.view, da.failure, da.reload, da.settle]);
+    () => ({ view: da.view, failure: da.failure, reload: da.reload, landed: da.landed, settle: da.settle }),
+    [da.view, da.failure, da.reload, da.landed, da.settle]);
   const tb = useTestboxView();
   const testbox = useMemo<TestboxPoll>(
     () => ({ view: tb.view, failure: tb.failure, reload: tb.reload }), [tb.view, tb.failure, tb.reload]);

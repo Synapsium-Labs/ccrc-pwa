@@ -5,9 +5,10 @@
 // arms the switch but an operator's confirmed tap.
 //
 // TURNING IT ON ASKS FIRST. A tap on "Keep them" opens a confirm sheet (`QuickConfirm`) that names how many worktrees the last
-// pass would keep when it ran in shadow (in any other mode, or before any pass, it says the card cannot tell), how many of them
-// the card lists when the list leaves some off, and that their owners are mailed; the write goes out only from the sheet's
-// confirm, and not when the card's current view refuses it. "Do not keep" asks nothing.
+// pass would keep when it ran in shadow (in any other mode it says the card cannot tell until the next pass, and with no counts,
+// because no pass has counted or the last pass counted nothing, that the card cannot say how many), how many of them the card
+// lists when the list leaves some off, and that their owners are mailed; the write goes out only from the sheet's confirm, and
+// not when the card's current view refuses it. "Do not keep" asks nothing.
 //
 // THE WAIT is `ScopeSweepSection`'s: the checked radio is the server's reading, never the tap, and an unmeasured marker
 // checks neither; a confirmed tap holds the choice with its line on screen, `COORD_CONFIRM_MS` bounds that hold, and the
@@ -40,6 +41,11 @@ const T = DELEGATION_ADOPT_TEXT;
 const RADIO_NAME = 'settings-delegation-adopt';
 /** Each choice's refusal line, in the order the card draws them: one leaf, drawn per choice (the markup census). */
 const REFUSAL_LINES = [['on', T.on], ['off', T.off]] as const;
+/** What a refocus request waits for (review 1703): `flight`, the write has not settled; `now`, the view the card has; `reading`,
+ *  the settled view's reading; `read`, the view the re-read with that issue number returns. */
+type RefocusWait =
+  | { readonly kind: 'flight' } | { readonly kind: 'now' }
+  | { readonly kind: 'reading'; readonly until: DelegationAdoptChoice | null } | { readonly kind: 'read'; readonly issue: number };
 
 export function DelegationAdoptSection({ poll }: { poll: DelegationAdoptPoll }): ReactNode {
   const { view, failure } = poll;
@@ -60,7 +66,7 @@ export function DelegationAdoptSection({ poll }: { poll: DelegationAdoptPoll }):
 }
 
 function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView; stale: boolean; poll: DelegationAdoptPoll }): ReactNode {
-  const { reload, settle } = poll;
+  const { reload, settle, landed } = poll;
   const [asked, setAsked] = useState<DelegationAdoptChoice | null>(null);
   const [confirming, setConfirming] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,11 +83,88 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
     timer.current = null;
   };
 
-  // A NEW reading retires any line about the old one; only the reading a tap asked for settles that tap.
+  // THE REFOCUS (review 1693 F4; review 1699 R2-1 to R2-3; review 1703 F1, F2, F3 and F6, ruled as one mechanism). The sheet's
+  // own give-back targets the radio that opened it, which is disabled while the write is in flight, so without this the focus
+  // falls to the page. One confirmed write, or a refusal that closed the sheet, makes ONE request, and it fires at most once:
+  // - It is in flight until the write settles: its answer, or a reading that shows the chosen value, whichever comes first.
+  //   The bound settles it too, on the view the card has then. An answer after the bound, or after a reading settled it, finds
+  //   no request in flight and makes none, so no later poll or other card's write moves the focus (F2, F3).
+  // - A good answer waits for the settled view (R2-1): in the shipped app the view reaches the card through the Settings frame
+  //   one commit after the write settles, and the radio that stood before the write must not be focused (Space on it would
+  //   send the opposite choice). A rejected or unreadable answer waits for the view its re-read returns (F6), so the focus is
+  //   never put on a radio that view then disables.
+  // - Focus inside the card's own confirm sheet, open or leaving, counts as nowhere, and the request waits until the sheet has
+  //   gone (F1): the sheet is portaled outside the card and holds the focus through its exit. Focus anywhere else outside the
+  //   card drops the request (R2-2, workbench-tabs' guard): an operator who went elsewhere stays there.
+  // - It then focuses the radio whose value is the reading, when enabled, else a line of the card's that holds text: the result
+  //   line, the refusal line for the reading, either refusal line, the unmeasured note (R2-3). None of them is ever empty.
+  const refocus = useRef<{ readonly of: object; readonly sheet: Element | null; wait: RefocusWait } | null>(null);
+  const seen = useRef({ asked, confirming, reading, landed });
+  const sheetWatch = useRef<MutationObserver | null>(null);
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  const refusalRefs = useRef<Partial<Record<DelegationAdoptChoice, HTMLParagraphElement | null>>>({});
+  const unmeasuredRef = useRef<HTMLParagraphElement | null>(null);
+
+  const stopWatch = (): void => {
+    sheetWatch.current?.disconnect();
+    sheetWatch.current = null;
+  };
+  /** Moves the request of the write `of`, while it is in flight, on to what it waits for; any other request is left alone. */
+  const settleRefocus = (of: object, wait: RefocusWait): void => {
+    const req = refocus.current;
+    if (req !== null && req.of === of && req.wait.kind === 'flight') req.wait = wait;
+  };
+  // Reads refs only, so the sheet watch's closure from an older render still reads the card as it stands.
+  const tryRefocus = (): void => {
+    const req = refocus.current;
+    if (req === null) return;
+    const { asked: holding, confirming: open, reading: now, landed: read } = seen.current;
+    const { wait } = req;
+    if (holding !== null || open || wait.kind === 'flight') return;
+    if (wait.kind === 'reading' && wait.until !== now) return;          // the settled view has not reached the card yet
+    if (wait.kind === 'read' && wait.issue > 0 && read < wait.issue) return;   // the re-read has not landed yet
+    const radios = document.querySelectorAll<HTMLInputElement>(`input[name="${RADIO_NAME}"]`);
+    const card = radios[0]?.closest('section') ?? null;
+    const sheet = req.sheet !== null && req.sheet.isConnected ? req.sheet : null;
+    const active = document.activeElement;
+    const nowhere = active === null || active === document.body || (sheet !== null && sheet.contains(active));
+    if (!nowhere && (card === null || !card.contains(active))) {
+      refocus.current = null;
+      stopWatch();
+      return;
+    }
+    if (sheet !== null) {
+      watchSheet(sheet);
+      return;
+    }
+    refocus.current = null;
+    stopWatch();
+    const radio = [...radios].find((r) => r.value === now && !r.disabled);
+    const refusal: HTMLElement | null = now === null ? null : refusalRefs.current[now] ?? null;
+    const textLine = statusRef.current ?? refusal ?? refusalRefs.current.on ?? refusalRefs.current.off ?? unmeasuredRef.current;
+    (radio ?? textLine)?.focus({ preventScroll: true });
+  };
+  /** Tries again once the sheet has left the document. */
+  const watchSheet = (sheet: Element): void => {
+    if (sheetWatch.current !== null) return;
+    const watch = new MutationObserver(() => {
+      if (sheet.isConnected) return;
+      stopWatch();
+      tryRefocus();
+    });
+    watch.observe(document.body, { childList: true, subtree: true });
+    sheetWatch.current = watch;
+  };
+
+  // A NEW reading retires any line about the old one; only the reading a tap asked for settles that tap, and its refocus request.
   useEffect(() => {
     if (reading === null || reading !== spokenOf.current) line.clear();
     spokenOf.current = null;
-    if (reading === tap.current?.choice) tap.current = null;
+    const settled = tap.current;
+    if (settled !== null && reading === settled.choice) {
+      settleRefocus(settled, { kind: 'now' });
+      tap.current = null;
+    }
     if (reading === asked) {
       clearTimer();
       setAsked(null);
@@ -89,58 +172,38 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reading]);
 
-  useEffect(() => clearTimer, []);
-
-  // After a tap, once its write settles (or a refusal closed the sheet), the focus comes back into the card (review 1693 F4).
-  // The sheet's own give-back targets the radio that opened it, which is disabled while the write is in flight, so without
-  // this the focus falls to the page.
-  // - It waits for the settled view (review 1699 R2-1): in the shipped app the view reaches the card through the Settings
-  //   frame one commit after the write settles, so a good reply's refocus waits until the card's reading is the reply's.
-  //   It then focuses the radio whose value is that reading, never one read as `:checked` before the view arrived: Space on
-  //   the radio that stood before the write would send the opposite choice.
-  // - It moves the focus only from nowhere, the page, or this card (review 1699 R2-2, workbench-tabs' guard): an operator
-  //   who went elsewhere while the write was in flight stays there.
-  // - With no enabled radio for the reading it focuses a line of the card's that holds text (review 1699 R2-3): the result
-  //   line, else the refusal line, else the unmeasured note. None of them is ever empty.
-  // `'current'`: focus for the reading the card shows now. `{until}`: wait until the card's reading is `until`.
-  const refocus = useRef<'current' | { readonly until: DelegationAdoptChoice | null } | null>(null);
-  const statusRef = useRef<HTMLDivElement | null>(null);
-  const refusalRefs = useRef<Partial<Record<DelegationAdoptChoice, HTMLParagraphElement | null>>>({});
-  const unmeasuredRef = useRef<HTMLParagraphElement | null>(null);
   useEffect(() => {
-    const want = refocus.current;
-    if (want === null || asked !== null || confirming) return;
-    if (want !== 'current' && want.until !== reading) return;   // the settled view has not reached the card yet
-    refocus.current = null;
-    const radios = document.querySelectorAll<HTMLInputElement>(`input[name="${RADIO_NAME}"]`);
-    const card = radios[0]?.closest('section') ?? null;
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && (card === null || !card.contains(active))) return;
-    const radio = [...radios].find((r) => r.value === reading && !r.disabled);
-    const status: HTMLElement | null = statusRef.current;
-    const refusal: HTMLElement | null = reading === null ? null : refusalRefs.current[reading] ?? null;
-    const textLine = status ?? refusal ?? refusalRefs.current.on ?? refusalRefs.current.off ?? unmeasuredRef.current;
-    (radio ?? textLine)?.focus({ preventScroll: true });
-  }, [asked, confirming, reading]);
+    seen.current = { asked, confirming, reading, landed };
+    tryRefocus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, confirming, reading, landed]);
+
+  useEffect(() => () => {
+    clearTimer();
+    stopWatch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const choose = (choice: DelegationAdoptChoice): void => {
     if (asked !== null) return;   // the disabled fieldset stops a finger; this stops a second call
+    // The confirm sheet the focus is in, if any: its exit is waited out before the focus comes back.
+    const sheet = document.activeElement?.closest('[role="dialog"]') ?? null;
     // The view the card shows now, not the one the sheet opened over (review 1693 F3): a choice it refuses sends nothing, the
     // sheet closes and the refusal line stays on screen.
     if (view.refused[choice] !== null) {
-      refocus.current = 'current';
+      refocus.current = { of: {}, sheet, wait: { kind: 'now' } };
       setConfirming(false);
       return;
     }
-    refocus.current = null;
     line.clear();
     spokenOf.current = null;
     setAsked(choice);
     const mine = { choice };
     tap.current = mine;
+    refocus.current = { of: mine, sheet, wait: { kind: 'flight' } };
     timer.current = setTimeout(() => {
       timer.current = null;
-      refocus.current = 'current';
+      settleRefocus(mine, { kind: 'now' });   // the bound gives up on the write: the view the card has, and nothing after
       setAsked(null);
       line.say(T.unconfirmed);
       reload();
@@ -157,13 +220,12 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
         if (!answered()) return;
         const reply = answer === 'unreadable' ? null : asDelegationAdoptView(answer);
         if (reply === null) {
-          refocus.current = 'current';
           line.say(UNCONFIRMED_TEXT);
-          reload();
+          settleRefocus(mine, { kind: 'read', issue: reload() });
           return;
         }
         const stands = delegationAdoptChecked(reply);
-        refocus.current = { until: stands };
+        settleRefocus(mine, { kind: 'reading', until: stands });
         if (stands === choice || stands === null) line.clear();
         else {
           spokenOf.current = stands;
@@ -173,10 +235,9 @@ function DelegationAdoptBody({ view, stale, poll }: { view: DelegationAdoptView;
       },
       (err: unknown) => {
         if (!answered()) return;
-        refocus.current = 'current';
         const failed = delegationAdoptFailure(err);
         line.say(failed.text, failed.tone);
-        reload();
+        settleRefocus(mine, { kind: 'read', issue: reload() });
       },
     );
   };
