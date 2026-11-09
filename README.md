@@ -8344,11 +8344,14 @@ each with what the change check measured or that none was read, at most 50 and t
 dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
 
 **Keep them** asks first: when the last pass ran in shadow, a confirmation names how many worktrees it would keep (the counts
-line's figure) and, when the list leaves some off, how many of them the card lists and how many it does not; after a pass in any
-other mode, or before any pass has counted, it says the card cannot tell until the next pass. It always says that the session that
-started each agent is mailed. Nothing is sent before it is confirmed, and nothing is sent when
-the card's latest reading refuses Keep them by then. Once a write settles, the focus returns to the choice the card now shows,
-unless the operator has moved it elsewhere. **Do not keep** goes at once; its note says
+line's figure) and, when the list leaves some off, how many of them the card lists and how many it does not. After a pass that
+kept or was paused, it says the card cannot tell until the next pass; after a pass that could not read whether keeping was on, it
+says that, and that the card cannot tell until the next pass; when no pass has counted, or the last pass counted nothing, it says
+the card cannot say how many this would keep. It always says that the session that started each agent is mailed. Nothing is sent
+before it is confirmed, and nothing is sent when the card's latest reading refuses Keep them by then. Once a write settles (its
+answer, or a reading that shows the choice, whichever comes first; after a rejected write, the view its re-read returns), the
+focus returns once to the choice the card then shows, or to a line of the card's that holds text, after the confirmation has
+gone, unless the operator has moved it elsewhere; it never moves after the write's bound has given up on it. **Do not keep** goes at once; its note says
 that worktrees already kept stay held back from the disk sweep until their hold ends. A choice the GET says would be refused is
 disabled, with the refusal in the card's own words, `sign-in-unarmed` included (turning it on needs sign-in armed and a signed-in
 operator), and a refused write says the same and re-reads. On a server without the door the card says it is not available there.

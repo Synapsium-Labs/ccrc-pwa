@@ -132,3 +132,45 @@ fieldset while a write is in flight, so the radio just tapped is disabled under 
 
 The fallback line R2-3 names, in this order: the card's result line (the status wrapper, drawn only with content), else the refusal
 line for the reading, else the unmeasured note. In R2-3's row it is the unmeasured note.
+
+## Fix round 3 (review 1703)
+
+F1, F2, F3 and F6 were ruled one defect: a refocus flag that was cleared before its guard decided, or set where no effect ran
+again. The card now keeps one refocus request per confirmed write, or per refusal that closed the sheet, and fires it at most
+once (`DelegationAdoptSection.tsx`, "THE REFOCUS"):
+
+- The request is in flight until the write settles: its answer, or a reading that shows the chosen value, whichever comes
+  first. The `COORD_CONFIRM_MS` bound settles it too, on the view the card has at that moment, as fix round 1 ruled for the
+  bound. An answer after the bound, or after a reading settled it, finds no request in flight and makes none.
+- A good answer waits for the settled view (R2-1). A rejected or unreadable answer waits for the view its re-read returns.
+  The card's hook now returns that read's issue number from `reload()`, and its new `landed` field gives the newest issue that
+  landed, whether the read succeeded or failed. The Settings frame's memo passes `landed` through.
+- Focus inside the card's own confirm sheet, while the sheet is open or leaving, counts as nowhere. The request then waits
+  until the sheet has left the document, watched with a `MutationObserver` on the body. Focus anywhere else outside the card
+  drops the request (R2-2).
+- When it fires, the request focuses the radio whose value is the reading, if that radio is enabled. Otherwise it focuses the
+  first of these lines that is drawn, each of which holds text (R2-3): the result line, the refusal line for the reading,
+  either refusal line, then the unmeasured note.
+
+| F | What changed | Row, red at aa2b39feb, then green | Mutant |
+|---|---|---|---|
+| F1 | the request waits out the sheet's exit; focus in the sheet is nowhere | the card's browser file, through the shipped Settings wiring, at 390 (refined, phosphor) and 1280 (instrument, light): Keep them then Do not keep, answered at 0 ms, 150 ms and held; a 0 ms reply that reads the marker unmeasurable (the unmeasured note); a 0 ms rejected Keep them (inside the card, on an element that holds text) | focus in the sheet treated as outside the card and the request cleared before the guard, as at aa2b39feb: 11 of 24 browser rows red |
+| F1, refusal on confirm | the same request (`choose`'s early return makes one, waiting `now`) | the sheet is open when a re-poll refuses Keep them, then the confirm: nothing sent, the focus on Do not keep's radio, inside the card (red at aa2b39feb at both widths, so the row can go red) | included in the F1 mutant's 11 |
+| F2 | an answer after the bound sets no request: only a request still in flight moves on | jsdom: the bound passes, the focus is moved to the page, a late answer arrives, then the reading changes; the focus stays on the page | the answer handlers set the request unconditionally: 1 red |
+| F3 | a reading that shows the tap's choice settles the request in flight | jsdom: a poll shows the chosen reading while the write is in flight; the focus lands on that radio once, and the later answer moves nothing | the reading no longer settles the request: 1 red |
+| F4 | in mode `unmeasured` the sheet says the last pass could not read whether keeping was on, so the card cannot say how many until the next pass (`confirmUnreadPass`). Live and suspended keep `confirmUntilNextPass`. R2-4's row now covers live and suspended. | jsdom: mode unmeasured, would keep 4. The sheet names no figure and does not say "did not count". | unmeasured given `confirmUntilNextPass` again: 1 red |
+| F5 | text: the words module's mode-line comment and the sheet's doc comment, the section header, README (`adoption` null: "cannot say how many", with no "until the next pass") | text | none |
+| F6 | a rejected write waits for its re-read's view | jsdom: a rejected write, then a re-read that refuses both choices; the focus is on the result line, never a disabled radio. Browser: the same at 0 ms and 600 ms, never a disabled radio or the page (red at aa2b39feb, so the row can go red) | no wait for the re-read: jsdom 1 red; browser 2 red (both 600 ms rows) |
+| F7 | the words census also builds `delegationAdoptRefusedLine(T.on, 'sign-in-unarmed')` | the census | "now" in that line only: the new census red, aa2b39feb's census green |
+
+Each browser row was run at both 390 and 1280 px.
+
+| Answer timing | 390, red at aa2b39feb | 1280, red at aa2b39feb | Both widths, at this tip |
+|---|---|---|---|
+| 0 ms | yes: the focus never reached the radio within 5 s | yes | green |
+| 150 ms | yes | no: the desk dialog's exit had already ended | green |
+| held | no | no | green |
+
+For F1's rejected Keep them row, the radio of the reading is enabled after the re-read. R2-1 and R2-3 therefore put the focus on
+that radio, and the text it holds is its label. The row asserts an element inside the card that holds text, with a radio read by
+its label, and never the page.
