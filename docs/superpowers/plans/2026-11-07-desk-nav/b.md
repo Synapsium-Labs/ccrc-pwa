@@ -215,7 +215,12 @@ file this PR does not touch, at a load of about 5. It was green 3 of 3 alone and
 requires every `var()` to name one a stylesheet defines. The gates run before that push were the named unit files, which
 do not include css-vars, not the whole pwa unit suite. The fix declares `--docs-crumbs-n: initial;` in
 `.docs-full .docs-crumbs`, as shell.css declares `--lane-card-min`: the inline style still outranks it, and without it the
-floor is three's (ruled 16867; the round's second push, this commit). The whole pwa unit suite then ran before that push.
+floor is three's (ruled 16867; 33acd470b). The same CI run failed three of the four unfold cases on "a ring is drawn": the
+case put keyboard focus on the first crumb with a Shift press and a programmatic `focus()`, which Chrome's `:focus-visible`
+heuristic matched locally but not on the runner. The case now focuses back and presses Tab, keyboard navigation under any
+heuristic, and asks that the Tab reached the first crumb. With the row's inset ring rule removed, all four go red
+(ruled 16870; 4be8cd746). Both went out in the round's second push, after the whole pwa unit suite and the browser file
+ran green on its tip.
 
 The coordinator carries F5 (a touch user cannot read the may-differ marker's words) as `touch-marker-words`, and F9 (d)
 (the control census's class for `.docs-fresh` and `.docs-copy`). F9 (e) needs nothing: the PR is squash-merged.
