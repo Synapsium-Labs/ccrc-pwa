@@ -491,7 +491,7 @@ describe('the controls on /waiting (Task 24)', () => {
     const runs = [cap(12), runFixture(14, 'coord', 'w-14', { program: 'other', programTitle: 'Other' })];
     open({ runs, view: waitingView({ items: [itemView({ id: 1, program: 'port-api' })] }) });
     const group = document.querySelector('.wl-group[data-program="port-api"]')!;
-    expect(group.querySelectorAll('.wl-item')).toHaveLength(2);
+    expect(group.querySelectorAll('.wl-item, .wl-capitem')).toHaveLength(2);
     expect(screen.getByText('1 review cap to lift')).toBeTruthy();
     const rail = screen.getByRole('navigation', { name: 'Programmes' });
     expect(within(rail).getByRole('button', { name: /All programmes/ }).textContent).toMatch(/2$/);
