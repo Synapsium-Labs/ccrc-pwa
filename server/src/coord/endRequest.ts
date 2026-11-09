@@ -162,10 +162,8 @@ const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== '';
 /** `POST /api/runs/:id/end-request`, after the box token has been checked by the route itself (it must come before any
  *  await). Body `{byId, byUuid, why}`; the order every box-token route keeps: shape, attribution, then ONE synchronous
  *  read-decide-write (`endRequestRun`), the emit and the answer. A refusal writes and emits nothing. */
-export async function endRequestHandler(deps: EndRequestRouteDeps, req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
+export async function endRequestHandler(runId: number | null, deps: EndRequestRouteDeps, req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
   const bad = (detail: string): FastifyReply => refuseRoute(reply, 'bad-request', { detail });
-  const rawId = (req.params as { id: string }).id;
-  const runId = /^[1-9][0-9]{0,15}$/.test(rawId) ? Number(rawId) : null;
   if (runId === null) return bad('the run id is a positive integer');
   const body = req.body ?? {};
   if (typeof body !== 'object' || Array.isArray(body)) return bad('the body is an object');

@@ -2081,7 +2081,8 @@ export function registerCoordRoutes(
   app.post('/api/runs/:id/end-request', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/end-request')) return;
-    return endRequestHandler({
+    const runId = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    return endRequestHandler(runId, {
       coord: deps.coord, now: () => Date.now(), requireAttribution, changed: () => { bus.emit('waiting'); },
       verdictOf: (runId) => {
         const v = watcher?.runVerdicts.of(runId) ?? null;

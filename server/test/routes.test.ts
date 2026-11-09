@@ -259,7 +259,7 @@ const QUERY_ID_SEAMS: Omit<RouteSource, 'code'>[] = [{ method: 'GET', routePath:
 const seamKey = (r: Omit<RouteSource, 'code'>): string => `${r.method} ${r.routePath}`;
 
 describe('canonical coordination id route census', () => {
-  it('keeps all twenty-five textual resource-id seams on a shared parser (twenty-two, plus the question family\'s three)', () => {
+  it('keeps all twenty-six textual resource-id seams on a shared parser (twenty-three, plus the question family\'s three)', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -272,6 +272,8 @@ describe('canonical coordination id route census', () => {
       // registered right after `advance` in coord/routes.ts.
       { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
+      // D-8076: a session asks the operator to end a run it cannot close, registered right after `items`.
+      { method: 'POST', routePath: '/api/runs/:id/end-request' },
       // D-6910: the operator's read of a review cap's ask, registered beside the lift.
       { method: 'GET', routePath: '/api/coord/review-cap/:id' },
       // Console speed S2: the archive's cursor `before` is a run id in the query (`QUERY_ID_SEAMS`).
