@@ -342,6 +342,24 @@ describe('a session on a usage limit with no account to take it', () => {
     expect(within(screen.getByRole('navigation', { name: 'Programmes' })).getByRole('button', { name: /prog-a/ }).textContent).toContain('2');
   });
 
+  it('keeps the summary count line right while a blocking item and a limit row come and go together', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const blocking = waitingView({ items: [itemView({ id: 1, program: 'prog-a', title: 'Blocker', neededBy: 'blocking' })] });
+    const sessions = [stuck('project-a-w1')];
+    const props = { view: blocking, sessions, runs: [] as never[], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+    const { rerender } = render(<WaitingScreen {...props} />);
+    const pills = () => within(screen.getByLabelText('Summary')).getAllByRole('listitem').map((li) => li.textContent);
+    expect(pills()).toEqual(['1 blocking now', '1 session on a usage limit']);
+    // The blocking item is resolved: its pill must go, the limit's stays.
+    rerender(<WaitingScreen {...props} view={waitingView()} />);
+    expect(pills()).toEqual(['1 session on a usage limit']);
+    // A blocking item and a second limit row arrive: each pill is drawn once.
+    rerender(<WaitingScreen {...props} view={blocking} sessions={[stuck('project-a-w1'), stuck('project-a-w2')]} />);
+    expect(pills()).toEqual(['1 blocking now', '2 sessions on a usage limit']);
+    expect(errors.mock.calls.flat().join(' ')).not.toContain('same key');
+    errors.mockRestore();
+  });
+
   it('opens nothing when the row itself is tapped: it is not an item, its controls are its own', () => {
     const { onOpenItem, onOpenSession } = open({ sessions: [stuck('project-a-w1')] });
     fireEvent.click(screen.getByTestId('limit-wait-row'));

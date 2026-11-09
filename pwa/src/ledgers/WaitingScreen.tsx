@@ -207,7 +207,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
           <>
             {words.length > 0 && (
               <ul className="wl-summary" aria-label="Summary">
-                {words.map((w) => <li key={w.tone} className="wl-pill" data-tone={w.tone}>{w.text}</li>)}
+                {/* Two pills can share a tone (the limit pill is `blocking` like "N blocking now"), so the text is in the key. */}
+                {words.map((w) => <li key={`${w.tone}:${w.text}`} className="wl-pill" data-tone={w.tone}>{w.text}</li>)}
               </ul>
             )}
             <div className="wl-grid">
