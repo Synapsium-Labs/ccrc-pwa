@@ -611,11 +611,11 @@ describe('a registered value is redacted before any derived field is cut: gist, 
   ].join('\n');
   let box: HistoryBox;
   /** Every text derivation stored for one node: its gist and topics, every node_refs value, its nodes_fts columns. */
-  const storedTexts = (nodeId: string): string[] => [
-    ...q<{ gist: string | null; topics: string | null }>(box, 'SELECT gist, topics FROM nodes WHERE node_id = ?', nodeId)
+  const storedTexts = (nodeId: string, b: HistoryBox = box): string[] => [
+    ...q<{ gist: string | null; topics: string | null }>(b, 'SELECT gist, topics FROM nodes WHERE node_id = ?', nodeId)
       .flatMap((r) => [r.gist ?? '', r.topics ?? '']),
-    ...q<{ value: string }>(box, 'SELECT value FROM node_refs WHERE node_id = ?', nodeId).map((r) => r.value),
-    ...q<{ gist: string | null; topics: string | null; refs: string | null }>(box,
+    ...q<{ value: string }>(b, 'SELECT value FROM node_refs WHERE node_id = ?', nodeId).map((r) => r.value),
+    ...q<{ gist: string | null; topics: string | null; refs: string | null }>(b,
       'SELECT f.gist, f.topics, f.refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?', nodeId)
       .flatMap((r) => [r.gist ?? '', r.topics ?? '', r.refs ?? '']),
   ];
@@ -633,8 +633,8 @@ describe('a registered value is redacted before any derived field is cut: gist, 
     });
     return out;
   };
-  const refsOf = (nodeId: string): { value: string; origin: string }[] =>
-    q<{ value: string; origin: string }>(box, 'SELECT value, origin FROM node_refs WHERE node_id = ? ORDER BY value', nodeId);
+  const refsOf = (nodeId: string, b: HistoryBox = box): { value: string; origin: string }[] =>
+    q<{ value: string; origin: string }>(b, 'SELECT value, origin FROM node_refs WHERE node_id = ? ORDER BY value', nodeId);
   const ftsRowsOf = (nodeId: string): number => q<{ c: number }>(box,
     'SELECT count(*) AS c FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?', nodeId)[0]!.c;
 
@@ -689,6 +689,94 @@ describe('a registered value is redacted before any derived field is cut: gist, 
     expect(ftsRowsOf(l1!.node_id), 'CONTROL: the node has its nodes_fts row').toBe(1);
     expect(stretches(storedTexts(l1!.node_id), V)).toEqual([]);
   });
+
+  // Task 1F: the template's semicolon-joined refs. Each case builds its own fixture HOME (one steered leaf), because
+  // the CONTROL's secret file must never name V, and the case's must record V's pair and then drop the value.
+  const SEMI_REFS = `src/${V}/model.ts;ccd/x.mjs`;
+  const semiSteered = (): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A steered fixture summary for the semicolon refs.', '</summary>',
+    steeredBlock({ gist: GIST, expand: 'zqtopic plain', refs: SEMI_REFS }),
+  ].join('\n');
+  /** One steered leaf holding V in its gist and in a semicolon-joined refs line. `register` records V's pair first. */
+  const semiLeaf = (prefix: string, id: string, u: string, register: boolean): { b: HistoryBox; leaf: LeafRow } => {
+    const b = makeHistoryBox(prefix);
+    const dir = path.join(b.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, 'x8derive.env');
+    if (register) {
+      fs.writeFileSync(file, `ZQ_DERIVE_V=${V}\n`, { mode: 0o600 });
+      for (let i = 0; i < 2; i += 1) expect(runSweep(b).code).toBe(0);
+      const db = openStoreRO(b);
+      try {
+        const pair = db.prepare('SELECT count(*) AS c FROM redact_hashes WHERE len = ? AND sha256 = ?')
+          .get(V.length, crypto.createHash('sha256').update(V).digest()) as { c: number };
+        expect(pair.c, 'CONTROL: the first ticks recorded the pair').toBe(1);
+      } finally { db.close(); }
+    }
+    fs.writeFileSync(file, `ZQ_DERIVE_OTHER=${crypto.randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const seq = compactionSequence({ n: 1, trigger: 'manual', workRows: 8, seed: 0xc9, sessionId: u, startMs: T0, summaryText: semiSteered });
+    plant(b, id, u, seq.rows);
+    const at = Date.parse(String(seq.rows.find((r) => r['uuid'] === seq.boundaryUuids[0])!['timestamp']));
+    spoolLine(b, id, { v: 1, ev: 'steer', id, sid: u, leaf: '', ts: at - 500 });
+    settle(b);
+    const [leaf] = leavesOf(b, u);
+    expect({ kind: leaf!.kind, status: leaf!.status }, 'CONTROL: the leaf is steered').toEqual({ kind: 'steered_leaf', status: 'ok' });
+    return { b, leaf: leaf! };
+  };
+
+  it('CONTROL: a fixture whose secret file never names V stores V in the gist and src/<V>/model.ts as a path ref', () => {
+    const { b, leaf } = semiLeaf('ccrc-hist-derive-semi-ctl-', 'claude-semi-control', '0189abcd-1234-4678-9abc-0000000000f6', false);
+    expect(stretches([leaf.gist ?? ''], V), 'the gist keeps V when nothing redacts it').not.toEqual([]);
+    const refs = refsOf(leaf.node_id, b);
+    expect(refs, 'the semicolon-joined ref holding V is kept as a path').toContainEqual({ value: `src/${V}/model.ts`, origin: 'model' });
+    expect(refs).toContainEqual({ value: 'ccd/x.mjs', origin: 'model' });
+    expect(q<{ kind: string }>(b, 'SELECT kind FROM node_refs WHERE node_id = ? AND value = ?', leaf.node_id, `src/${V}/model.ts`))
+      .toEqual([{ kind: 'path' }]);
+  }, 240_000);
+
+  it('a semicolon-joined refs token holding a registered value: no stored field keeps the value', () => {
+    const { b, leaf } = semiLeaf('ccrc-hist-derive-semi-', 'claude-semi-redact', '0189abcd-1234-4678-9abc-0000000000f7', true);
+    expect(GIST.indexOf(V), 'CONTROL: V straddles GIST_MAX').toBe(GIST_MAX - LEAD);
+    expect(leaf.gist!.slice(GIST_MAX - LEAD, GIST_MAX - LEAD + 10), 'redacted, then cut').toBe('[redacted]');
+    const refs = refsOf(leaf.node_id, b);
+    expect(refs, 'the clean half of the token is kept').toContainEqual({ value: 'ccd/x.mjs', origin: 'model' });
+    expect(refs.filter((r) => r.value.includes(V) || r.value.includes('[redacted]'))).toEqual([]);
+    expect(stretches(storedTexts(leaf.node_id, b), V)).toEqual([]);
+  }, 240_000);
+});
+
+describe('a steered leaf\'s template-shaped refs reach node_refs (Task 1F; spec 7.1, 7.4 item 7)', () => {
+  const ID = 'claude-template-refs';
+  const U = '0189abcd-1234-4678-9abc-0000000000f8';
+  const MINED = '/home/u/worktrees/p/quiet-basin/src/segment-0-5.ts';
+  const TEMPLATE = [
+    { kind: 'path', value: 'ccd/history/sweep.mjs' }, { kind: 'path:symbol', value: 'ccd/history/lib.mjs:blockFields' },
+    { kind: 'sha', value: 'a0860d1f' }, { kind: 'issue', value: '#286' }, { kind: 'd-number', value: 'D-4740' },
+    { kind: 'test', value: 'server/test/history-steer.test.ts' },
+  ];
+  const BLOCK_REFS = `${TEMPLATE.map((r) => r.value).join('; ')}; ${MINED}`;
+  it('node_refs holds the six with origin model, in order, ahead of the mined refs; a ref also mined stays model', () => {
+    const box = makeHistoryBox('ccrc-hist-derive-template-refs-');
+    const seq = compactionSequence({
+      n: 1, trigger: 'manual', workRows: 8, seed: 0xca, sessionId: U, startMs: T0,
+      summaryText: () => [
+        '<summary>', '1. Primary Request and Intent:', '   A steered fixture summary for the template refs.', '</summary>',
+        steeredBlock({ gist: 'Read the template refs through the parser and stored them, each classified.', expand: 'template, refs', refs: BLOCK_REFS }),
+      ].join('\n'),
+    });
+    plant(box, ID, U, seq.rows);
+    const at = Date.parse(String(seq.rows.find((r) => r['uuid'] === seq.boundaryUuids[0])!['timestamp']));
+    spoolLine(box, ID, { v: 1, ev: 'steer', id: ID, sid: U, leaf: '', ts: at - 500 });
+    settle(box);
+    const [leaf] = leavesOf(box, U);
+    expect({ kind: leaf!.kind, status: leaf!.status }, 'CONTROL: the leaf is steered').toEqual({ kind: 'steered_leaf', status: 'ok' });
+    const refs = q<{ kind: string; value: string; origin: string }>(box, 'SELECT kind, value, origin FROM node_refs WHERE node_id = ? ORDER BY rowid', leaf!.node_id);
+    expect(refs.slice(0, 6)).toEqual(TEMPLATE.map((r) => ({ ...r, origin: 'model' })));
+    expect(refs[6], 'the ref the span also mined stays model').toEqual({ kind: 'path', value: MINED, origin: 'model' });
+    expect(refs.filter((r) => r.origin === 'tool_use').map((r) => r.value), 'CONTROL: another path was mined, after the model refs')
+      .toContain('/home/u/worktrees/p/quiet-basin/src/segment-0-1.ts');
+    expect(refs.findIndex((r) => r.origin === 'tool_use')).toBeGreaterThan(6);
+  }, 240_000);
 });
 
 describe('a parser throw is recorded, counted once and never parsed again by a tick (RB5; NEW history-parser-crash-recorded)', () => {

@@ -8216,15 +8216,26 @@ export function directionOfSummaryRow(row) {
  *    is null;
  *  - topics: the `Expand for details about:` field split on commas, through capTopics (each once, at most
  *    TOPICS_MAX of at most TOPIC_CHARS);
- *  - refs: the `refs:` values classifyRef recognises, origin `model` (capRefs runs over the leaf's union).
+ *  - refs: the `refs:` values classifyRef recognises, origin `model` (capRefs runs over the leaf's union). A raw
+ *    token that does not classify whole is split on `;` (the steer template's separator), each part classified.
  *  Both cuts are surrogate-safe. A cut sets `capped`; no marker is ever inserted. */
 export function blockFields(block) {
   const gist = capText(typeof block.gist === 'string' ? block.gist.trim() : '', GIST_MAX);
   const topics = capTopics((typeof block.expand === 'string' ? block.expand : '').split(','));
   const refs = [];
   for (const v of Array.isArray(block.refs) ? block.refs : []) {
-    const kind = typeof v === 'string' ? classifyRef(v) : null;
-    if (kind !== null) refs.push({ kind, value: v, origin: 'model' });
+    if (typeof v !== 'string') continue;
+    // The steer template asks for `;`-separated identifiers, which parseBlocks' `[\s,]+` split leaves joined to the
+    // next token's tail (`ccd/x.mjs;`). A token that classifies whole is kept whole, as it always was (so a URL
+    // holding `;` stays one ref); otherwise it is split on `;` and each part classifyRef names is kept, in order.
+    // The split is here and not in parseBlocks, whose raw tokens (and blockStatus's count of them) stay as they were.
+    // (Task 1F; spec 2026-10-05 §7.1, §7.4 item 7)
+    const kind = classifyRef(v);
+    if (kind !== null) { refs.push({ kind, value: v, origin: 'model' }); continue; }
+    for (const part of v.split(';')) {
+      const k = part === '' ? null : classifyRef(part);
+      if (k !== null) refs.push({ kind: k, value: part, origin: 'model' });
+    }
   }
   const text = gist.text.trimEnd();
   return { gist: text === '' ? null : text, topics: topics.topics, refs, capped: gist.capped || topics.capped };
