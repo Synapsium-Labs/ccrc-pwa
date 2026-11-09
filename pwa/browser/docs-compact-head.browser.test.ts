@@ -821,11 +821,13 @@ describe('the desk head (desk-nav Part B)', () => {
         expect(c.w, `${c.text} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
         expect(c.inside, `${c.text} is wholly inside the crumbs`).toBe(true);
       }
-      // Keyboard focus on the first crumb: its ring is drawn inside its box, and the box inside the crumbs'.
-      await app.page.keyboard.press('Shift');
-      await app.page.locator('.docs-full .docs-crumb').first().focus();
+      // Keyboard focus on the first crumb, by Tab from back (a programmatic focus may not match :focus-visible): its
+      // ring is drawn inside its box, and the box inside the crumbs'.
+      await app.page.locator('.docs-full .docs-back').focus();
+      await app.page.keyboard.press('Tab');
       const ring = await app.page.evaluate(() => {
         const a = document.activeElement as HTMLElement;
+        if (!a.classList.contains('docs-crumb')) throw new Error(`Tab from back reached ${a.className}, not the first crumb`);
         const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
         const b = a.getBoundingClientRect();
         const cs = getComputedStyle(a);
