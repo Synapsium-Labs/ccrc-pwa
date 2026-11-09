@@ -5606,20 +5606,27 @@ typed on a worker's command line names a pane the worker is not in), the registr
 under the account's home from the password database (never `$HOME`), and `tmux`, `ps`, `id` and `getent` are found on a
 fixed system `PATH`; that the fleet's GitHub identity holds admin on the
 repository (`permissions.admin` of the repository read); that the PR is open, not a draft, and at the head named; that
+it is a PR the fleet itself opened, from a branch of the repository: a fork PR (`isCrossRepository`) is `cross-repo`, and a
+PR whose author is not the login the fleet's token belongs to (`GET /user`, compared without regard to case) is
+`not-fleet-pr`, because the approval the door stands in for is the human gate against code nobody here wrote and an
+outside contributor's PR with green CI must never reach it (no login is printed); that
 the base branch has no merge queue, whether set by a ruleset's `merge_queue` rule, by GitHub's `mergeQueue` read for
 the branch; that no review is in the changes-requested state; that every required check
 (from rulesets and classic protection alike) passes on that head, a skipped or neutral conclusion counting as passing
 exactly as GitHub and the landing verdict count it (the journal keeps the word, `lint:skipped`); that the base carries
-none of the rules `--admin` would get past and the door cannot judge for itself (a ruleset's `workflows`,
-`code_scanning`, `required_deployments` or `required_signatures`, classic signed commits, conversation resolution in
-either), and, where strict up-to-date applies (a ruleset's `strict_required_status_checks_policy` or classic
+none of the rules `--admin` would get past and the door cannot judge for itself. This fails closed: of a ruleset's
+rule types only `pull_request`, `required_status_checks`, `required_linear_history`, `merge_queue` (refused earlier) and
+the harmless `creation`, `deletion` and `non_fast_forward` pass, and any other (`workflows`, `code_scanning`,
+`required_deployments`, `required_signatures`, `update`, the commit message and email patterns, the file path, extension
+and size limits, or a type GitHub adds later) is named and refuses; so do classic signed commits, classic `lock_branch`
+(a frozen branch) and conversation resolution in either; and, where strict up-to-date applies (a ruleset's `strict_required_status_checks_policy` or classic
 `required_status_checks.strict`), that the head is not behind the base (a compare read); and that the repository allows
 a merge method the door will use, a merge commit preferred and a squash only where the repository allows nothing else
 (a rebase-only repository is refused, and so is one that allows a squash and a rebase but no merge commit). Just before the merge it reads the PR again (head, base, draft, state and decision; a base that is no longer the one the checks were judged against is `base-moved`, because the head pin does not pin the base), and runs `gh pr merge <n> -R <owner/repo> --admin
 --<method> --match-head-commit <sha>`, so a push that lands after the checks cannot slip in; then it reads the PR back.
 Its stdout is exactly one line. `MERGED <owner/repo>#<n> head=<sha> method=<m> merge=<oid> checks=<…>` (rc 0), or
 `REFUSED <reason>: <detail>` (rc 2) with `<reason>` one of `setting-off`, `setting-unread`, `caller-unknown`,
-`not-coordinator`, `unreadable`, `not-admin`, `not-open`, `draft`, `not-at-head`, `merge-queue`,
+`not-coordinator`, `unreadable`, `not-admin`, `not-open`, `draft`, `not-at-head`, `cross-repo`, `not-fleet-pr`, `merge-queue`,
 `protection-unreadable`, `unenforced-rules`, `behind-base`, `changes-requested`, `checks-not-green`, `method-none`,
 `rebase-only`, `squash-not-only`, `head-moved`, `base-moved`, `github-refused` or `unproven`; `unproven` means `gh` answered but the read-back does not show the merge at that head,
 so it is reported and never retried. Every call that got past the argument shapes leaves one line in `$REG/swap.log`:
@@ -5633,7 +5640,8 @@ per-repository list exists, since the identity's own admin permission is the lis
 is never admin-merged**: the queue decides, so this repository, which lands through its queue, is never landed by the
 door, and the CI paragraph's reasoning below (an admin merge skips the queue and lands on the fast run only) still
 holds for it. The server never calls the door; it is a session verb, and `ccd pr-admin-merge` names no server argv.
-The door does not tie the named repository to the caller's project and does not read the landing line; the
+The door does not tie the named repository, or the PR, to the caller's project or run (no per-PR record of what a
+coordinator opened exists to tie it to), and does not read the landing line; the
 coordinator skill reads the line first, as before every direct merge, and sends only `STOP approval-missing` to the
 door. The older D-7249 allowance above is unchanged.
 

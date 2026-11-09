@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { AM_GH_STUB, AM_PROT_NONE, HEAD_A, HEAD_B, MERGE_OID, amCaller, amCheckRun, amFixture, amProt, amRoute, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
+import { AM_GH_STUB, AM_PROT_NONE, FLEET_LOGIN, HEAD_A, HEAD_B, MERGE_OID, amCaller, amCheckRun, amFixture, amProt, amRoute, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-am-'); });
@@ -226,7 +226,8 @@ describe('the reads', () => {
   const ARGV = GOOD;
   const READS = [
     'api repos/owner-a/repo-a',
-    'pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision',
+    'pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision,isCrossRepository,author',
+    'api user',
     'api --paginate repos/owner-a/repo-a/rules/branches/main',
     'api graphql',
     'api -i repos/owner-a/repo-a/branches/main/protection',
@@ -274,14 +275,14 @@ describe('the reads', () => {
   it('refuses a base with a merge_queue rule', () => {
     amFixture(h, { rules: [{ type: 'merge_queue', parameters: { merge_method: 'SQUASH' } }] });
     expect(refused()).toBe('REFUSED merge-queue: main has a merge queue (a merge_queue rule); the queue lands it');
-    expect(calls(), 'the rules read is the last').toEqual(READS.slice(0, 3));
+    expect(calls(), 'the rules read is the last').toEqual(READS.slice(0, 4));
     journaled('merge-queue');
   });
 
   it('refuses a base GraphQL names a mergeQueue for, with no rule in the rules read', () => {
     amFixture(h, { mq: { data: { repository: { mergeQueue: { id: 'MQ_x' } } } } });
     expect(refused()).toBe("REFUSED merge-queue: main has a merge queue (GitHub's mergeQueue read); the queue lands it");
-    expect(calls()).toEqual(READS.slice(0, 4));
+    expect(calls()).toEqual(READS.slice(0, 5));
     const gql = h.ghCalls().find((c) => c.startsWith('api graphql'))!;
     expect(gql, 'the values are -f arguments, never interpolated into the query').toContain('-f o=owner-a -f r=repo-a -f b=main');
     expect(gql).not.toMatch(/query=[^ ]*owner-a/);
@@ -299,7 +300,39 @@ describe('the reads', () => {
   it('a base with a slash is read with its slash encoded', () => {
     amFixture(h, { pr: { state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'release/1.x', reviewDecision: '' } });
     refused();
-    expect(h.ghCalls()[2]).toBe('api --paginate repos/owner-a/repo-a/rules/branches/release%2F1.x');
+    expect(h.ghCalls()[3]).toBe('api --paginate repos/owner-a/repo-a/rules/branches/release%2F1.x');
+  });
+
+  it('refuses a fork PR (cross-repo) before reading anything else, however green', () => {
+    amFixture(h, { pr: { isCrossRepository: true } });
+    expect(refused()).toBe('REFUSED cross-repo: the PR comes from a fork; the door lands only a branch of owner-a/repo-a');
+    expect(calls()).toEqual(READS.slice(0, 2));
+    journaled('cross-repo');
+  });
+
+  it('refuses a PR the fleet\'s identity did not open, naming no login', () => {
+    for (const author of [{ login: 'outside-contributor' }, { login: 'app/dependabot' }, null]) {
+      amFixture(h, { pr: { author } });
+      fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
+      expect(refused(), JSON.stringify(author)).toBe("REFUSED not-fleet-pr: the PR was not opened by the fleet's GitHub identity");
+      expect(calls()).toEqual(READS.slice(0, 3));
+    }
+    journaled('not-fleet-pr');
+    expect(fs.readFileSync(reg('swap.log'), 'utf8')).not.toMatch(/outside-contributor|dependabot/);
+  });
+
+  it('the author is compared to the token\'s identity without regard to case, and an unreadable identity is never a pass', () => {
+    amFixture(h, { viewer: { login: FLEET_LOGIN.toUpperCase() } });
+    notRefusedAs('not-fleet-pr');
+    for (const viewer of [null, '', '[]', '{"login":7}', '{"login":""}', '{"login":"-"}', '{"login":"a b"}']) {
+      amFixture(h, { viewer });
+      expect(refused(), JSON.stringify(viewer)).toBe('REFUSED unreadable: the identity read');
+    }
+    // a PR with no cross-repo flag or an author that is not a login shape is unreadable too
+    for (const pr of [{ isCrossRepository: null }, { author: { login: 'a b' } }, { author: 'x' }, { author: { login: 7 } }]) {
+      amFixture(h, { pr });
+      expect(refused(), JSON.stringify(pr)).toBe('REFUSED unreadable: the PR read');
+    }
   });
 
   it('refuses a draft', () => {
@@ -338,7 +371,7 @@ describe('the reads', () => {
       amFixture(h, { protection: amProt(code, { message: 'Resource not accessible by personal access token' }, 'Forbidden') });
       fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
       expect(refused()).toBe(`REFUSED protection-unreadable: branch protection answered ${code} to an admin read: the token does not carry admin now`);
-      expect(calls()).toEqual(READS.slice(0, 5));
+      expect(calls()).toEqual(READS.slice(0, 6));
     }
     journaled('protection-unreadable');
   });
@@ -430,7 +463,7 @@ describe('the reads', () => {
   it('an empty required set is green: the check runs and statuses are not read', () => {
     amFixture(h, { rules: [], required: [] });
     amRun(h, ARGV);
-    expect(calls().slice(0, 6)).toEqual(READS.slice(0, 6));
+    expect(calls().slice(0, 7)).toEqual(READS.slice(0, 7));
     expect(calls().some((c) => c.includes('/check-runs') || c.includes('/status'))).toBe(false);
   });
 
@@ -470,25 +503,40 @@ describe('the reads', () => {
       [[rsc, { type: 'required_deployments', parameters: {} }, { type: 'workflows', parameters: {} }], 'required_deployments,workflows'],
       [[rsc, { type: 'required_signatures' }], 'required_signatures'],
       [[rsc, { type: 'pull_request', parameters: { required_review_thread_resolution: true } }], 'conversation_resolution'],
+      // fail closed: every other type is refused, the freezes and filters named in the review and one GitHub has not shipped
+      [[rsc, { type: 'update', parameters: { update_allows_fetch_and_merge: false } }], 'update'],
+      [[rsc, { type: 'commit_message_pattern', parameters: {} }, { type: 'committer_email_pattern', parameters: {} }], 'commit_message_pattern,committer_email_pattern'],
+      [[rsc, { type: 'file_path_restriction', parameters: {} }, { type: 'max_file_size', parameters: {} },
+        { type: 'file_extension_restriction', parameters: {} }], 'file_extension_restriction,file_path_restriction,max_file_size'],
+      [[rsc, { type: 'some_future_rule' }], 'some_future_rule'],
+      [[rsc, { type: 'Weird Type\u0007!' }], 'unknown_rule'],
     ] as Array<[unknown[], string]>) {
       amFixture(h, { rules });
       fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
       expect(refused(), named).toBe(`REFUSED unenforced-rules: main carries ${named}, which GitHub enforces at merge but not against --admin`);
-      expect(calls(), 'refused right after the protection read').toEqual(READS.slice(0, 5));
+      expect(calls(), 'refused right after the protection read').toEqual(READS.slice(0, 6));
     }
     journaled('unenforced-rules');
     // classic protection: signed commits and conversation resolution
     for (const [prot, named] of [
       [{ required_signatures: { enabled: true }, required_status_checks: { contexts: ['build'] } }, 'required_signatures'],
       [{ required_conversation_resolution: { enabled: true }, required_status_checks: { contexts: ['build'] } }, 'conversation_resolution'],
+      [{ lock_branch: { enabled: true }, required_status_checks: { contexts: ['build'] } }, 'lock_branch'],
     ] as Array<[unknown, string]>) {
       amFixture(h, { rules: [], protection: amProt(200, prot, 'OK') });
       expect(refused(), named).toBe(`REFUSED unenforced-rules: main carries ${named}, which GitHub enforces at merge but not against --admin`);
     }
     // the same keys switched off, and a pull_request rule that does not ask for resolution, are not a refusal
     amFixture(h, { rules: [{ type: 'pull_request', parameters: { required_review_thread_resolution: false } }],
-      protection: amProt(200, { required_signatures: { enabled: false }, required_conversation_resolution: { enabled: false }, required_status_checks: { contexts: ['build'] } }, 'OK') });
+      protection: amProt(200, { required_signatures: { enabled: false }, required_conversation_resolution: { enabled: false }, lock_branch: { enabled: false }, required_status_checks: { contexts: ['build'] } }, 'OK') });
     notRefusedAs('unenforced-rules');
+    // the rule types the door judges, and the harmless three, pass
+    amFixture(h, { rules: [{ type: 'creation' }, { type: 'deletion' }, { type: 'non_fast_forward' }, { type: 'required_linear_history' },
+      { type: 'pull_request', parameters: {} }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } }] });
+    notRefusedAs('unenforced-rules');
+    // a lock_branch that is not an object is unreadable, never a pass
+    amFixture(h, { protection: amProt(200, { lock_branch: true, required_status_checks: { contexts: ['build'] } }, 'OK') });
+    expect(refused()).toBe('REFUSED unreadable: the branch protection read');
   });
 
   it('under strict up-to-date the head must not be behind the base: a ruleset or classic protection asks the compare read', () => {
@@ -496,7 +544,7 @@ describe('the reads', () => {
     const strictRules = [{ type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'build' }] } }];
     amFixture(h, { rules: strictRules, compare: { status: 'diverged', ahead_by: 1, behind_by: 3 } });
     expect(refused()).toBe('REFUSED behind-base: main requires branches up to date and the head is 3 commits behind it');
-    expect(calls()).toEqual([...READS.slice(0, 5), COMPARE]);
+    expect(calls()).toEqual([...READS.slice(0, 6), COMPARE]);
     journaled('behind-base');
     amFixture(h, { rules: [], protection: amProt(200, { required_status_checks: { strict: true, contexts: ['build'] } }, 'OK'),
       compare: { status: 'behind', ahead_by: 0, behind_by: 1 } });
@@ -506,7 +554,7 @@ describe('the reads', () => {
     fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });
     const r = amRun(h, ARGV);
     expect(r.code, r.stdout).toBe(0);
-    expect(calls().slice(0, READS.length + 1)).toEqual([...READS.slice(0, 5), COMPARE, ...READS.slice(5)]);
+    expect(calls().slice(0, READS.length + 1)).toEqual([...READS.slice(0, 6), COMPARE, ...READS.slice(6)]);
     // not strict: no compare read at all
     amFixture(h);
     fs.rmSync(path.join(h.home, 'gh-calls'), { force: true });

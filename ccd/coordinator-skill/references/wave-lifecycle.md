@@ -1534,10 +1534,14 @@ line, once the landing line (above) answers `pinned` at the head you bind, run
 from your own session, in the foreground. It checks for itself that the setting
 is on, that you are a coordinator, that the fleet's GitHub identity is an admin
 of the repository, that its base has no merge queue, that the PR is open, not a
-draft and at that head, that no review requests changes, that every required
+draft and at that head, that it is a PR from a branch of the repository itself
+and opened by the fleet's own GitHub identity (a fork PR or another account's PR
+is refused, whatever its checks read), that no review requests changes, that every required
 check passes on that head (a skipped or neutral one counts, as GitHub counts it),
-that its base carries no rule the door cannot judge (required workflows, code
-scanning, deployments, signed commits, conversation resolution) and, where strict
+that its base carries no rule the door cannot judge (it refuses any ruleset rule
+type it does not read, such as required workflows, code scanning, deployments,
+signed commits, a branch lock or update restriction, and commit or file
+patterns, and classic signed commits, branch lock and conversation resolution) and, where strict
 up-to-date applies, that the head is not behind the base, and that the repository
 allows a merge commit or allows only a squash; it then merges with that method,
 pinned to the head, and journals it. Its one line decides: `MERGED …` is proven

@@ -928,8 +928,11 @@ Decided on the operator's ruling, 2026-11-09 (D-8124):
     respected, a merge commit preferred and a squash only where the repository allows nothing else (a squash beside a rebase, with
     no merge commit, is a refusal). "Green" is GitHub's own passing set (`success`, `neutral`, `skipped`), as the verdict reads it.
     `--admin` also gets past strict up-to-date, required workflows, code scanning, required deployments, signed commits and
-    conversation resolution, so the door refuses a base that carries any rule it cannot judge, and under strict up-to-date a head
-    that is behind the base.
+    conversation resolution, and a branch lock or an update restriction, so the door refuses a base that carries any rule it
+    cannot judge (it admits only the ruleset rule types it reads, and refuses every other, including types GitHub adds later, and
+    classic `lock_branch`), and under strict up-to-date a head that is behind the base. The door also lands only a PR from a branch
+    of the repository itself (not a fork) that the fleet's own GitHub identity opened: the approval it stands in for is the human
+    gate against code nobody here wrote, so an outside contributor's PR is refused (`cross-repo`, `not-fleet-pr`) however green.
 21. **Who, and through what.** Coordinators only; a worker still cannot merge at all. The hook keeps refusing a raw `--admin` and
     `gh api` merges, and the one gated door is `ccd pr-admin-merge`, which refuses with a typed reason and journals each call.
     The coordinator skill sends it the `approval-missing` stop and no other. The caller is derived from the process (the default

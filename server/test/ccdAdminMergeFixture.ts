@@ -10,6 +10,7 @@ import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 export const HEAD_A = 'a'.repeat(40);
 export const HEAD_B = 'b'.repeat(40);
 export const MERGE_OID = 'c'.repeat(40);
+export const FLEET_LOGIN = 'fleet-bot-a';
 
 /** `gh` logs its argv to `$HOME/gh-calls` and answers each read from `$HOME/am/routes`: one `pattern|file` line per
  *  route, the pattern a shell glob over the argv joined by spaces, the file under `$HOME/am/`. The first matching route
@@ -57,8 +58,10 @@ export const amCheckRun = (name: string, status = 'completed', conclusion: strin
 export interface AmOver {
   /** `GET /repos/owner-a/repo-a` */
   repo?: unknown;
-  /** `gh pr view 42 …` */
+  /** `gh pr view 42 …`; default: opened by the fleet's identity from a branch of the repository itself */
   pr?: unknown;
+  /** `gh api user`: the identity the fleet's token belongs to; default \`{ login: FLEET_LOGIN }\` */
+  viewer?: unknown;
   /** the fresh `gh pr view 42 --json headRefOid,baseRefName,reviewDecision,state,isDraft` just before the merge; default: \`pr\`'s answer */
   fresh?: unknown;
   /** the read-back after the merge (\`--json state,headRefOid,mergeCommit\`); default: MERGED at HEAD_A with MERGE_OID */
@@ -108,10 +111,14 @@ export function amFixture(h: PrHarness, over: AmOver = {}): void {
   route('api repos/owner-a/repo-a', 'repo.json', pick(over.repo, {
     permissions: { admin: true }, allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: false,
   }));
-  const pr = pick(over.pr, {
+  const prDefault = {
     number: 42, state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '',
-  });
-  route('pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision', 'pr.json', pr);
+    isCrossRepository: false, author: { login: FLEET_LOGIN },
+  };
+  // A PR document given as an object overrides the default field by field; anything else (a string, \`null\`) replaces it whole.
+  const pr = typeof over.pr === 'object' && over.pr !== null && !Array.isArray(over.pr) ? { ...prDefault, ...over.pr } : pick(over.pr, prDefault);
+  route('pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision,isCrossRepository,author', 'pr.json', pr);
+  route('api user', 'viewer.json', pick(over.viewer, { login: FLEET_LOGIN }));
   route('pr view 42 -R owner-a/repo-a --json headRefOid,baseRefName,reviewDecision,state,isDraft', 'fresh.json', pick(over.fresh, pr));
   route('pr view 42 -R owner-a/repo-a --json state,headRefOid,mergeCommit', 'readback.json', pick(over.readback, {
     state: 'MERGED', headRefOid: HEAD_A, mergeCommit: { oid: MERGE_OID },

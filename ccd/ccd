@@ -12573,7 +12573,8 @@ _AM_PROT_OK='
       and ((.context | test("[[:cntrl:]]")) | not) and ((.app_id | type) | IN("null", "number")))
     and (($rs.contexts // []) | type) == "array"
     and all(($rs.contexts // [])[]; type == "string" and length > 0 and ((test("[[:cntrl:]]")) | not))
-    and ((($p.required_linear_history // {}) | type) == "object"))'
+    and ((($p.required_linear_history // {}) | type) == "object")
+    and ((($p.lock_branch // {}) | type) == "object"))'
 # The repository: admin first (a non-admin answer needs nothing else), then the three merge-method settings, each a
 # boolean (a missing one is unreadable, never false).
 _AM_REPO_JQ='
@@ -12582,15 +12583,23 @@ _AM_REPO_JQ='
   elif ([.allow_merge_commit, .allow_squash_merge, .allow_rebase_merge] | all(type == "boolean")) | not then "unreadable"
   else "ok " + ([(if .allow_merge_commit then "merge" else empty end), (if .allow_squash_merge then "squash" else empty end),
                  (if .allow_rebase_merge then "rebase" else empty end)] | tojson) end'
-# The PR: state, draft, head, base and the review decision, typed before they are read out as five words.
+# The PR: state, draft, head, base, the review decision, whether it comes from a fork and who opened it, typed before they
+# are read out as seven words. The author is a login (a bot's carries a slash or brackets) or `-` for a deleted account;
+# anything else is unreadable, so no free text of GitHub's reaches a line.
 _AM_PR_JQ='
   if (.state | IN("OPEN", "CLOSED", "MERGED")) and (.isDraft | type) == "boolean"
      and (.headRefOid | type) == "string" and (.headRefOid | test("\\A[0-9a-f]{40}\\z"))
      and (.baseRefName | type) == "string" and (.baseRefName | test("\\A[A-Za-z0-9._/-]+\\z"))
      and (.baseRefName | startswith("-") | not)
      and ((.reviewDecision == null) or ((.reviewDecision | type) == "string" and (.reviewDecision | test("\\A[A-Z_]*\\z"))))
-  then "ok \(.state) \(.isDraft) \(.headRefOid) \(.baseRefName) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)"
+     and (.isCrossRepository | type) == "boolean"
+     and ((.author == null) or ((.author | type) == "object"
+          and ((.author.login | type) == "string" and (.author.login | test("\\A[A-Za-z0-9][A-Za-z0-9._/\\[\\]-]{0,99}\\z")))))
+  then "ok \(.state) \(.isDraft) \(.headRefOid) \(.baseRefName) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end) \(.isCrossRepository) \(if .author == null then "-" else .author.login end)"
   else "unreadable" end'
+# The identity the fleet's token belongs to: one login, shaped as an author's is.
+_AM_VIEWER_JQ='
+  if (.login | type) == "string" and (.login | test("\\A[A-Za-z0-9][A-Za-z0-9._/\\[\\]-]{0,99}\\z")) then .login else "unreadable" end'
 # The reviews: every entry validated whole, then per identity the latest APPROVED, CHANGES_REQUESTED or DISMISSED review
 # (COMMENTED and PENDING neither clear nor replace one); the requests that stand are the review ids of the identities
 # whose kept review requests changes. An entry with no user is a deleted account: its identity is its own review id.
@@ -12650,14 +12659,23 @@ _AM_METHOD_JQ='
   | if index("merge") != null then "merge" elif . == ["squash"] then "squash"
     elif index("squash") != null then "squash-not-only"
     elif index("rebase") != null then "rebase-only" else "method-none" end'
-# What `--admin` gets past that this door does not judge itself. Rules the door has no read for (a ruleset's `workflows`,
-# `code_scanning`, `required_deployments` and `required_signatures`, classic protection's signed commits, and conversation
-# resolution in either) are named, and any one of them refuses: GitHub enforces them at merge, but not against `--admin`.
+# What `--admin` gets past that this door does not judge itself. FAIL CLOSED: the ruleset rule types the door reads and
+# judges are the only ones that pass (pull_request, required_status_checks, required_linear_history, merge_queue, which
+# is refused earlier, and the harmless creation, deletion and non_fast_forward); every other type is named and refuses,
+# whether it is one the door knew of (`workflows`, `code_scanning`, `required_deployments`, `required_signatures`), one
+# that freezes or filters the branch (`update`, the commit message, author email and committer email patterns, the file
+# path, file extension and file size limits), or one GitHub adds later. A type is printed only when it is a plain
+# lower-case word, so no free text of GitHub's reaches a line. Conversation resolution (the pull_request rule's
+# `required_review_thread_resolution`, or classic protection's) and classic protection's signed commits and `lock_branch`
+# (a frozen branch, which `--admin` writes to past) are named the same way.
 _AM_UNENFORCED_JQ='
-  [ ($rules[] | select(.type | IN("workflows", "code_scanning", "required_deployments", "required_signatures")) | .type),
+  [ ($rules[] | select(.type | IN("pull_request", "required_status_checks", "required_linear_history", "merge_queue",
+                                  "creation", "deletion", "non_fast_forward") | not)
+      | .type | if test("\\A[a-z_]{1,40}\\z") then . else "unknown_rule" end),
     ($rules[] | select(.type == "pull_request" and ((.parameters.required_review_thread_resolution // false) != false)) | "conversation_resolution"),
     (if (($prot.required_signatures // {}).enabled // false) != false then "required_signatures" else empty end),
-    (if (($prot.required_conversation_resolution // {}).enabled // false) != false then "conversation_resolution" else empty end) ]
+    (if (($prot.required_conversation_resolution // {}).enabled // false) != false then "conversation_resolution" else empty end),
+    (if (($prot.lock_branch // {}).enabled // false) != false then "lock_branch" else empty end) ]
   | unique | join(",")'
 # Strict up-to-date: a ruleset's `strict_required_status_checks_policy` or classic protection's `required_status_checks.strict`.
 _AM_STRICT_JQ='
@@ -12713,7 +12731,7 @@ _am_protection() {   # <enc base> -> AM_OUT = the classic protection object, or 
   esac
 }
 _am_reads() {   # -> AM_METHOD and AM_CHECKS when every condition holds; otherwise a REFUSED line and exit 2
-  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead base dec enc rules prot cr st req ids
+  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead base dec cross author viewer enc rules prot cr st req ids
   # 1. the repository: admin, and the methods it allows
   _am_read "the repository read" "$_AM_ONE_OBJ" api "repos/$repo"
   v=$(jq -r "$_AM_REPO_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
@@ -12723,14 +12741,22 @@ _am_reads() {   # -> AM_METHOD and AM_CHECKS when every condition holds; otherwi
     *)         _am_unreadable "the repository read" ;;
   esac
   # 2. the PR itself
-  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json state,isDraft,headRefOid,baseRefName,reviewDecision
+  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json state,isDraft,headRefOid,baseRefName,reviewDecision,isCrossRepository,author
   v=$(jq -r "$_AM_PR_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
   [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
-  read -r _ state draft phead base dec <<<"$v"
+  read -r _ state draft phead base dec cross author <<<"$v"
   AM_BASE="$base"   # the base every rule-derived verdict below is judged against; `_am_act` re-reads it
   [[ "$state" == OPEN ]]  || _am_refuse "$AM_WHO" not-open "the PR is $state"
   [[ "$draft" == false ]] || _am_refuse "$AM_WHO" draft "the PR is a draft"
   [[ "$phead" == "$sha" ]] || _am_refuse "$AM_WHO" not-at-head "the PR head is $phead"
+  # 2b. WHOSE PR. The approval --admin stands in for is the human gate against code nobody here wrote, so the door lands
+  # only a PR from a branch of the repository itself, opened by the identity the fleet's own token belongs to (the one
+  # `ccd pr-open` opens as). A fork PR, or one another account opened, is never admin-merged by this door, however green.
+  [[ "$cross" == false ]] || _am_refuse "$AM_WHO" cross-repo "the PR comes from a fork; the door lands only a branch of $repo"
+  _am_read "the identity read" "$_AM_ONE_OBJ" api user
+  viewer=$(jq -r "$_AM_VIEWER_JQ" <<<"$AM_OUT" 2>/dev/null) || viewer=unreadable
+  [[ "$viewer" != unreadable ]] || _am_unreadable "the identity read"
+  [[ "${author,,}" == "${viewer,,}" ]] || _am_refuse "$AM_WHO" not-fleet-pr "the PR was not opened by the fleet's GitHub identity"
   enc="${base//\//%2F}"
   # 3. the rules on the base: a merge queue refuses; the required checks, the methods and linear history are kept
   _am_read "the rules read" "$_AM_RULES_OK" api --paginate "repos/$repo/rules/branches/$enc"
