@@ -3445,7 +3445,7 @@ name (a long one shortened by whole tokens, never cut mid-word), a dot and a sta
 pane, a gone coordinator, a failed spawn, `needs you`, `with coordinator`, a lifecycle qualifier, a stranded or
 refused swap, a wedge, `limit N%` (its account's 5h or 7d window over 75%), context at 80% or more, a hibernated
 coordinator, a recent restart, an unreadable registry, `off-pool` — and ONE context line: a child's `<programme> ·
-wave N of M`, otherwise its PR or branch. A row working on another project's code carries that project's chip.
+wave N of M`, otherwise its PR or branch; a coordinator's row also says `coordinator`, as one plain cell first on that line (D-8142, which overturns this rule's old "role only in the header"; a child's row never shows it). A row working on another project's code carries that project's chip.
 Everything else the row knows — its account, role, task tally, subagents, hold reason, question, graph reads and
 every marker, not only the first — is in the **session header**, a superset of the row (its details row folds
 behind one door on a phone). A coordinator's workers sit bracketed under it (`└─`); `Released (N)` and
@@ -3982,7 +3982,11 @@ A **program** is a long-horizon effort with a slug and a markdown ledger
 and parsed by nothing). A **run** is one wave of it in one workspace. A
 **coordinator** is an ordinary fleet session running the `ccrc-coordinator`
 skill, placed by `_ws_least_loaded` like any other session, acting through the
-server's HTTP API (by way of `ccrc-api`, below) and never raw `ccd`. See "Fleet
+server's HTTP API (by way of `ccrc-api`, below) and never raw `ccd`. A session the
+operator creates is a coordinator from its first turn: its start card tells it to
+load the skill now and to read its programme's goals when it has one, and a revived
+session (resume or fork) is reminded in a shorter line (D-8142, which overturns the
+earlier "no eager skill load" and the silence on revival). See "Fleet
 coordination" below for the skill's contract, the run lifecycle, the mail bus
 and its box token, caps and pause, why `ws-reap` stays human-only, and the
 honest boundary — this section covers only what that one does not: the install
