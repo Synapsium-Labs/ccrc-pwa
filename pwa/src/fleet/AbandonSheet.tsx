@@ -214,7 +214,6 @@ export function abandonConsequence(
 export interface AbandonAnswer {
   readonly released: boolean;
   readonly childReclaim?: 'queued' | 'not-queued';
-  readonly childReclaimWhy?: string;
 }
 
 export interface AbandonSheetProps {

@@ -153,7 +153,16 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
         .filter(([, n]) => n > 0),
     );
     // runWords.ts: childReclaimChip's parameter type and its one read.
-    expect(reads).toEqual({ 'pwa/src/fleet/runWords.ts': 2 });
+    // The abandon RESPONSE carries its own childReclaim, queued or not-queued (D-8073): api.ts's abandonRun declares,
+    // checks and copies it in its one parse, and AbandonSheet declares it on the result and reads it once for the toast.
+    // useRunList builds a RunSummary for a closed hit, so it names the field once with null. None of these reads
+    // RunSummary.childReclaim to render a chip.
+    expect(reads).toEqual({
+      'pwa/src/fleet/AbandonSheet.tsx': 2,
+      'pwa/src/fleet/runWords.ts': 2,
+      'pwa/src/lib/api.ts': 6,
+      'pwa/src/screens/useRunList.ts': 1,
+    });
   });
 });
 

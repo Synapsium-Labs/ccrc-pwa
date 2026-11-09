@@ -768,15 +768,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  at all — and only the first is worth a sentence about another run.
      *  `AbandonSheet` separates them on the run's own `sessionId`. */
     abandonRun: async (id: number, opts?: ReadOpts): Promise<{
-      released: boolean; childReclaim?: 'queued' | 'not-queued'; childReclaimWhy?: string;
+      released: boolean; childReclaim?: 'queued' | 'not-queued';
     }> => {
       const res = await request(`/api/runs/${id}/abandon`, { method: 'POST' }, opts);
-      const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown; childReclaimWhy?: unknown };
+      const body = (await res.json().catch(() => ({}))) as { released?: unknown; childReclaim?: unknown };
       // The child reclaim's two facts ride along when the server sent them (F24); an older server sends neither.
       return {
         released: body.released !== false,
         ...(body.childReclaim === 'queued' || body.childReclaim === 'not-queued' ? { childReclaim: body.childReclaim } : {}),
-        ...(typeof body.childReclaimWhy === 'string' ? { childReclaimWhy: body.childReclaimWhy } : {}),
       };
     },
     /** `POST /api/runs/:id/reclaim` — point a program's runs at a LIVING

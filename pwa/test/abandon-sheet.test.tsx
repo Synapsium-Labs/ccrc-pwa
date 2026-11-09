@@ -817,16 +817,17 @@ describe('the toast is the proof (F9, F24)', () => {
   });
 
   it('a not-queued child reclaim is a plain success', async () => {
-    open(run({ id: 206 }), { released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' });
+    open(run({ id: 206 }), { released: true, childReclaim: 'not-queued' });
     expect(await screen.findByText('Run 206 abandoned.')).toBeInTheDocument();
   });
 
-  it('api.abandonRun keeps childReclaim and childReclaimWhy, and passes its read options', async () => {
+  // The why-word is the server's: the PWA renders no close word, so the parse drops it (child-reclaim-chip-source).
+  it('api.abandonRun keeps childReclaim, drops the why-word, and passes its read options', async () => {
     const { createApi } = await import('../src/lib/api');
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ ok: true, id: 3, state: 'closing', released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' }),
       { status: 200, headers: { 'content-type': 'application/json' } }));
     const got = await createApi(fetchImpl as unknown as typeof fetch).abandonRun(3, { timeoutMs: 5_000 });
-    expect(got).toEqual({ released: true, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' });
+    expect(got).toEqual({ released: true, childReclaim: 'not-queued' });
     const old = await createApi((async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch).abandonRun(3);
     expect(old).toEqual({ released: true });
   });
