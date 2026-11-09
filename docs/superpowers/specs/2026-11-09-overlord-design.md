@@ -1,6 +1,6 @@
 # The Overlord: one coordinator above every coordinator, that the operator talks to
 
-**Spec** · 2026-11-09 · Status: Draft, rev 5 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
+**Spec** · 2026-11-09 · Status: Draft, rev 6 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
 the Overlord programme's coordinator · Issue: #2491 · Related: `docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md` (D-8126, PR #2487,
 not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` and its round 2,
@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R13 (the operator's) and the author's calls C1 to C52, so the operator can approve or overturn each one by number.
+R13 (the operator's) and the author's calls C1 to C55, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -363,8 +363,9 @@ from the server's canonical state, never from a summary of a summary, and proves
   - Claude Code's idle compaction is switched off for the Overlord, where the installed version supports it. Today it
     compacts an idle session after about 55 minutes and starts no turn afterwards (D-5373 measured this).
 - **When a compaction does happen,** three things protect what it keeps:
-  - The PreCompact hook supplies the Overlord's own summary instructions: keep request and act ids, open commitments
-    and the operator's recent corrections; drop tool output. Claude Code takes PreCompact output as the summary
+  - The PreCompact print supplies the Overlord's own summary instructions: keep request and act ids, open commitments
+    and the operator's recent corrections; drop tool output. That print belongs to `ccrc history`'s W3 steering, so
+    the instructions ride inside it (C53). Claude Code takes PreCompact output as the summary
     instructions (sourced; verified in W0).
   - The SessionStart(compact) card re-anchors it (§3.3.3).
   - The history line points at the lossless record.
@@ -489,7 +490,8 @@ before its first run, it rarely uses recall, and nothing measures what it has lo
 - **C51. Every session's compaction gets instructions, and every card says something.**
   - **Instructions by role.** One L1 table, `compactInstructionsFor(role)`, holds the instructions for each role:
     `overlord`, `coordinator`, `worker`, `reviewer` and a plain session. The auto-compact lane types `/compact` followed
-    by them, and the PreCompact hook prints the same text: one source, two carriers. A coordinator's keep its run ids,
+    by them, and the same text rides inside `ccrc history`'s W3 PreCompact print (C53): one source, two carriers, and no
+    second PreCompact writer. A coordinator's keep its run ids,
     wave, plan path and step, claims, rulings with their dates, open asks and items, and the mail it has not answered;
     a worker's keep its plan path, task, failing test or command, deviations and branch tip. Tool output is dropped.
     These follow the operator's own standing compaction instructions.
@@ -515,6 +517,69 @@ before its first run, it rarely uses recall, and nothing measures what it has lo
   (`coord/hibernate.ts`), ccd's auto-compact, the session hook's card, `ccrc history` (recall and the replay quiz) and
   the coordinator skill (clause 23, pinned by `coordinator-skill.test.ts`). Before W1a starts, this programme mails the
   coordinators of the programmes that own those pieces and claims the files, by the peer protocol.
+
+#### 3.3.10 Using the history and graph work already built
+
+Two programmes have been building memory machinery in parallel: `ccrc history`, a lossless, DAG-shaped record of every
+session's conversation (`2026-10-05-ccrc-history-lossless-dag-design.md`, with W3 steering and W4 `touched` in
+progress), and graphify, a knowledge graph of each repository's code with a working-set card at compaction
+(`2026-09-09-graphify-compaction-card-design.md`, `2026-10-28-graphify-shared-graphs-design.md`). Rev 5 of this spec
+used the first in passing and the second not at all. It also had a defect: it had the PreCompact hook print role
+instructions, while that hook prints nothing today (pinned by tests) and history's W3 is the planned owner of its
+one print.
+
+- **C53. Lossless history is the episodic memory of every long-lived role.**
+  - **Generations stay one record.** A renewal is a `/clear`, and history's family recall follows a session across
+    clears, so every generation of the Overlord, and of a coordinator, is one family. A new generation reaches anything
+    an earlier one said by `ccrc history describe` and `expand`, through a subagent (C44). Renewal discards the
+    context, never the record.
+  - **One PreCompact print, owned by history.** W3 steering makes PreCompact print one text: the instructions for the
+    session's own DAG leaf, the `<ccrc-leaf>` block. The role instructions of C51 ride inside that print, as a section
+    the role table supplies. Neither programme adds a second writer. While W3 is not armed for a session's backend
+    (arming is the operator's, after its compliance bars), only the typed `/compact` instructions carry them.
+  - **Leaves first, transcripts on demand.** The Overlord's daily distillation (§9.2) and its weekly drift reading of
+    coordinators (C52) read the DAG's leaves, the session-written summaries, before any raw transcript, and expand only
+    where a leaf is not enough. That makes reading every project (R10) affordable.
+  - **The replay quiz is history's own.** C52's quiz is the history programme's replay evaluation, which the operator
+    took off that programme's progress path on 2026-11-02 (recorded there as "evaluation not run"). R13 asks for it
+    to run for coordinators. It runs as a measure only, never as a gate on history's waves, and with that programme's
+    coordinator's agreement.
+  - **Ordering.** W1a's compaction-instructions part waits for history's W3-1 to land. Everything else in W1a does not.
+- **C54. The code graphs help the Overlord route, and stay out of its context.**
+  - **Routing.** "Who owns this?" is a routing question (§5.3). History W4's `touched <path|symbol>` joins history to
+    the code graph and names the sessions that worked on a file or symbol. The Overlord asks it, through a subagent,
+    to find the programme and coordinator closest to a request. A graph's blast radius (the files that import or call
+    what a request names) tells it how big a request is and whether it splits cleanly from a busy owner's work (C11).
+  - **No code in its head.** The graphify compaction card lists a session's code working set. The Overlord works on no
+    code (R12), so its card withholds that section. Coordinators and workers keep it.
+  - **Rejected: a graph store for the operator model.** The history programme already ruled graphify a code join only:
+    no content and no ordering. The operator model stays bi-temporal rows with full-text search (C43).
+- **C55. One mind, one thread, with readers beside it.** The Overlord decides on one thread. It does not run
+  multi-agent workflows. It does use ordinary subagents, because they are how its context stays lean (C44): without
+  them every mail body, history leaf and document would land in its own context and bring renewal sooner.
+  - **What a subagent may do: read and report.** Read the board, history, mail bodies, documents and graphs, and return
+    a summary under 2k tokens. The daily distillation (§9.2) is one: it returns proposed entries, and the Overlord's
+    main thread writes them.
+  - **What a subagent may not do: act.** It calls no Overlord door that writes, sends no mail, answers no question and
+    starts nothing. Every act stays on the main thread, so every act row has one author and one line of reasoning.
+    The session hook already tells a subagent's tool call from the main thread's (the scope rule history W3 and the
+    graphify card use), so its deny arm refuses the Overlord's writing verbs from subagent scope: an accident guard,
+    like every deny rule here.
+  - **Bounds.** At most three at once, in the background. Each names its model: Sonnet to read and distil, Haiku to
+    list, Opus where a summary needs judgement. Never Fable (the hook already denies it). The file-editing tools are
+    denied to them as to the main thread (C48).
+  - **Why.** A workflow is a fan-out of many agents, the shape of execution, which R12 hands down. It would draw
+    heavily on the Overlord's own accounts and Fable share (C45, C46). And a renewal or a swap in the middle of one is
+    unmeasured: the session-continuity programme is still measuring whether an interrupted workflow resumes after a
+    swap. A renewal that cut a workflow would lose work.
+  - **Big thinking goes down the chain too.** Research that needs a panel, an adversarial review of a decision, or a
+    survey across projects becomes a request to a coordinator, whose programme returns a report (E4). The Overlord
+    reads the report and decides.
+  - **Held by** the skill, `OVERLORD_DENY_RULES` (C48), which adds the workflow tool, and the hook's subagent-scope
+    arm above.
+  - **Revisit when** both hold: the continuity programme shows a workflow survives a clear and a swap, and M2 shows
+    answers waiting on serial reading. The step then would be a small, read-only "deliberation" workflow with a named
+    model on every agent, never Fable, and no doors.
 
 ### 3.4 Its model and its accounts
 
@@ -1108,8 +1173,9 @@ it directly.*
     project off as a source.
 - **Recorded rulings in documents** (S4): the specs' "Agreed" sections and the programme ledgers, where the operator's
   rulings are quoted with dates.
-- **Distillation runs daily**, as a background Sonnet subagent of the Overlord. It runs under the Overlord's own
-  attribution, so no other session can write the store.
+- **Distillation runs daily**, as a background Sonnet subagent of the Overlord. It reads and proposes; the Overlord's
+  main thread writes what it accepts (C55), under the Overlord's own attribution, so no other session can write the
+  store.
   - It reads each feed from its cursor and proposes entries.
   - It checks each new entry against the existing and retired entries, so a retired entry is not proposed again.
   - It writes everything as `inferred` except rulings and the operator's own words, which are `stated`.
@@ -1369,6 +1435,9 @@ this spec and can be overturned by number.
 | C50 | Coordinator renewal | none, the Overlord's triggers, their own | Their own row: ceiling, two compactions, failed probe, new build, a long wake, a long wave boundary | Proposed |
 | C51 | Compaction instructions and empty cards | Overlord only, every session | Every session, by role: one instruction table, two carriers; a card that is never silent | Proposed |
 | C52 | Recall and measuring loss for coordinators | none, probes, probes plus quiz plus a judge | Steering on the card and in summaries, clause 23, probes, the replay quiz weekly, and the Overlord as drift judge | Proposed |
+| C53 | Lossless history | mentioned in passing, the episodic layer | The episodic layer of every long-lived role: generations stay one family, one PreCompact print owned by history W3, leaves read before transcripts | Proposed |
+| C54 | Code graphs | unused, its context, its routing | Routing through history's `touched` and the graph's blast radius, read by subagents; the graphify card withheld from the Overlord | Proposed |
+| C55 | Workflows and subagents | workflows, subagents that act, read-only subagents only | No workflows; up to three read-only background subagents with named models, never Fable; every act on the main thread; big thinking goes to a coordinator | Proposed |
 
 ## 14. Build order
 
@@ -1379,6 +1448,7 @@ depends only on the waves before it.
 flowchart LR
   P0["Prerequisites<br/>D-8126 merged and built<br/>(calls record, goals read,<br/>decision procedure)<br/>D-8125 merged"] --> W1
   W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card,<br/>a model change at renewal,<br/>replay quiz baseline"] --> W1A
+  H3["ccrc history W3-1<br/>(its own programme)"] -.-> W1A
   W1A["W1a Continuity for every<br/>long-lived role<br/>role table, renewal lane,<br/>notes, cards, compaction<br/>instructions, probes,<br/>weekly quiz, clause 23"] --> W1
   W1["W1 Designate and talk<br/>exclusive account edge,<br/>designation with its model,<br/>skill v1, Overlord home and chat,<br/>board read, kill switch,<br/>the Overlord's card, canaries"] --> W2
   W2["W2 Route and follow up<br/>requests table, relay door,<br/>overlord mail role,<br/>follow-up arm, audit log"] --> W3
@@ -1460,7 +1530,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 
 ### Waiting on you
 
-- **Approve this spec** with calls C1 to C52, or name the calls to change. C47 is where your "everything" stops: it
+- **Approve this spec** with calls C1 to C55, or name the calls to change. C47 is where your "everything" stops: it
   keeps the credential stores closed.
 - **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live; at least two
   are recommended (C46). Nothing in this spec names them.
@@ -1477,6 +1547,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - **Settings history as a feed.** Switch changes have no history today. Trigger: the operator model needs them.
 - **An Overlord-only mail delivery mode.** Trigger: M3 above 10% for two weeks (C24).
 - **Programme-aware placement for the coordinators it starts.** This comes free when #749 lands.
+- **A read-only deliberation workflow for the Overlord** (C55). Trigger: the continuity programme shows a workflow
+  survives a clear and a swap, and M2 shows answers waiting on serial reading.
 
 ---
 
