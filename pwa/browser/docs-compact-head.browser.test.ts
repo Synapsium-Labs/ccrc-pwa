@@ -729,6 +729,11 @@ describe('the desk head (desk-nav Part B)', () => {
       expect(r.nameWhole, "the page's whole name").toBe(true);
       expect(r.folded, 'every crumb is drawn').toBe(false);
       expect(r.actionsOnLine, 'one row').toBe(true);
+      // Under a mouse an icon-only action keeps its icon's own width (16 px and its padding), so the stage widths do not
+      // move: the tap-wide icon is the coarse pointer's (review 1704 F3).
+      const icons = (await rowFigure(app.page)).controls.filter((c) => ([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView, DOCS_HEAD_TEXT.openCommitted] as readonly string[]).includes(c.name));
+      expect(icons.length).toBe(4);
+      for (const c of icons) expect(c.right - c.left, `${c.name} under a mouse`).toBeCloseTo(24, 0);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
@@ -921,6 +926,28 @@ describe('the desk head (desk-nav Part B)', () => {
       });
       expect(first.text, 'the first Tab stop after back').toBe(DOCS_HEAD_TEXT.index);
       expect(first.seen, 'it is seen whole').toBeGreaterThanOrEqual(first.w - 0.5);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  // Review 1704 F3 (Task C16, D-8139): an action drawn as its icon alone was 24 x 44 under a coarse pointer, where back,
+  // the crumbs, `…` and the compact head's icons are 44 wide. On the modified draft at 1280 the words hide, so every action
+  // is an icon: each is a tap wide and a tap tall.
+  it.each([INSTRUMENT, REFINED])('the modified draft at 1280 x 800, %s, under a coarse pointer: every control in the row is a tap wide and a tap tall, the icons too (review 1704 F3)', async (skin) => {
+    const app = await openRow({ width: 1280, height: 800, skin, touch: true }, DRAFT_DEEP, 'main');
+    try {
+      const r = await rowFigure(app.page);
+      const s = await rowState(app.page);
+      console.log(`PHH-FIGURE ${skin} 1280x800 touch-draft ${JSON.stringify({ words: s.words, controls: r.controls.map((c) => [c.name, Math.round((c.right - c.left) * 10) / 10, c.height]) })}`);
+      expect(r.fine, 'a coarse pointer').toBe(false);
+      expect(s.words, 'the action words are hidden').toBe(false);
+      expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView, DOCS_HEAD_TEXT.openCommitted]));
+      for (const c of r.controls) {
+        expect(c.right - c.left, `${c.name} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+        expect(c.height, `${c.name} is a tap tall`).toBeGreaterThanOrEqual(TAP - 0.5);
+      }
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();

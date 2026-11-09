@@ -211,6 +211,12 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .docs-full .docs-action { gap: var(--sp-1); white-space: nowrap; }
+/* Under a coarse pointer an action is a tap wide as well as a tap tall, as back, the crumbs and the compact head's icons
+   are, so one drawn as its icon alone is 44 x 44, not 24 x 44 (review 1704 F3). A fine pointer keeps the icon's own
+   width, so the row's stage widths under a mouse do not move. */
+@media (pointer: coarse) {
+  .docs-full .docs-action { justify-content: center; min-width: var(--tap-min); }
+}
 /* An action drawn as an icon beside its words reads as a button and drops the link underline; one drawn as text alone
    keeps it. A disabled Share or Export (waiting for the leaf) is dimmed as the compact bar dims it, never recoloured
    (fix round 1, F3; registered in design/audit.mjs's OPACITY_REGISTRY beside the compact bar's). */
