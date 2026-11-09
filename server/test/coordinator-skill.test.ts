@@ -129,7 +129,7 @@ const CONTRACT = [
   // Landing-order wave 3e (spec §5.7) rewrote its landing sentence: the route comes from the rules of the repository,
   // route Q keeps its spelling and words, a direct route spells exactly one method flag, and --admin is
   // never used (spec §11, ruling 5 of 2026-10-25).
-  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. `--admin` and GitHub API merge or enqueue calls are governed by the external policy authority of the repository; until that authority answers, this session never uses them. It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing uses `--admin` or an update of the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR: it opens that PR from a `ledger/<programme>` branch and folds that wave\'s `docs/superpowers/plans/<plan>/*.md` task notes into the ledger there. It lands a PR only by the route the rules of its repository give, read fresh before each landing, and every conflict among them is a stop for the operator. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it; on a direct route it lands with `gh pr merge <n> --<method> --match-head-commit <handoffCommit>`, exactly one method flag from the method set and never `--admin`, and a refused merge is a stop, never retried. This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124). It closes that run only once the PR reads MERGED at `handoffCommit`, or reads CLOSED at `handoffCommit` with `landedInTrain: true` on its row of `ccd pr-state --session <id>` (ccd sets that only when the merge train\'s own record proves the landing, never on a label alone): until then the run waits at `merging`. Unattended landing is the goal (spec 2026-09-23, ruling R5 as amended 2026-10-25): a lane, a timer or the keeper the operator runs may land a PR with no human present while every safeguard holds, namely that the GitHub merge queue re-tests the combined code, the required checks gate the enqueue, the landing binds the verified head with `--match-head-commit`, and nothing passes `--admin` outside that door or updates the branch. A worker never merges its own PR: that separation of duties is one of the safeguards.',
   // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
   // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
   'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
@@ -168,6 +168,15 @@ describe('the coordinator skill: its contract', () => {
     expect(skill, 'SKILL.md prints the licence route word again').not.toContain('admin=licensed');
   });
 
+  it('names the admin-merge door on approval-missing only, spelled once with the bound head (D-8124)', () => {
+    const wl = flat(refs('wave-lifecycle.md'));
+    const door = '`ccd pr-admin-merge --repo <owner/repo> --pr <pr> --head <handoffCommit>`';
+    expect(wl.split(door)).toHaveLength(2);
+    expect(wl).toContain('On `STOP approval-missing`, and on no other line');
+    expect(wl).toContain('never after `github-refused`, `changes-requested` or any other stop');
+    expect(allSkillText).not.toMatch(/ccd pr-admin-merge[^`\n]*--admin/);
+  });
+
   it('no longer tells the coordinator to review the handoff commit itself (design 2026-09-14 §4, §13)', () => {
     expect(skill).not.toContain('Review the handoff commit');
     expect(skill).not.toContain('review the handoff commit');
@@ -180,8 +189,8 @@ describe('the coordinator skill: its contract', () => {
     const lifecycle = flat(refs('wave-lifecycle.md'));
     expect(lifecycle).not.toMatch(/where the repository(\u2019|')?s? ruleset requires it/);
     expect(lifecycle).not.toContain('narrow approval licence');
-    expect(lifecycle).toContain("`--admin` and GitHub API merge or enqueue calls are governed by the repository's "
-      + 'external policy authority; until that authority answers (wave 2b), a coordinator never uses them');
+    expect(lifecycle).toContain('**No `--admin`.** A coordinator never passes `--admin` to gh and never makes a GitHub API merge or enqueue call itself');
+    expect(lifecycle).not.toContain('until that authority answers (wave 2b), a coordinator never uses them (spec');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
@@ -3276,8 +3285,8 @@ describe('the landing route from the repository\'s own rules (landing-order wave
   });
 
   it('never uses --admin on any route, never as a fallback, and never retries a refused merge (spec §11, the amendment of 2026-10-25, ruling 5)', () => {
-    expect(prose).toContain('**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5).');
-    expect(prose).toContain('That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`');
+    expect(prose).toContain('**No `--admin`.** A coordinator never passes `--admin` to gh and never makes a GitHub API merge or enqueue call itself (spec §11, the amendment of 2026-10-25, ruling 5, and its amendment of 2026-11-09, D-8124)');
+    expect(prose).toContain('The ruling of 2026-10-25 supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`');
     expect(prose).toContain('And `--admin` is never a fallback: a fallback is `--admin` after a refusal.');
     expect(prose).toContain('never retried with another method, with `--admin` or with `--auto`');
     expect(prose).toContain('This session writes no setting to make a route work');
@@ -3421,7 +3430,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(from, 'the No --admin paragraph is gone').toBeGreaterThanOrEqual(0);
     expect(to, 'the No --admin paragraph and the proof paragraph lost the requested-change section that follows them').toBeGreaterThan(from);
     const whole = [
-      '**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed by the repository\'s external policy authority; until that authority answers (wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25, ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset\'s `current_user_can_bypass`, which the verdict no longer reads. A direct route that needs an approval the fleet cannot give, and finds it missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` anything but `APPROVED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included: without `--admin` that merge could only be refused, or pass over the approval by a bypass the external authority has not granted. Under read 3b classic protection\'s approvals cannot be read, so there GitHub\'s refusal is the stop, `github-refused`. Route Q is unchanged: its enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is `--admin` after a refusal.',
+      '**No `--admin`.** A coordinator never passes `--admin` to gh and never makes a GitHub API merge or enqueue call itself (spec §11, the amendment of 2026-10-25, ruling 5, and its amendment of 2026-11-09, D-8124): no route passes `--admin`, and the one admin merge there is, `ccd pr-admin-merge`, is a door that checks for itself, never a route and never a fallback (**The admin-merge door (D-8124)**, below). The ruling of 2026-10-25 supersedes the approval licence of spec §5.7.4 and §11 item 10, so no answer read here licenses `--admin`: not a missing approval, not `enforce_admins`, and not a ruleset\'s `current_user_can_bypass`, which the verdict no longer reads. A direct route that needs an approval the fleet cannot give, and finds it missing (a `pull_request` rule\'s, or classic protection\'s, `required_approving_review_count` above 0, and `reviewDecision` anything but `APPROVED`), stops `approval-missing` before any merge, whether or not a request for changes stands, an ignored one included: a route\'s merge could only be refused, or pass over the approval by a bypass, and only the door below may land it. Under read 3b classic protection\'s approvals cannot be read, so there GitHub\'s refusal is the stop, `github-refused`. Route Q is unchanged: its enqueue never passes `--admin`, and a repository with a merge queue lands through it, never through the door. And `--admin` is never a fallback: a fallback is `--admin` after a refusal.',
       '**On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED with `landedInTrain: true` on the PR\'s row of `ccd pr-state --session <sessionId>`, with `headRefOid` equal to `handoffCommit`.',
       'A refused merge on route G or U is read, reported and stopped on, and never retried with another method, with `--admin` or with `--auto`.',
       'This session writes no setting to make a route work: no ruleset, no branch protection, no merge-method or auto-merge setting (clause 15).',
@@ -3521,6 +3530,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
       'Say in your turn\'s text which stop fired and what it read, for the operator: every stop goes to the operator, and only that exception goes on to the new-head route as well.',
       'The verdict stops with one of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`, `unknown-rule-type`, `method-set-empty`, `rebase-only`, `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`, `unverifiable`, `not-reported`, `changes-requested`, `approval-missing`.',
       'A `changes-requested` stop is read before `WAIT` and `RED` on every route and is the operator\'s to decide, as **A requested change** above says.',
+      'An `approval-missing` stop goes to the admin-merge door first, once (**The admin-merge door (D-8124)**, above): a `MERGED` line leaves no stop, and a `REFUSED` one is reported to the operator with the door\'s line.',
       'Four stops no read decides are yours to name: `red-unreachable` (above), `verdict-unread` (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub refused for a rule it enforces at merge and this session does not verify — reviews, signatures, deployments, code scanning, required workflows — which this session never works around.',
       'Not a stop: a required check red on the head that is the PR\'s own; that goes to the fix-round rule, on route G exactly as on route Q.',
       'A `red-unreachable` whose red is `main`\'s own and already fixed on `main` needs a new head, and this session takes the new-head route itself (D-7588).',
@@ -3668,7 +3678,7 @@ describe('the landing route from the repository\'s own rules (landing-order wave
     expect(CONTRACT[14]).toContain('On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it');
     expect(CONTRACT[14]).toContain('never writes the rulesets, branch protection, merge-method settings, auto-merge setting or `allow_update_branch`');
     expect(CONTRACT[14]).toContain('exactly one method flag from the method set and never `--admin`');
-    expect(CONTRACT[14]).toContain('`--admin` and GitHub API merge or enqueue calls are governed by the external policy authority of the repository; until that authority answers, this session never uses them.');
+    expect(CONTRACT[14]).toContain('This session never passes `--admin` to gh and never makes a GitHub API merge or enqueue call; its one admin merge is `ccd pr-admin-merge`, on an `approval-missing` stop only, as `references/wave-lifecycle.md` §5b says (D-8124).');
     expect(CONTRACT[14]).not.toContain('approval licence');
   });
 
@@ -4014,12 +4024,25 @@ describe('landing order wave 5e: the landing line read before every landing', ()
     'The order it answers is read and not yet acted on: which entry lands next is the line\'s head, a later stage\'s.',
   ].join(' ');
 
-  it('pins the whole landing-line paragraph, between the boundary paragraph and the stop paragraph (the line pin)', () => {
+  it('pins the whole landing-line paragraph, between the boundary paragraph and the admin-merge door paragraph (the line pin)', () => {
     const from = prose.indexOf('**The landing line.**');
-    const to = prose.indexOf('**A stop.**');
+    const to = prose.indexOf('**The admin-merge door (D-8124).**');
     expect(from, '§5b lost its landing-line paragraph').toBeGreaterThanOrEqual(0);
-    expect(to, 'the landing-line paragraph lost the stop paragraph that follows it').toBeGreaterThan(from);
+    expect(to, 'the landing-line paragraph lost the admin-merge door paragraph that follows it').toBeGreaterThan(from);
     expect(prose.slice(from, to).trim()).toBe(LINE);
+  });
+
+  it('pins the whole admin-merge door paragraph, between the landing-line paragraph and the stop paragraph (D-8124)', () => {
+    const from = prose.indexOf('**The admin-merge door (D-8124).**');
+    const to = prose.indexOf('**A stop.**');
+    expect(from, '§5b lost its admin-merge door paragraph').toBeGreaterThanOrEqual(0);
+    expect(to, 'the admin-merge door paragraph lost the stop paragraph that follows it').toBeGreaterThan(from);
+    expect(prose.slice(from, to).trim()).toBe([
+      '**The admin-merge door (D-8124).** On `STOP approval-missing`, and on no other line, once the landing line (above) answers `pinned` at the head you bind, run `ccd pr-admin-merge --repo <owner/repo> --pr <pr> --head <handoffCommit>` once, from your own session, in the foreground.',
+      'It checks for itself that the setting is on, that you are a coordinator, that the fleet\'s GitHub identity is an admin of the repository, that its base has no merge queue, that the PR is open, not a draft and at that head, that no review requests changes, and that every required check is `success` on that head; it then merges with the repository\'s method, pinned to the head, and journals it.',
+      'Its one line decides: `MERGED …` is proven as every route is (MERGED at `handoffCommit`, step 3); `REFUSED <reason>: …` leaves the stop standing, reported as `approval-missing` with the door\'s line; `unproven` is reported, never retried.',
+      'Never run it twice for one attempt, never after `github-refused`, `changes-requested` or any other stop, and never in place of route Q: a repository with a merge queue lands through it.',
+    ].join(' '));
   });
 
   it('names the line\'s entry state through L0, and the ejection-not-merging refusal in §4\'s table', () => {
@@ -4184,16 +4207,17 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
   ].join('\n');
   const count = (hay: string, needle: string): number => hay.split(needle).length - 1;
 
-  it('controls: the protected 5b verdict fence is 254 body lines, ends in a line feed and keeps its SHA-256 (the fence control)', async () => {
+  it('controls: the protected 5b verdict fence is 256 body lines, ends in a line feed and keeps its SHA-256 (the fence control)', async () => {
     const { createHash } = await import('node:crypto');
     const at = wl.indexOf('### 5b — The landing route, from the repository\'s own rules');
     expect(at).toBeGreaterThanOrEqual(0);
     const sec = wl.slice(at, wl.indexOf('\n## ', at));
     const body = /```bash\n([\s\S]*?)```/.exec(sec)?.[1] ?? '';
     expect(body.endsWith('\n'), 'the verdict fence lost its trailing line feed').toBe(true);
-    expect(body.split('\n').length - 1, 'the verdict fence changed its line count').toBe(254);
+    expect(body.split('\n').length - 1, 'the verdict fence changed its line count').toBe(256);
+    // D-8124 amended the fence once: the route comment's admin-merge sentence and the approval-missing stop line (256 lines, was 254).
     expect(createHash('sha256').update(body).digest('hex'))
-      .toBe('dec52b5aaf9d6166853a25a18db29d2203a38fd6ace044f7c7068e43c4eef3a7');
+      .toBe('910acd8e24f088d599a9ce9babfef4a13f72deed446c4f375b878c13a8b2d620');
     // The new block is outside the fence, the section and its latest-attempt paragraph.
     expect(sec, 'the WRITES block moved into 5b').not.toContain(WRITES_OPEN);
     expect(wl.indexOf(WRITES_OPEN), 'the WRITES block sits after the 5b heading').toBeLessThan(at);
