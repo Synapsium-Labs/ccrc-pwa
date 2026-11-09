@@ -93,7 +93,7 @@ function CapRow({ run, rowActs }: { run: RunSummary; rowActs: RowActs | null }):
   const rounds = cap === null || cap === 'unmeasured' ? null : cap;
   return (
     <li className="wl-li" data-acts={rowActs === null ? undefined : 'true'}>
-      <div className="wl-item wl-cap" data-run={run.id} data-state="open" data-needed="soon">
+      <div className="wl-capitem" data-run={run.id} data-state="open" data-needed="soon">
         <span className="wl-kind">{REVIEW_CAP_WORD}</span>
         <RowMain what={`Review cap reached: run ${run.id}`}
                  why={`${run.programTitle ?? run.program} wave ${run.wave}${rounds === null ? '' : `: ${rounds.rounds} of ${rounds.cap} review rounds`}`} />

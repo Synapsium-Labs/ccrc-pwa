@@ -81,7 +81,8 @@ let browser: Browser | undefined;
 
 beforeAll(async () => {
   const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
-  server = await serveDist(sharedDist());
+  const dist = sharedDist();
+  server = await serveDist(dist);
   browser = await chromium.launch({ executablePath, headless: true });
 }, 180_000);
 
@@ -121,7 +122,7 @@ describe.each(SKINS)('the controls on /waiting in %s', (skin) => {
           expect(await page.evaluate(sideways), 'sideways scroll').toBe(0);
           const rows = [
             ['an end-run row', await page.evaluate(boxesOf, '.wl-item[data-item="1"]'), 2],
-            ['a review cap row', await page.evaluate(boxesOf, '.wl-cap[data-run="101"]'), 1],
+            ['a review cap row', await page.evaluate(boxesOf, '.wl-capitem[data-run="101"]'), 1],
           ] as const;
           for (const [name, b, n] of rows) {
             expect(b, `${name} carries its controls`).not.toBeNull();
