@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
-  positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, waitingTotal,
+  limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, waitingTotal,
   type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
@@ -25,7 +25,7 @@ describe('groupByProgramme', () => {
       itemView({ id: 3, program: 'prog-a', neededBy: 'blocking', state: 'checking', tickedAt: NOW - MIN }),
       itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
     ], [ask('project-a-ask', 'prog-a')]);
-    const kinds = mixed[0]!.rows.map((r) => (r.kind === 'item' ? `item ${r.item.id}` : `question ${r.question.sessionId}`));
+    const kinds = mixed[0]!.rows.map((r) => (r.kind === 'item' ? `item ${r.item.id}` : r.kind === 'question' ? `question ${r.question.sessionId}` : `limit ${r.limit.sessionId}`));
     // The question is the operator's and comes first; the item the coordinator holds follows in `orderItems` order.
     expect(kinds).toEqual(['question project-a-ask', 'item 3', 'item 4']);
   });
@@ -290,6 +290,48 @@ describe('the summary pills count the groups the list draws', () => {
   });
   it("filtered to prog-a, prog-a's alone: prog-b's blocking item and question do not reach it", () => {
     expect(shownSummary(listGroups({ at: 'waiting', programme: 'prog-a' }, groups)))
-      .toEqual({ blocking: 0, questions: 0, soon: 1, checking: 1, cameBack: 0 });
+      .toEqual({ blocking: 0, questions: 0, limits: 0, soon: 1, checking: 1, cameBack: 0 });
+  });
+});
+
+// D-8123 (limit-swap-autofix Task 11): a session the limit watchdog found no account for (`FleetSession.limitWait`) is an
+// item the operator must act on, so it is NEVER hidden: it counts wherever a question counts (the door badge, the
+// programme chip, the side rail) and is filed under its programme as a question is.
+describe('limitRows (a session on a limit with no account to take it)', () => {
+  const stuck = (id: string, over: object = {}) => fleetSession({
+    id, title: `Title of ${id}`,
+    limitWait: { since: NOW - 10 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, ...over },
+  });
+  it('lists exactly the sessions whose limitWait is not null, oldest first', () => {
+    const rows = limitRows([stuck('s-b', { since: NOW - MIN }), fleetSession({ id: 's-none' }), stuck('s-a', { since: NOW - 30 * MIN })]);
+    expect(rows.map((r) => r.sessionId)).toEqual(['s-a', 's-b']);
+    expect(rows[0]).toMatchObject({ title: 'Title of s-a', since: NOW - 30 * MIN, reset: NOW + 60 * MIN, account: 'lane-a', waiting: false, program: null });
+  });
+  it('files a row under its programme as a question is (the run it is bound to)', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 's-a' })];
+    const sessions = withRunBinding([stuck('s-a')], runs);
+    expect(limitRows(sessions, runs).map((r) => r.program)).toEqual([sessionProgramme(sessions[0]!, runs)]);
+    expect(limitRows(sessions, runs)[0]!.program).toBe('prog-a');
+  });
+  it('counts in the total, the programme chip, the side-rail group and the summary', () => {
+    const runs = [runRow({ id: 1, program: 'prog-a', state: 'working', sessionId: 's-a' })];
+    const sessions = withRunBinding([stuck('s-a')], runs);
+    const limits = limitRows(sessions, runs);
+    const items = [itemView({ id: 1, program: 'prog-a' })];
+    expect(waitingTotal(items, [], limits)).toBe(2);
+    expect(waitingTotal(items, [])).toBe(1);
+    const view = waitingView({ items });
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-a')).toBe(2);
+    expect(programmeWaitingCount(view, sessions, runs, 'prog-b')).toBe(0);
+    const group = groupByProgramme(items, [], limits).find((g) => g.program === 'prog-a')!;
+    expect(group.waiting).toBe(2);
+    expect(group.rows.map((r) => r.kind)).toEqual(['limit', 'item']);
+    expect(shownSummary(listGroups(COMBINED_LIST, groupByProgramme(items, [], limits)))).toMatchObject({ limits: 1 });
+  });
+  it('a limit row alone makes a group, and opening the list steps over it (it is not an item)', () => {
+    const groups = groupByProgramme([], [], limitRows([stuck('s-a')]));
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ program: null, waiting: 1 });
+    expect(itemPlace(1, COMBINED_LIST, groups)).toBeNull();
   });
 });

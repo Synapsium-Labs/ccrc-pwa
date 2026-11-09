@@ -75,7 +75,11 @@
 .wl .wl-gwave { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
 .wl-items { display: grid; gap: var(--sp-1); list-style: none; margin: 0; padding: 0; }
 
-.wl-item {
+/* D-8123: `.wl-limit` is the row of a session on a usage limit with no account to take it (`LimitWaitRow`). It wears the item row's
+   shape and tokens through the same rules, under a class of its own (a class worn by a design-system component, `BareRow`'s
+   `wl-item`, names nothing else: `hook-class-collision`). It is not one button: it carries its own two controls. */
+.wl-item,
+.wl-limit {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--sp-2); align-items: start; width: 100%;
   min-height: var(--row-h); padding: var(--sp-2); text-align: left; font: inherit; cursor: pointer;
   background: var(--bg-surface); color: var(--ink-primary);
@@ -83,19 +87,32 @@
 }
 .wl-item[data-needed='blocking'][data-state='open'] { box-shadow: inset 0 0 0 1px var(--status-attention); }
 .wl-item[data-state='checking'] { background: var(--bg-surface); }
-.wl-item .wl-kind {
+.wl-item .wl-kind,
+.wl-limit .wl-kind {
   font: var(--weight-medium) var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm);
   background: var(--bg-raised); color: var(--ink-secondary); white-space: nowrap;
 }
-.wl-item .wl-main { display: grid; gap: 2px; min-width: 0; }
-.wl-item .wl-what { font-weight: var(--weight-medium); overflow-wrap: anywhere; color: var(--ink-primary); }
-.wl-item .wl-why { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wl-item .wl-main,
+.wl-limit .wl-main { display: grid; gap: 2px; min-width: 0; }
+.wl-item .wl-what,
+.wl-limit .wl-what { font-weight: var(--weight-medium); overflow-wrap: anywhere; color: var(--ink-primary); }
+.wl-item .wl-why,
+.wl-limit .wl-why { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wl-item .wl-bounce { font-size: var(--fs-meta); color: var(--ink-primary); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }
-.wl-item .wl-meta { display: grid; justify-items: end; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.wl-item .wl-meta,
+.wl-limit .wl-meta { display: grid; justify-items: end; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--ink-secondary); }
 @media (max-width: 520px) {
-  .wl-item { grid-template-columns: minmax(0, 1fr); }
-  .wl-item .wl-meta { justify-items: start; }
+  .wl-item,
+  .wl-limit { grid-template-columns: minmax(0, 1fr); }
+  .wl-item .wl-meta,
+  .wl-limit .wl-meta { justify-items: start; }
 }
+/* The controls take a row of their own under the row's three columns and wrap at every width, so nothing scrolls sideways. The
+   row itself is no tap target. */
+.wl-limit { cursor: default; box-shadow: inset 0 0 0 1px var(--status-attention); }
+.wl-limit .wl-limit-acts { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.wl-limit .wl-limit-acts .btn-primary,
+.wl-limit .wl-limit-acts .btn-ghost { width: auto; max-width: 100%; white-space: normal; text-align: center; }
 
 .wl-cleared { display: grid; gap: var(--sp-1); border-top: 1px dashed var(--edge-strong); padding-top: var(--sp-2); }
 .wl .wl-cleared-title { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); margin: 0; }
@@ -241,6 +258,32 @@
 .pv-head .pv-sub { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .pv-two { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
 @media (max-width: 900px) { .pv-two { grid-template-columns: minmax(0, 1fr); } }
+/* The Goals page's columns (the runs rebuild, Task 19, o8): Goals, Waiting on you and Stored secrets stack in the first, and the
+   Runs section is the other. Under 900 everything stacks in that order. */
+.pv-main { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
+/* The head's run facts (spec §8.5): the card's elements, the coordinator, the wave counts, a pending-close line per reason and
+   Resume. A full-width row of the head, wrapping; the controls keep the tap floor. */
+.pv-head .pv-facts { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); min-width: 0; }
+.pv-head .pv-facts p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pv-head .pv-lamp { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-counts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-coordinator { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-word[data-word='stuck'] { color: var(--status-attention-text); }
+.pv-head .pv-line { flex: 1 1 100%; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.pv-head .pv-pending { flex: 1 1 100%; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.pv-head .pv-marker {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pv-head .pv-coordinator-link {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+/* The Runs section's open waves: a wave per entry, newest first, its reviews indented beneath. */
+.pv-runs .programme-waves { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .programme-wave { display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .runs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .programme-reviews { margin-inline-start: var(--sp-4); }
 .pv-card {
   display: grid; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary);
   border: 1px solid var(--edge-subtle); border-radius: var(--r-md);

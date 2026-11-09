@@ -26,7 +26,7 @@ import { coordinatorGoneOf, runRowName } from '../src/fleet/runWords';
 import * as router from '../src/lib/router';
 import { ToastHost } from '@ccrc/ui';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
+import { RunsScreen, STUCK_NOW, stuckOpen, RowsBoard } from './runs-board';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -73,18 +73,18 @@ const makeStore = (): FleetStore => createFleetStore({
 
 // D-6170 keeps D-5589's id rule: the row is named in words, and the run number
 // lives only in the controls' accessible names and the row's title.
-it("the run number survives in Abandon's and Resume's accessible names and the row's title", () => {
+it("the run number survives in Abandon's accessible name and the row's title (Resume left the row, Task 19: its name is pinned on the run page)", () => {
   const store = makeStore();
   act(() => {
     store.setState({
-      // Abandon sits on the stuck run 3 (the Stuck band); Resume stays on an ordinary row, run 4.
+      // Abandon sits on the stuck run 3 (the Stuck band); run 4 is an ordinary row and carries no Resume.
       runs: [run(), run({ id: 4, program: 'programme-b', stuck: undefined })], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
       sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
     });
   });
-  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  const { container } = render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Resume run 4' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /^Resume/ })).toBeNull();
   const row = container.querySelector<HTMLElement>('li.run-stuck')!;
   expect(row.title).toMatch(/\brun 3\b/);
   expect(row.title).toContain('clear-cove');

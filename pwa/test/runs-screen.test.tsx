@@ -4,11 +4,11 @@ import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testi
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { serverBinding, withBindingFrames } from './runBindingFixture';
-import { RunsScreen, STUCK_NOW, foundRows, stuckOpen } from './runs-board';
+import { RunsScreen, STUCK_NOW, foundRows, programmeRow, programmesAnswer, stuckOpen, RowsBoard } from './runs-board';
 import { RunsAdvancedScreen } from '../src/screens/RunsAdvancedScreen';
 import { MailScreen } from '../src/screens/MailScreen';
-import type { FindReader } from '../src/screens/useRunList';
 import { navigate } from '../src/lib/router';
+import { runsAdvancedPath } from '../src/lib/routes';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, boundOpenRun, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
@@ -114,14 +114,15 @@ describe('programWave — the group header’s own derived fact (fix round 1, ta
 });
 
 describe('the run board', () => {
-  it('renders the live frame’s active runs immediately — Finished is read too, but the active half never waits on it', () => {
+  it('renders the live frame’s open programmes at once when the frame gives them a last move; one it gives none waits for the read, so it never jumps into the quiet fold', async () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    const load = vi.fn().mockResolvedValue(foundRows([]));
-    render(<RunsScreen store={store} loadFinished={load} />);
-    // Finished's read is UNCONDITIONAL (finding 1) — it is the only possible source of the Finished half — but the active
-    // row born from the live frame renders synchronously, before that promise has any chance to settle.
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
+    const load = vi.fn().mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } });
+    render(<RunsScreen store={store} loadProgrammes={load} />);
+    // The programmes read is UNCONDITIONAL — it is the only source of Finished and of a card's done count. A run with no last
+    // move in the frame leaves its card unknown-recency, so it waits for the read (D-8075) rather than showing and then folding.
+    expect(screen.queryByTestId('programme-card')).toBeNull();
+    expect(await screen.findByTestId('programme-card')).toHaveTextContent('Build 4: transcript surface');
     expect(load).toHaveBeenCalledTimes(1);
   });
 
@@ -136,13 +137,13 @@ describe('the run board', () => {
     // "setInterval was never called" spy is a false positive on the REAL
     // component — this drives fake time forward with
     // `advanceTimersByTimeAsync` (which also flushes the promise microtask
-    // queue between ticks) and counts Finished's reads directly instead.
+    // queue between ticks) and counts the programmes' reads directly instead.
     vi.useFakeTimers();
     try {
       const store = makeStore();
       act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-      const load = vi.fn().mockResolvedValue(foundRows([]));
-      render(<RunsScreen store={store} loadFinished={load} />);
+      const load = vi.fn().mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } });
+      render(<RunsScreen store={store} loadProgrammes={load} />);
       await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
       expect(load).toHaveBeenCalledTimes(1);
     } finally {
@@ -162,7 +163,7 @@ describe('the run board', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('resolves loadCold and populates Finished under React StrictMode — the aliveRef guard must RE-ARM, not just latch false once (I1, regression, measured)', async () => {
+  it('resolves the programmes read and populates Finished under React StrictMode — the aliveRef guard must RE-ARM, not just latch false once (I1, regression, measured)', async () => {
     // StrictMode (dev-only) runs every effect mount -> cleanup -> mount, on
     // the SAME component instance, before the app ever gets a "real" mount.
     // `aliveRef`'s cleanup sets `.current = false`; without re-arming it as
@@ -174,35 +175,36 @@ describe('the run board', () => {
     // fails against the pre-fix `useRef(true)` + bodyless-cleanup shape.
     const store = makeStore();
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
-    const finishedRun = r({ id: 9, wave: 1, state: 'done', closedAt: Date.now() });
     render(
       <StrictMode>
-        <RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [finishedRun] })} />
+        <RunsScreen loadCaps={NO_CAPS} store={store} loadProgrammes={programmesAnswer([programmeRow('build4-transcript-surface', {
+          title: 'Build 4: transcript surface', lastMoveAt: Date.now() - 60_000,
+          ending: { outcome: 'complete', waves: 4, neverStarted: 0, closedBy: null },
+        })])} />
       </StrictMode>,
     );
-    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /finished/i })).toBeInTheDocument();
     expect(screen.queryByText(/loading/i)).toBeNull();
   });
 
-  it('groups by program, and the group is a role=group — not a landmark', () => {
+  it('draws one card per programme, in a list — not a landmark per programme', async () => {
     const store = makeStore();
     act(() => {
       store.setState({
-        runs: [r({ id: 1, wave: 1, state: 'done', closedAt: 1 }), r({ id: 2 })],
+        runs: [r({ id: 1, wave: 1, state: 'done', closedAt: 1 }), r({ id: 2 }), r({ id: 5, program: 'prog-b', programTitle: 'Programme B' })],
         runsFrameSeen: true,
       });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    const group = screen.getByRole('group', { name: /Build 4: transcript surface/i });
-    expect(group.tagName).toBe('DIV');
+    render(<RunsScreen store={store} loadCaps={NO_CAPS} />);
+    expect(await screen.findAllByTestId('programme-card')).toHaveLength(2);
+    expect(screen.getByRole('list', { name: 'Programmes' }).tagName).toBe('UL');
     expect(document.querySelectorAll('section[aria-label]')).toHaveLength(0);
   });
 
   it('says the wave and the work-item tally, in tabular mono', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText('wave 3/4')).toBeInTheDocument();
     expect(screen.getByText('3/7')).toBeInTheDocument();
     // No blocked/failed cell: RunItemTally shipped as {done,total} only —
@@ -215,7 +217,7 @@ describe('the run board', () => {
     // clauses rather than print `0 X`") applied to the one place it was not.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('—');
     expect(screen.queryByText('0/0')).toBeNull();
   });
@@ -223,14 +225,14 @@ describe('the run board', () => {
   it('renders 3/7 for a run that declared seven', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('3/7');
   });
 
   it('renders 0/7 for a declared ledger nothing has settled yet — only total 0 is the dash', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 7 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(document.querySelector('.run-tally')?.textContent).toBe('0/7');
   });
 
@@ -239,7 +241,7 @@ describe('the run board', () => {
     // second cue invented for it (spec §3.3).
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ items: { done: 0, total: 0 } })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const tally = document.querySelector('.run-tally');
     expect(tally?.querySelector('[aria-hidden="true"]')).toBeNull();
     expect(tally?.getAttribute('title')).toBeNull();
@@ -259,7 +261,7 @@ describe('the run board', () => {
     // dot alone". A run board that colour-coded alone would fail the same rule.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ state: 'awaiting-review' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText(RUN_WORD['awaiting-review'])).toBeInTheDocument();
     expect(document.querySelector('.run-glyph')).not.toBeNull();
   });
@@ -274,7 +276,7 @@ describe('the run board', () => {
     const store = makeStore();
     const fromNewerBuild = { ...r(), state: 'quarantined' } as unknown as RunSummary;
     act(() => { store.setState({ runs: [fromNewerBuild], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByText(RUN_WORD.unknown)).toBeInTheDocument();
   });
 
@@ -284,102 +286,13 @@ describe('the run board', () => {
     delete noItems.items;
     const bad = noItems as unknown as RunSummary;
     act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
-    expect(() => render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />)).not.toThrow();
+    expect(() => render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />)).not.toThrow();
     // `runItems`' `{done:0,total:0}` default, rendered through
     // `itemTallyLabel`: a row that reached this renderer without a tally
     // reads as "no declared ledger" (spec §3.3's em dash), never as `0/0` —
     // which would be a claim that a ledger exists and nothing in it is done.
     expect(document.querySelector('.run-tally')?.textContent).toBe('—');
     expect(screen.queryByText('0/0')).toBeNull();
-  });
-
-  it('a row with no `closedAt` lands in Active, never silently in Finished (finding 2)', () => {
-    const store = makeStore();
-    const noClosedAt = { ...r() } as Partial<RunSummary>;
-    delete noClosedAt.closedAt;
-    const bad = noClosedAt as unknown as RunSummary;
-    act(() => { store.setState({ runs: [bad], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
-  });
-
-  it('splits finished runs out on closedAt — fed by the cold read, the only source of a finished row', async () => {
-    // The live frame is active-only BY CONSTRUCTION (the file header's own
-    // comment) — it can never carry id 1's closed row. Only the cold
-    // `?closed=1` read can, and — like the real route — it carries BOTH
-    // halves (finding 1: driven through the real seam, not `setState`).
-    const store = makeStore();
-    act(() => { store.setState({ runs: [r({ id: 2 })], runsFrameSeen: true }); });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
-      runs: [r({ id: 1, wave: 1, state: 'done', closedAt: Date.now() - 1 }), r({ id: 2 })],
-    })} />);
-    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
-  });
-
-  it('a reconstructed run (state:done, closedAt:null) lands in Finished, not nowhere (finding 3)', async () => {
-    // `CoordStore.reconstruct` (the disaster-recovery rebuild) never writes
-    // `closedAt` — pinned server-side as one of the facts the drill cannot
-    // recover — so a rebuilt program's finished waves carry `state:'done'`
-    // with `closedAt:null` forever. Splitting on `closedAt` filed a row like
-    // this in NEITHER group; splitting on `state` (what `CoordStore.runs()`
-    // itself uses) finds it correctly.
-    const store = makeStore();
-    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
-      runs: [r({ id: 1, wave: 1, state: 'done', closedAt: null })],
-    })} />);
-    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
-  });
-
-  it('a run that closes stops being active the instant the live frame says so — never resurrected by a stale snapshot (finding 3, failure A)', async () => {
-    const store = makeStore();
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r({ id: 7 })] })} />);
-    // The live frame lands, run 7 active…
-    act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    // …then run 7 closes: the active-only frame broadcasts an HONEST `[]`.
-    // The board must trust it, not the cold snapshot frozen at mount.
-    act(() => { store.setState({ runs: [] }); });
-    expect(screen.queryByTitle(/ · clear-cove$/)).toBeNull();
-    expect(screen.getByText(/no runs/i)).toBeInTheDocument();
-  });
-
-  it('a run that closes while this screen is open joins Finished, not vanishes (finding 22)', async () => {
-    // Without the fix, `cold` stays frozen at its mount-time snapshot for
-    // the rest of the screen's life — the live frame can drop the row (it
-    // just did, previous test), but nothing ever asks the archive again, so
-    // the newly-closed run is never seen as `done` and never lands in
-    // Finished either. `loadRuns` here answers differently on its SECOND
-    // call, the way the real `?closed=1` route would once the close has
-    // actually landed server-side.
-    const store = makeStore();
-    // Finished reads `find` (Task 11): it answers empty before the close and with the closed run after it.
-    let found = 0;
-    const loadFinished = vi.fn(async (): ReturnType<FindReader> => {
-      found += 1;
-      return foundRows(found === 1 ? [] : [r({ id: 7, state: 'done', closedAt: Date.now() })]);
-    });
-    render(<RunsScreen store={store} loadFinished={loadFinished} />);
-    act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    // The run closes: the live active-only frame drops it — this is the
-    // exact trigger the fix watches for.
-    act(() => { store.setState({ runs: [] }); });
-    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
-    expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(loadFinished).toHaveBeenCalledTimes(2);
-  });
-
-  it('the Finished group survives a new active run landing — it never re-reads from `live` (finding 3, failure B)', async () => {
-    const store = makeStore();
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({
-      runs: [r({ id: 1, wave: 1, state: 'done', closedAt: Date.now() - 1 })],
-    })} />);
-    expect(await screen.findByRole('group', { name: /finished/i })).toBeInTheDocument();
-    act(() => { store.setState({ runs: [r({ id: 10 })], runsFrameSeen: true }); });
-    expect(screen.getByRole('group', { name: /finished/i })).toBeInTheDocument();
   });
 
   // Task 14 gate: `role="group"` is never a named landmark that can be
@@ -391,42 +304,16 @@ describe('the run board', () => {
   // runs present, the cold read resolves `ok`, and finished is honestly
   // empty: there must be nothing here for a screen reader's landmark list
   // to land on and find empty.
-  it('renders no Finished group at all when the archive genuinely has none — an empty role=group is a dead end, not an honest state', async () => {
-    const store = makeStore();
-    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [r()] })} />);
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: /finished/i })).toBeNull();
-  });
-
-  it('the group header states the program’s FURTHEST wave, never an arbitrary row’s own (finding 4)', () => {
-    const store = makeStore();
-    act(() => {
-      store.setState({
-        runs: [
-          // 'awaiting-review' outranks 'working' in RUN_ORDER, so it leads
-          // the sorted group — but the program's own wave is 2, not 1.
-          r({ id: 2, wave: 1, state: 'awaiting-review' }),
-          r({ id: 1, wave: 2, state: 'working' }),
-        ],
-        runsFrameSeen: true,
-      });
-    });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByText('wave 2/4')).toBeInTheDocument();
-    expect(screen.queryByText('wave 1/4')).toBeNull();
-  });
-
   it('opens the run’s page, with a session or without one (A9)', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    const { rerender } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    const { rerender } = render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     fireEvent.click(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i }));
     expect(location.pathname).toBe('/runs/3');
 
     navigate('/runs');
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    rerender(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    rerender(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // No row is inert any more: the run's page says what the row cannot, and the session is one more tap from there.
     fireEvent.click(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i }));
     expect(location.pathname).toBe('/runs/3');
@@ -443,7 +330,7 @@ describe('the run board', () => {
     act(() => {
       store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess({ unmeasured: ['workdir'] })] });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     const note = screen.getByText('unreadable');
     expect(note).toHaveClass('sess-unmeasured');
     expect(note).toHaveAttribute('title', 'registry workdir temporarily unreadable — retrying');
@@ -465,7 +352,7 @@ describe('the run board', () => {
     // Review finding 19's own failure scenario: phone offline, or the server
     // mid-restart, with a program in flight — this must not assert the
     // program never existed.
-    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadProgrammes={async () => { throw new Error('offline'); }} />);
     expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
     expect(screen.queryByText(/^no runs\./i)).toBeNull();
   });
@@ -479,7 +366,7 @@ describe('the run board', () => {
     // a positive claim about the WHOLE program history a failed archive
     // read has no standing to make.
     const store = makeStore();
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => { throw new Error('offline'); }} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadProgrammes={async () => { throw new Error('offline'); }} />);
     // The live frame lands separately, honestly reporting no active runs —
     // it says nothing at all about the archive.
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
@@ -494,12 +381,10 @@ describe('the run board', () => {
     // genuinely empty" from "the archive could not be read".
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => { throw new Error('offline'); }} />);
-    // The active group renders as normal — this is not the whole-board
-    // failure state, only the Finished half's own.
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    const finishedGroup = await screen.findByRole('group', { name: /finished/i });
-    expect(finishedGroup).toHaveTextContent(/could not reach the server/i);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadProgrammes={async () => { throw new Error('offline'); }} />);
+    // The card renders as normal — this is not the whole-board failure state, only the Finished half's own.
+    expect(await screen.findByTestId('programme-card')).toBeInTheDocument();
+    expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument();
   });
 });
 
@@ -566,7 +451,7 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
 
   it('Start a programme sits in the header’s actions slot', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
-    const door = screen.getByRole('button', { name: /start a program/i });
+    const door = screen.getByRole('button', { name: /start a programme/i });
     expect(door).toHaveClass('program-start-door');
     const heading = screen.getByRole('heading', { level: 1 });
     // The scaffold's header holds the title and the actions: the door shares the heading's header, not the body.
@@ -574,11 +459,12 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
     expect(head.contains(door)).toBe(true);
   });
 
-  it('only the header, the search box and the paused banner sit above the list', () => {
+  it('only the header, the search box and the paused banner sit above the list', async () => {
     const store = makeStore();
     act(() => { store.setState({ coord: COORD('set'), coordFrameSeen: true, conn: 'open', runs: [r()], runsFrameSeen: true }); });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
-    const group = container.querySelector('.runs-group')!;
+    await screen.findByTestId('programme-card');
+    const group = container.querySelector('.programme-card')!;
     const before = [...container.querySelectorAll('*')]
       .filter((el) => (el.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 && !el.contains(group));
     // Of the board's own controls, only the search box and the paused banner come ahead of the first programme.
@@ -597,13 +483,14 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
     expect(loadRuns).toHaveBeenCalledWith();   // no limit, no before: the whole archive, as before
   });
 
-  it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', () => {
+  it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', async () => {
     const store = makeStore();
     act(() => {
       store.setState({ coord: COORD('set'), coordFrameSeen: true, runs: [r({ reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: null } })], runsFrameSeen: true });
     });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
-    const nodes = [...container.querySelectorAll('.rf-box, .coord-banner, .review-cap-band, .runs-group')];
+    await screen.findByTestId('programme-card');
+    const nodes = [...container.querySelectorAll('.rf-box, .coord-banner, .review-cap-band, .programme-card')];
     const names = nodes.map((n) => (n.matches('.rf-box') ? 'find' : n.matches('.coord-banner') ? 'paused' : n.matches('.review-cap-band') ? 'cap' : 'group'));
     expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('paused'));
     expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('find'));
@@ -649,12 +536,12 @@ describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+    expect(screen.getByRole('button', { name: /start a programme/i })).toHaveClass('program-start-door');
   });
 
   it('opens the sheet on tap', async () => {
     render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
-    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /start a programme/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
   });
 });
@@ -668,9 +555,9 @@ describe('the run board tells the start sheet which projects already have a run 
   // program" door, and a run row for `ccrc-pwa` is on screen in two of the three
   // cases, so the project row needs a needle nothing else carries.
   const openAndPick = async (): Promise<void> => {
-    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
-    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
-    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: 'Build 9 demo' } });
+    fireEvent.click(await screen.findByRole('button', { name: /start a programme/i }));
+    fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: 'build9-demo' } });
+    fireEvent.change(screen.getByLabelText(/programme title/i), { target: { value: 'Build 9 demo' } });
     fireEvent.click(await screen.findByRole('button', { name: /\/home\/u\/projects\/ccrc-pwa/ }));
   };
 
@@ -827,7 +714,7 @@ describe('the run board renders the dispatch window — and the wedge (Task 3)',
   const board = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   /** A run in the shape a `planned` one actually reaches the wire in: no
    *  session id (the server learns it by registry diff, AFTER `ws-add`
@@ -1028,7 +915,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
   const withSession = (over: Partial<FleetSession>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   const chip = (): HTMLElement | null => document.querySelector('.sess-spawn');
 
@@ -1082,7 +969,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     // not exist.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(chip()).toBeNull();
   });
 
@@ -1160,7 +1047,7 @@ describe('the run row renders the resume it has always carried (D-1, Task 5)', (
   const board2 = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   const cellR = (): HTMLElement | null => document.querySelector('.run-resumed');
 
@@ -1221,197 +1108,13 @@ describe('programsWithOpenRun — the program-level half of the resume door (D-1
     expect([...set]).toEqual([]);
   });
 });
-
-// The resume door on the board (program-leverage wave 5, D-1129). `coordinatorPresence`
-// decides (its own table lives in `resume-sheet.test.tsx`); this pins that the
-// BOARD asks it, with the right three arguments, and renders nothing when the
-// answer is not `dead`.
-//
-// The gate's SECOND term is the program's, not the row's (D-1146, review
-// MAJOR 2): the control renders when the coordinator is measured dead AND
-// (this run is open OR its program has no open run). The four cases below hold
-// both halves — the all-terminal program that previously rendered no control
-// anywhere, the terminal row that must still stay bare while its program has a
-// wave that can move, and `unknown`/`alive` still closing the door on the newly
-// reachable path.
-describe('the resume door on the run board', () => {
-  const coord = (over: Partial<FleetSession> = {}): FleetSession =>
-    sess({ id: 'ccrc-pwa-coordinator', workspace: null, branch: null, ...over });
-
-  const board = (opts: {
-    sessions: FleetSession[]; fleetFrameSeen: boolean; run?: Partial<RunSummary>;
-  }): void => {
-    const store = makeStore();
-    act(() => {
-      store.setState({
-        runs: [r(opts.run)], runsFrameSeen: true,
-        sessions: opts.sessions, fleetFrameSeen: opts.fleetFrameSeen,
-      });
-    });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-  };
-
-  it('offers the door when the claimant is measured dead', () => {
-    board({ sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true });
-    expect(screen.getByRole('button', { name: /resume run 3/i })).toBeInTheDocument();
-  });
-
-  it('hides it while the answer is unknown — no fleet frame has landed', () => {
-    // The row LOOKS identical; the difference is entirely whether this box has
-    // heard from the fleet at all. A board that read the hydrated snapshot as
-    // an answer would offer this door on every cold start.
-    board({ sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: false });
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  it('hides it while the answer is unknown — the claimant is not in the array', () => {
-    board({ sessions: [], fleetFrameSeen: true });
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  it('hides it when the claimant is alive', () => {
-    board({ sessions: [coord({ status: 'idle', lifecycle: 'running' })], fleetFrameSeen: true });
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  // D-7371: a hibernated orphan or never-started claimant is asleep (mail or opening it wakes it, D-5430): Resume would
-  // reclaim the program from a coordinator that is not gone, so the door stays closed, as the row's own sheet offers Wake.
-  it.each(['orphan', 'never-started'] as const)('hides it when the claimant is a hibernated %s', (lifecycle) => {
-    board({ sessions: [coord({ status: 'dead', bucket: 'dead', lifecycle, hibernatedAt: 1_784_500_000_000 })], fleetFrameSeen: true });
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  // D-7370: a substrate stamp over a pane tmux called gone is doubt (D-309): the coordinator may be alive, and Resume
-  // reclaims its runs, so the door stays closed.
-  it.each(['stopped', 'orphan', 'never-started'] as const)('hides it when a substrate fault stands over the claimant\'s gone pane (%s)', (lifecycle) => {
-    board({ sessions: [coord({ status: 'dead', bucket: 'dead', lifecycle, substrate: { at: 1, text: 'tmux: no server running' } })], fleetFrameSeen: true });
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  /** The terminal-row fixture. A closed row can only reach this screen through
-   *  the COLD read (`finished` has no other source), so these cases hand the
-   *  archive to `loadRuns` and let the live frame answer the active half — an
-   *  honest, ANSWERED `[]` when the program has nothing left open, which is the
-   *  exact state D-1146 turns on and NOT the same as a frame that never landed
-   *  (`runsFrameSeen` stays true throughout). */
-  const closedBoard = (opts: {
-    cold: RunSummary[]; live?: RunSummary[];
-    sessions?: FleetSession[]; fleetFrameSeen?: boolean;
-  }): void => {
-    const store = makeStore();
-    act(() => {
-      store.setState({
-        runs: opts.live ?? [], runsFrameSeen: true,
-        sessions: opts.sessions ?? [coord({ status: 'dead', lifecycle: 'orphan' })],
-        fleetFrameSeen: opts.fleetFrameSeen ?? true,
-      });
-    });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: opts.cold })} />);
-  };
-
-  /** The `<li>` a control actually sits on. Every assertion below reads the ROW
-   *  IDENTITY rather than a count of matched nodes: an earlier round of this
-   *  wave shipped a filter that matched `.run-resume` AND `.run-resumed` — one
-   *  character apart, one a control and the other a caption — so a length
-   *  assertion passed while describing entirely the wrong rows. */
-  const rowOf = (btn: HTMLElement): HTMLElement => {
-    const li = btn.closest('li.run-row');
-    expect(li).not.toBeNull();
-    return li as HTMLElement;
-  };
-
-  it('OFFERS the door on an all-terminal program — the case that had no control anywhere (D-1146)', async () => {
-    // Review MAJOR 2: `closeRun` retires a program at zero open runs, so
-    // between closing wave N and opening wave N+1 every row of the program is
-    // terminal. The old gate (`!isRunClosed(run)`) rendered nothing on any of
-    // them, `ResumeSheet` has one opener, and the wave ships no `ccrc-api`
-    // verb — so the operator could not ask for the one call that unwedges it
-    // (measured live: wave N+1's `POST /api/runs` refuses `claimed-by-another`
-    // naming the corpse, and a reclaim makes the same call answer ok).
-    closedBoard({ cold: [r({ state: 'done', closedAt: Date.now() })] });
-    // The row lands via the cold read, so wait for it before asserting on a
-    // control ON it.
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    const btn = screen.getByRole('button', { name: /resume run 3/i });
-    const row = rowOf(btn);
-    // Identity, not presence: this control is on the DONE row of this program,
-    // and it is the control (`run-resume`), never the caption (`run-resumed`).
-    expect(btn.className).toBe('run-resume');
-    expect(row.querySelector('.run-state')?.textContent).toBe('done');
-    expect(row.title).toBe('run 3 · clear-cove');
-  });
-
-  it('still hides it on a terminal row whose program has a wave that can move', async () => {
-    // The narrower half of the same gate, and the reason it is a program-level
-    // question rather than a row-level one: a finished wave sitting BESIDE a
-    // live one is the ordinary end state, and the door belongs on the wave
-    // that can still move, not on the archive underneath it.
-    const open = r({ id: 4, wave: 4, state: 'working', workspace: 'open-cove', branch: 'ws/open-cove' });
-    const done = r({ id: 3, wave: 3, state: 'done', closedAt: Date.now() });
-    closedBoard({ cold: [open, done], live: [open] });
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-    // …and the absence above is the gate's second term, not a dead board: the
-    // door IS on the open row of the same program, in the same render.
-    const btn = screen.getByRole('button', { name: /resume run 4/i });
-    expect(rowOf(btn).title).toBe('run 4 · open-cove');
-    // D-6170 (G5 (a)) and D-8074 (Task 13): Abandon is drawn on stuck rows only, so neither the terminal row nor the
-    // healthy open row of the same program offers one.
-    expect(screen.queryByRole('button', { name: /abandon run 3/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /abandon run 4/i })).toBeNull();
-  });
-
-  it('hides it on an all-terminal program while the claimant is only UNKNOWN — the widened term does not weaken the first', async () => {
-    // D-1146 widened the SECOND half of the gate and nothing else. `unknown`
-    // still hides the door (D-309's false dead), and it must keep hiding it on
-    // this newly-reachable path too — otherwise every cold start on a retired
-    // program would offer to hand a coordinator's ledger to somebody else.
-    closedBoard({ cold: [r({ state: 'done', closedAt: Date.now() })], fleetFrameSeen: false });
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  it('hides it on an all-terminal program whose claimant is alive', async () => {
-    closedBoard({
-      cold: [r({ state: 'done', closedAt: Date.now() })],
-      sessions: [coord({ status: 'idle', lifecycle: 'running' })],
-    });
-    expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-
-  it('needs two taps: the row control opens the sheet, nothing is sent by opening it', async () => {
-    const fetchImpl = vi.fn();
-    vi.stubGlobal('fetch', fetchImpl);
-    board({ sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true });
-    fireEvent.click(screen.getByRole('button', { name: /resume run 3/i }));
-    expect(await screen.findByRole('button', { name: /^re-kickoff$/i })).toBeInTheDocument();
-    expect(fetchImpl).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
-  it('the row still never nests a button inside a button, with three controls on it', () => {
-    const store = makeStore();
-    act(() => {
-      store.setState({
-        runs: [r()], runsFrameSeen: true,
-        sessions: [coord({ status: 'dead', lifecycle: 'orphan' })], fleetFrameSeen: true,
-      });
-    });
-    const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    for (const btn of container.querySelectorAll('button')) {
-      expect(btn.querySelector('button')).toBeNull();
-    }
-  });
-});
-
 describe('the run board worker row carries the graph chip', () => {
   const board = (over: Partial<FleetSession>): void => {
     const store = makeStore();
     act(() => {
       store.setState({ runs: [r()], runsFrameSeen: true, sessions: [sess(over)] });
     });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
 
   it('shows graph N for the run session the hook counted reads for', () => {
@@ -1431,7 +1134,7 @@ describe('the run board worker row carries the graph chip', () => {
   it('a finished wave of a live session keeps its worker\'s chip while the session is bound to its next wave', async () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ id: 10, wave: 4 })], runsFrameSeen: true, sessions: [sess({ graphQueries: 3 })] }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [r({ id: 9, state: 'done', closedAt: Date.now() - 60_000 })] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [r({ id: 9, state: 'done', closedAt: Date.now() - 60_000 })] })} loadCaps={NO_CAPS} />);
     expect(store.getState().sessions[0]?.run?.id).toBe(10);
     await waitFor(() => expect(screen.getAllByText('graph 3')).toHaveLength(2));
   });
@@ -1456,7 +1159,7 @@ describe('the run board worker row carries the graph chip', () => {
       store.setState({ runs: [r()], runsFrameSeen: true, sessions: [raw as unknown as FleetSession] });
     });
     const { container } = render(
-      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+      <RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // The class, not the text: RTL's matcher trims, so `graph ` normalises to
     // `graph` and a text query would MISS the very chip this test forbids.
     const chip = container.querySelector('.sess-graph');
@@ -1527,19 +1230,13 @@ describe('waveLabel — one spelling of `wave N/M`', () => {
     expect(waveLabel({ wave: 2, waveOf: null })).toBe('wave 2');
   });
 
-  it('is what the group header renders — the header no longer spells it inline', () => {
-    const store = makeStore();
-    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByText(waveLabel({ wave: 3, waveOf: 4 }))).toBeInTheDocument();
-  });
 });
 
 describe('the run row names its repo', () => {
   const board = (run: RunSummary): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [run], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
 
   it('badges EVERY row with the run’s own project', () => {
@@ -1600,7 +1297,7 @@ describe('the run board marks review runs (design 2026-09-14 §8)', () => {
   const board = (over: Partial<RunSummary>): void => {
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   };
   it('renders no kind chip on a work row', () => {
     board({ kind: 'work', reviews: null });
@@ -1693,7 +1390,7 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
   const boardWith = async (childReclaim: ChildReclaimStatus | null): Promise<void> => {
     const store = makeStore();
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
+    render(<RowsBoard store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
       runs: [r({ id: 7, state: 'done', closedAt: Date.now() - 60_000, childReclaim })],
     })} />);
     await screen.findByRole('group', { name: /finished/i });
@@ -1748,7 +1445,7 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
   // The inert row keeps the resume door where it was: last. A dead coordinator
   // and a programme with no open run are what make it render at all. The run is
   // closed, so D-6170 draws no abandon control after it.
-  it('keeps the resume door on a reclaimed row, its last child, and no abandon control', async () => {
+  it('a reclaimed row carries no resume door (it left the row, Task 19) and no abandon control', async () => {
     const store = makeStore();
     act(() => {
       store.setState({
@@ -1756,14 +1453,14 @@ describe('the finished row carries the reclaim chip, and a reclaimed row is iner
         sessions: [sess({ id: 'ccrc-pwa-coordinator', workspace: null, branch: null, status: 'dead', lifecycle: 'orphan' })],
       });
     });
-    render(<RunsScreen store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
+    render(<RowsBoard store={store} loadCaps={NO_CAPS} loadRuns={async () => ({
       runs: [r({ id: 7, state: 'done', closedAt: Date.now() - 60_000,
                  childReclaim: { word: 'reclaimed', sentence: 'gone', at: null } })],
     })} />);
-    const resume = await screen.findByRole('button', { name: /resume run 7/i });
-    const li = resume.closest('li')!;
+    const li = (await screen.findByTitle(/run 7/)).closest('li')!;
     expect(li).not.toHaveAttribute('data-inert');
-    expect([...li.children].map((c) => c.className)).toEqual(['run-open', 'run-resume']);
+    expect([...li.children].map((c) => c.className)).toEqual(['run-open']);
+    expect(screen.queryByRole('button', { name: /resume run 7/i })).toBeNull();
     expect(li.querySelector('.run-abandon')).toBeNull();
   });
 });
@@ -1805,46 +1502,14 @@ describe('the board’s doors', () => {
     expect(location.pathname, 'Back navigated nowhere').toBe('/');
   });
 
-  it('the resume sheet closes, and a hand-over re-reads the finished half', async () => {
-    // TWO CALLBACKS, ONE DOOR, and the second is the one with a reason: a
-    // reclaim rewrites `claimedBy` on EVERY run of the program, terminal ones
-    // included, and the finished half of this board has no source but the
-    // cold read. Both were uncovered functions.
-    const store = makeStore();
-    // The Resume control is gated on a coordinator this board measured DEAD
-    // (`coordinatorPresence`), so the row needs both a dead session and a seen
-    // fleet frame — without either, the door is correctly absent.
-    act(() => {
-      store.setState({
-        runs: [r({ claimedBy: 'ccrc-pwa-coordinator' })],
-        runsFrameSeen: true,
-        fleetFrameSeen: true,
-        conn: 'open',
-        sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa',
-                                  status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
-      });
-    });
-    const load = vi.fn().mockResolvedValue(foundRows([]));
-    render(<RunsScreen store={store} loadFinished={load} />);
-    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Resume run 3' }));
-    expect(await screen.findByText(/claims run 3/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('sheet-overlay'));
-    await waitFor(() => expect(screen.queryByText(/claims run 3/)).toBeNull());
-    expect(load, 'a dismissal is not a hand-over — nothing changed to re-read')
-      .toHaveBeenCalledTimes(1);
-  });
-
   it('the start sheet closes without starting anything', async () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Start a program' }));
-    expect(await screen.findByLabelText(/program slug/i)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Start a programme' }));
+    expect(await screen.findByLabelText(/programme slug/i)).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId('sheet-overlay').at(-1)!);
-    await waitFor(() => expect(screen.queryByLabelText(/program slug/i)).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText(/programme slug/i)).toBeNull());
   });
 });
 
@@ -1855,7 +1520,7 @@ describe('a row whose claimant or close time the board does not have', () => {
     // session map would be looking up `undefined`.
     const store = makeStore();
     act(() => { store.setState({ runs: [r({ claimedBy: null, state: 'planned' })], runsFrameSeen: true }); });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
+    render(<RowsBoard loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();
   });
 
@@ -1870,7 +1535,7 @@ describe('a row whose claimant or close time the board does not have', () => {
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
     const dated = r({ id: 11, state: 'done', workspace: 'dated-one', closedAt: Date.now() - 1000 });
     const undated = r({ id: 12, state: 'done', workspace: 'undated-one', closedAt: null });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store}
+    render(<RowsBoard loadCaps={NO_CAPS} store={store}
                        loadRuns={async () => ({ runs: [undated, dated] })} />);
     await screen.findByTitle(/ · dated-one$/);
     // The two rows' own order in the document, read off the text nodes the
@@ -1896,14 +1561,14 @@ describe('the run board on the page scaffold (D-5102)', () => {
 
 // D-6911: the board's "Waiting on you" band sits above the groups, and its button opens the lift sheet.
 describe('the review cap band on the run board', () => {
-  it('lists a waiting run above the programme groups, and Lift cap opens the sheet', async () => {
+  it('lists a waiting run above the programme cards, and Lift cap opens the sheet', async () => {
     const store = makeStore();
     const waiting = r({ id: 12, reviewCap: { rounds: 3, cap: 3, askedAt: Date.now() - 60_000, liftedAt: null } });
     act(() => { store.setState({ runs: [waiting], runsFrameSeen: true }); });
     vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} />);
     const band = screen.getByRole('group', { name: /waiting on you/i });
-    const group = screen.getByRole('group', { name: /^program /i });
+    const group = await screen.findByTestId('programme-card');
     expect(band.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(within(band).getByRole('button', { name: /lift cap/i }));
     expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();
@@ -1915,5 +1580,108 @@ describe('the review cap band on the run board', () => {
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
     expect(screen.queryByRole('group', { name: /waiting on you/i })).toBeNull();
+  });
+});
+
+describe('Closed today, and the board\'s order (Task 20, spec §8.2 items 1 to 10, A32, o6, F27, D-8075)', () => {
+  const NONE = { operator: 0, sweep: 0, coordinator: 0 };
+  const line = (c: HTMLElement): HTMLElement | null => c.querySelector('[data-testid="closed-today"]');
+  const board = async (closedToday: typeof NONE, runs: RunSummary[] = [r()]): Promise<HTMLElement> => {
+    const store = makeStore();
+    act(() => { store.setState({ runs, runsFrameSeen: true, conn: 'open' }); });
+    const { container } = render(<RunsScreen store={store} loadProgrammes={programmesAnswer([programmeRow('build4-transcript-surface', { lastMoveAt: Date.now() })], closedToday)} />);
+    await act(async () => { await Promise.resolve(); });
+    return container;
+  };
+
+  it('the board\'s order is header, search, paused banner, Stuck, Closed today, Waiting band, ReviewCapBand, programmes, quiet, Finished, foot', async () => {
+    const now = Date.now();
+    const store = makeStore();
+    const runs = [
+      r({ id: 1, program: 'p-live', programTitle: 'Live', stuck: STUCK_NOW }),
+      r({ id: 2, program: 'p-wait', programTitle: 'Wait', state: 'awaiting-review', waitsOn: 'coordinator', lastMoveAt: now - 3 * 86_400_000 }),
+      r({ id: 3, program: 'p-cap', programTitle: 'Cap', reviewCap: { rounds: 3, cap: 3, askedAt: now - 60_000, liftedAt: null } }),
+      r({ id: 4, program: 'p-quiet', programTitle: 'Quiet', sessionId: 'q', workspace: 'q' }),
+    ];
+    act(() => { store.setState({ runs, runsFrameSeen: true, conn: 'open', coord: { pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
+    const rows = [
+      programmeRow('p-live', { lastMoveAt: now }), programmeRow('p-wait', { lastMoveAt: now }), programmeRow('p-cap', { lastMoveAt: now }),
+      programmeRow('p-quiet', { lastMoveAt: now - 9 * 86_400_000 }),
+      programmeRow('p-done', { lastMoveAt: now - 3_600_000, ending: { outcome: 'complete', waves: 2, neverStarted: 0, closedBy: null } }),
+    ];
+    const { container } = render(<RunsScreen store={store} loadCaps={NO_CAPS} loadProgrammes={programmesAnswer(rows, { operator: 5, sweep: 0, coordinator: 60 })} />);
+    await act(async () => { await Promise.resolve(); });
+    await screen.findByText(/Closed today/);
+    const marks: [string, string][] = [
+      ['header', 'h1'], ['search', '#run-find-box'],
+      ['paused', '.coord-banner'], ['stuck', '[data-testid="stuck-band"]'], ['closed', '[data-testid="closed-today"]'],
+      ['waiting', '[data-testid="waiting-band"]'], ['cap', '.review-cap-band'], ['cards', 'ul.programme-cards'],
+      ['quiet', '[data-fold="quiet"]'], ['finished', '[data-fold="finished"]'], ['foot', '.runs-foot'],
+    ];
+    const found = marks.map(([name, sel]) => [name, container.querySelector(sel)] as const);
+    for (const [name, el] of found) expect(el, name).not.toBeNull();
+    for (let i = 1; i < found.length; i++) {
+      const [pn, p] = found[i - 1]!; const [cn, c] = found[i]!;
+      expect(p!.compareDocumentPosition(c!) & Node.DOCUMENT_POSITION_FOLLOWING, `${pn} before ${cn}`).toBeTruthy();
+    }
+  });
+
+  it('Closed today links each count through runsAdvancedPath with its filter and closedSince', async () => {
+    const c = await board({ operator: 5, sweep: 2, coordinator: 60 });
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    const links = within(line(c)!).getAllByRole('link');
+    expect(links.map((a) => a.textContent)).toEqual(['5 by you', '2 by ccrc', '60 by coordinators']);
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      runsAdvancedPath('by-you', midnight.getTime()), runsAdvancedPath('by-ccrc', midnight.getTime()), runsAdvancedPath('by-coordinators', midnight.getTime()),
+    ]);
+    fireEvent.click(links[0]!);
+    expect(location.pathname + location.search).toBe(runsAdvancedPath('by-you', midnight.getTime()));
+  });
+
+  it('it shows only once a close landed today', async () => {
+    expect(line(await board(NONE))).toBeNull();
+  });
+
+  it('a zero count is left out: Closed today: 5 by you · 60 by coordinators (o6)', async () => {
+    const c = await board({ operator: 5, sweep: 0, coordinator: 60 });
+    expect(line(c)!.textContent).toBe('Closed today: 5 by you · 60 by coordinators');
+  });
+
+  it('midnight is the operator\'s local day', async () => {
+    const read = vi.fn(async () => ({ ok: true as const, programmes: [], closedToday: NONE }));
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadProgrammes={read} />);
+    await act(async () => { await Promise.resolve(); });
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    expect(read).toHaveBeenCalledWith(d.getTime());
+  });
+
+  it('Closed today re-reads when a group loop ends and never adds locally', async () => {
+    const read = vi.fn()
+      .mockResolvedValueOnce({ ok: true, programmes: [], closedToday: { operator: 1, sweep: 0, coordinator: 0 } })
+      .mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 4, sweep: 0, coordinator: 0 } });
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true, conn: 'open' }); });
+    const { container } = render(<RunsScreen store={store} loadProgrammes={read} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(line(container)!.textContent).toBe('Closed today: 1 by you');
+    // A run leaves the frame: the count is whatever the server then says, never one added here.
+    act(() => { store.setState({ runs: [] }); });
+    await act(async () => { await Promise.resolve(); });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(line(container)!.textContent).toBe('Closed today: 4 by you');
+  });
+
+  it('Start a programme replaces every "program" on this screen', async () => {
+    const c = await board(NONE);
+    const door = screen.getByRole('button', { name: 'Start a programme' });
+    fireEvent.click(door);
+    await screen.findByLabelText('Programme slug');
+    expect(screen.getByLabelText('Programme title')).toBeInTheDocument();
+    const words = (document.body.textContent ?? '') + [...document.querySelectorAll('[placeholder],[aria-label],[title]')]
+      .map((e) => `${e.getAttribute('placeholder') ?? ''} ${e.getAttribute('aria-label') ?? ''} ${e.getAttribute('title') ?? ''}`).join(' ');
+    expect(words.match(/\b[Pp]rograms?\b/g)).toBeNull();
+    expect(c).toBeTruthy();
   });
 });

@@ -18,41 +18,25 @@ import {
 } from '../../../shared/api';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, dispatchStalledTitle,
-  childReclaimTitle, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel,
+  childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel,
   resumeNote, runKindChip, runRowName, runWarnings, runItems, runState, runStateWord, runWaitLine,
 } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
-import { coordinatorPresence } from '../fleet/presence';
 import { inAppClick } from '../fleet/settingsText';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
 import { runPath } from '../lib/routes';
 import '../fleet/fleet.css';
 
-// `memo` (D-6442, D-6438): the board re-renders each second while a dispatch is pending,
-// and a finished row's props are stable between those ticks (the run object from
-// the cold read, booleans, state setters, and `nowMs` from `finishedClock`), so a
-// tick inside one 30 s step re-renders no finished row. A fleet frame re-renders a
-// finished row only when its own `session` or its `coordSession` changed: the fleet
-// store keeps the object of every row that did not change (`keepRows`, C6), so an
-// identical frame after the first re-renders none, and a frame that changes one
-// session re-renders the rows holding it. The FIRST live frame re-renders every
-// mounted finished row even when it equals the hydrated snapshot: it flips
-// `fleetFrameSeen`, which reaches each row as `frameSeen` (measured 20 of 20, before
-// C6 and after it). A coordinator shared by many rows (`coordSession`) is one
-// such change: when its row changes, every finished row it claims re-renders. Before
-// C6 every frame brought new session objects and re-rendered every finished row with
-// a live session. The board mounts at most 20 finished rows until Show more
-// (`FINISHED_FOLD`), so these are counts out of at most 20.
+// `memo` (D-6442, D-6438): the programme page re-renders each second while a dispatch is pending, and a row's props are stable
+// between those ticks (the run object, its worker's session, and `nowMs`), so a tick inside one 30 s step re-renders no row.
+// The fleet store keeps the object of every row that did not change (`keepRows`, C6), so a frame that changes one session
+// re-renders only the rows holding it.
 export const RunRow = memo(function RunRow({
   run,
   nowMs,
   session,
-  coordSession,
-  frameSeen,
-  programHasOpenRun,
-  onResume,
   current = false,
 }: {
   run: RunSummary;
@@ -69,24 +53,6 @@ export const RunRow = memo(function RunRow({
    *  it yet). Looked up by the caller so this component stays a pure
    *  renderer of the one row it owns. */
   session: FleetSession | null;
-  /** The run's CLAIMANT as the live fleet snapshot has it — a different
-   *  lookup from `session` above, which is the run's WORKER. Both come off
-   *  `sessionById`, and conflating them would put the resume door on a row
-   *  whose worker died while its coordinator is fine. */
-  coordSession: FleetSession | null;
-  /** Has a `{type:'fleet'}` frame ever landed. Passed rather than inferred
-   *  from `coordSession !== null`: absence from a snapshot that never arrived
-   *  and absence from one that did are opposite facts, and only the second is
-   *  evidence of anything (D-1138). */
-  frameSeen: boolean;
-  /** Does this row's PROGRAM still have a run that can move, as the board
-   *  currently measures it (D-1146)? The row's own `state` cannot answer that
-   *  — it is a fact about the other rows — so the caller derives it once from
-   *  the same `active` slice it renders and hands each row the single bit it
-   *  needs, the same shape `session`/`coordSession` above are looked up in. */
-  programHasOpenRun: boolean;
-  /** Opens the ResumeSheet for this row (spec §7.3). */
-  onResume: (run: RunSummary) => void;
   /** This run is the one open in the broad pane (spec §8.4): the row says so to a screen reader and to the eye. */
   current?: boolean;
 }): ReactNode {
@@ -267,62 +233,8 @@ export const RunRow = memo(function RunRow({
   // Abandon is not on this row (the runs rebuild, D-8074, Task 13): it sits on a stuck row in the Stuck band
   // (`StuckBand.tsx`) and on the run's own page, and nowhere else on the board.
 
-  // The resume door. `coordinatorPresence` decides the FIRST half — the
-  // server's word (D-7181, OA-C15 (a)), and only `dead` opens it: `unknown` is
-  // what a pane tmux could not ask about, a missing row and an unarrived
-  // frame all read as, and each of those would otherwise offer to hand a live
-  // coordinator's program to somebody else (D-309's collapse; D-1129). D-1146 does
-  // not touch that half and it must stay exactly this strong: widening the
-  // second term below is only safe because the first one still refuses to act
-  // on doubt.
-  //
-  // THE SECOND HALF IS THE PROGRAM'S FACT, NOT THE ROW'S (D-1146, review
-  // MAJOR 2). It was `!isRunClosed(run)` alone, on the argument that "a done
-  // wave's coordinator being dead is the ORDINARY end state, not a wedge" —
-  // which is true of a finished wave sitting BESIDE one that can still move,
-  // and false of exactly the case that needs this door most. `closeRun`
-  // retires a program at zero open runs, and between closing wave N and
-  // opening wave N+1 a program has no open run at all — the close-then-open
-  // window ruling R1 names. There, every row is terminal, `ResumeSheet` has
-  // ONE opener (this button), and the wave shipped no `ccrc-api` verb on
-  // purpose, so the board rendered no control anywhere while the server half
-  // worked perfectly: measured live, wave N+1's `POST /api/runs` refuses
-  // `claimed-by-another by:<dead id>` and a reclaim is what makes it answer
-  // ok. `Abandon` on the last open run reached the same dead end from the
-  // other side, by removing the only Resume the program had.
-  //
-  // So: this run is open, OR its program has nothing open. A terminal row
-  // whose program is still running keeps the old answer — the door belongs on
-  // the wave that can move, not on the archive underneath it.
-  //
-  // The door is per ROW while the reclaim is per PROGRAM (contract R1 rewrites
-  // `claimedBy` on every run of the program, terminal ones included), so an
-  // all-terminal program with several waves offers the same door several
-  // times — one action repeated, never two different ones. Electing a single
-  // row to carry it would be this renderer deciding which wave represents a
-  // program, and `programWave`'s own docstring records what that guess cost
-  // the last time it was made here.
-  //
-  // D-1147, RECORDED AND DELIBERATELY NOT FIXED HERE: reclaiming an
-  // all-terminal program does not make runId-less `toId:'coordinator'` mail
-  // resolvable again. The close route retires the program
-  // (`setProgramState('done')` once `programOpenRunCount` reads zero) and
-  // `resolveCoordinator(null)` refuses on its single-active-program guard
-  // BEFORE it ever reads `claimedBy` — so the column this door rewrites is not
-  // the one that arm is stuck on. Mail naming an explicit `runId` resolves
-  // through a direct row read and is unaffected, which is the path the
-  // coordinator corpus already sends a resumed coordinator down.
-  const presence = coordinatorPresence(run.claimedBy, coordSession, frameSeen);
-  const resumeButton = presence === 'dead' && (!isRunClosed(run) || !programHasOpenRun) ? (
-    <button
-      type="button"
-      className="run-resume"
-      aria-label={`Resume run ${run.id}`}
-      onClick={() => onResume(run)}
-    >
-      Resume
-    </button>
-  ) : null;
+  // Resume is not on a row (the runs rebuild, D-8075, Task 19; spec §9.5, F25): it sits once on the programme page's head and
+  // on the run page, where `resumeShown` decides it.
 
   // Every row opens its run's page (the runs rebuild, D-8072; spec A9). A run with no session, a spawn under way or a
   // reclaimed child still has a page, so no row is inert any more: the page says what the row cannot. The session is one more
@@ -335,7 +247,6 @@ export const RunRow = memo(function RunRow({
       <button type="button" className="run-open" aria-current={current ? 'true' : undefined} onClick={() => navigate(runPath(run.id))}>
         {body}
       </button>
-      {resumeButton}
       {waitLine !== null && run.blockedBy != null && (
         <a className="run-wait" href={runPath(run.blockedBy)} onClick={inAppClick(runPath(run.blockedBy))}>{waitLine}</a>
       )}

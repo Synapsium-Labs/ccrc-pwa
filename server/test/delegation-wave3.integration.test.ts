@@ -1150,6 +1150,14 @@ const W4_PWA_FILES = [
   'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
   'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
 ] as const;
+/** Wave 5 PR8c's PWA files (D-8114): the Settings card over the adoption switch. It reads the switch's door and the lane's counts
+ *  and list (`GET /api/coord/delegation-adopt`), so its files name the door and the wire's types; no string they make public says
+ *  `adopt` (the card's own words census, `pwa/test/delegation-adopt-section.test.tsx`). The first two are named for it. */
+const W5_SWITCH_PWA_FILES = [
+  'pwa/src/fleet/DelegationAdoptSection.tsx', 'pwa/src/fleet/delegationAdoptWords.ts', 'pwa/src/fleet/useDelegationAdoptView.ts',
+  'pwa/src/lib/api.ts', 'pwa/src/fleet/settingsText.ts', 'pwa/src/screens/settings/SettingsDataProvider.tsx',
+  'pwa/src/screens/settings/AutomationSection.tsx',
+] as const;
 
 describe('8. the closed scope census', () => {
   it('the wave-4 shape: the frame union is main\'s seven plus `delegation`, and the broker\'s words appear only in PR2\'s named PWA files', () => {
@@ -1160,12 +1168,12 @@ describe('8. the closed scope census', () => {
     const FAMILY_NAME = /(?:^|[^A-Za-z])(?:delegat|lease|spool|carrier|adopt|retain|dispos|cleanup)/i;
     // Wave 4: PR2 adds exactly one file named for the broker, its words module; on PR1's branch it does not exist, so the same
     // allow-list text is green on both branches.
-    const named = ui.filter((f) => f !== 'pwa/src/fleet/delegationWords.ts');
+    const named = ui.filter((f) => f !== 'pwa/src/fleet/delegationWords.ts' && !W5_SWITCH_PWA_FILES.slice(0, 2).includes(f as never));
     expect(named.filter((f) => f.split('/').some((seg) => FAMILY_NAME.test(seg))), 'a PWA file named for the broker').toEqual([]);
     // CONTENT, in three parts, measured on origin/main at 0b3ff2f62 (the merge base). `delegation` is wave 4's frame word: allowed in
     // PR2's named files only...
     const W4_WORD = /delegation/i;
-    expect(pwaWordOffenders(ui, read, W4_WORD, W4_PWA_FILES), 'a PWA file outside PR2\'s list that names the broker').toEqual([]);
+    expect(pwaWordOffenders(ui, read, W4_WORD, [...W4_PWA_FILES, ...W5_SWITCH_PWA_FILES]), 'a PWA file outside PR2\'s list that names the broker').toEqual([]);
     const other: Record<string, string> = { 'pwa/src/fleet/Other.tsx': "export const k = 'delegation';\n" };
     expect(pwaWordOffenders(Object.keys(other), (f) => other[f]!, W4_WORD, W4_PWA_FILES), 'CONTROL: a file outside the list is red').toEqual(
       ['pwa/src/fleet/Other.tsx']);
@@ -1192,6 +1200,8 @@ describe('8. the closed scope census', () => {
         // Delegation wave 5 PR10 (O5-6 (a)): the wire's carrier-state word `adopted`, a key and a compared value in the words
         // module; no string the module makes public says it.
         'pwa/src/fleet/delegationWords.ts',
+        // Delegation wave 5 PR8c (D-8114): the adoption switch's card, its door's URL and its wire's type names.
+        ...W5_SWITCH_PWA_FILES,
       ]],
       // Delegation wave 5 PR10 (O5-6 (a)): the operator's keep door's URL (`/operator-retain`) in `pwa/src/lib/api.ts`, and the
       // wire's carrier-state word `retained`, a key and a compared value in the words module; no string it makes public says it.

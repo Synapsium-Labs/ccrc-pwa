@@ -188,9 +188,9 @@ describe('README: cross-repo programmes', () => {
   });
 
   it("names the board's three cues, grounded in the PWA files that render them", () => {
-    // The board is a screen AND its row (`RunRow.tsx`), so this reads the
-    // family rather than a path — see `componentFamily`.
-    const runsScreen = componentFamily(REPO, 'pwa/src/screens/RunsScreen.tsx');
+    // The badge is drawn by the row (`RunRow.tsx`); the board stopped drawing rows when the programme cards replaced its groups
+    // (the runs rebuild, Task 18, D-8075), so this reads the row's own family — see `componentFamily`.
+    const runsScreen = componentFamily(REPO, 'pwa/src/screens/RunRow.tsx');
     const card = read('pwa/src/fleet/ProjectCard.tsx');
     expect(runsScreen, 'the runs screen carries no `run-project` — wave 2 has not landed')
       .toContain('run-project');

@@ -1055,3 +1055,30 @@ describe('SwapSheet: a busy session asks "swap anyway" (D-5240)', () => {
     expect(swap).toHaveBeenCalledTimes(1);
   });
 });
+
+// D-8123 (limit-swap-autofix Task 11): the Waiting on you row for a session on a usage limit opens THIS sheet with its
+// list narrowed to the accounts that have measured room (`only`). Everything else about the sheet is unchanged.
+describe('SwapSheet narrowed to a given set of accounts (`only`)', () => {
+  it('offers only the named accounts, and keeps the ordinary list when `only` is absent', () => {
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    const { rerender } = render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} only={['claude9']} />);
+    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /team·b/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /gpt/ })).not.toBeInTheDocument();
+    rerender(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} />);
+    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();
+  });
+
+  it('an account that is not on the roster\'s pickable list stays unoffered even when named', () => {
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} only={['claude9', 'not-an-account']} />);
+    expect(screen.getAllByRole('button').filter((b) => /team·|gpt/.test(b.textContent ?? '')).map((b) => b.textContent)).toHaveLength(1);
+  });
+
+  it('with nothing left in the narrowed list it says so, in words, rather than rendering nothing', () => {
+    const s = fleetSession({ wrapper: 'claude', home: 'claude' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s])} only={[]} />);
+    expect(screen.getByText('No account has room right now.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument();
+  });
+});

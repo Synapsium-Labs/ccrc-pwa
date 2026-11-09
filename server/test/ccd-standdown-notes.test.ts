@@ -467,6 +467,58 @@ describe('D-6180: one episode per arm, so two arms on one tick do not flood', ()
     expect(dispatches()).toEqual([]);
   });
 
+  // D-8123: the `.woke` stand-down is a cosmetic hold, so it yields when the session's own account is at its
+  // ceiling (`_avail` fails): the affinity arm then moves it, with the gates that follow it still in force.
+  /** `~/.cc-limits/<w>.json`: `five`/`seven` percentages, a fresh `ts`, optional reset epochs. */
+  const limits = (w: string, five: number, seven: number, o: { fiveResetAt?: number; sevenResetAt?: number } = {}): void => {
+    fs.mkdirSync(path.join(h.home, '.cc-limits'), { recursive: true });
+    fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify({ five, seven, ts: T0, ...o }));
+  };
+
+  it('a woken session whose account reads seven=100 is moved by the affinity arm, not held by woke', () => {
+    seed(); h.sh(`_reg_set ${ID} woke ${T0 - 30}`); idleStatus(); writeTranscript([turn(T0 - 60)]);
+    limits('claude', 10, 100, { sevenResetAt: T0 + 86400 }); limits('claude-a', 20, 30);
+    tick(PROMPT, { target: null });
+    expect(standDowns()).toEqual([]);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a affinity`]);
+  });
+
+  it('kept: a woken session on an account under the ceiling still stands down `woke`', () => {
+    seed(); h.sh(`_reg_set ${ID} woke ${T0 - 30}`); idleStatus(); writeTranscript([turn(T0 - 60)]);
+    limits('claude', 10, 40); limits('claude-a', 20, 30);
+    tick(PROMPT, { extra: AFFINITY });
+    expect(words()).toEqual(['woke']);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a woken session at its ceiling still obeys the idle gate after the woke gate (a busy turn waits)', () => {
+    seed(); h.sh(`_reg_set ${ID} woke ${T0 - 30}`); writeTranscript([turn(T0 - 60)]);
+    limits('claude', 10, 100, { sevenResetAt: T0 + 86400 }); limits('claude-a', 20, 30);
+    tick(BUSY, { target: null });
+    expect(words()).toEqual(['idle-gate']);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('a woken session at its ceiling takes exactly the path an unwoken one does (a draft box does not hold a leave-at-ceiling move)', () => {
+    const run = (woken: boolean): string[] => {
+      const h2 = h; h = makeCcdHarness('ccrc-ccd-standdown-notes-');
+      try {
+        seed(); if (woken) h.sh(`_reg_set ${ID} woke ${T0 - 30}`); idleStatus(); writeTranscript([turn(T0 - 60)]);
+        limits('claude', 10, 100, { sevenResetAt: T0 + 86400 }); limits('claude-a', 20, 30);
+        tick(DRAFT, { target: null });
+        return [...standDowns().map((l) => l.replace(/^.* stand-down \S+ /, '')), ...dispatches()];
+      } finally { h.cleanup(); h = h2; }
+    };
+    expect(run(true)).toEqual(run(false));
+  });
+
+  it('a woken session at its ceiling sends no keys', () => {
+    seed(); h.sh(`_reg_set ${ID} woke ${T0 - 30}`); idleStatus(); writeTranscript([turn(T0 - 60)]);
+    limits('claude', 10, 100, { sevenResetAt: T0 + 86400 }); limits('claude-a', 20, 30);
+    tick(PROMPT, { target: null });
+    expect(h.calls().filter((l) => l.startsWith('tmux send-keys'))).toEqual([]);
+  });
+
   it('360 ticks of both arms stay at or below 2 × ceil(duration / COMPACT_NOTE_FLOOR) lines', () => {
     seed(); writeTranscript([turn(T0 - 60), limitRow(T0 - 5)]); HOLD();
     const floor = Number(h.sh('echo "$COMPACT_NOTE_FLOOR"'));

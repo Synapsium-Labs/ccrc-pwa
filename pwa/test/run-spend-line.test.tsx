@@ -52,8 +52,7 @@ describe('the run row reads no spend (A10)', () => {
     vi.stubGlobal('fetch', fetchImpl);
     for (const r of [run(), run({ sessionId: null, state: 'planned' })]) {
       render(
-        <ul><RunRow run={r} nowMs={Date.now()} session={null} coordSession={null} frameSeen={false}
-          programHasOpenRun={true} onResume={() => {}} /></ul>);
+        <ul><RunRow run={r} nowMs={Date.now()} session={null} /></ul>);
       expect(screen.queryByTestId('run-spend')).toBeNull();
       cleanup();
     }

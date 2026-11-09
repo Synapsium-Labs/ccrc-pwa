@@ -144,6 +144,14 @@ describe('the Waiting on you count (PL5a)', () => {
     expect(waitingItemsCount(waitingView({ items: [back] }), [], [])).toBe(1);
   });
 
+  it('a session on a limit with no account to take it counts (D-8123): an item the operator must act on is never hidden', () => {
+    const stuck = fleetSession({ id: 'stuck', limitWait: { since: 1, reset: null, account: 'lane-a', waiting: false } });
+    expect(waitingItemsCount(waitingView({ items: [itemView({ id: 1 })] }), [stuck, idle('c')], [])).toBe(2);
+    // Having chosen to wait does not hide it: it stays listed, with its Swap to… control.
+    const waits = fleetSession({ id: 'waits', limitWait: { since: 1, reset: 9, account: 'lane-a', waiting: true } });
+    expect(waitingItemsCount(waitingView(), [waits], [])).toBe(1);
+  });
+
   it('null before the waiting frame; null before the fleet frame', () => {
     expect(waitingItemsCount(null, [attention('a')], [])).toBeNull();
     expect(waitingItemsCount(waitingView({ items: [itemView()] }), null, [])).toBeNull();

@@ -3,12 +3,13 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
+import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
@@ -551,6 +552,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts?.crossPool === true ? { crossPool: true } : {}),
         ...(opts?.interrupt === true ? { interrupt: true } : {}),
       }),
+    /** D-8123: the operator's "Wait until reset" choice on a session the limit watchdog found no account for
+     *  (`FleetSession.limitWait`). `POST /api/sessions/:id/limit-wait`, no body; `409 not-waiting` when the record closed
+     *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
+    limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -731,6 +736,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const qs = p.toString();
       return getJson<RunFindAnswer>(`/api/runs/find${qs === '' ? '' : `?${qs}`}`, opts);
     },
+    /** `GET /api/programmes` (D-8075, spec 2026-11-04 §11.6): one row per programme and the runs closed since `since`, the
+     *  operator's local midnight in epoch ms (the server clamps it to the last 48 hours, A32). An older server has no such
+     *  route and answers 404, which a caller reads as no programme read. */
+    programmes: (since: number, opts?: ReadOpts) =>
+      getJson<ProgrammesAnswer>(`/api/programmes?since=${encodeURIComponent(String(Math.max(0, Math.floor(since))))}`, opts),
     /** `GET /api/runs/:id/record` (D-8071, spec 2026-11-04 §11.5): any run's lasting record, open or closed, however old. One
      *  read, no spend, no agent link. */
     runRecord: (id: number, opts?: ReadOpts) => getJson<RunRecordAnswer>(`/api/runs/${id}/record`, opts),
@@ -915,6 +925,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  ran. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have moved the switch. */
     setScopeSweepBusy: (body: ScopeSweepBusyRequest) =>
       postJsonOr<ScopeSweepView | 'unreadable'>('/api/coord/scope-sweep', 'unreadable', body),
+    /** `GET /api/coord/delegation-adopt` (D-8114): the delegation lane's keep switch, the fleet box's two capabilities, what a
+     *  tap of each direction would be refused with, and the lane's last pass. Settings' Automation card reads it through
+     *  `useDelegationAdoptView`, whose `asDelegationAdoptView` is the wire guard. */
+    delegationAdopt: (opts?: ReadOpts) => getJson<DelegationAdoptView>('/api/coord/delegation-adopt', opts),
+    /** `POST /api/coord/delegation-adopt` (D-8114): the switch, `{on}`. The reply is the same view, read after the verb ran; a
+     *  refusal is `{ok:false, error}` in one of the door's words. `postJsonOr`, for `setCoordCaps`' reason: an answer that
+     *  could not be read may still have moved the switch. */
+    setDelegationAdopt: (body: DelegationAdoptRequest) =>
+      postJsonOr<DelegationAdoptView | 'unreadable'>('/api/coord/delegation-adopt', 'unreadable', body),
     /** `POST /api/coord/dispatch-abandon`: `{choice:'on'|'off'}`. `postJsonOr` for `setCoordCaps`' reason: an answer that
      *  could not be read may still have stored the choice. */
     setDispatchAbandon: (body: DispatchAbandonRequest) =>

@@ -32,6 +32,7 @@ import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
+import { NewProjectDoor } from '../fleet/NewProjectDoor';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { PROJECT_ADD_TEXT } from '../fleet/projectAddWords';
@@ -290,6 +291,9 @@ export function FleetScreen({
             Runs · {runsLabel}
           </BareRow>
           <ClassChooser />
+          {/* The New project door rides this line where there is a list to add to (`NewProjectDoor`); the first-run
+              panel has its own. */}
+          {sessions.length > 0 && <NewProjectDoor inline onNewProject={flows.openAddProject} />}
         </div>
       )}
 
@@ -321,8 +325,8 @@ export function FleetScreen({
           <Button variant="primary" onClick={newSession}>
             Start a session
           </Button>
-          {/* A brand-new fleet has no project list to sit under, so its door is here (add-project spec §2). */}
-          <Button variant="ghost" onClick={flows.openAddProject}>{PROJECT_ADD_TEXT.add}</Button>
+          {/* A brand-new fleet has no project list to head, so its door is here (add-project spec §2). */}
+          <Button variant="ghost" onClick={flows.openAddProject}>{PROJECT_ADD_TEXT.open}</Button>
         </section>
       ) : (
         <>
@@ -330,6 +334,8 @@ export function FleetScreen({
               counts itself (Instrument's status heads, and its own bar in project mode), so a second set of chips
               above it would count every bucket twice. A part fact, never a skin name; the shared cards (Refined, or
               no frame) have no counts of their own, so they keep this bar. */}
+          {/* Where no runs line carries the New project door (Instrument's desk column), a row of its own heads the list. */}
+          {!runsLine && <NewProjectDoor inline={false} onNewProject={flows.openAddProject} />}
           {FleetList === null && <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />}
 
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared
@@ -358,11 +364,6 @@ export function FleetScreen({
               {`Archived on disk · ${archived.count} · ${archivedSizeText(archived)}`}
             </BareRow>
           )}
-          {/* Add project (add-project spec 2026-11-04 §2): at the foot of the list in this screen, not in a skin's part,
-              so every skin shows it. */}
-          <BareRow className="fleet-add-project-row" onClick={flows.openAddProject}>
-            <span aria-hidden="true">+ </span>{PROJECT_ADD_TEXT.add}
-          </BareRow>
         </>
       )}
 

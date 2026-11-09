@@ -135,6 +135,11 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
     // and the pane-scope sweep, on the reaper's gate.
     expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
+    // D-8123: the fleet limit watchdog's timer, on the same gate, after daemon-reload read its unit file.
+    expect(argv).toContain('--user enable --now ccd-limit-watchdog.timer');
+    expect(argv.indexOf('--user enable --now ccd-limit-watchdog.timer'),
+      'the limit watchdog timer was enabled before daemon-reload read its unit file')
+      .toBeGreaterThan(argv.indexOf('--user daemon-reload'));
     // history spec §9.5: fleet is not server, so the history sweep's timer arms here.
     expect(argv).toContain('--user enable --now ccd-history-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
@@ -310,6 +315,8 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-scope-sweep.timer',
+      // D-8123: the fleet limit watchdog's timer, `!= server` like the sweeps beside it, so `both` enables it.
+      '--user enable --now ccd-limit-watchdog.timer',
       // landing order wave 3b: the conflict radar's timer, `!= server` like the sweeps beside it, so `both` enables it.
       '--user enable --now ccd-land-probe.timer',
       // test box TB11 (D-7413): the durations timer, `!= server` like the radar, so `both` enables it.
@@ -349,7 +356,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccd-carry-dedupe.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-limit-watchdog.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccd-land-probe.') || dest.startsWith('ccd-testbox-times.') || dest.startsWith('ccd-carry-dedupe.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -370,6 +377,9 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The pane-scope sweep: a server box runs no pane scopes.
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
+    // D-8123: the fleet limit watchdog: a server box runs no session to rescue.
+    expect(existsSync(unitDir(home, 'ccd-limit-watchdog.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-limit-watchdog.timer'))).toBe(false);
     // landing order wave 3b: the conflict radar's pair is role-gated out (a server box checks out no project to
     // measure), while its BIN is placed on every role (a binary is never the gate), outside the GPT-lane block.
     expect(existsSync(unitDir(home, 'ccd-land-probe.service'))).toBe(false);
@@ -414,6 +424,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-codex-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-scope-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-limit-watchdog');
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');

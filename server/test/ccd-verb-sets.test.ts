@@ -100,6 +100,7 @@ const SERVER_NEVER_SENDS: Readonly<Record<string, string>> = {
   caps: 'the agent runs it itself at start and reports the list in its ready frame',
   'carry-dedupe': 'the operator\'s backlog collector at a terminal (#317); its `--apply` deletes, so no route builds it',
   clip: 'a terminal clipboard helper',
+  'limit-watchdog': 'the fleet limit watchdog\'s one pass (D-8123), run by ccd-limit-watchdog.timer on the box; never a server route',
   list: 'the listing alias of `ls`, at a terminal',
   ls: 'the operator\'s listing at a terminal',
   menu: 'the interactive picker at a terminal',

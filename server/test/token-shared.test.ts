@@ -382,8 +382,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
-  it('the holders across shared, server/src, pwa/src and agent/src are exactly the eleven separate seven-day quantities', () => {
-    // A weekly interval anywhere else must import the one in shared/box-token.ts. These eleven are separate
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the twelve separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These twelve are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
     // The delegation health window, spec §5.3's seven-day observation window, is a separate quantity ruled in by delegation wave 3
     // (R81), and it does not import the token interval. The review-child ceiling (D-5942) is the separate quantity
@@ -400,7 +400,11 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // answers the operator ruled (D-8115): `never-started`'s age (§7 row 5, planned work over 7 days old with nothing else open
     // in its programme), and A55's window, how long a closed programme's claimant is still measured after its last close. Each is
     // the spec's own seven days of run age or programme quiet, unrelated to token rotation, and neither imports the token interval.
+    // The programme cards' quiet fold (D-8075, spec §8.2 item 8) is the twelfth: a programme with no run opened or closed
+    // for seven days folds under quiet programmes and a finished one leaves the Finished fold. It is the spec's own seven
+    // days of programme quiet, a display threshold on the client, and it does not import the token interval.
     expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
+      'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',
       'server/src/childReclaimSweep.ts:REVIEW_CHILD_CEILING_MS',

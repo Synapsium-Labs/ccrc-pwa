@@ -325,6 +325,16 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['ws-release', '--session', 'x'])).toBe(true);
   });
 
+  // D-8123: the operator's "Wait until reset" choice is one token wide, `forget`'s shape: the verb takes the id and
+  // nothing else (ccd re-asserts exact arity and the id grammar), moves no session and sends no key.
+  it('grants limit-wait as the one-token prefix, and nothing that merely resembles it', () => {
+    expect(isExecAllowed('ccd', ['limit-wait', 'demo-quiet-basin'])).toBe(true);
+    expect(isExecAllowed('ccd', ['limit-wait'])).toBe(true);
+    expect(isExecAllowed('ccd', ['limit-watchdog'])).toBe(false);   // the timer's pass is never a wire verb
+    expect(isExecAllowed('ccd', ['limit-waitx', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['--limit-wait', 'demo-quiet-basin'])).toBe(false);
+  });
+
   // NAMED WORKSPACES S9: rename is reachable only by naming a session, never as a bare verb or behind another leading flag.
   it('grants ws-title ONLY with --session, in both directions', () => {
     expect(isExecAllowed('ccd', ['ws-title', '--session', 'demo-x', '--title', 'ENG-1234 - Fix the login flow'])).toBe(true);

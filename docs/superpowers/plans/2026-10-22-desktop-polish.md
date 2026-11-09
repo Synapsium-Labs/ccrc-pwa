@@ -3160,6 +3160,63 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
+### Task C16: the desk Docs head, desk-nav and chat follow-up sweep (D-8139) — now
+
+**Routing:** band 1. **Needs:** desk-nav Task B (#2480), C14 (#2465) and C15 (#2464) have merged; they have. Step 0 measures the live claims, and an item whose file is held waits or asks for consent. It touches no file Task C17 touches.
+
+**Why.** The final reviews of desk-nav Task B (1697, 1704) and of C14 (1689, 1694) and C15 (1668), and C15's own step 0, left findings for a later sweep. Three of them change what a person sees on the desk Docs head; the rest are small pins, words and records. The coordinator's rulings are in the table.
+
+**Items.**
+| # | From | Where | What |
+|---|---|---|---|
+| 1 | review 1704 F1 | `pwa/src/docs/docs.css` (the full head's crumbs), `pwa/src/docs/DocsHead.tsx` | A list the user unfolds with `…` wraps instead of clipping its start, as the compact head's panel already does, so no crumb is clipped and the first Tab stop after Back is always seen. Browser cases at 600 and 900 px with five and seven directories, both skins, red first. The comment at `docs.css` that says no drawn crumb is clipped says what is true after the change. |
+| 2 | review 1704 F2 | `pwa/src/docs/docs.css` (GitHub's refusal sentence) | In the refusal state the sentence gives way (ellipsis, a small basis, its full text in its `title`) before the page's name does, so a wider window never shows less of the name in this state either. The width sweep covers the refusal state at 768 px and from 900 to 1320 px, both skins. Red first. |
+| 3 | review 1704 F3 | `pwa/src/docs/docs.css` (`.docs-action`) | Under `(pointer: coarse)` an icon-only desk action is at least `var(--tap-min)` wide, as the compact head's are. The fine-pointer stage widths do not move. The touch case reads widths as well as heights, on a draft at 1280 px. The coarse stage widths are re-measured and recorded. |
+| 4 | review 1697 F5 | `pwa/src/docs/DocsHead.tsx` (the "may differ" marker) | Under a coarse pointer the marker shows its words, not a bare "≠". Red first. |
+| 5 | review 1697 F9(d) | `pwa/test/control-census.test.ts` | `docs-fresh` and `docs-copy` are classed by the size the desk line gives them (28 px under a fine pointer). |
+| 6 | review 1704 F7, F9 | `pwa/src/docs/DocsHead.tsx` (`useRowStage`) | F9: the width guard compares `contentRect.width`, not the integer `clientWidth`. F7: the stage re-probes when a font face loads, so a font swap at first load paints no failed stage; if no cheap fix holds, `c16.md` says a first-load font swap may paint one frame. |
+| 7 | review 1704 F10 | `pwa/src/docs/DocsHead.tsx`, a docs `*Words.ts` | The pure deciders (`fullHeadFormFor`, and `nameCut` and `rowFits` if they are pure) move to one L1 docs module; the trial render stays in the L4 hook. No behaviour change; the existing cases pass unchanged. |
+| 8 | review 1689 F9 | `pwa/src/skins/refined/AppBar.tsx`, `pwa/src/skins/PhoneBar.tsx` | A space separates the door's word and its count badge, as Instrument's does, so the label is in the name at every non-zero count. Pins in the Refined shell and phone-bar cases, red first. |
+| 9 | review 1689 A3 to A7, A9, A10, A12; review 1694 F1, F2, A3 | `pwa/src/lib/chatMarks.ts`, `pwa/src/lib/remarkChatMarks.ts`, `pwa/src/lib/useArrival.ts`, `pwa/src/screens/useColdRuns.ts`, `pwa/src/session/chat.css`, `pwa/test/phone-bar.test.tsx`, `server/test/single-definition/chat-marks.test.ts` | A3: a `)` closer needs a space before the capital. A4: the zero-count number words end at a word boundary ("none of tenants" keeps its label). Both red first, and every pinned row keeps its answer. A5 and A6 as the report directs, or kept with the reason named in `c16.md`. A7: a comment names the heuristic's costs. A9: the scaling pin's comment states the measured ratio. A10: `nameSpans` reuses `markRuns`' walk. A12, 1694 F1, F2 and A3: the comments say what the code does, within the block width. |
+| 10 | review 1689 A11 | `ui/src/primitives/door.tsx` | After reading every caller: a glyph of `undefined`, `false` or `''` draws no glyph span, as `null` does, with a pin. If a caller relies on the span, the reason goes in `c16.md` and nothing changes. |
+| 11 | C15's `held-by-why-placement-deferred` | `pwa/src/fleet/fleet.css`, `pwa/src/fleet/HeldByRows.tsx`, `pwa/test/fleet-css.test.ts` | `.held-by-why { flex: 1 0 100%; }` after the `.child-reclaim-sentence` rules; the why-line's span carries the class; pinned. |
+| 12 | review 1668 F1 to F3 | `pwa/src/fleet/heldByRowsWords.ts` (`heldByRowWhyNotForget`), `pwa/src/fleet/HeldByRows.tsx` | The JSDoc says an unlisted row is the console's store lagging the server's frame (the next frame settles it). The header says workspace and unlisted rows get no line. |
+| 13 | reviews 1704 F1, F5, F6, F11; 1694 A4; 1668 F2, F4 | this task's note, `c16.md` | The corrections to the existing notes go in `c16.md`, and no existing note is edited (as D-7282): `b.md:33`'s "no drawn crumb is ever clipped" held for the automatic fold only; the 530 px derivation (the folded floor is 191.8 px, the sum about 557, and the narrowest full row is 544 px in Instrument and 564 in Refined, at 900); M1a is red in 4 unit and 11 browser cases, S1 in 3 browser cases; the two existing ResizeObserver hooks (`fleet/useRowWidth.ts`, `useMeasuredColumn`) and why `useRowStage` is a different job; C14's departure slug `c14-unclosed-aside-hides-its-ends` renamed to name the behaviour it has; C15's mutant rows under `forgetHeldBack` and the null arm as an equivalent mutant. |
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read each report and the coordinator's carried list, re-anchor every item on `main`, and drop any item a later merge fixed, saying so. Measure the live claims.
+- [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
+- [ ] **Step 2: Verify.** Each touched suite once, the pwa typecheck, contrast-check, `css-vars`, the whole pwa unit suite and the whole browser suite once, and `deviation-refs`. Screenshots of the desk Docs head at 600, 900 and 1280 px, both skins, fine and coarse, before and after, in the PR body.
+
+- **D-8139** - `desk-docs-head-and-desk-nav-follow-up-sweep`: Task C16, issued on 2026-11-09. The findings that the final reviews of desk-nav Task B (1697, 1704), C14 (1689, 1694) and C15 (1668) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
+
+**Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. Nothing else changes behaviour. **Rollback.** A plain revert, item by item.
+
+### Task C17: the CI flake sweep, and Forget's registry read (D-8140) — now
+
+**Routing:** band 1. **Needs:** nothing. Step 0 measures the live claims; `server/test/delegation-wave3.integration.test.ts` is held by another programme's claim, so item 4's fix goes in the shared walker or in `boot.test`, not in that file. `ccd/ccd` is generated, so a change to it is made in its source and restamped, and `GROWTH_CHECK` runs armed. It touches no file Task C16 touches.
+
+**Why.** Five unrelated flakes each took #2480 out of the merge queue once on 2026-11-09, and the server teardown error had taken out #2429 twice, #2441 once and two other PRs before. Each costs every PR that meets it a queue round. This task finds each one's cause and fixes it; a retry or a longer timeout is not a fix. It also carries C15's deferred item 3.
+
+**Items.**
+| # | From | Where | What |
+|---|---|---|---|
+| 1 | `teardown-flake` | the server tests that log after they end; `server/vitest.config.*` only if the cause is there | vitest's `EnvironmentTeardownError` ("Closing rpc while onUserConsoleLog was pending") fails a server shard whose tests all passed: queue runs 42424948497 and 42604563101, and PR runs on #2464 and #2480; the sightings name `mail-revive` and `lane-coordination-characterization`. Find the console write that outlives its test (a timer, promise or child callback that logs after the test returns) and end it before the test ends. If a cheap guard can fail a test that leaves a console write pending, as #1379 did for lanes, add it with its mutant. Prove it with repeated runs of the named files under load. |
+| 2 | `connect-sheet-360-flake` | `pwa/browser/connect-sheet.browser.test.ts` | "refined, light, 360px: below 900 the sheet is a bottom sheet" (queue run 42601730623; also seen on #2481). Find the race and wait on the settled condition, not on a delay. |
+| 3 | `asks-sweep-warn-filter` | `server/test/asks-sweep.test.ts` (about line 348) | The silent-sweep row filters one delegation slow-line prefix (#2379); "delegation compaction: skipped …" also lands after the clock jump (queue run 42607345011). Filter the delegation pass's lines by their common source, not by one more prefix. |
+| 4 | `boot-mutant-census-race` | `server/test/scan/symbols.ts` (or `boot.test`) | The W5-K15 census walks `server/src` and reads `__boot_control_mutant__.ts`, which `boot.test` writes and removes; when both share a shard it meets ENOENT (queue run 42610373145). The shared walker excludes that file, as `rings/walkSrc.ts` and `single-definition/helpers.ts` do, with a pin. |
+| 5 | `testbox-takeover-race` | `agent/test/testbox-tools.test.ts` (about line 923), the toolsync driver if the cause is there | "a run started before the sync keeps its old paths … waits for the run" saw the takeover admit a run (queue run 42612892698). Find the race; a condition wait, not a sleep. If the driver is wrong, the fix is in the driver with a red case. |
+| 6 | C15 item 3 (review 1580 F12), `forget-reg-read-deferred` | `ccd` `cmd_forget` (its source), `shared/api.ts` | The workspace field is read with `_reg_read`: rc 1 (absent) goes on; rc 2 refuses with a new word in `shared/api.ts`, not `session-verdict-unknown`, which means tmux did not answer. A ccd case, red first, on a fixture HOME only. |
+
+**Steps.**
+- [ ] **Step 0: Re-ground.** Read each failing job's log (the runs above), re-anchor every item on `main`, check that no open PR already fixes it, and measure the live claims.
+- [ ] **Step 1: One commit per item.** Each fix names the cause it removes. A flake fix is proved by repeated runs of the file (at least 20, and under load where load is the trigger), before and after, with the counts in `c17.md`.
+- [ ] **Step 2: Verify.** Each touched suite once through `ccrc test`, `rings`, `single-definition`, the ccd suites for `forget`, both typechecks, the agent suite, the connect-sheet browser file and `deviation-refs`. A full CI run (`full-ci`) on the PR.
+
+- **D-8140** - `ci-flake-sweep`: Task C17, issued on 2026-11-09. The five flakes that dequeued #2480 on 2026-11-09, and C15's deferred Forget registry read, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+
+**Acceptance.** Every item's cause is named and removed, or named as fixed already, with its commit; each flake's before and after counts are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

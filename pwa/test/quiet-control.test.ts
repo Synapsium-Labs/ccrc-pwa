@@ -44,11 +44,8 @@ const SITES = [
   { file: ['fleet', 'CoordBanner.tsx'], hook: 'coord-toggle', flex: true },
   { file: ['fleet', 'ChildReclaimBanner.tsx'], hook: 'child-reclaim-toggle', flex: true },
   { file: ['fleet', 'CapsControl.tsx'], hook: 'caps-save', flex: true },
-  // TWO quiet controls here since D-6442: the door above and the Finished group's
-  // Show more (`runs-finished-more`), both in the scaffold's grid, neither flex-none.
-  // One entry each, so each one's hook class and posture is read; `uses: 2` counts the file.
-  { file: ['screens', 'RunsScreen.tsx'], hook: 'program-start-door', flex: false, uses: 2 },
-  { file: ['screens', 'RunsScreen.tsx'], hook: 'runs-finished-more', flex: false, uses: 2 },
+  // The board's one quiet control since the programme cards (D-8075): the door above. Finished's Show more left with its run list.
+  { file: ['screens', 'RunsScreen.tsx'], hook: 'program-start-door', flex: false },
   // The fifth, found BY this file on the day the other four were folded —
   // `.program-start-go` carried the same eleven declarations in the same
   // stylesheet and nobody had noticed.

@@ -5,11 +5,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { CoordCapsView, RunSummary, RunsPageAnswer } from '../../shared/api';
-import { FINISHED_FOLD } from '../src/fleet/runWords';
 import { ApiTimeout } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { runPath, runsRunHref } from '../src/lib/routes';
-import { RunsScreen, foundRows } from './runs-board';
+import { RunsScreen, RowsBoard, programmeRow, programmesAnswer } from './runs-board';
+import type { ProgrammesReader } from '../src/screens/usePrograms';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { clearScreenCache } from '../src/lib/screenCache';
 
@@ -29,7 +29,6 @@ const run = (id: number, over: Partial<RunSummary> = {}): RunSummary => ({
             lastRejectCode: null, briefQueued: true, clearError: null,
             coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
 });
-const closed = (id: number, ageMs: number): RunSummary => run(id, { state: 'done', closedAt: Date.now() - ageMs });
 
 const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
@@ -37,13 +36,18 @@ const makeStore = (): FleetStore => createFleetStore({
 const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 
 /** The board at `path`, with a live frame of `live` (none: no frame yet) and an archive read answered by `archive`. */
-function board(path: string, live: RunSummary[] | null, archive: RunSummary[] | Error = []) {
+function board(
+  path: string, live: RunSummary[] | null, archive: RunSummary[] | Error = [],
+  { rows = false, programmes }: { rows?: boolean; programmes?: ProgrammesReader } = {},
+) {
   const store = makeStore();
   act(() => { store.setState({ runs: live ?? [], runsFrameSeen: live !== null, sessions: [], fleetFrameSeen: true }); });
   const loadRuns = vi.fn((): Promise<RunsPageAnswer> =>
     archive instanceof Error ? Promise.reject(archive) : Promise.resolve({ runs: archive }));
   navigate(path);
-  const r = render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+  const r = render(rows
+    ? <RowsBoard store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />
+    : <RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} {...(programmes === undefined ? {} : { loadProgrammes: programmes })} />);
   return { ...r, store, loadRuns };
 }
 
@@ -61,7 +65,7 @@ describe('a row opens its run page (A9)', () => {
       run(2, { sessionId: null, state: 'planned', dispatchStartedAt: Date.now() - 5_000 }),
       run(3),
       run(4, { childReclaim: { word: 'reclaimed', sentence: 'gone', at: null } }),
-    ]);
+    ], [], { rows: true });
     await screen.findByText('Programme A');
     expect(document.querySelectorAll('.run-row')).toHaveLength(4);
     expect(document.querySelectorAll('[data-inert]')).toHaveLength(0);
@@ -69,7 +73,7 @@ describe('a row opens its run page (A9)', () => {
   });
 
   it('a tap on any row opens /runs/<id>, and a tap on a session-less row does too', async () => {
-    board('/runs', [run(7), run(8, { sessionId: null, state: 'planned' })]);
+    board('/runs', [run(7), run(8, { sessionId: null, state: 'planned' })], [], { rows: true });
     await screen.findByText('Programme A');
     fireEvent.click(rowOf(7).querySelector('.run-open')!);
     expect(here()).toBe('/runs/7');
@@ -141,14 +145,14 @@ describe('the row says what it waits on (§7)', () => {
       run(1, { state: 'planned', sessionId: null, waitsOn: 'coordinator' }),
       run(2, { state: 'awaiting-review', waitsOn: 'reviewer' }),
       run(3, { state: 'working', waitsOn: 'worker', lastMoveAt: Date.now() - 9 * 86_400_000 }),
-    ]);
+    ], [], { rows: true });
     expect(await screen.findByText('Waits for its coordinator to start it.')).toBeInTheDocument();
     expect(screen.getByText('Waits on a reviewer.')).toBeInTheDocument();
     expect(screen.getByText('No move in 9 days.')).toBeInTheDocument();
   });
 
   it('a run waiting behind a stuck run links that run', async () => {
-    board('/runs', [run(5, { state: 'planned', sessionId: null, blockedBy: 1012 })]);
+    board('/runs', [run(5, { state: 'planned', sessionId: null, blockedBy: 1012 })], [], { rows: true });
     const link = await screen.findByRole('link', { name: 'Waits behind a stuck run.' });
     expect(link).toHaveAttribute('href', '/runs/1012');
     fireEvent.click(link);
@@ -156,7 +160,7 @@ describe('the row says what it waits on (§7)', () => {
   });
 
   it('a row with no wait line has none', async () => {
-    board('/runs', [run(1)]);
+    board('/runs', [run(1)], [], { rows: true });
     await screen.findByText('Programme A');
     expect(document.querySelector('.run-wait')).toBeNull();
   });
@@ -168,9 +172,12 @@ describe('the board\'s states (§8.2)', () => {
     expect(await screen.findByText('No runs open.')).toBeInTheDocument();
   });
 
-  it('No runs open. stays above a Finished list when only closed runs remain', async () => {
-    board('/runs', [], [closed(9, 60_000)]);
-    const finished = await screen.findByRole('group', { name: /finished/i });
+  it('No runs open. stays above the Finished fold when only finished programmes remain', async () => {
+    board('/runs', [], [], { programmes: programmesAnswer([programmeRow('prog-a', {
+      title: 'Programme A', lastMoveAt: Date.now() - 60_000,
+      ending: { outcome: 'complete', waves: 5, neverStarted: 0, closedBy: null },
+    })]) });
+    const finished = await screen.findByRole('button', { name: /finished/i });
     const open = screen.getByText('No runs open.');
     expect(open.compareDocumentPosition(finished) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -185,9 +192,9 @@ describe('the board\'s states (§8.2)', () => {
   it('Could not load runs. Try again. on ApiTimeout, with a Try again control that reads again', async () => {
     const store = makeStore();
     const loadFinished = vi.fn()
-      .mockRejectedValueOnce(new ApiTimeout('/api/runs/find', 8_000))
-      .mockResolvedValue(foundRows([]));
-    render(<RunsScreen store={store} loadFinished={loadFinished} />);
+      .mockRejectedValueOnce(new ApiTimeout('/api/programmes', 8_000))
+      .mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } });
+    render(<RunsScreen store={store} loadProgrammes={loadFinished} />);
     expect(await screen.findByText('Could not load runs. Try again.')).toBeInTheDocument();
     expect(screen.queryByText('No runs open.')).toBeNull();
     const calls = loadFinished.mock.calls.length;
@@ -197,8 +204,8 @@ describe('the board\'s states (§8.2)', () => {
     await waitFor(() => expect(screen.queryByText('Could not load runs. Try again.')).toBeNull());
   });
 
-  it('with the frame seen and no open run, a failed archive read says so and never No runs open.', async () => {
-    board('/runs', [], new ApiTimeout('/api/runs', 8_000));
+  it('with the frame seen and no open run, a failed programmes read says so and never No runs open.', async () => {
+    board('/runs', [], [], { programmes: async () => { throw new ApiTimeout('/api/programmes', 8_000); } });
     expect(await screen.findByText('Could not load runs. Try again.')).toBeInTheDocument();
     expect(screen.queryByText('No runs open.')).toBeNull();
   });
@@ -231,19 +238,6 @@ function within41(line: HTMLElement): HTMLElement {
 }
 
 describe('a return from a run keeps the folds and the scroll (C2)', () => {
-  it('the Finished fold stays open after the board unmounts and mounts again', async () => {
-    const archive = Array.from({ length: FINISHED_FOLD + 5 }, (_, i) => closed(100 + i, (i + 1) * 60_000));
-    const first = board('/runs', [], archive);
-    await screen.findByRole('group', { name: /finished/i });
-    expect(document.querySelectorAll('.run-row')).toHaveLength(FINISHED_FOLD);
-    fireEvent.click(screen.getByRole('button', { name: /show/i }));
-    expect(document.querySelectorAll('.run-row')).toHaveLength(FINISHED_FOLD + 5);
-    first.unmount();
-    board('/runs', [], archive);
-    await screen.findByRole('group', { name: /finished/i });
-    expect(document.querySelectorAll('.run-row')).toHaveLength(FINISHED_FOLD + 5);
-  });
-
   it('the scroll place is restored on the way back', async () => {
     const scrollTo = vi.fn();
     vi.stubGlobal('scrollTo', scrollTo);

@@ -389,19 +389,19 @@ describe('W4-U0: today\'s tree, characterised before delegation rows (delegation
     expect(treeCalls.length).toBeGreaterThan(0);
     expect(treeCalls.map((c) => fingerprint(c.json))).toMatchInlineSnapshot(`
       [
-        "678df0990fc9d9a3",
-        "f5412eafea725a74",
-        "e13dd9fb1b84bb11",
-        "6c75881ac6dd9c0a",
-        "6c75881ac6dd9c0a",
-        "984d21b4e102850e",
-        "ecba0a4cb22421de",
-        "f01270cc3b4d1539",
-        "659cc933542493b0",
-        "17b9936e404411a1",
-        "3f683024a89f0c47",
-        "20176c2e6406ff43",
-        "e89a25980f4c561e",
+        "b1a2603462497bde",
+        "5fb6c02964afddd1",
+        "9988b0fe0f88c546",
+        "c85ecdae24141efc",
+        "c85ecdae24141efc",
+        "5c037d7f2017a68f",
+        "93adddaef769f7b0",
+        "1649bff0e7cee635",
+        "a7a64986314f3981",
+        "ab5b360fdbed58c1",
+        "ea5a249de385f143",
+        "2882f9bc95daf295",
+        "60a7f4debb02b3e1",
       ]
     `);
   });

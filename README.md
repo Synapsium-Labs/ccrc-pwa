@@ -1230,7 +1230,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `settings [--json] [--write]` | what each of the 67 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
+| `settings [--json] [--write]` | what each of the 69 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
@@ -1376,8 +1376,15 @@ Four are the memory gate's (D-8122): `CCRC_WAKE_PRESSURE_GATE` (warn, critical o
 `CCRC_WAKE_HEADROOM_MIN_GIB` (default 3) hold the automatic wakes while the box is under memory pressure, and
 `CCRC_SWEEP_BATCH` (default 5) and `CCRC_SWEEP_PRESSURE_WAIT_S` (default 300) pace the update sweep's restarts. The server
 reads the first two from its own environment; `ccrc update` reads the gate level and the last two through the reader.
+Two are the limit rescue's (D-8123): `CCRC_RESCUE_SOLO_JITTER_S` (0 to 120; default 15) caps the random wait before a rescue
+that is the only swap in flight, and `CCRC_LIMIT_WATCHDOG_MIN` (0 to 1440; default 5, 0 turns it off) is how many minutes a
+live session may show a limit sign with no swap before the fleet limit watchdog forces the rescue. `ccd` reads both in its
+own process, through the settings library.
+When no account has measured room for a stopped session, the watchdog records that, and the console's Waiting on you page shows a
+row for the session with its own two controls: Swap to… (the accounts that have room, updating as limits arrive) and Wait until
+reset at the time the limit ends. Neither sends a key to the terminal.
 
-**Seeing a box's settings.** `ccrc settings` prints what each of the 67 settings a fleet or server node reads resolves to on this
+**Seeing a box's settings.** `ccrc settings` prints what each of the 69 settings a fleet or server node reads resolves to on this
 box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and
 whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
 are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
@@ -3467,8 +3474,12 @@ would land (`New workspace on <project> — <account>, N% free`) or why nothing 
 beside `Runs ·` re-forecasts every card for one model class, and each card's **+** then asks for that class;
 **Coordinator row**, the default, is the request that names no class.
 
-**Add project**, at the foot of the project list and in the first-run panel, creates a project there:
-**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. It is
+**New project**, on the runs line just above the project list and in the first-run panel, creates a project there:
+**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. The **Start a
+session** sheet adds one in place too: its list opens with a **New project** row, and a search that is a GitHub
+repository (or a new name nothing matches) offers **Clone owner/repo** (or **Create empty project**), which adds it
+and picks it in one tap. The fleet door's success toast carries **Start session**, which opens that sheet on the new
+project. It is
 `POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
 fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
 An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
@@ -3701,6 +3712,8 @@ see "Fleet coordination" below.
 | `CCRC_WAKE_HEADROOM_MIN_GIB` | server | Whole GiB, default 3 (spec decision 6), 0 off: an automatic wake waits while the session slice's headroom (its `memory.max` minus its use, no more than `MemAvailable`) is below this. A node that sends no reading admits, and the journal says so (D-8122). |
 | `CCRC_SWEEP_BATCH` | fleet | Default 5: how many `claude-session@` supervisors `ccrc update` and `deploy.sh` restart at once, each batch verified before the next (D-8122). |
 | `CCRC_SWEEP_PRESSURE_WAIT_S` | fleet | Default 300: the most the update sweep waits, over the whole sweep, between batches while memory pressure is at the gate level; past it the sweep warns and goes on (D-8122). |
+| `CCRC_RESCUE_SOLO_JITTER_S` | fleet | Whole seconds from 0 to 120, default 15: the most a rescue waits (a random 0 to this) before it runs when no other session's swap was dispatched in the last `SWAP_JITTER` + 60 seconds. With another dispatch in flight the full 0 to 120 second spread stays, so a fleet-wide event is still not a herd. 0 sends a lone rescue at once; `swap.log`'s dispatch line ends ` max=<n>` with the spread that applied (D-8123). |
+| `CCRC_LIMIT_WATCHDOG_MIN` | fleet | Whole minutes from 0 to 1440, default 5, 0 off: how long a live session may show a limit sign with no swap before the fleet limit watchdog forces the rescue past the cooldown, draft and stale-press holds. It never sends a key to Claude Code's rate-limit menu (D-8123). |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
 | `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |
@@ -8331,8 +8344,33 @@ and the caller holds a session, before anything is read; then with `fleet-caps-u
 Two hand steps. Before rolling the fleet box below the release that ships the verb, switch adoption off at the door: once the verb is
 gone the door refuses `off` too, and the lane keeps adopting while the file stands. If the door or the verb is already gone, remove
 `~/.cc-sessions/delegation-adopt` on the fleet box by hand. And a directory standing in the switch's place reads `set` while neither
-arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box. The Settings card in front of the
-door follows in a later release.
+arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by hand on the fleet box.
+
+### The switch's card: Settings › Automation › Worktrees left behind
+
+The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
+after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
+(the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
+only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
+each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
+dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
+
+**Keep them** asks first: when the last pass ran in shadow, a confirmation names how many worktrees it would keep (the counts
+line's figure) and, when the list leaves some off, how many of them the card lists and how many it does not. After a pass with
+keeping on, or one that was paused, it says the card cannot tell until the next pass; after a pass that could not read everything
+it needs, it says that, and that the card cannot tell until the next pass; when no pass has counted, or the last pass counted
+nothing, it says the card cannot say how many this would keep. It always says that the session that started each agent is mailed.
+Nothing is sent before it is confirmed, one confirmation sends one write however often its button is pressed while it leaves, and
+nothing is sent when the card's latest reading refuses Keep them by then. Once a write settles (its answer, or a reading that
+shows the choice, whichever comes first; after a rejected write or an answer the card cannot read, the view its re-read
+returns), the focus returns once to the choice the card then shows, or to a line of the card's that holds text and stays on
+screen, after the confirmation has gone, unless the operator has moved it elsewhere; it never moves after the write's bound has
+given up on it, or once another reading has replaced the one the write settled on. **Do not keep** goes at once; its note says
+that worktrees already kept stay held back from the disk sweep until their hold ends. A choice the GET says would be refused is
+disabled, with the refusal in the card's own words, `sign-in-unarmed` included (turning it on needs sign-in armed and a signed-in
+operator), and a refused write says the same and re-reads. On a server without the door the card says it is not available there.
+The switch ships off, and the lane stays in shadow until the operator turns it on here.
 
 ## Contributing
 

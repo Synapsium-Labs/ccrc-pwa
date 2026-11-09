@@ -1169,6 +1169,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/screens/run-find.css', // the run board's search (D-8072): layout and ink only, grounded on --bg-page
       'src/screens/run-detail.css', // one run's page (D-8072): layout and ink only, grounded on --bg-page
       'src/fleet/group-abandon.css', // the group abandon sheet (D-8074): layout and ink only, on .abandon-sheet's own ground (fleet.css); the refusal ink is .abandon-sheet .abandon-error's
+      'src/screens/programme-card.css', // the programme cards, quiet fold and Finished (D-8075): layout and ink only, every ink on its own --bg-surface
       'src/screens/stuck-band.css', // the Stuck band (D-8074): layout and ink only; the band is grounded on --bg-page, its heads and rows on --bg-surface
       'src/screens/digest.css',   // the daily digest screen (D-5300)
       'src/screens/settings/settings.css', // Settings' frame (R2b1, D-5504); one ink since R2b2: `.settings-when`

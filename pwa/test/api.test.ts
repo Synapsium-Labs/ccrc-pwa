@@ -981,6 +981,16 @@ describe('account pools', () => {
     ]);
   });
 
+  it('limitWait(id) posts the operator\'s wait choice to the session\'s limit-wait door with no body (D-8123)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.limitWait('a b');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/sessions/a%20b/limit-wait');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
   it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
@@ -1796,5 +1806,15 @@ describe('api client — each door sends exactly its own request', () => {
     const refused = createApi((() =>
       Promise.resolve(jsonResponse(200, { released: false }))) as unknown as typeof fetch);
     expect(await refused.abandonRun(7)).toEqual({ released: false });
+  });
+});
+
+describe('api.programmes (D-8075)', () => {
+  it('reads GET /api/programmes with the operator\'s midnight as a whole number of milliseconds', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    const answer = await api.programmes(1_758_480_000_000.7);
+    expect(fetchImpl.mock.calls[0]![0]).toBe('/api/programmes?since=1758480000000');
+    expect(answer.programmes).toEqual([]);
   });
 });

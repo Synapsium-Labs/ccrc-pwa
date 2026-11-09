@@ -24,6 +24,8 @@ export const SETTINGS_LIB_FUNCTIONS = Object.freeze([
   '_browser_mcp_default_ok', '_browser_mcp_default_says', '_browser_mcp_servers_default', '_browser_mcp_servers_ok', '_browser_mcp_servers_says',
   // D-8122: deploy.sh's sweep checks the memory gate's settings with the shared `_mg_ok`, so it rides the library too.
   '_mg_ok', '_mg_says',
+  // D-8123: ccd reads the limit-rescue settings (a lone rescue's jitter) through this library in its own process.
+  '_lr_ok', '_lr_says',
 ]);
 
 const HEADER = [

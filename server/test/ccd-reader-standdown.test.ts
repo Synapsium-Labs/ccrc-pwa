@@ -324,9 +324,12 @@ const POPULATION: Record<string, GuardSpec> = {
     count: 1,
     guard: /!\s*_pane_measurable\s+"\$2"\s*&&.*\breturn\b/,
   },
+  // SKIPS THE PANE RUNGS RATHER THAN RETURNING (D-8123): a narrow pane still gets the transcript rung, so the guard
+  // sets `narrow` and the phrase grep sits inside `if [[ -z "$narrow" ]]`. `ccd-narrow-pane-transcript.test.ts`
+  // pins the behaviour (a banner or `esc to interrupt` on a narrow pane decides nothing).
   _session_hard_blocked: {
     count: 1,
-    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|\s*narrow=1\b/,
   },
   _auto_stale_check: {
     count: 1,

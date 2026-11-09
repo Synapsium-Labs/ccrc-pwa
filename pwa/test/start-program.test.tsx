@@ -97,8 +97,8 @@ const answerAccounts = (r: { accounts?: AccountUsage[]; projected?: ProjectedHom
  *  common setup every happy-path test below needs before it can see the
  *  confirm button at all. */
 async function fillAndPick(slug = 'build9-demo', title = 'Build 9 demo', rowName = /ccrc-pwa/i): Promise<void> {
-  fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: slug } });
-  fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: title } });
+  fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: slug } });
+  fireEvent.change(screen.getByLabelText(/programme title/i), { target: { value: title } });
   fireEvent.click(await screen.findByRole('button', { name: rowName }));
 }
 
@@ -279,13 +279,13 @@ describe('StartProgramSheet', () => {
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
-    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: 'Build 9 demo' } });
+    fireEvent.change(screen.getByLabelText(/programme title/i), { target: { value: 'Build 9 demo' } });
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
 
     const go = await screen.findByRole('button', { name: /^start/i });
     expect(go).toBeDisabled(); // slug is still empty
 
-    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
+    fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: 'build9-demo' } });
     await waitFor(() => expect(screen.getByRole('button', { name: /^start/i })).not.toBeDisabled());
   });
 
@@ -793,7 +793,7 @@ describe('StartProgramSheet', () => {
     render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
       loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
 
-    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
+    fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: 'build9-demo' } });
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
 
     const ledgerLine = await screen.findByText(/docs\/superpowers\/programs\/build9-demo\.md/);
@@ -855,7 +855,7 @@ describe('StartProgramSheet', () => {
     await fillAndPick(exactSlug, 'x');
     expect(screen.getByRole('button', { name: /^start x+/i })).not.toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: `${exactSlug}x` } });
+    fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: `${exactSlug}x` } });
     expect(await screen.findByText(
       new RegExp(`program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`, 'i'),
     )).toBeInTheDocument();
@@ -888,7 +888,7 @@ describe('StartProgramSheet', () => {
 
     // …while a slug refusal at the same moment IS shown, which is what proves
     // the silence above is the field discriminator and not a mute error slot.
-    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'bad slug' } });
+    fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: 'bad slug' } });
     expect(await screen.findByText(/letters, numbers, underscores, and hyphens/i))
       .toBeInTheDocument();
   });
@@ -909,8 +909,8 @@ describe('StartProgramSheet', () => {
     // and not the kickoff verdict (that one also refuses a blank title, and
     // would blank this line while the operator is still typing one).
     await fillAndPick('build_4-name', 'x');
-    const slugField = screen.getByLabelText(/program slug/i);
-    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: '' } });
+    const slugField = screen.getByLabelText(/programme slug/i);
+    fireEvent.change(screen.getByLabelText(/programme title/i), { target: { value: '' } });
 
     fireEvent.change(slugField, { target: { value: '  build_4-name  ' } });
     expect(await screen.findByText(/Its ledger: docs\/superpowers\/programs\/build_4-name\.md/))
@@ -941,7 +941,7 @@ describe('StartProgramSheet', () => {
     await fillAndPick(slug, exactTitle);
     expect(screen.getByRole('button', { name: /^start x+/i })).not.toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: `${exactTitle}x` } });
+    fireEvent.change(screen.getByLabelText(/programme title/i), { target: { value: `${exactTitle}x` } });
     expect(await screen.findByText(
       new RegExp(`kickoff body ${MAIL_BODY_MAX_BYTES + 1} bytes exceeds the ${MAIL_BODY_MAX_BYTES} byte mail body cap`, 'i'),
     )).toBeInTheDocument();
@@ -2064,7 +2064,7 @@ describe('StartProgramSheet', () => {
     // reports absence whether the guard held or not. MEASURED: without this
     // re-pick the unguarded code passed this test.
     fireEvent.click(screen.getByRole('button', { name: /reopen sheet/i, hidden: true }));
-    expect(await screen.findByLabelText(/program slug/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/programme slug/i)).toBeInTheDocument();
     await fillAndPick('other-program', 'A different program');
 
     expect(screen.queryByText(/could not be queued/i)).toBeNull();

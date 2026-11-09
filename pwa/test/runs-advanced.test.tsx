@@ -1,18 +1,19 @@
 // Advanced, the board's foot and Finished's read (the runs rebuild, Task 11, D-8073; spec 2026-11-04 §8.2, §8.2.3, §8.6, F10,
-// F18, o13). Placeholders only. The reads are injected: `read` for Advanced, `loadFinished` and `loadArchive` for the board.
+// F18, o13; the board's Finished is the programmes since Task 18, D-8075). Placeholders only. The reads are injected: `read` for
+// Advanced, `loadProgrammes` for the board.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { CoordCapsView, RunHit, RunSummary } from '../../shared/api';
+import type { CoordCapsView, ProgrammeRow, RunHit, RunSummary } from '../../shared/api';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { clearScreenCache } from '../src/lib/screenCache';
 import { runsAdvancedPath, runsClosedSinceOf, runsFilterOf } from '../src/lib/routes';
 import { RunsAdvancedScreen } from '../src/screens/RunsAdvancedScreen';
+import { RunsScreen as RealRunsScreen } from '../src/screens/RunsScreen';
 import type { FindReader } from '../src/screens/useRunList';
-import { fleetSession } from './fleetFixture';
-import { RunsScreen, foundRows } from './runs-board';
+import { RunsScreen, foundRows, programmeRow, programmesAnswer } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 const NOW = Date.now();
@@ -259,19 +260,6 @@ describe('the switches on Advanced (§8.6 item 1, Task 12a, D-8074)', () => {
   });
 });
 
-describe('the board while no frame has landed', () => {
-  it('a Finished row offers no Resume, since an open wave of its programme may exist', async () => {
-    const dead = fleetSession({ id: 'sess-coord', status: 'dead', lifecycle: 'orphan', workspace: null, branch: null });
-    const store = makeStore();
-    act(() => { store.setState({ sessions: [dead], fleetFrameSeen: true }); });
-    render(<RunsScreen store={store} loadFinished={async () => answer([hit(3)])} />);
-    await flush();
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
-    expect(document.querySelectorAll('li.run-row')).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
-  });
-});
-
 describe('the board foot (§8.2 item 10)', () => {
   const states: [string, () => void][] = [
     ['loading', () => { render(<RunsScreen store={makeStore()} loadRuns={NEVER} loadFinished={NEVER} loadCaps={NO_CAPS} />); }],
@@ -298,98 +286,105 @@ describe('the board foot (§8.2 item 10)', () => {
   });
 });
 
-describe('Finished reads find, in close order (§8.2.3, F10, F18)', () => {
+describe('Finished is the programmes (§8.2.3, A26, D-8075)', () => {
   const board = (props: Partial<React.ComponentProps<typeof RunsScreen>> & { live?: RunSummary[]; frame?: boolean } = {}) => {
     const { live = [], frame = true, ...rest } = props;
     const store = makeStore();
     if (frame) act(() => { store.setState({ runs: live, runsFrameSeen: true, sessions: [], fleetFrameSeen: true }); });
-    const view = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} {...rest} />);
+    const view = render(<RunsScreen store={store} loadCaps={NO_CAPS} {...rest} />);
     return { store, ...view };
   };
-  const finishedIds = (): number[] => [...document.querySelectorAll<HTMLElement>('[role="group"][aria-label^="finished"] li.run-row')]
-    .map((li) => Number(/^run (\d+) /.exec(li.getAttribute('title') ?? '')?.[1]));
-
-  it('the board’s own call is fixed: closed runs, 50 at a time, nothing a new server refuses', async () => {
-    const spy = vi.spyOn(api, 'findRuns').mockResolvedValue(answer([hit(3)]));
-    board({ loadRuns: undefined, loadFinished: undefined });
-    await flush();
-    expect(spy).toHaveBeenCalledWith({ scope: 'closed', limit: 50 });
+  const finishedRow = (slug: string, over: Partial<ProgrammeRow> = {}): ProgrammeRow => programmeRow(slug, {
+    title: `Programme ${slug}`, lastMoveAt: NOW - 3_600_000, ending: { outcome: 'complete', waves: 5, neverStarted: 0, closedBy: null }, ...over,
   });
+  const openFold = (): void => { fireEvent.click(screen.getByRole('button', { name: /finished/i })); };
+  const finishedSlugs = (): string[] => [...document.querySelectorAll<HTMLElement>('.programme-finished-row')].map((li) => li.dataset.programme ?? '');
 
-  it('Finished no longer reads the paged archive', async () => {
-    const archive = vi.fn(async () => ({ runs: [run(5, { state: 'done', closedAt: NOW }), run(6, { state: 'done', closedAt: NOW })] }));
-    const runsRead = vi.spyOn(api, 'runs');
-    board({ loadRuns: archive, loadFinished: async () => answer([hit(6)]) });
-    await flush();
-    expect(archive).not.toHaveBeenCalled();
-    expect(runsRead).not.toHaveBeenCalled();
-    expect(finishedIds()).toEqual([6]);
-  });
-
-  it('a just-abandoned old run heads Finished', async () => {
-    let n = 0;
+  it('the board’s own call is fixed: GET /api/programmes from the operator’s local midnight', async () => {
+    const spy = vi.spyOn(api, 'programmes').mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } });
     const store = makeStore();
-    act(() => { store.setState({ runs: [run(9)], runsFrameSeen: true, sessions: [], fleetFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS}
-      loadFinished={async () => { n += 1; return answer(n === 1 ? [hit(20)] : [hit(9, { closedAt: NOW, closedBy: 'operator' }), hit(20)]); }} />);
+    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [], fleetFrameSeen: true }); });
+    render(<RealRunsScreen store={store} />);
     await flush();
-    expect(finishedIds()).toEqual([20]);
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]![0]).toBe(midnight.getTime());
+  });
+
+  it('Finished lists a programme with no open run and its ending, folded, and leaves out one that is still open', async () => {
+    board({ live: [run(4, { program: 'prog-open', programTitle: 'Programme open' })],
+      loadProgrammes: programmesAnswer([finishedRow('prog-done'), finishedRow('prog-open')]) });
+    await flush();
+    expect(finishedSlugs()).toEqual([]);
+    openFold();
+    expect(finishedSlugs()).toEqual(['prog-done']);
+    expect(screen.getByText('complete · 5 waves done')).toBeInTheDocument();
+  });
+
+  it('the fold ends with All runs, newest close first, which opens All runs', async () => {
+    board({ loadProgrammes: programmesAnswer([finishedRow('prog-done')]) });
+    await flush();
+    openFold();
+    const link = screen.getByRole('link', { name: 'All runs, newest close first' });
+    expect(link).toHaveAttribute('href', '/runs/advanced');
+    fireEvent.click(link);
+    expect(location.pathname).toBe('/runs/advanced');
+  });
+
+  it('a programme whose last move was over 7 days ago is not in Finished', async () => {
+    board({ loadProgrammes: programmesAnswer([finishedRow('prog-old', { lastMoveAt: NOW - 8 * 86_400_000 }), finishedRow('prog-new')]) });
+    await flush();
+    openFold();
+    expect(finishedSlugs()).toEqual(['prog-new']);
+  });
+
+  it('a just-closed programme heads Finished once the frame drops its last run', async () => {
+    let n = 0;
+    const { store } = board({ live: [run(9)], loadProgrammes: async () => {
+      n += 1;
+      return { ok: true, programmes: n === 1 ? [finishedRow('prog-b', { lastMoveAt: NOW - 86_400_000 })]
+        : [finishedRow('prog-a', { lastMoveAt: NOW }), finishedRow('prog-b', { lastMoveAt: NOW - 86_400_000 })], closedToday: { operator: 0, sweep: 0, coordinator: 0 } };
+    } });
+    await flush();
     act(() => { store.setState({ runs: [] }); });
     await flush();
-    expect(finishedIds()).toEqual([9, 20]);
-  });
-
-  it('a Finished row of a programme with no open run still offers Resume, as today', async () => {
-    const dead = fleetSession({ id: 'sess-coord', status: 'dead', lifecycle: 'orphan', workspace: null, branch: null });
-    const store = makeStore();
-    act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: [dead], fleetFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadFinished={async () => answer([hit(3)])} />);
-    await flush();
-    expect(screen.getByRole('button', { name: /resume run 3/i })).toBeInTheDocument();
-  });
-
-  it('a Finished row beside an open wave offers none', async () => {
-    const dead = fleetSession({ id: 'sess-coord', status: 'dead', lifecycle: 'orphan', workspace: null, branch: null });
-    const store = makeStore();
-    act(() => { store.setState({ runs: [run(4)], runsFrameSeen: true, sessions: [dead], fleetFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} loadFinished={async () => answer([hit(3)])} />);
-    await flush();
-    expect(finishedIds()).toEqual([3]);
-    expect(screen.queryByRole('button', { name: /resume run 3/i })).toBeNull();
+    openFold();
+    expect(finishedSlugs()).toEqual(['prog-a', 'prog-b']);
   });
 
   describe('the board’s states (§8.2)', () => {
     const FAILED = 'Could not reach the server — runs may exist that are not shown.';
-    it('before the first frame and before Finished answers, the board says Loading…', async () => {
-      board({ frame: false, loadRuns: NEVER, loadFinished: NEVER });
+    const FINISHED_FAILED = 'Could not reach the server — finished runs may exist that are not shown.';
+    it('before the first frame and before the programmes answer, the board says Loading…', async () => {
+      board({ frame: false, loadProgrammes: NEVER });
       await flush();
       expect(screen.getByText('Loading…')).toBeInTheDocument();
       expect(screen.queryByText('No runs open.')).toBeNull();
     });
 
-    it('a failed Finished read with no frame says Could not reach the server, never No runs open.', async () => {
-      board({ frame: false, loadRuns: NEVER, loadFinished: async () => { throw new Error('down'); } });
+    it('a failed programmes read with no frame says Could not reach the server, never No runs open.', async () => {
+      board({ frame: false, loadProgrammes: async () => { throw new Error('down'); } });
       await flush();
       expect(screen.getByText(FAILED)).toBeInTheDocument();
       expect(screen.queryByText('No runs open.')).toBeNull();
     });
 
-    it('with the frame seen, no open run and a failed Finished read, it says the same', async () => {
-      board({ loadFinished: async () => { throw new Error('down'); } });
+    it('with the frame seen, no open run and a failed programmes read, it says the same', async () => {
+      board({ loadProgrammes: async () => { throw new Error('down'); } });
       await flush();
       expect(screen.getByText(FAILED)).toBeInTheDocument();
       expect(screen.queryByText('No runs open.')).toBeNull();
     });
 
-    it('with open runs and a failed Finished read, the Finished group says it could not be read', async () => {
-      board({ live: [run(5)], loadFinished: async () => { throw new Error('down'); } });
+    it('with open runs and a failed programmes read, the cards stay and Finished says it could not be read', async () => {
+      board({ live: [run(5)], loadProgrammes: async () => { throw new Error('down'); } });
       await flush();
-      const g = screen.getByRole('group', { name: 'finished, unknown' });
-      expect(within(g).getByText('Could not reach the server — finished runs may exist that are not shown.')).toBeInTheDocument();
+      expect(screen.getByTestId('programme-card')).toBeInTheDocument();
+      expect(screen.getByText(FINISHED_FAILED)).toBeInTheDocument();
     });
 
-    it('Finished answering before the frame and the paged read never claims "No runs open."; the board reads Loading', async () => {
-      const { store } = board({ frame: false, loadRuns: NEVER, loadFinished: async () => answer([]) });
+    it('the programmes answering before the frame never claims "No runs open."; the board reads Loading', async () => {
+      const { store } = board({ frame: false, loadProgrammes: programmesAnswer([]) });
       await flush();
       expect(screen.queryByText('No runs open.')).toBeNull();
       expect(screen.getByText('Loading…')).toBeInTheDocument();
@@ -397,34 +392,33 @@ describe('Finished reads find, in close order (§8.2.3, F10, F18)', () => {
       expect(screen.getByText('No runs open.')).toBeInTheDocument();
     });
 
-    it('with Finished answered ok and no frame yet, the open half says Loading… and never No runs open., and Finished’s rows show', async () => {
-      board({ frame: false, loadFinished: async () => answer([hit(3)]) });
-      await flush();
-      expect(screen.getByText('Loading…').closest('[data-state]')).toHaveAttribute('data-state', 'loading');
-      expect(screen.queryByText('No runs open.')).toBeNull();
-      expect(finishedIds()).toEqual([3]);
-    });
-
     it('the same holds when the server never sends a frame', async () => {
       vi.useFakeTimers();
       try {
-        board({ frame: false, loadFinished: async () => answer([hit(3)]) });
+        board({ frame: false, loadProgrammes: programmesAnswer([finishedRow('prog-done')]) });
         await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
         expect(screen.getByText('Loading…')).toBeInTheDocument();
         expect(screen.queryByText('No runs open.')).toBeNull();
-        expect(finishedIds()).toEqual([3]);
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it('an older server’s Finished reads as answered: the open half still waits for the frame, and the older line shows', async () => {
-      const older = async (): ReturnType<FindReader> => { throw new ApiError(404, { ok: false }); };
-      board({ frame: false, loadFinished: older, loadArchive: async () => ({ runs: [run(7, { state: 'done', closedAt: NOW })] }) });
+    it('an older server has no programmes route: the cards still show, from the open runs, and the older line shows', async () => {
+      const older = async (): Promise<never> => { throw new ApiError(404, { ok: false }); };
+      board({ live: [run(5)], loadProgrammes: older });
       await flush();
-      expect(screen.getByText('Loading…')).toBeInTheDocument();
-      expect(screen.getByText('This server is older, so Finished shows only the runs it can list.')).toBeInTheDocument();
-      expect(finishedIds()).toEqual([7]);
+      expect(screen.getByTestId('programme-card')).toBeInTheDocument();
+      expect(screen.getByText('This server is older, so Finished is not available.')).toBeInTheDocument();
+      expect(document.querySelector('[data-state="error"]')).toBeNull();
+      expect(screen.queryByText(/Could not reach the server/)).toBeNull();
+    });
+
+    it('any other refusal reads as failed, not as an older server', async () => {
+      board({ live: [run(5)], loadProgrammes: async () => { throw new ApiError(500, { error: 'server-error' }); } });
+      await flush();
+      expect(screen.queryByText('This server is older, so Finished is not available.')).toBeNull();
+      expect(screen.getByText(FINISHED_FAILED)).toBeInTheDocument();
     });
 
     it('no state reads the removed coldState', () => {
@@ -433,70 +427,19 @@ describe('Finished reads find, in close order (§8.2.3, F10, F18)', () => {
       expect(text).not.toMatch(/useColdRuns\(|runsPage|runPages/);
     });
 
-    it('a held Finished answer is a signal even when its re-read fails', async () => {
+    it('a held answer stays when its re-read fails, and the failure line shows beside it', async () => {
       let n = 0;
-      const { store } = board({ frame: false, loadRuns: NEVER, loadFinished: async () => { n += 1; if (n > 1) throw new Error('down'); return answer([hit(3)]); } });
+      const { store } = board({ live: [run(9)], loadProgrammes: async () => {
+        n += 1;
+        if (n > 1) throw new Error('down');
+        return { ok: true, programmes: [finishedRow('prog-done')], closedToday: { operator: 0, sweep: 0, coordinator: 0 } };
+      } });
       await flush();
-      act(() => { store.setState({ runs: [run(9)], runsFrameSeen: true }); });
-      expect(finishedIds()).toEqual([3]);
-      act(() => { store.setState({ runs: [] }); });                // a close: Finished is read again, and the read fails
+      act(() => { store.setState({ runs: [] }); });                // a close: the programmes are read again, and the read fails
       await flush();
-      expect(finishedIds()).toEqual([3]);
-      expect(screen.queryByText(FAILED)).toBeNull();
-      expect(screen.getByText('Could not reach the server — finished runs may exist that are not shown.')).toBeInTheDocument();
-    });
-  });
-
-  describe('against an older server (§8.2.3)', () => {
-    const OLDER = 'This server is older, so Finished shows only the runs it can list.';
-    const archive = [run(5, { state: 'done', closedAt: NOW - 5_000 }), run(6, { state: 'done', closedAt: NOW - 1_000 }), run(7)];
-    const refuse = (status: number, code: string) => async (): Promise<never> => { throw new ApiError(status, { error: code }); };
-
-    it('whose find reaches GET /api/runs/:id and answers 400 bad-request, Finished reads the unpaged archive, sorts it by closedAt, and says so', async () => {
-      const unpaged = vi.fn(async () => ({ runs: archive }));
-      board({ loadFinished: refuse(400, 'bad-request'), loadArchive: unpaged });
-      await flush();
-      expect(unpaged).toHaveBeenCalledTimes(1);
-      expect(finishedIds()).toEqual([6, 5]);
-      expect(screen.getByText(OLDER)).toBeInTheDocument();
-    });
-
-    it('that case never reads as failed or as empty', async () => {
-      board({ loadFinished: refuse(400, 'bad-request'), loadArchive: async () => ({ runs: [] }) });
-      await flush();
-      expect(document.querySelector('[data-state="error"]')).toBeNull();
-      expect(screen.queryByText(/Could not reach the server/)).toBeNull();
-      expect(screen.getByText(OLDER)).toBeInTheDocument();
-    });
-
-    it('a 404 from find reads the same', async () => {
-      board({ loadFinished: refuse(404, 'not-found'), loadArchive: async () => ({ runs: archive }) });
-      await flush();
-      expect(finishedIds()).toEqual([6, 5]);
-      expect(screen.getByText(OLDER)).toBeInTheDocument();
-    });
-
-    it('a 400 with another error code reads as failed', async () => {
-      const unpaged = vi.fn(async () => ({ runs: archive }));
-      board({ loadFinished: refuse(400, 'bad-limit'), loadArchive: unpaged });
-      await flush();
-      expect(unpaged).not.toHaveBeenCalled();
-      expect(screen.queryByText(OLDER)).toBeNull();
-      expect(screen.getByText(/Could not reach the server/)).toBeInTheDocument();
-    });
-
-    it('a find that fails for any other reason shows as failed, as today’s cold read does', async () => {
-      board({ loadFinished: refuse(500, 'server-error'), loadArchive: async () => ({ runs: archive }) });
-      await flush();
-      expect(screen.queryByText(OLDER)).toBeNull();
-      expect(screen.getByText(/Could not reach the server/)).toBeInTheDocument();
-    });
-
-    it('an unpaged archive that cannot be read is a failure', async () => {
-      board({ loadFinished: refuse(400, 'bad-request'), loadArchive: async () => { throw new Error('down'); } });
-      await flush();
-      expect(screen.getByText(/Could not reach the server/)).toBeInTheDocument();
-      await waitFor(() => expect(screen.queryByText(OLDER)).toBeNull());
+      openFold();
+      expect(finishedSlugs()).toEqual(['prog-done']);
+      expect(screen.getByText(FINISHED_FAILED)).toBeInTheDocument();
     });
   });
 });

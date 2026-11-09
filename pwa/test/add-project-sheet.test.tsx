@@ -1,4 +1,4 @@
-// The sheet the fleet screen's "Add project" row opens (add-project spec 2026-11-04 §2). It is driven the way the screen
+// The sheet the fleet screen's "New project" doors open (add-project spec 2026-11-04 §2). It is driven the way the screen
 // drives it: `open` true is open, false is closed, and a close is a `rerender` (vaul unmounts the panel at
 // `open={false}`, so a reset that lived inside it would never run). `fireEvent`, not `userEvent`: vaul's drag handler
 // raises unhandled errors under `userEvent`'s pointer sequence (`add-workspace-sheet.test.tsx` says the same).
@@ -39,7 +39,7 @@ describe('opening', () => {
   it('opens on From GitHub with both fields, and sends nothing', () => {
     const p = props();
     mount(p);
-    expect(screen.getByText(PROJECT_ADD_TEXT.add, { selector: 'h2' })).toBeInTheDocument();
+    expect(screen.getByText(PROJECT_ADD_TEXT.title, { selector: 'h2' })).toBeInTheDocument();
     expect((screen.getByLabelText(PROJECT_ADD_TEXT.github) as HTMLInputElement).checked).toBe(true);
     expect(repoField().value).toBe('');
     expect(nameField().value).toBe('');
@@ -156,12 +156,23 @@ describe('adding', () => {
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('on a fleet with no sessions yet, the toast says how to start one in the new project', async () => {
-    const p = props({ firstRun: true });
+  it('the toast\'s Start session starts a session in the new project, and a host without one offers no action', async () => {
+    const onStartSession = vi.fn();
+    const p = props({ onStartSession });
     mount(p);
     typeIn(repoField(), 'example/repo');
     fireEvent.click(confirm());
-    expect(await screen.findByText(projectAddedText('repo', 'github', { firstRun: true }))).toBeInTheDocument();
+    expect(await screen.findByText(projectAddedText('repo', 'github'))).toBeInTheDocument();
+    // `hidden`: this host's `onClose` is a spy, so the modal sheet stays up and hides the page behind it from the tree.
+    fireEvent.click(screen.getByRole('button', { name: PROJECT_ADD_TEXT.startSession, hidden: true }));
+    expect(onStartSession).toHaveBeenCalledWith('repo');
+    expect(screen.queryByText(projectAddedText('repo', 'github'))).not.toBeInTheDocument();
+    cleanup();
+    mount(props());
+    typeIn(repoField(), 'example/repo');
+    fireEvent.click(confirm());
+    expect(await screen.findByText(projectAddedText('repo', 'github'))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: PROJECT_ADD_TEXT.startSession, hidden: true })).not.toBeInTheDocument();
   });
 
   it('an answer it cannot read still closes, naming the project it sent', async () => {

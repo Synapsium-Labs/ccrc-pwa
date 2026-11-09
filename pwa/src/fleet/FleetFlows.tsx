@@ -17,6 +17,8 @@ import { useFleetChrome } from './FleetChrome';
 
 export interface FleetFlowDoors {
   openNewSession: () => void;
+  /** The new-session sheet on `project`, which it picks once an account is chosen (the Add project toast's action). */
+  openNewSessionOn: (project: string) => void;
   /** The `+` sheet for a project (named workspaces S7): the tap no longer creates, it asks. */
   openAddWorkspace: (project: string) => void;
   /** The Add project sheet (add-project spec 2026-11-04): clone a GitHub repository, or start an empty one. */
@@ -30,7 +32,9 @@ export interface FleetFlowDoors {
 }
 
 export function useFleetFlows(): FleetFlowDoors {
-  const { store, setNewOpen, setAddWorkspaceFor, setAddProjectOpen, setArchiveAllFor, setReapId, actions, projects } = useFleetChrome();
+  const {
+    store, setNewOpen, setNewProject, setAddWorkspaceFor, setAddProjectOpen, setArchiveAllFor, setReapId, actions, projects,
+  } = useFleetChrome();
   const { openFor } = actions;
   const { openPool } = projects;
   // Stable doors (C6, D-6438): a part that holds them (the command layer, a list row) is not handed new ones by a
@@ -38,7 +42,14 @@ export function useFleetFlows(): FleetFlowDoors {
   // is needed to keep it current. The dependencies are the chrome's setters and openers, named one by one, and none
   // changes on a fleet frame; `openPool` does change when `/api/projects` answers (it reads that answer's placement).
   return useMemo<FleetFlowDoors>(() => ({
-    openNewSession: () => setNewOpen(true),
+    openNewSession: () => {
+      setNewProject(null);
+      setNewOpen(true);
+    },
+    openNewSessionOn: (project) => {
+      setNewProject(project);
+      setNewOpen(true);
+    },
     openAddWorkspace: (project) => setAddWorkspaceFor(project),
     openAddProject: () => setAddProjectOpen(true),
     openActions: (id) => {
@@ -48,19 +59,27 @@ export function useFleetFlows(): FleetFlowDoors {
     openPool,
     openArchiveAll: (project) => setArchiveAllFor(project),
     openReap: (id) => setReapId(id),
-  }), [store, setNewOpen, setAddWorkspaceFor, setAddProjectOpen, setArchiveAllFor, setReapId, openFor, openPool]);
+  }), [store, setNewOpen, setNewProject, setAddWorkspaceFor, setAddProjectOpen, setArchiveAllFor, setReapId, openFor, openPool]);
 }
 
 export function FleetFlows(): ReactNode {
   const {
-    store, projects, actions, archiveAll, archiveAllFor, setArchiveAllFor, newOpen, setNewOpen,
+    store, projects, actions, archiveAll, archiveAllFor, setArchiveAllFor, newOpen, setNewOpen, newProject,
     addWorkspaceFor, setAddWorkspaceFor, addProjectOpen, setAddProjectOpen, reapId, setReapId,
   } = useFleetChrome();
+  const doors = useFleetFlows();
   const sessions = store((s) => s.sessions);
   const roster = store((s) => s.roster);
   return (
     <>
-      <NewSessionSheet open={newOpen} onClose={() => setNewOpen(false)} fleet={store} />
+      <NewSessionSheet
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        fleet={store}
+        initialProject={newProject}
+        addProject={projects.addProject}
+        addingProject={projects.addingProject}
+      />
 
       <AddWorkspaceSheet
         project={addWorkspaceFor}
@@ -76,7 +95,7 @@ export function FleetFlows(): ReactNode {
         onClose={() => setAddProjectOpen(false)}
         add={projects.addProject}
         adding={projects.addingProject}
-        firstRun={sessions.length === 0}
+        onStartSession={doors.openNewSessionOn}
       />
 
       <PoolSheet

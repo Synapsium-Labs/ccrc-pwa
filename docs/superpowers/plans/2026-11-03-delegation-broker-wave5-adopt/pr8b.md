@@ -70,7 +70,7 @@ card needs a runtime guard for `DelegationAdoptOnRefusal` beside its type, or it
 1665 N6, carried to PR8c). The card must also stop reading an item's `path`, which fix round 2 dropped (N10).
 With the list gone, the caps union is derived from its table (`DelegationAdoptCap = keyof typeof DELEGATION_ADOPT_CAP_MAP`, the
 refusal words' idiom), so the table is read and a word is spelled once; the PR8c patch adds the list back beside it.
-The seventh mutant the ruling named (the card's confirmation skipped, red in 13 of 53 rows) moved to PR8c with the card.
+The seventh mutant the ruling named (the card's confirmation skipped, red in 13 of 53 rows) moved to PR8c with the card. The card shipped in PR8c (run 1688), from these three patches with N6 and N10 fixed; its notes are `pr8c.md`.
 
 ## Precedent sites (D-7902, D-7994)
 

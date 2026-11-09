@@ -863,6 +863,8 @@ describe('the coordinator skill: linkage', () => {
       // screen's doors, not coordination doors: a coordinator reads its runs through `GET /api/runs`, and no programme acts on
       // either answer.
       'GET /api/runs/find',
+      // The programme card's read (D-8075, spec §11.6): the screen's door, session-gated; a coordinator reads its programme through its runs.
+      'GET /api/programmes',
       'GET /api/runs/:id/record',
     ]);
     const named = skillRoutes();

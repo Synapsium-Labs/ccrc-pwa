@@ -38,7 +38,7 @@ import { ItemView } from './ItemView';
 import { homeProjectOf, programmeSpecHref } from './ledgerLinks';
 import {
   BESIDE_LABEL, BETWEEN_ITEMS_LABEL, FROM_QUERY, GONE_WORD, LEFT_LIST_WORD, NEXT_ITEM_LABEL, NEXT_WORD,
-  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, SAVED_ROWS_WORD, backLabel, fromWord, groupByProgramme, itemPath, itemPlace,
+  NO_FRAME_WORD, PREVIOUS_ITEM_LABEL, PREVIOUS_WORD, SAVED_ROWS_WORD, backLabel, fromWord, groupByProgramme, itemPath, itemPlace, limitRows,
   savedListWords,
   goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
@@ -140,7 +140,7 @@ function useOpenedFrom(): ItemList {
 function useGroups(store: FleetStore): ProgrammeGroup[] | null {
   const view = store((s) => s.waiting);
   const { sessions, runs } = useHeard(store);
-  return view === null ? null : groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []));
+  return view === null ? null : groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []), limitRows(sessions ?? [], runs ?? []));
 }
 
 /** The list the item's URL names, settled by the one stale-list rule (`resolveList`); the named list itself before the first

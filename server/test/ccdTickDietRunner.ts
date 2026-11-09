@@ -56,6 +56,10 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _limit_reset_to: 'auto-swap reliability W1 (D-6181)',
   _roster_fp_to: 'accounts connect A15 (D-7717)',
   _dl_fingerprint_to: 'delegation broker wave 5 PR1, Task 5.1.3 (D-7939)',
+  _pane_limit_capture_to: 'limit swap autofix Task 6 (D-8123)',
+  _limit_rescue_knob_to: 'limit swap autofix Task 7 (D-8123)',
+  _watchdog_sign_to: 'limit swap autofix Task 9 (D-8123)',
+  _wd_operator_hold_to: 'limit swap autofix Task 9 (D-8123)',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
@@ -73,7 +77,8 @@ const LANDED: ReadonlySet<string> = new Set([
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
   '_home_measured_to', '_swap_lane_to', '_swap_pin_legacy_offset_to', '_swap_pin_expiry_to', '_limit_reset_to',
-  '_roster_fp_to', '_dl_fingerprint_to',
+  '_roster_fp_to', '_dl_fingerprint_to', '_pane_limit_capture_to', '_limit_rescue_knob_to', '_watchdog_sign_to',
+  '_wd_operator_hold_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),

@@ -8,9 +8,10 @@
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { WARN_GLYPH } from '@ccrc/ui';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildReclaimWord, isRunState, sessionRunOf,
-  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
+  type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type ProgrammePendingClose, type RunKind, type RunState, type RunSummary, type SessionRun } from '../../../shared/api';
 import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
+import { STUCK_HEADING, closeWhen } from './stuckWords';
 import type { CoordinatorPresence } from './presence';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -966,7 +967,7 @@ export const waveOfWords = (r: { wave: number; waveOf: number | null }): string 
 /** A programme's title in words (D-6170): the first non-blank `programTitle`
  *  any of `runs` carries for `program`, else the slug. A whitespace-only title
  *  is no title. The one reader: the ledger's group head, `runRowName` and
- *  `groupRuns` all ask it. */
+ *  the programme card (`openCards`) all ask it. */
 export const programmeTitle = (
   program: string,
   runs: readonly { program: string; programTitle?: string | null }[],
@@ -1042,4 +1043,38 @@ export const childOfRunLabel = (
  *  and only an absent field (an older server) falls back to what the board sees of the coordinator. */
 export function coordinatorGoneOf(run: { coordinatorGone?: boolean }, presence: CoordinatorPresence): boolean {
   return run.coordinatorGone ?? presence === 'dead';
+}
+
+/** Whether the Resume door is drawn for a run, or for a programme's head standing in for one (spec §9.5, A46, A55, A56, A60):
+ *  the coordinator reads gone by `coordinatorGoneOf`, and the run is open or its programme has no open run (D-1146). `null`
+ *  for `programHasOpenRun` is the runs frame not yet heard, which hides the door: a programme that may have a wave that can
+ *  move is not one to hand over. */
+export function resumeShown(
+  run: Pick<RunSummary, 'state' | 'coordinatorGone'>,
+  presence: CoordinatorPresence,
+  programHasOpenRun: boolean | null,
+): boolean {
+  if (programHasOpenRun === null) return false;
+  return coordinatorGoneOf(run, presence) && (!isRunClosed(run) || !programHasOpenRun);
+}
+
+/** One reason's pending close on a programme's head (spec §8.5, A37): "Owner gone: 3 · ccrc closes them in 2 h". Armed clocks
+ *  say "closes" and shadow ones "would close"; a clock at zero or past reads "soon" when armed and "now" in shadow. */
+export function pendingCloseLine(p: ProgrammePendingClose, nowMs: number): string {
+  const when = closeWhen(p.soonestAt, nowMs) ?? (p.armed ? 'soon' : 'now');
+  return `${STUCK_HEADING[p.reason]}: ${p.count} · ccrc ${p.armed ? 'closes' : 'would close'} ${p.count === 1 ? 'it' : 'them'} ${when}`;
+}
+
+/** A programme's open runs as its page lists them (spec §8.5): one entry per wave, newest wave first, each work run with the
+ *  reviews that name it nested beneath. A review whose work run is not open stands as an entry of its own, at its wave. */
+export function openWaves(open: readonly RunSummary[]): { run: RunSummary; reviews: RunSummary[] }[] {
+  const reviews = open.filter((r) => r.kind === 'review');
+  const used = new Set<number>();
+  const entries = open.filter((r) => r.kind !== 'review').map((run) => {
+    const mine = reviews.filter((x) => x.reviews === run.id).sort((a, b) => b.id - a.id);
+    for (const x of mine) used.add(x.id);
+    return { run, reviews: mine };
+  });
+  for (const x of reviews) if (!used.has(x.id)) entries.push({ run: x, reviews: [] });
+  return entries.sort((a, b) => b.run.wave - a.run.wave || b.run.id - a.run.id);
 }

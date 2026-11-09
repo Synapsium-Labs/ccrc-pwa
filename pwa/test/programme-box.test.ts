@@ -6,7 +6,7 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { cardsOf, fleetTree } from '../src/fleet/fleetTree';
 import { nestFleet } from '../src/fleet/nestFleet';
 import {
-  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, fleetHues, foldedCard, movementWords, nextStallBoundary,
+  PROG_HUES, assignHues, boxNeeds, boxOrder, boxState, fleetHues, motionState, foldedCard, movementWords, nextStallBoundary,
   programmeBoxes, rankBoxes, type BoxState, type ProgrammeBoxView,
 } from '../src/fleet/programmeBoxes';
 import { runCard, runLastMove } from '../src/fleet/runWords';
@@ -400,5 +400,24 @@ describe('nextStallBoundary', () => {
     const box = only(boxesOf(sessions, runs, runLastMove));
     expect(rankBoxes([box], at - 1, QUIET, false)[0]!.state).toBe('moving');
     expect(rankBoxes([box], at, QUIET, false)[0]!.state).toBe('stalled');
+  });
+});
+
+describe('motionState', () => {
+  const quiet = 2 * HOUR;
+  it('is the pure state step: paused, then stalled, then moving, and never stalled without a threshold and a move', () => {
+    expect(motionState(NOW - 5 * HOUR, NOW, quiet, true)).toBe('paused');
+    expect(motionState(NOW - 7_199_999, NOW, quiet, false)).toBe('moving');
+    expect(motionState(NOW - 7_200_000, NOW, quiet, false)).toBe('stalled');
+    expect(motionState(NOW - 50 * HOUR, NOW, null, false)).toBe('moving');
+    expect(motionState(null, NOW, quiet, false)).toBe('moving');
+  });
+
+  it("boxState's answers are unchanged: it asks needs first and calls motionState after", () => {
+    const b = view({ lastMoveAt: NOW - 5 * HOUR });
+    for (const paused of [true, false]) {
+      expect(boxState(b, false, NOW, quiet, paused)).toBe(motionState(b.lastMoveAt, NOW, quiet, paused));
+      expect(boxState(b, true, NOW, quiet, paused)).toBe('needs');
+    }
   });
 });

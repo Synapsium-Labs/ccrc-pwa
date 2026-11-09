@@ -20,9 +20,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
-import { Button, QC_ACTIONS, QC_CONSEQUENCE, Sheet, TextInput } from '@ccrc/ui';
+import { Button, QC_ACTIONS, QC_CONSEQUENCE, Select, Sheet, TextInput } from '@ccrc/ui';
 import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
 import { ensureSession } from '../session/useEnsure';
+import type { ResumeHeir } from './resumeHeirs';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -147,16 +148,25 @@ function reclaimErrorText(err: unknown): string {
   return RECLAIM_COPY.unknown;
 }
 
+/** The sheet's lead sentence, always first (spec §9.5): the rule "Abandon, never Reclaim" stated before any door. */
+export const RESUME_LEAD = 'Only if this work should go on. A dead programme is abandoned, not handed over.';
+
+/** The run a sheet needs: a `RunSummary` or a `RunHit` feeds it alike (the programme page's closed waves hand it a hit). */
+export type ResumeRun = Pick<RunSummary, 'id' | 'program' | 'programTitle' | 'wave' | 'claimedBy'>;
+
 export interface ResumeSheetProps {
-  run: RunSummary | null;
+  run: ResumeRun | null;
   onClose: () => void;
   onDone?: () => void;
+  /** Step 3's picker (spec §9.5): the project's live coordinators, by name. None draws no picker, and the typed id stays. */
+  heirs?: readonly ResumeHeir[];
 }
 
 export function ResumeSheet({
   run,
   onClose,
   onDone,
+  heirs = [],
   ensure = ensureSession,
   kickoff = api.kickoff,
   reclaimRun = api.reclaimRun,
@@ -300,13 +310,20 @@ export function ResumeSheet({
           </Button>
           {reclaimOpen ? (
             <>
+              {heirs.length > 0 && (
+                <Select aria-label={`Hand run ${run.id} to a coordinator`} value={heirs.some((h) => h.id === to) ? to : ''}
+                        onChange={(e) => setTo(e.target.value)}>
+                  <option value="">Choose a coordinator</option>
+                  {heirs.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+                </Select>
+              )}
               {/* The same object `.sess-hold-input` was: a single-line id
                   field inside a fleet sheet, self-grounded, tap-floored, with
                   the ::placeholder ink. It is `TextInput` now rather than a
                   third copy of those ten declarations. */}
               <TextInput
                 aria-label={`Hand run ${run.id} to this session id`}
-                placeholder="session id"
+                placeholder={heirs.length > 0 ? 'or enter a session id' : 'session id'}
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
               />
@@ -328,6 +345,7 @@ export function ResumeSheet({
       )}
     >
       <div className="abandon-sheet">
+        <p className={QC_CONSEQUENCE}>{RESUME_LEAD}</p>
         <p className={QC_CONSEQUENCE}>
           {claimedBy === null
             // Unreachable from the board (the row's gate needs a claimant to

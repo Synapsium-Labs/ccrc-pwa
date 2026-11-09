@@ -1,7 +1,8 @@
 // The combined "Waiting on you" list (desktop-polish PL5a, D-7712; spec §2; the prototype's view 1), the ONE Waiting on you
 // page since PL11 (D-7986, D29): a programme's chip and Goals page open it filtered to that programme. Pure over what the shell
 // holds: the waiting view (`null` until the first frame or read), the fleet's sessions (their questions join the list from
-// the `attention` bucket, so nothing new is stored for them) and runs, and the page clock. It routes nowhere itself: the
+// the `attention` bucket, so nothing new is stored for them; the sessions stopped on a usage limit with no account to take them
+// join the same way, from their `limitWait` record, D-8123) and runs, and the page clock. It routes nowhere itself: the
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
 // grouping, count and label is `ledgerWords.ts`'s).
 import type { ReactNode } from 'react';
@@ -12,10 +13,12 @@ import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
-  COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, listGroups, openRunsOf,
-  programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type Pill, type ProgrammeGroup, type QuestionRow, type Row,
+  COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups, openRunsOf,
+  programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import { SpecLink } from './GoalsPanel';
+import { LimitWaitRow } from './LimitWaitRow';
+import { RowMain, RowMeta } from './rowParts';
 import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
 
@@ -55,16 +58,6 @@ const NO_RUNS: readonly RunSummary[] = [];
 const NO_PROGRAMME_KEY = ' none';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
-/** The right-hand end of a row: its pills and when, ONE block for an item and for a session's question. */
-function RowMeta({ pills, when }: { pills: readonly Pill[]; when: string }): ReactNode {
-  return (
-    <span className="wl-meta">
-      {pills.map((p) => <span key={p.tone} className="wl-pill" data-tone={p.tone}>{p.word}</span>)}
-      <span>{when}</span>
-    </span>
-  );
-}
-
 function ItemRow({ item, now, onOpen, current }: { item: ItemView; now: number; onOpen: (id: number) => void; current: boolean }): ReactNode {
   const note = cameBackNote(item);
   const back = cameBack(item);
@@ -91,26 +84,26 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
       <BareRow className="wl-item wl-question" data-session={q.sessionId} data-state="question" data-needed="soon"
                onClick={() => onOpen(q.sessionId)}>
         <span className="wl-kind">{QUESTION_WORD}</span>
-        <span className="wl-main">
-          <span className="wl-what">{q.title}</span>
-          <span className="wl-why">A session is waiting for your answer. Open it to answer.</span>
-        </span>
+        <RowMain what={q.title} why="A session is waiting for your answer. Open it to answer." />
         <RowMeta pills={[{ tone: 'ask', word: QUESTION_PILL_WORD }]} when={q.at > 0 ? ageWords(q.at, now) : ''} />
       </BareRow>
     </li>
   );
 }
 
-/** One programme's rows: its items and its sessions' questions, as the list draws them, and as the list beside an open item
+/** One programme's rows: its items, its sessions' questions and its sessions stopped on a usage limit, as the list draws them, and as the list beside an open item
  *  draws them, with that item marked current (plan PL9). */
 export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
 }): ReactNode {
   return (
     <ul className="wl-items">
-      {rows.map((row) => row.kind === 'item'
-        ? <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} />
-        : <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession} />)}
+      {rows.map((row) => {
+        if (row.kind === 'item') return <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} />;
+        // A usage-limit row carries its own two controls (D-8123); tapping the row itself opens nothing.
+        if (row.kind === 'limit') return <LimitWaitRow key={`l${row.limit.sessionId}`} limit={row.limit} now={now} />;
+        return <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession} />;
+      })}
     </ul>
   );
 }
@@ -188,7 +181,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   }
   const heardRuns = runs ?? NO_RUNS;
   const questions = questionRows(sessions, heardRuns);
-  const groups = groupByProgramme(view.items, questions);
+  const groups = groupByProgramme(view.items, questions, limitRows(sessions, heardRuns));
   const hues = fleetHues(heardRuns);
   const filter = props.programme ?? null;
   // The sessions in no programme: the one filter no item list names (it holds questions only). Stale when no such group is drawn.
@@ -214,7 +207,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
           <>
             {words.length > 0 && (
               <ul className="wl-summary" aria-label="Summary">
-                {words.map((w) => <li key={w.tone} className="wl-pill" data-tone={w.tone}>{w.text}</li>)}
+                {/* Two pills can share a tone (the limit pill is `blocking` like "N blocking now"), so the text is in the key. */}
+                {words.map((w) => <li key={`${w.tone}:${w.text}`} className="wl-pill" data-tone={w.tone}>{w.text}</li>)}
               </ul>
             )}
             <div className="wl-grid">

@@ -32,6 +32,7 @@ const FIXTURE: AppFixture = {
     '/api/accounts': ACCOUNTS,
     '/api/runs': { runs: [] },
     '/api/runs/find': { runs: [], next: null },
+    '/api/programmes': { ok: true, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
     '/api/claims': [],
     '/api/coord/caps': { ok: true, caps: { maxConcurrentWorkers: 4 }, usage: { running: 0 }, updatedAt: null },
@@ -109,12 +110,13 @@ describe('the single readers change nothing on screen (C7n, D-7192, D-7209)', ()
         await go(page, '/runs');
         await page.waitForFunction((words) => [...document.querySelectorAll('[data-state="ok"]')].some((el) => el.textContent === words), NO_RUNS, { timeout: 30_000 });
         await page.waitForTimeout(500);
-        expect(count(sent.slice(before), '/api/runs/find?scope=closed&limit=50'), 'one Finished read on the board\'s mount').toBe(1);
+        expect(sent.slice(before).filter((u) => u.startsWith('/api/programmes')), 'one programmes read on the board\'s mount, which holds Finished').toHaveLength(1);
+        expect(sent.slice(before).filter((u) => u.startsWith('/api/runs/find')), 'the board reads no run list of its own').toEqual([]);
         expect(sent.slice(before).filter((u) => u.startsWith('/api/runs?')), 'the board reads no archive of its own').toEqual([]);
 
         // Start programme: the project list from one class-blind GET /api/projects.
         before = sent.length;
-        await page.getByRole('button', { name: 'Start a program' }).click();
+        await page.getByRole('button', { name: 'Start a programme' }).click();
         await page.getByRole('button', { name: /project-a/ }).first().waitFor({ timeout: 30_000 });
         expect(sent.slice(before).filter((s) => s.startsWith('/api/projects')), 'Start programme asks once, with no class').toEqual(['/api/projects']);
         await page.keyboard.press('Escape');
