@@ -250,13 +250,14 @@ interface Focus { tag: string; value: string | null; inCard: boolean; text: stri
 describe('the focus once a write settles, against the answer\'s timing (D-8114; review 1703 F1, F6)', () => {
   const FOCUS_VIEWS: readonly AppView[] = [{ skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: INSTRUMENT, theme: 'light', width: 1280 }];
   type Answer = number | 'held';
-  type Reply = 'ok' | 'unmeasurable' | 'reject' | 'reject-refusing';
-  async function card(view: AppView, reply: Reply, answer: Answer) {
+  type Reply = 'ok' | 'unmeasurable' | 'reject' | 'reject-refusing' | 'reject-dark';
+  async function card(view: AppView, reply: Reply, answer: Answer, first: DelegationAdoptView = SHADOW) {
     const { ctx, page, errors } = await openApp(browser!, view, FIXTURE);
-    let current: DelegationAdoptView = SHADOW;
+    let current: DelegationAdoptView = first;
     const posts: unknown[] = [];
     let release: () => void = () => undefined;
     let gate: Promise<void> | null = null;
+    let afterWrite: ((v: DelegationAdoptView) => DelegationAdoptView) | null = null;
     await ctx.route(`**${DOOR}`, async (r) => {
       const req = r.request();
       if (req.method() === 'POST') {
@@ -266,11 +267,15 @@ describe('the focus once a write settles, against the answer\'s timing (D-8114; 
           gate = new Promise((done) => { release = done; });
           await gate;
         } else if (answer > 0) await new Promise((done) => { setTimeout(done, answer); });
-        if (reply === 'reject' || reply === 'reject-refusing') {
+        if (reply === 'reject' || reply === 'reject-refusing' || reply === 'reject-dark') {
           if (reply === 'reject-refusing') current = NO_SWITCH;   // the re-read the rejection asks for refuses the reading's choice
+          if (reply === 'reject-dark') current = { ...DARK, state: 'set' };   // the switch moved, and sign-in is dark
           return r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'internal' }) });
         }
         current = reply === 'unmeasurable' ? { ...current, state: 'unmeasurable' } : { ...current, state: body.on ? 'set' : 'clear' };
+        const answered = current;
+        if (afterWrite !== null) current = afterWrite(current);   // what the next read serves, once this answer is out
+        return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, ...answered }) });
       }
       return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, ...current }) });
     });
@@ -278,7 +283,7 @@ describe('the focus once a write settles, against the answer\'s timing (D-8114; 
     const section = page.getByRole('region', { name: T.title });
     const off = section.getByRole('radio', { name: T.off });
     const on = section.getByRole('radio', { name: T.on });
-    await expect.poll(() => off.isChecked(), { timeout: 20_000 }).toBe(true);
+    await expect.poll(() => (first.state === 'set' ? on : off).isChecked(), { timeout: 20_000 }).toBe(true);
     const sheet = page.getByRole('dialog');
     const focus = (): Promise<Focus> => page.evaluate((name): Focus => {
       const a = document.activeElement as HTMLElement | null;
@@ -305,9 +310,12 @@ describe('the focus once a write settles, against the answer\'s timing (D-8114; 
       await page.waitForTimeout(400);
       return focus();
     };
+    /** A poll now: the page clock re-reads on `visibilitychange`, as it does when the operator comes back to the tab. */
+    const repoll = (): Promise<void> => page.evaluate(() => { document.dispatchEvent(new Event('visibilitychange')); });
     return {
-      ctx, page, errors, posts, section, on, off, sheet, keep, focus, settled,
+      ctx, page, errors, posts, section, on, off, sheet, keep, focus, settled, repoll,
       release: () => { release(); }, show: (v: DelegationAdoptView) => { current = v; },
+      serveNext: (f: (v: DelegationAdoptView) => DelegationAdoptView) => { afterWrite = f; },
     };
   }
 
@@ -397,6 +405,133 @@ describe('the focus once a write settles, against the answer\'s timing (D-8114; 
         const f = await c.settled((x) => x.inCard);
         expect(f).toMatchObject({ tag: 'INPUT', value: 'off', inCard: true });
         expect(c.posts).toEqual([]);
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
+
+    // Review 1709 finding 1: the sheet's confirm stays on screen, focused and live through its exit, so one confirm must send one
+    // {on:true} however many Enter, Space or click presses reach it while it leaves. A deliberate later confirm still sends.
+    for (const reply of ['ok', 'reject'] as const) {
+      it(`${named(view)}: Keep them confirmed and answered ${reply === 'ok' ? '' : '500 '}at 0 ms, then Enter at +60 ms and Space at +120 ms inside the sheet's exit: exactly one POST (finding 1)`, async () => {
+        const c = await card(view, reply, 0);
+        try {
+          await c.on.click();
+          const confirm = c.sheet.getByRole('button', { name: T.confirmLabel });
+          await expect.poll(() => confirm.isVisible(), { timeout: 10_000 }).toBe(true);
+          await confirm.click();
+          const t0 = Date.now();
+          await c.page.waitForTimeout(Math.max(0, 60 - (Date.now() - t0)));
+          await c.page.keyboard.press('Enter');
+          await c.page.waitForTimeout(Math.max(0, 120 - (Date.now() - t0)));
+          await c.page.keyboard.press(' ');
+          await expect.poll(() => c.sheet.count(), { timeout: 10_000 }).toBe(0);
+          await c.page.waitForTimeout(800);
+          expect(c.posts, 'a press inside the exit sent the confirmed write again').toEqual([{ on: true }]);
+          expect(c.errors).toEqual([]);
+        } finally {
+          await c.ctx.close();
+        }
+      }, 60_000);
+    }
+
+    it(`${named(view)}: Keep them confirmed and answered 500 at 0 ms, then, once the sheet has gone, reopened and confirmed again: a second POST goes (finding 1)`, async () => {
+      const c = await card(view, 'reject', 0);
+      try {
+        await c.on.click();
+        await c.sheet.getByRole('button', { name: T.confirmLabel }).click();
+        await expect.poll(() => c.sheet.count(), { timeout: 10_000 }).toBe(0);
+        await expect.poll(() => c.section.getByRole('status').count(), { timeout: 10_000 }).toBe(1);
+        await c.settled((f) => f.inCard);
+        expect(await c.off.isChecked()).toBe(true);
+        await c.on.click();
+        await c.sheet.getByRole('button', { name: T.confirmLabel }).click();
+        await expect.poll(() => c.posts.length, { timeout: 10_000 }).toBe(2);
+        await expect.poll(() => c.sheet.count(), { timeout: 10_000 }).toBe(0);
+        expect(c.posts).toEqual([{ on: true }, { on: true }]);
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
+
+    // Review 1709 finding 2: a rejected write whose re-read changes the reading clears the result line in the same commit, so the
+    // focus must land on what that commit leaves, never on the line it clears (which drops the focus to BODY).
+    it(`${named(view)}: Do not keep rejected at 0 ms while keeping was on, and the re-read reads off with both choices refused: the focus is a line with text, never BODY (finding 2)`, async () => {
+      const c = await card(view, 'reject-refusing', 0, { ...SHADOW, state: 'set' });
+      try {
+        await c.off.click();
+        await expect.poll(() => c.off.isDisabled(), { timeout: 10_000 }).toBe(true);
+        await expect.poll(() => c.off.isChecked(), { timeout: 10_000 }).toBe(true);
+        const f = await c.settled((x) => x.inCard);
+        expect(f.tag, 'the focus is on a radio the re-read disabled').not.toBe('INPUT');
+        expect(f.inCard).toBe(true);
+        expect(f.text, 'the focused element holds no text').not.toBe('');
+        expect(c.posts).toEqual([{ on: false }]);
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
+
+    it(`${named(view)}: Keep them rejected at 0 ms while the switch moved, and the re-read reads on with sign-in dark: the focus is a line with text, never BODY (finding 2, the other direction)`, async () => {
+      const c = await card(view, 'reject-dark', 0);
+      try {
+        await c.keep();
+        await expect.poll(() => c.on.isChecked(), { timeout: 10_000 }).toBe(true);
+        await expect.poll(() => c.on.isDisabled(), { timeout: 10_000 }).toBe(true);
+        const f = await c.settled((x) => x.inCard);
+        expect(f.tag, 'the focus is on a radio the re-read disabled').not.toBe('INPUT');
+        expect(f.inCard).toBe(true);
+        expect(f.text, 'the focused element holds no text').not.toBe('');
+        expect(c.errors).toEqual([]);
+      } finally {
+        await c.ctx.close();
+      }
+    }, 60_000);
+
+    // Review 1709 finding 3: Keep them answered on; its view arrives inside the exit; a poll shows off inside the exit (another
+    // actor); the sheet leaves; a later poll shows on. The request waiting for on was dropped when off arrived: focus does not move.
+    it(`${named(view)}: Keep them answered on at 0 ms, then a poll inside the sheet's exit reads off and a later poll reads on: the focus does not move (finding 3)`, async () => {
+      const c = await card(view, 'ok', 0);
+      try {
+        c.serveNext((v) => ({ ...v, state: 'clear' }));   // another actor turns it off as soon as the answer is out
+        // In the page: as soon as the answer's on is checked, poll (the page clock's re-read), and note whether the off that poll
+        // reads lands while the sheet is still in the document.
+        await c.page.evaluate((name) => {
+          const w = window as unknown as { f3?: { offInExit: boolean | null } };
+          w.f3 = { offInExit: null };
+          let sawOn = false;
+          const tick = (): void => {
+            const radio = (v: string): HTMLInputElement | null => document.querySelector(`input[name="${name}"][value="${v}"]`);
+            if (!sawOn && radio('on')?.checked === true) {
+              sawOn = true;
+              document.dispatchEvent(new Event('visibilitychange'));
+            }
+            if (sawOn && radio('off')?.checked === true) {
+              w.f3!.offInExit = document.querySelector('[role="dialog"]') !== null;
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        }, 'settings-delegation-adopt');
+        await c.on.click();
+        await c.sheet.getByRole('button', { name: T.confirmLabel }).click();
+        const offInExit = (): Promise<boolean | null> => c.page.evaluate(() => (window as unknown as { f3: { offInExit: boolean | null } }).f3.offInExit);
+        await expect.poll(offInExit, { timeout: 10_000 }).not.toBe(null);
+        expect(await offInExit(), 'the poll that read off landed after the sheet had gone: this row measures nothing').toBe(true);
+        await expect.poll(() => c.sheet.count(), { timeout: 10_000 }).toBe(0);
+        await c.page.waitForTimeout(300);
+        const before = await c.focus();
+        c.show({ ...SHADOW, state: 'set' });
+        await c.repoll();
+        await expect.poll(() => c.on.isChecked(), { timeout: 10_000 }).toBe(true);
+        await c.page.waitForTimeout(400);
+        const after = await c.focus();
+        expect(after, 'a later poll moved the focus').toEqual(before);
+        expect(after.value, 'a later poll moved the focus to the radio').not.toBe('on');
         expect(c.errors).toEqual([]);
       } finally {
         await c.ctx.close();

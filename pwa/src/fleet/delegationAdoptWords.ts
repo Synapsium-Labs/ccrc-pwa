@@ -48,7 +48,7 @@ export const DELEGATION_ADOPT_TEXT = {
     + 'would keep.',
   confirmUntilNextPass: 'The last pass did not count what turning this on would keep, so this card cannot say how many until the '
     + 'next pass.',
-  confirmUnreadPass: 'The last pass could not read whether keeping was on, so this card cannot say how many until the next pass.',
+  confirmUnreadPass: 'The last pass could not read everything it needs, so this card cannot say how many until the next pass.',
   confirmMail: 'The session that started each agent is mailed about its worktree. A kept worktree stays held back from the '
     + 'disk sweep until its hold ends.',
   ...VERB_WRITE_TEXT,
@@ -69,7 +69,7 @@ const MODE_LINE: Readonly<Record<DelegationAdoptionHealth['mode'], string>> = {
   live: 'Keeping was on at the last pass. The counts are from that pass.',
   shadow: 'Not keeping yet. The last pass only recorded the worktrees it would keep.',
   suspended: 'Paused. The server is holding off until its own check clears.',
-  unmeasured: 'The server could not read whether it keeps worktrees at the last pass.',
+  unmeasured: 'The server could not read everything it needs at the last pass.',
 };
 
 const MODES: readonly string[] = ['live', 'shadow', 'suspended', 'unmeasured'];
@@ -181,10 +181,11 @@ const are = (n: number): string => `${n} ${n === 1 ? 'is' : 'are'}`;
  *  many worktrees turning this on would keep, the same figure the counts line shows (`wouldAdopt`), whether or not a list was
  *  served, and, when the list leaves some off, how many it lists and how many it does not. In live and suspended modes the last
  *  pass did not count that (in live mode it counts what it kept, and the list is what was kept), so the sheet says the card cannot
- *  tell until the next pass. In unmeasured mode the last pass could not read whether keeping was on (it may still have counted,
- *  with the marker unread), so the sheet says that, and that the card cannot tell until the next pass. Outside shadow it names no
- *  figure and lists nothing. With `adoption` null no pass has counted, or the last pass counted nothing, so the sheet says the
- *  card cannot say how many this would keep. Every sheet says the owners are mailed. */
+ *  tell until the next pass. In unmeasured mode the last pass could not read everything it needs (the breaker, or the marker:
+ *  the health carries only the mode, so the sheet names neither, review 1709 finding 4), so the sheet says that, and that the
+ *  card cannot tell until the next pass. Outside shadow it names no figure and lists nothing. With `adoption` null no pass has
+ *  counted, or the last pass counted nothing, so the sheet says the card cannot say how many this would keep. Every sheet says
+ *  the owners are mailed. */
 export function delegationAdoptConfirm(adoption: DelegationAdoptionHealth | null): { title: string; consequence: string[]; confirmLabel: string } {
   const T = DELEGATION_ADOPT_TEXT;
   if (adoption === null) return { title: T.confirmTitle, consequence: [T.confirmCannotCount, T.confirmMail], confirmLabel: T.confirmLabel };

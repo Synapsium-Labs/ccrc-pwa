@@ -5,7 +5,7 @@
 // confirm sheet that names how many worktrees it would keep; nothing is sent before the confirm.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { DelegationAdoptionHealth, DelegationAdoptionKeep } from '../../shared/api';
 import { DELEGATION_ADOPTION_KEEPS_MAX } from '../../shared/api';
 import {
@@ -379,9 +379,15 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(said(health({ mode: 'shadow', wouldAdopt: 7, keeps: { items: TWO, more: 5 } }))).toMatch(/This would keep 7 worktrees\b/);
   });
 
-  it('unmeasured, would keep 4: the sheet says the last pass could not read whether keeping was on, names no figure and never says the pass did not count (review 1703 F4)', () => {
+  it('unmeasured, would keep 4: the sheet says the last pass could not read everything it needs, names no figure and never says the pass did not count (review 1703 F4, review 1709 finding 4)', () => {
     const s = said(health({ mode: 'unmeasured', wouldAdopt: 4, keeps: { items: TWO, more: 2 } }));
     expect(s).toContain(T.confirmUnreadPass);
+    // Mode unmeasured is the breaker unmeasured with the marker read, or the marker unreadable: neither the sheet nor the mode
+    // line may say which one it was (review 1709 finding 4, ruled).
+    expect(s).not.toMatch(/whether keeping was on/);
+    const mode = delegationAdoptModeLine(health({ mode: 'unmeasured', wouldAdopt: 4 }));
+    expect(mode).not.toMatch(/whether it keeps|whether keeping/);
+    expect(mode).not.toMatch(/\b4\b/);
     expect(s).not.toMatch(/did not count/);
     expect(s).not.toMatch(/\d+ worktrees?|\b4\b/);
     expect(s).not.toMatch(/listed on this card/);
@@ -541,6 +547,127 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(active.tagName, 'the focus is on a radio the re-read disabled').not.toBe('INPUT');
     expect(active.textContent?.trim()).not.toBe('');
     expect(screen.getByRole('region', { name: T.title }).contains(active)).toBe(true);
+  });
+
+  // Review 1709 finding 2: a rejected write whose re-read CHANGES the reading. The same commit clears the result line, so the
+  // focus must land on what that commit leaves: the refusal line or unmeasured note for the new reading, or an enabled radio.
+  const card = (): HTMLElement => screen.getByRole('region', { name: T.title });
+  const onATextLineInTheCard = async (): Promise<void> => {
+    await flush();
+    const active = document.activeElement as HTMLElement;
+    expect(active, 'the focus fell to the page').not.toBe(document.body);
+    expect(active.tagName, 'the focus is on a radio the re-read disabled').not.toBe('INPUT');
+    expect(active.textContent?.trim()).not.toBe('');
+    expect(card().contains(active)).toBe(true);
+  };
+  it('Do not keep rejected while keeping was on, then a re-read that reads it off with both choices refused: the focus is a line with text in the card, never BODY (review 1709 finding 2)', async () => {
+    vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(500, { ok: false, error: 'internal' }));
+    const poll: DelegationAdoptPoll = { view: view({ state: 'set' }), failure: null, reload: vi.fn(() => 7), landed: 6, settle: vi.fn() };
+    const { rerender } = render(<DelegationAdoptSection poll={poll} />);
+    radio(T.off).focus();
+    fireEvent.click(radio(T.off));
+    (document.activeElement as HTMLElement | null)?.blur();   // a browser blurs the radio the held fieldset disables
+    await flush();
+    await waitFor(() => expect(poll.reload).toHaveBeenCalledTimes(1));
+    const refusing = view({ state: 'clear', caps: { verb: 'absent', audit: 'present' }, refused: { on: 'fleet-switch-missing', off: 'fleet-switch-missing' } });
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: refusing, landed: 7 }} />);
+    expect(radio(T.off).checked).toBe(true);
+    expect(radio(T.off).disabled).toBe(true);
+    await onATextLineInTheCard();
+  });
+
+  it('Keep them rejected while the switch moved, then a re-read that reads it on with sign-in dark: the focus is a line with text in the card, never BODY (review 1709 finding 2, the other direction)', async () => {
+    vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(500, { ok: false, error: 'internal' }));
+    const poll: DelegationAdoptPoll = { view: view(), failure: null, reload: vi.fn(() => 7), landed: 6, settle: vi.fn() };
+    const { rerender } = render(<DelegationAdoptSection poll={poll} />);
+    await tapOnAndConfirm();
+    await flush();
+    await waitFor(() => expect(poll.reload).toHaveBeenCalledTimes(1));
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: view({ state: 'set', refused: { on: 'sign-in-unarmed', off: null } }), landed: 7 }} />);
+    expect(radio(T.on).checked).toBe(true);
+    expect(radio(T.on).disabled).toBe(true);
+    await onATextLineInTheCard();
+  });
+
+  it('a request waiting for the reading Keep them was answered with is dropped when another reading arrives after it: a later poll that shows on moves nothing (review 1709 finding 3)', async () => {
+    // jsdom has no exit animation, so the confirm sheet leaves at once; a stand-in dialog holds the focus instead, as the real
+    // sheet does through its exit, and the card waits for it to leave exactly as it waits for its own sheet.
+    const w = deferred();
+    vi.spyOn(api, 'setDelegationAdopt').mockReturnValue(w.promise);
+    const poll: DelegationAdoptPoll = { view: view(), failure: null, reload: vi.fn(() => 0), landed: 0, settle: vi.fn() };
+    const standIn = document.createElement('div');
+    standIn.setAttribute('role', 'dialog');
+    const inside = document.createElement('button');
+    inside.textContent = 'leaving';
+    standIn.append(inside);
+    const { rerender } = render(<DelegationAdoptSection poll={poll} />);
+    fireEvent.click(radio(T.on));
+    const sheet = await screen.findByRole('dialog');
+    document.body.append(standIn);
+    inside.focus();
+    fireEvent.click(within(sheet).getByRole('button', { name: T.confirmLabel }));
+    await act(async () => { w.resolve(view({ state: 'set' })); });
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: view({ state: 'set' }) }} />);   // the answer's view, inside the exit
+    await flush();
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: view({ state: 'clear' }) }} />);   // another actor's off, inside the exit
+    await flush();
+    await act(async () => { standIn.remove(); await Promise.resolve(); });
+    await flush();
+    expect(document.activeElement).toBe(document.body);
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: view({ state: 'set' }), landed: 1 }} />);   // a later poll shows on
+    await flush();
+    expect(radio(T.on).checked).toBe(true);
+    expect(document.activeElement, 'a later poll moved the focus').toBe(document.body);
+  });
+
+  it('once the refocus has fired it is spent: the focus moved back to the page stays there through a later poll (review 1709 finding 5)', async () => {
+    vi.spyOn(api, 'setDelegationAdopt').mockResolvedValue(view({ state: 'set' }));
+    const poll: DelegationAdoptPoll = { view: view(), failure: null, reload: vi.fn(() => 0), landed: 0, settle: vi.fn() };
+    const { rerender } = render(<DelegationAdoptSection poll={poll} />);
+    await tapOnAndConfirm();
+    await flush();
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: view({ state: 'set' }) }} />);
+    await flush();
+    expect(document.activeElement).toBe(radio(T.on));
+    (document.activeElement as HTMLElement | null)?.blur();
+    rerender(<DelegationAdoptSection poll={{ ...poll, view: view({ state: 'set' }), landed: 1 }} />);
+    await flush();
+    expect(document.activeElement, 'the spent request fired again').toBe(document.body);
+  });
+
+  it('the refocus picks the radio the page shows checked when it fires, even before the card\'s effects have read the new view (review 1709 finding 6)', async () => {
+    // The sheet's removal and a poll that changes the reading in ONE commit, outside act, as the real app commits them: the sheet
+    // watch's MutationObserver runs in the microtask after that commit, before React flushes the card's passive effects.
+    vi.spyOn(api, 'setDelegationAdopt').mockRejectedValue(new ApiError(500, { ok: false, error: 'internal' }));
+    let hostSet: (s: { view: DelegationAdoptView; dialog: boolean }) => void = () => undefined;
+    function Host(): ReactNode {
+      const [s, setS] = useState<{ view: DelegationAdoptView; dialog: boolean }>({ view: view({ state: 'set' }), dialog: true });
+      hostSet = setS;
+      const poll: DelegationAdoptPoll = { view: s.view, failure: null, reload: () => 0, landed: 0, settle: () => undefined };
+      return (
+        <>
+          <DelegationAdoptSection poll={poll} />
+          {s.dialog && <div role="dialog"><button type="button">leaving</button></div>}
+        </>
+      );
+    }
+    render(<Host />);
+    screen.getByRole('button', { name: 'leaving', hidden: true }).focus();
+    fireEvent.click(radio(T.off));
+    await flush();
+    await flush();
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const was = g.IS_REACT_ACT_ENVIRONMENT;
+    g.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      hostSet({ view: view({ state: 'clear' }), dialog: false });
+      await new Promise((done) => { setTimeout(done, 50); });
+    } finally {
+      g.IS_REACT_ACT_ENVIRONMENT = was;
+    }
+    expect(radio(T.off).checked).toBe(true);
+    expect(document.activeElement, 'the focus is the radio of the reading before the poll').not.toBe(radio(T.on));
+    expect(document.activeElement).toBe(radio(T.off));
   });
 
   it('a reply that reads the marker unmeasurable: the focus lands on a line with text (the unmeasured note), and no empty element is focusable (review 1699 R2-3)', async () => {
