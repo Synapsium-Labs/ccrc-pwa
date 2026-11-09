@@ -68,7 +68,9 @@ const EXEMPT_BUT_AUTHENTICATED = new Set(
    'GET /api/runs/:id/record', 'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks',
    'GET /api/pools/epoch', 'GET /api/updates/intent/:nodeId',
    // D-7554: the test box's read and its tools sync, `ccrc-api testbox status|tools-sync` cookieless, the PWA with a session.
-   'GET /api/testbox', 'POST /api/testbox/tools-sync']);
+   'GET /api/testbox', 'POST /api/testbox/tools-sync',
+   // D-8126: the goals read, `ccrc-api goals show` cookieless from the fleet host, the console with a session.
+   'GET /api/programmes/:slug/goals']);
 
 /** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
  *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
@@ -568,6 +570,8 @@ describe('the scanner is looking at something', () => {
     // count stays 118, the exempt-HTTP count 71 -> 72.
     // 195 since D-8076's `POST /api/runs/:id/end-request`: a box-token lane IN EXEMPT: the HTTP half 191 -> 192, the exempt-HTTP count 72 -> 73.
     // 197 since D-8076's `POST /api/items/:id/act` and `/decline`: the operator's two, session-gated and NOT EXEMPT: the HTTP half 192 -> 194, the gated count 118 -> 120, the exempt count stays 73.
+    // The route count stays 197 with D-8126's goals read: it was registered already and joins EXEMPT-BUT-AUTHENTICATED (a session
+    // or the box token), so the gated count 120 -> 119 and the exempt-HTTP count 73 -> 74.
     expect(ROUTES.length).toBe(197);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -850,6 +854,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail/inbox',
       'GET /api/peers',
       'GET /api/pools/epoch',
+      'GET /api/programmes/:slug/goals',
       'GET /api/programmes/:slug/items',
       'GET /api/reader-lab/probe/:nonce/:name',
       'GET /api/runs',
@@ -927,7 +932,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and sixty-four with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
+  it('the forty box-token lanes in EXEMPT are those coord routes, and sixty-five with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1496,7 +1501,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 194 HTTP routes, not the 73 exempt.
+          //    is not itself flag-aware — the assertion that covers all 194 HTTP routes, not the 74 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

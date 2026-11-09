@@ -535,7 +535,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
-  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`
+  caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
+  the programme goals read `GET /api/programmes/:slug/goals` (D-8126: a coordinator reads the pin, its definition of done and
+  the open items cookieless through `ccrc-api`, the console with a session)
   and the update projection read `GET /api/updates/intent/:nodeId` (a fleet node's timer pulls it cookieless from
   update-management W4), call `checkMailToken` only after a session check; `auth/gate.ts`'s EXEMPT reasons — route by route, each
   with its own argument — are the census, not this bullet. What does need saying here are the
