@@ -76,10 +76,13 @@ export function DocsBanners(p: {
           </Banner>,
         );
       }
-      if (d.caveats.includes('assume-unchanged') || d.caveats.includes('skip-worktree')) {
+      // Both caveats describe how drafts are read, so they show only whenever the tree has a draft (`n > 0`, the tree's
+      // own draft count, the one the hints above use): with none they say nothing a reader can act on (desk-nav Task B,
+      // D-8101).
+      if (n > 0 && (d.caveats.includes('assume-unchanged') || d.caveats.includes('skip-worktree'))) {
         out.push(<Banner key="caveat-hash" id="caveat-hash" tone="info" text={DOCS_BANNER_TEXT.caveatHash} />);
       }
-      if (d.caveats.includes('filters-bypassed')) {
+      if (n > 0 && d.caveats.includes('filters-bypassed')) {
         out.push(<Banner key="caveat-filters" id="caveat-filters" tone="info" text={DOCS_BANNER_TEXT.caveatFilters} />);
       }
       break;

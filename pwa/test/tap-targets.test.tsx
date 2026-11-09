@@ -990,6 +990,41 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     });
   });
 
+  // desk-nav Part B (D-8101): the desk head's dense truth line, its chip and copy commit size to `--docs-line-h`, the
+  // tap floor in :root and a dense value only under a fine pointer, so a coarse pointer keeps the floor.
+  describe('--docs-line-h — the desk truth line\'s height role', () => {
+    it('is --tap-min in :root and below it only inside @media (pointer: fine)', () => {
+      expect(declValue(rootBody(tokensCss), '--docs-line-h')).toBe('var(--tap-min)');
+      const media = [...stripComments(tokensCss).matchAll(/@media([^{]*)\{\s*:root\s*\{([^}]*)\}\s*\}/g)];
+      const where = media.filter((m) => /--docs-line-h\s*:/.test(m[2] ?? '')).map((m) => norm(m[1] ?? ''));
+      expect(where).toEqual(['(pointer: fine)']);
+      const dense = media.find((m) => norm(m[1] ?? '') === '(pointer: fine)' && /--docs-line-h\s*:/.test(m[2] ?? ''));
+      const px = Number(/--docs-line-h\s*:\s*(\d+)px/.exec(dense?.[2] ?? '')?.[1] ?? Number.NaN);
+      expect(px).toBe(28);
+      expect(px).toBeLessThan(Number.parseFloat(declValue(rootBody(tokensCss), '--tap-min') ?? 'NaN'));
+    });
+
+    it('is defined only in tokens.css, those two times: no skin, sheet or inline style under ui/src or pwa/src redefines it (fix round 1, F6; fix round 2, F9(a))', () => {
+      const roots = [path.join(import.meta.dirname, '..', '..', 'ui', 'src'), path.join(import.meta.dirname, '..', 'src')];
+      // A declaration in a sheet (`--docs-line-h: …`), and in TSX an inline style's key, quoted and perhaps cast and
+      // bracketed (`{ '--docs-line-h': … }`, `{ ['--docs-line-h' as string]: … }`), or a `setProperty('--docs-line-h', …)`.
+      const DEF = /--docs-line-h(?:['"`](?:\s+as\s+[\w.]+)?\s*\]?)?\s*:|setProperty\(\s*['"`]--docs-line-h['"`]/g;
+      const defs: string[] = [];
+      const walk = (dir: string): void => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          const at = path.join(dir, e.name);
+          if (e.isDirectory()) walk(at);
+          else if (/\.(css|tsx?)$/.test(e.name)) {
+            const n = (stripComments(readFileSync(at, 'utf8')).match(DEF) ?? []).length;
+            for (let i = 0; i < n; i++) defs.push(path.relative(path.join(import.meta.dirname, '..', '..'), at).split(path.sep).join('/'));
+          }
+        }
+      };
+      for (const r of roots) walk(r);
+      expect(defs).toEqual(['ui/src/styles/tokens.css', 'ui/src/styles/tokens.css']);
+    });
+  });
+
   describe('every banner action: .docs-banner-action (a btn-ghost) and .docs-hint-link', () => {
     it('are at least one tap tall, off the shared token, and the banner rule gives back only the width', () => {
       expect(buttonVariants({ variant: 'ghost' })).toContain('min-h-tap'); // @ccrc/ui's ghost Button carries the floor

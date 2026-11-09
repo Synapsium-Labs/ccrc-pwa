@@ -1235,7 +1235,9 @@ describe("W5 Share: a raster leaf's own image reports the pin it settled at (spe
 describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX12 Share half, M4.SH1 raster clause)', () => {
   const GH = 'https://github.com/example-org/example-repo';
   const shareButton = (): HTMLElement | null => screen.queryByRole('button', { name: DOCS_HEAD_TEXT.share });
-  const updatingTo = (commit: string): string => fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(commit) });
+  // A waiting Share's NAME: "Share: Updating to <short>…", its visible words after "Share: " (desk-nav Part B, fix round 1, F4).
+  const updatingTo = (commit: string): string =>
+    fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: fillSentence(DOCS_HEAD_TEXT.shareUpdating, { short: shortCommit(commit) }) });
   const sheetUrl = (): string | null | undefined => document.querySelector('.docs-share-url')?.textContent;
   function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
     let resolve: (v: T) => void = () => {};
@@ -1287,7 +1289,8 @@ describe('W5 Share on the Docs screen (spec 4.5, 4.16; M4.SH8 Share half, M4.EX1
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
     expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled();
-    const actions = [...document.querySelectorAll('.docs-actions .docs-action:not(.docs-export)')].map((e) => e.textContent);
+    // Each action's NAME (desk-nav Part B: the row shows "GitHub" and names the link View on GitHub).
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action:not(.docs-export)')].map((e) => e.getAttribute('aria-label') ?? e.textContent);
     expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.openCommitted]);
   });
 
@@ -1526,7 +1529,8 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
     open('/docs/demo/specs/a.md?ref=main', fakeLoaders({ tree: okTree(tree) }));
     await waitFor(() => expect(exportButton()).toBeEnabled());
-    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.textContent);
+    // Each action's NAME (desk-nav Part B: the row shows "GitHub" and names the link View on GitHub).
+    const actions = [...document.querySelectorAll('.docs-actions .docs-action')].map((e) => e.getAttribute('aria-label') ?? e.textContent);
     expect(actions).toEqual([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.export, DOCS_HEAD_TEXT.openCommitted]);
   });
 

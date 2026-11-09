@@ -435,6 +435,8 @@ export const DOCS_HEAD_TEXT = {
   sourceNone: 'nothing opened',
   updatedTo: 'Updated to {short}',
   github: 'View on GitHub',
+  /** The full head's row shows this word beside its icon; the link's name stays `github` (desk-nav Part B, D-8101). */
+  githubShort: 'GitHub',
   githubMayDiffer: "GitHub's copy may differ from this view",
   githubOff: 'View on GitHub: {reason}',
   openCommitted: 'Open committed version',

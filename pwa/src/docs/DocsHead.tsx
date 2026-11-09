@@ -9,8 +9,14 @@
 // Under DOCS_COMPACT_QUERY (600 CSS px) a leaf page draws the compact head instead (the phone-header plan of 2026-11-03):
 // one row of back, where and what, Share and Export as icons, and Page details, which opens a panel holding the crumbs,
 // the truth line and the link actions (`CompactHead`). Every other page, and every page at a wider viewport, draws the
-// header above, unchanged.
-import { useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
+// header above as one row and one dense line (desk-nav Part B, D-8101): back, the crumbs and the actions share the row
+// (GitHub, Share and Export an icon beside their words, the words giving way first when the row is short, `HeadRow`),
+// and the truth line sits under it on one line.
+import {
+  useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  type CSSProperties, type KeyboardEvent, type ReactNode,
+} from 'react';
+import { flushSync } from 'react-dom';
 import {
   DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
   type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
@@ -355,6 +361,16 @@ export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation): He
   return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';
 }
 
+/** How the full header is drawn (desk-nav Part B, D-8101; fix round 1, F2(b)): at 600 CSS px and wider, the desk head's
+ *  one row and dense line (`row`); under the compact width, where only a listing or the index draws the full header,
+ *  the stacked header main drew (`stacked`): the crumbs row, the truth line, then the actions in words. Part B is the
+ *  head at 600 px and wider, so below it nothing changes. */
+export type FullHeadForm = 'row' | 'stacked';
+
+export function fullHeadFormFor(compactWidth: boolean): FullHeadForm {
+  return compactWidth ? 'stacked' : 'row';
+}
+
 /** The Page details button's dot (phone-header refinement (f)), from the freshness chip's state: `ok` a good fetch, `warn`
  *  never fetched, `failed` a failed fetch, re-list or refresh, or a stale lock. `warn` and `failed` draw the same
  *  attention colour, as the picked mockup does; the button's name tells them apart. `null` has one meaning: no dot (no
@@ -380,14 +396,17 @@ function exportWords(state: Exclude<ExportState, { s: 'absent' }>): string {
 
 /** The crumbs (spec 4.4's layout): every crumb on a desktop; on a phone (under 900 px) the last two behind a leading
  *  `…` button, which shows them all. The last crumb is the page itself. `unfold`: every crumb at any width, with no `…`
- *  button (the compact head's panel, phone-header refinement (c)). */
-function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean }): ReactNode {
+ *  button (the compact head's panel, phone-header refinement (c)). `fold`: the last two behind `…` at a desk width too,
+ *  when the desk row has no room for every crumb (desk-nav Part B, fix round 2: `HeadRow`). `--docs-crumbs-n` is the
+ *  number of crumbs drawn, the `…` button counted, which docs.css's desk row reads for the crumbs' floor. */
+function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean; readonly fold?: boolean }): ReactNode {
   const desktop = useMediaQuery(DESK_QUERY);
   const [whole, setWhole] = useState(false);
-  const folded = p.unfold !== true && !desktop && !whole && p.crumbs.length > 2;
+  const folded = p.unfold !== true && (!desktop || p.fold === true) && !whole && p.crumbs.length > 2;
   const shown = folded ? p.crumbs.slice(-2) : p.crumbs;
+  const drawn = { '--docs-crumbs-n': shown.length + (folded ? 1 : 0) } as CSSProperties;
   return (
-    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs}>
+    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs} style={drawn}>
       <ol>
         {folded && (
           <li>
@@ -399,8 +418,8 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: bo
         {shown.map((c, i) => (
           <li key={c.href}>
             {i === shown.length - 1
-              ? <span className="docs-crumb-here" aria-current="page">{c.label}</span>
-              : <DocsPageLink className="docs-crumb" href={c.href}>{c.label}</DocsPageLink>}
+              ? <span className="docs-crumb-here" aria-current="page" title={c.label}>{c.label}</span>
+              : <DocsPageLink className="docs-crumb" href={c.href} title={c.label}>{c.label}</DocsPageLink>}
           </li>
         ))}
       </ol>
@@ -451,6 +470,9 @@ function TruthLine(p: {
   const counts: Record<string, number> = {};
   const localLead = c === null ? null : ref.side === 'origin' ? c.behind : c.ahead;
   const originLead = c === null ? null : ref.side === 'origin' ? c.ahead : c.behind;
+  // How the ref was chosen. The desk line may cut it to an ellipsis (desk-nav Part B, fix round 1, F2), so its title
+  // carries the whole sentence.
+  const via = fillSentence(VIA_SENTENCE[ref.via], ref.requested === null ? {} : { requested: ref.requested });
   if (localLead !== null) counts['ahead'] = localLead;
   if (originLead !== null) counts['behind'] = originLead;
   let leaf: ReactNode = null;
@@ -482,7 +504,7 @@ function TruthLine(p: {
       <span className="docs-truth-ref" title={ref.served}>{servedRefText(ref)}</span>{SEP}
       <code className="docs-truth-commit" title={ref.commit}>{shortCommit(ref.commit)}</code>{' '}
       <CopyCommit key={ref.commit} commit={ref.commit} />{SEP}
-      <span className="docs-truth-via">{fillSentence(VIA_SENTENCE[ref.via], ref.requested === null ? {} : { requested: ref.requested })}</span>
+      <span className="docs-truth-via" title={via}>{via}</span>
       {withRelation && (
         <>
           {SEP}
@@ -499,19 +521,45 @@ function TruthLine(p: {
   );
 }
 
+/** An action's face in the full head's row (desk-nav Part B, D-8101): its icon, then its words in `.docs-action-words`,
+ *  which docs.css hides when `HeadRow` asks (and under the `docs-head` container query); the control's name is set
+ *  beside it, so it is kept. */
+function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'file-text'; readonly words: string }): ReactNode {
+  return <><Icon name={p.icon} size={16} /><span className="docs-action-words">{p.words}</span></>;
+}
+
 /** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
- *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation. */
-function GithubAction(p: { readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean }): ReactNode {
+ *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
+ *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub". There the note is a
+ *  marker (`≠`) that takes no room from the crumbs (fix round 1, F1): its words are its `title`, a screen reader's
+ *  text inside it, and the link's accessible description. */
+function GithubAction(p: {
+  readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
+}): ReactNode {
+  const noteId = useId();
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
+  const row = p.row === true;
   if (!link.ok) {
-    return <span className="docs-action-off">{fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] })}</span>;
+    // The row may cut the refusal to an ellipsis (fix round 1, F5), so there its title carries the whole sentence.
+    const off = fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] });
+    return <span className="docs-action-off" title={row ? off : undefined}>{off}</span>;
   }
+  const noted = link.note === 'may-differ' || p.showsDraft;
   return (
     <>
-      <a className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}>
-        {DOCS_HEAD_TEXT.github}
+      <a
+        className="docs-action" href={link.url} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, link.url)}
+        aria-label={row ? DOCS_HEAD_TEXT.github : undefined} aria-describedby={row && noted ? noteId : undefined}
+      >
+        {row ? <RowFace icon="folder-code" words={DOCS_HEAD_TEXT.githubShort} /> : DOCS_HEAD_TEXT.github}
       </a>
-      {(link.note === 'may-differ' || p.showsDraft) && <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>}
+      {noted && (row
+        ? (
+          <span id={noteId} className="docs-action-note" title={DOCS_HEAD_TEXT.githubMayDiffer}>
+            <span aria-hidden="true">≠</span><span className="sr-only">{DOCS_HEAD_TEXT.githubMayDiffer}</span>
+          </span>
+        )
+        : <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>)}
     </>
   );
 }
@@ -545,6 +593,8 @@ function ExportAction(p: {
   readonly assets: ExportAssets | null; readonly readAt: number | null; readonly onPlainView: (() => void) | null;
   /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name. */
   readonly glyph?: boolean;
+  /** The full head's form (desk-nav Part B): an icon beside its words, named as the words form is. */
+  readonly row?: boolean;
 }): ReactNode {
   const { page, tree, state } = p;
   const [request, setRequest] = useState<ExportRequest | null>(null);
@@ -559,9 +609,9 @@ function ExportAction(p: {
     <>
       <button
         type="button" className="docs-action docs-export" disabled={!enabled} onClick={onClick}
-        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true ? words : undefined}
+        aria-label={busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true || p.row === true ? words : undefined}
       >
-        {p.glyph === true ? <Icon name="download" size={20} /> : words}
+        {p.glyph === true ? <Icon name="download" size={20} /> : p.row === true ? <RowFace icon="download" words={words} /> : words}
       </button>
       {request !== null && <ExportSheet request={request} onClose={() => setRequest(null)} />}
     </>
@@ -585,6 +635,9 @@ function ShareAction(p: {
   /** The compact row's form (phone-header refinement (e)): an icon, its words the accessible name ("Share: <words>" while
    *  it waits, as Export's is, since nothing visible says Share). */
   readonly glyph?: boolean;
+  /** The full head's form (desk-nav Part B): an icon beside its words, named as the compact form is, so a waiting Share
+   *  is "Share: <words>" whether or not its words show (fix round 1, F4). */
+  readonly row?: boolean;
 }): ReactNode {
   const { page, tree, share } = p;
   const [open, setOpen] = useState(false);
@@ -594,9 +647,9 @@ function ShareAction(p: {
     <>
       <button
         type="button" className="docs-action docs-share" disabled={share.s === 'updating'} onClick={() => setOpen(true)}
-        aria-label={p.glyph !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
+        aria-label={p.glyph !== true && p.row !== true ? undefined : share.s === 'updating' ? fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: words }) : words}
       >
-        {p.glyph === true ? <Icon name="share" size={20} /> : words}
+        {p.glyph === true ? <Icon name="share" size={20} /> : p.row === true ? <RowFace icon="share" words={words} /> : words}
       </button>
       {/* Whether this page offers Export (spec 4.17): the refusals that take Export's clause then carry it (spec 4.16). */}
       {target !== null && <ShareSheet target={target} exportOffered={p.exportOffered} onClose={() => setOpen(false)} />}
@@ -607,24 +660,32 @@ function ShareAction(p: {
 /** The actions (spec 4.5): View on GitHub; Share (spec 4.16), wherever `shareStateFor` offers it; and Open committed
  *  version, offered iff `entryView(...).offersCommitted` on a leaf not already at `view=committed`. Open committed
  *  version navigates with a history entry (URL state, so Back returns to the draft); the commit never enters the URL,
- *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. */
-function Actions(p: ActionInputs): ReactNode {
+ *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. The full head draws them in its
+ *  row (desk-nav Part B, D-8101): GitHub, Share, Export and Open committed version each an icon beside its words. */
+function Actions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
   const { page, tree, file } = p;
+  const row = p.form === 'row';
   const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
-      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
+      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} row={row} />}
       {share.s !== 'absent' && (
-        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} />
+        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row={row} />
       )}
       {exported.s !== 'absent' && page.kind === 'path' && (
         <ExportAction
           key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
-          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView}
+          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} row={row}
         />
       )}
-      {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
+      {committedHref !== null && (row
+        ? (
+          <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted}>
+            <RowFace icon="file-text" words={DOCS_HEAD_TEXT.openCommitted} />
+          </DocsPageLink>
+        )
+        : <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>)}
     </div>
   );
 }
@@ -707,19 +768,41 @@ export function DocsHead(p: {
       />
     );
   }
+  // The full head (desk-nav Part B, D-8101): one row of back, the crumbs and the actions, then the truth line as one dense
+  // line, then the plain-view note and "Updated to". `docs-full` scopes docs.css's row and dense-line rules to this head,
+  // so the compact head's panel, which draws the same truth line and link actions, keeps its own layout. Under the
+  // compact width a listing keeps the stacked header main drew (fix round 1, F2(b)).
+  const listed = tree !== null && page.kind !== 'index' ? { tree, page } : null;
+  const actionInputs = {
+    file: visit.file, leafImage: p.leafImage ?? null, exportBody: p.exportBody ?? null, pageStore: p.pageStore ?? null,
+    exportAssets: p.exportAssets ?? null, onPlainView: p.onPlainView ?? null,
+  };
+  if (fullHeadFormFor(compactWidth) === 'stacked') {
+    return (
+      <header className="docs-head">
+        <div className="docs-head-bar">
+          <BackButton page={page} />
+          <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
+        </div>
+        {listed !== null && (
+          <>
+            <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
+            <Actions form="stacked" page={listed.page} tree={listed.tree} {...actionInputs} />
+            {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
+          </>
+        )}
+        {visit.updatedTo !== null && (
+          <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
+        )}
+      </header>
+    );
+  }
   return (
-    <header className="docs-head">
-      <div className="docs-head-bar">
-        <BackButton page={page} />
-        <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-      </div>
-      {tree !== null && page.kind !== 'index' && (
+    <header className="docs-head docs-full">
+      <HeadRow page={page} crumbs={crumbs} listed={listed} actionInputs={actionInputs} />
+      {listed !== null && (
         <>
-          <TruthLine page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} />
-          <Actions
-            page={page} tree={tree} file={visit.file} leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null}
-            pageStore={p.pageStore ?? null} exportAssets={p.exportAssets ?? null} onPlainView={p.onPlainView ?? null}
-          />
+          <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
           {p.plainView === true && <p className="docs-note" role="status">{DOCS_HEAD_TEXT.exportPlainShown}</p>}
         </>
       )}
@@ -727,6 +810,97 @@ export function DocsHead(p: {
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
     </header>
+  );
+}
+
+/** How far the desk row has given way (desk-nav Part B, fix round 2, D-8101): 0, every crumb and the action words; 1,
+ *  every crumb and the actions as icons; 2, the actions as icons and the middle crumbs folded behind `…`. Past 2,
+ *  docs.css gives way: the page's name shortens to its floor, and only then do the actions wrap onto a second line. */
+type RowStage = 0 | 1 | 2;
+
+/** Whether the page's name is cut by a fraction of a pixel, which still draws its ellipsis while the integer
+ *  `scrollWidth` and `clientWidth` agree: its text's own width against its box's. Unmeasurable (no Range geometry): not. */
+function nameCut(here: HTMLElement): boolean {
+  const text = document.createRange();
+  text.selectNodeContents(here);
+  if (typeof text.getBoundingClientRect !== 'function') return false;
+  return text.getBoundingClientRect().width > here.getBoundingClientRect().width + 0.01;
+}
+
+/** Whether the row, as now laid out, shows the page's whole name, every drawn crumb whole inside the crumbs' box (none
+ *  clipped at the start), and the actions on the crumbs' line. A row not laid out (no box: jsdom, a hidden head) fits. */
+function rowFits(row: HTMLElement): boolean {
+  const nav = row.querySelector<HTMLElement>('.docs-crumbs');
+  const here = nav?.querySelector<HTMLElement>('.docs-crumb-here');
+  if (nav === null || nav === undefined || here === null || here === undefined) return true;
+  const box = nav.getBoundingClientRect();
+  if (box.height === 0) return true;
+  if (here.scrollWidth > here.clientWidth || nameCut(here)) return false;
+  for (const li of nav.querySelectorAll('li')) {
+    const b = li.getBoundingClientRect();
+    if (b.left < box.left - 0.5 || b.right > box.right + 0.5) return false;
+  }
+  const actions = row.querySelector('.docs-actions');
+  return actions === null || actions.getBoundingClientRect().top < box.bottom - 0.5;
+}
+
+/** The stage the row at `ref` stands at: the first of 0, 1 and 2 that fits (`rowFits`), re-measured from 0 whenever the
+ *  row's width changes, its contents change outside the crumbs (an action's words, a navigation, the tree arriving) or
+ *  a font loads. Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit
+ *  is never painted, and starting from 0 every time makes the stage a function of the width and the words alone, so a
+ *  wider row never stands further on than a narrower one. Changes inside the crumbs are the fold's own and are not
+ *  watched. With no ResizeObserver (jsdom) the row stays at 0. */
+function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
+  const [stage, setStage] = useState<RowStage>(0);
+  useLayoutEffect(() => {
+    const row = ref.current;
+    if (row === null || typeof ResizeObserver === 'undefined') return;
+    const probe = (): void => {
+      for (const s of [0, 1, 2] as const) {
+        flushSync(() => setStage(s));
+        if (s === 2 || rowFits(row)) return;
+      }
+    };
+    let width = -1;
+    const resized = new ResizeObserver(() => {
+      if (row.clientWidth === width) return;
+      width = row.clientWidth;
+      probe();
+    });
+    const changed = new MutationObserver((records) => {
+      const nav = row.querySelector('.docs-crumbs');
+      if (records.some((r) => nav === null || !nav.contains(r.target))) probe();
+    });
+    resized.observe(row);
+    changed.observe(row, { childList: true, subtree: true, characterData: true });
+    const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+    fonts?.addEventListener?.('loadingdone', probe);
+    return () => {
+      resized.disconnect();
+      changed.disconnect();
+      fonts?.removeEventListener?.('loadingdone', probe);
+    };
+  }, [ref]);
+  return stage;
+}
+
+/** The full head's row (desk-nav Part B, D-8101): back, the crumbs and the actions. When the row is short it gives way in
+ *  the order fix round 2 ruled: the action words hide first (each icon keeps its name and `title`), then the middle
+ *  crumbs fold behind `…` (`useRowStage`); then the page's name shortens to its floor, and only then do the actions wrap
+ *  onto a second line (docs.css). */
+function HeadRow(p: {
+  readonly page: DocsPageLocation; readonly crumbs: readonly DocsCrumb[];
+  readonly listed: { readonly tree: DocsTreeOk; readonly page: TreePage } | null;
+  readonly actionInputs: Omit<ActionInputs, 'page' | 'tree'>;
+}): ReactNode {
+  const ref = useRef<HTMLDivElement>(null);
+  const stage = useRowStage(ref);
+  return (
+    <div className="docs-head-bar" ref={ref} data-words={stage === 0 ? undefined : 'off'}>
+      <BackButton page={p.page} />
+      <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} fold={stage === 2} />
+      {p.listed !== null && <Actions form="row" page={p.listed.page} tree={p.listed.tree} {...p.actionInputs} />}
+    </div>
   );
 }
 
