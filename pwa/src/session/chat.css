@@ -705,10 +705,11 @@ button.metachip:active {
    map (lib/markdown.tsx, where CodeBlock and ChatMarkdown live now),
    because WHICH element a token becomes is this app's business and how it
    LOOKS is the design system's. Since the move three app rules name
-   `msg-assist`, with two concerns, each to place or size, never to colour: the plain-text rule
-   below, for its own element, and the reading column's measure (THE READING
-   COLUMN, D-8059), which sets one registered length on `.msg-assist` and
-   caps its prose children's width with it. */
+   `msg-assist`, with two concerns, each to place or size, never to
+   colour: the plain-text rule below, for its own element, and the
+   reading column's measure (THE READING COLUMN, D-8059), which sets one
+   registered length on `.msg-assist` and caps its prose children's
+   width with it. */
 
 /* PLAIN TEXT — a message chat did not format (lib/markdown.tsx's MsgPlain: the pre-scan refused it, or the worker
    path answered something other than a tree). Inside an assistant turn it sits in prose's `pre` well

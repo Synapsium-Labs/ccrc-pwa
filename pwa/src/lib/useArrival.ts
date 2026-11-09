@@ -1,5 +1,6 @@
-// The arrival at a row (ring L4: a hook). Extracted unchanged from `AccountsScreen`'s lane arrival (T2c, D-6329, Q14) so the
-// runs board's `?run=` (chat reading Task L, D-8062) and the accounts screen's `?lane=` share one mechanism, not two copies.
+// The arrival at a row (ring L4: a hook). Extracted unchanged from `AccountsScreen`'s lane arrival (T2c, D-6329, Q14),
+// and called today by that screen alone, for its `?lane=`. The runs board does not use it: it replaces an old
+// `/runs?run=<id>` with the run's own page, so `hold` below has no caller.
 import { useEffect, useRef, useState } from 'react';
 
 /** Arrive at the row keyed `key`: scroll it into view at `block: 'start'`, focus it without scrolling, and answer its key, which
@@ -10,10 +11,11 @@ import { useEffect, useRef, useState } from 'react';
  *  read brings it. The last key arrived at is held, so each value arrives once and a re-render never moves focus again; a
  *  second value on the same mount arrives once. No key, or a key with no row, clears the mark and the record, so a later
  *  return to the key that was arrived at arrives again (the shell's reset will have put the pane back at the top). `rows` is
- *  the screen's own map of its mounted rows, read when the effect runs. `hold` (the runs board's, review 1597, fix round 2
- *  ruling 2): each value arrives once, so the record and the mark stay while the row arrived at is missing and only a change
- *  of key clears them (a run that closes leaves its active row before its Finished one is drawn; the row it comes back as is
- *  marked and never arrived at twice). Accounts passes none, and its row going missing clears them as before. */
+ *  the screen's own map of its mounted rows, read when the effect runs. `hold` (default off; no caller passes it today:
+ *  it was written for the runs board, which no longer arrives at a row, review 1597, fix round 2 ruling 2): each value
+ *  arrives once, so the record and the mark stay while the row arrived at is missing and only a change of key clears
+ *  them (a row that is replaced by its successor is marked and never arrived at twice). Accounts passes none, and its
+ *  row going missing clears them. */
 export function useArrival<K>(key: K | null, rowExists: boolean, rows: ReadonlyMap<K, HTMLElement>, hold = false): K | null {
   const arrivedAt = useRef<K | null>(null);
   const [arrived, setArrived] = useState<K | null>(null);
