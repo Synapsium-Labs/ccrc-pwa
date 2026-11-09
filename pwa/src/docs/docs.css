@@ -146,9 +146,11 @@
    basis, so the row breaks a line before the crumbs would go under it: no drawn crumb is ever clipped. On a shared
    line the crumbs grow from the floor into the room the actions leave, up to their whole words (`max-width:
    max-content`, so a short path takes no more room than its words). Inside them the middle crumbs give way first (a
-   flex-shrink a thousand times the last crumb's), each down to one tap beside its `/`, its words cut with an ellipsis
-   and whole in its `title`; the page's own crumb is cut last, down to a tap and one more character, so its name always
-   shows a tap wide. A crumb is a tap wide even when its words are shorter. The list is end-justified, so a row
+   flex-shrink a hundred thousand times the last crumb's, so the name's share of a shortfall stays under the engine's
+   1/64 px layout unit and it draws no ellipsis while a middle crumb can still give), each down to one tap beside its
+   `/`, its words cut with an ellipsis and whole in its `title`; the page's own crumb is cut last, down to a tap and
+   one more character, so its name always shows a tap wide. A crumb is a tap wide even when its words are shorter. The
+   list is end-justified, so a row
    narrower than the floor itself (none at 600 px or wider) would clip the earliest crumbs, never the page's name. The
    crumbs clip, so the row's controls draw the focus ring inside their boxes, as the compact row's do. GitHub's
    may-differ note is a marker (`≠`) whose words are its `title`, a screen reader's text and the link's description,
@@ -178,7 +180,7 @@
   min-width: 0; max-width: max-content; overflow: hidden;
 }
 .docs-full .docs-crumbs ol { flex-wrap: nowrap; justify-content: flex-end; }
-.docs-full .docs-crumbs li { flex: 0 1000 auto; min-width: calc(var(--tap-min) + 1ch + var(--sp-1)); }
+.docs-full .docs-crumbs li { flex: 0 100000 auto; min-width: calc(var(--tap-min) + 1ch + var(--sp-1)); }
 .docs-full .docs-crumbs li:last-child { flex: 0 1 auto; min-width: calc(var(--tap-min) + 2ch + var(--sp-1)); }
 .docs-full .docs-crumb {
   display: block; flex: 0 1 auto; min-width: var(--tap-min); line-height: var(--tap-min); text-align: center;

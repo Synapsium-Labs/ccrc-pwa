@@ -705,7 +705,8 @@ describe('the desk head (desk-nav Part B)', () => {
       return {
         words: words.length > 0 && words.every((w) => getComputedStyle(w).display !== 'none'),
         folded: row.querySelector('.docs-crumbs-more') !== null,
-        nameWhole: here.scrollWidth <= here.clientWidth,
+        // To the subpixel: integer scrollWidth and clientWidth agree on a name cut by a fraction, which still draws `…`.
+        nameWhole: ((): boolean => { const t = document.createRange(); t.selectNodeContents(here); return t.getBoundingClientRect().width <= h.width + 0.01; })(),
         seen: Math.max(0, Math.min(h.right, nav.right) - Math.max(h.left, nav.left)),
         rowH: row.getBoundingClientRect().height,
         actionsOnLine: actions === undefined || actions.top < nav.bottom - 0.5,

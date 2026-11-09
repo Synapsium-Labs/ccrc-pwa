@@ -344,6 +344,27 @@ describe('the desk row gives way in order: the words, then the middle crumbs (fi
     expect(row().querySelector('.docs-crumbs-more')).toBeNull();
   });
 
+  it('a name cut by a fraction of a pixel is not whole: its text is measured against its box, past the integer widths', async () => {
+    atWidth(1280);
+    layOut(() => true);
+    // The integer widths agree (whole), but with the words shown the text runs half a pixel past its box, which still
+    // draws the ellipsis; with them hidden it fits.
+    const rangeRect = vi.fn(function (this: Range) {
+      const row = (this.startContainer as Element).closest?.('.docs-head-bar');
+      return new DOMRect(0, 0, row?.getAttribute('data-words') === 'off' ? 10 : 10.5, 20);
+    });
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: rangeRect });
+    try {
+      open('/docs/demo/specs/d/e/x.md', fakeLoaders({ tree: okTree(DEEP) }));
+      await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+      await waitFor(() => expect(row().getAttribute('data-words')).toBe('off'));
+      expect(row().querySelector('.docs-crumbs-more')).toBeNull();
+      expect(rangeRect).toHaveBeenCalled();
+    } finally {
+      delete (Range.prototype as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+    }
+  });
+
   it.each([
     ['the name is whole with the words', () => true, null, false],
     ['the name is whole only as icons: the words hide first, every crumb still drawn', (off: boolean) => off, 'off', false],

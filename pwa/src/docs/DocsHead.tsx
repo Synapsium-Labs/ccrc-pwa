@@ -818,6 +818,15 @@ export function DocsHead(p: {
  *  docs.css gives way: the page's name shortens to its floor, and only then do the actions wrap onto a second line. */
 type RowStage = 0 | 1 | 2;
 
+/** Whether the page's name is cut by a fraction of a pixel, which still draws its ellipsis while the integer
+ *  `scrollWidth` and `clientWidth` agree: its text's own width against its box's. Unmeasurable (no Range geometry): not. */
+function nameCut(here: HTMLElement): boolean {
+  const text = document.createRange();
+  text.selectNodeContents(here);
+  if (typeof text.getBoundingClientRect !== 'function') return false;
+  return text.getBoundingClientRect().width > here.getBoundingClientRect().width + 0.01;
+}
+
 /** Whether the row, as now laid out, shows the page's whole name, every drawn crumb whole inside the crumbs' box (none
  *  clipped at the start), and the actions on the crumbs' line. A row not laid out (no box: jsdom, a hidden head) fits. */
 function rowFits(row: HTMLElement): boolean {
@@ -826,7 +835,7 @@ function rowFits(row: HTMLElement): boolean {
   if (nav === null || nav === undefined || here === null || here === undefined) return true;
   const box = nav.getBoundingClientRect();
   if (box.height === 0) return true;
-  if (here.scrollWidth > here.clientWidth) return false;
+  if (here.scrollWidth > here.clientWidth || nameCut(here)) return false;
   for (const li of nav.querySelectorAll('li')) {
     const b = li.getBoundingClientRect();
     if (b.left < box.left - 0.5 || b.right > box.right + 0.5) return false;
