@@ -460,13 +460,16 @@ describe('the desk head (desk-nav Part B)', () => {
     });
   }, 120_000);
 
-  it('at 600 the crumbs give way first: the middle crumbs are cut while every action keeps its words', async () => {
+  it("at 600 the action words give way first (fix round 2): the actions are icons on the crumbs' line, each keeping its name, and the page's name shows", async () => {
     await at({ width: 600, height: 960, skin: REFINED }, async ({ page }) => {
       const r = await rowFigure(page);
       console.log(`PHH-FIGURE refined 600x960 deep-row ${JSON.stringify({ rowW: r.rowW, folded: r.folded, crumbCut: r.crumbCut, words: r.words })}`);
-      expect(r.folded || r.crumbCut, 'the middle crumbs give way').toBe(true);
       expect(r.words.length).toBe(3);
-      expect(r.words.every((w) => w.shown && !w.cut), 'every action keeps its words').toBe(true);
+      expect(r.words.some((w) => w.shown), 'no word shows').toBe(false);
+      expect(r.folded, 'the middle crumbs are folded').toBe(true);
+      expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView]));
+      for (const c of r.controls) expect(Math.abs(c.mid - r.back!.mid), `${c.name} on the row's line`).toBeLessThanOrEqual(1);
+      expect(r.here!.right - r.here!.left, "the page's name").toBeGreaterThanOrEqual(TAP);
       expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
     }, DEEP_TREE, DEEP);
   }, 120_000);
@@ -498,7 +501,7 @@ describe('the desk head (desk-nav Part B)', () => {
       expect(r.fine, 'a mouse').toBe(true);
       expect(r.truth!.height, 'two dense lines at most').toBeLessThanOrEqual(2 * DENSE + 0.5);
       expect(r.truth!.bottom - r.head!.top, 'the head').toBeLessThanOrEqual(HEAD_MAX + DENSE);
-      expect(r.words.every((w) => w.shown && !w.cut), 'every action shows its words').toBe(true);
+      expect(r.row!.height, 'the row is one line, its actions as icons (fix round 2)').toBeLessThanOrEqual(TAP + 0.5);
       expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
     }, DEEP_TREE, DEEP);
   }, 120_000);
@@ -671,6 +674,96 @@ describe('the desk head (desk-nav Part B)', () => {
       await app.ctx.close();
     }
   }, 120_000);
+
+  // Fix round 2: the ORDER in which the row gives way when room runs short (desk-nav Part B, D-8101). The action words
+  // hide first (each icon keeps its name), then the middle crumbs fold behind `…`, then the page's name shortens to its
+  // floor, and only then do the actions wrap onto a second line.
+  /** Opens `path?ref=` at `view` with `tree`, once the actions have settled (Export reads "Export (plain view)"). */
+  async function openRow(view: View, tree: ReturnType<typeof treeOk>, ref: string): Promise<OpenedApp> {
+    const app = await openView(view, tree, DEEP);
+    await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${DEEP}?ref=${ref}`, { waitUntil: 'load' });
+    await app.page.waitForFunction(() => document.querySelector('.docs-full .docs-export')?.getAttribute('aria-label') === 'Export (plain view)', undefined, { timeout: 90_000 });
+    return app;
+  }
+  interface RowState {
+    readonly words: boolean; readonly folded: boolean; readonly nameWhole: boolean; readonly seen: number; readonly rowH: number;
+    readonly actionsOnLine: boolean; readonly crumbs: readonly { readonly text: string; readonly w: number; readonly inside: boolean }[];
+    readonly scrollW: number; readonly innerW: number;
+  }
+  /** The row as laid out now, two frames after any resize. */
+  async function rowState(page: Page): Promise<RowState> {
+    return page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const row = document.querySelector('.docs-full > .docs-head-bar')!;
+      const nav = row.querySelector('.docs-crumbs')!.getBoundingClientRect();
+      const here = row.querySelector('.docs-crumb-here') as HTMLElement;
+      const h = here.getBoundingClientRect();
+      const actions = row.querySelector('.docs-actions')?.getBoundingClientRect();
+      const words = [...row.querySelectorAll('.docs-action-words')];
+      return {
+        words: words.length > 0 && words.every((w) => getComputedStyle(w).display !== 'none'),
+        folded: row.querySelector('.docs-crumbs-more') !== null,
+        nameWhole: here.scrollWidth <= here.clientWidth,
+        seen: Math.max(0, Math.min(h.right, nav.right) - Math.max(h.left, nav.left)),
+        rowH: row.getBoundingClientRect().height,
+        actionsOnLine: actions === undefined || actions.top < nav.bottom - 0.5,
+        crumbs: [...row.querySelectorAll('.docs-crumb, .docs-crumb-here, .docs-crumbs-more')].map((c) => {
+          const b = c.getBoundingClientRect();
+          return { text: c.textContent ?? '', w: b.width, inside: b.left >= nav.left - 0.5 && b.right <= nav.right + 0.5 };
+        }),
+        scrollW: document.documentElement.scrollWidth, innerW: innerWidth,
+      };
+    });
+  }
+  const SWEEP = Array.from({ length: (1480 - 900) / 20 + 1 }, (_, i) => 900 + 20 * i);
+
+  it.each([INSTRUMENT, REFINED])("the modified draft at 1280 x 800, %s, under a mouse: the action words hide, and the page's whole name shows (fix round 2, item 1)", async (skin) => {
+    const app = await openRow({ width: 1280, height: 800, skin, pointer: 'fine' }, DRAFT_DEEP, 'main');
+    try {
+      const r = await rowState(app.page);
+      console.log(`PHH-FIGURE ${skin} 1280x800 draft-name ${JSON.stringify({ seen: r.seen, words: r.words, folded: r.folded, rowH: r.rowH })}`);
+      expect(r.words, 'the action words are hidden').toBe(false);
+      expect(r.nameWhole, "the page's whole name").toBe(true);
+      expect(r.folded, 'every crumb is drawn').toBe(false);
+      expect(r.actionsOnLine, 'one row').toBe(true);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => ([[600, 960], [768, 1024]] as const).map(([w, h]) => [skin, w, h] as const)))('the modified draft, %s, %i x %i under a mouse: one action row, the actions as icons (fix round 2, item 1)', async (skin, width, height) => {
+    const app = await openRow({ width, height, skin, pointer: 'fine' }, DRAFT_DEEP, 'main');
+    try {
+      const r = await rowState(app.page);
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} draft-row ${JSON.stringify({ seen: r.seen, words: r.words, folded: r.folded, rowH: r.rowH })}`);
+      expect(r.words, 'the action words are hidden').toBe(false);
+      expect(r.actionsOnLine, 'the actions share the crumbs\' line').toBe(true);
+      expect(r.rowH, 'one row').toBeLessThanOrEqual(TAP + 0.5);
+      expect(r.seen, "the page's name").toBeGreaterThanOrEqual(TAP);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  it.each([INSTRUMENT, REFINED])('the modified draft, %s, under a mouse, 900 to 1480 px in 20 px steps: a wider window never shows less of the name (fix round 2, item 1)', async (skin) => {
+    const app = await openRow({ width: 900, height: 800, skin, pointer: 'fine' }, DRAFT_DEEP, 'main');
+    try {
+      const seen: [number, number, string][] = [];
+      for (const w of SWEEP) {
+        await app.page.setViewportSize({ width: w, height: 800 });
+        const r = await rowState(app.page);
+        seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`]);
+      }
+      console.log(`PHH-FIGURE ${skin} sweep draft-name ${JSON.stringify(seen)}`);
+      for (let i = 1; i < seen.length; i++) {
+        expect(seen[i]![1], `the name at ${seen[i]![0]} against ${seen[i - 1]![0]}`).toBeGreaterThanOrEqual(seen[i - 1]![1] - 0.5);
+      }
+    } finally {
+      await app.ctx.close();
+    }
+  }, 300_000);
 
   it.each([
     [1280, 800],

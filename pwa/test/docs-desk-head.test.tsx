@@ -290,3 +290,57 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     }
   });
 });
+
+// Fix round 2 (D-8101): the order in which the row gives way. jsdom lays nothing out, so a fake ResizeObserver reports the
+// row once and the page's crumb reads as cut or whole by the stage the row stands at; the pixels are the browser file's.
+describe('the desk row gives way in order: the words first (fix round 2)', () => {
+  const DEEP = treeOk({ entries: [entry('specs', 'd/e/x.md')] });
+
+  /** A ResizeObserver that reports its element once, a microtask after `observe`, as an engine reports a first size. */
+  class OnceObserver {
+    private readonly cb: ResizeObserverCallback;
+    constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+    observe(): void { queueMicrotask(() => this.cb([], this as unknown as ResizeObserver)); }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+
+  /** Lays the row out so that the page's name is whole only when `whole(wordsOff, folded)` says so. */
+  function layOut(whole: (wordsOff: boolean, folded: boolean) => boolean): void {
+    vi.stubGlobal('ResizeObserver', OnceObserver);
+    const rowOf = (e: Element): Element | null => e.closest('.docs-head-bar');
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      const r = rowOf(this);
+      if (!this.classList.contains('docs-crumb-here') || r === null) return 0;
+      return whole(r.getAttribute('data-words') === 'off', r.querySelector('.docs-crumbs-more') !== null) ? 40 : 120;
+    });
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('docs-crumb-here') ? 60 : 900;
+    });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 10, 44));
+  }
+
+  it('a row that is never measured (no ResizeObserver) keeps the words and every crumb', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', undefined);
+    open('/docs/demo/specs/d/e/x.md', fakeLoaders({ tree: okTree(DEEP) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect(row().getAttribute('data-words')).toBeNull();
+    expect(row().querySelector('.docs-crumbs-more')).toBeNull();
+  });
+
+  it.each([
+    ['the name is whole with the words', () => true, null, false],
+    ['the name is whole only as icons: the words hide first, every crumb still drawn', (off: boolean) => off, 'off', false],
+  ] as const)('%s', async (_what, whole, words, folded) => {
+    atWidth(1280);
+    layOut(whole);
+    open('/docs/demo/specs/d/e/x.md', fakeLoaders({ tree: okTree(DEEP) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    await waitFor(() => expect(row().getAttribute('data-words')).toBe(words));
+    await waitFor(() => expect(row().querySelector('.docs-crumbs-more') !== null).toBe(folded));
+    // Whatever the stage, each action keeps its name.
+    expect(within(row()).getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeInTheDocument();
+    expect(within(row()).getByRole('link', { name: DOCS_HEAD_TEXT.github })).toBeInTheDocument();
+  });
+});

@@ -10,9 +10,13 @@
 // one row of back, where and what, Share and Export as icons, and Page details, which opens a panel holding the crumbs,
 // the truth line and the link actions (`CompactHead`). Every other page, and every page at a wider viewport, draws the
 // header above as one row and one dense line (desk-nav Part B, D-8101): back, the crumbs and the actions share the row
-// (GitHub, Share and Export an icon beside their words, the words giving way under docs.css's container query), and the
-// truth line sits under it on one line.
-import { useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
+// (GitHub, Share and Export an icon beside their words, the words giving way first when the row is short, `HeadRow`),
+// and the truth line sits under it on one line.
+import {
+  useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  type KeyboardEvent, type ReactNode,
+} from 'react';
+import { flushSync } from 'react-dom';
 import {
   DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
   type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
@@ -515,7 +519,8 @@ function TruthLine(p: {
 }
 
 /** An action's face in the full head's row (desk-nav Part B, D-8101): its icon, then its words in `.docs-action-words`,
- *  which docs.css hides under the `docs-head` container query; the control's name is set beside it, so it is kept. */
+ *  which docs.css hides when `HeadRow` asks (and under the `docs-head` container query); the control's name is set
+ *  beside it, so it is kept. */
 function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'file-text'; readonly words: string }): ReactNode {
   return <><Icon name={p.icon} size={16} /><span className="docs-action-words">{p.words}</span></>;
 }
@@ -791,11 +796,7 @@ export function DocsHead(p: {
   }
   return (
     <header className="docs-head docs-full">
-      <div className="docs-head-bar">
-        <BackButton page={page} />
-        <Crumbs key={crumbs.at(-1)?.href} crumbs={crumbs} />
-        {listed !== null && <Actions form="row" page={listed.page} tree={listed.tree} {...actionInputs} />}
-      </div>
+      <HeadRow page={page} crumbs={crumbs} listed={listed} actionInputs={actionInputs} />
       {listed !== null && (
         <>
           <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
@@ -806,6 +807,86 @@ export function DocsHead(p: {
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
     </header>
+  );
+}
+
+/** How far the desk row has given way (desk-nav Part B, fix round 2, D-8101): 0, the action words shown; 1, the actions
+ *  as icons. Past 1, docs.css gives way: the crumbs shorten, and only then do the actions wrap onto a second line. */
+type RowStage = 0 | 1;
+
+/** Whether the row, as now laid out, shows the page's whole name, every drawn crumb whole inside the crumbs' box (none
+ *  clipped at the start), and the actions on the crumbs' line. A row not laid out (no box: jsdom, a hidden head) fits. */
+function rowFits(row: HTMLElement): boolean {
+  const nav = row.querySelector<HTMLElement>('.docs-crumbs');
+  const here = nav?.querySelector<HTMLElement>('.docs-crumb-here');
+  if (nav === null || nav === undefined || here === null || here === undefined) return true;
+  const box = nav.getBoundingClientRect();
+  if (box.height === 0) return true;
+  if (here.scrollWidth > here.clientWidth) return false;
+  for (const li of nav.querySelectorAll('li')) {
+    const b = li.getBoundingClientRect();
+    if (b.left < box.left - 0.5 || b.right > box.right + 0.5) return false;
+  }
+  const actions = row.querySelector('.docs-actions');
+  return actions === null || actions.getBoundingClientRect().top < box.bottom - 0.5;
+}
+
+/** The stage the row at `ref` stands at: the first of 0 and 1 that fits (`rowFits`), re-measured from 0 whenever the
+ *  row's width changes, its contents change outside the crumbs (an action's words, a navigation, the tree arriving) or
+ *  a font loads. Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit
+ *  is never painted, and starting from 0 every time makes the stage a function of the width and the words alone, so a
+ *  wider row never stands further on than a narrower one. Changes inside the crumbs are the fold's own and are not
+ *  watched. With no ResizeObserver (jsdom) the row stays at 0. */
+function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
+  const [stage, setStage] = useState<RowStage>(0);
+  useLayoutEffect(() => {
+    const row = ref.current;
+    if (row === null || typeof ResizeObserver === 'undefined') return;
+    const probe = (): void => {
+      for (const s of [0, 1] as const) {
+        flushSync(() => setStage(s));
+        if (s === 1 || rowFits(row)) return;
+      }
+    };
+    let width = -1;
+    const resized = new ResizeObserver(() => {
+      if (row.clientWidth === width) return;
+      width = row.clientWidth;
+      probe();
+    });
+    const changed = new MutationObserver((records) => {
+      const nav = row.querySelector('.docs-crumbs');
+      if (records.some((r) => nav === null || !nav.contains(r.target))) probe();
+    });
+    resized.observe(row);
+    changed.observe(row, { childList: true, subtree: true, characterData: true });
+    const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+    fonts?.addEventListener?.('loadingdone', probe);
+    return () => {
+      resized.disconnect();
+      changed.disconnect();
+      fonts?.removeEventListener?.('loadingdone', probe);
+    };
+  }, [ref]);
+  return stage;
+}
+
+/** The full head's row (desk-nav Part B, D-8101): back, the crumbs and the actions. When the row is short it gives way in
+ *  the order fix round 2 ruled: the action words hide first (each icon keeps its name and `title`, `useRowStage`); then
+ *  the crumbs shorten, and only then do the actions wrap onto a second line (docs.css). */
+function HeadRow(p: {
+  readonly page: DocsPageLocation; readonly crumbs: readonly DocsCrumb[];
+  readonly listed: { readonly tree: DocsTreeOk; readonly page: TreePage } | null;
+  readonly actionInputs: Omit<ActionInputs, 'page' | 'tree'>;
+}): ReactNode {
+  const ref = useRef<HTMLDivElement>(null);
+  const stage = useRowStage(ref);
+  return (
+    <div className="docs-head-bar" ref={ref} data-words={stage === 0 ? undefined : 'off'}>
+      <BackButton page={p.page} />
+      <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
+      {p.listed !== null && <Actions form="row" page={p.listed.page} tree={p.listed.tree} {...p.actionInputs} />}
+    </div>
   );
 }
 

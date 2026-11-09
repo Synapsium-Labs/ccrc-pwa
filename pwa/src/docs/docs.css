@@ -134,8 +134,8 @@
 /* — the full head as one row and one dense line (desk-nav Part B, D-8101). `DocsHead` draws back, the crumbs and the
    actions in `.docs-head-bar`, then the truth line under it. Every rule here is scoped to `.docs-full`, the full head's
    own class, because the compact head's panel draws the same truth line and link actions in its own layout, which does
-   not change. No rule here keys on a viewport width: the row is a `docs-head` container, and only the container query
-   below hides the action words.
+   not change. No rule here keys on a viewport width: the row is a `docs-head` container, and the action words hide when
+   `HeadRow` asks (`data-words`) or under the container query below.
    THE ROW (fix round 1, F1: readable wins over compact). The crumbs have a real floor, three crumbs at a tap each
    beside their `/` (the `…` button, the parent and the page's own name when folded), and that floor is their flex
    basis, so the row breaks a line before the crumbs would go under it: when the floor and the actions do not fit on
@@ -145,8 +145,9 @@
    crumb's), each down to one tap beside its `/`, its words cut with an ellipsis and whole in its `title`; the page's
    own crumb is cut last, down to a tap and one more character, so its name always shows a tap wide. If even the floors do not fit, the list is end-justified, so what is clipped is the earliest
    crumbs, never the page's name. The crumbs clip, so the row's controls draw the focus ring inside their boxes, as
-   the compact row's do. The actions keep their words while there is room; under the container query each keeps its
-   icon and its name. GitHub's may-differ note is a marker (`≠`) whose words are its `title`, a screen reader's text and
+   the compact row's do. THE ORDER (fix round 2): the action words give way first. `HeadRow` measures the row and hides
+   them (`data-words="off"`) whenever it cannot show the page's whole name with them, and the container query hides them
+   below 530 px; each action keeps its icon and its name. GitHub's may-differ note is a marker (`≠`) whose words are its `title`, a screen reader's text and
    the link's description, so it takes no room from the crumbs. On a line of their own, if the actions are still wider
    than the row (a draft at 600: GitHub, Share, Export and Open committed version with their words), they wrap among
    themselves rather than run past the head; GitHub's refusal, the one long sentence among them, is cut with an
@@ -187,6 +188,7 @@
    (fix round 1, F3; registered in design/audit.mjs's OPACITY_REGISTRY beside the compact bar's). */
 .docs-full .docs-action:has(> .docs-action-words) { text-decoration: none; }
 .docs-full .docs-action:disabled { opacity: 0.35; }
+.docs-full > .docs-head-bar[data-words='off'] .docs-action-words { display: none; }
 @container docs-head (width < 530px) {
   .docs-action-words { display: none; }
 }

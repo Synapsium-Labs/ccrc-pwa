@@ -104,14 +104,17 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(declValue(mark, 'flex')).toBe('none');
   });
 
-  it('the action words hide only under the docs-head container query', () => {
+  it('the action words hide when the row asks (`HeadRow`, fix round 2, item 1) and under the docs-head container query, nowhere else', () => {
     const preludes = containerPreludes();
     expect(preludes).toHaveLength(1);
     expect(preludes[0]).toMatch(/^@container docs-head \(width < \d+px\)$/);
     expect(declValue(ruleIn(atBlock(docsCss, preludes[0]!), '.docs-action-words'), 'display')).toBe('none');
-    // Nowhere else is a word hidden: the one `.docs-action-words` rule is the one inside the query.
+    const asked = `${ROW}[data-words='off'] .docs-action-words`;
+    expect(declValue(ruleIn(docsCss, asked), 'display')).toBe('none');
+    // Nowhere else is a word hidden: outside the query, the one `.docs-action-words` rule is the row's ask.
     const outside = stripComments(docsCss).replace(atBlock(docsCss, preludes[0]!), '');
-    expect(outside).not.toMatch(/\.docs-action-words\s*[,{]/);
+    const hiding = [...outside.matchAll(/([^{}]*\.docs-action-words)\s*\{/g)].map((m) => m[1]!.trim());
+    expect(hiding).toEqual([asked]);
   });
 
   it('the truth line is one line at --docs-line-h when its facts fit, and wraps onto a second line when they do not; it clips nothing (F2)', () => {
