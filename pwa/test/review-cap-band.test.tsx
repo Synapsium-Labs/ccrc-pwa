@@ -8,7 +8,7 @@ import { NOW, MIN, run } from './rollupFixture';
 afterEach(() => { cleanup(); });
 
 const cap = (over: Partial<ReviewCapStatus> = {}): ReviewCapStatus =>
-  ({ rounds: 3, cap: 3, askedAt: NOW - 30 * MIN, liftedAt: null, ...over });
+  ({ rounds: 3, cap: 3, askedAt: NOW - 30 * MIN, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null, ...over });
 const waiting = run(12, 'coord', 'w-12', { programTitle: 'Port the API', wave: 2, reviewCap: cap() });
 const lifted = run(14, 'coord', 'w-14', { reviewCap: cap({ liftedAt: NOW - 5 * MIN }) });
 const closed = run(16, 'coord', 'w-16', { state: 'done', reviewCap: cap() });

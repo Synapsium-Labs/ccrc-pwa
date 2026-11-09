@@ -4359,7 +4359,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
         expect(res.statusCode).toBe(200);
         return ((res.json() as { runs: RunSummary[] }).runs.find((r) => r.id === id))!.reviewCap;
       };
-      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null });
+      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null });
       for (const id of ids) expect(await capOf(id)).toBeNull();
       const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
       expect(refused.statusCode).toBe(409);

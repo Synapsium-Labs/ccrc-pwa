@@ -486,7 +486,7 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
   it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', async () => {
     const store = makeStore();
     act(() => {
-      store.setState({ coord: COORD('set'), coordFrameSeen: true, runs: [r({ reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: null } })], runsFrameSeen: true });
+      store.setState({ coord: COORD('set'), coordFrameSeen: true, runs: [r({ reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } })], runsFrameSeen: true });
     });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     await screen.findByTestId('programme-card');
@@ -1563,7 +1563,7 @@ describe('the run board on the page scaffold (D-5102)', () => {
 describe('the review cap band on the run board', () => {
   it('lists a waiting run above the programme cards, and Lift cap opens the sheet', async () => {
     const store = makeStore();
-    const waiting = r({ id: 12, reviewCap: { rounds: 3, cap: 3, askedAt: Date.now() - 60_000, liftedAt: null } });
+    const waiting = r({ id: 12, reviewCap: { rounds: 3, cap: 3, askedAt: Date.now() - 60_000, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } });
     act(() => { store.setState({ runs: [waiting], runsFrameSeen: true }); });
     vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
     render(<RunsScreen loadCaps={NO_CAPS} store={store} />);

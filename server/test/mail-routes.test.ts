@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
+import { isReviewRoundsRefusal } from '../../shared/refusal.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
@@ -1091,8 +1092,12 @@ describe('the rejection table is total, in both directions', () => {
         // literals (`'pressure-warn'`, `'headroom-unmeasured'`). A refusal is journalled as `memory-gate:<word>` where the
         // lane journals its skips, never a `refused` or `reject.code`. Admitted through the exported guard, derived from
         // `WAKE_MEMORY_REFUSALS` and `WAKE_MEMORY_NOTES`, never NOT_CODES.
+        // THE COORDINATOR'S REVIEW-ROUNDS DOOR (D-8125): `coord/reviewcap.ts` names the lift's refusals as literals
+        // (`'coord-lift-off'`, `'cap-not-reached'`). Admitted through the exported guard, derived from `REVIEW_ROUNDS_REFUSALS`,
+        // never NOT_CODES.
+        || isReviewRoundsRefusal(tok)
         || isWakeGateKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word or wake-gate word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal or wake-gate word`).toBe(true);
     }
   });
 });

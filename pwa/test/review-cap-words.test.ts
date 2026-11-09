@@ -5,7 +5,7 @@ import { capWaiting, findingsWords, reviewCapOf } from '../src/fleet/reviewCapWo
 import { run } from './rollupFixture';
 
 const cap = (over: Partial<ReviewCapStatus> = {}): ReviewCapStatus =>
-  ({ rounds: 3, cap: 3, askedAt: 1_000, liftedAt: null, ...over });
+  ({ rounds: 3, cap: 3, askedAt: 1_000, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null, ...over });
 /** A run as an older server ships it: no `reviewCap` key at all. */
 const older = (): RunSummary => {
   const r: Partial<RunSummary> = { ...run(12, 'coord', 'w-12') };

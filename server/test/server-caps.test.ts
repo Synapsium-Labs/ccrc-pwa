@@ -21,6 +21,14 @@ const AT = 1_790_000_000;
 
 afterEach(() => { vi.useRealTimers(); });
 
+describe('review-rounds-v1 (D-8125)', () => {
+  it('is advertised, and the word matches the file grammar', () => {
+    expect(SERVER_CAPS).toContain('review-rounds-v1');
+    expect(isServerCapWord('review-rounds-v1')).toBe(true);
+    expect(parseServerCaps(renderServerCaps(['review-rounds-v1'], AT), AT)).toEqual({ ok: true, at: AT, words: ['review-rounds-v1'] });
+  });
+});
+
 describe('the file\'s grammar: renderServerCaps then parseServerCaps (spec §6.1)', () => {
   it('round-trips the words, and an empty list', () => {
     const text = renderServerCaps(['dispatch-live-gate-v1', 'hook-main-state-v1'], AT);

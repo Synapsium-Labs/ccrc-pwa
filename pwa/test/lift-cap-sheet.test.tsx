@@ -9,7 +9,7 @@ import { run } from './rollupFixture';
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 const work = (id = 12) => run(id, 'coord', `w-${id}`, {
-  programTitle: 'Port the API', wave: 2, reviewCap: { rounds: 3, cap: 3, askedAt: 1_000, liftedAt: null },
+  programTitle: 'Port the API', wave: 2, reviewCap: { rounds: 3, cap: 3, askedAt: 1_000, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null },
 });
 const view = (id = 12, summary = '2 findings, 1 needs a ruling'): ReviewCapView => ({
   ok: true, askedAt: 1_000, liftedAt: null,

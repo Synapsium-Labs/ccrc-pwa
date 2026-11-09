@@ -6871,7 +6871,24 @@ export interface ChildReclaimStatus {
  * cap's ask was raised (the refused fourth open) and lifted (the operator's `POST /api/coord/review-cap`). Both times
  * are epoch ms on the server's clock, and null until that event. Only a work run carries one.
  */
-export interface ReviewCapStatus { rounds: number; cap: number; askedAt: number | null; liftedAt: number | null }
+export interface ReviewCapStatus {
+  rounds: number;
+  /** The EFFECTIVE cap (`effectiveReviewCap(granted)`, D-8125): the base cap plus the rounds the run's coordinator has
+   *  granted. An older server sends neither `granted` nor `askHandledAt` nor `coordLift`, and its `cap` is then 3. */
+  cap: number;
+  askedAt: number | null;
+  liftedAt: number | null;
+  /** D-8125: the extra rounds the run's coordinator has granted (0 when it has lifted none). */
+  granted: number;
+  /** D-8125: when a coordinator lift closed the ask, or null (never closed, or no ask). */
+  askHandledAt: number | null;
+  /** D-8125: the run's last coordinator lift, or null. */
+  coordLift: CoordLiftRecord | null;
+}
+
+/** D-8125: one coordinator lift of a work run's review-round cap, as the journal holds it. `count` is how many coordinator
+ *  lifts the run has had. */
+export interface CoordLiftRecord { at: number; by: string; reason: string; rounds: number; capBefore: number; capAfter: number; count: number }
 
 /** The last review's report as the store reads it from its `review-done` mail; both fields are null when no review
  *  has reported. `summary` is the mail body after its fingerprint line. Moved here from `server/src/coord/reviewcap.ts`
@@ -6915,6 +6932,10 @@ export interface ReviewCapView { ok: true; ask: ReviewCapAsk; askedAt: number | 
 
 /** `POST /api/coord/review-cap`'s answer (D-6795), typed once for the route's literal and the PWA's call. */
 export interface ReviewCapLiftAnswer { ok: true; run: number; rounds: number; cap: number; lifted: true }
+
+/** `POST /api/runs/:id/review-rounds`'s answer (D-8125): the coordinator's bounded lift, with the cap before and after
+ *  and whether it closed the operator's open ask. */
+export interface ReviewRoundsLiftAnswer { ok: true; run: number; rounds: number; capBefore: number; capAfter: number; closedAsk: boolean }
 
 /** A programme's name from its slug (D-8071): hyphens read as spaces and the first letter capital, so `programme-a` is
  *  `Programme a`. The name a programme row takes when an open sends no `programmeTitle`, and the one migration 43 sets. */
@@ -11900,7 +11921,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 // from Tasks 2 and 10, the file's name, the lease and the grammar in `ccd/session-hook.sh`.
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
-export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1';
+export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -11939,6 +11960,10 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  since Q3l `ccrc-api` refuses a server whose current cap file omits this word (`no-questions-door`, D-7328). W7 gates its client on this word before it calls a door of the family. Added by the change
    *  that builds the family, cut after its routes, cores and aliases. */
   'questions-v1': true,
+  /** D-8125: this server answers `POST /api/runs/:id/review-rounds`, the coordinator's bounded lift of a work run's
+   *  review-round cap, as specified (the run's claiming or programme coordinator, a reason, `REVIEW_ROUND_CAP` more
+   *  rounds, journalled, the operator's ask closed). Added by the change that builds the door, cut after it. */
+  'review-rounds-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

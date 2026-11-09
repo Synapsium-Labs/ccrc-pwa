@@ -86,11 +86,16 @@ describe('cutWhole', () => {
 
 // D-6909: the cap's state on a run row. A work run carries it; a review run, or a run of unknown kind, carries null.
 describe('reviewCapStatus', () => {
-  it('a work run with no review_cap row reads rounds and the cap, nothing raised or lifted', () => {
-    expect(reviewCapStatus('work', 2, undefined)).toEqual({ rounds: 2, cap: 3, askedAt: null, liftedAt: null });
+  it('a work run with no review_cap row reads rounds and the cap, nothing raised, lifted or granted', () => {
+    expect(reviewCapStatus('work', 2, undefined)).toEqual({ rounds: 2, cap: 3, askedAt: null, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null });
   });
   it('a work run carries its row\'s askedAt and liftedAt', () => {
-    expect(reviewCapStatus('work', 3, { askedAt: 10, liftedAt: 20 })).toEqual({ rounds: 3, cap: 3, askedAt: 10, liftedAt: 20 });
+    expect(reviewCapStatus('work', 3, { askedAt: 10, liftedAt: 20 })).toEqual({ rounds: 3, cap: 3, askedAt: 10, liftedAt: 20, granted: 0, askHandledAt: null, coordLift: null });
+  });
+  it('the cap is the effective one: a granted row of 3 reads cap 6 (D-8125)', () => {
+    const lift = { at: 5, by: 'coordinator-a', reason: 'two real major findings remain open', rounds: 3, capBefore: 3, capAfter: 6, count: 1 };
+    expect(reviewCapStatus('work', 4, { askedAt: 10, liftedAt: null, granted: 3, askHandledAt: 11, coordLift: lift }))
+      .toEqual({ rounds: 4, cap: 6, askedAt: 10, liftedAt: null, granted: 3, askHandledAt: 11, coordLift: lift });
   });
   it('a review run, and a run of unknown kind, carry null', () => {
     expect(reviewCapStatus('review', 0, undefined)).toBeNull();

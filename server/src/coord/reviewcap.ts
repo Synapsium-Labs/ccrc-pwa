@@ -1,5 +1,5 @@
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
-import { REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_WORDS, type LastReviewReport, type ReviewCapAsk, type ReviewCapStatus, type ReviewFindings, type RunKind } from '../../../shared/api.js';
+import { REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_WORDS, type CoordLiftRecord, type LastReviewReport, type ReviewCapAsk, type ReviewCapStatus, type ReviewFindings, type RunKind } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 
 /**
@@ -23,11 +23,15 @@ export const reviewCapRefuses = (rounds: number, lifted: boolean, granted: numbe
   !lifted && rounds >= effectiveReviewCap(granted);
 
 /** D-6909: the cap's state a run row carries. Only a work run has one; a review run, or a run of unknown kind, is null.
- *  `row` is the run's `review_cap` row, absent until the ask is raised or the cap lifted. */
+ *  `row` is the run's `review_cap` state, absent until the ask is raised or the cap lifted; its D-8125 fields are optional so
+ *  a row without them reads as granted 0, no handled ask and no coordinator lift. `cap` is the effective one. */
 export const reviewCapStatus = (kind: RunKind, rounds: number,
-  row: { askedAt: number | null; liftedAt: number | null } | undefined): ReviewCapStatus | null =>
-  kind !== 'work' ? null
-    : { rounds, cap: REVIEW_ROUND_CAP, askedAt: row?.askedAt ?? null, liftedAt: row?.liftedAt ?? null };
+  row: { askedAt: number | null; liftedAt: number | null; granted?: number | null; askHandledAt?: number | null; coordLift?: CoordLiftRecord | null } | undefined): ReviewCapStatus | null => {
+  if (kind !== 'work') return null;
+  const granted = row?.granted ?? 0;
+  return { rounds, cap: effectiveReviewCap(granted), askedAt: row?.askedAt ?? null, liftedAt: row?.liftedAt ?? null,
+    granted, askHandledAt: row?.askHandledAt ?? null, coordLift: row?.coordLift ?? null };
+};
 
 /** `text` cut to at most `max` characters, never inside a token (review 960 F1). The egress mask matches a key only
  *  whole, so a cut that falls inside a run of non-whitespace drops that whole run rather than send its prefix unmasked;
