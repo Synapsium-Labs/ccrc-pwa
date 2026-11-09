@@ -1,6 +1,6 @@
 # The Overlord: one coordinator above every coordinator, that the operator talks to
 
-**Spec** · 2026-11-09 · Status: Draft, rev 1 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
+**Spec** · 2026-11-09 · Status: Draft, rev 2 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
 the Overlord programme's coordinator · Issue: #2491 · Related: `docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md` (D-8126, PR #2487,
 not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` and its round 2,
@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R8 (the operator's) and the author's calls C1 to C44, so the operator can approve or overturn each one by number.
+R8 (the operator's) and the author's calls C1 to C46, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -27,6 +27,8 @@ This spec turns each ruling into a design:
 - **A long life.** One Overlord, many generations. The server renews its context from canonical state before it grows
   long, re-anchors it on every start, proves it remembers with canaries and probes, and audits it daily from outside
   (§3.3).
+- **Its model and its accounts.** It runs Fable, the newest of the family, because the operator selected it (C45). It
+  runs on a pool of accounts of its own, which no other session may use and which it never leaves (C46, §3.4).
 - **Authority.** Authority starts as D-8126's operator-only list, unchanged. It is relaxed one named act at a time
   through operator grants that the server enforces (§7).
 - **Knowledge.** Knowledge of the operator is a private store on the server box. It is fed from rulings, from the
@@ -44,6 +46,7 @@ This spec turns each ruling into a design:
 - one designation row;
 - three new coordination tables and one new private store;
 - one new hold tier in the question lanes;
+- one new clause in the pool rule: an exclusive account serves only its own pool;
 - Overlord doors beside the operator's doors;
 - one console place;
 - one new clause in the coordinator skill.
@@ -187,9 +190,9 @@ same Overlord comes back, never a new one beside it. The server enforces this, n
   - On start, and after any compaction, the skill reads `GET /api/overlord/board` (§5.2) and its open requests before
     doing anything else.
   - The Overlord card (C38) re-anchors it at every start, and §3.3 says how it stays whole for months.
-- **C6. Model.** It runs Opus at high effort, per the fleet's standing model policy: Opus orchestrates, and a
-  credits-billed model is never chosen by a session (O2). Long reading goes to subagents that name their model:
-  Sonnet for reading and distilling, Haiku for listing. Its own context stays free for routing and judgement.
+- **C6. Model.** It runs Fable at high effort, the model the operator selected for it (C45, §3.4). Long reading goes to
+  subagents that name their model: Sonnet for reading and distilling, Haiku for listing. Its own context stays free for
+  routing and judgement.
 - **C7. It obeys every brake the operator has.**
   - Under `coordinator-paused` it starts nothing and dispatches nothing, though it still answers and relays.
   - Under `mail-disabled` it sends nothing.
@@ -398,6 +401,67 @@ from the server's canonical state, never from a summary of a summary, and proves
 - **History stays whole.** The Overlord's own conversations are in `ccrc history` across every generation, and the
   history line on its card points at the last generation's node. The steering of W3 (`<ccrc-leaf>` blocks, once
   armed) applies to its compactions like any session's.
+
+### 3.4 Its model and its accounts
+
+The operator, 2026-11-09, after rev 1: the Overlord should run the Fable class, and it should probably have an account
+pool of its own. Both fit what it is. Its work is judgement for the whole fleet, which is exactly the work the fleet's
+model policy saves Fable for. And one session whose holds cover every coordinator should never wait behind workers for
+an account, nor take theirs.
+
+- **C45. It runs Fable, because the operator selected it.**
+  - **The operator's choice, on the designation.** The designation row gains `model` (`fable` or `opus`). Only the
+    operator's session-gated doors write it: designate, move, and a Settings row. This is the D-6790 rule kept whole:
+    Fable runs only when the operator selects it, and every box-token write that names `fable` is still refused
+    (`409 fable-operator-only`). The Overlord cannot pick its own model, and no other session can borrow the choice.
+  - **A class, never a version.** It asks for the class `fable`. The class follows its family's newest model through
+    the fleet's model-class auto-advance (the operator's ruling of 2026-10-07), so it runs the newest Fable today (5.2,
+    as the operator says) and moves to the next one without anyone touching it. The move lands at a renewal, never
+    inside a generation (C44).
+  - **The server applies the choice at each renewal.** One L1 decider, `overlordModelFor`, answers the model for the
+    next generation: the designated model when the pool has an account that can serve it, else `opus`. "Can serve" is
+    the limits read the fleet already makes for each class: for Fable it is the sweep's estimate of the account's Fable
+    share against its cap, so Fable's weekly cap is a fact the decider reads, not a failure the Overlord meets mid-turn.
+    The renewal lane composes the class write itself, as the server does for the operator's console (the same path
+    D-6791 leaves open outside a session's shell). Every change of model is a `renew` act row that names the model and
+    why.
+  - **Falling back never stalls it.** When Fable's cap is reached, the next generation runs Opus, and the first renewal
+    after Fable is servable again returns to Fable. The daily quiet-window renewal (C36) makes that at most a day. If a
+    turn fails on the cap before the renewal, the Overlord is not live for those minutes, and every hold falls through to
+    the operator at once (C23), as for any outage.
+  - **Its helpers are never Fable.** Its subagents run Sonnet, Haiku or Opus (C6, C44), and the session hook already
+    denies a Fable subagent. The daily outside audit (C42) runs on Opus: a judge on another model shares fewer of the
+    Overlord's blind spots.
+  - **How a generation starts on another model** is measured in W0: the class write and a relaunch, or a `/model`
+    typed after the clear and before the first prompt. The typed form saves the account's default model (the
+    auto-advance spec's D19). That side effect is harmless here only because the accounts are the Overlord's alone
+    (C46).
+- **C46. A pool of accounts of its own, exclusive both ways.**
+  - **Its side.** The Overlord lives in its own project (C2's default, `overlord`), and the operator tags that project
+    with a pool that only the Overlord's project uses (written here as `<overlord-pool>`; real pool names are the
+    operator's data and stay out of this repository). `ccd` already keeps a tagged project in its pool: placement,
+    the auto-swap and every manual verb (the pools spec's ruling 6). The Overlord never crosses out of its pool.
+  - **The other side is new: an exclusive account.** Today an untagged project may land on any account, a tagged one
+    included ("untagged is unconstrained"), so a pool alone does not keep other sessions off the Overlord's accounts.
+    An account's pool edge gains `exclusive`, off by default. An exclusive account serves only projects tagged with its
+    own pool. An untagged project, another pool, the auto-swap's last-resort bracket and the overflow rotation never
+    land on it. This adds one clause to the pool rule: "serve iff either side is untagged or the names agree, unless the
+    account is exclusive, when the names must agree".
+  - **One rule, written once on each side.** The clause goes in `ccd`'s one pool decider (`_pool_ok`) and in the
+    server's twin (`server/src/pools.ts`), which every placement, swap and forecast already asks. The flag lives in
+    `pool_edges` (one writer, the operator's membership door) and reaches the fleet box in `$REG/pool-epoch` like every
+    edge. A `ccd` that predates it would ignore the flag and fail open, so the box advertises a capability word
+    (`pool-exclusive`), and the server refuses to set `exclusive` while the fleet box does not advertise it
+    (`pool-exclusive-unenforced`). Nothing is exclusive until it can be enforced.
+  - **How many accounts.** At least two are recommended, so an account at its ceiling swaps to the other inside the
+    pool, and each account carries its own Fable share. Which accounts, and how many, is the operator's choice in
+    Settings; the spec names none. Account management stays the operator's: the Overlord never tags, untags or edits
+    an account or a pool (§8, "does not get").
+  - **When the pool is exhausted.** The pools spec's ruling 6 stands: stay in the pool, never cross, make it loud. For
+    the Overlord, a stranded session is a session that is not live, so every hold falls through to the operator (C23),
+    and an operator item says which accounts are at their ceilings and when the first resets. No coordinator waits.
+  - **The coordinators it starts never use its accounts.** They are placed by their own projects' pools (C32), and the
+    exclusive edge keeps them off the Overlord's pool even when their project is untagged.
 
 ## 4. Where the operator talks to it
 
@@ -1013,6 +1077,8 @@ This section lists the build surface by bounded context, so each piece has one o
 | `operator-model.db` and its store | new context, **Operator Model** | L3 | its own file and migrations. Its reason to be a context of its own is privacy: one store, one reader, one deny path |
 | Hibernate and idle-sleep eligibility skip the designated Overlord | C4 Workspace Lifecycle | L1 | one rung in each lane's eligibility, reading the designation |
 | `overlordKickoff` template, `overlord` sender | C5 | L0 and L1 | `coord/kickoff.ts` beside the two existing templates |
+| `overlordModelFor`, the designation's `model` | C5 | L1 and L3 | the renewal lane asks it; the limits read's per-class serviceability is its input (C45) |
+| The exclusive account edge | C1 Fleet Registry & Accounts | L1 (`_pool_ok`, `pools.ts`), L3 (`pool_edges`) | one clause in the pool rule, one column, the `pool-exclusive` capability word (C46) |
 | Start placement policy moved out of the PWA | C1 Fleet Registry & Accounts | L1 | `startProgramPlacement` gets one shared home for the sheet and the start door |
 | Overlord doors (`/api/overlord/*`) | C5 | L4 | registered from a new `coord/overlordRoutes.ts`, a lane source of its own for the box-token census, `auth/gate.ts`'s `EXEMPT` table and the rings allowlist |
 | `toId:'overlord'` role and the `overlord` system sender | C5 | L0 and L3 | `SYSTEM_MAIL_SENDER_MAP`, `MAIL_ROLE_IDS` |
@@ -1072,6 +1138,7 @@ Success means fewer operator touches, faster answers, and no new stall.
 | M8 | Probe pass rate after renewal and compaction | 100% after one re-read | the probe rows |
 | M9 | Outside audit scores, and agreement with the golden set | stable or rising; golden agreement at least 90% | `overlord_audits` |
 | M10 | Context at renewal, and compactions per generation | under the ceiling; at most one compaction | `renew` act rows, the compactions journal |
+| M11 | Generations on the designated model, and minutes stranded with no servable account | Fable for at least 90% of generations; stranded minutes watched | `renew` act rows, the pools journal |
 | M7 | Inferred entries the operator retired or corrected, per week | watched. A high rate means the distillation over-reaches | `entry_events` |
 
 ## 13. Decisions (the author's calls)
@@ -1086,7 +1153,7 @@ this spec and can be overturned by number.
 | C3 | Scope | one project, the fleet | The fleet: the operator talks only to it | Proposed |
 | C4 | Does it claim runs | yes, no | No: one coordinator per programme, and no nested-coordinator rule is bent | Proposed |
 | C5 | Where its state lives | its context, the server | The server: it survives compaction and replacement | Proposed |
-| C6 | Model | Opus, Fable | Opus at high effort, per the fleet's model policy; Fable only when the operator names it | Proposed |
+| C6 | Model | Opus, Fable | Fable at high effort, because the operator selected it (C45); subagents never Fable | Proposed |
 | C7 | Brakes | its own, the operator's | All of the operator's, plus a kill switch of its own | Proposed |
 | C8 | Surface | the Fleet home, a new place, a floating panel | A new place, first in the navigation (Q1 asks about making it the home) | Proposed |
 | C9 | Request tracking | in its context, a table | A table: requests outlive compaction and the operator can see them | Proposed |
@@ -1125,6 +1192,8 @@ this spec and can be overturned by number.
 | C42 | Drift | self-assessment, an outside audit | A daily outside audit with a golden set of the operator's own answers | Proposed |
 | C43 | Changing preferences | overwrite, bi-temporal | Bi-temporal entries: a change is a row, never something to remember | Proposed |
 | C44 | Context hygiene | ad hoc, rules | Reads through subagents, one model per generation, compact reads | Proposed |
+| C45 | How its model is chosen and kept | the session, the operator once, the operator plus the server | The operator's choice on the designation; the server applies it at each renewal, falls back to Opus at Fable's cap and returns after | Proposed |
+| C46 | Its accounts | shared, a tagged pool, a tagged pool with exclusive accounts | A pool of its own, with an `exclusive` edge so no other session lands on its accounts; enforced on both boxes before it can be set | Proposed |
 
 ## 14. Build order
 
@@ -1134,8 +1203,8 @@ depends only on the waves before it.
 ```mermaid
 flowchart LR
   P0["Prerequisites<br/>D-8126 merged and built<br/>(calls record, goals read,<br/>decision procedure)<br/>D-8125 merged"] --> W0
-  W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card"] --> W1
-  W1["W1 Designate and talk<br/>designation, skill v1,<br/>Overlord place with chat,<br/>board read, kill switch,<br/>card, notes, renewal, canaries"] --> W2
+  W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card,<br/>a model change at renewal"] --> W1
+  W1["W1 Designate and talk<br/>exclusive account edge,<br/>designation with its model,<br/>skill v1, Overlord place with chat,<br/>board read, kill switch,<br/>card, notes, renewal, canaries"] --> W2
   W2["W2 Route and follow up<br/>requests table, relay door,<br/>overlord mail role,<br/>follow-up arm, audit log"] --> W3
   W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door,<br/>probes, outside audit"] --> W4
   W4["W4 Learn<br/>operator-model.db, feed read,<br/>distillation, About you,<br/>privacy controls"] --> W5
@@ -1150,6 +1219,9 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 
 - Each wave's PR carries characterization tests for every lane it touches, red-first tests for every new guard (the
   mutation-table discipline), and census updates in the same PR.
+- **W1 ships the exclusive edge first,** in a pools-context PR of its own, fleet box before server box, because the
+  server refuses the flag until the fleet box enforces it (C46). The operator then tags the Overlord's accounts in
+  Settings before designating.
 - **Switching on.** W3's hold tier ships dark behind `overlord-holds-live` and runs in shadow for one week. In shadow
   it records what it would have held, and the Overlord answers in the Log without acting. The week ends with an operator
   item that shows the shadow answers next to the operator's real answers. The operator switches it on.
@@ -1187,6 +1259,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 | A forged Overlord | A session acts with Overlord powers | Same exposure as a forged coordinator today, plus logged, overturnable acts. Irreversible grants are refused until §7.4's identity exists |
 | Context load on one session | The Overlord loses the thread across many programmes | The board and the requests table are its memory. Reading goes to subagents. Compaction loses nothing (C5) |
 | Too many coordinators | Window spend and box load rise | The live-programme cap (C28) and the fleet's own admission |
+| Fable's weekly cap or window weight | The Overlord's accounts run out sooner than on Opus | The accounts are its own (C46), so the cost lands nowhere else. Reading goes to cheaper subagents (C44). Opus takes over at the cap and Fable returns after (C45). M11 watches it |
+| The Overlord's pool is exhausted | No account can serve it | Holds fall through to the operator (C23), an operator item names the reset, and two or more accounts are recommended (C46) |
 
 ## Where things stand
 
@@ -1195,6 +1269,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - R1 to R6, the operator's rulings of 2026-11-09 on the six open questions of #2491 (§2).
 - R7, the operator's ruling of 2026-11-09: there is one and only one Overlord (§3.1).
 - R8, the operator's direction of 2026-11-09: it lives a very long time without memory loss (§3.3).
+- The operator's direction of 2026-11-09, after rev 1: Fable, and an account pool of its own. C45 and C46 turn it into
+  design (§3.4), and wait on approval with the other calls.
 
 ### Waiting on you
 
@@ -1207,7 +1283,9 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
   every entry kept `overlord-only`, and any project switchable off. No session gains a cross-project read. The other
   arms are ccrc projects only, or no prompts at all (rulings and the Overlord chat only). The answer sets the size of
   W4 and its privacy review.
-- **Approve this spec** with calls C1 to C44, or name the calls to change.
+- **Approve this spec** with calls C1 to C46, or name the calls to change.
+- **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live; at least two
+  are recommended (C46). Nothing in this spec names them.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions, and D-8125 (PR #2490). This programme's wave 1
   starts when both have merged.
 
