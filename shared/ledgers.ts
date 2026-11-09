@@ -209,6 +209,14 @@ export interface GoalsView {
   doneWhen?: readonly string[] | null;
 }
 
+/** What a coordinator or the console reads of one programme (`GET /api/programmes/:slug/goals`, D-8126): the pin with its
+ *  modifications and stored definition of done, and the programme's items still waiting on the operator, each by `id`, `kind`,
+ *  `title` and `neededBy` only. Never an item's `why`, `how`, `answer` or `note`, nor a secret's slot or state. */
+export interface GoalsRead {
+  goals: GoalsView;
+  openItems: { id: number; kind: ItemKind; title: string; neededBy: NeededBy }[];
+}
+
 export interface WaitingView {
   items: ItemView[];
   cleared: ItemView[];

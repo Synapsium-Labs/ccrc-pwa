@@ -7,7 +7,8 @@
 // 400 lines (ARCH-01, `growth-check`).
 //
 // The OPERATOR'S routes (plan PL4) are in the same file, registered by `registerLedgerOperatorRoutes` from `server.ts`
-// beside `/api/digest/correct`: session-gated only (they sit behind the auth gate when it is armed), no box token. One of them,
+// beside `/api/digest/correct`: session-gated only (they sit behind the auth gate when it is armed), no box token, except the goals read (D-8126), which takes a
+// session OR the box token and is a lane of the census. One of them,
 // `PUT /api/items/:id/secret` (plan PL6), is a credential act and takes the account gate with a step-up as well. They are
 // the doors `box-token-census.test.ts` names as session-only, and they decide nothing themselves: a move is `nextItemState`'s,
 // the stale label is `itemIsStale`'s (L1, `shared/ledgers.ts`), and ONE builder, `viewOfItem`, makes an `ItemView` for the
@@ -25,13 +26,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Bus } from '../bus.js';
 import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
+import type { GateDecision } from '../auth/gate.js';
+import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import { LEDGER_ROUTE_REFUSALS, type RouteRefusal } from '../../../shared/refusal.js';
 import {
   ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
   actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, isEndRunAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
   nextItemState, outsideDocLink, secretAnswer, secretTailOf,
-  type CoordinatorPresence, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
+  type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
 import type { CoordStore, ItemEventRow, ItemRow } from './store.js';
@@ -136,6 +139,16 @@ export function waitingViewOf(
     items: open.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
     cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf)),
     goals: programmes.map((p) => coord.goalsFor(p)),
+  };
+}
+
+/** One programme's goals read, once for every door (`GET /api/programmes/:slug/goals`): the pin and the programme's open items
+ *  (`open` and `checking`, oldest first), each item cut to `id`, `kind`, `title` and `neededBy` (F1: nothing else of an item,
+ *  and no secret's slot or state, leaves by this route). */
+export function goalsReadOf(coord: CoordStore, slug: string, now: number): GoalsRead {
+  return {
+    goals: coord.goalsFor(slug),
+    openItems: coord.itemsFor(slug, now).open.map((i) => ({ id: i.id, kind: i.kind, title: i.title, neededBy: i.neededBy })),
   };
 }
 
@@ -530,6 +543,11 @@ export interface LedgerOperatorDeps {
   /** `closeRun`'s typed result as the abandon route sends it (`sendCloseOutcome`), so the act answers in the same shapes and
    *  the sheet reads the same refusals and `childReclaim` fields (A23). */
   sendClose: (reply: FastifyReply, outcome: CloseOutcome) => FastifyReply;
+  /** Whether the sign-in gate is armed (`cfg.authEnabled`): the goals read authenticates for itself (EXEMPT-BUT-AUTHENTICATED). */
+  authEnabled: boolean;
+  /** The gate's session verdict for a request, and the box token read at request time: the goals read's two credentials. */
+  sessionAuth: (req: FastifyRequest) => GateDecision;
+  mailToken: () => string | BoxTokenHolder | null;
   /** How long an act waits for the slot's previous act before it answers `slot-busy` (`SLOT_WAIT_MS`; a test passes its own). */
   slotWaitMs?: number;
 }
@@ -626,10 +644,24 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, secretOf) });
   });
 
-  app.get('/api/programmes/:slug/goals', (req, reply) => {
+  // EXEMPT-BUT-AUTHENTICATED (D-149's pattern, D-8126): a live session OR the box token, 401 only when both fail, and before
+  // the `not-configured` answer so an anonymous caller learns nothing. No ownership check (a coordinator reads another
+  // programme's pin). The `onRequest` is the whole check; the handler below it is synchronous.
+  app.get('/api/programmes/:slug/goals', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!deps.authEnabled) return undefined;
+      const session = deps.sessionAuth(req);
+      if (session.reason === 'session') return undefined;
+      if (checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/programmes/:slug/goals') === 'ok') return undefined;
+      return reply.code(401).send({
+        ok: false, error: 'unauthenticated', verdict: session.verdict,
+        detail: `this read takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})`,
+      });
+    },
+  }, (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    return reply.code(200).send({ ok: true, goals: coord.goalsFor((req.params as { slug: string }).slug) });
+    return reply.code(200).send({ ok: true, ...goalsReadOf(coord, (req.params as { slug: string }).slug, deps.now()) });
   });
 
   app.post('/api/items/:id/tick', (req, reply) => {

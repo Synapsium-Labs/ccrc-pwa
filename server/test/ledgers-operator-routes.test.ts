@@ -7,20 +7,24 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { goalsReadOf } from '../src/coord/ledgersRoutes.js';
 import { itemMailBody, itemMailSubject, tickMail } from '../src/coord/ledgersMail.js';
 import { FleetWatcher } from '../src/watch.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import {
   ANSWER_MAX, TICK_UNANSWERED_MS, coordinatorPresenceIn, itemIsStale, type CoordinatorPresence, type ItemView, type WaitingView,
 } from '../../shared/ledgers.js';
 import { LEDGER_ROUTE_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
+import type { GoalsRead } from '../../shared/ledgers.js';
 import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES, SECRET_MASK } from '../../shared/api.js';
 
 let app: FastifyInstance | null = null;
@@ -266,6 +270,34 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
     expect(res.json()).toMatchObject({ ok: true, goals: { program: 'prog-a', specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'What it builds.' } });
   });
 
+  it('the read answers the goals and the programme\'s open items, and nothing else of an item (the goals-read-v1 shape)', async () => {
+    const r = await rig();
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+    const open = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main ships.', neededBy: 'blocking' });
+    raise(r, { program: 'prog-b', runId: null, raisedBy: 'lane-b', title: 'Another programme' });
+    const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as { ok: true; goals: unknown } & GoalsRead;
+    expect(Object.keys(body).sort()).toEqual(['goals', 'ok', 'openItems']);
+    expect(body.goals).toMatchObject({ program: 'prog-a', doneWhen: ['It ships.'] });
+    expect(body.openItems).toEqual([{ id: open, kind: 'decide', title: 'Which branch', neededBy: 'blocking' }]);
+    expect(Object.keys(body.openItems[0]!).sort()).toEqual(['id', 'kind', 'neededBy', 'title']);
+  });
+
+  it('an item that is cleared, or belongs to another programme, is not an open item', async () => {
+    const r = await rig();
+    const id = raise(r);
+    expect(r.coord.moveItem(id, 'withdraw', 'coordinator', {}, NOW0 + 1, { programmeHasOpenRun: true }).ok).toBe(true);
+    const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as GoalsRead;
+    expect(body.openItems).toEqual([]);
+  });
+
+  it('goalsReadOf carries only goals and openItems; a secret item shows no slot and no why/how/answer/note (F1)', async () => {
+    const r = await rig();
+    raise(r, { kind: 'secret', title: 'A key', secretSlot: 'slot-a', why: 'private why', how: ['private how'] });
+    const read = goalsReadOf(r.coord, 'prog-a', NOW0);
+    expect(Object.keys(read).sort()).toEqual(['goals', 'openItems']);
+    const text = JSON.stringify(read);
+    for (const word of ['private why', 'private how', 'slot-a', 'secretSlot', 'answer', 'note']) expect(text).not.toContain(word);
+  });
   it('a shaped secret in an item title is masked in the answer (the read joins the masked GET routes)', async () => {
     const r = await rig();
     const key = ['sk', 'ant', 'api03', createHash('sha256').update('x').digest('base64url').repeat(3).slice(0, 95)].join('-');
@@ -273,6 +305,64 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
     const res = await r.app.inject({ method: 'GET', url: '/api/waiting' });
     expect(res.body).not.toContain(key.slice(8, 40));
     expect(res.body).toContain(SECRET_MASK);
+  });
+});
+
+const PASS = 'correct horse battery staple';
+const FAST: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
+const BOX = 'e'.repeat(64);
+
+async function armed(): Promise<{ app: FastifyInstance; coord: CoordStore }> {
+  const home = mkTmp('ccrc-ledgers-goals-armed-');
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASS, FAST, 1)}\n`, { mode: 0o600 });
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const base = testDeps(home, recorder().run);
+  app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: BOX, coord });
+  coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'A', 0, 'active')").run();
+  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+  return { app, coord };
+}
+
+describe('GET /api/programmes/:slug/goals takes a session or the box token (EXEMPT-BUT-AUTHENTICATED, D-149\'s pattern)', () => {
+  const url = '/api/programmes/prog-a/goals';
+  const cookieOf = async (a: FastifyInstance): Promise<string> => {
+    const res = await a.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASS } });
+    expect(res.statusCode, res.body).toBe(204);
+    const set = res.headers['set-cookie'];
+    const line = Array.isArray(set) ? set[0]! : String(set);
+    return line.slice(0, line.indexOf(';'));
+  };
+
+  it('armed: no cookie and no token is 401 unauthenticated; a wrong token is 401', async () => {
+    const { app: a } = await armed();
+    const none = await a.inject({ method: 'GET', url });
+    expect(none.statusCode).toBe(401);
+    expect(none.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+    const wrong = await a.inject({ method: 'GET', url, headers: { 'x-ccrc-mail-token': 'f'.repeat(64) } });
+    expect(wrong.statusCode).toBe(401);
+    expect(wrong.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+  });
+
+  it('armed: the box token alone is 200, a session alone is 200, and the two answers are deep-equal', async () => {
+    const { app: a } = await armed();
+    const viaToken = await a.inject({ method: 'GET', url, headers: { 'x-ccrc-mail-token': BOX } });
+    const viaSession = await a.inject({ method: 'GET', url, headers: { cookie: await cookieOf(a) } });
+    expect(viaToken.statusCode, viaToken.body).toBe(200);
+    expect(viaSession.statusCode, viaSession.body).toBe(200);
+    expect(viaToken.json()).toEqual(viaSession.json());
+    expect(viaToken.json()).toMatchObject({ ok: true, goals: { program: 'prog-a', doneWhen: ['It ships.'] }, openItems: [] });
+  });
+
+  it('auth off: 200 with neither credential (today\'s behaviour)', async () => {
+    const r = await rig();
+    expect((await r.app.inject({ method: 'GET', url })).statusCode).toBe(200);
+  });
+
+  it('a coordinator reads another programme\'s pin: no ownership check on the read (C9)', async () => {
+    const { app: a } = await armed();
+    const res = await a.inject({ method: 'GET', url: '/api/programmes/prog-zzz/goals', headers: { 'x-ccrc-mail-token': BOX } });
+    expect(res.statusCode).toBe(200);
   });
 });
 
