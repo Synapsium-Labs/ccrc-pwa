@@ -239,9 +239,9 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     return r.stdout.split('\n').filter(Boolean).map((l) => l.split(US) as [string, string]);
   };
 
-  it('V4: every key _set_says has words for (the 67) is written refused, with its words and its source, and the sample is nowhere', () => {
+  it('V4: every key _set_says has words for (the 68) is written refused, with its words and its source, and the sample is nowhere', () => {
     const keys = WITH_WORDS();
-    expect(keys).toHaveLength(67);
+    expect(keys).toHaveLength(68);
     const sample = (k: string, i: number): string => REFUSED_SAMPLE[k] ?? `zz-refused-${i}`;
     const home = boxWith('ccrc-sv-v4-', keys.map(([k], i) => `${k}=${sample(k, i)}\n`).join(''));
     // The sample is a refused one, in this fixture, for every key: a sample a check accepts fails here, loudly.
@@ -905,12 +905,12 @@ describe('ccrc settings: the human form keeps its three formats (V8, review F4)'
     const r = settings(home, [], { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: '120' });
     expect(r.code, r.stderr).toBe(0);
     const lines = r.stdout.split('\n').filter(Boolean);
-    expect(lines.slice(0, 70).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
+    expect(lines.slice(0, 71).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
     expect(lines[0]).toBe('CCRC_BACKUP_KEEP               not shown  (environment, refused): a whole number from 0 to 9999');
     expect(lines[3]).toBe('CCRC_UPDATE_HEALTH_S           120  (environment, ok)');
-    expect(lines[70]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
-    expect(lines[71]).toMatch(/^backups: /);
-    expect(lines[72]).toMatch(/^disk: /);
+    expect(lines[71]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
+    expect(lines[72]).toMatch(/^backups: /);
+    expect(lines[73]).toMatch(/^disk: /);
     expect(existsSync(join(home, '.ccrc', 'box-settings.json')), 'the human form writes nothing').toBe(false);
   });
 });
@@ -1044,7 +1044,7 @@ describe('ccrc settings --write: the file', () => {
     if (got !== 'LAST-GOOD') {
       const doc = JSON.parse(got) as { v: number; settings: unknown[] };
       expect(doc.v).toBe(2);
-      expect(doc.settings).toHaveLength(70);
+      expect(doc.settings).toHaveLength(71);
     }
   }, 60_000);
 });
@@ -1145,8 +1145,10 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
       /_ccrc_knob CCRC_RESCUE_SOLO_JITTER_S 15 file;/, /_ccrc_knob CCRC_LIMIT_WATCHDOG_MIN 5 file;/,
       // D-8125: the coordinator's review-cap lift, at the default the server (`reviewCapCoordLiftOf`) uses.
       /_ccrc_knob CCRC_REVIEW_CAP_COORD_LIFT off file;/,
+      // D-8124: the admin-merge door's switch.
+      /_ccrc_knob CCRC_ADMIN_MERGE auto file;/,
     ]) expect(reads, String(re)).toMatch(re);
-    expect(reads.match(/_ccrc_knob /g), 'seventeen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four, D-8123 the limit rescue\'s two, D-8125 the coordinator lift\'s one); the two line readers are the owners\' own').toHaveLength(17);
+    expect(reads.match(/_ccrc_knob /g), 'eighteen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four, D-8123 the limit rescue\'s two, D-8125 the coordinator lift\'s one, D-8124 the admin-merge switch); the two line readers are the owners\' own').toHaveLength(18);
   });
 
   // D-8122: the headroom floor's default is CLAUDE_HEADROOM_GATE_BYTES (the server's WAKE_HEADROOM_MIN_GIB_DEFAULT is
@@ -1159,6 +1161,12 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
     expect(readme).toContain(`| \`CCRC_WAKE_HEADROOM_MIN_GIB\` | server | Whole GiB, default ${gib} (spec decision 6)`);
     const example = readFileSync(join(path.dirname(CCRC), '..', 'deploy', 'ccrc.env.example'), 'utf8');
     expect(example).toContain(`MemAvailable). Default ${gib},\n# spec decision 6's figure`);
+  });
+
+  it('CCRC_ADMIN_MERGE: auto by default, off accepted, any other word refused (D-8124)', () => {
+    expect(rowOf(json(boxWith('ccrc-sv-lnd-', '')), 'CCRC_ADMIN_MERGE')).toEqual({ key: 'CCRC_ADMIN_MERGE', state: 'ok', value: 'auto', from: 'default' });
+    expect(rowOf(json(boxWith('ccrc-sv-lnd-', 'CCRC_ADMIN_MERGE=off\n')), 'CCRC_ADMIN_MERGE')).toMatchObject({ state: 'ok', value: 'off', from: 'file' });
+    expect(rowOf(json(boxWith('ccrc-sv-lnd-', 'CCRC_ADMIN_MERGE=on\n')), 'CCRC_ADMIN_MERGE')).toMatchObject({ state: 'refused', why: 'auto or off' });
   });
 
   it('V9: cmd_settings and its _set_ helpers never name the warning arrays, _tb_load, _gr_knobs or `_slice_limit ` with a space', () => {

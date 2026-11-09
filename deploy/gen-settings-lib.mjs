@@ -26,6 +26,8 @@ export const SETTINGS_LIB_FUNCTIONS = Object.freeze([
   '_mg_ok', '_mg_says',
   // D-8123: ccd reads the limit-rescue settings (a lone rescue's jitter) through this library in its own process.
   '_lr_ok', '_lr_says',
+  // D-8124: ccd's admin-merge door reads its switch through this library, so its check rides it too.
+  '_lnd_ok', '_lnd_says',
 ]);
 
 const HEADER = [
