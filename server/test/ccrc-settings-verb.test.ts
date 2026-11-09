@@ -1144,7 +1144,7 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
       // D-8123: the limit rescue's two, at the defaults ccd (`_rescue_jitter_max`, the watchdog) uses.
       /_ccrc_knob CCRC_RESCUE_SOLO_JITTER_S 15 file;/, /_ccrc_knob CCRC_LIMIT_WATCHDOG_MIN 5 file;/,
       // D-8125: the coordinator's review-cap lift, at the default the server (`reviewCapCoordLiftOf`) uses.
-      /_ccrc_knob CCRC_REVIEW_CAP_COORD_LIFT on file;/,
+      /_ccrc_knob CCRC_REVIEW_CAP_COORD_LIFT off file;/,
     ]) expect(reads, String(re)).toMatch(re);
     expect(reads.match(/_ccrc_knob /g), 'seventeen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four, D-8123 the limit rescue\'s two, D-8125 the coordinator lift\'s one); the two line readers are the owners\' own').toHaveLength(17);
   });

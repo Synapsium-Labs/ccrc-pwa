@@ -27,7 +27,7 @@ async function rig(cfg: Partial<CcrcConfig> = {}) {
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const base = testDeps(home, recorder().run);
-  const app: FastifyInstance = await buildServer({ ...base, mailToken: ID_GATE_TOKEN, coord, notifyLog, cfg: { ...base.cfg, ...cfg } });
+  const app: FastifyInstance = await buildServer({ ...base, mailToken: ID_GATE_TOKEN, coord, notifyLog, cfg: { ...base.cfg, reviewCapCoordLift: 'on', ...cfg } });
   const open = (program: string, claimedBy: string, over: Record<string, unknown> = {}) =>
     coord.openRun({ program, title: 'T', project: 'demo', wave: 1, waveOf: null, claimedBy, ...over });
   const work = (program = 'prog-a', claimedBy = 'lane-a'): number => (open(program, claimedBy) as { id: number }).id;
@@ -189,5 +189,12 @@ describe('POST /api/runs/:id/review-rounds (D-8125)', () => {
       expect(stored, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
       expect(sent, key.slice(i, i + 8)).not.toContain(key.slice(i, i + 8));
     }
+  });
+});
+
+describe('the door is off unless the box turns it on (D-8125)', () => {
+  it('a server config read from an empty environment carries off, so the door answers coord-lift-off', async () => {
+    const { reviewCapCoordLiftOf } = await import('../src/config.js');
+    expect(reviewCapCoordLiftOf({})).toBe('off');
   });
 });

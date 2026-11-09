@@ -1384,7 +1384,7 @@ When no account has measured room for a stopped session, the watchdog records th
 row for the session with its own two controls: Swap to… (the accounts that have room, updating as limits arrive) and Wait until
 reset at the time the limit ends. Neither sends a key to the terminal.
 
-One is the coordinator's review-cap lift (D-8125): `CCRC_REVIEW_CAP_COORD_LIFT` (`on` or `off`, default `on`) lets a
+One is the coordinator's review-cap lift (D-8125): `CCRC_REVIEW_CAP_COORD_LIFT` (`on` or `off`, default `off`) lets a
 coordinator extend a reached review-round cap by three rounds, with a reason; `off` leaves the operator's lift as the only
 door. The server reads it from its own environment.
 
@@ -3729,7 +3729,7 @@ see "Fleet coordination" below.
 | `CCRC_SWEEP_PRESSURE_WAIT_S` | fleet | Default 300: the most the update sweep waits, over the whole sweep, between batches while memory pressure is at the gate level; past it the sweep warns and goes on (D-8122). |
 | `CCRC_RESCUE_SOLO_JITTER_S` | fleet | Whole seconds from 0 to 120, default 15: the most a rescue waits (a random 0 to this) before it runs when no other session's swap was dispatched in the last `SWAP_JITTER` + 60 seconds. With another dispatch in flight the full 0 to 120 second spread stays, so a fleet-wide event is still not a herd. 0 sends a lone rescue at once; `swap.log`'s dispatch line ends ` max=<n>` with the spread that applied (D-8123). |
 | `CCRC_LIMIT_WATCHDOG_MIN` | fleet | Whole minutes from 0 to 1440, default 5, 0 off: how long a live session may show a limit sign with no swap before the fleet limit watchdog forces the rescue past the cooldown, draft and stale-press holds. It never sends a key to Claude Code's rate-limit menu (D-8123). |
-| `CCRC_REVIEW_CAP_COORD_LIFT` | server | `on` (default) or `off`: whether a run's coordinator may extend a reached review-round cap by three more rounds, with a one-line reason (`POST /api/runs/:id/review-rounds`, D-8125). `off` makes the operator's lift the only door. |
+| `CCRC_REVIEW_CAP_COORD_LIFT` | server | `off` (default) or `on`: whether a run's coordinator may extend a reached review-round cap by three more rounds, with a one-line reason (`POST /api/runs/:id/review-rounds`, D-8125). `off` makes the operator's lift the only door. |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
 | `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |

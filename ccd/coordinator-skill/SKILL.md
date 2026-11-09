@@ -336,7 +336,8 @@ not after.
    by the rules in `references/wave-lifecycle.md` (Extending a reached review
    cap), extend with `"$API" runs review-rounds <work run id> --json -` and a
    one-line reason, or rule on the findings you hold, or wait. Extending first
-   means the open is never refused, so the operator is never asked or pushed.
+   means the open is never refused, so the operator is never asked or pushed. `coord-lift-off` on the extension means this box
+   leaves the lift to the operator (the default): do not retry; rule on the findings you hold, or wait for the operator's lift.
    `cap-review-rounds` on an open means you opened without deciding: do not retry
    the open. The server has told the operator (one ask, with the last review's
    open findings); a late extension still closes that ask, but the operator has

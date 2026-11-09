@@ -689,17 +689,21 @@ main() {
 
   # THE DOOR'S IDENTITY IS THE PANE'S, NEVER THE CALLER'S (D-8125): `byId` and `byUuid` are filled from `derive_identity` and a
   # body that speaks for itself is refused, so a worker pane cannot type its coordinator's pair (it would read the
-  # coordinator's `<id>.uuid` off the shared registry). The test is deliberately blunt and case-insensitive: any `byid` or
-  # `byuuid` text, or any `\u` escape (which could spell either key), anywhere in the body is `bad-body`, so no padded, nested
-  # or escaped spelling survives to last-win over the spliced first keys. A body that is not a JSON object is refused too.
+  # coordinator's `<id>.uuid` off the shared registry). The test is STRUCTURAL: jq parses the body (so an escaped spelling such
+  # as `\u0062yId` is already the key it spells) and every object key at any depth, case-folded and with whitespace removed, is
+  # compared whole with `byid` and `byuuid`. Prose is never scanned, so a reason that says "lookup by id" or holds a
+  # backslash is sent. A duplicate key still shows as the key, so no spelling survives to last-win over the spliced first
+  # keys. A body that is not valid JSON, or not an object, is refused `bad-body`; without jq the call is refused too (every
+  # box the client runs on carries it for `ccrc`), never guessed at.
   if [[ "$key" == 'runs.review-rounds' ]]; then
-    local rb="${body//[[:space:]]/}" rlow
+    local rb="${body//[[:space:]]/}" rnamed
     [[ -n "$rb" ]] || body='{}'             # a bodyless call goes on as the identity alone; the server asks for the reason
-    rlow=$(printf '%s' "$rb" | tr '[:upper:]' '[:lower:]')
-    case "$rlow" in
-      *byid*|*byuuid*|*'\u'*)
-        refuse 'bad-body' 'the review-rounds body names no identity: byId and byUuid are this pane, filled here' ;;
-    esac
+    command -v jq >/dev/null 2>&1 \
+      || refuse 'bad-body' 'the review-rounds body cannot be checked here: jq is not installed'
+    rnamed=$(printf '%s' "$body" | jq -r '[.. | objects | keys_unsorted[] | ascii_downcase | gsub("\\s"; "")] | any(. == "byid" or . == "byuuid")' 2>/dev/null) \
+      || refuse 'bad-body' 'the review-rounds body is not valid JSON'
+    [[ "$rnamed" == 'false' ]] \
+      || refuse 'bad-body' 'the review-rounds body names no identity: byId and byUuid are this pane, filled here'
     derive_identity
     splice_body_field 'byUuid' "$DERIVED_UUID" 'the review-rounds body is not a JSON object; the identity cannot be added'
     splice_body_field 'byId' "$DERIVED_ID" 'the review-rounds body is not a JSON object; the identity cannot be added'

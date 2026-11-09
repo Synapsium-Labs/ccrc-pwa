@@ -7,8 +7,9 @@
 // the cheap forgery: it fills the pair from the calling pane and refuses a body that names either, so another pane cannot
 // type its coordinator's pair through the client. D-8125 open item for the operator: a caller that bypasses the client
 // (raw HTTP with the box token and a read of the registry) is still attribution, not proof; a credential only the session
-// holds would close it. The bound on a misuse is the grant itself (REVIEW_ROUND_CAP rounds per lift, journaled, noticed,
-// switchable off). Ownership is decided from
+// holds would close it. Until then the door is OFF by default (`CCRC_REVIEW_CAP_COORD_LIFT`, `reviewCapCoordLiftOf`): the
+// per-lift bound (REVIEW_ROUND_CAP rounds, journaled, noticed) does not stop repeated lifts, so a box turns the door on
+// knowingly. Ownership is decided from
 // the server's own rows: the run's `claimedBy`, or an open claim on its programme. A worker is neither.
 //
 // THE ORDER (a cheaper refusal is never reached after an expensive one): not configured; the box token; the body's shape

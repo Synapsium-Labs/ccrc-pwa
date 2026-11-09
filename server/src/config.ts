@@ -225,7 +225,7 @@ export interface CcrcConfig {
    *  `wakeGateConfigOf` reads them. */
   wakeGate: WakeGateConfig;
   /** D-8125: `CCRC_REVIEW_CAP_COORD_LIFT`, whether a coordinator may extend a reached review-round cap
-   *  (`POST /api/runs/:id/review-rounds`). `on` (the default) or `off`; read once at start by `reviewCapCoordLiftOf`.
+   *  (`POST /api/runs/:id/review-rounds`). `off` (the default) or `on`; read once at start by `reviewCapCoordLiftOf`. Default off until a credential only the coordinator session holds exists (D-8125 open item).
    *  Off leaves the operator's lift (`POST /api/coord/review-cap`) as the only door. */
   reviewCapCoordLift: ReviewCapCoordLift;
   /** D-7319: `CCRC_DISPATCH_ABANDON_MS`, how old a `planned` run's dispatch stamp must be, with no session bound,
@@ -467,14 +467,15 @@ export function wakeGateConfigOf(env: NodeJS.ProcessEnv): WakeGateConfig {
 /** D-8125: the coordinator's review-cap lift, on or off fleet-wide. */
 export type ReviewCapCoordLift = 'on' | 'off';
 
-/** `CCRC_REVIEW_CAP_COORD_LIFT` from the environment (D-8125). Absent or empty is `on` and silent; `on` and `off` read as
- *  given (case and surrounding space aside). This switch RESTRICTS authority, so any other value (`false`, `0`, `no`) says so
+/** `CCRC_REVIEW_CAP_COORD_LIFT` from the environment (D-8125). Absent or empty is `off` and silent; `on` and `off` read as
+ *  given (case and surrounding space aside). The door's caller is attribution, not proof, so the default is off until a
+ *  credential only the coordinator session holds exists. Any other value (`false`, `0`, `no`) says so
  *  once and reads `off`: a mistyped kill switch must never leave coordinator lifts running. */
 export function reviewCapCoordLiftOf(env: NodeJS.ProcessEnv): ReviewCapCoordLift {
   const raw = env['CCRC_REVIEW_CAP_COORD_LIFT'];
   const v = raw?.trim().toLowerCase();
-  if (raw === undefined || v === '' || v === 'on') return 'on';
-  if (v === 'off') return 'off';
+  if (raw === undefined || v === '' || v === 'off') return 'off';
+  if (v === 'on') return 'on';
   console.warn(`ccrc-server: CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw.slice(0, 40))} is not one of on|off; it reads as off (coordinator lifts disabled) because the switch restricts authority.`);
   return 'off';
 }

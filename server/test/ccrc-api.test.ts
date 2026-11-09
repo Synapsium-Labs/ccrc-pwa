@@ -1564,6 +1564,19 @@ describe('runs review-rounds: the coordinator\'s cap extension refuses locally o
     expect(seen).toEqual([]);
   });
 
+  it.each([
+    ['by id in prose', '2 majors open: lookup by id returns a stale row'],
+    ['nearby identifiers', 'two majors open in nearby identifiers handling'],
+    ['standby identity', 'one major open: standby identity is wrong'],
+    ['a backslash before a u', 'major open in C:\\\\users\\\\x path handling'],
+  ])('sends a reason with %s, since only object keys are checked, not prose', async (_n, reason) => {
+    const body = JSON.stringify({ reason });
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], body, PANE);
+    expect(r.status).toBe(0);
+    expect(seen).toEqual([{ method: 'POST', url: '/api/runs/7/review-rounds', auth: TOKEN,
+      body: `{"byId":"demo-ws","byUuid":"u-1234",${body.slice(1)}` }]);
+  });
+
   it('refuses a body that is not an object, sending nothing', async () => {
     const r = await run(['runs', 'review-rounds', '7', '--json', '-'], '["x"]', PANE);
     expect((JSON.parse(r.stdout) as { error: string }).error).toBe('bad-body');

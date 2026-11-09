@@ -26929,7 +26929,7 @@ _set_reads() {
   _ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300 file; _set_got CCRC_SWEEP_PRESSURE_WAIT_S $?
   _ccrc_knob CCRC_RESCUE_SOLO_JITTER_S 15 file; _set_got CCRC_RESCUE_SOLO_JITTER_S $?
   _ccrc_knob CCRC_LIMIT_WATCHDOG_MIN 5 file; _set_got CCRC_LIMIT_WATCHDOG_MIN $?
-  _ccrc_knob CCRC_REVIEW_CAP_COORD_LIFT on file; _set_got CCRC_REVIEW_CAP_COORD_LIFT $?
+  _ccrc_knob CCRC_REVIEW_CAP_COORD_LIFT off file; _set_got CCRC_REVIEW_CAP_COORD_LIFT $?
 }
 
 cmd_settings() {

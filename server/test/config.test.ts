@@ -645,9 +645,9 @@ describe('reviewCapCoordLiftOf (D-8125)', () => {
     try { return { value: reviewCapCoordLiftOf(env), said: warn.mock.calls.flat().join(' ') }; } finally { warn.mockRestore(); }
   };
 
-  it('an absent or empty value is on and silent', () => {
-    expect(warnOf({})).toEqual({ value: 'on', said: '' });
-    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: '' })).toEqual({ value: 'on', said: '' });
+  it('an absent or empty value is off and silent: the door is attribution, not proof, so it is opt-in', () => {
+    expect(warnOf({})).toEqual({ value: 'off', said: '' });
+    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: '' })).toEqual({ value: 'off', said: '' });
   });
 
   it('on and off read as given, silently', () => {
@@ -671,7 +671,7 @@ describe('reviewCapCoordLiftOf (D-8125)', () => {
   it('loadConfig carries it as cfg.reviewCapCoordLift', () => {
     const home = mkTmp('ccrc-cfg-rclift-');
     seedRoster(home);
-    expect(loadConfig({ CCRC_HOME: home }).reviewCapCoordLift).toBe('on');
-    expect(loadConfig({ CCRC_HOME: home, CCRC_REVIEW_CAP_COORD_LIFT: 'off' }).reviewCapCoordLift).toBe('off');
+    expect(loadConfig({ CCRC_HOME: home }).reviewCapCoordLift).toBe('off');
+    expect(loadConfig({ CCRC_HOME: home, CCRC_REVIEW_CAP_COORD_LIFT: 'on' }).reviewCapCoordLift).toBe('on');
   });
 });
