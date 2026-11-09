@@ -118,6 +118,33 @@ describe('the read: the card says what the lane says (D-8114)', () => {
     for (const n of ['4', '5', '6', '7', '8', '9', '10', '11']) expect(counts).toContain(n);
   });
 
+  // Item 131 (D-8114, PR8d): in mode unmeasured the counts line names no would-keep figure, as the sheet names none, and says
+  // the card cannot say how many until the next pass. Mode unmeasured is the breaker unmeasured with the marker read (set or
+  // clear) or the marker unreadable, so the row renders each. Shadow still names the figure, as its sheet does.
+  it.each<DelegationAdoptView['state']>(['clear', 'set', 'unmeasurable'])('mode unmeasured, would keep 4, marker %s: the counts line names no would-keep figure and says the next pass will tell (item 131)', (state) => {
+    owned(view({ state, adoption: health({ mode: 'unmeasured', adopted: 1, wouldAdopt: 4, waiting: 5, unchanged: 6 }) }));
+    const counts = screen.getByText(/^Last pass:/).textContent ?? '';
+    expect(counts).not.toMatch(/would keep 4/);
+    expect(counts).not.toMatch(/\b4\b/);
+    expect(counts).toMatch(/what turning this on would keep, this card cannot say how many until the next pass\./);
+    for (const n of ['kept 1', 'waiting 5', 'unchanged 6']) expect(counts).toContain(n);
+  });
+
+  it('shadow, would keep 4: the counts line still names the figure, as the sheet does (item 131)', () => {
+    owned(view({ adoption: health({ mode: 'shadow', wouldAdopt: 4 }) }));
+    const counts = screen.getByText(/^Last pass:/).textContent ?? '';
+    expect(counts).toContain('would keep 4');
+    expect(counts).not.toMatch(/until the next pass/);
+  });
+
+  // Review 1727 F2: live and suspended are unchanged too, so their counts line still names the figure.
+  it.each<DelegationAdoptionHealth['mode']>(['live', 'suspended'])('mode %s, would keep 4: the counts line still names the figure and says nothing of the next pass (item 131)', (mode) => {
+    owned(view({ adoption: health({ mode, wouldAdopt: 4 }) }));
+    const counts = screen.getByText(/^Last pass:/).textContent ?? '';
+    expect(counts).toContain('would keep 4');
+    expect(counts).not.toMatch(/until the next pass/);
+  });
+
   it('the four modes read differently from one another', () => {
     const lines = (['live', 'shadow', 'suspended', 'unmeasured'] as const).map((mode) => delegationAdoptModeLine(health({ mode })));
     expect(new Set(lines).size).toBe(4);
@@ -393,6 +420,19 @@ describe('turning the switch on asks first (D-8114, ruling 5)', () => {
     expect(s).not.toMatch(/listed on this card/);
     expect(s).toMatch(/until the next pass/);
     expect(s).toMatch(/mail/i);
+  });
+
+  // Item 131 (PR8d): the sheet's two "cannot say" sentences are now built from the phrases the counts line shares, so this row
+  // pins what the sheet renders, word for word as before the split, in modes unmeasured, live and suspended.
+  it('the sheet\'s sentences outside shadow, word for word, after the phrases they share with the counts line were split out (item 131)', () => {
+    const unread = 'The last pass could not read everything it needs, so this card cannot say how many until the next pass.';
+    const uncounted = 'The last pass did not count what turning this on would keep, so this card cannot say how many until the next pass.';
+    const mail = 'The session that started each agent is mailed about its worktree. A kept worktree stays held back from the disk '
+      + 'sweep until its hold ends.';
+    const sheet = (mode: DelegationAdoptionHealth['mode']): string[] => delegationAdoptConfirm(health({ mode, wouldAdopt: 4 })).consequence;
+    expect(sheet('unmeasured')).toEqual([unread, mail]);
+    expect(sheet('live')).toEqual([uncounted, mail]);
+    expect(sheet('suspended')).toEqual([uncounted, mail]);
   });
 
   it('the words speak of the last pass and the mode, and a refusal of on speaks of on only (review 1699 R2-5, R2-6, R2-7)', () => {
