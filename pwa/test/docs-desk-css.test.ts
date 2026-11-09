@@ -1,10 +1,12 @@
 // The desk Docs head, its stylesheet half (desk-nav plan 2026-11-07, Task B, Step 3; D-8101). vitest evaluates no
 // stylesheet and jsdom lays nothing out, so this file holds docs.css's own declarations for the full head: the row is a
-// `docs-head` container that never wraps, the crumbs take the room the actions leave and their middle crumbs give way
-// first, the action words hide only under the `docs-head` container query, the truth line is one line at
-// `--docs-line-h` with its chip and its commit never giving way, and no rule keys on a viewport width. Every rule here
-// is scoped to `.docs-full`, the full head's own class, so the compact head's panel (which draws the same truth line
-// and link actions) does not change. The pixels are browser/docs-compact-head.browser.test.ts's.
+// `docs-head` container that wraps the actions onto a second line only once the crumbs are at their floor (the crumbs
+// drawn, a tap each), the crumbs take the room the actions leave and their middle crumbs give way first, the action
+// words hide when the row asks (`HeadRow`'s `data-words`) and under the `docs-head` container query, the truth line is
+// one line at `--docs-line-h` when its facts fit and wraps rather than clip when they do not, with only the via
+// sentence giving way, and no rule keys on a viewport width. Every rule here is scoped to `.docs-full`, the full head's
+// own class, so the compact head's panel (which draws the same truth line and link actions) does not change. The pixels
+// are browser/docs-compact-head.browser.test.ts's.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';

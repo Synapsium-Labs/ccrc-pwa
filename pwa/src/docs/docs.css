@@ -152,14 +152,14 @@
    narrower than the floor itself (none at 600 px or wider) would clip the earliest crumbs, never the page's name. The
    crumbs clip, so the row's controls draw the focus ring inside their boxes, as the compact row's do. GitHub's
    may-differ note is a marker (`≠`) whose words are its `title`, a screen reader's text and the link's description,
-   so it takes no room from the crumbs. On a line of their own, if the actions are still wider
-   than the row (a draft at 600: GitHub, Share, Export and Open committed version with their words), they wrap among
-   themselves rather than run past the head; GitHub's refusal, the one long sentence among them, is cut with an
-   ellipsis there, its whole words in its `title`. Every crumb carries its whole name in its `title` too.
+   so it takes no room from the crumbs. On a line of their own, if the actions are still wider than the row, they wrap
+   among themselves rather than run past the head (no measured state needs it); GitHub's refusal, the one long
+   sentence among them, is cut with an ellipsis there, its whole words in its `title`. Every crumb carries its whole name in its `title` too.
    THE QUERY'S WIDTH, measured in Chrome (docs-compact-head.browser.test.ts): back (44) and the row's two 4 px gaps, the
    crumbs at their floor when folded (the `…` button and two crumbs at a tap and a separator each, about 164), and the
    widest actions with their words (GitHub, Share and "Export (plain view)", 313) come to about 529, so the words hide
-   below 530. A leaf at 600 has a 584 px row; a listing on a phone, which keeps the full head, has a narrower one.
+   below 530. A leaf at 600 has a 584 px row, the narrowest full head's: below 600 a leaf draws the compact head and a
+   listing main's stacked head (fix round 1, F2(b)), so the query now serves a row narrowed by something else.
    THE LINE (fix round 1, F2: it hides no fact). One line at `--docs-line-h` (tokens.css: the tap floor, 28 px under a
    fine pointer) when its facts fit, and so are the chip and copy commit inside it; when they do not fit it wraps onto
    a second line, and it clips nothing. Only the via sentence gives way, to an ellipsis, from a small basis up to its
