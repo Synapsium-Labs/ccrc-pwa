@@ -20,7 +20,7 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
-import { raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type ReviewCapState } from './reviewCapStore.js';
+import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
@@ -4986,6 +4986,11 @@ export class CoordStore {
   /** D-6795: record that the cap's ask is raised, once per cap level (`reviewCapStore.ts`). */
   raiseReviewCapAsk(workRunId: number, now: number): boolean {
     return raiseReviewCapAsk(this.db, workRunId, now);
+  }
+
+  /** D-8125: a coordinator allows three more review rounds (`reviewCapStore.ts`). */
+  liftReviewCapByCoordinator(i: Parameters<typeof liftReviewCapByCoordinator>[1]): CoordLiftResult {
+    return liftReviewCapByCoordinator(this.db, i);
   }
 
   /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */

@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 189 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 190 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -363,6 +363,9 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   ['POST /api/runs/:id/route',
     'the coordinator escalates or demotes a run session by the routing ladders — box-token gated ' +
     '(routing spec 2026-09-14 §5.3, slice 5, Task 2)'],
+  ['POST /api/runs/:id/review-rounds',
+    'the coordinator extends a work run\'s reached review-round cap by three rounds, with a reason — box-token gated, ' +
+    'attribution checked against the registry, ownership decided from the run\'s claimant (D-8125)'],
   ['POST /api/claims',
     'a session claims the paths it is about to edit — box-token gated, attribution checked ' +
     'against the registry exactly as the mail ingress checks its sender'],
