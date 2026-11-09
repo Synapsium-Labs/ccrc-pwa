@@ -21,6 +21,8 @@ import { SPAWN_STALL_MS } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
+import { decideDispatch, type BindFacts } from '../src/coord/dispatchDecide.js';
+import type { RegistryRead, SessionRecord } from '../src/registry.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -92,5 +94,32 @@ describe('characterization: a stalled dispatch before the server abandons it (D-
     const states = f.coord.db.prepare('SELECT state FROM mail_deliveries').all() as { state: string }[];
     expect(states.map((s) => s.state)).toEqual(['rejected']);
     expect(f.calls).toEqual([]);
+  });
+});
+
+// D-8126, CHARACTERIZATION (green before the orphan event existed): `decideBind`'s after-spawn refusals and the events
+// they carry, exactly as the dispatch executor journals them.
+describe("characterization: decideBind's after-spawn refusals (D-8126)", () => {
+  const rec = (id: string): SessionRecord => ({ id, project: 'demo', workspace: `/w/${id}`, branch: `ws/${id}`, wrapper: 'claude',
+    uuid: `u-${id}`, held: null, spawn: null, unmeasured: [] }) as unknown as SessionRecord;
+  const listed = (records: SessionRecord[]): RegistryRead => ({ listed: true, records, refused: new Set<string>() }) as unknown as RegistryRead;
+  const unlisted = { listed: false } as unknown as RegistryRead;
+  const bind = (over: Partial<BindFacts>): BindFacts => ({ step: 'bind', project: 'demo', childSlug: null, beforeIds: new Set(['old']),
+    after: listed([rec('old'), rec('new')]), res: { ok: true }, ...over });
+
+  it('an unlistable AFTER read is registry-unmeasurable, with ccd\'s stderr only when ccd failed, and no event', () => {
+    expect(decideDispatch(bind({ after: unlisted }))).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'registry-unmeasurable' } });
+    expect(decideDispatch(bind({ after: unlisted, res: { ok: false, stderr: 'boom', cutShort: true } })))
+      .toMatchObject({ kind: 'refused', outcome: { kind: 'registry-unmeasurable', stderr: 'boom' } });
+  });
+  it('two candidates are ambiguous-dispatch; the dispatch-refused event rides only when ccd failed', () => {
+    const after = listed([rec('n1'), rec('n2')]);
+    expect(decideDispatch(bind({ after }))).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 } });
+    expect(decideDispatch(bind({ after, res: { ok: false, stderr: 'no', cutShort: true } })))
+      .toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2' });
+  });
+  it('zero candidates with ccd failed is fleetFailed', () => {
+    expect(decideDispatch(bind({ after: listed([rec('old')]), res: { ok: false, stderr: 'no', cutShort: false } })))
+      .toMatchObject({ outcome: { kind: 'fleetFailed' }, event: 'dispatch-refused:fleetFailed candidates=' });
   });
 });
