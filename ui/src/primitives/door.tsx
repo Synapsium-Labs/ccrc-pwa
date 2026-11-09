@@ -50,8 +50,9 @@ export const DOOR =
 export const DOOR_GLYPH = 'font-ui text-meta leading-none';
 
 export interface DoorProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** The decorative glyph. Rendered `aria-hidden` in its own span; `null` renders no span, so no gap stands before the
-   *  word (desk-nav Task A review 1646 A4; desktop-polish Task C14, D-8110). */
+  /** The decorative glyph. Rendered `aria-hidden` in its own span; `null`, `undefined`, `false` and `''` draw nothing and
+   *  get no span, so no gap stands before the word (desk-nav Task A review 1646 A4; review 1689 A11). `0` renders, so it
+   *  keeps its span. */
   glyph: ReactNode;
   /** The visible word. SHORT, and it must be a word: the accessible name
    *  begins with it so a voice user saying what they see still reaches the
@@ -68,7 +69,7 @@ export interface DoorProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export function Door({ className, glyph, children, ...props }: DoorProps): ReactNode {
   return (
     <button type="button" className={cn(DOOR, className)} {...props}>
-      {glyph !== null && <span className={DOOR_GLYPH} aria-hidden="true">{glyph}</span>}
+      {glyph !== null && glyph !== undefined && glyph !== false && glyph !== '' && <span className={DOOR_GLYPH} aria-hidden="true">{glyph}</span>}
       {children}
     </button>
   );
