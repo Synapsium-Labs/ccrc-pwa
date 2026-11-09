@@ -3,7 +3,7 @@
 // hard-coded, so a branch that merges second moves up without editing a line here. Fixture coord.db files only.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
@@ -93,8 +93,10 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       ['text', 'TEXT', 1, null, 0], ['ruling', 'TEXT', 0, null, 0], ['itemId', 'INTEGER', 0, null, 0],
       ['pr', 'INTEGER', 0, null, 0], ['mergedAt', 'INTEGER', 0, null, 0]]);
     const programs = colsOf(db, 'programs');
-    expect(programs.slice(-3)).toEqual([
-      ['specPath', 'TEXT', 0, null, 0], ['inShort', 'TEXT', 0, null, 0], ['inShortAt', 'INTEGER', 0, null, 0]]);
+    // The definition of done is a later entry's column (D-8126; its own pin is the describe below).
+    expect(programs.slice(-4)).toEqual([
+      ['specPath', 'TEXT', 0, null, 0], ['inShort', 'TEXT', 0, null, 0], ['inShortAt', 'INTEGER', 0, null, 0],
+      ['doneWhen', 'TEXT', 0, null, 0]]);
     db.close();
   });
 
@@ -133,5 +135,45 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// The stored definition of done (D-8126): one nullable column on `programs`, found by its DDL like the slot above.
+const ADD_DONE_WHEN = /ALTER TABLE programs ADD COLUMN doneWhen(?![A-Za-z0-9_])/;
+const DW_SLOT = MIGRATIONS.findIndex((m) => ADD_DONE_WHEN.test(m)) + 1;
+
+describe('programs.doneWhen is one nullable column and nothing else (D-8126)', () => {
+  it('the slot is found by DDL, added once, never amended into a frozen entry', () => {
+    expect(DW_SLOT, 'no MIGRATIONS entry adds programs.doneWhen').toBeGreaterThan(SLOT);
+    expect(MIGRATIONS.filter((m) => ADD_DONE_WHEN.test(m)).length).toBe(1);
+    expect(MIGRATIONS.slice(0, DW_SLOT - 1).some((m) => /doneWhen/.test(m))).toBe(false);
+  });
+
+  it('a database at the previous user_version migrates, adds the column only and keeps its rows', () => {
+    const p = dbPathIn(mkTmp('ccrc-mig-donewhen-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < DW_SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${DW_SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'Prog A', 1, 'active')");
+    });
+    raw.close();
+    // The entry alone, on a copy: the original stays one version behind for openCoordDb to migrate.
+    const copy = dbPathIn(mkTmp('ccrc-mig-donewhen-copy-'));
+    mkdirSync(path.dirname(copy), { recursive: true });
+    copyFileSync(p, copy);
+    const alone = new DatabaseSync(copy);
+    const had = objectNames(alone);
+    const hadCols = colsOf(alone, 'programs');
+    alone.exec(MIGRATIONS[DW_SLOT - 1]!);
+    expect(objectNames(alone)).toEqual(had);
+    expect(colsOf(alone, 'programs')).toEqual([...hadCols, ['doneWhen', 'TEXT', 0, null, 0]]);
+    expect(alone.prepare('SELECT doneWhen FROM programs').all()).toEqual([{ doneWhen: null }]);
+    alone.close();
+    const db = openCoordDb(p);
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
+    expect(db.prepare('SELECT slug, title FROM programs').all()).toEqual([{ slug: 'prog-a', title: 'Prog A' }]);
+    db.close();
   });
 });

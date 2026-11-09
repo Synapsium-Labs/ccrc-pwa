@@ -253,14 +253,14 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
   it('a pinned programme with no item still has its goals in the list', async () => {
     const r = await rig();
     r.coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-c', 'C', 0, 'active')").run();
-    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0);
+    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
     const w = ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
     expect(w.goals.map((g) => g.program)).toContain('prog-c');
   });
 
   it('serves one programme\'s goals', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
     const res = await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, goals: { program: 'prog-a', specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'What it builds.' } });
