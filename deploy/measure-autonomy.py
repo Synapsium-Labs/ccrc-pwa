@@ -12,6 +12,26 @@ file, and a printed table carries counts and hours only: an excerpt of a questio
 
 A wait counts in the window when it STARTED in [--since, --until) (UTC days).
 
+The `items` subcommand runs on the SERVER box, over the coordination database, READ-ONLY: the connection is opened
+`mode=ro` with `query_only` on, every statement is a SELECT, and a missing `--db` exits 2 without creating a file.
+
+    python3 deploy/measure-autonomy.py items --db PATH [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR]
+
+  M3, per programme: operator items raised (`operator_items.raisedAt` in the window) plus asks released to the operator
+  (`asks.releasedAt` in the window with a `releaseReason` or a parent of `operator`: the rows `askDecision`
+  (server/src/coord/digest.ts) does not read as a coordinator's decision), over programme-days with an open run. An ask
+  belongs to the programme of its `runId`; an ask with no run is counted in `unattributed-asks` and in no programme. A
+  run is open from `runs.openedAt` to its terminal `run_events` row (toState done, failed or unknown), else to its
+  `closedAt`, else to the window's end; a UTC day counts when any run of the programme was open for any part of it.
+  M6, per ISO week (UTC, Monday): coordinator-hours flagged by `coord-blocked`. Where the verdict is recorded
+  (`applyStallSession` in server/src/watch.ts): a run-less coordinator's push goes through `pushOne` with
+  `recordAlways`, which archives a `feed_events` row of kind `run` titled "coordinator blocked" (rung 1) or "coordinator
+  blocked (escalated)" (rung 2), and nothing else records it (the latch is in memory). This reads that one source. A
+  flagged coordinator-hour is a distinct (session, UTC hour) holding at least one such row, a lower bound: the arm
+  records no recovery row, and the feed keeps only its newest rows (`FEED_RETENTION`).
+Rows printed: `programmes`, `unattributed-asks`, `m3-p1`.. (`items=N asks=N days=N value=V`, an ordinal in slug order, never
+a slug), `m3-all`, and `m6-YYYY-MM-DD` (the week's Monday). `--out` gets `items.json` (the same figures with the slugs).
+
 Rows printed (one `name: value` per line):
   transcripts     transcript files read
   coordinators    transcripts that are a coordinator by `is_coordinator`, with at least one row of their own after
@@ -23,7 +43,7 @@ Files under --out: `waits.json` (every Wait, with an `id`), `waits-over-1h.csv` 
 parts; `parts` is left empty for a reviewer).
 Exit 0 measured; 2 an input missing or refused.
 """
-import argparse, csv, datetime, glob, json, os, re, sys
+import argparse, csv, datetime, glob, json, os, re, sqlite3, sys, time, urllib.parse
 
 # `shared/api.ts`'s IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX and MAIL_ENVELOPE_FENCE: second spellings, bound
 # to the first by measure-autonomy.test.ts, which reds when they differ.
@@ -364,6 +384,107 @@ def cmd_transcripts(a):
                     w.writerow([x['id'], x['kind'], f'{x["hours"]:g}', x['excerpt'], ''])
 
 
+DAY_MS = 86_400_000
+HOUR_MS = 3_600_000
+OPERATOR_PRINCIPAL = 'operator'          # `ASK_OPERATOR_PRINCIPAL` in shared/api.ts
+BLOCKED_TITLE = '\u26a0 coordinator blocked'   # `stallCoordBlockedPushText`'s title, rung 1; rung 2 appends " (escalated)"
+RUN_TERMINAL = ('done', 'failed', 'unknown')   # the states `RUN_TRANSITIONS` leaves no edge out of
+
+
+def open_ro(db_path):
+    if not os.path.isfile(db_path):
+        fail(f'no database at {db_path}')
+    try:
+        con = sqlite3.connect('file:' + urllib.parse.quote(os.path.abspath(db_path)) + '?mode=ro', uri=True)
+        con.execute('PRAGMA query_only = ON')
+        con.execute('SELECT 1 FROM sqlite_master LIMIT 1')
+    except sqlite3.Error as e:
+        fail(f'cannot read the database: {e}')
+    return con
+
+
+def day_floor(ms):
+    return ms // DAY_MS
+
+
+def programme_days(spans, lo, hi):
+    """The UTC days any [open, end) span touches inside [lo, hi): a set of day numbers."""
+    days = set()
+    for o, e in spans:
+        o2, e2 = max(o, lo), min(e, hi)
+        if e2 < o2 or (e2 == o2 and not lo <= o < hi):
+            continue
+        for d in range(day_floor(o2), day_floor(max(e2 - 1, o2)) + 1):
+            days.add(d)
+    return days
+
+
+def week_monday(ms):
+    d = datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).date()
+    return (d - datetime.timedelta(days=d.weekday())).isoformat()
+
+
+def figure(v):
+    return str(round(v, 2))
+
+
+def cmd_items(a):
+    con = open_ro(a.db)
+    lo = int(parse_day(a.since, '--since') * 1000) if a.since else 0
+    hi = int(parse_day(a.until, '--until') * 1000) if a.until else int((time.time() // 86400 + 1) * DAY_MS)
+    try:
+        slugs = [r[0] for r in con.execute('SELECT slug FROM programs ORDER BY slug')]
+        runs = con.execute('SELECT id, program, openedAt, closedAt FROM runs').fetchall()
+        terminal = dict(con.execute(
+            'SELECT runId, MAX(at) FROM run_events WHERE toState IN (%s) GROUP BY runId' % ','.join('?' * len(RUN_TERMINAL)),
+            RUN_TERMINAL).fetchall())
+        items = dict(con.execute(
+            'SELECT program, COUNT(*) FROM operator_items WHERE raisedAt >= ? AND raisedAt < ? GROUP BY program', (lo, hi)).fetchall())
+        asks = con.execute(
+            'SELECT r.program, COUNT(*) FROM asks a JOIN runs r ON r.id = a.runId '
+            'WHERE a.releasedAt >= ? AND a.releasedAt < ? AND (a.releaseReason IS NOT NULL OR a.parentId = ?) GROUP BY r.program',
+            (lo, hi, OPERATOR_PRINCIPAL)).fetchall()
+        unattributed = con.execute(
+            'SELECT COUNT(*) FROM asks a LEFT JOIN runs r ON r.id = a.runId '
+            'WHERE a.releasedAt >= ? AND a.releasedAt < ? AND (a.releaseReason IS NOT NULL OR a.parentId = ?) AND r.id IS NULL',
+            (lo, hi, OPERATOR_PRINCIPAL)).fetchone()[0]
+        blocked = con.execute(
+            'SELECT sessionId, at FROM feed_events WHERE kind = ? AND (title LIKE ? OR title LIKE ?) AND at >= ? AND at < ?',
+            ('run', BLOCKED_TITLE + ' \u203a%', BLOCKED_TITLE + ' (escalated)%', lo, hi)).fetchall()
+    except sqlite3.Error as e:
+        fail(f'cannot read the database: {e}')
+    finally:
+        con.close()
+    ask_n = dict(asks)
+    spans = {}
+    for rid, prog, opened, closed in runs:
+        end = terminal.get(rid, closed if closed is not None else hi)
+        spans.setdefault(prog, []).append((opened, end))
+    rows_out, tot_i, tot_a, tot_d = [], 0, 0, 0
+    for slug in slugs:
+        d = len(programme_days(spans.get(slug, []), lo, hi))
+        i, k = items.get(slug, 0), ask_n.get(slug, 0)
+        rows_out.append({'slug': slug, 'items': i, 'asks': k, 'days': d, 'value': (i + k) / d if d else 0.0})
+        tot_i, tot_a, tot_d = tot_i + i, tot_a + k, tot_d + d
+    print(f'programmes: {len(slugs)}')
+    print(f'unattributed-asks: {unattributed}')
+    for n, r in enumerate(rows_out, 1):
+        print(f'm3-p{n}: items={r["items"]} asks={r["asks"]} days={r["days"]} value={figure(r["value"])}')
+    all_v = (tot_i + tot_a) / tot_d if tot_d else 0.0
+    print(f'm3-all: items={tot_i} asks={tot_a} days={tot_d} value={figure(all_v)}')
+    hours = {}
+    for sid, at in blocked:
+        hours.setdefault(week_monday(at), set()).add((sid, at // HOUR_MS))
+    weeks = {w: len(h) for w, h in sorted(hours.items())}
+    for w, n in weeks.items():
+        print(f'm6-{w}: {n}')
+    if a.out:
+        os.makedirs(a.out, exist_ok=True)
+        with open(os.path.join(a.out, 'items.json'), 'w', encoding='utf8') as f:
+            json.dump({'programmes': rows_out, 'all': {'items': tot_i, 'asks': tot_a, 'days': tot_d, 'value': all_v},
+                       'unattributedAsks': unattributed, 'm6': weeks}, f, indent=1)
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='measure-autonomy.py', description=__doc__.split('\n')[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -373,6 +494,12 @@ def main(argv):
     t.add_argument('--root', action='append')
     t.add_argument('--out')
     t.set_defaults(fn=cmd_transcripts)
+    i = sub.add_parser('items', help='M3 and M6 over the coordination database (the server box)')
+    i.add_argument('--db', required=True)
+    i.add_argument('--since')
+    i.add_argument('--until')
+    i.add_argument('--out')
+    i.set_defaults(fn=cmd_items)
     a = ap.parse_args(argv)
     a.fn(a)
 
