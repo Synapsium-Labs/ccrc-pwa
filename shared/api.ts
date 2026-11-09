@@ -14087,3 +14087,35 @@ export interface AttentionRow {
   readonly sentence: string;
   readonly sentenceFirst: boolean;
 }
+
+/** D-8126 (coordinator-autonomy-default, §8.2): how a coordinator's recorded call weighs. `routine` is kept for the run
+ *  record only; `big` is shown to the operator until Seen, overturned or aged; `block` is a thread waiting on a
+ *  condition (the wake below), never a digest line. The runtime list is derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+export type CoordCallClass = 'routine' | 'big' | 'block';
+const COORD_CALL_CLASS_MAP: Record<CoordCallClass, true> = { routine: true, big: true, block: true };
+export const CALL_CLASSES: readonly CoordCallClass[] = Object.keys(COORD_CALL_CLASS_MAP) as CoordCallClass[];
+
+/** What a `block` call waits on: a named condition, or a clock time in epoch milliseconds. */
+export type CallWake = 'capacity' | 'account-room' | 'disk' | 'memory' | 'update' | `time:${number}`;
+export type CallWakeCondition = Exclude<CallWake, `time:${number}`>;
+const CALL_WAKE_MAP: Record<CallWakeCondition, true> = { capacity: true, 'account-room': true, disk: true, memory: true, update: true };
+export const CALL_WAKES: readonly CallWakeCondition[] = Object.keys(CALL_WAKE_MAP) as CallWakeCondition[];
+
+/** One coordinator call on the wire (the goals read, the waiting view and the run record). */
+export interface CallView {
+  id: number;
+  program: string;
+  runId: number | null;
+  madeBy: string;
+  class: CoordCallClass;
+  question: string | null;
+  options: string[] | null;
+  chosen: string;
+  why: string;
+  reversible: boolean;
+  wakeOn: CallWake | null;
+  at: number;
+  seenAt: number | null;
+  overturnedAt: number | null;
+  overturnNote: string | null;
+}
