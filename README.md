@@ -5483,7 +5483,7 @@ GitHub's merge queue — measured before each landing, never remembered — a pr
 run closes. Once its review is clean, the coordinator advances the run to `merging`, waits for
 `gh pr checks <pr> --required` to pass (gh arms auto-merge, rather than queueing, a PR whose required
 checks have not), enqueues from its own session with
-`gh pr merge <pr> --match-head-commit <handoffCommit>` — never `--squash`, never `--admin` — and reads
+`gh pr merge <pr> --match-head-commit <handoffCommit>` — never `--squash`, never `--admin`, a queue being the case the admin-merge door (below) refuses — and reads
 the queue entry back. The run waits at `merging`, holding its child, so a PR still in the queue is
 never reclaimed out from under it, and closes only once the PR reads MERGED at `handoffCommit`. The
 server reports how the queue answered: `ccd pr-state --project` makes one GraphQL read per repository
@@ -5514,7 +5514,7 @@ creates `landing-checks-live`, it writes the same rows as `landing-shadow:` and 
 merges nothing, writes no branch and touches no merge queue. `ci.yml` answers
 `merge_group` and runs
 what a pull request runs. **Workers never merge**: the session hook denies `gh pr merge` — `--auto`,
-`--squash` and `--admin` included — at any command head it can parse, after stripping quoted text,
+`--squash` and `--admin` included — at any command head it can parse (the admin-merge door, `ccd pr-admin-merge`, among them), after stripping quoted text,
 comments and heredoc bodies the way bash reads them, to any session whose hold names a programme wave
 or whose workspace carries the child marker; a coordinator whose own workspace carries either is
 refused like a worker and is sent to the operator's shell. The deny is a contract, not a wall: what it
@@ -5543,7 +5543,7 @@ stays at `merging` and goes to the operator, and this build has no repair route 
 `byId`/`byUuid` attribution, `ccrc-api landing entries|order --json -`) record an entry and its order edges; the attributed `byId` is
 the setter, and an omitted `afterIds` or `fixesMain` keeps its value while an explicit `[]` or `false` clears it.
 
-**The bypass deny (landing-order wave 2b).** A second question, asked of every session after the worker
+**The bypass deny (landing-order wave 2b).** The deny stands whole after D-8124, which adds one gated door beside it ("The admin-merge door", below). A second question, asked of every session after the worker
 deny's and with its text unchanged, closes the two ways past the queue that the worker deny leaves open:
 the hook refuses `gh pr merge … --admin`, and a `gh api` call that reaches a merge (the pulls merge
 endpoint, the repository `merges` endpoint, and the `mergePullRequest`, `enqueuePullRequest`,
@@ -5587,6 +5587,45 @@ never lifts the `gh api` half, the over-cap reading or the worker deny. A reposi
 ambient state (a working directory left by an earlier call's `cd`, the checkout's remotes, the inherited
 environment) is a listed pass under it. The break-glass door for everyone else is the operator's own shell,
 which runs no hook, or GitHub's UI (R9).
+
+**The admin-merge door (D-8124).** The hook above refuses every raw `gh pr merge … --admin` and `gh api` merge in every
+session, and it still does. The operator ruled on 2026-11-09 that this blanket rule has one exception, for a case the
+hook's text match cannot carry: a coordinator landing a PR in a repository where the fleet's GitHub identity is an
+admin, when the only thing in the way is an approval the fleet cannot give (the landing verdict's `STOP
+approval-missing`). Whether the identity is an admin, whether the base has a merge queue, whether the required checks
+are green on this exact head, and whether a review requests changes are answers from GitHub that a regular expression
+over a command line cannot read, so loosening the hook's match to let `--admin` through would trade a refusal for a
+guess. The door is a `ccd` verb instead: `ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <40-hex sha>`, run by
+a coordinator from its own session. It runs `gh` itself, which no hook sees, and it makes every check before the one
+merge it can make, cheapest and local first, refusing at the first that fails: the argument shapes; the setting
+(`CCRC_ADMIN_MERGE`, below); that the caller is a coordinator (named by its tmux pane, with no child marker and no hold
+that names a programme wave, read as the hook reads a hold); that the fleet's GitHub identity holds admin on the
+repository (`permissions.admin` of the repository read); that the PR is open, not a draft, and at the head named; that
+the base branch has no merge queue, whether set by a ruleset's `merge_queue` rule, by GitHub's `mergeQueue` read for
+the branch; that no review is in the changes-requested state; that every required check
+(from rulesets and classic protection alike) is `success` on that head; and that the repository allows a merge method
+the door will use, a merge commit preferred and a squash only where the repository allows nothing else (a rebase-only
+repository is refused). Just before the merge it reads the PR again, and runs `gh pr merge <n> -R <owner/repo> --admin
+--<method> --match-head-commit <sha>`, so a push that lands after the checks cannot slip in; then it reads the PR back.
+Its stdout is exactly one line. `MERGED <owner/repo>#<n> head=<sha> method=<m> merge=<oid> checks=<…>` (rc 0), or
+`REFUSED <reason>: <detail>` (rc 2) with `<reason>` one of `setting-off`, `setting-unread`, `caller-unknown`,
+`not-coordinator`, `unreadable`, `not-admin`, `not-open`, `draft`, `not-at-head`, `merge-queue`,
+`protection-unreadable`, `changes-requested`, `checks-not-green`, `method-none`, `rebase-only`, `head-moved`,
+`github-refused` or `unproven`; `unproven` means `gh` answered but the read-back does not show the merge at that head,
+so it is reported and never retried. Every call that got past the argument shapes leaves one line in `$REG/swap.log`:
+`admin-merge <who>: <owner/repo>#<n> head=<sha> method=<m> checks=<…> result=merged merge=<oid>`, or
+`admin-merge-refused <who or ?>: <owner/repo>#<n> head=<sha> reason=<reason>`. The hook's worker deny covers the door as
+it covers `gh pr merge`, so a worker is refused twice, by the hook and by the door's own caller check; a worker never
+merges, as before. The bypass deny's reason now names the door, so a coordinator refused for a raw `--admin` is told
+where the one allowed path is. **`CCRC_ADMIN_MERGE`** (`auto` or `off`, default `auto`; a value `ccd` cannot read or
+use reads as `off`) is the fleet-wide switch, set in `ccrc.env` and shown by `ccrc settings` and the console; no
+per-repository list exists, since the identity's own admin permission is the list. **A repository with a merge queue
+is never admin-merged**: the queue decides, so this repository, which lands through its queue, is never landed by the
+door, and the CI paragraph's reasoning below (an admin merge skips the queue and lands on the fast run only) still
+holds for it. The server never calls the door; it is a session verb, and `ccd pr-admin-merge` names no server argv.
+The door does not tie the named repository to the caller's project and does not read the landing line; the
+coordinator skill reads the line first, as before every direct merge, and sends only `STOP approval-missing` to the
+door. The older D-7249 allowance above is unchanged.
 
 **Peers and claims (build 9).** Sessions that share a repository find each other and stake out paths
 through the server — `ccd` never sees a claim. `GET /api/peers?of=<id>` (or `?project=<slug>`,
@@ -7934,7 +7973,7 @@ full Linux suite — every server shard, the agent, pwa and browser tests and th
 browser suite there and `test (server)` a red node floor, so either stops the merge (the perf legs stay advisory).
 Nothing reaches `main` through the queue without it. The one way around it is a bypass actor's direct merge
 (`gh pr merge --admin`, which the ruleset's admin bypass still allows): the required checks are then satisfied by the
-fast run, so such a merge lands only what the fast run tested. Don't do it; the daily `full-suite` is the next run that
+fast run, so such a merge lands only what the fast run tested. Don't do it here (ccrc's admin-merge door, D-8124, refuses any repository with a merge queue, so it never lands this one); the daily `full-suite` is the next run that
 would catch what it skipped. The **macOS legs** (`test-macos`, `probe-macos`) live in `.github/workflows/macos.yml`: they run on every
 push to `main` (coalesced) and nightly, block no pull request and no queue entry, and a red one is a failing run on
 `main`. A refresh **every three hours** runs no test legs: it re-traces what every merge since the last one affected and
