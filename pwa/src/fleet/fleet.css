@@ -1589,18 +1589,16 @@
   white-space: nowrap;
 }
 
-/* D-5301 (coordinator-first spec §8): the quiet `coordinator` badge, on the
-   label's line after `.sess-repo`. `.sess-repo`'s register — mono, 2xs,
-   --ink-tertiary — because it is a standing fact about the row, not a call to
-   act, and nearly every operator-made row carries it. `flex: none` keeps the
-   word whole while `.sess-label` ellipsises, so the phone row (360, 390) and the
-   laptop and wide rows (1280, 1920) show the same cell; one short word needs no
-   ceiling of its own. */
+/* D-5301 made the quiet `coordinator` badge; D-5545 moved it to the header; D-8142 puts the word back on the card as
+   one plain cell, FIRST on the context line (`.sess-meta--context`, SessionMeta.tsx). Mono and secondary ink, the
+   meta line's own size, so it reads as one legible fact beside the context. `flex: none` and `nowrap` keep the word
+   whole (the context beside it shortens or wraps instead), and `align-self: flex-start` keeps it on the context's
+   first line when a branch beside it takes two at the desk (D-6332). */
 .sess-role {
   flex: none;
+  align-self: flex-start;
   font-family: var(--family-mono);
-  font-size: var(--fs-2xs);
-  color: var(--ink-tertiary);
+  color: var(--ink-secondary);
   white-space: nowrap;
 }
 

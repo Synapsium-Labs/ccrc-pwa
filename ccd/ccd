@@ -8069,22 +8069,20 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   fi
   # ── THE ROUTING RECORD (routing spec §5.3 for the argv, §4 for the default) ──
   # Here rather than at the pre-flight because every one of these is a WRITE
-  # against `$id`, and `$id` does not exist until the lines above. The argv wins
-  # over the default outright: a dispatcher that named fields has said what this
-  # worker is for, and the coordinator row is what an OPERATOR spawn gets when
-  # nobody said anything. A dispatched worker (`--no-rc`) that named nothing gets
+  # against `$id`, and `$id` does not exist until the lines above. The coordinator
+  # row is what an OPERATOR spawn always gets, and the argv is laid over it
+  # (D-8142). A dispatched worker (`--no-rc`) that named nothing gets
   # NEITHER — its spawn line stays byte-identical to a pre-slice-1 one.
   #
   # THE ACTOR IS THE DECLARED ONE WHEN THERE IS ONE. The dispatch path already
   # passes `--actor 'run:<id> dispatch'`, which is a truer answer than the verb's
   # own name; `ws-add` is the fallback for a call that declared nothing.
-  # D-8121: a `--route` that names only `browser` is not a routing answer, so an operator spawn still gets the
-  # coordinator row beside it (`_route_argv_routes`; `_route_any` leaves `browser` out, so the seed is not skipped).
+  # D-8142: an OPERATOR spawn always gets the coordinator row, the argv laid over it (`_route_seed_default` skips
+  # the fields the argv names); `_route_any` leaves `browser` out, so a browser-only pick never suppresses the seed.
+  # A dispatched worker (`--no-rc`) gets only what its argv names.
+  (( ! norc )) && _route_seed_default "$id" "$hw" "${lc_route[@]}"
   if (( ${#lc_route[@]} )); then
     _route_argv_write "$id" "${lc_actor:-ws-add}" argv "${lc_route[@]}"
-  fi
-  if (( ! norc )) && ! _route_argv_routes "${lc_route[@]}"; then
-    _route_seed_default "$id" "$hw"
   fi
   # AFTER the record, never before it: `degraded` is a statement about a record
   # that exists, and `_route_degrade` reads the standing stamp to decide whether
@@ -21222,12 +21220,6 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   for f in "${ROUTE_FIELDS[@]}"; do [[ "$f" != browser && -e "$REG/$1.$f" ]] && return 0; done
   return 1
 }
-_route_argv_routes() {   # k=v... — 0 iff a pair names a field other than `browser` (D-8121): such an argv says what the
-  # session is for, so it replaces the default row; `browser` pairs alone ride beside the default, never instead of it.
-  local kv
-  for kv in "$@"; do [[ "${kv%%=*}" != browser ]] && return 0; done
-  return 1
-}
 _route_valid() {   # field value — THREE answers, because two of them are two different
   # facts and used to collapse into one (fix round 2, Finding 1):
   #   0  the value IS in the field's closed vocabulary
@@ -21434,7 +21426,7 @@ _route_argv_write() {   # id actor reason k=v... — write validated fields (the
   done
 }
 
-_route_seed_default() {   # id wrapper — the coordinator row for an OPERATOR spawn that named no field
+_route_seed_default() {   # id wrapper [k=v...] — the coordinator row for an OPERATOR spawn, under the argv's pairs
   # ON EVERY LANE, INCLUDING A NON-ANTHROPIC ONE (controller ruling R1, on the
   # slice-4 probe that settled S1-R10). The first cut of this gated the row on
   # `_is_anthropic_backend` because nobody had run a class alias anywhere else;
@@ -21448,8 +21440,22 @@ _route_seed_default() {   # id wrapper — the coordinator row for an OPERATOR s
   # `_route_any` stays: a session that carries ANY field already has a record,
   # and this must never overwrite one (spec §5.1).
   _route_any "$1" && return 0
+  # D-8142: the argv is laid OVER the row, never instead of it. A field the argv names is not seeded first, so the
+  # journal never shows a value the operator did not want (`class: ∅ -> sonnet`, never `opus -> sonnet`).
+  local id="$1" named=" " kv pair f
+  local -a seed=()
+  shift 2
+  for kv in "$@"; do named+="${kv%%=*} "; done
+  # A haiku class takes no effort level (the pair `_route_argv_check` and `cmd_route` refuse), so an argv that names
+  # `class=haiku` and no effort must not have the row's effort laid under it: effort stays unset, the absent-equivalent.
+  [[ "$(_route_argv_class "$@")" == haiku ]] && named+="effort "
   # shellcheck disable=SC2086
-  _route_argv_write "$1" spawn "coordinator row (default)" $ROUTE_COORDINATOR_ROW
+  for pair in $ROUTE_COORDINATOR_ROW; do
+    f="${pair%%=*}"
+    [[ "$named" == *" $f "* ]] || seed+=("$pair")
+  done
+  (( ${#seed[@]} )) || return 0
+  _route_argv_write "$id" spawn "coordinator row (default)" "${seed[@]}"
 }
 
 _route_argv_class() {   # k=v... -> stdout the class= value among them, or nothing
@@ -26814,12 +26820,11 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `start` is the actor on both arms, including the one `cmd_enable` reaches:
   # that verb forwards the pairs here rather than parsing them twice, and its own
   # `enable` lifecycle row already records that boot-persistence was asked for.
-  # D-8121: a `--route` naming only `browser` keeps the mint's default row (the same rule as `ws-add`'s).
+  # D-8142: at a mint the coordinator row is seeded FIRST and the argv laid over it, whatever the pairs name (the
+  # same rule as `ws-add`'s); a revival writes the named pairs alone.
+  [[ -z "$regw" ]] && _route_seed_default "$id" "$wrapper" "${route[@]}"
   if (( ${#route[@]} )); then
     _route_argv_write "$id" start argv "${route[@]}"
-  fi
-  if [[ -z "$regw" ]] && ! _route_argv_routes "${route[@]}"; then
-    _route_seed_default "$id" "$wrapper"
   fi
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
   # already pinned home to this wrapper, so the marker's account clause is

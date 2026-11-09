@@ -10895,7 +10895,7 @@ describe('history card line: SessionStart(compact) serves the sweep\'s predictio
     fs.rmSync(child, { force: true });
     expect(fs.existsSync(path.join(home, '.cc-sessions', `${ID}.hold`)), 'no hold row').toBe(false);
     const roleOnly = served();
-    expect(roleOnly, 'the role subject alone, before any prediction').toMatch(/^ccrc-role: You are a coordinator for this project\./);
+    expect(roleOnly, 'the role subject alone, before any prediction').toMatch(/^ccrc-role: You are still this project's coordinator\./);   // a compaction gets the short reminder (D-8142)
     expect(hasLine(roleOnly), 'no line without a prediction').toBe(false);
     plantAll();
     fs.rmSync(child, { force: true });   // plantDirs plants the child row; this case is the session without one

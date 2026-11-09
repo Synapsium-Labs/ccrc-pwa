@@ -12,6 +12,9 @@
 //     below the 900px desk a long name or programme is shortened HERE, by whole tokens
 //     (`shortenByToken`), and from 900px up the full form draws (a name or branch past
 //     two lines ends in the browser's clamp `…`, D-6332); the full text rides `title`.
+//     D-8142 (operator ruling 2026-11-09) overturns this for ONE fact: a coordinator's card also says
+//     `coordinator`, first on the context line, because every session the operator creates is one from its first
+//     turn and the operator should see which rows are. The branch beside it shortens to what is left of the budget.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
 //     the same key, with its full text, plus everything the card leaves out.
 //     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
@@ -226,6 +229,15 @@ export function coordinatorRole(session: FleetSession): boolean {
 /** The word the header and the session details say for a coordinator, and the palette's session entries too. */
 export const COORDINATOR_WORD = 'coordinator';
 
+/** THE role fact: the card's (D-8142) and the header's one object, so the word and its title have one home. */
+/** The role's hover title, written once: the card's role cell and the header's role detail both read it. */
+export const COORDINATOR_ROLE_TITLE = 'this session is its project\'s coordinator';
+const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE };
+
+/** The width the card's role cell takes on the context line: the word and its middot separator (D-8142). A branch
+ *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
+export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
+
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
@@ -396,6 +408,8 @@ export interface CardFacts {
   readonly name: Fact;
   readonly status: Fact;
   readonly context: Fact | null;
+  /** `coordinator`, for a session that is its project's coordinator; never a child's (D-8142). */
+  readonly role: Fact | null;
   readonly marker: Fact | null;
   readonly workingOn: Fact | null;
   /** The row's attached delegation entries, every liveness (D-7781). */
@@ -404,10 +418,16 @@ export interface CardFacts {
 
 export function cardFacts(f: SessionFactSet): CardFacts {
   const short = shortenByToken(f.name, NAME_BUDGET);
+  const role: Fact | null = f.coordinatorRole ? ROLE_FACT : null;
+  const ctx = contextFact(f);
+  // The role cell takes the front of the context line, so a branch beside it shortens to what is left of the budget.
+  const context = role !== null && ctx !== null && ctx.key === 'branch'
+    ? { ...ctx, short: shortenByToken(ctx.text, NAME_BUDGET - ROLE_CELL_CHARS) } : ctx;
   return {
     name: { key: 'name', text: f.name, short, title: f.name },
     status: { key: 'status', text: f.statusText, ...(f.statusTitle === undefined ? {} : { title: f.statusTitle }) },
-    context: contextFact(f),
+    context,
+    role,
     marker: markers(f)[0] ?? null,
     workingOn: f.workingOn === null ? null : { key: 'working-on', text: f.workingOn, title: `works on ${f.workingOn}’s code` },
     delegated: f.delegated === null ? null
@@ -423,7 +443,7 @@ export function headerFacts(f: SessionFactSet): Fact[] {
     { key: 'status', text: headerStatusText(f), ...(f.statusTitle === undefined ? {} : { title: f.statusTitle }) },
     { key: 'lane', text: f.lane.name, ...(f.lane.label === undefined ? {} : { title: f.lane.label }) },
   ];
-  if (f.coordinatorRole) out.push({ key: 'role', text: COORDINATOR_WORD });
+  if (f.coordinatorRole) out.push(ROLE_FACT);
   if (f.workingOn !== null) out.push({ key: 'working-on', text: f.workingOn });
   const ctx = contextFact(f);
   // The context fact under its own key — the programme and wave, the child marker, `held`, the PR or the branch.
@@ -452,7 +472,7 @@ export function headerFacts(f: SessionFactSet): Fact[] {
 /** The subset rule, as a predicate the test and the harness both call: every card fact has a header fact under its
  *  key carrying its FULL text, or, for `delegated`, at least its count. */
 export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact[] {
-  const shown = [card.name, card.status, card.context, card.marker, card.workingOn, card.delegated]
+  const shown = [card.name, card.status, card.context, card.role, card.marker, card.workingOn, card.delegated]
     .filter((x): x is Fact => x !== null);
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).

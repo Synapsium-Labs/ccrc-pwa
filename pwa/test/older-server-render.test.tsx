@@ -33,6 +33,12 @@ const HEAD_DOORS = /<button[^>]*(?:class="docs-door"|accounts-door|class="mail-b
 /** The strip's no-lane placeholder, a door to the Accounts place, which a phone no longer draws: the bottom bar's Accounts door is
  *  that door (PL10 fix round 1, review 1466 F3, the coordinator's ruling on 15104). jsdom renders a phone. */
 const STRIP_PLACEHOLDER = /<div class="accounts-strip" role="link"[^>]*><span class="accounts-strip-empty">[^<]*<\/span><\/div>/g;
+/** The card's role cell (D-8142): a coordinator row, whose frame carries `role: 'coordinator'` as a current server's does,
+ *  now says the word first on its context line. A head-only addition, declared like the doors: the base drew no such cell.
+ *  Where the cell was the line's only content the base drew no context line, so the empty line goes with it. A row with no
+ *  `role` field (an older server) draws neither, which the count below pins. */
+const ROLE_ONLY_LINE = /<span class="sess-meta sess-meta--context"><span class="sess-role"[^>]*>coordinator<\/span><\/span>/g;
+const ROLE_CELL = /<span class="sess-role"[^>]*>coordinator<\/span>/g;
 /** The programme box's title door (PL10, D26 amended), round the title span the base drew. */
 const TITLE_DOOR = /<a [^>]*pg-title-door[^>]*>(<span class="pg-title">[^<]*<\/span>)<\/a>/g;
 /** React's `useId` values, renumbered by first appearance. The ids' NUMBERS are the counter's position, not markup: a
@@ -73,11 +79,12 @@ describe('an older server: no delegation frame, the base\'s fleet (delegation br
       // The Instrument view renders the skin's table alone, outside `FleetScreen`, so it draws no head.
       expect((html.match(PROJECTS_HEAD) ?? []).length, `${view}: one projects head per fleet screen`).toBe(view === 'instrument' ? 0 : 1);
       const old = html.split(MARKED).join(LIST).split(BACKUP_SLOT).join('').replace(TITLE_DOOR, '$1').replace(PROJECTS_HEAD, '');
+      expect(baseline.views[view].match(ROLE_CELL), `${view}: the base drew no role cell`).toBeNull();
       expect(old, `${view}: no other delegation attribute`).not.toContain('data-delegation');
       for (const word of ['inferred', 'Unowned work', 'Offline coordinator', 'delegated']) {
         expect(html, `${view}: no "${word}"`).not.toContain(word);
       }
-      expect(renumberIds(old), `${view}: the base's markup, byte for byte, less its three head doors and the phone's strip placeholder`)
+      expect(renumberIds(old.replace(ROLE_ONLY_LINE, '').replace(ROLE_CELL, '')), `${view}: the base's markup, byte for byte, less its three head doors, the phone's strip placeholder and the coordinator role cell`)
         .toBe(renumberIds(baseline.views[view].replace(HEAD_DOORS, '').replace(STRIP_PLACEHOLDER, '')));
     }
   });

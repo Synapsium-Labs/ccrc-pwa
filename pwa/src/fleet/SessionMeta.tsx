@@ -173,7 +173,13 @@ export function SessionMeta({
             <span className="sess-meta-chip" title={glance.delegated.title}>{glance.delegated.text}</span>
           )}
         </span>
-        {context !== null && <span className="sess-meta sess-meta--context" style={metaStyle}>{context}</span>}
+        {(glance.role !== null || context !== null) && (
+          <span className="sess-meta sess-meta--context" style={metaStyle}>
+            {/* D-8142: a coordinator's role, first on the context line; the middot rule separates it from the context. */}
+            {glance.role !== null && <span className="sess-role" title={glance.role.title}>{glance.role.text}</span>}
+            {context}
+          </span>
+        )}
       </>
     );
   }

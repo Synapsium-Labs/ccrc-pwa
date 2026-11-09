@@ -440,7 +440,6 @@ cmd_start -> _reg_id_cap
 cmd_start -> _reg_read
 cmd_start -> _reg_set
 cmd_start -> _route_argv_check
-cmd_start -> _route_argv_routes
 cmd_start -> _route_argv_write
 cmd_start -> _route_seed_default
 cmd_start -> _strand_clear
@@ -498,7 +497,6 @@ cmd_ws_add -> _reg_id_cap
 cmd_ws_add -> _reg_set
 cmd_ws_add -> _route_argv_check
 cmd_ws_add -> _route_argv_class
-cmd_ws_add -> _route_argv_routes
 cmd_ws_add -> _route_argv_write
 cmd_ws_add -> _route_degrade
 cmd_ws_add -> _route_seed_default

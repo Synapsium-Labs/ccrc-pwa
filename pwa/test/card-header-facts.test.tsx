@@ -15,8 +15,8 @@ import { createFleetStore } from '../src/stores/fleet';
 import type { RunSummary } from '../../shared/api';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import {
-  MARKER_ORDER, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers, sessionFacts, shortenByToken,
-  type FactInput,
+  COORDINATOR_WORD, MARKER_ORDER, NAME_BUDGET, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers,
+  sessionFacts, shortenByToken, type FactInput,
 } from '../src/fleet/sessionFacts';
 import type { ChildRunContext } from '../src/fleet/runWords';
 import { setSkin } from '../src/lib/skin';
@@ -126,6 +126,41 @@ describe('the model (D-5545)', () => {
       expect(shown).not.toMatch(/run #\d|run:\d|program:|wave:\d/);
     });
   }
+
+  it('a coordinator\'s card names its role; a child\'s never does (D-8142)', () => {
+    for (const [name, input] of Object.entries(CASES)) {
+      const role = cardFacts(sessionFacts(input)).role;
+      if (input.session.role === 'coordinator') {
+        expect(role, name).toMatchObject({ key: 'role', text: 'coordinator' });
+      } else {
+        expect(role, name).toBeNull();
+      }
+    }
+    expect(cardFacts(sessionFacts(CASES['a coordinator']!)).role).toEqual(
+      { key: 'role', text: COORDINATOR_WORD, title: 'this session is its project\'s coordinator' });
+    expect(cardFacts(sessionFacts(CASES['a coordinator']!)).role).not.toBeNull();
+    expect(cardFacts(sessionFacts(CASES['a plain operator workspace with a PR']!)).role).not.toBeNull();
+    for (const c of ['a held dispatched child', 'a hold whose run left the board']) {
+      expect(cardFacts(sessionFacts(CASES[c]!)).role, c).toBeNull();
+    }
+    // An older server sends no role: a worker, so no role fact.
+    const older = s({ workspace: 'old-pond' }) as unknown as Record<string, unknown>;
+    delete older.role;
+    expect(cardFacts(sessionFacts({ session: older as unknown as FleetSession, now: NOW })).role).toBeNull();
+    expect(cardFacts(sessionFacts({ session: s({ role: null as never }), now: NOW })).role).toBeNull();
+  });
+
+  it('a coordinator with a long branch keeps both whole on the card (D-8142)', () => {
+    const branch = 'feat/a-long-descriptive-branch-name-for-the-sidebar';
+    const f = sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'coordinator', branch }), now: NOW });
+    const c = cardFacts(f);
+    expect(c.role?.text).toBe('coordinator');
+    expect(c.context).toMatchObject({ key: 'branch', text: branch, short: 'feat/a-long…' });
+    expect(c.context!.short!.length + c.role!.text.length + 3).toBeLessThanOrEqual(NAME_BUDGET);
+    // A child, and a coordinator with no role cell to make room for, keep the full budget.
+    const kid = cardFacts(sessionFacts({ session: s({ workspace: 'bright-lake', name: 'bright-lake', role: 'child', branch }), now: NOW }));
+    expect(kid.context?.short).toBe(shortenByToken(branch, NAME_BUDGET));
+  });
 
   it('a child names its programme and wave on the card; the header keeps the verbatim hold and the coordinator', () => {
     const f = sessionFacts(CASES['a held dispatched child']!);
@@ -246,8 +281,19 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         // The card's status word as the CARD renders it, in the header's visible text.
         const cardWord = visible(card.querySelector('.sess-state')!);
         expect(text, 'the card\'s status word is missing from the header').toContain(cardWord);
-        for (const fact of [c.name, c.status, c.context, c.marker, c.workingOn]) {
+        for (const fact of [c.name, c.status, c.context, c.marker, c.workingOn, c.role]) {
           if (fact !== null) expect(text, `${fact.key} missing from the header`).toContain(fact.text);
+        }
+        // D-8142: a coordinator's context line begins with the one role cell; a child has none.
+        const roles = card.querySelectorAll('.sess-role');
+        if (input.session.role === 'coordinator') {
+          expect(roles.length).toBe(1);
+          const ctxLine = card.querySelector('.sess-meta--context')!;
+          expect(ctxLine.firstElementChild).toBe(roles[0]);
+          expect(visible(ctxLine).trim().startsWith('coordinator')).toBe(true);
+          expect(text).toContain('coordinator');
+        } else {
+          expect(roles.length).toBe(0);
         }
         // The verbatim hold — the card's `held` or programme names it, the header spells it.
         if (input.session.held !== null) expect(text, 'the verbatim hold').toContain(`held: ${input.session.held}`);

@@ -1493,14 +1493,17 @@ describe('whose code a row works on (D-5527)', () => {
 });
 
 // D-5545: on nearly every operator-made row the badge said the same word, so it moved to the session header's
-// details, where it names the role of the one session being read. The card carries no badge.
+// details, where it names the role of the one session being read. D-8142 puts the word back on the CARD as one
+// plain cell, first on the context line (`card-header-facts.test.tsx` pins its place); it is not a badge.
 describe('the coordinator badge (D-5301)', () => {
   const role = (): HTMLElement | null =>
     [...document.querySelectorAll<HTMLElement>('.chat-fact')].find((e) => e.textContent === 'coordinator') ?? null;
 
-  it("is a header fact: 'coordinator' in the details, never a badge on the row", () => {
+  it("is a header fact, and a plain role cell on the card, never a badge (D-8142)", () => {
     render(<SessionLine session={s({ role: 'coordinator' })} onOpen={() => {}} onActions={() => {}} />);
-    expect(document.querySelector('.sess-role')).toBeNull();
+    expect(document.querySelectorAll('.sess-role')).toHaveLength(1);
+    expect(document.querySelector('.sess-role')?.textContent).toBe('coordinator');
+    expect(document.querySelector('.sess-badge, [data-badge]')).toBeNull();
     expect(screen.getByRole('button', { name: /^quiet-mesa$/ })).toBeInTheDocument();
     cleanup();
     header(s({ role: 'coordinator' }));

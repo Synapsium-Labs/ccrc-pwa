@@ -3383,9 +3383,10 @@ with no record spawns as it always did.
 menu) write one field each through `POST /api/sessions/:id/route`, which runs `ccd route … --apply` (`501` from a
 fleet `ccd` that does not advertise `route-apply-v1`); the chip wears `queued` until the pane reads the change
 back (on a session whose row carries no routing record yet, a toast says so after 60 s without a read-back). The
-new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn with nothing chosen gets
+new-session sheet seeds `class`, `effort` and `workflow` at creation. An operator spawn always gets
 the coordinator row, `class=opus effort=high subagent=sonnet workflow=on` (workflows enabled for a short clause-19
-review, never standing `ultracode` orchestration, ruling 2026-10-25); a dispatched worker gets a record
+review, never standing `ultracode` orchestration, ruling 2026-10-25), and any field the operator picks is laid over it
+rather than replacing it (D-8142); a dispatched worker gets a record
 only when its run names one. **Fable runs only when the operator selects it** (D-6790, ruling 2026-10-24). Neither automatic ladder
 (`shared/routing-ladder.ts`) reaches it — both stop at `opus`, and a reversal of a demotion off `fable` answers `ceiling`
 rather than restoring it — and every box-token route write refuses it with `409 fable-operator-only`: a coordinator's
@@ -3461,7 +3462,7 @@ name (a long one shortened by whole tokens, never cut mid-word), a dot and a sta
 pane, a gone coordinator, a failed spawn, `needs you`, `with coordinator`, a lifecycle qualifier, a stranded or
 refused swap, a wedge, `limit N%` (its account's 5h or 7d window over 75%), context at 80% or more, a hibernated
 coordinator, a recent restart, an unreadable registry, `off-pool` — and ONE context line: a child's `<programme> ·
-wave N of M`, otherwise its PR or branch. A row working on another project's code carries that project's chip.
+wave N of M`, otherwise its PR or branch; a coordinator's row also says `coordinator`, as one plain cell first on that line (D-8142, which overturns this rule's old "role only in the header"; a child's row never shows it). A row working on another project's code carries that project's chip.
 Everything else the row knows — its account, role, task tally, subagents, hold reason, question, graph reads and
 every marker, not only the first — is in the **session header**, a superset of the row (its details row folds
 behind one door on a phone). A coordinator's workers sit bracketed under it (`└─`); `Released (N)` and
@@ -3999,7 +4000,11 @@ A **program** is a long-horizon effort with a slug and a markdown ledger
 and parsed by nothing). A **run** is one wave of it in one workspace. A
 **coordinator** is an ordinary fleet session running the `ccrc-coordinator`
 skill, placed by `_ws_least_loaded` like any other session, acting through the
-server's HTTP API (by way of `ccrc-api`, below) and never raw `ccd`. See "Fleet
+server's HTTP API (by way of `ccrc-api`, below) and never raw `ccd`. A session the
+operator creates is a coordinator from its first turn: its start card tells it to
+load the skill now and to read its programme's goals when it has one, and a revived
+session (resume or fork) is reminded in a shorter line (D-8142, which overturns the
+earlier "no eager skill load" and the silence on revival). See "Fleet
 coordination" below for the skill's contract, the run lifecycle, the mail bus
 and its box token, caps and pause, why `ws-reap` stays human-only, and the
 honest boundary — this section covers only what that one does not: the install

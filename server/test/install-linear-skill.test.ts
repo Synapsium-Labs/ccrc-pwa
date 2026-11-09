@@ -55,9 +55,10 @@ describe('the start card is byte for byte as on main: no Linear line (D-7682 R6;
     `${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } })}\n`;
 
   it('a coordinator row (no `.child`, no hold) is shown the role sentence and nothing else', () => {
-    expect(card()).toBe(envelope('ccrc-role: You are a coordinator for this project. For work worth splitting, run the '
-      + '`ccrc-coordinator` skill and dispatch; your children\'s questions and permission prompts come to you first; your '
-      + 'own go to the operator.'));
+    expect(card()).toBe(envelope('ccrc-role: You are this project\'s coordinator from your first turn. Load the '
+      + '`ccrc-coordinator` skill now, before anything else, and act as it says. When your work belongs to a programme, '
+      + 'read its goals and definition of done in its ledger (`docs/superpowers/programs/<slug>.md`) before you plan or '
+      + 'ask. Your children\'s questions and permission prompts come to you first; your own go to the operator.'));
   });
 
   it('a held worker row is shown the hold card and nothing else', () => {

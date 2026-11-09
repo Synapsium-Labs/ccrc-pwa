@@ -258,17 +258,74 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     expect(composed(newSessions()[0]!)).not.toContain('ultracode');
   });
 
-  it('an explicit --route on an operator ws-add wins over the coordinator row, and the DECLARED actor is the one journaled', () => {
+  it('an explicit --route on an operator ws-add is laid over the coordinator row, and the DECLARED actor is the one journaled', () => {
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --actor 'run:7 dispatch' --route class=sonnet demo`);
     const id = 'demo-quiet-mesa';
-    expect(record(id)).toEqual(['sonnet', null, null, null]);
+    expect(record(id)).toEqual(['sonnet', 'high', 'sonnet', 'on']);
     const rows = routeRows();
-    expect(rows).toHaveLength(1);
-    expect(decOf(rows[0]!)).toMatchObject({ actor: 'run:7 dispatch', reason: 'argv' });
+    expect(rows).toHaveLength(4);
+    expect(decOf(rows[3]!)).toMatchObject({ actor: 'run:7 dispatch', reason: 'argv' });
   });
 });
 
-describe('a --route that names only browser keeps the coordinator row (D-8121)', () => {
+describe('an operator pick lays over the coordinator row (D-8142)', () => {
+  it('an operator ws-add with --route class=sonnet keeps effort high, subagent sonnet and workflow on', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route class=sonnet demo`);
+    const id = 'demo-quiet-mesa';
+    expect(record(id)).toEqual(['sonnet', 'high', 'sonnet', 'on']);
+    const rows = routeRows();
+    expect(rows).toHaveLength(4);
+    for (let i = 0; i < 3; i++) expect(decOf(rows[i]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
+    expect(decOf(rows[3]!)).toMatchObject({ actor: 'ws-add', reason: 'argv' });
+    // The field the argv names is never seeded first: the journal shows no value the operator did not want.
+    expect(rows[3]!['detail']).toBe('class: ∅ -> sonnet');
+  });
+
+  it('an operator ws-add with --route effort=low --route workflow=off keeps class opus and subagent sonnet', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route effort=low --route workflow=off demo`);
+    expect(record('demo-quiet-mesa')).toEqual(['opus', 'low', 'sonnet', 'off']);
+    const line = composed(newSessions()[0]!);
+    expect(line).toContain('--model opus');
+    expect(line).toContain('--effort low');
+  });
+
+  it('a minting start with --route subagent=haiku gets class opus, effort high and workflow on', () => {
+    h.sh(`${START_SPAWNLESS} cmd_start --route subagent=haiku claude demo`);
+    expect(record('claude-demo')).toEqual(['opus', 'high', 'haiku', 'on']);
+  });
+
+  it('a dispatched worker (--no-rc) with --route class=sonnet still gets that field alone', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route class=sonnet demo`);
+    expect(record('demo-quiet-mesa')).toEqual(['sonnet', null, null, null]);
+    expect(routeRows()).toHaveLength(1);
+  });
+
+  it('--route class=haiku at mint on ws-add seeds no effort, so the refused pair never lands and a later route --set succeeds', () => {
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route class=haiku demo`);
+    const id = 'demo-quiet-mesa';
+    expect(record(id)).toEqual(['haiku', null, 'sonnet', 'on']);
+    expect(shStatus(`cmd_route --session ${id} --set workflow=off`).status).toBe(0);
+    expect(record(id)).toEqual(['haiku', null, 'sonnet', 'off']);
+  });
+
+  it('--route class=haiku at mint on start seeds no effort, so the refused pair never lands and a later route --set succeeds', () => {
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=haiku claude demo`);
+    expect(record('claude-demo')).toEqual(['haiku', null, 'sonnet', 'on']);
+    expect(shStatus('cmd_route --session claude-demo --set workflow=off').status).toBe(0);
+    expect(record('claude-demo')).toEqual(['haiku', null, 'sonnet', 'off']);
+  });
+
+  it('a revival with --route effort=low on a coordinator whose record says class=sonnet effort=medium writes effort only', () => {
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=sonnet --route effort=medium claude demo`);
+    expect(record('claude-demo')).toEqual(['sonnet', 'medium', 'sonnet', 'on']);
+    const before = routeRows().length;
+    h.sh(`${START_SPAWNLESS} cmd_start --route effort=low claude demo`);
+    expect(record('claude-demo')).toEqual(['sonnet', 'low', 'sonnet', 'on']);
+    expect(routeRows()).toHaveLength(before + 1);
+  });
+});
+
+describe('a --route that names only browser keeps the coordinator row (D-8121, D-8142)', () => {
   it('an operator ws-add with --route browser=on gets the coordinator row beside it, and the spawn composes the row', () => {
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route browser=on demo`);
     const id = 'demo-quiet-mesa';
@@ -276,8 +333,8 @@ describe('a --route that names only browser keeps the coordinator row (D-8121)',
     expect(h.reg(id, 'browser')).toBe('on');
     const rows = routeRows();
     expect(rows).toHaveLength(5);
-    expect(decOf(rows[0]!)).toMatchObject({ actor: 'ws-add', reason: 'argv' });
-    expect(decOf(rows[1]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
+    expect(decOf(rows[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
+    expect(decOf(rows[4]!)).toMatchObject({ actor: 'ws-add', reason: 'argv' });
     expect(composed(newSessions()[0]!)).toContain('--model opus');
   });
 
@@ -288,10 +345,10 @@ describe('a --route that names only browser keeps the coordinator row (D-8121)',
     expect(routeRows()).toHaveLength(1);
   });
 
-  it('browser beside a routing field is the caller\'s answer: no coordinator row', () => {
+  it('browser beside a routing field rides over the coordinator row too', () => {
     h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --route browser=on --route class=sonnet demo`);
-    expect(record('demo-quiet-mesa')).toEqual(['sonnet', null, null, null]);
-    expect(routeRows()).toHaveLength(2);
+    expect(record('demo-quiet-mesa')).toEqual(['sonnet', 'high', 'sonnet', 'on']);
+    expect(routeRows()).toHaveLength(5);
   });
 
   it('a minting start with --route browser=off gets the coordinator row too; a revival with it seeds nothing', () => {
@@ -299,6 +356,7 @@ describe('a --route that names only browser keeps the coordinator row (D-8121)',
     expect(record('claude-demo')).toEqual(['opus', 'high', 'sonnet', 'on']);
     expect(h.reg('claude-demo', 'browser')).toBe('off');
     expect(routeRows()).toHaveLength(5);
+    expect(decOf(routeRows()[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
     h.sh(`${START_SPAWNLESS} cmd_start --route browser=on claude demo`);
     expect(h.reg('claude-demo', 'browser')).toBe('on');
     expect(routeRows()).toHaveLength(6);
@@ -317,20 +375,22 @@ describe('--route on start and enable (routing spec §5.3)', () => {
   it('start takes --route, writes after the mint, journals with actor start; enable forwards it; an existing row is never re-seeded', () => {
     h.sh(`${START_SPAWNLESS} cmd_start --route subagent=haiku claude demo`);
     expect(h.reg('claude-demo', 'subagent')).toBe('haiku');
-    expect(decOf(routeRows()[0]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(routeRows()).toHaveLength(4);
+    expect(decOf(routeRows()[3]!)).toMatchObject({ actor: 'start', reason: 'argv' });
 
     // `enable` forwards the pair to `cmd_start` and parses it ONCE, so the
     // route row says `start`; its own `enable` lifecycle row precedes it.
     h.sh(`${START_SPAWNLESS} cmd_enable --route workflow=off claude-a demo`);
     expect(h.reg('claude-a-demo', 'workflow')).toBe('off');
-    expect(decOf(routeRows()[1]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(routeRows()).toHaveLength(8);
+    expect(decOf(routeRows()[7]!)).toMatchObject({ actor: 'start', reason: 'argv' });
 
     // A second start of an EXISTING session with no --route seeds nothing: the
     // default is for a session being MINTED, never for one being revived.
     h.sh(`${START_SPAWNLESS} cmd_start claude demo`);
     expect(h.reg('claude-demo', 'subagent')).toBe('haiku');
-    expect(h.reg('claude-demo', 'class')).toBeNull();
-    expect(routeRows()).toHaveLength(2);
+    expect(h.reg('claude-demo', 'class')).toBe('opus');   // seeded at the mint, never re-written
+    expect(routeRows()).toHaveLength(8);
   });
 
   it('start and enable WRITE --route on a session that ALREADY has a row — the pairs are never silently discarded', () => {
@@ -342,18 +402,21 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     // differently, so they must not answer alike (controller ruling S4-R3).
     h.sh(`${START_SPAWNLESS} cmd_start --route class=sonnet claude demo`);
     expect(h.reg('claude-demo', 'class')).toBe('sonnet');
-    expect(routeRows()).toHaveLength(1);
+    expect(routeRows()).toHaveLength(4);
 
     h.sh(`${START_SPAWNLESS} cmd_enable --route class=opus claude demo`);
     expect(h.reg('claude-demo', 'class')).toBe('opus');
     const rows = routeRows();
-    expect(rows).toHaveLength(2);
-    expect(decOf(rows[1]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(rows).toHaveLength(5);
+    expect(decOf(rows[4]!)).toMatchObject({ actor: 'start', reason: 'argv' });
     // THE OLD VALUE IS READ AND RENDERED, exactly as `cmd_route` renders it —
     // an audit row that said `∅ -> opus` here would claim a first write that
     // did not happen and hide the value it replaced.
-    expect(rows[1]!['detail']).toBe('class: sonnet -> opus');
+    expect(rows[4]!['detail']).toBe('class: sonnet -> opus');
     expect(routeLog('claude-demo')).toEqual([
+      'route claude-demo: effort ∅ -> high [actor=spawn] (coordinator row (default))',
+      'route claude-demo: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))',
+      'route claude-demo: workflow ∅ -> on [actor=spawn] (coordinator row (default))',
       'route claude-demo: class ∅ -> sonnet [actor=start] (argv)',
       'route claude-demo: class sonnet -> opus [actor=start] (argv)',
     ]);
@@ -376,10 +439,13 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     expect(r.out).toContain('already running: claude-demo');
     expect(h.reg('claude-demo', 'class')).toBe('opus');
     const rows = routeRows();
-    expect(rows).toHaveLength(2);
-    expect(decOf(rows[1]!)).toMatchObject({ actor: 'start', reason: 'argv' });
-    expect(rows[1]!['detail']).toBe('class: sonnet -> opus');
+    expect(rows).toHaveLength(5);
+    expect(decOf(rows[4]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(rows[4]!['detail']).toBe('class: sonnet -> opus');
     expect(routeLog('claude-demo')).toEqual([
+      'route claude-demo: effort ∅ -> high [actor=spawn] (coordinator row (default))',
+      'route claude-demo: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))',
+      'route claude-demo: workflow ∅ -> on [actor=spawn] (coordinator row (default))',
       'route claude-demo: class ∅ -> sonnet [actor=start] (argv)',
       'route claude-demo: class sonnet -> opus [actor=start] (argv)',
     ]);
@@ -394,7 +460,7 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     const r = shStatus(`${START_ALIVE} cmd_enable claude demo`);
     expect(r.status, r.out).toBe(0);
     expect(h.reg('claude-demo', 'class')).toBe('sonnet');
-    expect(routeRows()).toHaveLength(1);
+    expect(routeRows()).toHaveLength(4);
   });
 
   it('start refuses a bad value before the registry row exists', () => {
@@ -453,16 +519,16 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     install('gpt');
     h.sh(`${START_SPAWNLESS} cmd_start --route class=fable gpt demo`);
     expect(h.reg('gpt-demo', 'class')).toBe('fable');
-    expect(decOf(routeRows()[0]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(decOf(routeRows()[3]!)).toMatchObject({ actor: 'start', reason: 'argv' });
     expect(h.reg('gpt-demo', 'degraded')).toBeNull();
 
     h.sh(`${WS_ADD_REAL_SPAWN} _spawn_start gpt-demo resume`);
     expect(h.reg('gpt-demo', 'class')).toBe('fable');   // the INTENDED class is kept
     expect(h.reg('gpt-demo', 'degraded')).toBe('opus'); // the class actually served
     const rows = routeRows();
-    expect(rows).toHaveLength(2);
-    expect(decOf(rows[1]!)).toMatchObject({ actor: 'ccd' });
-    expect(rows[1]!['detail']).toBe('degraded: ∅ -> opus');
+    expect(rows).toHaveLength(5);
+    expect(decOf(rows[4]!)).toMatchObject({ actor: 'ccd' });
+    expect(rows[4]!['detail']).toBe('degraded: ∅ -> opus');
     expect(composed(newSessions()[0]!)).toContain('--model opus');
   });
 });

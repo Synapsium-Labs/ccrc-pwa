@@ -198,10 +198,11 @@ export function NewSessionSheet({
   // A project to pick by name once the list holds it and an account is chosen: the sheet's `initialProject`, or the one
   // an inline add just made.
   const [pendingPick, setPendingPick] = useState<string | null>(null);
-  // The routing row's three fields (routing spec, slice 4, Task 6). Each is
+  // The routing row's fields (routing spec, slice 4, Task 6). Each is
   // '' (unset) until the operator picks one; unset means the request carries
-  // no `route` key at all, so an operator who never touches this row starts
-  // a session exactly the way this sheet always has.
+  // no `route` key for that field, and the session takes the coordinator row's
+  // value for it. A picked field is laid over that row, never in place of it
+  // (D-8142).
   const [routeClass, setRouteClass] = useState('');
   const [routeEffort, setRouteEffort] = useState('');
   const [routeWorkflow, setRouteWorkflow] = useState('');
@@ -724,7 +725,9 @@ export function NewSessionSheet({
               never a hand-typed list, so a class or effort rung this build
               adds or drops shows up here for free. Leaving all three unset
               sends no `route` key at all — "Automatic" (unset), the coordinator
-              row an ordinary start has always landed on. */}
+              row an ordinary start has always landed on. A field picked here
+              is laid OVER that row (D-8142): choosing Class never costs the
+              session its effort, subagent or workflow defaults. */}
           <div className="route-row">
             <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
               <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
