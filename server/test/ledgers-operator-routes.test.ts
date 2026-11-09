@@ -25,6 +25,8 @@ import {
 } from '../../shared/ledgers.js';
 import { LEDGER_ROUTE_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
 import type { GoalsRead } from '../../shared/ledgers.js';
+import type { CallView, RunRecordAnswer } from '../../shared/api.js';
+import type { NewCall } from '../src/coord/coordCalls.js';
 import { MAIL_BODY_MAX_BYTES, MAIL_SUBJECT_MAX_BYTES, SECRET_MASK } from '../../shared/api.js';
 
 let app: FastifyInstance | null = null;
@@ -276,7 +278,8 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
     const open = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main ships.', neededBy: 'blocking' });
     raise(r, { program: 'prog-b', runId: null, raisedBy: 'lane-b', title: 'Another programme' });
     const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as { ok: true; goals: unknown } & GoalsRead;
-    expect(Object.keys(body).sort()).toEqual(['goals', 'ok', 'openItems']);
+    expect(Object.keys(body).sort()).toEqual(['bigCalls', 'goals', 'ok', 'openItems']);
+    expect(body.bigCalls).toEqual([]);
     expect(body.goals).toMatchObject({ program: 'prog-a', doneWhen: ['It ships.'] });
     expect(body.openItems).toEqual([{ id: open, kind: 'decide', title: 'Which branch', neededBy: 'blocking' }]);
     expect(Object.keys(body.openItems[0]!).sort()).toEqual(['id', 'kind', 'neededBy', 'title']);
@@ -294,7 +297,7 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
     const r = await rig();
     raise(r, { kind: 'secret', title: 'A key', secretSlot: 'slot-a', why: 'private why', how: ['private how'] });
     const read = goalsReadOf(r.coord, 'prog-a', NOW0);
-    expect(Object.keys(read).sort()).toEqual(['goals', 'openItems']);
+    expect(Object.keys(read).sort()).toEqual(['bigCalls', 'goals', 'openItems']);
     const text = JSON.stringify(read);
     for (const word of ['private why', 'private how', 'slot-a', 'secretSlot', 'answer', 'note']) expect(text).not.toContain(word);
   });
@@ -745,5 +748,132 @@ describe('review 1333 F1: no await between the item read and the write, in each 
     // Exactly the write, then the microtask queued at the first read: an await between them flips the pair, and a route
     // whose first read moved off `itemById` (so no microtask was queued) fails here rather than passing unobserved.
     expect(order, `${name}: an await sits between the item read and the write, or the first read is not itemById`).toEqual(['write', 'microtask']);
+  });
+});
+
+// ── D-8126 (wave A3, Task A3-6): the Seen door and the three reads of a call ──────────────────────────────────────────
+const callOf = (over: Partial<NewCall> = {}): NewCall => ({
+  class: 'big', runId: null, question: 'Which fixture name?', options: ['demo-w1', 'demo-w2'], chosen: 'demo-w1',
+  why: 'The shorter name reads better.', reversible: false, wakeOn: null, ...over,
+});
+const record = (r: Rig, over: Partial<NewCall> = {}, at = Date.now(), program = 'prog-a', by = 'lane-a'): number =>
+  r.coord.insertCall(program, by, callOf(over), null, at);
+const seen = (r: Rig, id: number | string) => r.app.inject({ method: 'POST', url: `/api/calls/${id}/seen`, payload: {} as never });
+const waitingOf = async (r: Rig): Promise<WaitingView> =>
+  ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
+
+describe('POST /api/calls/:id/seen (D-8126, wave A3)', () => {
+  it('with a session is 200, marks the call, says so on the bus, and is idempotent', async () => {
+    const r = await rig();
+    const id = record(r);
+    const first = await seen(r, id);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toMatchObject({ ok: true, call: { id, seenAt: expect.any(Number) } });
+    const at = r.coord.callById(id)!.seenAt;
+    expect(r.waiting()).toBe(1);
+    const again = await seen(r, id);
+    expect(again.statusCode).toBe(200);
+    expect(r.coord.callById(id)!.seenAt).toBe(at);
+  });
+
+  it('on a routine row is 409 not-big, on a block row too, and on an unknown row 404 unknown-call', async () => {
+    const r = await rig();
+    const routine = record(r, { class: 'routine', reversible: true });
+    const res = await seen(r, routine);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'not-big' });
+    expect(r.coord.callById(routine)!.seenAt).toBeNull();
+    expect(REFUSAL_STATUS['not-big']).toBe(409);
+    const missing = await seen(r, 424242);
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ error: 'unknown-call' });
+    expect((await seen(r, '007')).statusCode).toBe(400);
+  });
+
+  it('is the operator\'s door: the box token alone is 401, a session is 200', async () => {
+    const home = mkTmp('ccrc-calls-seen-armed-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine(PASS, FAST, 1)}\n`, { mode: 0o600 });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const base = testDeps(home, recorder().run);
+    app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: BOX, coord });
+    const id = coord.insertCall('prog-a', 'lane-a', callOf(), null, Date.now());
+    const token = await app.inject({ method: 'POST', url: `/api/calls/${id}/seen`, headers: { 'x-ccrc-mail-token': BOX }, payload: {} as never });
+    expect(token.statusCode).toBe(401);
+    expect(coord.callById(id)!.seenAt).toBeNull();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASS } });
+    const set = login.headers['set-cookie'];
+    const line = Array.isArray(set) ? set[0]! : String(set);
+    const cookie = line.slice(0, line.indexOf(';'));
+    const ok = await app.inject({ method: 'POST', url: `/api/calls/${id}/seen`, headers: { cookie }, payload: {} as never });
+    expect(ok.statusCode, ok.body).toBe(200);
+  });
+});
+
+describe('big calls on the waiting view, the goals read and the run record (D-8126, wave A3)', () => {
+  it('the waiting view lists an unseen big call, then under callsCleared after Seen; a routine or block call is never listed', async () => {
+    const r = await rig();
+    const id = record(r);
+    record(r, { class: 'routine', reversible: true });
+    record(r, { class: 'block', wakeOn: 'disk', question: null, options: null });
+    const before = await waitingOf(r);
+    expect(before.calls!.map((c) => c.id)).toEqual([id]);
+    expect(before.callsCleared).toEqual([]);
+    expect((await seen(r, id)).statusCode).toBe(200);
+    const after = await waitingOf(r);
+    expect(after.calls).toEqual([]);
+    expect(after.callsCleared!.map((c) => c.id)).toEqual([id]);
+    expect(after.callsCleared![0]).toMatchObject({ class: 'big', chosen: 'demo-w1', seenAt: expect.any(Number) });
+  });
+
+  it('a call older than 7 days is cleared, not open', async () => {
+    const r = await rig();
+    const old = record(r, {}, Date.now() - 8 * 86_400_000);
+    const w = await waitingOf(r);
+    expect(w.calls).toEqual([]);
+    expect(w.callsCleared!.map((c) => c.id)).toEqual([old]);
+  });
+
+  it('the goals read\'s bigCalls holds at most 20 of the programme\'s big calls, newest first', async () => {
+    const r = await rig();
+    const t0 = Date.now() - 10_000_000;
+    const ids = Array.from({ length: 23 }, (_, i) => record(r, { chosen: `c${i}` }, t0 + i * 1000));
+    record(r, {}, t0, 'prog-b', 'lane-b');
+    record(r, { class: 'routine', reversible: true }, t0);
+    const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as { ok: true } & GoalsRead;
+    expect(body.bigCalls).toHaveLength(20);
+    expect(body.bigCalls.map((c) => c.id)).toEqual(ids.slice(3).reverse());
+    expect(body.bigCalls.every((c) => c.class === 'big' && c.program === 'prog-a')).toBe(true);
+    expect(goalsReadOf(r.coord, 'prog-zzz', NOW0).bigCalls).toEqual([]);
+  });
+
+  it('the run record lists every class of call that names the run, oldest first, and no other run\'s', async () => {
+    const r = await rig();
+    const t = Date.now();
+    const a = record(r, { runId: r.runA, class: 'routine', reversible: true }, t);
+    const b = record(r, { runId: r.runA }, t + 1);
+    const c = record(r, { runId: r.runA, class: 'block', wakeOn: 'disk', question: null, options: null }, t + 2);
+    record(r, { runId: null }, t + 3);
+    const res = await r.app.inject({ method: 'GET', url: `/api/runs/${r.runA}/record` });
+    expect(res.statusCode, res.body).toBe(200);
+    const calls = (res.json() as RunRecordAnswer).calls!;
+    expect(calls.map((x) => [x.id, x.class])).toEqual([[a, 'routine'], [b, 'big'], [c, 'block']]);
+  });
+
+  it('every text on every read is masked again on egress, even from a row stored unmasked', async () => {
+    const r = await rig();
+    const key = ['sk', 'ant', 'api03', createHash('sha256').update('y').digest('base64url').repeat(3).slice(0, 95)].join('-');
+    const id = record(r, { runId: r.runA });
+    r.coord.db.prepare('UPDATE coordinator_calls SET why = ?, chosen = ?, question = ?, options = ? WHERE id = ?')
+      .run(`used ${key}`, `pick ${key}`, `which ${key}?`, JSON.stringify([`opt ${key}`]), id);
+    const w = await waitingOf(r);
+    const g = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as GoalsRead;
+    const rr = (await r.app.inject({ method: 'GET', url: `/api/runs/${r.runA}/record` })).json() as RunRecordAnswer;
+    for (const c of [w.calls![0]!, g.bigCalls[0]!, rr.calls![0]!] as CallView[]) {
+      expect(JSON.stringify(c)).not.toContain(key.slice(8, 40));
+      expect(JSON.stringify(c)).toContain('[REDACTED]');
+    }
+    const seenRes = await seen(r, id);
+    expect(seenRes.body).not.toContain(key.slice(8, 40));
   });
 });

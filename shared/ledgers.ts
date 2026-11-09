@@ -10,7 +10,7 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 
@@ -215,12 +215,18 @@ export interface GoalsView {
 export interface GoalsRead {
   goals: GoalsView;
   openItems: { id: number; kind: ItemKind; title: string; neededBy: NeededBy }[];
+  /** D-8126: the programme's last 20 big calls, newest first, however long ago and whether or not seen. */
+  bigCalls: CallView[];
 }
 
 export interface WaitingView {
   items: ItemView[];
   cleared: ItemView[];
   goals: GoalsView[];
+  /** D-8126: the big calls the operator has yet to see (newest first), and those that left the group inside the
+   *  Recently cleared window. OPTIONAL on the wire: an older server omits both. ADDITIVE. */
+  calls?: CallView[];
+  callsCleared?: CallView[];
 }
 
 const NEEDED_BY_RANK: Readonly<Record<NeededBy, number>> = { blocking: 0, soon: 1, later: 2 };

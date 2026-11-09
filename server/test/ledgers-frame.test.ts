@@ -79,6 +79,25 @@ const raise = async (r: Rig, over: Record<string, unknown> = {}) =>
   });
 
 describe('the waiting frame (plan PL4)', () => {
+  it('carries a big call, rebuilds when one is recorded and again when it is Seen (D-8126)', async () => {
+    const r = await rig();
+    const sock = connect(r.port);
+    expect((await sock.waitingFrame(1)).waiting.calls).toEqual([]);
+    const res = await r.app.inject({
+      method: 'POST', url: '/api/coord/programmes/prog-a/calls', headers: HEADERS,
+      payload: { byId: 'lane-a', byUuid: 'u-lane-a', class: 'big', question: 'Which name?', options: ['a', 'b'], chosen: 'a', why: 'Shorter.', reversible: false } as never,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    const second = await sock.waitingFrame(2);
+    expect(second.waiting.calls!.map((c) => c.id)).toEqual([id]);
+    expect(second.waiting.callsCleared).toEqual([]);
+    expect((await r.app.inject({ method: 'POST', url: `/api/calls/${id}/seen`, payload: {} as never })).statusCode).toBe(200);
+    const third = await sock.waitingFrame(3);
+    expect(third.waiting.calls).toEqual([]);
+    expect(third.waiting.callsCleared!.map((c) => c.id)).toEqual([id]);
+  });
+
   it('is sent on connect, with the whole view, and FLEET_PROTO stays 1', async () => {
     const r = await rig();
     r.coord.raiseItem({ program: 'prog-a', runId: r.runA, raisedBy: 'lane-a', kind: 'do', title: 'First', why: 'w', how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, NOW0);

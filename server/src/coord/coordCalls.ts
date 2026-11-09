@@ -1,4 +1,4 @@
-import { CALL_CLASSES, CALL_WAKES, type CallWake, type CallWakeCondition, type CoordCallClass } from '../../../shared/api.js';
+import { CALL_CLASSES, CALL_WAKES, type CallView, type CallWake, type CallWakeCondition, type CoordCallClass } from '../../../shared/api.js';
 import { redactCommand } from './redact.js';
 import { cutWhole } from './reviewcap.js';
 
@@ -77,6 +77,18 @@ export function callClearedAt(row: CallRow, now: number): number | null {
   const agedAt = row.at + CALL_SEEN_WINDOW_MS;
   const times = [row.seenAt, row.overturnedAt, agedAt <= now ? agedAt : null].filter((t): t is number => t !== null);
   return times.length === 0 ? null : Math.min(...times);
+}
+
+/** A call as it leaves the server (D-8126): the wire shape, with every text masked once more (F3). The store masks on the
+ *  way in; a row stored before a mask learned a shape, or written by another door, is still masked on every read. */
+export function callViewOf(row: CallRow): CallView {
+  const mask = (t: string): string => redactCommand(t);
+  return {
+    id: row.id, program: row.program, runId: row.runId, madeBy: row.madeBy, class: row.class,
+    question: row.question === null ? null : mask(row.question), options: row.options === null ? null : row.options.map(mask),
+    chosen: mask(row.chosen), why: mask(row.why), reversible: row.reversible, wakeOn: row.wakeOn, at: row.at,
+    seenAt: row.seenAt, overturnedAt: row.overturnedAt, overturnNote: row.overturnNote === null ? null : mask(row.overturnNote),
+  };
 }
 
 /** The digest's predicate for the call table: only a `big` call is a line (R4). */

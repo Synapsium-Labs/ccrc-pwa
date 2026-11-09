@@ -11,6 +11,7 @@
 // A call is recorded by the coordinator that holds the programme and by nobody else (F2): a worker's own pair, and
 // another programme's coordinator, are both `not-your-programme`.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { Bus } from '../bus.js';
 import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
@@ -26,6 +27,8 @@ export interface CoordCallsRouteDeps {
   requireMailToken: (req: FastifyRequest, reply: FastifyReply, route: string) => boolean;
   requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid') => Promise<boolean>;
   notice: NoticeSink;
+  /** A big call joins the operator's Waiting-on-you frame, so the frame is rebuilt (`waiting`). */
+  bus: Bus;
   now: () => number;
   /** The server's build stamp, the one `/health` answers as `version`; null where the build carries none. */
   build: string | null;
@@ -74,6 +77,7 @@ export function registerCoordCallsRoute(app: FastifyInstance, deps: CoordCallsRo
       deps.notice({ kind: 'coord', sessionId: '', runId: call.runId, title: `Call made · ${slug}`, body: `${call.question ?? ''} → ${call.chosen}` },
         'record-only', { degraded: `coordinator call ${id}, feed archive degraded` });
     }
+    if (call.class === 'big') deps.bus.emit('waiting');
     const stored = coord.callById(id);
     const answer: CallRecordAnswer = { ok: true, id, class: call.class, expiresAt: stored?.expiresAt ?? null };
     return reply.code(200).send(answer);
