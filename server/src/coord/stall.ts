@@ -737,7 +737,7 @@ function stallReactivatedAt(input: StallInput): number {
 /** When the coordinator-ball cap's 30 h starts: the run's newest relevant mail, or its re-activation when that is later
  *  (`coord-ball-restarts-on-reactivation` (D-3789)). ONE definition: the verdict times the cap from it, and the push
  *  names it. Null when no relevant mail exists, and then the cap never fires. */
-function stallCoordBallFrom(input: StallInput, f: StallFacts): number | null {
+export function stallCoordBallFrom(input: StallInput, f: StallFacts): number | null {
   return f.lastExchangeAt === null ? null : Math.max(f.lastExchangeAt, stallReactivatedAt(input));
 }
 

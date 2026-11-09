@@ -799,8 +799,13 @@ deploy; `stall-watch-w2-live` makes the rung send.
 
 ### Task A6-2: the rung's facts and its act, in the coordinator pass
 
-**Files:** Modify `server/src/watch.ts` (`judgeStallCoordinator`), `server/src/coord/ports.ts` (`WatcherCoordPort` gains
-`liveBlocksOf`, `programmeHasBlockingItem`, `isPinned`); Test `server/test/stall-sweep.test.ts`.
+**Files:** Modify `server/src/watch.ts` (`judgeStallCoordinator`, and `judgeCoordBall` beside it), `server/src/coord/ports.ts`
+(`WatcherCoordPort` gains `liveBlocksOf`, `openRunsOfClaimant`, `programmeHasBlockingItem`; `isPinned` belongs to A6-3, the
+first task that reaches it, because the port's ring test fails a member nothing reaches), `server/src/coord/store.ts`
+(`openRunsOfClaimant(claimedBy)`: every non-terminal run it claims, whatever its state, because `stallCandidates` keeps only
+active runs of bound workers and an `awaiting-review` run is what the rung looks for) and `server/src/coord/ledgersStore.ts`
+(`programmeHasBlockingItem`); `stallCoordBallFrom` is exported from `stall.ts`; a claimant with no active run is judged
+`ballOnly`: the rung alone, and still left to the registry-row loop for orphan D. Test `server/test/stall-sweep.test.ts`.
 
 **Behaviour:** the pass reads, from the store, the coordinator's claimed non-terminal runs, whether any of its
 programmes holds a `blocking` open item, its live blocks, its newest `wait:` mail, the newest per-run ball time (the

@@ -1831,6 +1831,13 @@ export interface LifecycleBirthEvent {
  *  token-shaped run (a compaction uuid) is neither archived in the clear nor masked into a collision. */
 const feedDedupeHash = (key: string): string => createHash('sha256').update(key).digest('hex');
 
+/** The columns `stallCandidates` and `openRunsOfClaimant` select, integers as TEXT for the cast-and-prove. */
+interface StallRunSqlRow {
+  idText: string; kind: string; state: string; sessionId: string | null; claimedBy: string | null;
+  dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
+  reviewsText: string | null; project: string; workspace: string | null;
+}
+
 /**
  * Every read and every write of the coordination database, in one class, and
  * SYNCHRONOUS throughout — `DatabaseSync` has no async surface, so a whole
@@ -4202,6 +4209,12 @@ export class CoordStore {
       { idText: string; kind: string; state: string; sessionId: string; claimedBy: string | null;
         dispatchedAtText: string | null; program: string; waveText: string; waveOfText: string | null;
         reviewsText: string | null; project: string; workspace: string | null }[];
+    return this.stallRunRowsOf(rows);
+  }
+
+  /** `stallCandidates`' cast-and-prove, shared with `openRunsOfClaimant`: ALL-OR-FAILURE over the rows it is handed. */
+  private stallRunRowsOf(rows: readonly StallRunSqlRow[]):
+    { ok: true; runs: StallRunRow[] } | { ok: false; kind: Extract<StallReadFailure, 'run-unreadable'>; detail: string } {
     const runs: StallRunRow[] = [];
     for (const r of rows) {
       const nums = measureRunNumbers(r);
@@ -4212,11 +4225,25 @@ export class CoordStore {
         if (!at.ok) return { ok: false, kind: 'run-unreadable', detail: at.detail };
         dispatchedAt = at.value;
       }
-      runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId, claimedBy: r.claimedBy,
+      runs.push({ id: nums.nums.id, kind: r.kind, state: r.state, sessionId: r.sessionId ?? '', claimedBy: r.claimedBy,
         dispatchedAt, program: r.program, wave: nums.nums.wave, waveOf: nums.nums.waveOf,
         project: r.project, workspace: r.workspace });
     }
     return { ok: true, runs };
+  }
+
+  /** Every run `claimedBy` names that is not terminal, in id order, whatever its state and with or without a worker
+   *  (a planned run has none: its `sessionId` reads ''). The coordinator pass's read for the coord-ball mail rung,
+   *  where `stallCandidates` is the wrong question: it keeps only the ACTIVE runs of bound workers, and an
+   *  `awaiting-review` run is exactly what that rung looks for. Same cast-and-prove, same all-or-failure. */
+  openRunsOfClaimant(claimedBy: string): { ok: true; runs: StallRunRow[] } | { ok: false; kind: Extract<StallReadFailure, 'run-unreadable'>; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, kind, state, sessionId, claimedBy, ' +
+      'CAST(dispatchedAt AS TEXT) AS dispatchedAtText, program, CAST(wave AS TEXT) AS waveText, ' +
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText, project, workspace FROM runs ' +
+      `WHERE claimedBy = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id`,
+    ).all(claimedBy) as unknown as StallRunSqlRow[];
+    return this.stallRunRowsOf(rows);
   }
 
   /** The sessions COORDINATING something live: every distinct `claimedBy` of a
@@ -10473,6 +10500,8 @@ export class CoordStore {
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
   newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+  /** Whether the programme holds an open item raised at the `blocking` level (work has stopped on it). */
+  programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
 
   // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
   // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).

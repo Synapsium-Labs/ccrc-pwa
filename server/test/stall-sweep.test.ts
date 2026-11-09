@@ -2588,3 +2588,75 @@ describe('sweepStalls: coord-blocked (D-6942)', () => {
     expect(h.calls.filter((a) => a[0] === 'send-keys')).toEqual([]);
   });
 });
+
+describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
+  // An idle coordinator whose one run sits at awaiting-review since the worker's done mail: nothing is active, so
+  // `stallCandidates` names no run of it, and the pass reads its claimed runs from `openRunsClaimedBy`.
+  const COORD_PID = 4343;
+  const T0 = Date.parse('2026-11-09T10:00:00Z');             // the worker's done mail: the ball is the coordinator's
+  const RUNG_AT = T0 + 20 * 60_000;                           // COORD_BALL_MAIL_MS
+  const seedCoordLive = (h: Harness): void => {
+    writeFileSync(path.join(h.home, '.claude', 'sessions', `${COORD_PID}.json`), JSON.stringify({
+      pid: COORD_PID, sessionId: COORD_UUID, cwd: '/w/demo', name: null, nameSource: null,
+      status: 'idle', statusUpdatedAt: T0, version: '2.1.284', startedAt: T0 - 3_600_000,
+    }));
+  };
+  const tickWith = (): StallTick => ({
+    panePids: new Map<string, number | null>([[COORD, COORD_PID]]), records: [regRow(COORD, COORD_UUID)], refused: new Set(),
+  });
+  const sessions = [fleetRow(COORD)];
+  const setup = async (): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; runId: number }> => {
+    const r = await rig();
+    seedRegistry(r.h.home, COORD, COORD_UUID);
+    seedCoordLive(r.h);
+    seedTurnMark(r.h.home, COORD, { sessionId: COORD_UUID, stopAt: T0, at: T0, turnAt: T0 - 600_000 });
+    at(T0 - 3_000_000);
+    const opened = r.coord.openRun({ program: 'demo-program', title: 'demo-program', project: 'demo', wave: 2, waveOf: 3, claimedBy: COORD });
+    if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+    r.coord.markDispatched(opened.id, WORKER, `${WORKER}-ws`, `ws/${WORKER}`, false, T0 - 3_000_000);
+    for (const [to, ms] of [['dispatched', T0 - 2_900_000], ['working', T0 - 2_800_000], ['awaiting-review', T0 - 60_000]] as const) {
+      at(ms);
+      const adv = r.coord.advance(opened.id, to, 'coordinator');
+      if (!adv.ok) throw new Error(`advance refused: ${JSON.stringify(adv)}`);
+    }
+    at(T0);
+    r.coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: opened.id, kind: 'status', subject: WAVE_DONE_SUBJECT, body: 'b', artifacts: [] });
+    return { h: r.h, coord: r.coord, w: r.w, runId: opened.id };
+  };
+  const ballMail = (coord: CoordStore): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith('stall:coord-ball:'));
+
+  it('live: 19 minutes of idle is nothing; at 20 it mails the coordinator once, and a sweep a minute later sends no more', async () => {
+    const { coord, w } = await setup();
+    await sweepThrough(w, sessions, W2_LIVE, tickWith(), T0 + 19 * 60_000, T0 + 19 * 60_000);
+    expect(ballMail(coord)).toEqual([]);
+    await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT, RUNG_AT);
+    const sent = ballMail(coord);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.toId).toBe(COORD);
+    expect(sent[0]!.subject).toBe(`stall:coord-ball:${T0}:r2`);
+    expect(mailBody(coord, sent[0]!.id)).toContain('Continue per coordinator clause 21');
+    await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT + 60_000, RUNG_AT + 60_000);
+    expect(ballMail(coord)).toHaveLength(1);
+  });
+
+  it('w2 unarmed: the rung records its shadow line and sends nothing', async () => {
+    const { coord, w } = await setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await sweepThrough(w, sessions, LIVE, tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
+    expect(ballMail(coord)).toEqual([]);
+    expect(lines(warn, `ccrc-server: stall-watch shadow coord-ball r2 ${COORD} (run-less) key ${T0}`)).toBe(1);
+  });
+
+  it('a blocking item on the run\'s programme holds it', async () => {
+    const { coord, w, runId } = await setup();
+    coord.raiseItem({ program: 'demo-program', runId, raisedBy: 'lane-a', kind: 'do', title: 'T', why: 'w', how: [], options: null, neededBy: 'blocking', soonLabel: null, secretSlot: null }, T0);
+    await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
+    expect(ballMail(coord)).toEqual([]);
+  });
+
+  it('a paused box sends nothing', async () => {
+    const { coord, w } = await setup();
+    await sweepThrough(w, sessions, [...W2_LIVE, COORDINATOR_PAUSE_MARKER], tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
+    expect(ballMail(coord)).toEqual([]);
+  });
+});

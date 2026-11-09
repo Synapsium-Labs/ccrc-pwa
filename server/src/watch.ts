@@ -138,11 +138,11 @@ import { claimantMeasuredDead, measureClaimant } from './coord/reclaim.js';
 import { heldFor } from './coord/heldFor.js';
 import { buildDigest, digestDayFor, digestPushCopy, digestWindow, readDigestHour } from './coord/digest.js';
 import {
-  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
+  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, STALL_WAIT_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
   stallCoordBlockedPushText, stallCoordBlockedStep, stallFailedVerdict, stallRestartedVerdicts, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
-  stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
+  stallCoordBallFrom, stallCoordBallMailStep, stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
   type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
@@ -356,6 +356,10 @@ interface StallResolution {
   readonly quietMs: number;
   readonly levelSource: StallResolved['levelSource'];
 }
+
+/** One coordinator the stall pass judges: the active runs it claims, and `ballOnly` for a claimant with none, which
+ *  gets the coord-ball mail rung alone. */
+interface StallCoordinatorSubject { readonly sessionId: string; readonly runs: readonly StallRunRow[]; readonly ballOnly?: true }
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
@@ -6533,8 +6537,20 @@ export class FleetWatcher {
       judging = true;
       const workers = stallSubjects(candidates.runs);
       const workerIds = new Set(workers.map((x) => x.primary.sessionId));
-      const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
+      const coordinators: StallCoordinatorSubject[] = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
       const judged = new Set([...workerIds, ...coordinators.map((c) => c.sessionId)]);
+      // The coord-ball mail rung's coordinators: claimants of open runs none of which is active (an `awaiting-review`
+      // run is no candidate), so `stallCandidates` names none of them. They get that rung alone (`ballOnly`) and stay
+      // out of `judged`, so orphan D still reaches them through the registry-row loop below.
+      let ballIds: string[] = [];
+      try {
+        ballIds = store.openCoordinatorIds();
+      } catch (err) {
+        console.warn(`ccrc-server: stall-watch coord-ball claimants unreadable (${err instanceof Error ? err.message : String(err)}) — the rung skips this sweep`);
+      }
+      const ballOnly: StallCoordinatorSubject[] = ballIds
+        .filter((id) => id !== '' && !judged.has(id))
+        .map((sessionId) => ({ sessionId, runs: [], ballOnly: true }));
       this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
       for (const subject of workers) {
         try {
@@ -6543,7 +6559,7 @@ export class FleetWatcher {
           console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
       }
-      for (const c of coordinators) {
+      for (const c of [...coordinators, ...ballOnly]) {
         try {
           await this.judgeStallCoordinator(store, c, sessions, tick, arming, paused, now);
         } catch (err) {
@@ -6723,7 +6739,7 @@ export class FleetWatcher {
    *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
    *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
   private async judgeStallCoordinator(
-    store: WatcherCoordPort, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
+    store: WatcherCoordPort, c: StallCoordinatorSubject,
     sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const id = c.sessionId;
@@ -6739,8 +6755,11 @@ export class FleetWatcher {
     } else {
       const ident = this.stallUuid(tick, id);
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-      mark = await this.stallMarkRead(id, ident, lr);
-      this.stallMarkClock(id, ident, mark, now);
+      // A `ballOnly` coordinator keeps no marker clock: the clock belongs to the arms it does not run.
+      if (c.ballOnly !== true) {
+        mark = await this.stallMarkRead(id, ident, lr);
+        this.stallMarkClock(id, ident, mark, now);
+      }
     }
     const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
@@ -6754,6 +6773,10 @@ export class FleetWatcher {
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
+    if (c.ballOnly === true) {
+      this.judgeCoordBall(store, si, project, now);
+      return;
+    }
     for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
@@ -6765,6 +6788,48 @@ export class FleetWatcher {
     const step = stallCoordBlockedStep(blocked, now);
     if (step.episode === null) this.stallCoordEpisodes.delete(id); else this.stallCoordEpisodes.set(id, step.episode);
     this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
+    this.judgeCoordBall(store, si, project, now);
+  }
+
+  /** The coord-ball mail rung for one coordinator (design 2026-11-09 §8.3 item 1): the lane measures, `stallCoordBallMailStep`
+   *  decides, `applyStallSession` applies. The facts are the coordinator's claimed non-terminal runs of every state, whether
+   *  any of their programmes holds a `blocking` open item, its live blocks, its newest `wait:` mail and the newest time
+   *  the ball sat with it on any claimed run (each run's own `stallFacts`, restarted by a re-activation). A read that
+   *  fails holds the rung this sweep: no mail is ever sent on a fact that was not read. */
+  private judgeCoordBall(store: WatcherCoordPort, si: StallSessionInput, project: string, now: number): void {
+    const id = si.sessionId;
+    const claimed = store.openRunsOfClaimant(id);
+    if (!claimed.ok) {
+      console.warn(`ccrc-server: stall-watch coord-ball runs of ${id} unreadable (${claimed.kind}: ${claimed.detail}) — held this sweep`);
+      return;
+    }
+    if (claimed.runs.length === 0) return;
+    let ballSince: number | null = null;
+    for (const run of claimed.runs) {
+      if (run.sessionId === '') continue;
+      const read = store.stallMailFor(run.sessionId, [run.id], now - BACKLOG_HORIZON_MS);
+      if (!read.ok) {
+        console.warn(`ccrc-server: stall-watch coord-ball mail of run ${run.id} unreadable (${read.kind}: ${read.detail}) — held this sweep`);
+        return;
+      }
+      const input: StallInput = {
+        subject: { primary: run, runs: [run] }, worker: si.worker, mail: stallRunMail(read.mail, [run.id]), notices: [],
+        arming: si.arming, coordinationPaused: si.coordinationPaused, coordinator: null,
+        activation: stallReactivation(store.runEvents(run.id)),
+      };
+      const facts = stallFacts(input);
+      if (facts.ball !== 'coordinator') continue;
+      const from = stallCoordBallFrom(input, facts);
+      if (from !== null && (ballSince === null || from > ballSince)) ballSince = from;
+    }
+    const waitSentAt = si.mail.reduce<number | null>(
+      (best, m) => (m.fromId === id && m.subject.startsWith(STALL_WAIT_PREFIX) && (best === null || m.at > best) ? m.at : best), null);
+    const programmes = [...new Set(claimed.runs.map((r) => r.program))];
+    const v = stallCoordBallMailStep({
+      session: si, runs: claimed.runs, blockingItem: programmes.some((p) => store.programmeHasBlockingItem(p)),
+      liveBlock: store.liveBlocksOf(id, now).length > 0, waitSentAt, ballSince,
+    }, now);
+    this.applyStallSession(store, si, project, v, now);
   }
 
   /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
