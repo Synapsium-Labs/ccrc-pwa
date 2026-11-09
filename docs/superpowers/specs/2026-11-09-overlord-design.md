@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R6 (the operator's) and the author's calls C1 to C35, so the operator can approve or overturn each one by number.
+R7 (the operator's) and the author's calls C1 to C35, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -19,8 +19,10 @@ when none fits. It follows the work up and reports back. It answers the coordina
 from the programme's goals and from a private, operator-reviewed database of how the operator works. It raises only
 what is truly the operator's.
 
-**What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2). This spec turns
-each ruling into a design:
+**What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2), and ruled the
+same day that there is one and only one Overlord (R7). This spec turns each ruling into a design:
+- **One Overlord.** Exactly one exists, for the whole fleet, and the server enforces it. It is one lasting identity,
+  not a role that sessions take turns at, and nothing can create a second one (§3.1).
 - **Authority.** Authority starts as D-8126's operator-only list, unchanged. It is relaxed one named act at a time
   through operator grants that the server enforces (§7).
 - **Knowledge.** Knowledge of the operator is a private store on the server box. It is fed from rulings, from the
@@ -99,6 +101,7 @@ The rulings are settled; this spec only turns them into design.
 | R4 | **Surface.** Inside ccrc first and foremost. Mobile push, Telegram and Discord come later and are out of scope | A new Overlord place in the console: its chat, its open requests and its log. The existing web push stays exactly as it is. No new channel (§4) |
 | R5 | **Spawning.** Think of it as the operator. It uses ccrc's own tooling the way the operator does, possibly with some extras. Spell out which extras, and why each one is needed | It uses the operator's doors through Overlord doors that log every act. Six extras (E1 to E6) are named with their reasons, and a list of what it explicitly does not get (§8) |
 | R6 | **Audit.** A log of everything it relayed, decided and started. Not every item can be reversed, so the log marks which items can be overturned and which cannot | One table, `overlord_acts`, written in the same transaction as the act. Reversibility is derived from the act's kind. Overturns go through the one correction door (§10) |
+| R7 | **One and only one Overlord** (the operator, 2026-11-09, after rev 1) | One identity for the whole fleet, enforced by the server. A second can never be started, designated, spawned or nested. Replacing its session is a handover of the same Overlord, never a second one (§3.1) |
 
 ## 3. What the Overlord is
 
@@ -107,7 +110,7 @@ lives on the server, not in its context window.
 
 ```mermaid
 flowchart TB
-  OP["Operator<br/>console: Overlord place"] <--> OV["Overlord<br/>one designated session<br/>skill ccrc-overlord"]
+  OP["Operator<br/>console: Overlord place"] <--> OV["The Overlord<br/>one and only one<br/>skill ccrc-overlord"]
   OV <--> SRV["ccrc server<br/>Overlord doors, audit log,<br/>operator model store"]
   SRV <--> C1["Coordinator A<br/>programme a"]
   SRV <--> C2["Coordinator B<br/>programme b"]
@@ -121,17 +124,45 @@ flowchart TB
 every act it takes is checked and logged. The dotted edge shows that nothing stops the operator from talking to a
 coordinator directly.*
 
+### 3.1 One and only one (R7)
+
+There is exactly one Overlord. It is not one per project, per box or per programme, and there is no Overlord of a
+subset of the fleet. It is one lasting identity, `overlord`, whose memory (requests, log, operator model, grants) is
+the same from the day it starts. The session that runs it is that identity's current body: if the session is lost, the
+same Overlord comes back, never a new one beside it. The server enforces this, not the skill:
+- **One row, by construction.** `overlord_designation` is a singleton table (`id INTEGER PRIMARY KEY CHECK (id = 1)`).
+  A second row cannot exist, so two Overlords cannot exist, whatever any caller does.
+- **No second start.** "Start the Overlord" is offered only while no Overlord exists. While one exists, the door refuses
+  `overlord-exists` and names it, and the console shows **Open the Overlord** instead.
+- **No Overlord from below.** No session can make itself the Overlord: designation is the operator's door only. The
+  Overlord's start door (E4) refuses a kickoff that names the `ccrc-overlord` skill, and a coordinator's dispatch never
+  carries it, so the Overlord can never spawn a sub-Overlord and a coordinator can never become one. The skill installer
+  ships `ccrc-overlord` to every home, so the skill is everywhere, but outside the designated session it refuses to act:
+  its first step checks `GET /api/overlord/board`, which answers 403 to anyone else.
+- **No Overlord that is also something else.** The designated session claims no runs (C4), cannot be dispatched as a
+  child, and cannot be designated while it claims a run or carries a `.child` marker (`overlord-not-root`).
+- **Moving it is a handover, never a second Overlord.** If its session must change (a lost workspace, a move to another
+  project), the operator's **Move the Overlord** door rewrites the one row in one transaction. The old session's powers
+  end in the same write that grants the new one's, and the new session starts by reading the same server state. Restart
+  (C23) keeps the same session id, so most recoveries need no move at all.
+- **What the operator sees.** The console shows the one Overlord everywhere: one place, one chat, one log. There is no
+  list of Overlords and no picker.
+
+### 3.2 Its parts
+
 - **C1. A session, not a server process.** The Overlord is a Claude Code session running the new `ccrc-overlord` skill.
   - What this reuses: the console's chat, `ccrc history`, compaction, account swaps, the hibernate lane and the mail
     lane, all as they are.
   - Rejected: an agent loop inside the server. It would be a second runtime with none of the fleet's tooling, and the
     server would start making judgements, which breaks "decide in L1, act in L4".
-- **C2. One at a time, designated by the operator.** A single row, `overlord_designation`, holds the session id, when it
+- **C2. Designated once, by the operator.** The singleton row, `overlord_designation`, holds the session id, when it
   was designated and the console device that did it. It binds the **session id**, not a `.uuid`: Claude Code rotates a
   session's uuid on every `/clear` and compaction (`_sync_uuid`), and a binding to the uuid would end the Overlord's
   powers at its first compaction. Each call proves freshness the usual way, by the registry's current uuid (C27).
-  - Its one writer is a session-gated operator door: `POST /api/overlord/designate`, and `DELETE` to stand down.
-  - Designating a new session ends the old one's powers in the same transaction.
+  - Its one writer is a session-gated operator door with a step-up: `POST /api/overlord/designate` (create, refused
+    `overlord-exists` when the row exists), `POST /api/overlord/move` (the handover in §3.1), and `DELETE` to retire
+    the Overlord entirely. Retiring keeps its requests, log, grants and model, so the next start is the same Overlord
+    with the same memory.
   - "Start the Overlord" in the console composes the existing session-create door, then designates the new session.
     The operator picks the project. The default suggestion is a dedicated `overlord` project made by the add-project
     door, because the Overlord's own repository is nearly empty: its state is on the server.
@@ -838,7 +869,7 @@ this spec and can be overturned by number.
 | # | Call | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
 | C1 | What the Overlord is | a server agent loop, a session | A session: it reuses the chat, history, compaction and swaps, and the server stays free of judgement | Proposed |
-| C2 | How many, and who names it | many, self-declared, one designated | One, designated by the operator's door and bound to the session id, so a compaction keeps it; a new designation ends the old one's powers | Proposed |
+| C2 | Who names it, and what it binds | self-declared, designated | Designated by the operator's door, bound to the session id so a compaction keeps it. The count is R7's: one, enforced by a singleton row | Proposed |
 | C3 | Scope | one project, the fleet | The fleet: the operator talks only to it | Proposed |
 | C4 | Does it claim runs | yes, no | No: one coordinator per programme, and no nested-coordinator rule is bent | Proposed |
 | C5 | Where its state lives | its context, the server | The server: it survives compaction and replacement | Proposed |
@@ -918,6 +949,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
   by any side path.
 - **A6. Never let the operator model leave ccrc.**
 - **A7. Never become the stall.** A hold it cannot serve falls through to the operator.
+- **A8. Never make another Overlord,** or act as one outside the designated session (R7).
 
 ## 16. Risks
 
@@ -936,6 +968,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 ### Agreed
 
 - R1 to R6, the operator's rulings of 2026-11-09 on the six open questions of #2491 (§2).
+- R7, the operator's ruling of 2026-11-09: there is one and only one Overlord (§3.1).
 
 ### Waiting on you
 
