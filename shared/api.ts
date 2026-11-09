@@ -7078,6 +7078,8 @@ export interface RunRecordAnswer {
   events: RunRecordEvent[];
   reviewedBy: RunHit[];
   olderEvents: number;
+  /** D-8126: every class of call that names the run, oldest first. OPTIONAL on the wire: an older server omits it. */
+  calls?: CallView[];
 }
 
 export interface RunSummary {
