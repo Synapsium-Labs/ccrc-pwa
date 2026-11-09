@@ -96,6 +96,8 @@ describe('the box', () => {
     vi.spyOn(api, 'findRuns').mockImplementation(NEVER);
     Object.defineProperty(window, 'scrollY', { value: 340, configurable: true });
     mount(board([open({ id: 11 })]));
+    // A card with no known last move waits for the programmes read, so the list appears once it settles.
+    await settle();
     expect(screen.getByRole('list', { name: 'Programmes' })).toBeInTheDocument();
     type('lane');
     expect(screen.queryByRole('list', { name: 'Programmes' })).toBeNull();
