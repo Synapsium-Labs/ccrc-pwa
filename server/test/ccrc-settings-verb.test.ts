@@ -239,9 +239,9 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     return r.stdout.split('\n').filter(Boolean).map((l) => l.split(US) as [string, string]);
   };
 
-  it('V4: every key _set_says has words for (the 66) is written refused, with its words and its source, and the sample is nowhere', () => {
+  it('V4: every key _set_says has words for (the 67) is written refused, with its words and its source, and the sample is nowhere', () => {
     const keys = WITH_WORDS();
-    expect(keys).toHaveLength(66);
+    expect(keys).toHaveLength(67);
     const sample = (k: string, i: number): string => REFUSED_SAMPLE[k] ?? `zz-refused-${i}`;
     const home = boxWith('ccrc-sv-v4-', keys.map(([k], i) => `${k}=${sample(k, i)}\n`).join(''));
     // The sample is a refused one, in this fixture, for every key: a sample a check accepts fails here, loudly.
@@ -259,7 +259,7 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     const needles = keys.flatMap(([k], i) => [...sample(k, i).split(/[\t/]/), sample(k, i)]).filter((t) => t.length >= 4);
     if (!MAC) {
       refusedRows(d, keys);
-      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(66);
+      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(67);
       expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
       for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
     } else {
@@ -905,12 +905,12 @@ describe('ccrc settings: the human form keeps its three formats (V8, review F4)'
     const r = settings(home, [], { CCRC_BACKUP_KEEP: 'abc', CCRC_UPDATE_HEALTH_S: '120' });
     expect(r.code, r.stderr).toBe(0);
     const lines = r.stdout.split('\n').filter(Boolean);
-    expect(lines.slice(0, 69).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
+    expect(lines.slice(0, 70).map((l) => l.split(/\s+/)[0])).toEqual([...BOX_SETTINGS_SHOWN]);
     expect(lines[0]).toBe('CCRC_BACKUP_KEEP               not shown  (environment, refused): a whole number from 0 to 9999');
     expect(lines[3]).toBe('CCRC_UPDATE_HEALTH_S           120  (environment, ok)');
-    expect(lines[69]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
-    expect(lines[70]).toMatch(/^backups: /);
-    expect(lines[71]).toMatch(/^disk: /);
+    expect(lines[70]).toBe('deadline: plain 900000 ms, min 900000 ms, max 900000 ms');
+    expect(lines[71]).toMatch(/^backups: /);
+    expect(lines[72]).toMatch(/^disk: /);
     expect(existsSync(join(home, '.ccrc', 'box-settings.json')), 'the human form writes nothing').toBe(false);
   });
 });
@@ -1044,7 +1044,7 @@ describe('ccrc settings --write: the file', () => {
     if (got !== 'LAST-GOOD') {
       const doc = JSON.parse(got) as { v: number; settings: unknown[] };
       expect(doc.v).toBe(2);
-      expect(doc.settings).toHaveLength(69);
+      expect(doc.settings).toHaveLength(70);
     }
   }, 60_000);
 });
@@ -1143,8 +1143,10 @@ describe('ccrc settings: the verb reads by literal calls, and its table of host 
       /_ccrc_knob CCRC_SWEEP_PRESSURE_WAIT_S 300 file;/,
       // D-8123: the limit rescue's two, at the defaults ccd (`_rescue_jitter_max`, the watchdog) uses.
       /_ccrc_knob CCRC_RESCUE_SOLO_JITTER_S 15 file;/, /_ccrc_knob CCRC_LIMIT_WATCHDOG_MIN 5 file;/,
+      // D-8125: the coordinator's review-cap lift, at the default the server (`reviewCapCoordLiftOf`) uses.
+      /_ccrc_knob CCRC_REVIEW_CAP_COORD_LIFT off file;/,
     ]) expect(reads, String(re)).toMatch(re);
-    expect(reads.match(/_ccrc_knob /g), 'sixteen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four, D-8123 the limit rescue\'s two); the two line readers are the owners\' own').toHaveLength(16);
+    expect(reads.match(/_ccrc_knob /g), 'seventeen direct reads (D-8121 added the two browser reads, D-8122 the memory gate\'s four, D-8123 the limit rescue\'s two, D-8125 the coordinator lift\'s one); the two line readers are the owners\' own').toHaveLength(17);
   });
 
   // D-8122: the headroom floor's default is CLAUDE_HEADROOM_GATE_BYTES (the server's WAKE_HEADROOM_MIN_GIB_DEFAULT is

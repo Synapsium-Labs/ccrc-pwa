@@ -651,7 +651,7 @@ describe('the review cap door on the cap\'s record', () => {
     dispatchedAt: 2, closedAt: null, handoffCommit: null, items: { done: 0, total: 0 }, unreadMail: 0,
     health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null,
               briefQueued: true, clearError: null, coordKickoffPendingSince: null },
-    childReclaim: null, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null }, hadChild: false, ...over,
+    childReclaim: null, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null }, hadChild: false, ...over,
   });
   const notice = (over: Partial<NotifyEvent> = {}): NotifyEvent =>
     e({ seq: 9, kind: 'run', sessionId: '', runId: 12, title: 'Review cap reached on run 12', body: 'Lift the cap…', ...over });
@@ -678,7 +678,7 @@ describe('the review cap door on the cap\'s record', () => {
   });
 
   it('shows no door once the run is lifted', async () => {
-    await mount(notice(), [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6 } })]);
+    await mount(notice(), [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6, granted: 0, askHandledAt: null, coordLift: null } })]);
     expect(door()).toBeNull();
   });
 
@@ -695,7 +695,7 @@ describe('the review cap door on the cap\'s record', () => {
   it('takes the door away when the runs frame turns liftedAt non-null, without a remount', async () => {
     const store = await mount(notice(), [capRun()]);
     expect(door()).toBeInTheDocument();
-    act(() => { store.setState({ runs: [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6 } })] }); });
+    act(() => { store.setState({ runs: [capRun({ reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: 6, granted: 0, askHandledAt: null, coordLift: null } })] }); });
     expect(door()).toBeNull();
   });
 

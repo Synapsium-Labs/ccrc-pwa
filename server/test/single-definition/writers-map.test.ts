@@ -353,7 +353,8 @@ describe(TABLES_PIN, () => {
   it('each table\'s writers, by name', () => {
     const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
     expect(tableWriters(files)).toEqual({
-      run_events: [`${S}advanceInner`, `${S}insertObservation`, `${S}recordDeadCoordinatorBreakerHeld`, `${S}recordRunEvent`],
+      // D-8125: `liftReviewCapByCoordinator` writes its lift's event inside the lift's own transaction (the SQL of `recordRunEvent`).
+      run_events: ['server/src/coord/reviewCapStore.ts#liftReviewCapByCoordinator', `${S}advanceInner`, `${S}insertObservation`, `${S}recordDeadCoordinatorBreakerHeld`, `${S}recordRunEvent`],
       mail_deliveries: [`${S}queueDelivery`, `${S}writeDeliveries`],
       feed_events: [`${S}recordFeedEvent`],
       lifecycle_events: [`${S}ingestJournal`],

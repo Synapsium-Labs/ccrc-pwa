@@ -271,7 +271,7 @@ describe('graph settings: _graph_knobs reads them through _ccrc_knob, _gr_knobs 
     // GR2's count, held as it was: the test box keys TB1 appends after these (D-7403) are counted by testbox-knobs.test.ts.
     // D-7857 adds CCRC_CARRY_COPY_WARN_BYTES, outside the graph and test box keys: 43 -> 44; D-7876 adds
     // CCRC_GRAPH_PRESSURE_MAX, a graph key: 44 -> 45; D-8121 adds the two browser MCP settings: 45 -> 47; D-8122 the memory gate's four: 47 -> 51.
-    expect(settings.filter((s) => !s.startsWith('CCRC_TESTBOX_')), 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four), 44 with D-7857, 45 with D-7876, 47 with D-8121, 51 with D-8122, 53 with D-8123').toHaveLength(53);
+    expect(settings.filter((s) => !s.startsWith('CCRC_TESTBOX_')), 'counted exit: CCRC_SETTINGS 21 -> 43 (wave 29 added four), 44 with D-7857, 45 with D-7876, 47 with D-8121, 51 with D-8122, 53 with D-8123, 54 with D-8125').toHaveLength(54);
     expect(raw(box()).map((f) => f[0])).toEqual(SPEC_KEYS);
   });
 

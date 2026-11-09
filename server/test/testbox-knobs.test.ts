@@ -281,7 +281,7 @@ describe('TB1: the test box settings, through ccrc\'s one reader (D-7403; spec Â
     expect(settings.filter((s) => s.startsWith('CCRC_TESTBOX_'))).toEqual([...HOST_KEYS, ...BOX_KEYS]);
     // D-7857 adds one ccrc setting outside the test box's tables, CCRC_CARRY_COPY_WARN_BYTES: 87 -> 88; D-7876 adds
     // one graph key, CCRC_GRAPH_PRESSURE_MAX: 88 -> 89; D-8121 adds the two browser MCP settings: 89 -> 91; D-8122 the memory gate's four: 91 -> 95.
-    expect(settings, 'counted exit: CCRC_SETTINGS 43 -> 87 (TB1 adds 16 host and 28 box keys), 88 with D-7857, 89 with D-7876, 91 with D-8121, 95 with D-8122, 97 with D-8123').toHaveLength(97);
+    expect(settings, 'counted exit: CCRC_SETTINGS 43 -> 87 (TB1 adds 16 host and 28 box keys), 88 with D-7857, 89 with D-7876, 91 with D-8121, 95 with D-8122, 97 with D-8123, 98 with D-8125').toHaveLength(98);
     const b = fixture();
     expect(knobs(b, 'host').lines.map((f) => f[0])).toEqual(HOST_KEYS);
     expect(knobs(b, 'box').lines.map((f) => f[0])).toEqual(BOX_KEYS);

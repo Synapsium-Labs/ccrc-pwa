@@ -168,6 +168,49 @@ describe('the header and the facts', () => {
   });
 });
 
+describe('the Review cap fact (D-8125)', () => {
+  const status = (over: Record<string, unknown> = {}) =>
+    ({ rounds: 3, cap: 3, askedAt: T0, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null, ...over });
+  const lift = { at: T0, by: 'coord-a', reason: 'two major findings, converging', rounds: 3, capBefore: 3, capAfter: 6, count: 1 };
+  const factText = async (cap: unknown): Promise<string | undefined> => {
+    const r = run({ reviewCap: cap } as Partial<RunSummary>);
+    reads(r);
+    await open(r);
+    await screen.findByText('Items done');
+    return screen.queryByText('Review cap')?.nextElementSibling?.textContent ?? undefined;
+  };
+
+  it('a cap nobody lifted says its rounds, and a waiting ask keeps the operator control', async () => {
+    expect(await factText(status())).toBe('3 of 3 rounds');
+    expect(screen.getByRole('button', { name: 'Lift cap' })).toBeInTheDocument();
+  });
+
+  it('a cap its coordinator lifted says who and why, and shows no operator control', async () => {
+    const text = await factText(status({ cap: 6, granted: 3, askHandledAt: T0 + 1, coordLift: lift }));
+    expect(text).toBe('3 of 6 rounds · Cap lifted by its coordinator: two major findings, converging');
+    expect(screen.queryByRole('button', { name: 'Lift cap' })).toBeNull();
+  });
+
+  it('a second coordinator lift says how many times', async () => {
+    const text = await factText(status({ rounds: 6, cap: 9, granted: 6, askHandledAt: T0 + 1, coordLift: { ...lift, count: 2 } }));
+    expect(text).toBe('6 of 9 rounds · Cap lifted by its coordinator: two major findings, converging, 2 times');
+  });
+
+  it('an operator lift says so', async () => {
+    expect(await factText(status({ liftedAt: T0 + 1 }))).toBe('3 of 3 rounds · Lifted by the operator');
+  });
+
+  it('is absent for a review run and for an older server\'s unmeasured cap', async () => {
+    expect(await factText(null)).toBeUndefined();
+    cleanup();
+    const r = run();
+    reads(r);
+    await open(r);
+    await screen.findByText('Items done');
+    expect(screen.queryByText('Review cap')).toBeNull();
+  });
+});
+
 describe('the Who and Pull requests facts', () => {
   it('a claimant with no fleet row reads gone when the server says coordinatorGone', async () => {
     const r = run({ state: 'done', closedAt: T0 + 5000, closedBy: 'coordinator', claimedBy: 'lane-a-project-a', coordinatorGone: true });

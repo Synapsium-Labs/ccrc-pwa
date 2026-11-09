@@ -170,6 +170,17 @@ export const LEDGER_ROUTE_REFUSALS = {
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
+/**
+ * The coordinator's review-rounds door (D-8125), `POST /api/runs/:id/review-rounds`, in `LEDGER_ROUTE_REFUSALS`' idiom: an
+ * object of literals the route and the census read. `run-closed`, `not-found`, `bad-request`, `not-your-programme`,
+ * `run-unreadable` and `not-configured` are reused words, declared with their own tables.
+ */
+export const REVIEW_ROUNDS_REFUSALS = { coordLiftOff: 'coord-lift-off', capNotReached: 'cap-not-reached' } as const;
+export type ReviewRoundsRefusal = (typeof REVIEW_ROUNDS_REFUSALS)[keyof typeof REVIEW_ROUNDS_REFUSALS];
+const REVIEW_ROUNDS_WORDS: ReadonlySet<string> = new Set(Object.values(REVIEW_ROUNDS_REFUSALS));
+/** Whether `word` is one of the review-rounds door's own words (the mail-routes code census admits them through this). */
+export const isReviewRoundsRefusal = (word: string): word is ReviewRoundsRefusal => REVIEW_ROUNDS_WORDS.has(word);
+
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal | ProjectAddRefusal
@@ -182,6 +193,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | DispatchAbandonRefusal
   // The programme ledgers' coordinator routes (plan PL3): an item move's four words, declared once in `ledgers.ts`.
   | ItemMoveRefusal | LedgerRouteRefusal
+  // The coordinator's review-rounds door (D-8125): its two words of its own.
+  | ReviewRoundsRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
@@ -370,6 +383,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'policy-unavailable': 503, 'journal-unavailable': 503,
   'linear-unauthorised': 502,
   'linear-invalid': 422,
+  // The coordinator's review-rounds door (D-8125): CHOSEN, not measured. 409 for both: the box has coordinator lifts turned
+  // off, or the run is not at its cap; neither is a fault in what the coordinator sent.
+  [REVIEW_ROUNDS_REFUSALS.coordLiftOff]: 409, [REVIEW_ROUNDS_REFUSALS.capNotReached]: 409,
   ...LANDING_REFUSAL_STATUS,
 };
 

@@ -20,6 +20,7 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
+import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
@@ -1957,7 +1958,8 @@ export class CoordStore {
           if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
           // D-6795: the Nth+1 round is refused unless the operator lifted the cap for this work run. `by` is the count.
           const rounds = this.reviewRounds(input.reviews ?? -1);
-          if (reviewCapRefuses(rounds, this.reviewCapLifted(input.reviews ?? -1))) {
+          const gate = this.reviewCapGate(input.reviews ?? -1);
+          if (reviewCapRefuses(rounds, gate.liftedAt !== null, gate.granted)) {
             return { refused: 'cap-review-rounds' as const, by: String(rounds) };
           }
         }
@@ -4971,39 +4973,24 @@ export class CoordStore {
     return this.reviewCapStates([workRunId]).get(workRunId)?.rounds ?? 0;
   }
 
-  /** D-6909: the review-cap state of a batch of runs, in two statements whatever its size (`healthFor`'s rule,
-   *  D-1299): review-run counts grouped by the run they review, and the `review_cap` rows. An id with neither has no
-   *  entry; `hydrateRun` reads that as zero rounds, nothing raised or lifted. */
-  reviewCapStates(ids: readonly number[]): Map<number, { rounds: number; askedAt: number | null; liftedAt: number | null }> {
-    const out = new Map<number, { rounds: number; askedAt: number | null; liftedAt: number | null }>();
-    if (ids.length === 0) return out; // `placeholders(0)` is an empty `IN ()`, a SQLite syntax error
-    const ph = placeholders(ids.length);
-    const counts = this.db.prepare(`SELECT reviews AS id, COUNT(*) AS n FROM runs WHERE kind = 'review' AND reviews IN (${ph}) `
-      + 'GROUP BY reviews').all(...ids) as { id: number; n: number }[];
-    for (const c of counts) out.set(Number(c.id), { rounds: Number(c.n), askedAt: null, liftedAt: null });
-    const rows = this.db.prepare(`SELECT workRunId AS id, askedAt, liftedAt FROM review_cap WHERE workRunId IN (${ph})`)
-      .all(...ids) as { id: number; askedAt: number | null; liftedAt: number | null }[];
-    for (const r of rows) {
-      const id = Number(r.id);
-      out.set(id, { rounds: out.get(id)?.rounds ?? 0, askedAt: r.askedAt === null ? null : Number(r.askedAt),
-        liftedAt: r.liftedAt === null ? null : Number(r.liftedAt) });
-    }
-    return out;
+  /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
+  reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
+    return reviewCapStatesOf(this.db, ids);
   }
 
-  /** D-6795: whether the operator lifted the review-round cap for this work run. */
-  reviewCapLifted(workRunId: number): boolean {
-    const row = this.db.prepare('SELECT liftedAt FROM review_cap WHERE workRunId = ?')
-      .get(workRunId) as { liftedAt: number | null } | undefined;
-    return row !== undefined && row.liftedAt !== null;
+  /** D-8125: the operator's lift time and the coordinator's grant for one work run. */
+  reviewCapGate(workRunId: number): { liftedAt: number | null; granted: number } {
+    return reviewCapGate(this.db, workRunId);
   }
 
-  /** D-6795: record that the cap's ask is raised. True exactly once per work run: the insert that creates the row is
-   *  the raise, so a second refusal (or a restart) finds the row and raises nothing. */
+  /** D-6795: record that the cap's ask is raised, once per cap level (`reviewCapStore.ts`). */
   raiseReviewCapAsk(workRunId: number, now: number): boolean {
-    const res = this.db.prepare('INSERT OR IGNORE INTO review_cap (workRunId, askedAt, liftedAt) VALUES (?, ?, NULL)')
-      .run(workRunId, now);
-    return Number(res.changes) === 1;
+    return raiseReviewCapAsk(this.db, workRunId, now);
+  }
+
+  /** D-8125: a coordinator allows three more review rounds (`reviewCapStore.ts`). */
+  liftReviewCapByCoordinator(i: Parameters<typeof liftReviewCapByCoordinator>[1]): CoordLiftResult {
+    return liftReviewCapByCoordinator(this.db, i);
   }
 
   /** D-6795: the operator's lift, per work run. Idempotent; false when the run is not a work run on file. */

@@ -1230,7 +1230,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `status`, `version` | what this box is (its build, role, services, sessions and whether the two boxes agree); the build it runs — both read-only |
 | `update`, `rollback`, `versions`, `channel`, `rollout`, `watchdog` | this section |
 | `backup`, `logs`, `uninstall` | the maintenance verbs, below |
-| `settings [--json] [--write]` | what each of the 69 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
+| `settings [--json] [--write]` | what each of the 70 settings a fleet or server node reads resolves to on this box (the test box's own 28 are left out), shown by display class, with the backups and free disk; read-only ("Seeing a box's settings", below) |
 | `coordination-snapshot validate\|restore\|recover` | classify a backup's coordination snapshot, restore it as one set, finish an interrupted restore; exits 0 (`v1`, `legacy`), 1 (`none`, `thinned`), 2 (`invalid`), 70 (usage or a helper that cannot run), below |
 | `expose duckdns\|byo\|ip\|status` | a public name and a certificate ("Exposure", above) |
 | `passwd` | set or rotate the PWA passphrase ("The session gate", below) |
@@ -1380,11 +1380,17 @@ Two are the limit rescue's (D-8123): `CCRC_RESCUE_SOLO_JITTER_S` (0 to 120; defa
 that is the only swap in flight, and `CCRC_LIMIT_WATCHDOG_MIN` (0 to 1440; default 5, 0 turns it off) is how many minutes a
 live session may show a limit sign with no swap before the fleet limit watchdog forces the rescue. `ccd` reads both in its
 own process, through the settings library.
+One is the coordination family's (D-8125): `CCRC_REVIEW_CAP_COORD_LIFT` (on or off; default off) lets a run's coordinator
+extend its review-round cap by three rounds at a time, with a reason; the server reads it.
 When no account has measured room for a stopped session, the watchdog records that, and the console's Waiting on you page shows a
 row for the session with its own two controls: Swap to… (the accounts that have room, updating as limits arrive) and Wait until
 reset at the time the limit ends. Neither sends a key to the terminal.
 
-**Seeing a box's settings.** `ccrc settings` prints what each of the 69 settings a fleet or server node reads resolves to on this
+One is the coordinator's review-cap lift (D-8125): `CCRC_REVIEW_CAP_COORD_LIFT` (`on` or `off`, default `off`) lets a
+coordinator extend a reached review-round cap by three rounds, with a reason; `off` leaves the operator's lift as the only
+door. The server reads it from its own environment.
+
+**Seeing a box's settings.** `ccrc settings` prints what each of the 70 settings a fleet or server node reads resolves to on this
 box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and
 whether the act that reads it would use it, refuse it or could not decide (D-6914, D-7861). The test box's own 28 settings
 are left out. Every row has a display class, written once in the class table: `value` prints the value, `origin` prints a
@@ -1512,6 +1518,17 @@ static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
 `attestation: 'none'` safe.
+
+**The review cap (D-8125).** A work run takes three review runs; the fourth is refused with `cap-review-rounds` and one
+operator ask. Two doors extend it. The operator's lift (`POST /api/coord/review-cap`, session-gated, no box token) removes
+the cap for that run. The run's coordinator may instead extend it with `POST /api/runs/:id/review-rounds` (box token,
+`ccrc-api runs review-rounds`; the caller is the run's claiming coordinator or its programme's live coordinator, attributed by the
+session's id and uuid, re-measured against the registry): a one-line `reason` is required, and each call adds three more
+rounds, only at a reached cap, so the coordinator re-judges every three rounds. A coordinator lift is journalled in the
+run's record with its reason and the rounds before and after, sends a record-only feed notice, closes the operator's ask
+as handled by the coordinator, and shows on the run page as "cap lifted by its coordinator". `CCRC_REVIEW_CAP_COORD_LIFT=off`
+turns the coordinator's door off fleet-wide; the operator's lift is unaffected. The grant is stored as a granted-rounds
+count (schema migration 48).
 
 **Adding a passkey** is Accounts → **Your sign-in** → **Add a passkey on this device**, shown
 only where the browser can create one (WebAuthn Level 2, which needs a secure context). On an
@@ -3714,6 +3731,7 @@ see "Fleet coordination" below.
 | `CCRC_SWEEP_PRESSURE_WAIT_S` | fleet | Default 300: the most the update sweep waits, over the whole sweep, between batches while memory pressure is at the gate level; past it the sweep warns and goes on (D-8122). |
 | `CCRC_RESCUE_SOLO_JITTER_S` | fleet | Whole seconds from 0 to 120, default 15: the most a rescue waits (a random 0 to this) before it runs when no other session's swap was dispatched in the last `SWAP_JITTER` + 60 seconds. With another dispatch in flight the full 0 to 120 second spread stays, so a fleet-wide event is still not a herd. 0 sends a lone rescue at once; `swap.log`'s dispatch line ends ` max=<n>` with the spread that applied (D-8123). |
 | `CCRC_LIMIT_WATCHDOG_MIN` | fleet | Whole minutes from 0 to 1440, default 5, 0 off: how long a live session may show a limit sign with no swap before the fleet limit watchdog forces the rescue past the cooldown, draft and stale-press holds. It never sends a key to Claude Code's rate-limit menu (D-8123). |
+| `CCRC_REVIEW_CAP_COORD_LIFT` | server | `off` (default) or `on`: whether a run's coordinator may extend a reached review-round cap by three more rounds, with a one-line reason (`POST /api/runs/:id/review-rounds`, D-8125). `off` makes the operator's lift the only door. |
 | `CCRC_AGENT_URL` | server | `ws://`/`wss://` URL of `ccrc-agent` on the fleet host, including its path, e.g. `ws://<fleet address>:7789/agent`. |
 | `CCRC_AGENT_TOKEN` | server + agent | Bearer token; must match on both sides. Generate with `openssl rand -hex 32`. |
 | `CCRC_HETZNER_TOKEN` | server | Hetzner Cloud API token — only used by the degraded-mode reboot action. Unset leaves that route disabled (`501`). |

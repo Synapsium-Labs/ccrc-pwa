@@ -4308,7 +4308,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       const lift = await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } });
       expect(lift.statusCode).toBe(200);
       expect(lift.json()).toEqual({ ok: true, run: workId, rounds: 3, cap: 3, lifted: true });
-      expect(w.coord.reviewCapLifted(workId)).toBe(true);
+      expect(w.coord.reviewCapGate(workId).liftedAt !== null).toBe(true);
       expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(200);
       expect(w.coord.reviewRounds(workId)).toBe(4);
     });
@@ -4359,7 +4359,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
         expect(res.statusCode).toBe(200);
         return ((res.json() as { runs: RunSummary[] }).runs.find((r) => r.id === id))!.reviewCap;
       };
-      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null });
+      expect(await capOf(workId)).toEqual({ rounds: 3, cap: 3, askedAt: null, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null });
       for (const id of ids) expect(await capOf(id)).toBeNull();
       const refused = await postOpen(app, REVIEW(workId, { title: 'R4' }));
       expect(refused.statusCode).toBe(409);

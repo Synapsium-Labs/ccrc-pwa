@@ -224,6 +224,10 @@ export interface CcrcConfig {
    *  (warn|critical|off, default warn) and `CCRC_WAKE_HEADROOM_MIN_GIB` (default `CLAUDE_HEADROOM_GATE_BYTES`, 3).
    *  `wakeGateConfigOf` reads them. */
   wakeGate: WakeGateConfig;
+  /** D-8125: `CCRC_REVIEW_CAP_COORD_LIFT`, whether a coordinator may extend a reached review-round cap
+   *  (`POST /api/runs/:id/review-rounds`). `off` (the default) or `on`; read once at start by `reviewCapCoordLiftOf`. Default off until a credential only the coordinator session holds exists (D-8125 open item).
+   *  Off leaves the operator's lift (`POST /api/coord/review-cap`) as the only door. */
+  reviewCapCoordLift: ReviewCapCoordLift;
   /** D-7319: `CCRC_DISPATCH_ABANDON_MS`, how old a `planned` run's dispatch stamp must be, with no session bound,
    *  before the server abandons it (`coord/abandonDeadDispatch.ts`). A safe integer at or above `SPAWN_STALL_MS` (the
    *  console's own stalled threshold, itself at or above the `ws-add` ceiling), else `DISPATCH_ABANDON_DEFAULT_MS`; a
@@ -460,6 +464,22 @@ export function wakeGateConfigOf(env: NodeJS.ProcessEnv): WakeGateConfig {
   return { pressure, headroomMinBytes: gib * 2 ** 30 };
 }
 
+/** D-8125: the coordinator's review-cap lift, on or off fleet-wide. */
+export type ReviewCapCoordLift = 'on' | 'off';
+
+/** `CCRC_REVIEW_CAP_COORD_LIFT` from the environment (D-8125). Absent or empty is `off` and silent; `on` and `off` read as
+ *  given (case and surrounding space aside). The door's caller is attribution, not proof, so the default is off until a
+ *  credential only the coordinator session holds exists. Any other value (`false`, `0`, `no`) says so
+ *  once and reads `off`: a mistyped kill switch must never leave coordinator lifts running. */
+export function reviewCapCoordLiftOf(env: NodeJS.ProcessEnv): ReviewCapCoordLift {
+  const raw = env['CCRC_REVIEW_CAP_COORD_LIFT'];
+  const v = raw?.trim().toLowerCase();
+  if (raw === undefined || v === '' || v === 'off') return 'off';
+  if (v === 'on') return 'on';
+  console.warn(`ccrc-server: CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw.slice(0, 40))} is not one of on|off; it reads as off (coordinator lifts disabled) because the switch restricts authority.`);
+  return 'off';
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
   const home = env.CCRC_HOME ?? os.homedir();
   // `||`, not `??`: an EnvironmentFile's bare `CCRC_ACCOUNTS=` line — which is
@@ -578,6 +598,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     updateDeadlineMs: Number.isSafeInteger(deadlineNum) && deadlineNum > 0 ? deadlineNum : DEFAULT_UPDATE_DEADLINE_MS,
     depsShed: depsShedConfigOf(env),
     wakeGate: wakeGateConfigOf(env),
+    reviewCapCoordLift: reviewCapCoordLiftOf(env),
     dispatchAbandonMs,
     backupStaleHours: backupStaleHoursOf(env.CCRC_BACKUP_STALE_HOURS),
     // The auth keys. Task 5 added ONLY the ones the gate itself consumes (the

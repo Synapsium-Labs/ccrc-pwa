@@ -141,7 +141,8 @@ describe('the claimant client census (D-7320)', () => {
     // reader is the one hand-written copy, no cap-reader call is unguarded, every claimant door is a POST.
     for (const r of claimant) expect(['asks.answer', 'asks.release', 'approvals.rule', 'approvals.release'], r.key).toContain(r.key);
     expect(defs.filter((s) => s.kind === 'hand').map((s) => `${s.file}#${s.name}`), 'the hand-written cap reader').toEqual(['ccd/session-hook.sh#_hook_server_cap']);
-    expect(calls.filter((s) => !s.guarded), 'a cap-reader call no $claimant test guards').toEqual([]);
+    // The one named exception: `runs review-rounds` reads the cap file for `review-rounds-v1` in its own loop (D-8125).
+    expect(calls.filter((s) => !s.guarded && !s.text.includes('"$rwant"')), 'a cap-reader call no $claimant test guards').toEqual([]);
     for (const d of server) expect(d.route, 'a claimant door').toMatch(/^POST \/api\//);
   });
 
@@ -165,8 +166,9 @@ describe('the claimant client census (D-7320)', () => {
   });
   // Q3l re-pointed the guard from `$family` (the fifth field it removed) to `$claimant`, the row test it wrote (D-7324;
   // named exception): still one call, for the four claimant rows only.
-  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 1, guarded by the $claimant test before it (D-7322, D-7324)', () => {
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 2, the claimant guard and the review-rounds loop (D-7322, D-7324, D-8125)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
+      [false, 'if _api_server_cap "$rwant"; then'],
       [true, 'if [[ -n "$claimant" ]] && _api_server_cap "$want"; then'],
     ]);
   });

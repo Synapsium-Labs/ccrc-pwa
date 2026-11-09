@@ -7,7 +7,7 @@
 //   raise the ask on every refusal .............. "raised exactly once" (second refusal adds a notice)
 //   count only `planned` review runs ............ rounds 1-3 case (the failed rounds are not counted)
 //   delete the store's guard .................... both the refusal case and the lifted case (never refuses)
-//   `reviewCapLifted` always false .............. the lifted case (the 4th stays refused)
+//   `reviewCapGate` never lifted .......... the lifted case (the 4th stays refused)
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -17,14 +17,15 @@ import {
 } from '../../shared/api.js';
 import { parseFile, parseSource, type CallSite, type ParsedFile } from './scan/parse.js';
 import { REPO, walkSrc } from './rings/walkSrc.js';
-import { REVIEW_FINDING_MAX, REVIEW_ROUND_CAP, cutWhole, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf } from '../src/coord/reviewcap.js';
+import { REVIEW_FINDING_MAX, REVIEW_ROUND_CAP, cutWhole, extractOpenFindings, reviewCapAsk, reviewCapNotice, reviewCapRefuses, reviewCapStatus, reviewFindingsOf,
+  effectiveReviewCap, COORD_LIFT_REASON_MIN, COORD_LIFT_REASON_MAX, coordLiftReason, coordLiftVerdict, coordLiftNotice, coordLiftEventDetail } from '../src/coord/reviewcap.js';
 
 describe('reviewCapRefuses', () => {
   it('the cap is 3', () => { expect(REVIEW_ROUND_CAP).toBe(3); });
   it.each([[0, false], [1, false], [2, false], [3, true], [4, true]])('%i rounds, not lifted -> refuses %s', (n, want) => {
-    expect(reviewCapRefuses(n, false)).toBe(want);
+    expect(reviewCapRefuses(n, false, 0)).toBe(want);
   });
-  it('a lifted run is never refused', () => { expect(reviewCapRefuses(7, true)).toBe(false); });
+  it('a lifted run is never refused', () => { expect(reviewCapRefuses(7, true, 0)).toBe(false); });
 });
 
 describe('reviewCapNotice', () => {
@@ -85,11 +86,16 @@ describe('cutWhole', () => {
 
 // D-6909: the cap's state on a run row. A work run carries it; a review run, or a run of unknown kind, carries null.
 describe('reviewCapStatus', () => {
-  it('a work run with no review_cap row reads rounds and the cap, nothing raised or lifted', () => {
-    expect(reviewCapStatus('work', 2, undefined)).toEqual({ rounds: 2, cap: 3, askedAt: null, liftedAt: null });
+  it('a work run with no review_cap row reads rounds and the cap, nothing raised, lifted or granted', () => {
+    expect(reviewCapStatus('work', 2, undefined)).toEqual({ rounds: 2, cap: 3, askedAt: null, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null });
   });
   it('a work run carries its row\'s askedAt and liftedAt', () => {
-    expect(reviewCapStatus('work', 3, { askedAt: 10, liftedAt: 20 })).toEqual({ rounds: 3, cap: 3, askedAt: 10, liftedAt: 20 });
+    expect(reviewCapStatus('work', 3, { askedAt: 10, liftedAt: 20 })).toEqual({ rounds: 3, cap: 3, askedAt: 10, liftedAt: 20, granted: 0, askHandledAt: null, coordLift: null });
+  });
+  it('the cap is the effective one: a granted row of 3 reads cap 6 (D-8125)', () => {
+    const lift = { at: 5, by: 'coordinator-a', reason: 'two real major findings remain open', rounds: 3, capBefore: 3, capAfter: 6, count: 1 };
+    expect(reviewCapStatus('work', 4, { askedAt: 10, liftedAt: null, granted: 3, askHandledAt: 11, coordLift: lift }))
+      .toEqual({ rounds: 4, cap: 6, askedAt: 10, liftedAt: null, granted: 3, askHandledAt: 11, coordLift: lift });
   });
   it('a review run, and a run of unknown kind, carry null', () => {
     expect(reviewCapStatus('review', 0, undefined)).toBeNull();
@@ -160,5 +166,95 @@ describe('reviewCapNotice reads the shared findings words', () => {
   it('stays silent on unnamed', () => {
     const b = body({ state: 'unnamed' });
     for (const w of [REVIEW_FINDINGS_NONE_OPEN, ...Object.values(REVIEW_FINDINGS_WORDS)]) expect(b).not.toContain(w);
+  });
+});
+
+describe('effectiveReviewCap and reviewCapRefuses with a grant (D-8125)', () => {
+  it('the effective cap is the base plus the grant', () => {
+    expect(effectiveReviewCap(0)).toBe(3);
+    expect(effectiveReviewCap(6)).toBe(9);
+  });
+  it('a grant moves the refusal point; a lift still removes it', () => {
+    expect(reviewCapRefuses(3, false, 0)).toBe(true);
+    expect(reviewCapRefuses(3, false, 3)).toBe(false);
+    expect(reviewCapRefuses(6, false, 3)).toBe(true);
+    expect(reviewCapRefuses(99, true, 0)).toBe(false);
+  });
+});
+
+describe('coordLiftReason (D-8125)', () => {
+  it('the bounds are 16 and 300', () => {
+    expect(COORD_LIFT_REASON_MIN).toBe(16);
+    expect(COORD_LIFT_REASON_MAX).toBe(300);
+  });
+  it.each([[undefined], [42], [''], ['   '], ['too short']])('%j is refused naming both bounds', (raw) => {
+    const r = coordLiftReason(raw);
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.detail).toContain('16'); expect(r.detail).toContain('300'); }
+  });
+  it('a multi-line reason is refused', () => {
+    const r = coordLiftReason('two real majors still open\nsecond line');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toMatch(/one line/);
+    expect(coordLiftReason('two real majors still open\rsecond line').ok).toBe(false);
+  });
+  it('a real reason passes unchanged', () => {
+    const t = 'F1 and F3 are real majors and round 3 closed two of five';
+    expect(coordLiftReason(`  ${t}  `)).toEqual({ ok: true, reason: t });
+  });
+  it('a 400-character reason is cut to at most 300 and never inside a token', () => {
+    const raw = Array.from({ length: 80 }, (_, i) => `word${i}`).join(' ').slice(0, 400);
+    const r = coordLiftReason(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.reason.length).toBeLessThanOrEqual(300);
+      expect(raw.startsWith(r.reason)).toBe(true);
+      expect(/^word\d+$/.test(r.reason.split(' ').pop()!)).toBe(true);
+      expect(raw[r.reason.length]).toBe(' ');
+    }
+  });
+  it('a secret-shaped key is masked, no 8-character slice survives', () => {
+    const secret = 'sk-' + 'Zq7Lm2Xv9Rt4Bw8Nc3Hd6Fy1Ka5Js0Pe';
+    const r = coordLiftReason(`round 3 closed two majors, key ${secret} was pasted by mistake`);
+    expect(r.ok).toBe(true);
+    if (r.ok) for (let i = 0; i + 8 <= secret.length; i++) expect(r.reason.includes(secret.slice(i, i + 8))).toBe(false);
+  });
+  it('a result shorter than the minimum after the cut is refused', () => {
+    const secret = 'sk-' + 'Zq7Lm2Xv9Rt4Bw8Nc3Hd6Fy1Ka5Js0Pe';
+    expect(coordLiftReason(secret).ok).toBe(false);
+  });
+});
+
+describe('coordLiftVerdict (D-8125)', () => {
+  type VerdictInput = Parameters<typeof coordLiftVerdict>[0];
+  const base: VerdictInput = { kind: 'work', closed: false, rounds: 3, granted: 0, liftedAt: null, setting: 'on' };
+  const refused = (over: Partial<VerdictInput>) => {
+    const v = coordLiftVerdict({ ...base, ...over });
+    return v.ok ? 'ok' : v.refused;
+  };
+  it('the setting off refuses even at the cap', () => { expect(refused({ setting: 'off' })).toBe('coord-lift-off'); });
+  it('a review run and an unknown run are not found', () => {
+    expect(refused({ kind: 'review' })).toBe('not-found');
+    expect(refused({ kind: 'unknown' })).toBe('not-found');
+  });
+  it('a closed run is refused', () => { expect(refused({ closed: true })).toBe('run-closed'); });
+  it('under the cap, or already lifted by the operator, is cap-not-reached', () => {
+    expect(refused({ rounds: 2 })).toBe('cap-not-reached');
+    expect(refused({ rounds: 5, granted: 3 })).toBe('cap-not-reached');
+    expect(refused({ liftedAt: 1, rounds: 50 })).toBe('cap-not-reached');
+  });
+  it('at the cap it grants one more cap of rounds', () => {
+    expect(coordLiftVerdict({ ...base })).toEqual({ ok: true, capBefore: 3, capAfter: 6 });
+    expect(coordLiftVerdict({ ...base, rounds: 6, granted: 3 })).toEqual({ ok: true, capBefore: 6, capAfter: 9 });
+  });
+});
+
+describe('coordLiftNotice and coordLiftEventDetail (D-8125)', () => {
+  it('word the record exactly', () => {
+    expect(coordLiftNotice(12, 'lane-a', 'two real majors still open', 3, 6)).toEqual({
+      title: 'Review cap lifted by its coordinator',
+      body: 'Run 12: lane-a allowed 3 more review rounds (cap 3 to 6). Why: two real majors still open',
+    });
+    expect(coordLiftEventDetail(3, 3, 6, 'two real majors still open')).toBe('coord-lift: rounds 3, cap 3 -> 6: two real majors still open');
   });
 });

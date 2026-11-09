@@ -712,10 +712,13 @@ describe('the coordinator skill: linkage', () => {
   // accounts`, `/api/notify`, …) that the coordinator has no business
   // knowing about.
   const registeredCoordRoutes = (): Set<string> => {
-    const src = readFileSync(path.join(root, 'server/src/coord/routes.ts'), 'utf8');
     const routes = new Set<string>();
-    for (const m of src.matchAll(/app\.(get|post)\(\s*'([^']+)'/g)) {
-      routes.add(`${m[1]!.toUpperCase()} ${m[2]}`);
+    // D-8125: the coordinator's review-rounds door registers from its own file, beside the run routes it extends.
+    for (const f of ['routes.ts', 'reviewRoundsRoute.ts']) {
+      const src = readFileSync(path.join(root, 'server/src/coord', f), 'utf8');
+      for (const m of src.matchAll(/app\.(get|post)\(\s*'([^']+)'/g)) {
+        routes.add(`${m[1]!.toUpperCase()} ${m[2]}`);
+      }
     }
     return routes;
   };
@@ -808,7 +811,8 @@ describe('the coordinator skill: linkage', () => {
       'POST /api/coord/collect-lane',
       // BUILD-SPEND CONTROLS (D-6795) — the operator-dial shape a fifth time. A coordinator told about this door
       // would be told how to lift the review-round cap on its own run, which is the cap's own defeat. The
-      // forbid-mention case below is what turns this permission-to-omit into a prohibition.
+      // forbid-mention case below is what turns this permission-to-omit into a prohibition. The operator's removal
+      // stays unnamed; the coordinator's bounded extension is `POST /api/runs/:id/review-rounds` (D-8125), named.
       'POST /api/coord/review-cap',
       // THE AUTOMATIC COORDINATOR ROLL (D-7453) — the operator-dial shape once more. The setting decides whether an idle
       // coordinator is rolled onto the current release and its new rules; a coordinator told about this door would be
@@ -1992,6 +1996,19 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // D-6795, the caps dial's accounting: EXEMPT above only PERMITS the omission; this FORBIDS the mention.
     expect(allSkillText).not.toContain('/api/coord/review-cap');
     expect(allSkillText).not.toContain('review-cap');
+  });
+
+  it('names the coordinator review-rounds door, its refusals and the review-round cutoff (D-8125)', () => {
+    for (const w of ['runs review-rounds', 'POST /api/runs/:id/review-rounds', 'coord-lift-off', 'cap-not-reached',
+      'no-review-rounds-door', 'not-your-programme', '2 rounds', '3 for security']) {
+      expect(allSkillText, `the skill must name ${w}`).toContain(w);
+    }
+  });
+
+  it('tells the coordinator to extend at the cap, before a fourth open is refused, and not to type its identity (D-8125)', () => {
+    expect(allSkillText).toContain('before you open a fourth');
+    expect(allSkillText).toContain('the operator is not pushed');
+    expect(allSkillText).not.toContain('review-rounds`) with `{"byId"');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

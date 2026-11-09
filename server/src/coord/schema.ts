@@ -2347,6 +2347,37 @@ export const MIGRATIONS: readonly string[] = [
   );
   ALTER TABLE mail_deliveries ADD COLUMN wake TEXT;
   `,
+  // ── 48: user_version 47 -> 48 ─────────────────────────────────────────────
+  // The coordinator lifts the review-round cap (D-8125): `review_cap.granted` is the extra rounds the run's coordinator
+  // has allowed (NULL reads as 0; each lift adds `REVIEW_ROUND_CAP`, so the cap in force is 3 + granted); `askHandledAt` is
+  // when a coordinator lift last closed the open ask (a re-raise at the next cap clears it); `review_cap_lifts` is the
+  // append-only journal, one row per coordinator lift (who, when, why, the rounds then and the cap before and after). The
+  // writers are `reviewCapStore.ts`'s `liftReviewCapByCoordinator` and `raiseReviewCapAsk`, both through `CoordStore`; the
+  // operator's lift (`liftReviewCap`) still writes `liftedAt` alone and still removes the cap.
+  //
+  // TWO NULLABLE COLUMNS AND A NEW TABLE, nothing an older build trips on: it opens a file at `user_version 48` by rule 3
+  // (it warns, reads as-is and migrates nothing). A coordinator lift never writes `askedAt` to NULL and never writes
+  // `liftedAt`, so that older build reads the run as waiting on a raised ask with no lift, refuses the open at 3, and the
+  // operator can lift. Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 47
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE review_cap ADD COLUMN granted INTEGER;
+  ALTER TABLE review_cap ADD COLUMN askHandledAt INTEGER;
+  CREATE TABLE review_cap_lifts (
+    id          INTEGER PRIMARY KEY,
+    workRunId   INTEGER NOT NULL REFERENCES runs(id),
+    at          INTEGER NOT NULL,
+    byId        TEXT    NOT NULL,
+    reason      TEXT    NOT NULL,
+    rounds      INTEGER NOT NULL,
+    capBefore   INTEGER NOT NULL,
+    capAfter    INTEGER NOT NULL,
+    closedAskAt INTEGER
+  );
+  CREATE INDEX review_cap_lifts_by_run ON review_cap_lifts(workRunId, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
