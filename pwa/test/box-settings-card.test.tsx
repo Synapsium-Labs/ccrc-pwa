@@ -312,7 +312,7 @@ const familyKeys = (f: string): BoxSettingName[] =>
 const FAMILY_WORDS: Readonly<Record<string, string>> = {
   updates: 'Backups and updates', 'session-slice': 'Session slice', 'test-runs': 'Test runs', graph: 'Graph', testbox: 'Test box',
   keepalive: 'Keepalive', 'usage-sweep': 'Usage sweep', 'carry-copies': 'Carry copies', 'browser-tools': 'Browser tools',
-  'memory-gate': 'Memory gate', 'limit-rescue': 'Limit rescue', coordination: 'Coordination', landing: 'Landing',
+  'memory-gate': 'Memory gate', 'limit-rescue': 'Limit rescue', coordination: 'Coordination', 'admin-merge': 'Admin merge',
 };
 const plural = (n: number): string => (n === 1 ? '1 setting' : `${n} settings`);
 const summaries = (el: HTMLElement): string[] => [...el.querySelectorAll('.box-settings-family > summary')].map((x) => x.textContent ?? '');
@@ -321,7 +321,7 @@ const rowOf = (el: HTMLElement, k: string): HTMLElement => within(el).getByText(
 const REFUSED_WHY = BOX_SETTING_REFUSAL_WORDS[0];
 
 describe('Box settings card: what the library calls a fold (characterization, two nodes)', () => {
-  it('C3: two fleet-role nodes with every family folded hold 2 + 2 x 13 groups (D-8121 added Browser tools, D-8122 Memory gate, D-8123 Limit rescue, D-8125 Coordination, D-8124 Landing)', () => {
+  it('C3: two fleet-role nodes with every family folded hold 2 + 2 x 13 groups (D-8121 added Browser tools, D-8122 Memory gate, D-8123 Limit rescue, D-8125 Coordination, D-8124 Admin merge)', () => {
     renderCard([fleet(ok(v2doc())), { ...fleet(ok(v2doc()), 'second'), nodeId: OTHER_ID }]);
     expect(screen.getAllByRole('group')).toHaveLength(2 + 2 * 13);
   });
@@ -334,7 +334,7 @@ describe('Box settings card: families (D17)', () => {
       'Backups and updates: 7 settings, none set', 'Session slice: 2 settings, none set', 'Test runs: 8 settings, none set',
       'Graph: 23 settings, none set', 'Keepalive: 3 settings, none set', 'Usage sweep: 1 setting, none set',
       'Test box: 16 settings, none set', 'Carry copies: 1 setting, none set', 'Browser tools: 2 settings, none set',
-      'Memory gate: 4 settings, none set', 'Limit rescue: 2 settings, none set', 'Coordination: 1 setting, none set', 'Landing: 1 setting, none set',
+      'Memory gate: 4 settings, none set', 'Limit rescue: 2 settings, none set', 'Coordination: 1 setting, none set', 'Admin merge: 1 setting, none set',
     ];
     const derived = BOX_SETTING_FAMILIES.map((f) => `${FAMILY_WORDS[f]}: ${plural(familyKeys(f).length)}, none set`);
     expect(derived).toEqual(expected);
@@ -451,7 +451,7 @@ describe('Box settings card: a server-role node (D21)', () => {
     const { container } = renderCard([server(ok(v2doc({ settings })))]);
     const b = block('server');
     const lines = [...b.querySelectorAll('p.box-settings-line')].map((p) => p.textContent);
-    expect(unusedFamilies).toHaveLength(9);
+    expect(unusedFamilies).toHaveLength(10);
     for (const f of unusedFamilies) {
       expect(lines, f).toContain(`${FAMILY_WORDS[f]}: ${plural(familyKeys(f).length)}, ${BOX_SETTINGS_NOT_USED_TEXT}`);
       expect(familyEl(container, f), f).toBeNull();

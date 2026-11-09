@@ -22150,7 +22150,7 @@ BOX_SETTINGS_TABLE=(
   CCRC_RESCUE_SOLO_JITTER_S:value:limit-rescue:fleet,both:run
   CCRC_LIMIT_WATCHDOG_MIN:value:limit-rescue:fleet,both:run
   CCRC_REVIEW_CAP_COORD_LIFT:value:coordination:server,both:run
-  CCRC_ADMIN_MERGE:value:landing:fleet,both:run
+  CCRC_ADMIN_MERGE:value:admin-merge:fleet,both:run
 )
 # key:word,word (D-7914): the fixed words a setting's check admits beside the value shape. Mirrored in shared/api.ts's
 # BOX_SETTING_VALUE_WORDS and held equal, both ways, to it and to _tb_shape's word arms by box-settings-table.test.ts.
@@ -26761,7 +26761,7 @@ _set_says() {
     memory-gate) _mg_says "$1" ;;
     limit-rescue) _lr_says "$1" ;;
     coordination) _rc_says ;;
-    landing) _lnd_says "$1" ;;
+    admin-merge) _lnd_says "$1" ;;
     *) return 1 ;;
   esac
 }
@@ -26801,7 +26801,7 @@ _set_check() {
     memory-gate) _mg_ok "$k" "$v" ;;
     limit-rescue) _lr_ok "$k" "$v" ;;
     coordination) _rc_ok "$k" "$v" ;;
-    landing) _lnd_ok "$k" "$v" ;;
+    admin-merge) _lnd_ok "$k" "$v" ;;
     updates)
       [ "$k" != CCRC_RELEASE_BASE_URL ] || return 0
       # One subshell: the mask first (a path that cannot exist stands in for ccrc.env, so the resolver judges the given value alone, D-7920), then the key's
