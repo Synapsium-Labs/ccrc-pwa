@@ -2796,6 +2796,15 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       expect(wakeMail(coord)).toEqual([]);
     });
 
+    it('account-room: the recording turn\'s own stop marker does not release the block', async () => {
+      const { h, coord, w } = await setup();
+      const id = park(coord, 'account-room', T0 + 10 * 60_000);
+      // the turn began before the row was recorded and ended after it
+      seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, stopAt: T0 + 12 * 60_000, at: T0 + 12 * 60_000, turnAt: T0 + 5 * 60_000 });
+      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + 10 * 60_000, SWEEP_T + 10 * 60_000);
+      expect(wokenAt(coord, id)).toBeNull();
+    });
+
     it('a woken block is no longer live, so the coord-ball rung may fire again (F5)', async () => {
       const { coord, w } = await setup();
       park(coord, 'disk', T0 + 1000);

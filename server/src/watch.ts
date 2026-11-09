@@ -6818,7 +6818,9 @@ export class FleetWatcher {
     if (!turnMark.ok && readMark !== null && rows.some((r) => r.wakeOn === 'account-room')) {
       try { turnMark = await readMark(); } catch { /* unread: no turn is claimed */ }
     }
-    const lastTurn = turnMark.ok ? Math.max(turnMark.turnAt ?? 0, turnMark.stopAt ?? 0) : 0;
+    // Only a turn that STARTED after the row counts: the turn that recorded the block ends (or fails) after the row, so its
+    // own stop marker must not release the block before the coordinator has resumed.
+    const lastTurn = turnMark.ok ? (turnMark.turnAt ?? 0) : 0;
     for (const row of rows) {
       const due = blockWakeDue(row, {
         now,
