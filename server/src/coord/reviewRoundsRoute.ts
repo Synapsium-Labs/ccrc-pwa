@@ -16,6 +16,7 @@
 // and the reason; attribution; the run's read; ownership; the lift under `coordMutex`; the notice; the answer. A refusal at
 // any step writes nothing and emits nothing. The route writes no `operator_items` row: the cap's ask is `review_cap`'s
 // `askHandledAt`, closed in the store's transaction.
+import { coordinatorOfRun } from './bindingReads.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { NoticeSink } from '../notice.js';
 import { refuseRoute } from '../refuse.js';
@@ -59,8 +60,9 @@ export function registerReviewRoundsRoute(app: FastifyInstance, deps: ReviewRoun
     const read = coord.run(id);
     if (!read.ok) return refuseRoute(reply, 'run-unreadable', { detail: read.detail });
     if (read.run === null) return refuseRoute(reply, 'not-found', { detail: `run ${id} not found` });
-    const { claimedBy, program } = read.run;
-    let owns = claimedBy === byId;
+    const { program } = read.run;
+    // The run's coordinator through the one binding reader (ARCH-62), never a hand comparison of the claimant.
+    let owns = coordinatorOfRun(coord, id) === byId;
     if (!owns) {
       try { owns = coord.claimsProgramme(byId, program); }
       catch (err) { return refuseRoute(reply, 'run-unreadable', { detail: err instanceof Error ? err.message : String(err) }); }
