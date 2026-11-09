@@ -8343,10 +8343,12 @@ missing or not read, and the worktrees the last pass would keep, or kept: projec
 each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
 dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
 
-**Keep them** asks first: a confirmation names how many worktrees the last pass would keep (the counts line's figure; it says it
-cannot tell only when the lane has counted nothing), how many of them the card lists and how many it does not when the list leaves
-some off, and that the session that started each agent is mailed. Nothing is sent before it is confirmed, and nothing is sent when
-the card's latest reading refuses Keep them by then. **Do not keep** goes at once; its note says
+**Keep them** asks first: when the last pass ran in shadow, a confirmation names how many worktrees it would keep (the counts
+line's figure) and, when the list leaves some off, how many of them the card lists and how many it does not; after a pass in any
+other mode, or before any pass has counted, it says the card cannot tell until the next pass. It always says that the session that
+started each agent is mailed. Nothing is sent before it is confirmed, and nothing is sent when
+the card's latest reading refuses Keep them by then. Once a write settles, the focus returns to the choice the card now shows,
+unless the operator has moved it elsewhere. **Do not keep** goes at once; its note says
 that worktrees already kept stay held back from the disk sweep until their hold ends. A choice the GET says would be refused is
 disabled, with the refusal in the card's own words, `sign-in-unarmed` included (turning it on needs sign-in armed and a signed-in
 operator), and a refused write says the same and re-reads. On a server without the door the card says it is not available there.

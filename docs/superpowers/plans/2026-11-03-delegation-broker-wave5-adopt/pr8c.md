@@ -55,9 +55,10 @@ overflows.
 
 Fix round 2 of PR8b dropped `path` from each would-keep item, so an item is project, worktree, parent session and what changed. The
 patch's reader still required `path`, so it read every path-less view as no view. Its card keyed the list on `path` and showed it as
-each item's title. Now the reader reads the four fields, the list keys on project and worktree with no title, and no fixture carries
-a path, the browser file's included. Row, red first: an item of exactly those four keys reads whole through the reader and the poll, and no list item carries a
-title. Mutant: the reader requiring `path` again reds nine rows. That title assertion could not fail on path-less fixtures, so fix
+each item's title. Now the reader reads the four fields, the list keys on project and worktree with no title, and no fixture carried
+a path, the browser file's included; since fix round 1 one row's items carry a `path` on purpose (F2, below). Row, red first: an item of exactly those four keys reads whole through the reader and the poll, and no list item carries a
+title. Mutant: the reader requiring `path` again reds nine rows (9 of 57, on the card's own reader). After fix round 1 (F1) the card
+reads items only through the shared reader; the same mutant there reds 9 of 70 at fix round 2's tip. That title assertion could not fail on path-less fixtures, so fix
 round 1 adds a row whose two items still carry one shared `path` (the shared reader passes unknown fields through): the path is shown
 nowhere, is no item's title, and is no key (two items with one path would warn of a duplicate key). Mutants: the card putting the
 item's `path` into a title reds it, and so does keying on it (review 1693 F2). The second guard is the pwa typecheck:
@@ -69,7 +70,9 @@ patch applied it failed on `path` too, because the shared type no longer has the
 ## M7: the confirmation-skipped mutant, re-measured
 
 The ruling's seventh mutant (a tap of "Keep them" writing at once, with no confirmation) reds 14 of the card file's 57 rows. Before the
-split it was 13 of 53. The added red row is N6's write-reply row, which taps through the confirmation.
+split it was 13 of 53. The added red row is N6's write-reply row, which taps through the confirmation. Re-measured at fix round 2's
+tip, where the file has 70 rows, it reds 21 (review 1699 R2-8): the rounds' focus, stale-sheet and sheet-wording rows tap through
+the confirmation too.
 
 ## Precedent sites (D-7994's card, `ScopeSweepSection.tsx`)
 
@@ -113,3 +116,19 @@ words (review 1693 F9, ruled no change).
 
 F4's precedents, by reading and not measured: `ScopeSweepSection` and `PaneScopeStopSection` open no sheet, but both disable their
 fieldset while a write is in flight, so the radio just tapped is disabled under the focus. Their fix is out of this PR's scope.
+
+## Fix round 2 (review 1699)
+
+| R2 | What changed | Row, red at fix round 1's tip, then green | Mutant |
+|---|---|---|---|
+| R2-1 | the refocus waits until the card's reading is the settled reply's (in the shipped app the view arrives through the Settings frame one commit later), then focuses the radio whose value is that reading, when enabled; it never reads `:checked` early | the card's browser file, through the shipped Settings wiring: the write held, then answered, and the active element is the radio the new reading checks, for Keep them then on and for Do not keep then off (all 8 views red, then green). A jsdom row mounted through `SettingsDataProvider` could also go red, and is added | today's effect (no wait, `:checked`): the browser file 8 of 8 red; the jsdom frame row red |
+| R2-2 | the refocus moves the focus only from nowhere, the page, or this card | focus moved to a control outside the card while the write is in flight stays there | the guard dropped: 1 red |
+| R2-3 | the status wrapper is drawn only with content; with no enabled radio for the reading the focus goes to the result line, else the refusal line, else the unmeasured note (each `tabIndex=-1`, each with text) | a reply that reads the marker unmeasurable: the focus is on the unmeasured note, and no empty focusable element is in the card | the wrapper drawn empty again: 1 red |
+| R2-4 | the sheet names the would-keep figure only after a shadow pass; after live, suspended or unmeasured it says the card cannot tell until the next pass and lists nothing | live with a list and `more` above 0, suspended, unmeasured | the mode check dropped: 1 red |
+| R2-5 | `nothingCounted` and `confirmCannotCount` speak of the last pass: none has counted a worktree yet, or the last counted nothing | words row | none |
+| R2-6 | the live mode line describes the mode: "Keeping was on at the last pass." | words row | none |
+| R2-7 | `fleet-caps-unmeasured` says this cannot be turned on until the fleet box reports | words row | none |
+| R2-8 | the section's header sentence on the sheet; the words module's header names F9's exception; this note's stale figures (above) | text | none |
+
+The fallback line R2-3 names, in this order: the card's result line (the status wrapper, drawn only with content), else the refusal
+line for the reading, else the unmeasured note. In R2-3's row it is the unmeasured note.
