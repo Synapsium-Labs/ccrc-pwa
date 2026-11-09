@@ -14,8 +14,13 @@ import { redactCommand } from './redact.js';
 /** Review runs one work run may have before the next is refused: rounds 1 to 3 open, the 4th is refused. */
 export const REVIEW_ROUND_CAP = 3;
 
-/** Whether opening one more review run is over the cap. A lifted run is never over it. */
-export const reviewCapRefuses = (rounds: number, lifted: boolean): boolean => !lifted && rounds >= REVIEW_ROUND_CAP;
+/** D-8125: the cap in force for a run whose coordinator has granted `granted` extra rounds (each lift grants `REVIEW_ROUND_CAP`). */
+export const effectiveReviewCap = (granted: number): number => REVIEW_ROUND_CAP + granted;
+
+/** Whether opening one more review run is over the cap. An operator-lifted run is never over it; a coordinator grant
+ *  raises the cap by `granted`. `granted` is required so every caller is visited. */
+export const reviewCapRefuses = (rounds: number, lifted: boolean, granted: number): boolean =>
+  !lifted && rounds >= effectiveReviewCap(granted);
 
 /** D-6909: the cap's state a run row carries. Only a work run has one; a review run, or a run of unknown kind, is null.
  *  `row` is the run's `review_cap` row, absent until the ask is raised or the cap lifted. */
@@ -85,3 +90,45 @@ export function reviewCapNotice(a: ReviewCapAsk): { title: string; body: string 
       + 'Lift the cap for this run to allow another round.',
   };
 }
+
+/** D-8125: the bounds of a coordinator's lift reason, in characters. */
+export const COORD_LIFT_REASON_MIN = 16;
+export const COORD_LIFT_REASON_MAX = 300;
+
+/** The reason a coordinator gives for a lift: one line, trimmed, masked, cut whole at the maximum. */
+export function coordLiftReason(raw: unknown): { ok: true; reason: string } | { ok: false; detail: string } {
+  const bounds = `${COORD_LIFT_REASON_MIN} to ${COORD_LIFT_REASON_MAX} characters`;
+  if (typeof raw !== 'string') return { ok: false, detail: `reason must be a string of ${bounds}` };
+  const trimmed = raw.trim();
+  if (/[\r\n]/.test(trimmed)) return { ok: false, detail: `reason must be one line of ${bounds}` };
+  if (trimmed.length < COORD_LIFT_REASON_MIN) return { ok: false, detail: `reason must be ${bounds}, saying why another round is needed` };
+  const reason = cutWhole(redactCommand(trimmed), COORD_LIFT_REASON_MAX);
+  if (reason.length < COORD_LIFT_REASON_MIN) return { ok: false, detail: `reason must be ${bounds} once masked` };
+  return { ok: true, reason };
+}
+
+/** Why a coordinator lift is refused. Ownership is the route's to decide (it needs the registry). */
+export type CoordLiftRefusal = 'coord-lift-off' | 'run-closed' | 'not-found' | 'cap-not-reached';
+
+/** Whether a coordinator may lift now, and the cap before and after. Order: setting, kind, closed, lifted or under the cap. */
+export function coordLiftVerdict(i: { kind: RunKind | 'unknown'; closed: boolean; rounds: number; granted: number; liftedAt: number | null; setting: 'on' | 'off' }):
+  { ok: true; capBefore: number; capAfter: number } | { ok: false; refused: CoordLiftRefusal; detail: string } {
+  if (i.setting === 'off') return { ok: false, refused: 'coord-lift-off', detail: 'coordinator review-cap lifts are turned off on this box; the operator lifts the cap' };
+  if (i.kind !== 'work') return { ok: false, refused: 'not-found', detail: 'only a work run has a review cap' };
+  if (i.closed) return { ok: false, refused: 'run-closed', detail: 'the run is closed' };
+  const capBefore = effectiveReviewCap(i.granted);
+  if (i.liftedAt !== null || i.rounds < capBefore) {
+    return { ok: false, refused: 'cap-not-reached', detail: i.liftedAt !== null ? 'the cap is already lifted for this run' : `the run has had ${i.rounds} review rounds, under its cap of ${capBefore}` };
+  }
+  return { ok: true, capBefore, capAfter: capBefore + REVIEW_ROUND_CAP };
+}
+
+/** The record-only notice a coordinator lift sends. */
+export const coordLiftNotice = (run: number, by: string, reason: string, capBefore: number, capAfter: number): { title: string; body: string } => ({
+  title: 'Review cap lifted by its coordinator',
+  body: `Run ${run}: ${by} allowed ${capAfter - capBefore} more review rounds (cap ${capBefore} to ${capAfter}). Why: ${reason}`,
+});
+
+/** The run-event detail a coordinator lift writes. */
+export const coordLiftEventDetail = (rounds: number, capBefore: number, capAfter: number, reason: string): string =>
+  `coord-lift: rounds ${rounds}, cap ${capBefore} -> ${capAfter}: ${reason}`;

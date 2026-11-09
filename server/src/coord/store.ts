@@ -1957,7 +1957,7 @@ export class CoordStore {
           if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
           // D-6795: the Nth+1 round is refused unless the operator lifted the cap for this work run. `by` is the count.
           const rounds = this.reviewRounds(input.reviews ?? -1);
-          if (reviewCapRefuses(rounds, this.reviewCapLifted(input.reviews ?? -1))) {
+          if (reviewCapRefuses(rounds, this.reviewCapLifted(input.reviews ?? -1), 0)) {
             return { refused: 'cap-review-rounds' as const, by: String(rounds) };
           }
         }
