@@ -793,6 +793,7 @@ describe('the bypass deny (wave 2b)', () => {
     expect(r.deny).toContain('gh pr view <n> --json state,mergedAt');
     expect(r.deny).toContain('R9\'s door');
     expect(r.deny).toContain('the operator\'s own shell or GitHub\'s UI');
+    expect(r.deny, 'the bypass reason names the admin-merge door (D-8124)').toContain('ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>');
     expect(r.deny).toContain('the whole command is read');
     expect(r.deny, 'the reason never claims landing is the operator\'s alone').not.toContain('landing is the operator');
     expect(r.deny, 'the reason does not mention the allowance').not.toMatch(/allow/i);
@@ -1008,6 +1009,7 @@ describe('the bypass deny (wave 2b)', () => {
       expect(d).toContain('--body-file');
       expect(d).toContain('ccrc-api mail send --json <file>');
       expect(d).toContain('R9\'s door');
+      expect(d, 'the over-cap bypass reason names the admin-merge door (D-8124)').toContain('ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>');
       expect(d, 'the over-cap reason never claims landing is the operator\'s alone').not.toContain('landing is the operator');
     });
 
@@ -1511,6 +1513,70 @@ describe('the bypass deny (wave 2b)', () => {
       expect(lines('echo MERGE').length - lines('echo MARGE').length, 'an upper-case MERGE reached the strip').toBe(0);
       expect(lines('echo PullRequest').length - lines('echo PullRequezt').length, 'a bare PullRequest reached the strip').toBe(0);
     });
+  });
+});
+
+describe('the admin-merge door (D-8124)', () => {
+  const DOOR = `ccd pr-admin-merge --repo owner-a/repo-a --pr 42 --head ${'a'.repeat(40)}`;
+  const hookText = fs.readFileSync(HOOK, 'utf8');
+
+  it('refuses a worker\'s call of the admin-merge door with wave 2\'s reason', () => {
+    hold(WAVE_HOLD);
+    expect(bash(DOOR).deny).toBe(bash('gh pr merge 42').deny);
+    expect(bash(DOOR).deny).toBe(waveReason(WAVE_HOLD));
+    marker();
+    expect(bash(`~/.local/bin/${DOOR}`).deny).toContain('a wave\'s session never merges');
+    fs.rmSync(path.join(home, '.cc-sessions', `${ID}.hold`));
+    expect(bash(DOOR).deny, 'the child marker alone refuses the door too').toContain('the child marker');
+  });
+
+  it('a coordinator\'s call of the door passes', () => {
+    expect(bash(DOOR).deny).toBeNull();
+    expect(bash(`cd /tmp && ${DOOR}`).deny).toBeNull();
+  });
+
+  it('a raw --admin merge from a coordinator is still refused: the door is the only way', () => {
+    expect(bash('gh pr merge 42 --admin').deny).not.toBeNull();
+    expect(bash(`${DOOR} --admin`).deny, 'the door call spells no --admin, and a trailing one is no merge head').toBeNull();
+  });
+
+  it('mentions of the door pass, in a worker too', () => {
+    hold(WAVE_HOLD);
+    for (const c of [`echo "${DOOR}"`, `git commit -m "land with ${DOOR}"`, 'grep -n pr-admin-merge ccd/ccd', 'ccd pr-admin-mergers', 'echo ccd pr-admin-merge-x'])
+      expect(bash(c).deny, c).toBeNull();
+  });
+
+  it('CCD_DOOR_RE is derived from GH_MERGE_RE\'s head: the cut occurs once and the head is shared', () => {
+    const defs = ['GH_MERGE_RE', 'CCD_DOOR_CUT', 'CCD_DOOR_RE'].map((n) => {
+      const m = new RegExp(`^${n}=.*$`, 'm').exec(hookText);
+      if (m === null) throw new Error(`the hook no longer defines ${n} on one line`);
+      return m[0];
+    }).join('\n');
+    const run = (script: string, ...args: string[]): string => {
+      const r = spawnSync('bash', ['-c', `${defs}\n${script}`, 'x', ...args], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      return r.stdout;
+    };
+    const [mergeRe, cut, doorRe] = run('printf "%s\\0%s\\0%s" "$GH_MERGE_RE" "$CCD_DOOR_CUT" "$CCD_DOOR_RE"').split('\0') as [string, string, string];
+    expect(mergeRe.split(cut).length, 'the cut occurs once in GH_MERGE_RE').toBe(2);
+    const headEnd = doorRe.indexOf('ccd[ \t]+pr-admin-merge');
+    expect(headEnd, 'the door tail follows the head').toBeGreaterThan(0);
+    expect(mergeRe.startsWith(doorRe.slice(0, headEnd)), 'CCD_DOOR_RE\'s head is GH_MERGE_RE\'s, character for character').toBe(true);
+    const verdicts = (cmds: string[]): boolean[] =>
+      run('for c in "$@"; do if [[ "$c" =~ $CCD_DOOR_RE ]]; then echo 1; else echo 0; fi; done', ...cmds).trim().split('\n').map((x) => x === '1');
+    const yes = ['ccd pr-admin-merge --repo a/b', 'GH_TOKEN=x ccd pr-admin-merge', 'env ccd pr-admin-merge x', 'echo ok; ccd pr-admin-merge',
+      'x=$(ccd pr-admin-merge y)', 'timeout 60 ccd pr-admin-merge x', '~/.local/bin/ccd pr-admin-merge x', 'ccd pr-admin-merge;echo', 'ccd\tpr-admin-merge'];
+    const no = ['ccd pr-admin-mergex', 'echo ccd pr-admin-merge', 'xccd pr-admin-merge', 'ccd pr-state', 'gh pr merge 42', 'ccd pr-admin-merg'];
+    expect(verdicts(yes), `matched: ${yes.join(' | ')}`).toEqual(yes.map(() => true));
+    expect(verdicts(no), `matched: ${no.join(' | ')}`).toEqual(no.map(() => false));
+  });
+
+  it('LISTED pass: a worker\'s door call over the parse cap', () => {
+    hold(WAVE_HOLD);
+    expect(bash(sized(' ', DOOR, CAP + 1)).deny).toBeNull();
+    const a = hookText.indexOf('# WHAT PASSES UNPARSED, the `gh api` half');
+    const b = hookText.indexOf('# The hook is a contract the fleet honours', a);
+    expect(hookText.slice(a, b), 'the header\'s list names the over-cap door call').toContain('a call of the admin-merge door over the parse cap');
   });
 });
 

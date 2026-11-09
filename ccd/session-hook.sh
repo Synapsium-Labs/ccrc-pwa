@@ -4363,7 +4363,11 @@ fi
 #   - ways to move `main` that are not merges, out of this wave's scope and named
 #     as such: `gh api -X PATCH repos/<o>/<r>/git/refs/heads/<b>`, the GraphQL
 #     `updateRef`, `updateRefs` and `createCommitOnBranch` mutations, and `git
-#     push` to a protected branch.
+#     push` to a protected branch;
+#   - a call of the admin-merge door over the parse cap: over the cap the hook
+#     asks only the `gh … pr … merge` segment rule, so a worker's over-cap
+#     `ccd pr-admin-merge …` passes the hook (the door itself refuses that
+#     caller, a hold naming a programme wave or the child marker, D-8124).
 # The hook is a contract the fleet honours, not an access boundary (spec §4),
 # and identity on this box is attribution. A session with neither — a
 # coordinator's own, the operator's — is never asked THIS question (wave 2's), so
@@ -4407,6 +4411,19 @@ fi
 # `gh pr view <n> --json state,mergedAt`, R9's door (the operator's own shell or
 # GitHub's UI) and the wide reading. Text with no merge head passes (`echo
 # --admin`, a commit message that names it).
+#
+# THE ADMIN-MERGE DOOR (D-8124). On 2026-11-09 the operator ruled that a coordinator
+# may admin-merge in a repository where ccrc's GitHub identity is an admin and no
+# merge queue applies. The deny above stays WHOLE, for `--admin` and `gh api` in
+# every session: a text read of a command cannot check admin permission, a merge
+# queue, the head, the required checks or the reviews, and a loosened match would
+# let the unchecked spelling through. The one gated door is `ccd pr-admin-merge`,
+# which checks every condition itself at merge time, refuses with a typed reason
+# and journals the merge; it runs `gh` as a subprocess, which no hook sees. This
+# hook adds two things for it: the worker deny covers the door (CCD_DOOR_RE, below,
+# sets the merge question like a `gh … pr … merge` head, so a hold naming a
+# programme wave or the child marker is refused with wave 2's reason, byte for
+# byte), and the bypass reasons name the door as the way for a coordinator.
 #
 # THE gh api HALF. A `gh … api` call that reaches a merge is refused the same way,
 # in every session, by the same single jq and with the same reason prefix. Once the
@@ -4642,6 +4659,12 @@ GH_MERGE_RE=$'(^|[;&|(\n]|\\$\\()[ \t]*(([!{]|if|then|do|else|elif|while|until|t
 # there leaves the head alone. The cut is quoted so the brackets are literal in the pattern, not a glob class.
 GH_API_CUT=$'[ \t]+pr('
 GH_API_RE=${GH_MERGE_RE%%"$GH_API_CUT"*}$'[ \t]+api([[:space:];&|()<>]|$)'
+# CCD_DOOR_RE (D-8124): the same head grammar with `ccd pr-admin-merge` for `gh … pr … merge`, DERIVED from GH_MERGE_RE's
+# own text as GH_API_RE is, so the three never drift. `([^[:space:];&|()]*/)?gh(` (CCD_DOOR_CUT: the head's optional
+# path prefix, then the command word `gh` and the `(` that opens its flag group) occurs once in GH_MERGE_RE, right after
+# the wrapper prefix, so cutting there leaves the head alone and the door's own command word and verb follow it.
+CCD_DOOR_CUT=$'([^[:space:];&|()]*/)?gh('
+CCD_DOOR_RE=${GH_MERGE_RE%%"$CCD_DOOR_CUT"*}$'([^[:space:];&|()]*/)?ccd[ \t]+pr-admin-merge([[:space:];&|()<>]|$)'
 # ALLOW_ADMIN_RE (D-7249): the allowance's grammar, defined ONCE and handed to the strip's single jq as
 # `--arg allow`. Oniguruma: `\A` and `\z` anchor the whole raw command, `[ \t\n]*` is folded in at both
 # ends (jq 1.6 and 1.7 have no `trim`), digits are `[0-9]+` (never `\d`), and each word of the set is told
@@ -4734,6 +4757,9 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
       mmerge=1
       if [[ "$mflags" == *a* ]]; then madmin=1; fi
     fi
+    # The admin-merge door (D-8124) is asked wave 2's question like a merge: a worker never lands a PR, by any verb.
+    # It is not a bypass: its text spells no `--admin`, and the door itself refuses a caller that is not a coordinator.
+    if [[ -z "$mmerge" && "$mcmd" =~ $CCD_DOOR_RE ]]; then mmerge=1; fi
     if [[ ( "$mflags" == *w* || "$mflags" == *p* ) && "$mcmd" =~ $GH_API_RE ]]; then mapi=1; fi
   fi
   if [[ -n "$madmin" || -n "$mapi" ]]; then mbypass=1; fi
@@ -4775,9 +4801,11 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
         mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session, and this command is $mover bytes, over the deny's $MERGE_PARSE_CAP-byte parse cap, and its raw text holds $mread: the hook cannot tell prose from a command over the cap, so it refuses the text."
         mreason+=" Split it into commands of at most $MERGE_PARSE_CAP bytes, or write the text with the Write tool and pass it as a file (\`--body-file <file>\` for \`gh pr create\`, \`ccrc-api mail send --json <file>\` for a mail), which keeps the command short."
         mreason+=" A landing is \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues the PR; a bypass is R9's door, the operator's own shell or GitHub's UI."
+        mreason+=" In a repository where the fleet's GitHub identity is an admin and no merge queue applies, a coordinator lands a PR stopped only by \`approval-missing\` through \`ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>\`, which checks every condition itself and journals the merge (D-8124)."
       elif [[ -z "$mallow" ]]; then
         mreason="ccrc: \`--admin\` and \`gh api\` merges are refused in every session: the merge queue is how a PR lands, and a bypass of it is not a session's to take (landing-order spec §5.2)."
         mreason+=" Land a PR with \`gh pr merge <n> --match-head-commit <sha>\`, which enqueues it, and read whether it merged with \`gh pr view <n> --json state,mergedAt\`. A bypass is R9's door: the operator's own shell or GitHub's UI."
+        mreason+=" In a repository where the fleet's GitHub identity is an admin and no merge queue applies, a coordinator lands a PR stopped only by \`approval-missing\` through \`ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>\`, which checks every condition itself and journals the merge (D-8124)."
         if [[ -n "$mapi" ]]; then
           mreason+=" A \`gh api\` call is refused when its command names a merge mutation (\`mergePullRequest\`, \`enqueuePullRequest\`, \`enablePullRequestAutoMerge\`, \`mergeBranch\`) or a merge path (\`repos/<o>/<r>/pulls/<n>/merge\`, \`repos/<o>/<r>/merges\`), by any method, a GET included: the hook cannot tell a read of the merge path from a write, so \`gh pr view <n> --json state,mergedAt\` is how a session asks whether a PR merged."
           mreason+=" Note that the whole command is read, quoted text included, once it holds a \`gh api\` or merge command, so a real \`gh api\` call and an unrelated mention of a mutation word or merge path in one command is refused too: run them as separate commands, name an output file another way, or pass a body with \`-F body=@<file>\`."

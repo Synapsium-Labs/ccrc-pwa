@@ -9170,6 +9170,7 @@ forget
 list
 menu
 pick
+pr-admin-merge
 pr-landing
 pr-open
 pr-state
@@ -12407,6 +12408,492 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
   _gh_rows_ok "$opened" \
     || die "the PR was opened, but gh answered something that is not a list of PRs"
   printf '%s\n' "$opened"
+}
+
+# ── the admin-merge door (D-8124) ───────────────────────────────────────────────────────────────────────────────────
+# `ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>` is the ONE place an admin merge is made. The session
+# hook keeps refusing a raw `gh pr merge --admin` and every `gh api` merge in every session; this verb runs `gh` itself
+# as a subprocess, which no hook sees, so it performs every check the operator's ruling names before the merge and
+# refuses with a typed reason otherwise. This part is the gate before any GitHub call: argv, the box setting, and who
+# is asking. The verb is a SESSION verb, run from a coordinator's own Bash; no server argv builder names it.
+#
+# THE SHAPE OF A HOLD THAT NAMES A PROGRAMME WAVE, held equal to the hook's `CCRC_HOLD_WAVE_RE` by the single-definition
+# pin `ccd AM_HOLD_WAVE_RE is session-hook.sh CCRC_HOLD_WAVE_RE, byte for byte` (server/test/single-definition/
+# vocabularies.test.ts). A caller whose hold matches is a worker (a self-claimed run's hold or a reclaim heir), refused as
+# the hook's worker merge deny refuses it. The bound is the hook's `CCRC_HOLD_MAX`, with its off-by-one argument: a hold
+# read back 128 long may have been cut, so only a value of at most 127 is judged.
+AM_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
+AM_HOLD_MAX=127
+AM_HOLD_READ=128   # the hook's CCRC_ID_MAX: what `_ct_read` reads of a hold, so AM_HOLD_MAX is its off-by-one
+AM_WHO='?'; AM_WHY=""; AM_REPO=""; AM_PR=""; AM_HEAD=""; AM_BASE=""; AM_HOME=""; AM_REG=""; AM_UID=""
+# WHO IS ASKING, AND WHERE THE SWITCH LIVES, ARE DERIVED FROM THE PROCESS, NEVER FROM THE ENVIRONMENT THE CALLER SETS.
+# A command line can carry `TMUX_PANE=%7`, a `TMUX` pointing at a socket of its own making, a `TMUX_TMPDIR`, a `HOME`
+# holding a ccrc.env that says auto, and a `PATH` with a shim in front; the session hook sees none of that once a quoted
+# span hides it, and past its parse cap it sees nothing at all, so the door is the only guard on those paths. So:
+#   - the account's home is the password database's answer for the real uid (`_am_home`), and the registry, the journal
+#     and the setting file all hang off that, never off $HOME;
+#   - the pane is asked of the fleet's one default tmux socket by path (`-S`), which ignores $TMUX and $TMUX_TMPDIR, and
+#     the pane's own process must be this process or an ancestor of it (`_am_ancestor`), so another pane's id on the
+#     command line names a pane this process is not inside, and a server of the caller's own making is never asked;
+#   - tmux, ps, id and getent are looked up on a fixed system PATH (`_am_sys`), not on the caller's.
+# What this does not close: a caller that exports a shell FUNCTION named tmux or ps into the door's environment, a worker
+# that deliberately starts a session of its own named cc-<some coordinator's id> on the real socket, and a caller that
+# edits the installed ccd. Those are a user that is subverting the fleet, not one that is mistaken about it.
+AM_SYS_PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+_am_sys() { PATH="$AM_SYS_PATH" "$@"; }   # <cmd> [args...] -> the command, found on the fixed system PATH (a function of that name still wins)
+_am_home() {   # -> sets AM_UID, AM_HOME and AM_REG from the real uid's password entry; rc 1 = unreadable (all three empty)
+  local line h un
+  AM_UID=""; AM_HOME=""; AM_REG=""
+  AM_UID=$(_am_sys id -u 2>/dev/null) || AM_UID=""
+  [[ "$AM_UID" =~ ^[0-9]+$ ]] || { AM_UID=""; return 1; }
+  h=""
+  line=$(_am_sys getent passwd "$AM_UID" 2>/dev/null) || line=""
+  line=${line%%$'\n'*}
+  IFS=: read -r _ _ _ _ _ h _ <<<"$line"
+  if [[ -z "$h" ]]; then   # no getent (macOS): the directory service's word for this user
+    un=$(_am_sys id -un 2>/dev/null) || un=""
+    [[ "$un" =~ ^[A-Za-z0-9._-]+$ ]] && line=$(_am_sys dscl . -read "/Users/$un" NFSHomeDirectory 2>/dev/null) || line=""
+    h=${line#NFSHomeDirectory: }; h=${h%%$'\n'*}
+  fi
+  [[ "$h" == /* && "$h" != *[[:cntrl:]]* && -d "$h" ]] || { AM_UID=""; return 1; }
+  AM_HOME="${h%/}"; AM_REG="$AM_HOME/.cc-sessions"
+}
+_am_ancestor() {   # <pid> -> rc 0 when <pid> is this process or one of its ancestors
+  local p=$$ n=0 pp
+  while (( n++ < 64 )); do
+    [[ "$p" == "$1" ]] && return 0
+    (( p > 1 )) || return 1
+    pp=$(_am_sys ps -o ppid= -p "$p" 2>/dev/null) || return 1
+    pp=${pp//[[:space:]]/}
+    [[ "$pp" =~ ^[0-9]+$ ]] || return 1
+    p=$pp
+  done
+  return 1
+}
+_am_refuse() {   # <caller> <reason> <detail> -> one REFUSED line on stdout, one journal line, exit 2
+  local who="$1" reason="$2" detail="${3//[[:cntrl:]]/ }"
+  printf 'REFUSED %s: %s\n' "$reason" "$detail"
+  [[ -z "$AM_REG" ]] || echo "$(date '+%F %T') admin-merge-refused $who: $AM_REPO#$AM_PR head=$AM_HEAD reason=$reason" >> "$AM_REG/swap.log" 2>/dev/null || true
+  exit 2
+}
+_am_setting() {   # -> rc 0 = auto; rc 1 = off (AM_WHY); rc 2 = unread, which reads as off (AM_WHY). Never an unbounded read.
+  local lib out
+  AM_WHY=""
+  [[ -n "$AM_HOME" ]] || { AM_WHY="the account's home cannot be read (read as off)"; return 2; }
+  lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"
+  [[ -f "$lib" ]] || lib="$AM_HOME/.local/libexec/ccrc/ccrc-settings.sh"
+  # A SUBSHELL, as `_browser_mcp_box` reads it: the library sets ccrc's own names, which stay out of ccd. Its HOME is the
+  # account's (the library derives the box file from it), not the caller's.
+  # shellcheck disable=SC1090  # the library's path is chosen at run time: beside this ccd, else ~/.local/libexec/ccrc
+  out=$( HOME="$AM_HOME"; if ! { . "$lib" 2>/dev/null && declare -F _ccrc_knob _lnd_ok _lnd_says >/dev/null 2>&1; }; then printf 'noreader'; exit 0; fi
+         # `file`: the operator's fleet-wide switch is read from the box file alone, as the console reads it; a caller's
+         # environment (CCRC_ADMIN_MERGE=auto in front of the verb) never overrides an `off` written there.
+         if ! _ccrc_knob CCRC_ADMIN_MERGE auto file; then printf 'unread %s' "$KNOB_WHY"; exit 0; fi
+         if _lnd_ok CCRC_ADMIN_MERGE "$KNOB"; then printf 'value %s' "$KNOB"
+         else printf 'unread CCRC_ADMIN_MERGE must be %s' "$(_lnd_says CCRC_ADMIN_MERGE)"; fi )
+  case "$out" in
+    'value auto') return 0 ;;
+    'value off')  AM_WHY="CCRC_ADMIN_MERGE is off"; return 1 ;;
+    unread\ *)    AM_WHY="${out#unread } (read as off)"; return 2 ;;
+    *)            AM_WHY="the settings reader (ccrc-settings.sh) is missing or broken (read as off)"; return 2 ;;
+  esac
+}
+_am_who() {   # -> sets AM_WHO (the session id the pane names, or ?) and AM_WHY (why none, else empty); rc 1 = unnamed
+  local out pid tname id
+  AM_WHO='?'; AM_WHY=""
+  [[ -n "$AM_REG" && -n "$AM_UID" ]] || { AM_WHY="the account's home cannot be read"; return 1; }
+  [[ -n "${TMUX_PANE:-}" ]] || { AM_WHY="no tmux pane"; return 1; }
+  [[ "$TMUX_PANE" =~ ^%[0-9]+$ ]] || { AM_WHY="the tmux pane id is not a pane id"; return 1; }
+  # The exact pane, bounded, as the session hook asks it, but on the fleet's one default socket by path (`-S` beats $TMUX
+  # and $TMUX_TMPDIR) and with the pane's own process pid beside its session name.
+  out=$(_am_sys _plat_timeout 2 tmux -S "/tmp/tmux-$AM_UID/default" display-message -p -t "$TMUX_PANE" '#{pane_pid} #S' 2>/dev/null) || out=""
+  pid=${out%% *}; tname=${out#* }
+  [[ "$pid" =~ ^[0-9]+$ && "$tname" == cc-?* ]] || { AM_WHY="tmux names no ccrc session for this pane"; return 1; }
+  _am_ancestor "$pid" || { AM_WHY="the named pane is not the one this command is running in"; return 1; }
+  id="${tname#cc-}"
+  [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || { AM_WHY="the pane's session name is not a session id"; return 1; }
+  [[ -f "$AM_REG/$id.uuid" ]] || { AM_WHY="no registry row for $id"; return 1; }
+  AM_WHO="$id"
+}
+_am_caller() {   # the caller is a coordinator: named by the pane, no child marker, no hold naming a programme wave
+  local id hf h
+  _am_who || _am_refuse '?' caller-unknown "$AM_WHY"
+  id="$AM_WHO"
+  [[ ! -e "$AM_REG/$id.child" && ! -L "$AM_REG/$id.child" ]] \
+    || _am_refuse "$id" not-coordinator "$id carries the child marker"
+  hf="$AM_REG/$id.hold"
+  if [[ -e "$hf" || -L "$hf" ]]; then
+    # READ THE HOLD THE WAY THE HOOK DOES (`_ct_read`): at most AM_HOLD_READ characters, newlines and all (`-N` ignores
+    # the delimiter), then trimmed of leading and trailing whitespace (CR and LF included), and only then the length
+    # bound and the shape. A first-line read that trimmed nothing let ` program:x wave:2`, `program:x wave:2 ` and a
+    # CRLF or leading-newline hold past the one guard an over-cap command has, while the hook calls each a worker's.
+    # Where `_ct_read` answers "unmeasurable" (not a regular readable file) the hook judges nothing; the door, which
+    # is the only guard there, refuses instead: doubt reads as a worker.
+    [[ -f "$hf" && -r "$hf" ]] || _am_refuse "$id" not-coordinator "$id's hold cannot be read"
+    h=""
+    IFS= read -r -N "$AM_HOLD_READ" h 2>/dev/null < "$hf" || true
+    h="${h#"${h%%[![:space:]]*}"}"; h="${h%"${h##*[![:space:]]}"}"
+    if (( ${#h} <= AM_HOLD_MAX )) && [[ "$h" =~ $AM_HOLD_WAVE_RE ]]; then
+      _am_refuse "$id" not-coordinator "$id's hold reads $h"
+    fi
+  fi
+}
+# ── the reads (every one a GET, each judged before the next is made) ───────────────────────────────────────────────
+# Each read is bounded (AM_GH_TIMEOUT), its answer must be exactly the JSON shape named for it before any field is read
+# (the verdict's rule: jq's exit status follows only the last of several values), and a failure of any kind is
+# `unreadable: <which read>`, never a pass. Nothing printed here is GitHub's free text: a refusal names a required check,
+# a number, a method or a base the door already validated.
+AM_GH_TIMEOUT=8
+AM_OUT=""; AM_ALLOW='[]'; AM_METHOD=""; AM_CHECKS=""
+_AM_ONE_OBJ='length == 1 and (.[0] | type) == "object"'
+_AM_PAGES_ARR='length > 0 and all(.[]; type == "array")'
+_AM_PAGES_RUNS='length > 0 and all(.[]; type == "object" and (.check_runs | type) == "array" and all(.check_runs[]; type == "object"))'
+_AM_PAGES_STATUS='length > 0 and all(.[]; type == "object" and (.statuses | type) == "array" and all(.statuses[]; type == "object"))'
+# The rules read: every page an array of rule objects; the two rule types whose parameters are read are typed here, and
+# every required-check entry is a named object (a name with a control character is refused, so it cannot reach a line).
+_AM_RULES_OK='
+  def rsc: .parameters.required_status_checks;
+  def meth: .parameters.allowed_merge_methods;
+  length > 0 and all(.[]; type == "array")
+  and all(.[][]; type == "object" and (.type | type) == "string"
+    and (if .type | IN("required_status_checks", "pull_request") then (.parameters | type) == "object" else true end))
+  and all(.[][] | select(.type == "required_status_checks");
+        (rsc | type) == "array"
+        and all(rsc[]; type == "object" and (.context | type) == "string" and (.context | length) > 0
+          and ((.context | test("[[:cntrl:]]")) | not) and ((.integration_id | type) | IN("null", "number"))))
+  and all(.[][] | select(.type == "pull_request");
+        (.parameters | has("allowed_merge_methods") | not) or ((meth | type) == "array" and all(meth[]; type == "string")))'
+# The classic protection read: one object; the required contexts and the app-pinned checks typed, as the rules'.
+_AM_PROT_OK='
+  .[0] as $p | (
+    ($p.required_status_checks // {}) as $rs
+    | ($rs | type) == "object"
+    and (($rs.checks // []) | type) == "array"
+    and all(($rs.checks // [])[]; type == "object" and (.context | type) == "string" and (.context | length) > 0
+      and ((.context | test("[[:cntrl:]]")) | not) and ((.app_id | type) | IN("null", "number")))
+    and (($rs.contexts // []) | type) == "array"
+    and all(($rs.contexts // [])[]; type == "string" and length > 0 and ((test("[[:cntrl:]]")) | not))
+    and ((($p.required_linear_history // {}) | type) == "object")
+    and ((($p.lock_branch // {}) | type) == "object"))'
+# The repository: admin first (a non-admin answer needs nothing else), then the three merge-method settings, each a
+# boolean (a missing one is unreadable, never false).
+_AM_REPO_JQ='
+  if (.permissions.admin | type) != "boolean" then "unreadable"
+  elif .permissions.admin == false then "not-admin"
+  elif ([.allow_merge_commit, .allow_squash_merge, .allow_rebase_merge] | all(type == "boolean")) | not then "unreadable"
+  else "ok " + ([(if .allow_merge_commit then "merge" else empty end), (if .allow_squash_merge then "squash" else empty end),
+                 (if .allow_rebase_merge then "rebase" else empty end)] | tojson) end'
+# The PR: state, draft, head, base, the review decision, whether it comes from a fork and who opened it, typed before they
+# are read out as seven words. The author is a login (a bot's carries a slash or brackets) or `-` for a deleted account;
+# anything else is unreadable, so no free text of GitHub's reaches a line.
+_AM_PR_JQ='
+  if (.state | IN("OPEN", "CLOSED", "MERGED")) and (.isDraft | type) == "boolean"
+     and (.headRefOid | type) == "string" and (.headRefOid | test("\\A[0-9a-f]{40}\\z"))
+     and (.baseRefName | type) == "string" and (.baseRefName | test("\\A[A-Za-z0-9._/-]+\\z"))
+     and (.baseRefName | startswith("-") | not)
+     and ((.reviewDecision == null) or ((.reviewDecision | type) == "string" and (.reviewDecision | test("\\A[A-Z_]*\\z"))))
+     and (.isCrossRepository | type) == "boolean"
+     and ((.author == null) or ((.author | type) == "object"
+          and ((.author.login | type) == "string" and (.author.login | test("\\A[A-Za-z0-9][A-Za-z0-9._/\\[\\]-]{0,99}\\z")))))
+  then "ok \(.state) \(.isDraft) \(.headRefOid) \(.baseRefName) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end) \(.isCrossRepository) \(if .author == null then "-" else .author.login end)"
+  else "unreadable" end'
+# The identity the fleet's token belongs to: one login, shaped as an author's is.
+_AM_VIEWER_JQ='
+  if (.login | type) == "string" and (.login | test("\\A[A-Za-z0-9][A-Za-z0-9._/\\[\\]-]{0,99}\\z")) then .login else "unreadable" end'
+# The reviews: every entry validated whole, then per identity the latest APPROVED, CHANGES_REQUESTED or DISMISSED review
+# (COMMENTED and PENDING neither clear nor replace one); the requests that stand are the review ids of the identities
+# whose kept review requests changes. An entry with no user is a deleted account: its identity is its own review id.
+# Only numbers come out. There is no ignore key: the door never passes over a request.
+_AM_REVIEWS_JQ='
+  def sint: type == "number" and . == floor and . > 0 and . <= 9007199254740991;
+  if all(.[][]; type == "object" and (.id | sint)
+       and (.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING"))
+       and (.user == null or (.user.id | sint)))
+  then [.[][] | {id, state, user: (if .user == null then null else {id: .user.id} end)}]
+       | [reduce .[] as $e ({}; if $e.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
+              then .[if $e.user == null then "r:\($e.id)" else "u:\($e.user.id)" end] = $e else . end)
+          | .[] | select(.state == "CHANGES_REQUESTED") | .id] | unique | join(",")
+  else error("malformed") end'
+# The required set: the rules'(with their App, integration_id) and the classic protection's (checks with app_id, where
+# -1 is any App, and bare contexts). An App-pinned name keeps its App; the same name unpinned is the same requirement.
+_AM_REQ_JQ='
+  def pin: if . == null or . == -1 then null else . end;
+  [($rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[] | {context, app: (.integration_id | pin)}),
+   ($prot.required_status_checks.checks[]? | {context, app: (.app_id | pin)}),
+   ($prot.required_status_checks.contexts[]? | {context: ., app: null})]
+  | unique | . as $all
+  | map(select(.app != null or (.context as $c | all($all[]; .context != $c or .app == null))))'
+# Each required name judged on the head's check runs and statuses ARRAY (never the combined state), in this order of
+# precedence: red, pending, neutral, skipped, missing. Passing when at least one exists and every run is completed with
+# conclusion success, neutral or skipped (GitHub's own passing set for a required check, and the landing verdict's: a
+# required job a path filter skipped is not in the way of a merge, so it is not in the way of this door either) and every
+# status is success. The journal keeps the word (`lint:skipped`), so a passing skip is never read as a success. An
+# App-pinned name is judged on that App's runs only and no status stands in for it. `ok <name:word,...>` or
+# `bad <name=word, ...>`.
+_AM_JUDGE_JQ='
+  def runs($x): [$cr[] | select(.name == $x.context and ($x.app == null or .app == $x.app))];
+  def sts($x): if $x.app == null then [$st[] | select(.context == $x.context)] else [] end;
+  def word($x): runs($x) as $r | sts($x) as $s
+    | if ($r | length) + ($s | length) == 0 then "missing"
+      elif any($r[]; .status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))
+           or any($s[]; .state | IN("failure", "error")) then "red"
+      elif any($r[]; .status != "completed") or any($s[]; .state != "success") then "pending"
+      elif any($r[]; .conclusion == "neutral") then "neutral"
+      elif any($r[]; .conclusion == "skipped") then "skipped"
+      else "success" end;
+  [$q[] | {n: .context, w: word(.)}] | sort_by(.n) as $j
+  | if ($j | length) == 0 then "ok none-required"
+    elif all($j[]; .w | IN("success", "neutral", "skipped")) then "ok " + ([$j[] | "\(.n):\(.w)"] | join(","))
+    else "bad " + ([$j[] | select(.w | IN("success", "neutral", "skipped") | not) | "\(.n)=\(.w)"] | join(", ")) end'
+# The method set: the repository's three settings, cut by every pull_request rule that names its methods (absent names
+# all three), and without merge under linear history (a rule or classic protection). A merge commit when one is allowed;
+# a squash ONLY when it is the whole set (the ruling: never --squash unless the repository only allows squash); squash
+# beside a rebase with no merge commit is `squash-not-only`, which the door refuses rather than choose; a rebase alone is
+# refused.
+_AM_METHOD_JQ='
+  ($al) as $a
+  | reduce ($rules[] | select(.type == "pull_request") | .parameters | select(has("allowed_merge_methods"))
+            | .allowed_merge_methods | map(ascii_downcase)) as $lim ($a; . - (. - $lim))
+  | if any($rules[]; .type == "required_linear_history") or ($prot.required_linear_history.enabled == true)
+    then . - ["merge"] else . end
+  | if index("merge") != null then "merge" elif . == ["squash"] then "squash"
+    elif index("squash") != null then "squash-not-only"
+    elif index("rebase") != null then "rebase-only" else "method-none" end'
+# What `--admin` gets past that this door does not judge itself. FAIL CLOSED: the ruleset rule types the door reads and
+# judges are the only ones that pass (pull_request, required_status_checks, required_linear_history, merge_queue, which
+# is refused earlier, and the harmless creation, deletion and non_fast_forward); every other type is named and refuses,
+# whether it is one the door knew of (`workflows`, `code_scanning`, `required_deployments`, `required_signatures`), one
+# that freezes or filters the branch (`update`, the commit message, author email and committer email patterns, the file
+# path, file extension and file size limits), or one GitHub adds later. A type is printed only when it is a plain
+# lower-case word, so no free text of GitHub's reaches a line. Conversation resolution (the pull_request rule's
+# `required_review_thread_resolution`, or classic protection's) and classic protection's signed commits and `lock_branch`
+# (a frozen branch, which `--admin` writes to past) are named the same way.
+_AM_UNENFORCED_JQ='
+  [ ($rules[] | select(.type | IN("pull_request", "required_status_checks", "required_linear_history", "merge_queue",
+                                  "creation", "deletion", "non_fast_forward") | not)
+      | .type | if test("\\A[a-z_]{1,40}\\z") then . else "unknown_rule" end),
+    ($rules[] | select(.type == "pull_request" and ((.parameters.required_review_thread_resolution // false) != false)) | "conversation_resolution"),
+    (if (($prot.required_signatures // {}).enabled // false) != false then "required_signatures" else empty end),
+    (if (($prot.required_conversation_resolution // {}).enabled // false) != false then "conversation_resolution" else empty end),
+    (if (($prot.lock_branch // {}).enabled // false) != false then "lock_branch" else empty end) ]
+  | unique | join(",")'
+# Strict up-to-date: a ruleset's `strict_required_status_checks_policy` or classic protection's `required_status_checks.strict`.
+_AM_STRICT_JQ='
+  any($rules[] | select(.type == "required_status_checks") | .parameters.strict_required_status_checks_policy; (. // false) != false)
+  or (($prot.required_status_checks // {}).strict // false) != false'
+
+# The fresh read just before the merge: state, draft, head, base and decision, typed before they are read out as five words.
+# The base is read again because `--match-head-commit` pins the head and not the base: a retarget (by hand, or GitHub's own
+# when a stacked parent merges and its branch goes) leaves the head as it was while every rule-derived verdict was judged
+# against the old base.
+_AM_FRESH_JQ='
+  if (.state | IN("OPEN", "CLOSED", "MERGED")) and (.isDraft | type) == "boolean"
+     and (.headRefOid | type) == "string" and (.headRefOid | test("\\A[0-9a-f]{40}\\z"))
+     and (.baseRefName | type) == "string" and (.baseRefName | test("\\A[A-Za-z0-9._/-]+\\z"))
+     and (.baseRefName | startswith("-") | not)
+     and ((.reviewDecision == null) or ((.reviewDecision | type) == "string" and (.reviewDecision | test("\\A[A-Z_]*\\z"))))
+  then "ok \(.state) \(.isDraft) \(.headRefOid) \(.baseRefName) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)"
+  else "unreadable" end'
+# The read-back: the merge commit id, only when the PR is MERGED at the bound head ($sha); otherwise nothing.
+# shellcheck disable=SC2016  # $sha is a jq variable (--arg), not shell
+_AM_BACK_JQ='
+  if .state == "MERGED" and .headRefOid == $sha and (.mergeCommit | type) == "object"
+     and (.mergeCommit.oid | type) == "string" and (.mergeCommit.oid | test("\\A[0-9a-f]{40}\\z"))
+  then .mergeCommit.oid else "" end'
+
+_am_unreadable() { _am_refuse "$AM_WHO" unreadable "$1"; }
+_am_read() {   # <what> <jq shape> <gh args...> -> AM_OUT = the answer, exactly the shape named, else unreadable naming <what>
+  local what="$1" shape="$2" rc=0
+  shift 2
+  AM_OUT=$(_plat_timeout "$AM_GH_TIMEOUT" gh "$@" 2>/dev/null) || rc=$?
+  (( rc == 0 )) || _am_unreadable "$what"
+  jq -se "$shape" <<<"$AM_OUT" >/dev/null 2>&1 || _am_unreadable "$what"
+}
+_am_protection() {   # <enc base> -> AM_OUT = the classic protection object, or `null` when the branch has none
+  local out rc=0 first code body
+  out=$(_plat_timeout "$AM_GH_TIMEOUT" gh api -i "repos/$AM_REPO/branches/$1/protection" 2>/dev/null) || rc=$?
+  # gh exits 1 for a 4xx and still prints the headers and the body; any other status (a timeout) reads nothing.
+  (( rc == 0 || rc == 1 )) || _am_unreadable "the branch protection read"
+  out=${out//$'\r'/}
+  first=${out%%$'\n'*}
+  [[ "$first" =~ ^HTTP/[0-9.]+\ ([0-9]{3})($|\ ) ]] || _am_unreadable "the branch protection read"
+  code="${BASH_REMATCH[1]}"
+  [[ "$out" == *$'\n\n'* ]] || _am_unreadable "the branch protection read"
+  body="${out#*$'\n\n'}"
+  case "$code" in
+    200) jq -se "$_AM_ONE_OBJ and ($_AM_PROT_OK)" <<<"$body" >/dev/null 2>&1 || _am_unreadable "the branch protection read"
+         AM_OUT=$(jq -c . <<<"$body" 2>/dev/null) || _am_unreadable "the branch protection read" ;;
+    404) jq -se "$_AM_ONE_OBJ and (.[0].message == \"Branch not protected\")" <<<"$body" >/dev/null 2>&1 \
+           || _am_unreadable "the branch protection read"
+         AM_OUT=null ;;
+    401|403) _am_refuse "$AM_WHO" protection-unreadable "branch protection answered $code to an admin read: the token does not carry admin now" ;;
+    *) _am_unreadable "the branch protection read" ;;
+  esac
+}
+_am_reads() {   # -> AM_METHOD and AM_CHECKS when every condition holds; otherwise a REFUSED line and exit 2
+  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead base dec cross author viewer enc rules prot cr st req ids
+  # 1. the repository: admin, and the methods it allows
+  _am_read "the repository read" "$_AM_ONE_OBJ" api "repos/$repo"
+  v=$(jq -r "$_AM_REPO_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
+  case "$v" in
+    not-admin) _am_refuse "$AM_WHO" not-admin "the fleet's GitHub identity is not an admin of $repo" ;;
+    'ok '*)    AM_ALLOW="${v#ok }" ;;
+    *)         _am_unreadable "the repository read" ;;
+  esac
+  # 2. the PR itself
+  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json state,isDraft,headRefOid,baseRefName,reviewDecision,isCrossRepository,author
+  v=$(jq -r "$_AM_PR_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
+  [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
+  read -r _ state draft phead base dec cross author <<<"$v"
+  AM_BASE="$base"   # the base every rule-derived verdict below is judged against; `_am_act` re-reads it
+  [[ "$state" == OPEN ]]  || _am_refuse "$AM_WHO" not-open "the PR is $state"
+  [[ "$draft" == false ]] || _am_refuse "$AM_WHO" draft "the PR is a draft"
+  [[ "$phead" == "$sha" ]] || _am_refuse "$AM_WHO" not-at-head "the PR head is $phead"
+  # 2b. WHOSE PR. The approval --admin stands in for is the human gate against code nobody here wrote, so the door lands
+  # only a PR from a branch of the repository itself, opened by the identity the fleet's own token belongs to (the one
+  # `ccd pr-open` opens as). A fork PR, or one another account opened, is never admin-merged by this door, however green.
+  [[ "$cross" == false ]] || _am_refuse "$AM_WHO" cross-repo "the PR comes from a fork; the door lands only a branch of $repo"
+  _am_read "the identity read" "$_AM_ONE_OBJ" api user
+  viewer=$(jq -r "$_AM_VIEWER_JQ" <<<"$AM_OUT" 2>/dev/null) || viewer=unreadable
+  [[ "$viewer" != unreadable ]] || _am_unreadable "the identity read"
+  [[ "${author,,}" == "${viewer,,}" ]] || _am_refuse "$AM_WHO" not-fleet-pr "the PR was not opened by the fleet's GitHub identity"
+  enc="${base//\//%2F}"
+  # 3. the rules on the base: a merge queue refuses; the required checks, the methods and linear history are kept
+  _am_read "the rules read" "$_AM_RULES_OK" api --paginate "repos/$repo/rules/branches/$enc"
+  rules=$(jq -sc '[.[][]]' <<<"$AM_OUT") || _am_unreadable "the rules read"
+  jq -e 'any(.[]; .type == "merge_queue")' <<<"$rules" >/dev/null 2>&1 \
+    && _am_refuse "$AM_WHO" merge-queue "$base has a merge queue (a merge_queue rule); the queue lands it"
+  # 4. GitHub's own word for a queue on that branch, which a repository can have with no rule in the read above
+  _am_read "the merge queue read" \
+    'length == 1 and (.[0] | type) == "object" and (.[0].errors == null) and (.[0].data.repository | type) == "object" and (.[0].data.repository | has("mergeQueue"))' \
+    api graphql -f 'query=query($o:String!,$r:String!,$b:String!){repository(owner:$o,name:$r){mergeQueue(branch:$b){id}}}' \
+    -f "o=${repo%%/*}" -f "r=${repo#*/}" -f "b=$base"
+  if [[ $(jq -sr '.[0].data.repository.mergeQueue | if . == null then "none" else "queue" end' <<<"$AM_OUT" 2>/dev/null) == queue ]]; then
+    _am_refuse "$AM_WHO" merge-queue "$base has a merge queue (GitHub's mergeQueue read); the queue lands it"
+  fi
+  # 5. classic protection: the required checks and linear history
+  _am_protection "$enc"
+  prot="$AM_OUT"
+  # 5b. what `--admin` would get past and the door does not judge: refused by name; and strict up-to-date, where the head
+  # must not be behind the base (GitHub's compare read: the head is `behind_by` commits behind)
+  v=$(jq -nr --argjson rules "$rules" --argjson prot "$prot" "$_AM_UNENFORCED_JQ" 2>/dev/null) || _am_unreadable "the rules read"
+  [[ -z "$v" ]] || _am_refuse "$AM_WHO" unenforced-rules "$base carries $v, which GitHub enforces at merge but not against --admin"
+  v=$(jq -nr --argjson rules "$rules" --argjson prot "$prot" "$_AM_STRICT_JQ" 2>/dev/null) || _am_unreadable "the rules read"
+  case "$v" in
+    true)  _am_read "the compare read" 'length == 1 and (.[0] | type) == "object" and (.[0].behind_by | type) == "number" and (.[0].behind_by >= 0) and (.[0].behind_by == (.[0].behind_by | floor))' \
+             api "repos/$repo/compare/$enc...$sha?per_page=1"
+           v=$(jq -sr '.[0].behind_by' <<<"$AM_OUT" 2>/dev/null) || _am_unreadable "the compare read"
+           [[ "$v" =~ ^[0-9]+$ ]] || _am_unreadable "the compare read"
+           [[ "$v" == 0 ]] || _am_refuse "$AM_WHO" behind-base "$base requires branches up to date and the head is $v commits behind it" ;;
+    false) ;;
+    *)     _am_unreadable "the rules read" ;;
+  esac
+  # 6. a standing request for changes, by the PR's decision or by a reviewer's latest review
+  _am_read "the reviews read" "$_AM_PAGES_ARR" api --paginate "repos/$repo/pulls/$pr/reviews"
+  ids=$(jq -sr "$_AM_REVIEWS_JQ" <<<"$AM_OUT" 2>/dev/null) || _am_unreadable "the reviews read"
+  if [[ "$dec" == CHANGES_REQUESTED || -n "$ids" ]]; then
+    v=""
+    [[ "$dec" == CHANGES_REQUESTED ]] && v="reviewDecision=CHANGES_REQUESTED"
+    [[ -z "$ids" ]] || v="${v:+$v }reviews=$ids"
+    _am_refuse "$AM_WHO" changes-requested "$v"
+  fi
+  # 7. every required check, on the exact head
+  req=$(jq -nc --argjson rules "$rules" --argjson prot "$prot" "$_AM_REQ_JQ" 2>/dev/null) || _am_unreadable "the rules read"
+  if [[ "$req" == '[]' ]]; then
+    AM_CHECKS="none-required"
+  else
+    _am_read "the check runs read" "$_AM_PAGES_RUNS" api --paginate "repos/$repo/commits/$sha/check-runs?filter=latest"
+    cr=$(jq -sc '[.[].check_runs[] | {name, status, conclusion, app: ((.app // {}) | .id)}]' <<<"$AM_OUT" 2>/dev/null) \
+      || _am_unreadable "the check runs read"
+    _am_read "the commit statuses read" "$_AM_PAGES_STATUS" api --paginate "repos/$repo/commits/$sha/status"
+    st=$(jq -sc '[.[].statuses[] | {context, state}]' <<<"$AM_OUT" 2>/dev/null) || _am_unreadable "the commit statuses read"
+    v=$(jq -nr --argjson q "$req" --argjson cr "$cr" --argjson st "$st" "$_AM_JUDGE_JQ" 2>/dev/null) || _am_unreadable "the check runs read"
+    case "$v" in
+      'ok '*)  AM_CHECKS="${v#ok }" ;;
+      'bad '*) _am_refuse "$AM_WHO" checks-not-green "${v#bad }" ;;
+      *)       _am_unreadable "the check runs read" ;;
+    esac
+  fi
+  # 8. the method: a merge commit when one is allowed, a squash only when it is the only method allowed, never a rebase
+  v=$(jq -nr --argjson rules "$rules" --argjson prot "$prot" --argjson al "$AM_ALLOW" "$_AM_METHOD_JQ" 2>/dev/null) \
+    || _am_unreadable "the rules read"
+  case "$v" in
+    merge|squash) AM_METHOD="$v" ;;
+    squash-not-only) _am_refuse "$AM_WHO" squash-not-only "$base allows a squash and a rebase but no merge commit; the door does not choose between them" ;;
+    rebase-only)  _am_refuse "$AM_WHO" rebase-only "only a rebase merge is allowed on $base; the door does not rebase-merge" ;;
+    method-none)  _am_refuse "$AM_WHO" method-none "no merge method is allowed on $base of $repo" ;;
+    *)            _am_unreadable "the rules read" ;;
+  esac
+}
+cmd_pr_admin_merge() {   # ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>
+  # Fixed arity, no getopt loop and no "$@" passthrough, as `cmd_pr_open` has: pflag is last-wins, so a passthrough would
+  # let a caller override -R, the head pin or the merge flags the door sets itself.
+  [[ $# -eq 6 && $1 == --repo && $3 == --pr && $5 == --head ]] \
+    || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha>"
+  local repo=$2 pr=$4 head=$6 owner name
+  [[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --repo)"
+  owner="${repo%%/*}"; name="${repo#*/}"
+  [[ $owner != -* && $owner != .* && $name != -* && $name != .* ]] \
+    || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --repo)"
+  [[ $pr =~ ^[1-9][0-9]{0,8}$ ]] || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --pr)"
+  [[ $head =~ ^[0-9a-f]{40}$ ]]  || die "usage: ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <sha> (bad --head)"
+  AM_REPO="$repo"; AM_PR="$pr"; AM_HEAD="$head"
+
+  # The account's home first (the registry, the journal and the setting file hang off it); then the caller's name, read only
+  # to LABEL the journal. Whether it may ask is judged after the setting.
+  _am_home || true
+  _am_who || true
+  local src=0
+  _am_setting || src=$?
+  case "$src" in
+    0) ;;
+    1) _am_refuse "$AM_WHO" setting-off "$AM_WHY" ;;
+    *) _am_refuse "$AM_WHO" setting-unread "$AM_WHY" ;;
+  esac
+  _am_caller
+
+  _am_reads
+
+  _am_act
+}
+# THE ONE WRITE. After the reads, one fresh read of the PR (a push, a draft toggle, a review or a close since the first
+# read is caught here), then the single `gh pr merge … --admin --match-head-commit <sha>`: GitHub itself refuses a merge
+# whose head is not <sha>, so a push between this read and the write cannot slip in. Never a second merge call, on any
+# path; a merge gh answered but the read-back cannot prove is `unproven`, reported and not retried. The flag that makes
+# this an admin merge is spelled exactly once in this verb, on that one call.
+_am_act() {   # -> MERGED line (rc 0), or a REFUSED line (exit 2); uses AM_METHOD and AM_CHECKS from `_am_reads`
+  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead pbase dec rc=0 err oid
+  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json headRefOid,baseRefName,reviewDecision,state,isDraft
+  v=$(jq -r "$_AM_FRESH_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
+  [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
+  read -r _ state draft phead pbase dec <<<"$v"
+  [[ "$phead" == "$sha" ]]       || _am_refuse "$AM_WHO" head-moved "the PR head moved to $phead since the checks"
+  [[ "$pbase" == "$AM_BASE" ]]   || _am_refuse "$AM_WHO" base-moved "the PR base moved from $AM_BASE to $pbase since the checks"
+  [[ "$state" == OPEN ]]         || _am_refuse "$AM_WHO" not-open "the PR is $state"
+  [[ "$draft" == false ]]        || _am_refuse "$AM_WHO" draft "the PR is a draft"
+  [[ "$dec" != CHANGES_REQUESTED ]] || _am_refuse "$AM_WHO" changes-requested "reviewDecision=CHANGES_REQUESTED"
+
+  err=$(_plat_timeout "$AM_GH_TIMEOUT" gh pr merge "$pr" -R "$repo" --admin "--$AM_METHOD" --match-head-commit "$sha" 2>&1 >/dev/null) || rc=$?
+  if (( rc == 124 )); then
+    # A timeout proves nothing either way: GitHub may have merged. Reported, never retried.
+    _am_refuse "$AM_WHO" unproven "the merge call timed out; GitHub may have merged (method=$AM_METHOD); not retried"
+  elif (( rc != 0 )); then
+    err=${err%%$'\n'*}
+    err=$(printf '%s' "$err" | LC_ALL=C tr -d '[:cntrl:]' | head -c 200)
+    _am_refuse "$AM_WHO" github-refused "${err:-gh pr merge failed (rc $rc)}"
+  fi
+
+  # The read-back: the PR must read MERGED at the bound head with a merge commit id. Anything else is unproven.
+  rc=0
+  AM_OUT=$(_plat_timeout "$AM_GH_TIMEOUT" gh pr view "$pr" -R "$repo" --json state,headRefOid,mergeCommit 2>/dev/null) || rc=$?
+  oid=""
+  if (( rc == 0 )) && jq -se "$_AM_ONE_OBJ" <<<"$AM_OUT" >/dev/null 2>&1; then
+    oid=$(jq -r --arg sha "$sha" "$_AM_BACK_JQ" <<<"$AM_OUT" 2>/dev/null) || oid=""
+  fi
+  [[ "$oid" =~ ^[0-9a-f]{40}$ ]] \
+    || _am_refuse "$AM_WHO" unproven "gh answered the merge but the read-back does not show MERGED at $sha (method=$AM_METHOD); not retried"
+  echo "$(date '+%F %T') admin-merge $AM_WHO: $repo#$pr head=$sha method=$AM_METHOD checks=$AM_CHECKS result=merged merge=$oid" >> "$AM_REG/swap.log" 2>/dev/null || true
+  printf 'MERGED %s#%s head=%s method=%s merge=%s checks=%s\n' "$repo" "$pr" "$sha" "$AM_METHOD" "$oid" "$AM_CHECKS"
 }
 
 # ── reap guards ────────────────────────────────────────────────────
@@ -47116,6 +47603,7 @@ case "${1:-}" in
   project-add) shift; cmd_project_add "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
+  pr-admin-merge) shift; cmd_pr_admin_merge "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   pr-landing) shift; cmd_pr_landing "$@" ;;
   pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
@@ -47124,6 +47612,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

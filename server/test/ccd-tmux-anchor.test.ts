@@ -448,12 +448,17 @@ const targetSites = (src: string): TSite[] => {
   return out;
 };
 
-/** The three spellings a ccd `-t` may take. `_tmux_t` builds a target from a
+/** The spellings a ccd `-t` may take. `_tmux_t` builds a target from a
  *  registry id; `_tmux_at` anchors a tmux NAME a function already holds; `$t`
  *  is a variable the per-function check below proves was bound from one of
- *  them. Anything else — a bare `$(_tmux …)`, a hand-anchored `=…` (the
- *  colon-less form fails silently on pane commands), a literal — is refused. */
-const ALLOWED_CCD_ARG = /^(?:"\$\(_tmux_t "[^"]*"\)"|"\$\(_tmux_at "[^"]*"\)"|"\$t")$/;
+ *  them. The one named allowance is `"$TMUX_PANE"`: a pane id (`%N`), which
+ *  tmux resolves EXACTLY (no name search, prefix match or fnmatch), so the
+ *  D-3525 hazard of a name falling through to a sibling session cannot arise;
+ *  `_am_who` asks which session the calling pane belongs to, so it holds no
+ *  registry id to build a `_tmux_t` target from. Anything else — a bare
+ *  `$(_tmux …)`, a hand-anchored `=…` (the colon-less form fails silently on
+ *  pane commands), a literal — is refused. */
+const ALLOWED_CCD_ARG = /^(?:"\$\(_tmux_t "[^"]*"\)"|"\$\(_tmux_at "[^"]*"\)"|"\$t"|"\$TMUX_PANE")$/;
 
 /** Every function in ccd/ccd, by its `^name() {` … `^}` text. */
 const functions = (src: string): Map<string, string> => {

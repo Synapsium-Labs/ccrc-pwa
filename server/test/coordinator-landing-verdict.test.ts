@@ -206,7 +206,7 @@ const via3b = with_(bare, { protection: fail(403, 'Resource not accessible by in
 /** The one line a direct route prints when an approval it needs is missing (spec §11, the amendment of 2026-10-25, ruling 5:
  *  no route uses `--admin`, so such a merge could only be refused or pass over the approval by a bypass nobody granted). */
 const approvalMissing = (route: 'G' | 'U'): string =>
-  `STOP approval-missing: route ${route} needs an approval the fleet cannot give, and --admin is never used`;
+  `STOP approval-missing: route ${route} needs an approval the fleet cannot give; only the admin-merge door may land it (D-8124)`;
 
 const ROUTES: Case[] = [
   ['route Q: this repository as measured (§5.7.7), the four classic checks gating the enqueue', measured,
@@ -1716,13 +1716,22 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
       const [line, ...rest] = r.out.split('\n').filter(Boolean);
       expect(rest, 'the verdict printed more than one line').toEqual([]);
       expect(line, 'a line that names admin=licensed').not.toContain('admin=licensed');
-      // The one line allowed to name --admin is the stop that says it is never used.
-      if (line!.startsWith('ROUTE')) expect(line).not.toContain('--admin');
-      else if (line!.includes('--admin')) expect(line).toMatch(/^STOP approval-missing: route [GU] needs an approval the fleet cannot give, and --admin is never used$/);
+      // No line the verdict prints spells --admin: the stop names the admin-merge door in words (D-8124).
+      expect(line, 'a line that spells --admin').not.toContain('--admin');
+      if (!line!.startsWith('ROUTE')) expect(line).toMatch(/^STOP approval-missing: route [GU] needs an approval the fleet cannot give; only the admin-merge door may land it \(D-8124\)$/);
       for (const c of r.calls) {
         expect(c, 'a call carries --admin').not.toContain('--admin');
         expect(c, 'a call names a ruleset by id').not.toContain('rulesets');
       }
+    }
+  });
+
+  it('every ROUTE line still prints admin=never: the admin-merge door is not a route (D-8124)', () => {
+    const routes = ROUTES.filter(([, , line]) => line.startsWith('ROUTE'));
+    expect(routes.length, 'the ROUTE cases are gone').toBeGreaterThan(3);
+    for (const [name, fx, line, env] of routes) {
+      expect(line, name).toMatch(/^ROUTE [QGU] method=\w+ admin=never strict=\w+$/);
+      expect(verdict(fx(), env).out, name).toBe(`${line}\n`);
     }
   });
 
@@ -1732,10 +1741,9 @@ describe('the landing verdict block (landing-order wave 3e, spec §5.7)', () => 
     expect(b).not.toContain('admin=licensed');
     expect(b).not.toContain('licence-fails');
     expect(b).not.toContain('current_user_can_bypass');
-    // The only code line that spells --admin is the stop that says it is never used (comment lines are dropped).
-    expect(codeLines(b).filter((l) => l.includes('--admin')).map((l) => l.trim())).toEqual([
-      'stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"']);
-    expect(b).toContain('stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"');
+    // No code line spells --admin (comment lines are dropped); the stop sends the landing to the admin-merge door in words.
+    expect(codeLines(b).filter((l) => l.includes('--admin'))).toEqual([]);
+    expect(b).toContain('stop "approval-missing: route $route needs an approval the fleet cannot give; only the admin-merge door may land it (D-8124)"');
     expect(b).toContain('say "ROUTE $route method=$method admin=never strict=$strict"');
   });
 

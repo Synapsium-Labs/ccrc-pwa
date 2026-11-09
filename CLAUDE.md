@@ -308,7 +308,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   the queue's base), no node floor or agent tests, and the pwa suite whole; on a pull request without `full-ci`, no
   agent tests, pwa typecheck, pwa build or Storybook. Every skip is by step, so the required checks still report. The queue is the
   safety net for everything the fast run leaves out, so nobody bypasses it: an admin merge that skips the queue
-  (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it. **The macOS legs** (`test-macos`, `probe-macos`)
+  (`gh pr merge --admin`; the ruleset's admin bypass allows it) lands on the fast run only, so never use it; ccrc's admin-merge door (D-8124) refuses any repository with a merge queue, so it never lands here. **The macOS legs** (`test-macos`, `probe-macos`)
   live in `.github/workflows/macos.yml`, off the merge path and off the push to `main` (2026-11-02): the daily run calls them (their nightly run), a dispatched
   or called full run (release-stable's gate) runs the tests, and `gh workflow run macos.yml` runs both on demand; a red
   one is a failing run on `main`, never a PR's or a queue entry's. **CodeQL** is an advanced setup (`.github/workflows/codeql.yml`, D-7744), not GitHub's default setup: it scans every pull request to `main` and `main` once a day, never a push to `main` and never the merge queue, and it feeds no required check. **A merge

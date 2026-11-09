@@ -1286,12 +1286,14 @@ case "$w" in
   *) stop "unreadable: read 5" ;;
 esac
 
-# The route (§5.7.4). No route uses --admin: --admin and GitHub API merge or enqueue calls are governed by the
-# repository's external policy authority, and until that authority answers (wave 2b) a coordinator never uses them
-# (spec §11, the amendment of 2026-10-25, ruling 5, which supersedes the approval licence). So a direct route that
-# needs an approval the fleet cannot give, and finds it missing, stops here, whether or not a request stands: without
-# --admin that merge could only be refused, or pass over the approval by a bypass no authority has granted. A required
-# approval is missing unless read 1's reviewDecision is exactly APPROVED: any other value, empty or absent, is missing.
+# The route (§5.7.4). No route uses --admin: a coordinator never passes --admin to the merge command and never makes
+# a GitHub API merge or enqueue call itself (spec §11, the amendment of 2026-10-25, ruling 5, which supersedes the
+# approval licence). On 2026-11-09 the operator answered for the policy authority (D-8124): one admin-merge door,
+# `ccd pr-admin-merge`, may land a PR whose only stop is this one, and it is not a route, so the ROUTE lines keep
+# admin=never. So a direct route that needs an approval the fleet cannot give, and finds it missing, stops here,
+# whether or not a request stands: a route's merge could only be refused, or pass over the approval by a bypass. A
+# required approval is missing unless read 1's reviewDecision is exactly APPROVED: any other value, empty or absent,
+# is missing.
 if [ "$route" != Q ]; then
   if [ "$req" != "[]" ] || [ -n "$gates" ]; then route=G; else route=U; fi
 fi
@@ -1301,7 +1303,7 @@ missing=$(jq -nr --argjson r "$rules" --argjson p "$prot" --argjson pr "$r1" '
   elif $pr.reviewDecision == "APPROVED" then "no"
   else "yes" end') || stop "unreadable: the approval"
 if [ "$route" != Q ] && [ "$missing" = yes ]; then
-  stop "approval-missing: route $route needs an approval the fleet cannot give, and --admin is never used"
+  stop "approval-missing: route $route needs an approval the fleet cannot give; only the admin-merge door may land it (D-8124)"
 fi
 say "ROUTE $route method=$method admin=never strict=$strict"
 )
@@ -1437,22 +1439,26 @@ Outside these two doors, only an explicit operator instruction to start another
 attempt authorizes one: never infer it from an ignore answer or from automation,
 and no report, rerun, fresh route or passage of time is one.
 
-**No `--admin`.** `--admin` and GitHub API merge or enqueue calls are governed
-by the repository's external policy authority; until that authority answers
-(wave 2b), a coordinator never uses them (spec §11, the amendment of 2026-10-25,
-ruling 5). That ruling supersedes the approval licence of spec §5.7.4 and §11
+**No `--admin`.** A coordinator never passes `--admin` to gh and never makes a
+GitHub API merge or enqueue call itself (spec §11, the amendment of 2026-10-25,
+ruling 5, and its amendment of 2026-11-09, D-8124): no route passes `--admin`,
+and the one admin merge there is, `ccd pr-admin-merge`, is a door that checks
+for itself, never a route and never a fallback (**The admin-merge door
+(D-8124)**, below). The ruling of 2026-10-25 supersedes the approval licence of
+spec §5.7.4 and §11
 item 10, so no answer read here licenses `--admin`: not a missing approval, not
 `enforce_admins`, and not a ruleset's `current_user_can_bypass`, which the
 verdict no longer reads. A direct route that needs an approval the fleet cannot
 give, and finds it missing (a `pull_request` rule's, or classic protection's,
 `required_approving_review_count` above 0, and `reviewDecision` anything but
 `APPROVED`), stops `approval-missing` before any merge, whether or not a request
-for changes stands, an ignored one included: without `--admin` that merge could
-only be refused, or pass over the approval by a bypass the external authority
-has not granted. Under read 3b classic protection's approvals cannot be read, so
-there GitHub's refusal is the stop, `github-refused`. Route Q is unchanged: its
-enqueue never passes `--admin`. And `--admin` is never a fallback: a fallback is
-`--admin` after a refusal.
+for changes stands, an ignored one included: a route's merge could only be
+refused, or pass over the approval by a bypass, and only the door below may land
+it. Under read 3b classic protection's approvals cannot be read, so there
+GitHub's refusal is the stop, `github-refused`. Route Q is unchanged: its
+enqueue never passes `--admin`, and a repository with a merge queue lands
+through it, never through the door. And `--admin` is never a fallback: a
+fallback is `--admin` after a refusal.
 
 **On every route** the merge is proven as step 3 proves it: MERGED, or CLOSED
 with `landedInTrain: true` on the PR's row of `ccd pr-state --session
@@ -1529,6 +1535,29 @@ missing entry. A read answered 404 comes from a server older than the line: read
 it as no entry, and land the same way. The order it answers is read and not yet
 acted on: which entry lands next is the line's head, a later stage's.
 
+**The admin-merge door (D-8124).** On `STOP approval-missing`, and on no other
+line, once the landing line (above) answers `pinned` at the head you bind, run
+`ccd pr-admin-merge --repo <owner/repo> --pr <pr> --head <handoffCommit>` once,
+from your own session, in the foreground. It checks for itself that the setting
+is on, that you are a coordinator, that the fleet's GitHub identity is an admin
+of the repository, that its base has no merge queue, that the PR is open, not a
+draft and at that head, that it is a PR from a branch of the repository itself
+and opened by the fleet's own GitHub identity (a fork PR or another account's PR
+is refused, whatever its checks read), that no review requests changes, that every required
+check passes on that head (a skipped or neutral one counts, as GitHub counts it),
+that its base carries no rule the door cannot judge (it refuses any ruleset rule
+type it does not read, such as required workflows, code scanning, deployments,
+signed commits, a branch lock or update restriction, and commit or file
+patterns, and classic signed commits, branch lock and conversation resolution) and, where strict
+up-to-date applies, that the head is not behind the base, and that the repository
+allows a merge commit or allows only a squash; it then merges with that method,
+pinned to the head, and journals it. Its one line decides: `MERGED …` is proven
+as every route is (MERGED at `handoffCommit`, step 3); `REFUSED <reason>: …`
+leaves the stop standing, reported as `approval-missing` with the door's line;
+`unproven` is reported, never retried. Never run it twice for one attempt, never
+after `github-refused`, `changes-requested` or any other stop, and never in
+place of route Q: a repository with a merge queue lands through it.
+
 **A stop.** A stop enqueues nothing and merges nothing. It leaves the run where
 it is (at `merging` or `awaiting-review`) and changes nothing, with one
 exception, the new-head route below. Say in your turn's text which stop fired
@@ -1539,7 +1568,10 @@ of these reasons: `unreadable`, `read-3b-unknowable`, `not-at-head`,
 `queue-method-not-allowed`, `two-queue-methods`, `auto-merge-off`,
 `unverifiable`, `not-reported`, `changes-requested`, `approval-missing`. A
 `changes-requested` stop is read before `WAIT` and `RED` on every route and is
-the operator's to decide, as **A requested change** above says. Four stops no
+the operator's to decide, as **A requested change** above says. An
+`approval-missing` stop goes to the admin-merge door first, once (**The
+admin-merge door (D-8124)**, above): a `MERGED` line leaves no stop, and a
+`REFUSED` one is reported to the operator with the door's line. Four stops no
 read decides are yours to name: `red-unreachable` (above), `verdict-unread`
 (above), `checks-gate-unread` (step 3) and `github-refused`, a merge GitHub
 refused for a rule it enforces at merge and this session does not verify —
