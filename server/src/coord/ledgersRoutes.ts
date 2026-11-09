@@ -451,6 +451,14 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     }
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
+    // The definition of done is operator-only (O3): a pin sets it only while none is stored; a different list over a stored
+    // one is a modification, which cites a ruling or an item (`goals modify`) and leaves a dated row.
+    if (doneWhen !== null) {
+      const stored = coord.goalsFor(slug).doneWhen ?? null;
+      if (stored !== null && JSON.stringify(stored) !== JSON.stringify(doneWhen)) {
+        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'this programme already has a definition of done; change it with goals modify, citing a ruling or an itemId' });
+      }
+    }
     coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen);
     changed();
     return reply.code(200).send({ ok: true });
@@ -653,8 +661,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
       const session = deps.sessionAuth(req);
       if (session.reason === 'session') return undefined;
       if (checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'GET /api/programmes/:slug/goals') === 'ok') return undefined;
-      return reply.code(401).send({
-        ok: false, error: 'unauthenticated', verdict: session.verdict,
+      return refuseRoute(reply, 'unauthenticated', {
+        verdict: session.verdict,
         detail: `this read takes a session cookie OR the box token (${MAIL_TOKEN_HEADER})`,
       });
     },
