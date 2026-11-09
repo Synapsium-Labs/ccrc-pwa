@@ -38,6 +38,7 @@ the HTTP status, every response header in the order Linear sent it, the parsed `
 | `error-401-invalid-key` | a made-up key of the right shape | `KEY_CHECK_QUERY` |
 | `error-401-revoked-key` | the capture's own key, after the operator revoked it | `KEY_CHECK_QUERY` |
 | `error-429-ratelimited-constructed` | **constructed, not recorded**: see below | `KEY_CHECK_QUERY` |
+| `mutation-attachment-link-url-constructed` | **constructed, not recorded**: see below | `LINEAR_DOCUMENTS.link` |
 
 ## What the fixtures show
 
@@ -89,6 +90,15 @@ developer documentation, the page titled "Rate limiting" (read 2026-11-02). That
 
 Its request limit (2500) is the recorded one. Its remaining count, reset time and `Retry-After` value are made-up
 examples, and its message is ours. The file's `constructed` field says the same.
+
+## The constructed link answer
+
+`mutation-attachment-link-url-constructed.json` was **not recorded** (D-8141). The capture ran before the `link` verb
+existed. It is built from the document `ops.ts` sends and Linear's published schema for `attachmentLinkURL` (an issue id,
+a URL, an optional title; the payload carries `success` and the `attachment`). Its attachment id is a fixture id, and its
+complexity and rate-limit headers are copied from the recorded comment mutation as illustrative values. It is to be
+replaced by a recorded `mutation-attachment-link-url.json` against a throwaway issue, after which the exception in
+`linear-fixtures.test.ts` goes. The file's `constructed` field says the same.
 
 ## The scrub
 

@@ -75,7 +75,7 @@ const ERROR_TABLE_ROWS = [
 const RECORDED_DOCUMENT = {
   issue: 'read-issue', search: 'read-search', comments: 'read-comments', statuses: 'read-statuses', projects: 'read-projects',
   labels: 'read-labels', users: 'read-users', create: 'mutation-issue-create', update: 'mutation-issue-update',
-  comment: 'mutation-comment-create', resolveIssue: 'resolve-issue', resolveIssueAndParent: 'resolve-issue-and-parent',
+  comment: 'mutation-comment-create', link: 'mutation-attachment-link-url-constructed', resolveIssue: 'resolve-issue', resolveIssueAndParent: 'resolve-issue-and-parent',
   resolveParent: 'resolve-parent', directoryStates: 'directory-states-page-1', directoryLabels: 'directory-labels-page-1',
   directoryProjects: 'directory-projects-page-1', directoryUsers: 'directory-users-page-1',
 } as const satisfies Record<keyof typeof LINEAR_DOCUMENTS, string>;
@@ -140,20 +140,22 @@ const shaped = (op: LinearVerb, body: unknown, ctx: LinearShapeContext = SHAPE):
 const issueOf = (node: Record<string, unknown>, ctx: LinearShapeContext = SHAPE): Record<string, unknown> =>
   shaped('issue', { data: { issue: node } }, ctx)['issue'] as Record<string, unknown>;
 
+const PR_URL = 'https://github.com/example-org/example-repo/pull/1';
+
 // ── the table ──
 
 describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (spec §6.4)', () => {
   it('has exactly one row per verb, keyed by it, in the verb list', () => {
     expect(Object.keys(LINEAR_OPS)).toEqual([...LINEAR_VERBS]);
     for (const v of LINEAR_VERBS) expect(LINEAR_OPS[v].op).toBe(v);
-    expect(LINEAR_VERBS).toHaveLength(12);
+    expect(LINEAR_VERBS).toHaveLength(13);
   });
 
-  it('a row\'s class is its own, never its method\'s: the three writes are write, search is a read although it POSTs', () => {
+  it('a row\'s class is its own, never its method\'s: the four writes are write, search is a read although it POSTs', () => {
     const classes = Object.fromEntries(LINEAR_VERBS.map((v) => [v, LINEAR_OPS[v].class]));
     expect(classes).toEqual({
       workspaces: 'read', teams: 'read', issue: 'read', search: 'read', comments: 'read', statuses: 'read', projects: 'read',
-      labels: 'read', users: 'read', create: 'write', update: 'write', comment: 'write',
+      labels: 'read', users: 'read', create: 'write', update: 'write', comment: 'write', link: 'write',
     });
     expect(LINEAR_OPS.search.method).toBe('POST');
   });
@@ -163,9 +165,9 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
     expect(q).toEqual({
       workspaces: [], teams: ['workspace'], issue: ['workspace'], search: ['workspace'], comments: ['workspace', 'limit', 'after'],
       statuses: ['team', 'workspace'], projects: ['team', 'workspace', 'limit', 'after'], labels: ['team', 'workspace'],
-      users: ['workspace', 'limit', 'after'], create: ['workspace'], update: ['workspace'], comment: ['workspace'],
+      users: ['workspace', 'limit', 'after'], create: ['workspace'], update: ['workspace'], comment: ['workspace'], link: ['workspace'],
     });
-    expect(LINEAR_VERBS.filter((v) => LINEAR_OPS[v].ref)).toEqual(['issue', 'comments', 'update', 'comment']);
+    expect(LINEAR_VERBS.filter((v) => LINEAR_OPS[v].ref)).toEqual(['issue', 'comments', 'update', 'comment', 'link']);
   });
 
   it('only workspaces and teams are answered from the store, with no document and no Linear call', () => {
@@ -187,7 +189,7 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
   });
 
   it('a mutation appears only as a write row\'s operation document, one per row, and never in a resolve or a read', () => {
-    const MUTATIONS = ['issueCreate', 'issueUpdate', 'commentCreate'];
+    const MUTATIONS = ['issueCreate', 'issueUpdate', 'commentCreate', 'attachmentLinkURL'];
     const mutationsIn = (d: string): string[] => MUTATIONS.filter((m) => new RegExp(`\\b${m}\\(`).test(d));
     for (const v of LINEAR_VERBS) {
       const row = LINEAR_OPS[v];
@@ -206,8 +208,8 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
       }
     }
     for (const c of LINEAR_DIRECTORY_COLLECTIONS) expect(LINEAR_DIRECTORY_DOCUMENTS[c].startsWith('query '), c).toBe(true);
-    expect([callRow('create'), callRow('update'), callRow('comment')].map((r) => mutationsIn(r.document)[0]))
-      .toEqual(['issueCreate', 'issueUpdate', 'commentCreate']);
+    expect([callRow('create'), callRow('update'), callRow('comment'), callRow('link')].map((r) => mutationsIn(r.document)[0]))
+      .toEqual(['issueCreate', 'issueUpdate', 'commentCreate', 'attachmentLinkURL']);
   });
 
   it('the resolve selects the issue\'s id, its current identifier and its current team, and the parent\'s in the same document', () => {
@@ -217,12 +219,15 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
     expect(LINEAR_DOCUMENTS.resolveParent.match(SELECTS)).toHaveLength(1);
     expect(callRow('update').resolves).toEqual([LINEAR_DOCUMENTS.resolveIssue, LINEAR_DOCUMENTS.resolveIssueAndParent]);
     expect(callRow('comment').resolves).toEqual([LINEAR_DOCUMENTS.resolveIssue]);
+    expect(callRow('link').resolves).toEqual([LINEAR_DOCUMENTS.resolveIssue]);
     expect(callRow('create').resolves).toEqual([LINEAR_DOCUMENTS.resolveParent]);
     for (const v of LINEAR_VERBS) if (LINEAR_OPS[v].class === 'read' && LINEAR_OPS[v].source === 'linear') expect(callRow(v).resolves, v).toEqual([]);
   });
 
   it('the resolve plan: update and comment resolve the issue, a parent rides the same document, a create with no parent resolves nothing', () => {
     expect(linearResolvePlan(valid('comment', { ref: 'AAA-12', body: { body: 'x' } })))
+      .toEqual({ document: LINEAR_DOCUMENTS.resolveIssue, variables: { id: 'AAA-12' }, issue: true, parent: false });
+    expect(linearResolvePlan(valid('link', { ref: 'AAA-12', body: { url: PR_URL } })))
       .toEqual({ document: LINEAR_DOCUMENTS.resolveIssue, variables: { id: 'AAA-12' }, issue: true, parent: false });
     expect(linearResolvePlan(valid('update', { ref: 'AAA-12', body: { title: 'x' } })))
       .toEqual({ document: LINEAR_DOCUMENTS.resolveIssue, variables: { id: 'AAA-12' }, issue: true, parent: false });
@@ -257,7 +262,7 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
     }
     // The recorded values themselves (README.md's table), so a re-capture that changes one is seen here.
     expect(Object.fromEntries(Object.entries(RECORDED_DOCUMENT).map(([n, f]) => [n, recordedComplexity(f)]))).toEqual({
-      issue: 10, search: 12, comments: 6, statuses: 601, projects: 60, labels: 575, users: 65, create: 11, update: 11, comment: 3,
+      issue: 10, search: 12, comments: 6, statuses: 601, projects: 60, labels: 575, users: 65, create: 11, update: 11, comment: 3, link: 3,
       resolveIssue: 3, resolveIssueAndParent: 5, resolveParent: 3,
       directoryStates: 901, directoryLabels: 875, directoryProjects: 600, directoryUsers: 651,
     });
@@ -360,11 +365,12 @@ describe('LINEAR_OPS: one row per verb, the allow-list of what the key can run (
 // ── the validators ──
 
 describe('the closed body validators (spec §5.2, §5.3)', () => {
-  const BODIES: Record<'search' | 'create' | 'update' | 'comment', { ref?: string; body: Record<string, unknown> }> = {
+  const BODIES: Record<'search' | 'create' | 'update' | 'comment' | 'link', { ref?: string; body: Record<string, unknown> }> = {
     search: { body: { team: 'AAA', text: 'login' } },
     create: { body: { team: 'AAA', title: 'A title' } },
     update: { ref: 'AAA-12', body: { title: 'A title' } },
     comment: { ref: 'AAA-12', body: { body: 'A comment' } },
+    link: { ref: 'AAA-12', body: { url: PR_URL } },
   };
 
   it('each POST verb takes the fields §5.3 names', () => {
@@ -414,6 +420,28 @@ describe('the closed body validators (spec §5.2, §5.3)', () => {
     for (const body of [null, [], 'text', 3]) {
       expect(validateLinearCall('comment', { ref: 'AAA-12', body })).toEqual({ ok: false, word: 'bad-request', field: 'body' });
     }
+  });
+
+  it('link takes a GitHub pull-request or issue URL and nothing else (D-8141)', () => {
+    const refused = (url: unknown): unknown => validateLinearCall('link', { ref: 'AAA-12', body: { url } });
+    const bad = { ok: false, word: 'bad-field', field: 'url' };
+    expect(valid('link', { ref: 'AAA-12', body: { url: PR_URL } }).fields).toEqual({ url: PR_URL });
+    expect(valid('link', { ref: 'AAA-12', body: { url: 'https://github.com/example-org/example-repo/issues/7', title: 'T' } }).fields)
+      .toEqual({ url: 'https://github.com/example-org/example-repo/issues/7', title: 'T' });
+    for (const u of [
+      'http://github.com/example-org/example-repo/pull/1', 'https://gitlab.com/example-org/example-repo/pull/1',
+      'https://github.com.evil.example/example-org/example-repo/pull/1', 'https://evil.example/https://github.com/a/b/pull/1',
+      `https://user${'@'}github.com/example-org/example-repo/pull/1`, 'https://github.com:8443/example-org/example-repo/pull/1',
+      'https://github.com/example-org/example-repo/pull/1?x=1', 'https://github.com/example-org/example-repo/pull/1#c',
+      'https://github.com/example-org/example-repo/pull/1/files', 'https://github.com/example-org/example-repo/pull/0',
+      'https://github.com/example-org/example-repo/commit/abc', 'https://github.com/example-org/example-repo', 'https://github.com/a/b/pull/x',
+      `https://linear${'.'}app/ws-a/issue/AAA-12`, 'javascript:alert(1)', '', 3, null,
+      `https://github.com/example-org/${'r'.repeat(101)}/pull/1`,
+      `https://github.com/example-org/${'r'.repeat(100)}/pull/1`.replace('pull/1', 'pull/1'.padEnd(200, '0')),
+    ]) expect(refused(u), String(u)).toEqual(bad);
+    expect(validateLinearCall('link', { ref: 'AAA-12', body: {} })).toEqual(bad);
+    expect(validateLinearCall('link', { ref: 'AAA-12', body: { url: PR_URL, title: '' } })).toEqual({ ok: false, word: 'bad-field', field: 'title' });
+    expect(validateLinearCall('link', { ref: 'AAA-12', body: { url: PR_URL, body: 'x' } })).toEqual({ ok: false, word: 'bad-field', field: 'body' });
   });
 
   it('the bounds of §5.3', () => {
@@ -527,10 +555,20 @@ describe('the variables: resolved UUIDs, names through the directory (spec §4.4
     expect(JSON.stringify(upd)).not.toMatch(/AAA-1\b/);
   });
 
+  it('link sends the resolved issue id, the URL and the title when there is one, and the journal names exactly those', () => {
+    expect(varsOf('link', valid('link', { ref: 'AAA-12', body: { url: PR_URL } }))).toEqual({ issueId: ISSUE_ID, url: PR_URL });
+    expect(varsOf('link', valid('link', { ref: 'AAA-12', body: { url: PR_URL, title: 'A pull request' } })))
+      .toEqual({ issueId: ISSUE_ID, url: PR_URL, title: 'A pull request' });
+    const r = callRow('link').variables(valid('link', { ref: 'AAA-12', body: { url: PR_URL, title: 't' } }), ctxOf());
+    expect(r).toMatchObject({ ok: true, fields: ['url', 'title'] });
+    expect(JSON.stringify(r)).not.toContain('AAA-12');
+  });
+
   it('a write built before its resolve is the route\'s fault, never a call', () => {
     const none = ctxOf({ resolved: null });
     expect(callRow('update').variables(valid('update', { ref: 'AAA-12', body: { title: 't' } }), none)).toEqual({ ok: false, word: 'unresolved' });
     expect(callRow('comment').variables(valid('comment', { ref: 'AAA-12', body: { body: 'x' } }), none)).toEqual({ ok: false, word: 'unresolved' });
+    expect(callRow('link').variables(valid('link', { ref: 'AAA-12', body: { url: PR_URL } }), none)).toEqual({ ok: false, word: 'unresolved' });
     expect(callRow('create').variables(valid('create', { body: { team: 'AAA', title: 't', parent: 'AAA-1' } }), none))
       .toEqual({ ok: false, word: 'unresolved' });
   });
@@ -806,6 +844,17 @@ describe('the shapers: Linear\'s text is data, fenced and stripped (spec §5.4, 
     expect(callRow('comment').shape({ data: { commentCreate: { success: true, comment: { id: COMMENT_ID, createdAt: '2026-10-31T10:00:00Z' } } } }, SHAPE))
       .toEqual({ ok: true, result: COMMENT_ID, answer: { comment: { createdAt: '2026-10-31T10:00:00Z' } } });
     expect(callRow('create').shape({ data: { issueCreate: { success: false, issue: null } } }, SHAPE)).toEqual({ ok: false, word: 'unreachable' });
+  });
+
+  it('a link answers {linked: true} and gives the journal the attachment id; the constructed fixture shapes the same way', () => {
+    const ATTACHMENT = '33333333-4444-4000-8000-000000000002';
+    expect(callRow('link').shape({ data: { attachmentLinkURL: { success: true, attachment: { id: ATTACHMENT } } } }, SHAPE))
+      .toEqual({ ok: true, result: ATTACHMENT, answer: { linked: true } });
+    expect(callRow('link').shape(linearRecord('mutation-attachment-link-url-constructed').body, SHAPE))
+      .toMatchObject({ ok: true, answer: { linked: true } });
+    expect(callRow('link').shape({ data: { attachmentLinkURL: { success: false, attachment: null } } }, SHAPE)).toEqual({ ok: false, word: 'unreachable' });
+    expect(callRow('link').shape({ data: { attachmentLinkURL: { success: true, attachment: { id: 'x' } } } }, SHAPE)).toEqual({ ok: false, word: 'malformed' });
+    expect(callRow('link').shape({ data: {} }, SHAPE)).toEqual({ ok: false, word: 'malformed' });
   });
 
   it('teams and workspaces, answered from the store, clean every name', () => {

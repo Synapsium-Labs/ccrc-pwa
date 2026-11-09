@@ -126,9 +126,9 @@ describe('every route\'s onRequest holds the token check, and nothing in the fil
   const registrations = calls.filter((c) => c.callee === 'app.get' || c.callee === 'app.post');
   const tokenChecks = calls.filter((c) => c.name === 'checkMailToken');
 
-  it('twelve registrations, each passing its own token verdict, for its own lane, to the options that build onRequest', () => {
+  it('thirteen registrations, each passing its own token verdict, for its own lane, to the options that build onRequest', () => {
     expect(registrations.map((r) => `${r.name!.toUpperCase()} ${r.args[0]!.text}`).sort()).toEqual(Object.values(LINEAR_PROXY_ROUTES).sort());
-    expect(tokenChecks, 'a token check outside the twelve registrations').toHaveLength(12);
+    expect(tokenChecks, 'a token check outside the thirteen registrations').toHaveLength(13);
     for (const r of registrations) {
       const key = `${r.name!.toUpperCase()} ${r.args[0]!.text}`;
       const own = tokenChecks.filter((t) => t.start >= r.start && t.end <= r.end);

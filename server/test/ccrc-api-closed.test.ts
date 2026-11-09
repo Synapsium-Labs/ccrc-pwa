@@ -151,6 +151,7 @@ describe('the corpora no longer invoke curl', () => {
       'linear.create',
       'linear.issue',
       'linear.labels',
+      'linear.link',
       'linear.search',
       'linear.statuses',
       'linear.update',
@@ -357,6 +358,7 @@ describe('the client stays closed', () => {
     // each takes the caller's own body, `byId` and `byUuid` included, and fills none, so the two fills below stay two.
     // `leases.retain` (delegation broker wave 5, PR8) took it to fifty-eight; it takes the caller's own body and fills none.
     // `runs.review-rounds` (the coordinator's review-cap extension, D-8125) took it to fifty-nine; it takes the caller's own body and fills none.
+    // `linear.link` (D-8141) took it to sixty; it takes the caller's own body and fills none.
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -365,7 +367,7 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(59);
+    expect(routeKeys().size).toBe(60);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
@@ -470,13 +472,14 @@ describe('the Linear rows: identity in the query on every row, the body as the c
     [['linear', 'create', '--json', '-'], 'POST', '/api/linear/proxy/issues', ''],
     [['linear', 'update', 'AAA-12', '--json', '-'], 'POST', '/api/linear/proxy/issues/AAA-12', ''],
     [['linear', 'comment', 'AAA-12', '--json', '-'], 'POST', '/api/linear/proxy/issues/AAA-12/comments', ''],
+    [['linear', 'link', 'AAA-12', '--json', '-'], 'POST', '/api/linear/proxy/issues/AAA-12/links', ''],
   ];
   const linearRows = (): ReturnType<typeof clientRoutes> => clientRoutes().filter((r) => r.key.startsWith('linear.'));
   const POSTS = CALLS.filter(([, m]) => m === 'POST');
 
-  it('the twelve Linear rows are exactly the calls below, read through clientRoutes()', () => {
+  it('the thirteen Linear rows are exactly the calls below, read through clientRoutes()', () => {
     expect(linearRows().map((r) => r.key).sort()).toEqual(CALLS.map(([a]) => `${a[0]}.${a[1]}`).sort());
-    expect(linearRows()).toHaveLength(12);
+    expect(linearRows()).toHaveLength(13);
   });
 
   it.each(CALLS)('%s sends %s %s with the pane\'s identity last in the query', async (args, method, p, q) => {
