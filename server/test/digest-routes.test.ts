@@ -4,6 +4,8 @@
 // Both are session-gated when armed and carry no box token. The fixture is the approvals lane's (a fixture HOME, a
 // real store, the real server); neutral ids only.
 import { describe, it, expect, afterEach } from 'vitest';
+import { Bus } from '../src/bus.js';
+import { buildServer } from '../src/server.js';
 import { approvalsFixture, CHILD, PARENT, type Approvals } from './approvalsHarness.js';
 import { DIGEST_CORRECTION_MAX_CHARS, type DigestAnswer } from '../../shared/api.js';
 import type { NewCall } from '../src/coord/coordCalls.js';
@@ -136,6 +138,25 @@ describe('POST /api/digest/correct on a call row (D-8126)', () => {
       expect(overturned(f, id).overturnedAt).toBeNull();
     }
     expect(mails(f)).toEqual([]);
+  });
+
+  it('a corrected call tells the live Waiting frame to re-read; an ask correction does not', async () => {
+    f = await approvalsFixture();
+    const bus = new Bus();
+    const app = await buildServer(f.deps, bus);
+    try {
+      let waiting = 0;
+      bus.on('waiting', () => { waiting += 1; });
+      const id = f.coord.insertCall('prog-a', PARENT, callOf('big'), null, at(0));
+      const res = await app.inject({ method: 'POST', url: '/api/digest/correct', payload: { rowKind: 'call', id, text: 'Use postgres here.' } });
+      expect(res.statusCode).toBe(200);
+      expect(waiting).toBe(1);
+      const q = ask(f, at(1));
+      answer(f, q, PARENT, at(2));
+      const res2 = await app.inject({ method: 'POST', url: '/api/digest/correct', payload: { rowKind: 'ask', id: q, text: 'No.' } });
+      expect(res2.statusCode).toBe(200);
+      expect(waiting).toBe(1);
+    } finally { await app.close(); }
   });
 
   it('an unknown call is 404 unknown-call; a second correction before the first is read is 409 duplicate', async () => {
