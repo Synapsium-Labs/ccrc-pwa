@@ -1,12 +1,15 @@
 // The held-rows list (cleanup un-wedge R2): the registry rows that hold the automatic cleanup, one line each, in
 // `AttentionList`'s shape. Each line carries ONE control, and a tap only opens its confirm; only the confirm acts.
 // The server decided the act and wrote the sentence (`heldByRowControl` is the console's own check that forget is
-// never offered beyond gone-unrecorded, nor where the session sheet's Forget rule, `forgetOffered`, does not allow it,
-// Task C15). When that check turns a forget act into Check again, a line after the server's sentence, in the same
-// wrapping row, says why (`heldByRowWhyNotForget`: running, asleep or in doubt). Forget calls the existing forget door with exactly the row id the server named;
-// "Check again" sends nothing: it re-reads the latest status the store already holds, and the line says ccrc reads the
-// row again when it next checks what it holds, at their own pace (minutes to hours), and nothing while the cleanup is
-// paused. It never implies it asked the server. Nothing here stops a process or offers any other act.
+// never offered beyond gone-unrecorded, nor where the session sheet's Forget rule does not allow it: `forgetHeldBack`
+// in presence.ts holds the rule and its reasons, and `forgetOffered` is that rule answering `null`; Task C15). When that
+// check turns a forget act into Check again, a line after the server's sentence, in the same wrapping row, says why
+// (`heldByRowWhyNotForget`: running, asleep or in doubt). A workspace row and a row the fleet does not list (the
+// console's store lagging the server's frame) get no line. Forget calls the existing forget door with exactly the row
+// id the server named; "Check again" sends nothing: it re-reads the latest status the store already holds, and the
+// line says ccrc reads the row again when it next checks what it holds, at their own pace (minutes to hours), and
+// nothing while the cleanup is paused. It never implies it asked the server. Nothing here stops a process or offers
+// any other act.
 import { useEffect, useState, type ReactNode } from 'react';
 import type { CleanupHeldByAct, FleetSession } from '../../../shared/api';
 import { Button, QuickConfirm, toast } from '@ccrc/ui';

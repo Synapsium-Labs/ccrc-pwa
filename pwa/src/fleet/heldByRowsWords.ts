@@ -50,7 +50,8 @@ const HELD_BY_FORGET_HELD_BACK: Record<Exclude<ForgetHeldBack, 'workspace'>, str
 
 /** The line for a forget act the console turned into Check again, or `null`. It decides nothing itself: the reason is
  *  `forgetHeldBack`'s, and this maps `running`, `asleep` and `doubt` to words. `null` when the act and the control agree,
- *  for a row the fleet does not list (the server's sentence already says so, ruling R2), and for a workspace row. */
+ *  for a workspace row (ruling R2), and for a row the fleet does not list: the console's store is lagging the server's
+ *  frame, which named a row the console has not received yet, and the next frame settles it (review 1668 F1). */
 export function heldByRowWhyNotForget(item: CleanupHeldByItem, session: ForgetFacts | undefined): string | null {
   if (item.act !== 'forget' || session === undefined || heldByRowControl(item, session) !== 'recheck') return null;
   const reason = forgetHeldBack(session);
