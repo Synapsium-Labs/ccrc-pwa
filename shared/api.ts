@@ -2028,6 +2028,10 @@ export function isSpawnVerdict(v: unknown): v is SpawnVerdict {
  */
 export type SkillState = 'present' | 'absent' | 'unmeasurable';
 
+/** What a dispatch's self-install of the worker skill did where it measured `absent` (D-8126, row 38): the answer of
+ *  `ccd skill-ensure`, or `failed` when the verb failed, answered nothing readable, or ran out its deadline. */
+export type SkillInstall = 'installed' | 'converged' | 'failed';
+
 /** Presentational only, and keyed BY the type so the compiler keeps it total —
  *  a member added to the union with no key here is a compile error, which is
  *  what makes the derived list below trustworthy. */

@@ -54,7 +54,7 @@ import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { dispatchRun, installAbsentSkill, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
@@ -261,6 +261,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // total over the union's MEMBERS, not over one member's fields, so this
       // body would stay green while the distinction silently never shipped.
       adopted: r.adopted, spawnState: r.spawnState, skillState: r.skillState,
+      // D-8126 (row 38): `null` where nothing was absent or the verb is not on this box; unconditional for the same reason.
+      skillInstall: r.skillInstall,
       // D-8086: a `200` with no `intents` field came from a server older than 5g, which took no hold.
       intents: r.intents,
     });
@@ -1660,7 +1662,9 @@ export function registerCoordRoutes(
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     const run = () => coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents));
-    const outcome = await run();
+    // D-8126 (row 38): the self-install of an absent worker skill runs AFTER the serialiser releases, so it never holds
+    // a close, reclaim or another dispatch behind two installers.
+    const outcome = await installAbsentSkill(dispatchDeps, await run());
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside
     // `coordMutex` (close, reclaim, settle and the dead-coordinator lane's abandons share it), and only a measured
     // verdict re-runs the WHOLE decision, once — pause, caps, transition, the child gate, `ensure`, the verdict are
@@ -1672,7 +1676,7 @@ export function registerCoordRoutes(
       if (!(await waitForMeasuredVerdict(() => dispatchDeps.turnVerdict(record, uuid)))) {
         return sendDispatchOutcome(reply, outcome);
       }
-      return sendDispatchOutcome(reply, await run());
+      return sendDispatchOutcome(reply, await installAbsentSkill(dispatchDeps, await run()));
     }
     return sendDispatchOutcome(reply, outcome);
   });

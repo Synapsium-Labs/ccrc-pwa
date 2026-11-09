@@ -1290,6 +1290,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     // only when interesting, a measured absence and an omitted field would be
     // one value to the coordinator reading this JSON.
     expect(body.skillState).toBe('absent');
+    // D-8126: the self-install's answer rides the same body, unconditionally; this fixture's runner returns no JSON
+    // line, so the verb reads `failed` and the dispatch still succeeded.
+    expect(Object.keys(body), 'skillInstall never reached the wire').toContain('skillInstall');
+    expect(body.skillInstall).toBe('failed');
   });
 
   it('the 200 body CARRIES adopted and spawnState — the coordinator sees nothing but this JSON', async () => {
@@ -1773,6 +1777,10 @@ describe('POST /api/runs/:id/dispatch', () => {
       // skill, so `absent` is the honest answer here.
       { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
         causedBy: 'coordinator', detail: 'skill-preflight:absent' },
+      // D-8126 (row 38): where the preflight measured `absent`, the route then runs `skill-ensure`; this fixture's
+      // runner answers no JSON line, which reads `failed` — recorded, and never a refusal.
+      { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
+        causedBy: 'coordinator', detail: 'skill-install:failed' },
     ]);
     // D-47: NOTHING was queued — the delivery lane must never be handed a
     // brief to inject into a context `/clear` never actually verified as
@@ -1886,6 +1894,10 @@ describe('POST /api/runs/:id/dispatch', () => {
       // skill, so `absent` is the honest answer here.
       { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
         causedBy: 'coordinator', detail: 'skill-preflight:absent' },
+      // D-8126 (row 38): where the preflight measured `absent`, the route then runs `skill-ensure`; this fixture's
+      // runner answers no JSON line, which reads `failed` — recorded, and never a refusal.
+      { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
+        causedBy: 'coordinator', detail: 'skill-install:failed' },
     ]);
   });
 
@@ -1908,10 +1920,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    // Five rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
+    // Six rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
     // fixture's missing `route-argv-v1` earns it; its `child-omitted` row — no `child-argv-v1` either — its
     // transition, and its skill preflight, wave 2 F2), and none from the refused second.
-    expect(w.coord.runEvents(opened.id).length).toBe(5);
+    expect(w.coord.runEvents(opened.id).length).toBe(6);
   });
 
   it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {

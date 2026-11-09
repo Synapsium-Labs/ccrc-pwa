@@ -17,7 +17,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
+import { dispatchRun, installAbsentSkill, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { clearSender } from '../src/inject/send.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import type { CcdArgv } from '../src/ccdargv.js';
@@ -51,6 +51,10 @@ interface Cfg {
   /** Model a wrapper this box's roster does not carry — `configDirFor` answers
    *  undefined, so no read is ever issued. */
   unrostered?: boolean;
+  /** What the fake `skill-ensure` answers; default is the installer's `installed` line. */
+  ensure?: (argv: CcdArgv) => CcdResult;
+  /** `skill-ensure` never answers (the deadline must bound it). */
+  hang?: boolean;
 }
 
 const harness = async (cfg: Cfg) => {
@@ -64,7 +68,13 @@ const harness = async (cfg: Cfg) => {
   });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
 
+  const calls: CcdArgv[] = [];
   const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
+    calls.push(argv);
+    if (argv[0] === 'skill-ensure') {
+      if (cfg.hang === true) return new Promise<CcdResult>(() => undefined);
+      return cfg.ensure?.(argv) ?? { ran: true, ok: true, stdout: '{"wrapper":"claude","result":"installed","detail":"ok"}\n', stderr: '', killed: false, signal: null };
+    }
     if (argv[0] === 'ws-add') seedRow(home, NEW_ID);
     return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
@@ -91,11 +101,17 @@ const harness = async (cfg: Cfg) => {
       ? (): string | undefined => undefined
       : (w: string): string | undefined => configDirFor(conf, w),
     turnVerdict: async () => 'idle' as const, sendClear: clearSender(base),
+    ...(cfg.hang === true ? { skillEnsureDeadlineMs: 20 } : {}),
   } as DispatchRunDeps;
 
   return {
-    coord, runId: opened.id,
+    coord, runId: opened.id, calls,
     dispatch: () => dispatchRun(deps, opened.id, 'go', undefined),
+    /** The route's step: dispatch under the serialiser, then the install after its release. */
+    dispatchAndHeal: async () => {
+      const out = await dispatchRun(deps, opened.id, 'go', undefined);
+      return installAbsentSkill(deps, out);
+    },
     details: (): (string | null)[] => coord.runEvents(opened.id).map((e) => e.detail),
   };
 };
@@ -202,5 +218,60 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
     expect(pre, 'no skill-preflight row was written').toBeDefined();
     expect(pre!.toState).toBe('dispatched');
     expect(pre!.fromState).toBe('dispatched');
+  });
+});
+
+describe('a dispatch that measures the skill absent installs it (D-8126, row 38)', () => {
+  const ensureCalls = (h: { calls: CcdArgv[] }): CcdArgv[] => h.calls.filter((a) => a[0] === 'skill-ensure');
+
+  it('absent runs the verb once for the bound wrapper and answers installed, with the event', async () => {
+    const h = await harness({ installed: false });
+    const out = await h.dispatchAndHeal();
+    expect(out).toMatchObject({ ok: true, skillState: 'absent', skillInstall: 'installed', briefQueued: true });
+    expect(ensureCalls(h)).toEqual([['skill-ensure', '--wrapper', 'claude']]);
+    expect(h.details()).toContain('skill-install:installed');
+  });
+
+  it('records the bind before the install', async () => {
+    const h = await harness({ installed: false });
+    await h.dispatchAndHeal();
+    const d = h.details();
+    expect(d.indexOf('skill-preflight:absent')).toBeGreaterThanOrEqual(0);
+    expect(d.indexOf('skill-install:installed')).toBeGreaterThan(d.indexOf('skill-preflight:absent'));
+  });
+
+  it('a failing verb answers failed, and the dispatch still succeeds', async () => {
+    const h = await harness({ installed: false,
+      ensure: () => ({ ran: true, ok: false, stdout: '', stderr: 'no source', killed: false, signal: null }) });
+    const out = await h.dispatchAndHeal();
+    expect(out).toMatchObject({ ok: true, skillState: 'absent', skillInstall: 'failed' });
+    expect(h.details()).toContain('skill-install:failed');
+  });
+
+  it('a verb that answers converged is reported as converged', async () => {
+    const h = await harness({ installed: false,
+      ensure: () => ({ ran: true, ok: true, stdout: '{"wrapper":"claude","result":"converged","detail":""}\n', stderr: '', killed: false, signal: null }) });
+    expect(await h.dispatchAndHeal()).toMatchObject({ skillInstall: 'converged' });
+  });
+
+  it('present and unmeasurable run nothing and answer null', async () => {
+    for (const cfg of [{ installed: true }, { installed: true, degraded: true }] as const) {
+      const h = await harness(cfg);
+      const out = await h.dispatchAndHeal();
+      expect(out).toMatchObject({ ok: true, skillInstall: null });
+      expect(ensureCalls(h)).toEqual([]);
+      expect(h.details().some((d) => d?.startsWith('skill-install:'))).toBe(false);
+    }
+  });
+
+  it('dispatchRun itself never runs the verb (it runs inside the serialiser)', async () => {
+    const h = await harness({ installed: false });
+    expect(await h.dispatch()).toMatchObject({ ok: true, skillState: 'absent', skillInstall: null });
+    expect(ensureCalls(h)).toEqual([]);
+  });
+
+  it('a verb that never answers is bounded and reads failed', async () => {
+    const h = await harness({ installed: false, hang: true });
+    expect(await h.dispatchAndHeal()).toMatchObject({ skillInstall: 'failed' });
   });
 });

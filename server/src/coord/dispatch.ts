@@ -22,7 +22,7 @@ import { queueSystemMail } from './rundefsTx.js';
 import { WAVE_BRIEF_SUBJECT } from './briefwatch.js';
 import {
   SPAWN_NOT_RECORDED, armEventDetail, routeForBrowserCap,
-  type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillInstall, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
@@ -151,6 +151,14 @@ export type DispatchOutcome =
        * either way, so it is an unknown to report, not a gap to go fix.
        */
       skillState: SkillState;
+      /**
+       * What the self-install did where `skillState` measured `absent` (D-8126, row 38): `installAbsentSkill` runs it
+       * AFTER the coordination serialiser releases, so `dispatchRun` itself always answers `null` and the route
+       * fills the field in. `null` too where nothing was absent, nothing was run, or this box's ccd lacks the verb.
+       */
+      skillInstall: SkillInstall | null;
+      /** The wrapper whose home the skill was measured on, for `installAbsentSkill`; never sent on the wire. */
+      skillWrapper: string | null;
       /** The landing intent keys this dispatch wrote (wave 5g, D-8086); `[]` when it named none. A `200` that carries no
        *  `intents` field came from a server older than 5g, which took no hold. */
       intents: readonly string[] }
@@ -757,5 +765,38 @@ export async function dispatchRun(
   }
 
   return { ok: true, id, sessionId, resumed, clearedAt, briefQueued, clearError,
-    adopted, spawnState: adoptedSpawn, skillState, intents: intentKeys };
+    adopted, spawnState: adoptedSpawn, skillState, skillInstall: null, skillWrapper: bound.wrapper, intents: intentKeys };
+}
+
+/** The bound on one `skill-ensure` call: two installers over one home, no network. */
+const SKILL_ENSURE_DEADLINE_MS = 60_000;
+
+/**
+ * D-8126, row 38: a dispatch that measured the worker skill `absent` installs it. Called by the route AFTER
+ * `coordMutex` releases `dispatchRun` (the bind is committed and the `skill-preflight` row written by then, so the
+ * install never delays it), and never refuses: a failed, unparsable or overdue verb answers `failed` and the dispatch
+ * stands. `present` and `unmeasurable` run nothing. The verb's own JSON line names the result; its rc alone does not.
+ */
+export async function installAbsentSkill(
+  deps: Pick<DispatchRunDeps, 'coord' | 'runCcd' | 'fleetState'> & { skillEnsureDeadlineMs?: number },
+  out: DispatchOutcome,
+): Promise<DispatchOutcome> {
+  if (!out.ok || out.skillState !== 'absent' || out.skillWrapper === null) return out;
+  if (!ccdCan(deps.fleetState, 'skillEnsure')) return out;
+  let result: SkillInstall = 'failed';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const overdue = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deps.skillEnsureDeadlineMs ?? SKILL_ENSURE_DEADLINE_MS); });
+    const res = await Promise.race([deps.runCcd(CCD_ARGV.skillEnsure(out.skillWrapper)), overdue]);
+    if (res !== null && res.ok) {
+      const line = res.stdout.trim().split('\n').filter((l) => l.trim() !== '').pop() ?? '';
+      try {
+        const word = (JSON.parse(line) as { result?: unknown }).result;
+        if (word === 'installed' || word === 'converged') result = word;
+      } catch { /* an unparsable answer is a failure */ }
+    }
+  } catch { /* a refused argv or a throwing runner is a failure too */ }
+  finally { if (timer !== undefined) clearTimeout(timer); }
+  deps.coord.recordRunEvent(out.id, 'coordinator', `skill-install:${result}`);
+  return { ...out, skillInstall: result };
 }
