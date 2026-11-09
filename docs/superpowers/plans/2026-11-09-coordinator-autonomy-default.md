@@ -1186,12 +1186,27 @@ Test `server/test/measure-autonomy.test.ts`.
   readings.
 
 **A1 baseline (taken 2026-11-09; counts only).**
-- Transcript census (`transcripts`, fleet box, window 2026-10-26 to 2026-11-09, 13 coordinators, 17,426 transcripts read):
-  typed-reply waits 125 (24 over an hour, 198.01 h, median 0.04 h, p90 4.07 h); dialogs 44 (11 over an hour, 34.82 h,
-  median 0.24 h, p90 2.54 h); all 169 (35 over an hour, 232.83 h, median 0.06 h, p90 3.15 h). §10's figures were taken
-  over a different window (14 days to 2026-10-25), so the two are beside each other, not subtracted.
+- Transcript census (`transcripts --since 2026-10-26 --until 2026-11-09`, fleet box, read-only, re-run for this
+  correction; 17,427 transcripts read, 13 coordinators by `is_coordinator`): typed-reply waits 123 (24 over an hour,
+  197.87 h, median 0.04 h, p90 4.07 h); dialogs 44 (11 over an hour, 34.82 h, median 0.24 h, p90 2.54 h); all 167 (35
+  over an hour, 232.69 h, median 0.06 h, p90 3.15 h). These are the figures later readings (the monitoring wave's
+  Step 1) are compared against.
+- **Relation to §10 (not reconciled; stated as measured).** §10's typed-reply and dialog rows give the SAME window (14
+  days to 2026-11-09), so the window does not explain the gap. They say 246 coordinator sessions, 137 waits (32 over
+  an hour, 680 h) and 611 dialogs (116 over an hour, 539 h); the committed script reads 13, 123 (24, 197.87 h) and 44
+  (11, 34.82 h). Only §10's child-mail-held rows come from another window (14 days to 2026-10-25). The committed
+  script's coordinator test is the one §1.2 words, and loosening it does not close the gap: counting every transcript
+  that changed in the window, with or without the swap-copy removal, reads at most 149 typed-reply waits (29 over an
+  hour, 288 h) and 236 dialogs (22 over an hour, 66 h). So the §1.2 figures come from an ad hoc census whose method
+  the committed script does not reproduce (its definition of a session, of a span or of the dialog pairing differs),
+  and the fleet box holds almost no transcript older than 2026-10-28 (its files date from the 2026-10-27 to
+  2026-10-29 move), so the first days of the window are thin. Read M1 and M2's baseline as the committed script's
+  figures above; §10's 680 h and 611 stay as the spec's original, differently-taken, reading and are not a
+  comparison base.
 - M3, M4 and M6 over the coordination database (`items`, `sample --n 30 --seed 1`, `score`): not yet taken. The
-  coordination database lives on the server box; the builder was not permitted to reach it. The reviewer takes them.
+  coordination database lives on the server box, which this builder may not reach, and the sample's parts need a
+  reviewer's classing against §3 and §5. A task owner with server-box access takes them; A1-4 is not complete
+  until they are written here.
 
 ### Waiting on you
 
