@@ -786,6 +786,20 @@ export type BlockReason = 'no-receipt' | 'no-block' | 'gist-short' | 'carried-co
 export const BLOCK_REASONS: readonly BlockReason[];
 export function capText(text: string, max: number): { text: string; capped: boolean };
 export function capTopics(items: Iterable<string>): { topics: string[]; capped: boolean };
+
+// --- W3 Task 1A: the steer template and its composer (spec §7.1)
+export const STEER_LEAF_TEMPLATE: string;
+export const STEER_FIRST_LINE: string;
+export const STEER_GENERIC_TEXT: string;
+export const PREV_GIST_MAX: 300;
+export const STEER_FILE_MAX: 8192;
+export const PARENT_ADDON_MAX: 4000;
+export function escapeArchive(s: string): string;
+/** The quoted gist, or null when it is omitted (a directive shape after redaction). */
+export function quoteGist(gist: string, pairIdx: PairIndex, max?: number): string | null;
+export function nodeRangeText(earliestMs: number | null, latestMs: number | null): string;
+export interface SteerPrev { id: string; range: string; kind: string; status?: string | undefined; gist: string; flag: boolean }
+export function composeSteerFile(i: { leafId: string; prev: SteerPrev | null; children: readonly unknown[]; pairIdx: PairIndex }): { text: string; bytes: number };
 export function gistSha(gist: string): string;
 export interface Block {
   kind: 'leaf' | 'node'; attrs: Record<string, string>; gist: string | null; expand: string | null;

@@ -9882,7 +9882,7 @@ describe('deriveHealth, W5h-1: a check after a bind that cannot finish (D-5633)'
     expect(words(r, 'warn')).toEqual(['export-marks-unchecked']);
     expect(words(r, 'fail')).toEqual([]);
     expect(r.warn[0]!.detail).toBe(`store ${STORE}: the check of the export marks after a bind has not finished: it last stopped on budget `
-      + `(the run budget was spent before its next batch, ingest first), has stopped on budget or off for 30 min, and has cleared at least 4 mark(s) so far; ${TAIL}`);
+      + `(the check's own slice of the run budget was spent before its next batch), has stopped on budget or off for 30 min, and has cleared at least 4 mark(s) so far; ${TAIL}`);
   });
 
   it.each(ALL)('stopped on %s: the detail names the word, and the remedy is that word\'s own, then the prune hold', (word) => {
