@@ -3,7 +3,7 @@
 // subcommands, never by import.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, readdirSync, statSync, utimesSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMailNudge } from '../src/coord/envelope.js';
@@ -272,5 +272,72 @@ describe('measure-autonomy items', () => {
     const r = itemsRun(['--db', gone, ...WINDOW]);
     expect(r.status).toBe(2);
     expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
+// ── sample and score: the M4 draw and its per-part share (spec §5.1's split rule) ──
+const csvIds = (file: string): string[] =>
+  readFileSync(file, 'utf8').trim().split('\n').slice(1).map((l) => l.split(',')[0]);
+
+describe('measure-autonomy sample and score', () => {
+  const wide = ['--since', '2026-10-01', '--until', '2026-11-16'];
+
+  it('draws the same ids twice for the same seed', () => {
+    const db = fixtureDb();
+    const draw = (): string[] => {
+      const out = mkTmp('ccrc-autonomy-out-');
+      const r = run(['sample', '--db', db, '--n', '2', '--seed', '7', ...wide, '--out', out]);
+      expect(r.status, r.stderr).toBe(0);
+      return csvIds(path.join(out, 'sample.csv'));
+    };
+    const first = draw();
+    expect(first).toHaveLength(2);
+    expect(draw()).toEqual(first);
+  });
+
+  it('writes sample.csv with the columns id, kind, title, why, parts and an empty parts', () => {
+    const out = mkTmp('ccrc-autonomy-out-');
+    const r = run(['sample', '--db', fixtureDb(), '--n', '30', '--seed', '1', ...wide, '--out', out]);
+    expect(r.status, r.stderr).toBe(0);
+    const lines = readFileSync(path.join(out, 'sample.csv'), 'utf8').trim().split('\n');
+    expect(lines[0]).toBe('id,kind,title,why,parts');
+    expect(lines).toHaveLength(5);          // all four items: n exceeds the pool
+    expect(lines[1].endsWith(',')).toBe(true);
+    expect(readdirSync(out)).toEqual(['sample.csv']);
+  });
+
+  it('exits 2 for a missing --db and creates no file', () => {
+    const dir = mkTmp('ccrc-autonomy-db-');
+    const r = run(['sample', '--db', path.join(dir, 'coord.db'), '--n', '3', '--seed', '1', '--out', path.join(dir, 'o')]);
+    expect(r.status).toBe(2);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  const scoreFile = (body: string): string => {
+    const f = path.join(mkTmp('ccrc-autonomy-score-'), 'filled.csv');
+    writeFileSync(f, 'id,kind,title,why,parts\n' + body);
+    return f;
+  };
+
+  it('reads 3 of 4 parts as 75% routine or big', () => {
+    const r = run(['score', scoreFile('1,decision,t,w,routine\n2,decision,t,w,o3\n3,decision,t,w,big;routine\n')]);
+    expect(r.status, r.stderr).toBe(0);
+    const t = rows(r.stdout);
+    expect(t['parts']).toBe('4');
+    expect(t['routine-or-big']).toBe('3');
+    expect(t['m4']).toBe('75.0');
+  });
+
+  it('refuses a row with an unknown class and names the row', () => {
+    const r = run(['score', scoreFile('1,decision,t,w,routine\n9,decision,t,w,maybe\n')]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('9');
+    expect(r.stderr).toContain('maybe');
+  });
+
+  it('refuses a row with no parts', () => {
+    const r = run(['score', scoreFile('5,decision,t,w,\n')]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('5');
   });
 });
