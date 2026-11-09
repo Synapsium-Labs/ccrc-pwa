@@ -221,8 +221,9 @@ describe('coordLiftReason (D-8125)', () => {
 });
 
 describe('coordLiftVerdict (D-8125)', () => {
-  const base = { kind: 'work' as const, closed: false, rounds: 3, granted: 0, liftedAt: null, setting: 'on' as const };
-  const refused = (over: Partial<typeof base> & { kind?: 'work' | 'review' | 'unknown' }) => {
+  type VerdictInput = Parameters<typeof coordLiftVerdict>[0];
+  const base: VerdictInput = { kind: 'work', closed: false, rounds: 3, granted: 0, liftedAt: null, setting: 'on' };
+  const refused = (over: Partial<VerdictInput>) => {
     const v = coordLiftVerdict({ ...base, ...over });
     return v.ok ? 'ok' : v.refused;
   };
