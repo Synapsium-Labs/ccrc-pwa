@@ -4,13 +4,14 @@
 // row's title (D-5589); Abandon is drawn on open rows only; a group head prints
 // the programme's title. "today:" rows pin the answer the base gave and are
 // flipped by the behaviour commits; "kept:" rows hold across them.
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import type { CoordCapsView, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { RunsScreen } from './runs-board';
+import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
+beforeEach(stuckOpen);
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 // Neutral fixtures: programme-a titled "Programme A", workspace s-aaaa, run 7.
@@ -51,7 +52,7 @@ const nameOf = (row: HTMLElement): string => row.querySelector('.run-name')?.tex
 
 describe('kept: across D-6170', () => {
   it('kept: an open planned run with no session renders Abandon (the wedge door, D-282)', async () => {
-    const c = await board([run({ state: 'planned', sessionId: null, workspace: null, branch: null, dispatchedAt: null })]);
+    const c = await board([run({ state: 'planned', sessionId: null, workspace: null, branch: null, dispatchedAt: null, stuck: STUCK_NOW })]);
     expect(within(rows(c)[0]!).getByRole('button', { name: 'Abandon run 7' })).toBeInTheDocument();
   });
 
@@ -68,31 +69,31 @@ describe('kept: across D-6170', () => {
   });
 
   it("kept: Abandon's accessible name carries the run number", async () => {
-    await board([run({ id: 12 })]);
+    await board([run({ id: 12, stuck: STUCK_NOW })]);
     expect(screen.getByRole('button', { name: 'Abandon run 12' })).toBeInTheDocument();
   });
 });
 
 describe('the runs ledger at a glance (D-6170)', () => {
   it('no closed row renders Abandon', async () => {
-    const c = await board([run({ id: 1 })], [
+    const c = await board([run({ id: 1, stuck: STUCK_NOW })], [
       run({ id: 2, state: 'done', closedAt: Date.now() - 2_000 }),
       run({ id: 3, state: 'failed', closedAt: Date.now() - 3_000 }),
     ]);
     await screen.findByTitle(/run 2/);
-    expect(rows(c)).toHaveLength(3);
+    expect(rows(c)).toHaveLength(4);
     expect(screen.getByRole('button', { name: 'Abandon run 1' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Abandon run 2' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Abandon run 3' })).toBeNull();
   });
 
   it('a done or failed row with no closedAt still renders no Abandon (closed is the state, not the stamp)', async () => {
-    const c = await board([run({ id: 1 })], [
+    const c = await board([run({ id: 1, stuck: STUCK_NOW })], [
       run({ id: 4, state: 'done', closedAt: null }),
       run({ id: 5, state: 'failed', closedAt: null }),
     ]);
     await screen.findByTitle(/run 4/);
-    expect(rows(c)).toHaveLength(3);
+    expect(rows(c)).toHaveLength(4);
     expect(screen.getByRole('button', { name: 'Abandon run 1' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Abandon run 4' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Abandon run 5' })).toBeNull();

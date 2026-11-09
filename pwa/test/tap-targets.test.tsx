@@ -29,7 +29,7 @@ import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { MailScreen } from '../src/screens/MailScreen';
-import { RunsScreen } from './runs-board';
+import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {
@@ -63,6 +63,7 @@ const read = (...seg: string[]): string =>
 const readUi = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', ...seg), 'utf8');
 const fleetCss = read('fleet', 'fleet.css');
+const stuckCss = read('screens', 'stuck-band.css');
 const chatCss = read('session', 'chat.css');
 const tokensCss = readUi('styles', 'tokens.css');
 /** The mail strip is the design system's now, and its stylesheet travelled
@@ -557,24 +558,38 @@ describe('.mail-strip-head — the session mail strip’s door to its rows', () 
 
 // — Build 4, Task 12: the run row's own abandon control (spec §4.3, D-287 (was D-B4-14)) —
 
-describe('.run-abandon — the wedge release, a sibling of .run-open', () => {
+describe('.run-abandon — the stuck row\'s release, a sibling of .run-open', () => {
+  beforeEach(stuckOpen);
   it('is at least one tap tall AND wide, off the shared token', () => {
     expect(declValue(ruleIn(fleetCss, '.run-row .run-abandon'), 'min-height')).toBe('var(--tap-min)');
     expect(declValue(ruleIn(fleetCss, '.run-row .run-abandon'), 'min-width')).toBe('var(--tap-min)');
   });
   it('is the class the rendered row control actually carries', () => {
     const store = makeStore();
-    act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
+    act(() => { store.setState({ runs: [run({ stuck: STUCK_NOW })], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
   });
-  // D-287's own reason for existing: an inert row (no session, so no
-  // .run-open) still gets the control — that IS the wedge shape.
-  it('is present on an inert row too, where .run-open is absent', () => {
+  // D-287's own reason for existing: a stuck row with no session (so nothing to open but the run's page) still gets the
+  // control, and an ordinary row gets none (D-8074, Task 13).
+  it('is present on a stuck row with no session, and absent from an ordinary one', () => {
     const store = makeStore();
-    act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
+    act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned', stuck: STUCK_NOW })], runsFrameSeen: true }); });
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /abandon run 3/i })).toHaveClass('run-abandon');
+    cleanup();
+    act(() => { store.setState({ runs: [run({ sessionId: null, state: 'planned' })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    expect(screen.queryByRole('button', { name: /abandon run 3/i })).toBeNull();
+  });
+});
+
+// — The Stuck band's heads (the runs rebuild, D-8074, Task 13): the fold toggle and the group control keep the floor —
+
+describe('the Stuck band\'s heads', () => {
+  it('the fold toggle and the group control are at least one tap tall, off the shared token', () => {
+    expect(declValue(ruleIn(stuckCss, '.stuck-head .stuck-head-toggle'), 'min-height')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(stuckCss, '.stuck-head .stuck-head-group'), 'min-height')).toBe('var(--tap-min)');
   });
 });
 

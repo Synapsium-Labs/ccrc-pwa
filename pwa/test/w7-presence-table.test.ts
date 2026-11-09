@@ -164,7 +164,7 @@ const SITES: readonly Site[] = [
 function resumeDoor(coord: FleetSession | null, _word: string): string {
   render(createElement('ul', null, createElement(RunRow, {
     run: RUN(), nowMs: NOW, session: WORKER(), coordSession: coord, frameSeen: true, programHasOpenRun: true,
-    onAbandon: () => {}, onResume: () => {},
+    onResume: () => {},
   })));
   const shown = document.querySelector('.run-resume') !== null ? 'resume' : 'none';
   cleanup();

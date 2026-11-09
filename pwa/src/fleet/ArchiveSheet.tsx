@@ -228,7 +228,7 @@ export function ArchiveSheet({
           <p className={QC_CONSEQUENCE}>Its workers will be cleaned up.</p>
           <p className={QC_CONSEQUENCE}>{`${ask.runs.map(runPhrase).join('; ')}.`}</p>
           <p className={QC_CONSEQUENCE}>
-            To pause a programme instead, use the coordinator pause switch on the Runs screen — archiving its
+            To pause a programme instead, use the coordinator pause switch under Advanced on the Runs screen — archiving its
             coordinator does not pause it.
           </p>
         </>

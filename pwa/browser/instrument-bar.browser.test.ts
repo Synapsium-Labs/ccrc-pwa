@@ -232,7 +232,9 @@ describe('the tip is drawn below the icon, by hover and by Tab', () => {
             await page.mouse.move(width - 10, 700);
 
             // Tab, from the top of the page, until the Accounts door has the focus.
-            await page.locator('body').click({ position: { x: width - 10, y: 700 } });
+            // The click's place sets where Tab starts, so it is the top of the page (the bar's own corner), not a point on the
+            // route's body: a point down the page lands on whatever row the route draws there.
+            await page.locator('header.shell-accounts').click({ position: { x: 1, y: 1 } });
             let reached = false;
             for (let i = 0; i < 40 && !reached; i += 1) {
               await page.keyboard.press('Tab');

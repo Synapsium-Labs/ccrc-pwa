@@ -24,6 +24,8 @@ const RUN = {
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0, lastRejectCode: null, briefQueued: false,
     clearError: null, coordKickoffPendingSince: null },
   childReclaim: null, reviewCap: null, hadChild: false,
+  // Abandon sits on stuck rows alone (the runs rebuild, D-8074, Task 13), so the run is in the Stuck band.
+  stuck: { reason: 'owner-gone', cause: 'worker-gone', since: NOW - 2 * 24 * H, closes: null },
 };
 
 // The run's worker carries a child mark and the run's claimant is a live session, so the sheet shows the child sentence (the
@@ -72,6 +74,7 @@ async function openSheet(width: number, skin: string, theme: string, height?: nu
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
   if (height !== undefined) await opened.page.setViewportSize({ width, height });
   await opened.page.goto(`${server!.origin}/runs`);
+  await opened.page.locator('.stuck-head-toggle').first().click();
   await opened.page.getByRole('button', { name: 'Abandon run 1501' }).first().click();
   await opened.page.locator('.sheet-panel[data-state="open"]').waitFor({ timeout: 20_000 });
   return opened;

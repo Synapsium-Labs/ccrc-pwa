@@ -52,7 +52,6 @@ export const RunRow = memo(function RunRow({
   coordSession,
   frameSeen,
   programHasOpenRun,
-  onAbandon,
   onResume,
   current = false,
 }: {
@@ -86,8 +85,6 @@ export const RunRow = memo(function RunRow({
    *  the same `active` slice it renders and hands each row the single bit it
    *  needs, the same shape `session`/`coordSession` above are looked up in. */
   programHasOpenRun: boolean;
-  /** Opens the AbandonSheet for this row (Task 12, spec §4.3, D-287 (was D-B4-14)). */
-  onAbandon: (run: RunSummary) => void;
   /** Opens the ResumeSheet for this row (spec §7.3). */
   onResume: (run: RunSummary) => void;
   /** This run is the one open in the broad pane (spec §8.4): the row says so to a screen reader and to the eye. */
@@ -267,29 +264,8 @@ export const RunRow = memo(function RunRow({
       )}
     </>
   );
-  // The abandon control, D-287: a SIBLING of `.run-open` inside the `<li>`,
-  // never nested inside it — `RunsScreen.tsx:118-122` (pre-fix) wrapped the
-  // whole row body in `<button className="run-open">`, and a `<button>`
-  // inside a `<button>` is invalid HTML and unreachable to a screen reader.
-  // It renders on every OPEN row, including one with no session
-  // — that is exactly the wedge shape (`ambiguous-dispatch`, a
-  // `planned` run with no session) this control exists to release
-  // (`abandon-sheet.test.tsx`'s own pin on that case).
-  //
-  // D-6170 (G5 (a)): drawn on OPEN rows only. A closed run has nothing left to
-  // release, and a door on every finished row invites the act the runs page
-  // exists to make rare. A `planned` run with no session is open, so the
-  // wedge door above stands (D-282).
-  const abandonButton = isRunClosed(run) ? null : (
-    <button
-      type="button"
-      className="run-abandon"
-      aria-label={`Abandon run ${run.id}`}
-      onClick={() => onAbandon(run)}
-    >
-      Abandon
-    </button>
-  );
+  // Abandon is not on this row (the runs rebuild, D-8074, Task 13): it sits on a stuck row in the Stuck band
+  // (`StuckBand.tsx`) and on the run's own page, and nowhere else on the board.
 
   // The resume door. `coordinatorPresence` decides the FIRST half — the
   // server's word (D-7181, OA-C15 (a)), and only `dead` opens it: `unknown` is
@@ -360,7 +336,6 @@ export const RunRow = memo(function RunRow({
         {body}
       </button>
       {resumeButton}
-      {abandonButton}
       {waitLine !== null && run.blockedBy != null && (
         <a className="run-wait" href={runPath(run.blockedBy)} onClick={inAppClick(runPath(run.blockedBy))}>{waitLine}</a>
       )}

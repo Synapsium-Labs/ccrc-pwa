@@ -57,11 +57,15 @@ export function inlinePauseError(err: unknown): string | null {
 export function CoordBanner({
   store = useFleetStore,
   coordPause = api.coordPause,
+  onlyWhilePaused = false,
 }: {
   store?: FleetStore;
   /** Injectable so a test can drive the toggle without a server — same shape
    *  `RunsScreen`'s own `loadRuns` prop uses. Defaults to `api.coordPause`. */
   coordPause?: (paused: boolean) => Promise<void>;
+  /** The board's paused banner (runs rebuild §8.2 item 3, D-8074): drawn unless coordination is plainly not paused. The switch that
+   *  pauses lives under Advanced, which draws the banner without this. */
+  onlyWhilePaused?: boolean;
 }): ReactNode {
   const coord = store((s) => s.coord);
   const coordFrameSeen = store((s) => s.coordFrameSeen);
@@ -75,6 +79,8 @@ export function CoordBanner({
   const pause = useMarkerToggle(coord === null ? null : pauseState, coordPause);
 
   if (!coordFrameSeen || coord === null) return null;
+  // A registry that cannot be read is a pause dispatch cannot rule out (`unmeasurable`), so it shows with `set`.
+  if (onlyWhilePaused && pauseState === 'clear') return null;
 
   return (
     <ControlRow className="coord-banner" role="status">

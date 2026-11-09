@@ -45,11 +45,25 @@ const RUNS = [
   run(1506, { program: 'prog-c', programTitle: 'Prog C', wave: 1, waveOf: 1, workspace: 'w6', branch: null }),
 ];
 
+/** One stuck run per reason (the Stuck band, Task 13), two of them holding a workspace or session so a head says why. */
+const stuckOf = (reason: string, cause: string | null, ago: number, closes: { at: number; armed: boolean } | null = null) =>
+  ({ reason, cause, since: NOW - ago, closes });
+const STUCK_RUNS = [
+  run(1601, { state: 'planned', kind: 'review', reviews: 1501, sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('review-of-closed', 'target-closed', 30 * DAY, { at: NOW + 20 * H, armed: false }) }),
+  run(1602, { program: 'prog-d', programTitle: 'Programme D', state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('overtaken', null, 28 * DAY) }),
+  run(1603, { program: 'prog-d', programTitle: 'Programme D', wave: 3, state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('overtaken', null, 12 * DAY) }),
+  run(1604, { program: 'prog-e', programTitle: 'Programme E', stuck: stuckOf('owner-gone', 'coordinator-archived', 49 * DAY) }),
+  run(1605, { program: 'prog-f', programTitle: 'Programme F', state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('owner-gone', 'coordinator-gone', 5 * H) }),
+  run(1606, { program: 'prog-g', programTitle: 'Programme G', state: 'planned', dispatchStartedAt: NOW - 8 * DAY, dispatchedAt: null, stuck: stuckOf('start-never-landed', null, 8 * DAY) }),
+  run(1607, { program: 'prog-h', programTitle: 'Programme H', state: 'planned', sessionId: null, workspace: null, dispatchedAt: null, stuck: stuckOf('never-started', null, 23 * DAY) }),
+];
+const ALL_RUNS = [...RUNS, ...STUCK_RUNS];
+
 const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a', repo: { state: 'named', slug: 'owner-a/repo-a' } }] },
-    '/api/runs': { runs: RUNS, nextBefore: null }, '/api/claims': [],
+    '/api/runs': { runs: ALL_RUNS, nextBefore: null }, '/api/claims': [],
     // Finished reads `find` (Task 11): no closed run here, so the board's rows are the open ones alone.
     '/api/runs/find': { ok: true, exact: null, runs: [], reviewsOf: [], next: null },
     // The run page the number lands on reads these four; a real server answers each in this shape.
@@ -64,7 +78,7 @@ const FIXTURE: AppFixture = {
     '/api/coord/caps': { ok: true, caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 }, updatedAt: null },
   },
   fleetFrames: [
-    { type: 'fleet', sessions: [] }, { type: 'runs', runs: RUNS },
+    { type: 'fleet', sessions: [] }, { type: 'runs', runs: ALL_RUNS },
     { type: 'pools', pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } },
   ],
 };
@@ -90,6 +104,15 @@ async function openBoard(width: number, skin: string, theme: string): Promise<Op
   await opened.page.goto(`${server!.origin}/runs`);
   await opened.page.locator('.run-row').first().waitFor({ timeout: 20_000 });
   return opened;
+}
+
+/** Open every Stuck head (they fold by default), and wait for the rows. */
+async function openHeads(page: Page): Promise<void> {
+  const toggles = page.locator('[data-testid="stuck-band"] .stuck-head-toggle');
+  for (let i = 0, n = await toggles.count(); i < n; i++) {
+    if ((await toggles.nth(i).getAttribute('aria-expanded')) !== 'true') await toggles.nth(i).click();
+  }
+  await page.locator('li.run-stuck').first().waitFor({ timeout: 20_000 });
 }
 
 const here = (page: Page): Promise<string> => page.evaluate(() => location.pathname + location.search);
@@ -121,9 +144,11 @@ for (const width of MATRIX.widths) {
               return {
                 tap, rows, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
                 spend: document.querySelectorAll('.run-spend').length, vw: innerWidth,
+                banded: document.querySelectorAll('li.run-stuck').length,
               };
             });
-            expect(m.rows.length).toBe(RUNS.length);
+            // The Stuck band is a second view (spec 8.2.2): every run keeps its group row, and an opened head adds a band row.
+            expect(m.rows.length).toBe(ALL_RUNS.length + m.banded);
             expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
             expect(m.spend, 'the board draws no spend line (A10)').toBe(0);
             for (const row of m.rows) {
@@ -246,16 +271,17 @@ for (const width of MATRIX.widths) {
         it('a row runs on one line with its control at the right where the text fits; facts stack when narrow and sit in two columns from medium; a long branch wraps', async () => {
           const { ctx, page, errors } = await openBoard(width, skin, theme);
           try {
-            if (want !== 'narrow') {
-              const line = await page.locator('.run-row[title^="run 1506"]').evaluate((li) => {
-                const open = li.querySelector('.run-open')!.getBoundingClientRect();
-                const abandon = li.querySelector('.run-abandon')!.getBoundingClientRect();
-                return { openTop: open.top, openBottom: open.bottom, mid: (abandon.top + abandon.bottom) / 2, abandonLeft: abandon.left, openRight: open.right };
-              });
-              expect(line.mid, 'a short row keeps its control on its one line').toBeGreaterThanOrEqual(line.openTop);
-              expect(line.mid).toBeLessThanOrEqual(line.openBottom);
-              expect(line.abandonLeft, 'the control sits at the right').toBeGreaterThanOrEqual(line.openRight - 1);
-            }
+            // Abandon sits on stuck rows alone (Task 13): at the right end of the row's first line, at every width.
+            await openHeads(page);
+            const line = await page.locator('li.run-stuck[title^="run 1607"]').evaluate((li) => {
+              const open = li.querySelector('.run-open')!.getBoundingClientRect();
+              const abandon = li.querySelector('.run-abandon')!.getBoundingClientRect();
+              const word = li.querySelector('.run-name')!.getBoundingClientRect();
+              return { openTop: open.top, abandonTop: abandon.top, wordTop: word.top, abandonLeft: abandon.left, openRight: open.right, abandonRight: abandon.right, rowRight: li.getBoundingClientRect().right };
+            });
+            expect(line.abandonTop, 'the control sits on the first line').toBeLessThanOrEqual(line.wordTop + 4);
+            expect(line.abandonLeft, 'the control sits at the right').toBeGreaterThanOrEqual(line.openRight - 1);
+            expect(line.abandonRight).toBeLessThanOrEqual(line.rowRight + 1);
             await page.locator('.run-row[title^="run 1501"] .run-open').click();
             await page.locator('.rd-facts').first().waitFor({ timeout: 20_000 });
             const m = await page.evaluate(() => {
@@ -432,6 +458,59 @@ for (const width of MATRIX.widths) {
   }
 }
 
+// The top of the board and the switches under Advanced (Task 12a, D-8074): the start door sits in the header's actions slot, the
+// board draws none of the three switches, and Advanced draws them whole, inside the window, at every width.
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`the top of the board and the switches, ${skin} ${theme} at ${width}px`, () => {
+        it('puts Start a program in the header at the tap floor, holds no switch, and Advanced draws the switches inside the window', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            const board = await page.evaluate(() => {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              document.body.appendChild(probe);
+              const tap = probe.getBoundingClientRect().height;
+              probe.remove();
+              const door = document.querySelector<HTMLElement>('.program-start-door');
+              const r = door?.getBoundingClientRect() ?? null;
+              const h1 = document.querySelector('h1');
+              const head = h1?.parentElement ?? null;
+              return {
+                tap, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                door: r === null ? null : { h: r.height, right: r.right, left: r.left },
+                inHead: head !== null && door !== null && head.contains(door),
+                caps: document.querySelector('.caps-control') !== null,
+                reclaim: document.querySelector('.child-reclaim-banner') !== null,
+              };
+            });
+            expect(board.door, 'the start door is drawn').not.toBeNull();
+            expect(board.inHead, 'in the header, beside the title').toBe(true);
+            expect(board.door!.h, 'at the tap floor').toBeGreaterThanOrEqual(board.tap - 1);
+            expect(board.door!.right).toBeLessThanOrEqual(board.vw);
+            expect(board.door!.left).toBeGreaterThanOrEqual(0);
+            expect(board.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            expect(board.caps || board.reclaim, 'no switch on the board').toBe(false);
+            await page.getByRole('link', { name: 'Advanced' }).click();
+            await page.locator('.caps-control').waitFor({ timeout: 20_000 });
+            const adv = await page.evaluate(() => {
+              const box = document.querySelector('.caps-control')!.getBoundingClientRect();
+              return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, right: box.right, left: box.left, vw: innerWidth };
+            });
+            expect(adv.page, 'no sideways page scroll on Advanced').toBeLessThanOrEqual(0);
+            expect(adv.right).toBeLessThanOrEqual(adv.vw);
+            expect(adv.left).toBeGreaterThanOrEqual(0);
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}
+
 describe('Advanced in a broad column opens a run beside its list', () => {
   it('a row sets ?open=<id> and the run draws in the pane (Instrument, 1920)', async () => {
     const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: 'dark', width: 1920 }, ADVANCED_FIXTURE);
@@ -449,3 +528,103 @@ describe('Advanced in a broad column opens a run beside its list', () => {
     }
   });
 });
+
+// The Stuck band (Task 13, D-8074; spec §8.2, §8.2.1): at each width, skin and theme the heads fold by default, the last head
+// ends within half a visible height of the fold on a 667-tall phone (the visible height stops at the bottom bar), the last fold
+// scrolls clear of the bar, every link and band control is at the tap floor, and a head's group control sits on its own line
+// when narrow and at the right from medium. The measured heads' end is recorded in the log line for the PR body.
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`the Stuck band, ${skin} ${theme} at ${width}px`, () => {
+        it('folds by default, ends within half a visible height of the fold at 667 tall, scrolls clear of the bar, and keeps every control at the tap floor', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            await page.setViewportSize({ width, height: 667 });
+            await page.locator('.stuck-band').waitFor({ timeout: 20_000 });
+            const m = await page.evaluate(() => {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              document.body.appendChild(probe);
+              const tap = probe.getBoundingClientRect().height;
+              probe.remove();
+              const bar = document.querySelector<HTMLElement>('.shell-phone-nav');
+              const barTop = bar !== null && getComputedStyle(bar).display !== 'none' ? bar.getBoundingClientRect().top : null;
+              const visible = barTop ?? innerHeight;
+              const heads = [...document.querySelectorAll<HTMLElement>('[data-testid="stuck-band"] .stuck-head')];
+              const last = heads[heads.length - 1]!.getBoundingClientRect();
+              const first = document.querySelector<HTMLElement>('.stuck-band')!.getBoundingClientRect();
+              const under = (el: Element): number => el.getBoundingClientRect().height;
+              return {
+                tap, visible, barTop, headCount: heads.length, lastBottom: last.bottom, bandTop: first.top,
+                folded: [...document.querySelectorAll('[data-testid="stuck-band"] .stuck-head-toggle')].every((b) => b.getAttribute('aria-expanded') === 'false'),
+                rows: document.querySelectorAll('li.run-stuck').length,
+                short: [...document.querySelectorAll('.stuck-band button, .runs-column a')].filter((el) => under(el) < tap - 1).map((el) => el.className || el.tagName),
+                page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              };
+            });
+            console.info(`stuck heads' end at ${width} ${skin} ${theme} (667 tall): ${Math.round(m.lastBottom)}px of ${Math.round(m.visible)}px visible`);
+            expect(m.headCount, 'all five heads').toBe(5);
+            expect(m.folded, 'every head folded by default').toBe(true);
+            expect(m.rows, 'no stuck row while folded').toBe(0);
+            expect(m.lastBottom - m.visible, 'the last head ends within half a visible height of the fold').toBeLessThanOrEqual(m.visible / 2);
+            expect(m.short, 'every link and band control at the tap floor').toEqual([]);
+            expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            if (width < 900) {
+              expect(m.barTop, 'the phone bar bounds the visible height').not.toBeNull();
+              await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+              const clear = await page.evaluate(() => {
+                const foot = document.querySelector<HTMLElement>('.runs-foot-link')!.getBoundingClientRect();
+                return { footBottom: foot.bottom, barTop: document.querySelector<HTMLElement>('.shell-phone-nav')!.getBoundingClientRect().top };
+              });
+              expect(clear.footBottom, 'the last fold scrolls clear of the bar').toBeLessThanOrEqual(clear.barTop + 1);
+            }
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+
+        it('opens a head to its rows, each inside its box, and puts a head\'s group control on its own line when narrow and at the right from medium', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            await page.locator('.stuck-band').waitFor({ timeout: 20_000 });
+            const heads = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.stuck-group')].map((g) => {
+              const head = g.querySelector('.stuck-head')!.getBoundingClientRect();
+              const toggle = g.querySelector('.stuck-head-toggle')!.getBoundingClientRect();
+              const group = g.querySelector('.stuck-head-group')?.getBoundingClientRect() ?? null;
+              return {
+                reason: g.getAttribute('data-reason'), headRight: head.right, headLeft: head.left, toggleBottom: toggle.bottom, toggleRight: toggle.right,
+                toggleMid: (toggle.top + toggle.bottom) / 2,
+                group: group === null ? null : { top: group.top, left: group.left, right: group.right, mid: (group.top + group.bottom) / 2 },
+              };
+            }));
+            const withControl = heads.filter((h) => h.group !== null);
+            expect(withControl.length, 'heads with a group control').toBeGreaterThanOrEqual(3);
+            for (const h of withControl) {
+              if (width < 640) {
+                expect(h.group!.top, `${h.reason}: the control sits on its own line`).toBeGreaterThanOrEqual(h.toggleBottom - 1);
+              } else {
+                expect(h.group!.right, `${h.reason}: the control sits at the right`).toBeGreaterThanOrEqual(h.headRight - 24);
+                expect(Math.abs(h.group!.mid - h.toggleMid), `${h.reason}: on the toggle's line`).toBeLessThanOrEqual(20);
+              }
+            }
+            await openHeads(page);
+            const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('li.run-stuck')].map((li) => {
+              const r = li.getBoundingClientRect();
+              return { title: li.title, overflow: li.scrollWidth - li.clientWidth, right: r.right, vw: innerWidth };
+            }));
+            expect(rows).toHaveLength(STUCK_RUNS.length);
+            for (const r of rows) {
+              expect(r.overflow, `${r.title} fits its box`).toBeLessThanOrEqual(1);
+              expect(r.right, `${r.title} ends inside the window`).toBeLessThanOrEqual(r.vw + 1);
+            }
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}

@@ -1,4 +1,4 @@
-// Child-reclamation wave 6, Task 12 (spec §5.9): the board's second trigger.
+// Child-reclamation wave 6, Task 12 (spec §5.9): the archive hook's second trigger (the board left this read in Task 12a, D-8074).
 // Wave 5 re-reads the archive when a finished child's session leaves the fleet
 // frame, but ccd journals the reclaim's end after the purge, so that read
 // usually races the server's journal mirror and the row reads no chip. The
@@ -6,10 +6,10 @@
 // the board re-reads once per CHANGE of it, never on null, never on a timer,
 // and only while some finished row is still unsettled.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import type { ChildReclaimStatus, CoordCapsView, CoordStatus, FleetSession, RunSummary } from '../../shared/api';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import type { ChildReclaimStatus, CoordStatus, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { RunsScreen } from './runs-board';
+import { useColdRuns } from '../src/screens/useColdRuns';
 import { childReclaimDoneRefreshDue, runHadChild } from '../src/fleet/runWords';
 import { childReclaimDoneAtOf } from '../src/fleet/childReclaimWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -37,7 +37,6 @@ const makeStore = (): FleetStore => createFleetStore({
   makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close(): void {} }) as unknown as WebSocket,
 });
 
-const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {});
 // ── end of copied fixtures ──
 
 const T = 1_758_500_000_000;
@@ -57,8 +56,8 @@ const board = async (rows: RunSummary[],
   act(() => { store.setState({ runs: [], runsFrameSeen: true, sessions: opts.sessions ?? [], fleetFrameSeen: true,
     coord: opts.coordSeen === false ? null : coordWith(opts.doneAt), coordFrameSeen: opts.coordSeen !== false }); });
   const loadRuns = vi.fn(async (): Promise<{ runs: RunSummary[] }> => ({ runs: rows }));
-  render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-  await screen.findByRole('group', { name: /finished/i });
+  const view = renderHook(() => useColdRuns(store, loadRuns));
+  await waitFor(() => expect(view.result.current.cold).not.toBeNull());
   expect(loadRuns).toHaveBeenCalledTimes(1);
   return { store, loadRuns };
 };
@@ -118,7 +117,7 @@ describe('runHadChild — the one reader of the wire field (D-8068)', () => {
   });
 });
 
-describe('the board re-reads the archive when the newest reclaim end changes (wave 6)', () => {
+describe('the archive hook re-reads when the newest reclaim end changes (wave 6; the board no longer holds this read, Task 12a, D-8074)', () => {
   it('re-reads once when the value changes and a finished row is still pending', async () => {
     const { store, loadRuns } = await board([finished(7, 'pending')], { doneAt: T });
     frame(store, coordWith(T + 1));
@@ -154,8 +153,8 @@ describe('the board re-reads the archive when the newest reclaim end changes (wa
     const loadRuns = vi.fn<() => Promise<{ runs: RunSummary[] }>>()
       .mockResolvedValueOnce({ runs: [finished(7, 'pending', true)] })
       .mockResolvedValue({ runs: [finished(7, null, true)] });
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
-    await screen.findByRole('group', { name: /finished/i });
+    const view = renderHook(() => useColdRuns(store, loadRuns));
+    await waitFor(() => expect(view.result.current.cold).not.toBeNull());
     act(() => { store.setState({ sessions: [] }); });           // wave 5's trigger: it reads, and races
     await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(2));
     await settle();

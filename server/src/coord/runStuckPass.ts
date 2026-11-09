@@ -156,8 +156,6 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
   }
 
   // THE FACTS of each open run, and the verdict.
-  const programmeOpen = new Map<string, number>();
-  for (const r of open) programmeOpen.set(r.program, (programmeOpen.get(r.program) ?? 0) + 1);
   const reviewedOpen = new Set(open.flatMap((r) => (r.kind === 'review' && r.reviews !== null ? [r.reviews] : [])));
   const factsOf = new Map<number, RunStuckFacts>();
   for (const r of open) {
@@ -190,7 +188,7 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
       dispatchedAt: r.dispatchedAt, lastMoveAt: lastMoveOf(r.id),
       claimant: c?.person ?? null, claimantJournal: cj, worker: w?.person ?? null, workerJournal: wj,
       target, laterReviewMoved: false, overtaken: overtakenAt !== null,
-      aloneInProgramme: (programmeOpen.get(r.program) ?? 0) === 1,
+      aloneInProgramme: false,
       reviewOpen: r.state === 'awaiting-review' ? reviewedOpen.has(r.id) : null,
       behind: null, times,
     });
@@ -198,7 +196,22 @@ async function pass(deps: RunStuckPassDeps): Promise<void> {
 
   // PHASE ONE: each run's verdict. PHASE TWO: a planned run behind the nearest earlier wave that is stuck.
   const now = deps.now();
+  // R1 (2026-11-08): "nothing else open" counts only open runs that are not themselves stuck. A run's own never-started
+  // verdict depends on its neighbours' verdicts, so every run is read first with `aloneInProgramme` false (no
+  // never-started), then re-read until no verdict changes. A verdict only ever turns on, so the loop ends.
   const stuck = new Map(open.map((r) => [r.id, runStuck(factsOf.get(r.id)!, now)] as const));
+  for (let changed = true; changed;) {
+    changed = false;
+    const unstuckOpen = new Map<string, number>();
+    for (const r of open) if (stuck.get(r.id) === null) unstuckOpen.set(r.program, (unstuckOpen.get(r.program) ?? 0) + 1);
+    for (const r of open) {
+      if (stuck.get(r.id) !== null || (unstuckOpen.get(r.program) ?? 0) !== 1) continue;
+      factsOf.set(r.id, { ...factsOf.get(r.id)!, aloneInProgramme: true });
+      const v = runStuck(factsOf.get(r.id)!, now);
+      stuck.set(r.id, v);
+      if (v !== null) changed = true;
+    }
+  }
   const answers = new Map<number, RunVerdict>();
   for (const r of open) {
     const f = factsOf.get(r.id)!;

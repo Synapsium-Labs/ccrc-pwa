@@ -80,7 +80,7 @@ export const ABANDON_COPY: Record<
  *  generic "request failed". Unlike that banner, every branch here returns a
  *  string (never `null`): this sheet has no ordinary-toast fallback to defer
  *  to — a failed abandon has nowhere else to be said. */
-function abandonErrorText(err: unknown): AbandonError {
+export function abandonErrorText(err: unknown): AbandonError {
   const said = abandonSentence(err);
   // "This run already closed." comes with a door to the record (spec 9.1): the close is the proof.
   const closed = err instanceof ApiError && err.status === 409 && said.startsWith(ABANDON_COPY['bad-transition']);
@@ -93,7 +93,7 @@ function abandonErrorText(err: unknown): AbandonError {
 }
 
 /** What the sheet says under a refusal: an optional lead sentence, the text, and whether a link to the record follows. */
-interface AbandonError { readonly lead: string | null; readonly text: string; readonly record: boolean }
+export interface AbandonError { readonly lead: string | null; readonly text: string; readonly record: boolean }
 
 function abandonSentence(err: unknown): string {
   if (!(err instanceof ApiError)) return ABANDON_COPY.unknown;

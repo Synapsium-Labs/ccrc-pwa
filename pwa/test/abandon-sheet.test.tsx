@@ -13,7 +13,7 @@
 // someone drops the line from `RunsScreen`.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import type { ChildMark, CoordCapsView, FleetSession } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -26,10 +26,11 @@ import { coordinatorGoneOf, runRowName } from '../src/fleet/runWords';
 import * as router from '../src/lib/router';
 import { ToastHost } from '@ccrc/ui';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { RunsScreen } from './runs-board';
+import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
+beforeEach(stuckOpen);
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 // Same shape as runs-screen.test.tsx's own `r()` — RunSummary as PR I
@@ -47,7 +48,9 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, reviewCap: null, hadChild: false,
+  // Abandon sits on stuck rows alone (D-8074, Task 13), so the board cases below find their run in the Stuck band.
+  stuck: STUCK_NOW, ...over,
 });
 
 // `runs-screen.test.tsx`'s own `sess` builder, verbatim: a full `FleetSession`
@@ -74,14 +77,15 @@ it("the run number survives in Abandon's and Resume's accessible names and the r
   const store = makeStore();
   act(() => {
     store.setState({
-      runs: [run()], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
+      // Abandon sits on the stuck run 3 (the Stuck band); Resume stays on an ordinary row, run 4.
+      runs: [run(), run({ id: 4, program: 'programme-b', stuck: undefined })], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
       sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
     });
   });
   const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Resume run 3' })).toBeInTheDocument();
-  const row = container.querySelector<HTMLElement>('li.run-row')!;
+  expect(screen.getByRole('button', { name: 'Resume run 4' })).toBeInTheDocument();
+  const row = container.querySelector<HTMLElement>('li.run-stuck')!;
   expect(row.title).toMatch(/\brun 3\b/);
   expect(row.title).toContain('clear-cove');
 });
@@ -484,8 +488,9 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // No session to open, yet the row opens the run's page (A9), and the release valve (an ambiguous-dispatch wedge is
     // exactly a `planned` run with no session) is still there.
-    expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+    // The run is stuck, so the band lists it and its programme group keeps it too (a second view, not a move).
+    expect(screen.getAllByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /abandon run 3/i }).length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -735,7 +740,7 @@ describe('the sheet lines (spec 9.1, F8, A52)', () => {
   const sheetText = (): string => document.querySelector('.abandon-sheet')?.textContent ?? '';
 
   it('the sheet repeats the row\'s name and context line verbatim', () => {
-    const r = run({ state: 'awaiting-review', waitsOn: 'coordinator' });
+    const r = run({ state: 'awaiting-review', waitsOn: 'coordinator', stuck: undefined });
     render(<AbandonSheet run={r} onClose={() => {}} />);
     expect(screen.getByText(runRowName(r))).toBeInTheDocument();
     expect(screen.getByText('Reviews done. Waits on its coordinator.')).toBeInTheDocument();

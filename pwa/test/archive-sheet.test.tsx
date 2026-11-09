@@ -76,7 +76,7 @@ describe('the confirm reads by case', () => {
     mount(s(), { archive, runs: [claimedRun(RUN7), claimedRun(RUN8), claimedRun({ ...RUN7, id: 6 }, 'done')] });
     expect(screen.getByText('It has 2 open runs. End its programme too?')).toBeInTheDocument();
     expect(screen.getByText('Its workers will be cleaned up.')).toBeInTheDocument();
-    expect(screen.getByText(/coordinator pause switch on the Runs screen/)).toBeInTheDocument();
+    expect(screen.getByText(/coordinator pause switch under Advanced on the Runs screen/)).toBeInTheDocument();
     expect(buttons()).toEqual(['End programme and archive', 'Cancel']);
     fireEvent.click(screen.getByRole('button', { name: 'End programme and archive' }));
     await waitFor(() => expect(archive).toHaveBeenCalledWith('demo-amber', { programme: 'end' }));

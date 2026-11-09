@@ -1,29 +1,20 @@
 // The run board. `/accounts`'s anatomy, run over a different list: route regex,
 // the data-view OR, the detail slot, a back control at the tap floor, one door.
 //
-// TWO sources, TWO DIFFERENT HALVES — never one switched for the other (fix
-// round 1, task 5, findings 1 and 3). The live `{type:'runs'}` frame
-// (`/ws/fleet`) is ACTIVE-ONLY by construction: `watch.ts`'s `emitRuns` calls
-// `coord.runs()` with no options, and `CoordStore.runs()` defaults to
-// excluding `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair). It
-// can never carry a finished run, so it is trusted for the ACTIVE half only —
-// the instant it has said anything at all, including an honestly empty `[]`
-// (`runsFrameSeen`,
-// `stores/fleet.ts`), because an empty array from a frame that DID arrive is
-// a true empty roster, not silence.
+// TWO sources, TWO DIFFERENT HALVES — never one switched for the other (fix round 1, task 5, findings 1 and 3; the runs
+// rebuild, Task 12a, D-8074). The live `{type:'runs'}` frame (`/ws/fleet`) is ACTIVE-ONLY by construction: `watch.ts`'s
+// `emitRuns` calls `coord.runs()` with no options, and `CoordStore.runs()` defaults to excluding `TERMINAL_RUN_STATES`
+// (`shared/api.ts`'s `done`/`failed` pair). It can never carry a finished run, so it is trusted for the OPEN half only, and
+// nothing else lists an open run: the instant it has said anything at all, including an honestly empty `[]`
+// (`runsFrameSeen`, `stores/fleet.ts`), the open half is answered, because an empty array from a frame that DID arrive is a
+// true empty roster, not silence. Before it, the open half says Loading…, whatever Finished answered.
 //
-// `GET /api/runs?closed=1` (`api.runs(true)`) is the COLD read: a deep link
-// straight to /runs, a server too old to send the frame at all — AND, always,
-// the only possible source of the FINISHED half, because `includeClosed` is
-// the only thing that drops that `WHERE` clause. It is issued UNCONDITIONALLY
-// on every mount (never gated on whether a live frame has already answered —
-// that gate is exactly what starved the Finished group the moment anything
-// was active) and it never races the live frame for the active half, because
-// the two are never merged into one slice: `finished` reads ONLY the cold
-// result, `active` reads `live` once `runsFrameSeen` is true and falls back to
-// the cold result's own active-filtered rows only before that (the cold-start
-// / old-server case). Polling would be a fourth cadence for data that changes
-// on human timescales; this reads it once and lets the socket carry updates.
+// `GET /api/runs/find` (`useRunList`, scope closed) is the FINISHED half: close order, 50 at a time, read on every mount and
+// again when a run leaves the frame. An older server has no `find`, and Finished then reads the unpaged archive
+// (`GET /api/runs?closed=1`) instead. The two halves are never merged into one slice. Polling would be a fourth cadence for
+// data that changes on human timescales; this reads once and lets the socket carry updates.
+//
+// The switches (pause, caps, child reclaim) left this screen for Advanced; the paused banner stays, only while paused.
 //
 // RunSummary's SHIPPED shape (`shared/api.ts`, PR I) diverges from the plan's
 // illustrative one on several points — no `waves` (it's `waveOf`), no
@@ -34,7 +25,7 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type CoordCapsView, type RunSummary } from '../../../shared/api';
+import { type RunSummary } from '../../../shared/api';
 import {
   FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun,
   programmeTitle, runState, runsByProgram, waveLabel, coordinatorOf, workerOf,
@@ -44,11 +35,8 @@ import { coordinatorPresence } from '../fleet/presence';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
 import { ReviewCapBand } from '../fleet/ReviewCapBand';
 import { CoordBanner } from '../fleet/CoordBanner';
-import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
-import { CapsControl } from '../fleet/CapsControl';
 import { ResumeSheet } from '../fleet/ResumeSheet';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
-import { api } from '../lib/api';
 import { inAppClick } from '../fleet/settingsText';
 import { navigate, useLocation } from '../lib/router';
 import { runParam, runPath, runQueryOf, runsAdvancedPath } from '../lib/routes';
@@ -59,25 +47,16 @@ import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
 
-/** The caps dial's default reader, module-scope like `useColdRuns.ts#loadColdRuns` and
- *  for the same reason: a stable identity rather than a fresh closure per
- *  render, so the control's own effect does not re-fire on every parent
- *  re-render. */
-const loadCapsDefault = (): Promise<CoordCapsView> => api.coordCaps();
-/** The board's archive reader (console speed S2): the paged `GET /api/runs?closed=1&limit=&before=`. Module-level, so its
- *  identity is stable across renders (`useColdRuns.ts#loadColdRuns`'s reason). The Inbox and Mail keep the unpaged
- *  `loadColdRuns`. */
-const loadColdRunsPage: PagedLoader = (limit, before) => api.runsPage(limit, before ?? null);
-/** How many closed runs one read of the archive asks for (console speed S2). */
-const ARCHIVE_PAGE = 50;
 /** Finished's own failure sentence: its read did not answer, so newer closes may be missing. */
 const FINISHED_UNREAD = 'Could not reach the server — finished runs may exist that are not shown.';
 
 import { RunRow } from './RunRow';
+import { StuckBand, WaitingBand, isStuckRun } from './StuckBand';
+import { stuckLine } from '../fleet/stuckWords';
 import { RunDetailScreen } from './RunDetailScreen';
 import { useMeasuredColumn } from './runColumn';
 import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
-import { loadColdRuns, useColdRuns, type PagedLoader } from './useColdRuns';
+import { loadColdRuns } from './useColdRuns';
 import { readFind, useRunList, type ArchiveReader, type FindReader } from './useRunList';
 
 
@@ -150,12 +129,10 @@ const ADVANCED_WORDS = 'Advanced';
 /** The board's props: the store, the injected reads, and the run open beside it, if any. */
 interface BoardProps {
   store?: FleetStore;
-  loadRuns?: PagedLoader;
   /** Finished's reader: `GET /api/runs/find`, the board's own fixed call. */
   loadFinished?: FindReader;
   /** The unpaged archive, read only when the server is too old to have `find`. */
   loadArchive?: ArchiveReader;
-  loadCaps?: () => Promise<CoordCapsView>;
   /** The run open in the broad pane, or null: its row is marked current and a search keeps it open. */
   openId?: number | null;
 }
@@ -194,24 +171,13 @@ export function RunsScreen(props: BoardProps): ReactNode {
 
 function RunsBoard({
   store = useFleetStore,
-  loadRuns = loadColdRunsPage,
   loadFinished = readFind,
   loadArchive = loadColdRuns,
-  loadCaps = loadCapsDefault,
   openId = null,
 }: {
   store?: FleetStore;
-  loadRuns?: PagedLoader;
   loadFinished?: FindReader;
   loadArchive?: ArchiveReader;
-  /** The caps dial's own read, injected HERE rather than left to
-   *  `CapsControl`'s default, for the reason `loadRuns` is: every loader this
-   *  screen sets going on mount is one a test must be able to hold, and a
-   *  component that reaches for the global `fetch` from inside the tree puts a
-   *  request into every test that renders the board. Measured — it broke the
-   *  resume-door test's `expect(fetchImpl).not.toHaveBeenCalled()`, which is a
-   *  guard worth keeping exactly as strict as it was. */
-  loadCaps?: () => Promise<CoordCapsView>;
   openId?: number | null;
 }): ReactNode {
   const live = store((s) => s.runs);
@@ -239,24 +205,19 @@ function RunsBoard({
   // screen over.
   const [startOpen, setStartOpen] = useState(false);
 
-  // The archive read — the only carrier of a finished run — with its race
-  // guard and the four transitions that re-fire it: `useColdRuns`. 170 lines,
-  // none of which rendered anything.
-  const { cold, state: coldState, timedOut, reload: loadColdPaged } =
-    useColdRuns(store, loadRuns, { page: ARCHIVE_PAGE });
-  // Finished reads `find` in close order (§8.2.3, F10, F18): its own state, its own rows, its own pages. The paged arm above
-  // now feeds `ChildReclaimBanner` and the pre-frame active rows only.
+  // Finished reads `find` in close order (§8.2.3, F10, F18): its own state, its own rows, its own pages. Nothing but the live
+  // frame lists open runs, and the paged archive read is gone (the runs rebuild, Task 12a, D-8074).
   const fin = useRunList({ scope: 'closed' }, { read: loadFinished, fallback: loadArchive, watch: { live, seen: runsFrameSeen } });
   const finishedState = fin.state;
   const hasOlder = fin.hasOlder;
   const reloadFinished = fin.reload;
   const loadOlder = fin.loadOlder;
   // Every act that closes or rewrites a run re-reads both: the banner's source and Finished's.
-  const loadCold = async (): Promise<void> => { await Promise.all([loadColdPaged(), reloadFinished()]); };
+  const loadCold = async (): Promise<void> => { await reloadFinished(); };
   // "Show older" (console speed S2): disabled while a page is on its way.
   const [olderBusy, setOlderBusy] = useState(false);
   // Only a page that FAILED says so: a page `dropped` as stale (a re-read landed meanwhile) is not an error, and the next tap
-  // asks again. It is the older page's own outcome, apart from the re-read's (`coldState`): only the next tap clears it.
+  // asks again. It is the older page's own outcome, apart from Finished's re-read: only the next tap clears it.
   const [olderFailed, setOlderFailed] = useState(false);
   const showOlder = (): void => {
     setOlderBusy(true);
@@ -273,16 +234,9 @@ function RunsBoard({
   const abandonSession = abandonTarget === null ? undefined : workerOf(abandonTarget, sessionById) ?? undefined;
   // The sheet's "Its coordinator is told." line asks `coordinatorGoneOf`, whose fallback is the board's reading of the claimant.
   const abandonPresence = abandonTarget === null ? 'unknown' : coordinatorPresence(abandonTarget.claimedBy, coordinatorOf(abandonTarget, sessionById), fleetFrameSeen);
-  // ACTIVE reads `live` the instant the socket has said anything at all
-  // (`runsFrameSeen`) — including an honest `[]`, which is what a run
-  // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
-  // instead (the pre-fix shape) could not tell "nothing is active" apart
-  // from "no frame has arrived yet", so the moment a run closed and the live
-  // frame correctly said `[]`, the board fell back to `cold` — a snapshot
-  // frozen at mount — and kept rendering the closed run as active
-  // indefinitely (finding 3, failure A). Before any frame has ever landed
-  // (a cold deep link, or a server too old to send the frame), `cold`'s own
-  // active-filtered rows are the best available answer.
+  // OPEN reads `live` alone, from the instant the socket has said anything at all (`runsFrameSeen`) — including an honest
+  // `[]`, which is what a run closing broadcasts. Before any frame has landed (a cold deep link, or a server too old to send
+  // it) `noSignalYet` holds and nothing is listed as open: no other read may stand in for the frame (Task 12a).
   //
   // `isRunClosed` (state), never `runClosedAt` (fix, review findings 3/22):
   // `closedAt` is written by exactly one path outside `reconstruct`, and
@@ -293,8 +247,7 @@ function RunsBoard({
   // `closedAt` filed those rows in NEITHER group the instant a live frame
   // excluded them by state, or in BOTH depending on which slice happened to
   // answer first. `state` is the same line `CoordStore.runs()` itself draws.
-  const active = (runsFrameSeen ? live : cold ?? live)
-    .filter((r) => !isRunClosed(r));
+  const active = live.filter((r) => !isRunClosed(r));
   // The tick, and it is deliberately declared HERE rather than up with the
   // other hooks: it reads `active`, which is the list it has to describe.
   //
@@ -322,21 +275,11 @@ function RunsBoard({
   // the reasoning). `finished` is not consulted: it holds closed runs by
   // construction, and `dispatchWindow` answers `none` for every closed state.
   const now = useNow(anyDispatchPending(active) ? 1_000 : 30_000);
-  // FINISHED reads ONLY `cold` — never `live`, which cannot carry a closed
-  // run by construction (see the file header). Reading it from the same
-  // `runs` slice `active` used (the pre-fix shape) meant the Finished group
-  // vanished the instant anything went active, because `live` winning that
-  // switch discarded whatever `cold` had found (finding 3, failure B).
-  //
-  // Memoised on `cold` (D-6442): the 1 s tick re-renders this screen, and a sort
-  // of up to 500 rows is no work for a tick to repeat. The FOLD is the other half:
-  // only the newest `shownFinished` rows mount, and a door adds the next batch.
-  // A `find` hit is slim, and the paged read's newest rows are whole (they carry the child-reclaim chip and the tally), so a
-  // hit the paged arm also holds draws from that row; the ORDER and the membership are `find`'s alone.
-  const finished = useMemo(() => {
-    const whole = new Map((cold ?? []).filter(isRunClosed).map((r) => [r.id, r] as const));
-    return (fin.rows ?? []).filter((r) => isRunClosed(r)).map((r) => whole.get(r.id) ?? r);
-  }, [fin.rows, cold]);
+  // FINISHED reads ONLY `find` (`fin`) — never `live`, which cannot carry a closed run by construction (see the file header).
+  // Memoised on the rows (D-6442): the 1 s tick re-renders this screen, and a filter of up to 500 rows is no work for a tick
+  // to repeat. The FOLD is the other half: only the newest `shownFinished` rows mount, and a door adds the next batch. A `find`
+  // hit is slim, so a Finished row carries no child-reclaim chip or tally; the ORDER and the membership are `find`'s alone.
+  const finished = useMemo(() => (fin.rows ?? []).filter((r) => isRunClosed(r)), [fin.rows]);
   // The fold is kept across a visit to a run (C2, the runs rebuild D-8072): a return finds Finished as it was left.
   const [foldAt, setFoldAt] = useState(() => Math.max(FINISHED_FOLD, keptBoard()?.fold ?? FINISHED_FOLD));
   const foldKept = useRef(foldAt);
@@ -402,23 +345,18 @@ function RunsBoard({
   // The click's own commit consumes the flag, whether or not focus moves: the
   // door unmounts with the last batch, so focus has to land somewhere that stays,
   // the group's heading, never the body (D-6442). "Last batch" is read from the
-  // committed state here, so a `cold` that grew meanwhile leaves the door, and
+  // committed state here, so rows that grew meanwhile leave the door, and
   // focus, where they are, and no flag outlives the click that set it.
   useEffect(() => {
     if (!focusHeadNext.current) return;
     focusHeadNext.current = false;
     if (shownFinished >= finished.length) finishedHead.current?.focus();
   }, [shownFinished, finished.length]);
-  // Review finding 19: neither half is trustworthy enough to assert "there
-  // are none of these" until IT has a real answer — `runsFrameSeen` for
-  // active, `coldState === 'ok'` for finished (finished has no other
-  // source). When NEITHER has ever answered, this screen knows nothing at
-  // all, and must say so rather than rendering the ordinary empty state.
-  //
-  // Console speed S2: a held answer (`cold` non-null) IS a signal, whatever `coldState` says now: a failed re-read over
-  // stored pages keeps its rows, and must not swap the board for "Could not reach the server".
-  // Finished answering says nothing about whether runs are OPEN (its `find` is a closed-only read), so it does not end this window.
-  const noSignalYet = !runsFrameSeen && coldState !== 'ok' && cold === null;
+  // Review finding 19: the open half is not trustworthy enough to assert "there are none of these" until the frame has answered
+  // (`runsFrameSeen`), and nothing else lists an open run. Until then the board says Loading…, or that the server could not be
+  // reached once Finished has failed, and never "No runs open." Finished's rows show below as they arrive: Finished
+  // answering says nothing about whether runs are OPEN (its `find` is a closed-only read), so it does not end this window.
+  const noSignalYet = !runsFrameSeen;
   // The board's own answer to "does this project already have a program
   // running?", handed to the sheet rather than fetched by it — the sheet's
   // composition is pinned at exactly two network calls
@@ -428,9 +366,8 @@ function RunsBoard({
   // answered, `new Set()` would tell the sheet this board had measured an empty
   // world; `null` says it has measured nothing, which is what is true. Both of
   // the paths that reach it (a cold deep link, a server too old to send the
-  // frame — the two `active`'s own comment above names) resolve to a measured
-  // set the moment `api.runs(true)` returns, so this is a window and not a dead
-  // end.
+  // frame) resolve to a measured set the moment a frame lands, so this is a
+  // window and not a dead end.
   //
   // Built from `active`, which is already `!isRunClosed`-filtered: a project
   // whose only run is `done` is not carrying a coordinator any more.
@@ -445,34 +382,21 @@ function RunsBoard({
   // door on?" — two questions over one list that stop agreeing the moment one
   // project carries two programs.
   //
-  // Built from `active`, and an EMPTY answer here is a measured empty rather
-  // than silence in every window this board passes through — which is the
-  // whole condition D-1146 turns on. A terminal row can only reach the screen
-  // through the cold read (`finished` has no other source), and the cold read
-  // is `?closed=1`, which carries the ACTIVE half too. So whenever there is a
-  // finished row on screen to ask this about, `active` is either the live
-  // frame's fleet-wide answer (`runsFrameSeen`) or that same cold read's own
-  // active rows — never the not-yet-answered `null` window, which renders no
-  // rows at all (`noSignalYet`, below). And the archive clamp cannot fake the
-  // condition either: `CoordStore.runs`'s `closedLimit` is ASYMMETRIC BY
-  // DESIGN (review finding 24) — it caps the newest closed rows and drops no
-  // active run at any age, so a truncated cold read can lose an archive row
-  // this door would have appeared on, never the open row whose presence
-  // WITHHOLDS it.
+  // Built from `active`, and an EMPTY answer here is a measured empty once the frame has answered, which is the whole
+  // condition D-1146 turns on. Before it (`noSignalYet`) Finished's rows can already be on screen, and then the answer is
+  // unknown, not empty: `rowFor` withholds the door for them. The archive clamp cannot fake the condition either:
+  // `CoordStore.runs`'s `closedLimit` is ASYMMETRIC BY DESIGN (review finding 24) — it caps the newest closed rows and drops
+  // no active run at any age, so a truncated read can lose an archive row this door would have appeared on, never the open
+  // row whose presence WITHHOLDS it.
   const programsOpen = programsWithOpenRun(active);
   const hasAny = active.length > 0 || finished.length > 0;
-  // I6 (residual): `coldState === 'error'` is a fact about the FINISHED half
-  // specifically — `active` can be fully answered by the live frame alone
-  // (`runsFrameSeen`) even while the cold read that is `finished`'s only
-  // source has failed outright. Before this, a failed cold read with
-  // `runsFrameSeen` already true skipped `noSignalYet` entirely (that guard
-  // reads `!runsFrameSeen`, and it IS seen) and fell straight through to
-  // `!hasAny`'s ordinary "No runs." the moment no run was active either — a
-  // POSITIVE claim about the program's whole history a failed archive read
-  // has no standing to make, the exact thing `noSignalYet`'s own comment
-  // above already refuses to do for the "never asked yet" case. Read below
-  // for the second half: active rows present, finished's own read failed.
-  const coldFailed = coldState === 'error' || finishedState === 'error';
+  // I6 (residual): a failed Finished read is a fact about the FINISHED half specifically — the open half can be fully
+  // answered by the live frame alone (`runsFrameSeen`) while Finished's `find` has failed outright. With the frame seen and no
+  // run open, `!hasAny` would fall straight through to the ordinary "No runs open." — a POSITIVE claim about the program's
+  // whole history that a failed read has no standing to make. Read below for the second half: open rows present, Finished
+  // failed.
+  const coldFailed = finishedState === 'error';
+  const timedOut = fin.timedOut;
   // A read that ran out of time (C1's `ApiTimeout`) says so and offers to read again (§8.2); any other failure keeps the
   // sentence it always had.
   const failedLine: ReactNode = timedOut ? (
@@ -512,11 +436,58 @@ function RunsBoard({
       session={workerOf(run, sessionById)}
       coordSession={coordinatorOf(run, sessionById)}
       frameSeen={fleetFrameSeen}
-      programHasOpenRun={programsOpen.has(run.program)}
-      onAbandon={setAbandonTarget}
+      // Unknown, not empty, until the frame answers: a Finished row offers no Resume while an open wave may exist.
+      programHasOpenRun={noSignalYet || programsOpen.has(run.program)}
       onResume={setResumeTarget}
       current={run.id === openId}
     />
+  );
+
+  const finishedGroup: ReactNode = (
+      finished.length > 0 || finishedState === 'older' ? (
+        <div className="runs-group" role="group" aria-label={`finished (${finished.length})`}>
+          <p className="runs-group-head" ref={finishedHead} tabIndex={-1}>
+            <span className="runs-program">Finished</span>
+          </p>
+          <ul className="runs-list">
+            {finished.slice(0, shownFinished).map((run) => rowFor(run, finishedNow))}
+          </ul>
+          {finishedState === 'older' && <p className="runs-info" data-info="older-server">{FINISHED_OLDER}</p>}
+          {/* One quiet control at the foot of Finished. It unfolds the loaded rows first; once every loaded row is
+              shown it asks for the next page ("Show older", console speed S2), so a tap always changes something the
+              operator can see. The two are never offered together, so they are one control. */}
+          {(shownFinished < finished.length || hasOlder) && (
+            <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
+              disabled={shownFinished >= finished.length && olderBusy}
+              onClick={shownFinished < finished.length ? showMoreFinished : showOlder}>
+              {shownFinished < finished.length
+                ? finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
+                  finished.length - shownFinished)
+                : 'Show older'}
+            </Button>
+          )}
+          {/* Two failures, two lines, each its own fact (fix round 2, F3, F4): a failed re-read (a remount's background
+              read included) says newer closes may be missing, beside the stored rows (Step 6); a failed "Show older"
+              says older ones did not load. Both failed, both show. */}
+          {coldFailed && <EmptyState data-state="error">{timedOut ? failedLine : FINISHED_UNREAD}</EmptyState>}
+          {hasOlder && shownFinished >= finished.length && olderFailed && (
+            <EmptyState data-state="error">Could not load older runs.</EmptyState>
+          )}
+        </div>
+      ) : coldFailed ? (
+        // I6, second half: at least one run is active (this branch is
+        // only reached via `hasAny`), so the board is not empty — but
+        // `finished` is empty ONLY because its one source, `find`,
+        // failed, never because the archive is honestly empty
+        // (an answered read with zero rows renders nothing here, on
+        // purpose — that IS an answered, empty Finished group). Silently
+        // omitting the whole group here reads as "nothing has ever
+        // finished", which the board has no standing to claim.
+        <div className="runs-group" role="group" aria-label="finished, unknown">
+          <p className="runs-group-head"><span className="runs-program">Finished</span></p>
+          <EmptyState data-state="error">{timedOut ? failedLine : FINISHED_UNREAD}</EmptyState>
+        </div>
+      ) : null
   );
 
   return (
@@ -526,6 +497,11 @@ function RunsBoard({
       wide
       title="Runs"
       back={backToFleet('runs-back')}
+      actions={(
+        <Button variant="quiet" size="fit" className="program-start-door text-xs leading-none" onClick={() => setStartOpen(true)}>
+          Start a program
+        </Button>
+      )}
     >
 
       <RunFindBox value={findText} onChange={typeFind} />
@@ -542,51 +518,41 @@ function RunsBoard({
         </div>
       )}
 
-      {/* Task 11, spec §4.2: the coordination surface's own pause readout —
-          `/runs` and nowhere else (FleetScreen never mounts this). Renders
-          nothing until the first `{type:'coord'}` frame has arrived
-          (`CoordBanner`'s own `coordFrameSeen` gate). */}
-      <CoordBanner store={store} />
+      {/* The paused banner (§8.2 item 3): only while coordination is paused. The switch itself lives under Advanced. */}
+      <CoordBanner store={store} onlyWhilePaused />
 
-      {/* Child-reclamation wave 4 (spec §5.8, §5.9): the reclaim switch and the
-          attention list, one row under the pause banner — `/runs` and nowhere
-          else, rendering nothing until a coord frame that carries the field. */}
-      {/* D-5527: the banner names a reclaim target by its programme and wave, and a
-          reclaim follows a run's CLOSE, so it is handed the finished runs too. */}
-      <ChildReclaimBanner store={store} runs={[...live, ...(cold ?? [])]} />
+      {/* The Stuck band (§8.2 item 4): one head per reason, right under the paused banner, so no healthy work sits above it.
+          The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. The group control opens the group sheet (Task 14). */}
+      {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget}
+        presence={(r) => coordinatorPresence(r.claimedBy, coordinatorOf(r, sessionById), fleetFrameSeen)} onGroupDone={() => { void loadCold(); }} />}
 
-      {/* Wave 6, spec §8: the operator's dial on the two coordination caps,
-          beside the pause control and on `/runs` alone. Renders nothing until
-          its own read lands — and nothing at all on a box with no coordination
-          database, where the caps do not exist to be shown. */}
-      <CapsControl coordCaps={loadCaps} />
+      {/* Waiting on its coordinator (§8.2 item 6): one folded row below Stuck; a stuck run is in the Stuck band alone (R2). */}
+      {!finding && !noSignalYet && <WaitingBand runs={active} nowMs={now} openId={openId}
+        coordinatorOpenable={(r) => coordinatorOf(r, sessionById) !== null} />}
 
-      {/* Task 13, spec §4.4: ONE door, rendered here regardless of the
-          board's own state below — a program starts before any run exists
-          to show. */}
-      <Button variant="quiet" size="fit" className="program-start-door text-xs leading-none" onClick={() => setStartOpen(true)}>
-        Start a program
-      </Button>
-
-      {/* D-6911: every open work run whose review cap waits on the operator, above the groups. Reads `active`, so a
-          closed run never waits; renders nothing when no run does. */}
+      {/* D-6911: every open work run whose review cap waits on the operator. It sits below where the Stuck band goes (Task 13)
+          until review caps join `/waiting` (Task 24); renders nothing when no run waits. */}
       <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
 
       {finding ? <RunFindResults q={findText} store={store} openId={openId} /> : (<>
       {!noSignalYet && <RunInfoLines runs={active} />}
       {noSignalYet ? (
         // Review finding 19: neither source has answered yet, so this is not
-        // "no runs" — it is "no answer". `coldState === 'error'` only after
-        // the cold read has actually failed; until then this is the ordinary
+        // "no runs" — it is "no answer". The failed line only after
+        // Finished's read has actually failed; until then this is the ordinary
         // in-flight window every mount passes through.
-        <EmptyState data-state={coldFailed ? 'error' : 'loading'}>
-          {coldFailed ? failedLine : 'Loading…'}
-        </EmptyState>
+        <>
+          <EmptyState data-state={coldFailed ? 'error' : 'loading'}>
+            {coldFailed ? failedLine : 'Loading…'}
+          </EmptyState>
+          {/* Finished's own rows show as they arrive, whatever the open half is waiting on. */}
+          {finished.length > 0 || finishedState === 'older' ? finishedGroup : null}
+        </>
       ) : !hasAny ? (
         // I6: `noSignalYet` above only covers the "nothing has answered at
         // all" window — once the live frame has said `runsFrameSeen`, this
-        // arm is reached even with `active` honestly empty AND the cold
-        // read (finished's only source) having FAILED. That is not "No
+        // arm is reached even with `active` honestly empty AND
+        // Finished's read having FAILED. That is not "No
         // runs" either: it is "no active runs, and the archive could not be
         // read", which must say so rather than claim the program's whole
         // history is empty.
@@ -627,50 +593,7 @@ function RunsBoard({
             );
           })}
 
-          {finished.length > 0 || finishedState === 'older' ? (
-            <div className="runs-group" role="group" aria-label={`finished (${finished.length})`}>
-              <p className="runs-group-head" ref={finishedHead} tabIndex={-1}>
-                <span className="runs-program">Finished</span>
-              </p>
-              <ul className="runs-list">
-                {finished.slice(0, shownFinished).map((run) => rowFor(run, finishedNow))}
-              </ul>
-              {finishedState === 'older' && <p className="runs-info" data-info="older-server">{FINISHED_OLDER}</p>}
-              {/* One quiet control at the foot of Finished. It unfolds the loaded rows first; once every loaded row is
-                  shown it asks for the next page ("Show older", console speed S2), so a tap always changes something the
-                  operator can see. The two are never offered together, so they are one control. */}
-              {(shownFinished < finished.length || hasOlder) && (
-                <Button variant="quiet" size="fit" className="runs-finished-more text-xs leading-none"
-                  disabled={shownFinished >= finished.length && olderBusy}
-                  onClick={shownFinished < finished.length ? showMoreFinished : showOlder}>
-                  {shownFinished < finished.length
-                    ? finishedMoreLabel(Math.min(FINISHED_FOLD, finished.length - shownFinished),
-                      finished.length - shownFinished)
-                    : 'Show older'}
-                </Button>
-              )}
-              {/* Two failures, two lines, each its own fact (fix round 2, F3, F4): a failed re-read (a remount's background
-                  read included) says newer closes may be missing, beside the stored rows (Step 6); a failed "Show older"
-                  says older ones did not load. Both failed, both show. */}
-              {coldFailed && <EmptyState data-state="error">{timedOut ? failedLine : FINISHED_UNREAD}</EmptyState>}
-              {hasOlder && shownFinished >= finished.length && olderFailed && (
-                <EmptyState data-state="error">Could not load older runs.</EmptyState>
-              )}
-            </div>
-          ) : coldFailed ? (
-            // I6, second half: at least one run is active (this branch is
-            // only reached via `hasAny`), so the board is not empty — but
-            // `finished` is empty ONLY because its one source, the cold
-            // read, failed, never because the archive is honestly empty
-            // (`coldState==='ok'` with zero rows renders nothing here, on
-            // purpose — that IS an answered, empty Finished group). Silently
-            // omitting the whole group here reads as "nothing has ever
-            // finished", which the board has no standing to claim.
-            <div className="runs-group" role="group" aria-label="finished, unknown">
-              <p className="runs-group-head"><span className="runs-program">Finished</span></p>
-              <EmptyState data-state="error">{timedOut ? failedLine : FINISHED_UNREAD}</EmptyState>
-            </div>
-          ) : null}
+          {finishedGroup}
         </>
       )}
 
@@ -687,15 +610,16 @@ function RunsBoard({
           (Step 5) so an abandoned run moves into Finished — the live frame's
           own vanish-diff (above) also fires for the same close, and both
           landing is harmless because they feed separate slices (`active`
-          from `live`, `finished` from `cold`, never merged). */}
-      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)} coordinatorPresence={abandonPresence}
+          from `live`, `finished` from `find`, never merged). */}
+      <AbandonSheet run={abandonTarget} contextLine={abandonTarget !== null && isStuckRun(abandonTarget) ? stuckLine(abandonTarget, now) : undefined}
+        workspaceChild={abandonChildOf(abandonSession)} coordinatorPresence={abandonPresence}
         onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
       {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
           the program, terminal ones included (contract R1), and the finished
-          half of this board has no source but the cold read. */}
+          half of this board has no source but its `find` read. */}
       <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
-      {/* D-6911: the live `runs` frame carries the lift on the watcher's next tick; `loadCold()` re-reads the board
+      {/* D-6911: the live `runs` frame carries the lift on the watcher's next tick; `loadCold()` re-reads Finished
           for a session with no frame yet. */}
       <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => { void loadCold(); }} />
       <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}

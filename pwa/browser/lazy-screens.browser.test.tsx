@@ -101,9 +101,11 @@ const drawn = async (page: Page): Promise<void> => {
   return pane.querySelector('p.shell-placeholder-copy[role="status"]') === null
     && !/This screen could not be (shown|loaded)\./.test(pane.textContent ?? '')
     && pane.querySelector('button, h1, h2') !== null
-    // /runs: the caps dial draws nothing until `coordCaps()` resolves (`CapsControl.tsx`), so the snapshot waits for its
-    // number field (desk-nav Task A review 1646 A1; desktop-polish Task C14, D-8110). Every other route waits as before.
-    && (location.pathname !== '/runs' || pane.querySelector('.caps-input') !== null);
+    // /runs: the board's own reads must have answered before the snapshot (desk-nav Task A review 1646 A1; desktop-polish
+    // Task C14, D-8110). The caps dial moved to /runs/advanced (D-8074, Task 12a), so the board waits for its foot link
+    // and for no "Loading…" of its own (Finished's read). Every other route waits as before.
+    && (location.pathname !== '/runs'
+      || (pane.querySelector('a[href="/runs/advanced"]') !== null && !/Loading…/.test(pane.textContent ?? '')));
     }, undefined, { timeout: 30_000 });
   } catch (err) {
     const pane = await page.evaluate(() => document.querySelector('.shell-detail')?.outerHTML.slice(0, 600) ?? 'no pane');

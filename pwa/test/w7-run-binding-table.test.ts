@@ -69,7 +69,7 @@ vi.mock('../src/fleet/AbandonSheet', async (orig) => {
   };
   return { ...m, AbandonSheet: Spy };
 });
-const { RunsScreen } = await import('./runs-board');
+const { RunsScreen, STUCK_NOW, stuckOpen } = await import('./runs-board');
 
 const W = 'session-a';
 const C = 'coord-a';
@@ -154,6 +154,14 @@ async function board(sc: Scenario): Promise<{ rows: Map<number, { session: strin
     const last = [...seen.rows].reverse().find((x) => x.run === id);
     rows.set(id, { session: last?.session ?? null, coord: last?.coord ?? null, resume: screen.queryByRole('button', { name: `Resume run ${id}` }) !== null });
   }
+  // Abandon sits on stuck rows alone (D-8074, Task 13): the same world is drawn again with every open run stuck, and the
+  // sheet's child word is read off the door in the Stuck band. The rows above came from the ordinary board.
+  cleanup();
+  stuckOpen();
+  const stuckStore = makeStore(sc);
+  act(() => { stuckStore.setState({ runs: sc.live.map((r) => ({ ...r, stuck: STUCK_NOW })) }); });
+  render(createElement(RunsScreen, { store: stuckStore, loadRuns: async () => ({ runs: [...sc.cold] }), loadCaps: NO_CAPS }));
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
   const abandon = new Map<number, AbandonChild>();
   for (const id of sc.focus) {
     const door = screen.queryByRole('button', { name: `Abandon run ${id}` });

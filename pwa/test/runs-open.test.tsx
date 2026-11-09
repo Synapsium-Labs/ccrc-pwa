@@ -9,7 +9,7 @@ import { FINISHED_FOLD } from '../src/fleet/runWords';
 import { ApiTimeout } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { runPath, runsRunHref } from '../src/lib/routes';
-import { RunsScreen } from './runs-board';
+import { RunsScreen, foundRows } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { clearScreenCache } from '../src/lib/screenCache';
 
@@ -184,16 +184,16 @@ describe('the board\'s states (§8.2)', () => {
 
   it('Could not load runs. Try again. on ApiTimeout, with a Try again control that reads again', async () => {
     const store = makeStore();
-    const loadRuns = vi.fn()
-      .mockRejectedValueOnce(new ApiTimeout('/api/runs', 8_000))
-      .mockResolvedValue({ runs: [] });
-    render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+    const loadFinished = vi.fn()
+      .mockRejectedValueOnce(new ApiTimeout('/api/runs/find', 8_000))
+      .mockResolvedValue(foundRows([]));
+    render(<RunsScreen store={store} loadFinished={loadFinished} />);
     expect(await screen.findByText('Could not load runs. Try again.')).toBeInTheDocument();
     expect(screen.queryByText('No runs open.')).toBeNull();
-    const calls = loadRuns.mock.calls.length;
+    const calls = loadFinished.mock.calls.length;
     act(() => { store.setState({ runs: [], runsFrameSeen: false }); });
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    await waitFor(() => expect(loadRuns.mock.calls.length).toBeGreaterThan(calls));
+    await waitFor(() => expect(loadFinished.mock.calls.length).toBeGreaterThan(calls));
     await waitFor(() => expect(screen.queryByText('Could not load runs. Try again.')).toBeNull());
   });
 

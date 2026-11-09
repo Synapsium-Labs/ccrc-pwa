@@ -236,6 +236,12 @@ const CONTROLS: Record<string, string> = {
   'fleet/AbandonSheet.tsx <a> (computed)':
     'VARIANT buttonVariants. The abandon sheet\'s two stand-alone links (the runs rebuild, D-8073): "See this run" and, under '
     + '"This run already closed.", "Open record": `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks.',
+  'fleet/GroupAbandonSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. The group sheet\'s "Open record" links (the runs rebuild, D-8074): `GHOST_ANCHOR`, the ghost button on an anchor, '
+    + 'whose `min-h-tap` this census checks.',
+  'fleet/GroupAbandonSheet.tsx <button> group-abandon-row':
+    'TOKEN. A ticked run in the group sheet (D-8074): the whole line is one `role="checkbox"` button, and `.group-abandon-sheet .group-abandon-row` '
+    + 'declares the floor.',
   'accounts/RunFrame.tsx <a> (computed)':
     'VARIANT buttonVariants. The sign-in URL card\'s Open ↗ (accounts plan Task A22, D-7849): the primary at ≥900 (52px, '
     + '`acct-open-primary`) and the ghost below 900 (`GHOST_ANCHOR`). An anchor, not a button, because it opens the '
@@ -275,7 +281,12 @@ const CONTROLS: Record<string, string> = {
     + '`metaChipTone()` doors, which the rail has the room to raise to the floor the header\'s chips are ruled under.',
   'screens/MailScreen.tsx <button> mail-chip': 'TOKEN. Both filter chips.',
   'screens/RunFind.tsx <a> rf-link': 'TOKEN. A search result (the runs rebuild, D-8072): the whole result row is the link, `--tap-min` tall in run-find.css.',
-  'screens/RunRow.tsx <button> run-abandon': 'TOKEN. The abandon door.',
+  'screens/StuckBand.tsx <button> run-abandon': 'TOKEN. The abandon door, on a stuck row alone (the runs rebuild, D-8074).',
+  'screens/StuckBand.tsx <button> run-open': 'TOKEN. A stuck row\'s open door: `.run-row .run-open` declares the floor.',
+  'screens/StuckBand.tsx <button> stuck-head-toggle': 'TOKEN. A Stuck head\'s fold toggle (D-8074): `.stuck-head .stuck-head-toggle` declares the floor.',
+  'screens/StuckBand.tsx <a> run-waiting-line': 'TOKEN. The "Waits behind a stuck run." link on a Waiting row (D-8074): `.run-row .run-waiting-line` declares the floor.',
+  'screens/StuckBand.tsx <a> run-coordinator': 'TOKEN. A Waiting row\'s Open the coordinator link (D-8074): `.run-row .run-coordinator` declares the floor.',
+  'screens/StuckBand.tsx <button> stuck-head-group': 'TOKEN. A Stuck head\'s group control (D-8074): `.stuck-head .stuck-head-group` declares the floor.',
   'screens/RunRow.tsx <button> run-open': 'TOKEN. The open door.',
   'screens/RunRow.tsx <button> run-resume': 'TOKEN. The resume door.',
   'screens/RunDetailScreen.tsx <a> rd-wait-link': 'TOKEN. The link a planned run behind a stuck run draws in the header (the runs rebuild, D-8072): `.rd-wait-link` declares the floor.',

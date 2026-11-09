@@ -193,7 +193,6 @@ describe('ReadOpts reach the polled reads', () => {
     ['linearWorkspaces', (a, o) => a.linearWorkspaces(o)],
     ['digest', (a, o) => a.digest(undefined, o)],
     ['passkeys', (a, o) => a.passkeys(o)],
-    ['runsPage', (a, o) => a.runsPage(50, null, o)],
   ];
   it.each(cases)('%s honours the caller signal', async (_name, call) => {
     const api = createApi(ok() as unknown as typeof fetch);
@@ -202,21 +201,5 @@ describe('ReadOpts reach the polled reads', () => {
     await expect(call(api, { signal: ctl.signal })).rejects.toMatchObject({ name: 'AbortError' });
     const live = new AbortController();
     await expect(call(api, { signal: live.signal }), 'a live signal reads as before').resolves.toBeDefined();
-  });
-});
-
-describe('runsPage, the archive page read', () => {
-  it('asks for one page and reads nextBefore', async () => {
-    const fetchImpl = vi.fn(async (_url: string) => new Response(JSON.stringify({ runs: [], nextBefore: 41 }), { status: 200 }));
-    const api = createApi(fetchImpl as unknown as typeof fetch);
-    await expect(api.runsPage(50, 100)).resolves.toEqual({ runs: [], nextBefore: 41 });
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/runs?closed=1&limit=50&before=100');
-  });
-
-  it('the first page sends no before', async () => {
-    const fetchImpl = vi.fn(async (_url: string) => new Response(JSON.stringify({ runs: [] }), { status: 200 }));
-    const api = createApi(fetchImpl as unknown as typeof fetch);
-    await expect(api.runsPage(50, null)).resolves.toEqual({ runs: [] });
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/runs?closed=1&limit=50');
   });
 });
