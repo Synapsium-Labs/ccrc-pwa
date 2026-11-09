@@ -61,6 +61,8 @@ The programme is complete when all six hold:
    superseded by the skip ruling. Run 1190's drafts (#1876) are either accepted as W3's plan and W4's addendum or
    superseded by them, and never sidestepped by a fresh run that evades their review cap. Each of these needs an
    authorised act. Run 1022's continuity role ends with the final run, which closes only when no other run is open.
+   (2026-11-09: run 1022 was ended earlier, under CP-26 and CP-61, once W3's first run was open. The open runs now
+   hold the programme open; see the current checkpoint.)
 5. **Recall use is reported, not gated.** One read-only report shows how sessions use recall, from the existing
    `recall_calls` rows (one row per read-verb call: verb, exit code and duration, never the query text), over a
    stated window: calls per family, the share answered "not found" (exit 3), and expands per grep. It sets no
@@ -105,8 +107,10 @@ stand. The evidence is under "Latest rulings and evidence — 2026-11-08 to 2026
   (item 86), whose result do-item 111 waits for.
 - **Held runs.** Runs 1233 and 1236 are closed as superseded and #1969 and #1975 are closed unmerged (item 87). Run
   1190 is done, its drafts accepted and merged. Holding run 1022 was ended with the abandon arm at 19:43Z, once W3's
-  first run was open (CP-26, CP-61). Runs 1713 and 1714 now hold the programme open, and its final run still closes
-  only when no other run is open (definition of done, item 4).
+  first run was open (CP-26, CP-61). Done-item 4 had said that run 1022's role ends with the final run. The
+  coordinator read CP-26 and CP-61 as the authorised disposition the current route asks for, and the operator may
+  rule otherwise. Runs 1713 and 1714 now hold the programme open, and its final run still closes only when no other
+  run is open.
 - **The 2026-11-07 ledger update** (#2454) landed on 2026-11-08 at 21:04Z as `bda5e87a6`, on one new landing
   attempt the operator authorised (item 97).
 - **Recall use** was reported on 2026-11-07 (definition of done, item 5).
@@ -320,10 +324,11 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
   - **0 of 3,793** distinct boundaries carry the field, including all 177 written by 2.1.319. The precompute path is
     not live, and O3 stands as ruled. The spike report re-takes the count over its cohort's range. Limit: a transcript
     that retention already deleted is not counted.
-  - The evidence file is in the coordinator's clips. An independent re-derivation matched the counts.
+  - The evidence file is in the coordinator's clips. A read-only verification workflow re-derived the counts
+    independently at 11:50Z and matched them. By then the store held one more boundary blob, 5,007.
 - **Fix round 14, the land-prep (mail 16911).** The round was bounded to the two documents:
   - a dated note at the top of each, recording the approval and act 1;
-  - five status lines that the acceptance would have left stale;
+  - six status lines that the acceptance would have left stale;
   - the PR's title, and marking the PR ready.
 
   The coordinator wrote the expected documents before sending the round. The worker's commit `5f80a91ac`
@@ -370,7 +375,11 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
     - whether the meta carries `agent_type`; else NULL;
     - the live `node_refs` row count.
 
-    They gate CP-73's canonical share, not W4-1's merge, and no build worker measures live state.
+    P12 (b) gates CP-73's canonical share: no workflow file counts toward it until (b), or its fallback (c), is
+    settled. The `node_refs` count sets the fixture for P9's and P13's p95 under W4-4, and holds TC20's and TC23's
+    order until then. `agent_type` decides whether SA16 fills the column or leaves it NULL. None of the three gates
+    W4-1's merge, and no build worker measures live state. Run 1714's brief said all three gate CP-73's canonical
+    share; the coordinator corrected that by mail 17025.
 - **Holding run 1022 ended (CP-26, CP-61).** Once run 1713 was open, the coordinator ended run 1022 with the abandon
   arm at 19:43Z, as CP-26 and CP-61 direct. The current route keeps run 1022 open "until an authorised
   continuity-preserving successor/disposition". Under those two rows, W3's first run is that successor. Runs 1713
@@ -2358,7 +2367,8 @@ holds over an earlier one for the same item.
 2. #1876 merged on 2026-11-09 as the accepted W3 plan and the approved W4 addendum (item 121), and #1969 and #1975
    are closed unmerged (item 87). Next, on each wave-done from run 1713 (W3-1) and run 1714 (the W4 plan): re-measure
    it, then dispatch a held-out review run. W3-1's held numbers, 8135 to 8138, are licensed only by the
-   coordinator. The W4 plan's three read-only measurements are the coordinator's acts, and they gate CP-73.
+   coordinator. The W4 plan's three read-only measurements are the coordinator's acts: P12 (b) gates CP-73's
+   canonical share, and the other two set W4-4's cost fixture and SA16's value.
 3. Test-only #2063 and run 1320 are complete: independently proven exact-head merge, accepted MERGED mail before
    accepted final close, `done/released` and a separately read terminal row. Review 1321 is also done/released.
    Do not repeat enqueue, mail, close or review, or read the worker diff in the coordinator. Retain the minor
