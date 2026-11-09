@@ -32,7 +32,7 @@ import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { FleetCards } from '../fleet/FleetCards';
 import { BucketBar } from '../fleet/BucketBar';
 import { FleetHead } from '../fleet/FleetHead';
-import { ProjectsHead } from '../fleet/ProjectsHead';
+import { NewProjectDoor } from '../fleet/NewProjectDoor';
 import { useFleetChrome } from '../fleet/FleetChrome';
 import { useFleetFlows } from '../fleet/FleetFlows';
 import { PROJECT_ADD_TEXT } from '../fleet/projectAddWords';
@@ -291,6 +291,9 @@ export function FleetScreen({
             Runs · {runsLabel}
           </BareRow>
           <ClassChooser />
+          {/* The New project door rides this line where there is a list to add to (`NewProjectDoor`); the first-run
+              panel has its own. */}
+          {sessions.length > 0 && <NewProjectDoor inline onNewProject={flows.openAddProject} />}
         </div>
       )}
 
@@ -331,8 +334,8 @@ export function FleetScreen({
               counts itself (Instrument's status heads, and its own bar in project mode), so a second set of chips
               above it would count every bucket twice. A part fact, never a skin name; the shared cards (Refined, or
               no frame) have no counts of their own, so they keep this bar. */}
-          {/* The New project door at the head of the list it adds to (add-project spec §2, as redrawn), on every skin. */}
-          <ProjectsHead named={FleetList === null} onNewProject={flows.openAddProject} />
+          {/* Where no runs line carries the New project door (Instrument's desk column), a row of its own heads the list. */}
+          {!runsLine && <NewProjectDoor inline={false} onNewProject={flows.openAddProject} />}
           {FleetList === null && <BucketBar sessions={sessions} acks={acks} ackAll={ackAll} />}
 
           {/* The list itself: the skin's own (Instrument's status-grouped table, W2 Task S10, D-5473), or the shared

@@ -10,7 +10,7 @@ The operator asked for this: *"add a new project to ccrc, from a GitHub repo or 
 
 Today a project is a directory under the projects root on the fleet box. Only someone with a shell there can create one, by running `git clone` into `~/projects` by hand. The prototype adds one door for it:
 
-- **PWA:** a **New project** door at the head of the fleet list and in the first-run panel, and an inline add in the
+- **PWA:** a **New project** door above the fleet list (on its runs line) and in the first-run panel, and an inline add in the
   **Start a session** sheet (§2, redrawn 2026-11-09). The form has two choices:
   - **From GitHub:** `owner/repo`, a github.com URL, or the scheme-less `github.com/owner/repo` a browser's address bar gives.
   - **Empty:** a fresh `git init`.
@@ -38,11 +38,11 @@ The new directory is listed by the existing `GET /api/projects` walk. The route 
 
 Redrawn on 2026-11-09, after the operator could not find the first prototype's grey row under the last project card.
 An operator adds a project because they want to work in it, so the main way in is the **Start a session** sheet, where
-they notice the project is missing. The fleet screen keeps a visible door at the head of its list.
+they notice the project is missing. The fleet screen keeps a visible door just above its list.
 
 ```
  Fleet ─────────────────────────────
-  Projects               [ + New project ]   ← head over the list (Instrument: the door alone)
+  Runs · 8 active  [Automatic ▾] [+ New project]   ← on the runs line; a row of its own where none
   [project cards …]
 
  ┌ Start a session · step 2 ─────────┐
@@ -75,7 +75,10 @@ they notice the project is missing. The fleet screen keeps a visible door at the
 - A refusal stays in the form, and the typed text is kept.
 - An empty project can take a session started in its main checkout. It cannot take a workspace until it has a GitHub
   `origin`, because `ws-add` refuses with `no origin/HEAD`. The success toast for the Empty choice says so.
-- The first-run panel (a fleet with no sessions) keeps its own **New project** button: it has no list to head.
+- The fleet door rides the runs line, the full-width row just above the list, because a row of its own pushed the
+  first session row past the phone's height budget (`refined-phone.browser.test.ts`). Where no runs line is drawn
+  (Instrument's desk column) it takes a row of its own.
+- The first-run panel (a fleet with no sessions) keeps its own **New project** button: it has no list.
 
 ## 3. The shared vocabulary (L0, `shared/projectAdd.ts`)
 

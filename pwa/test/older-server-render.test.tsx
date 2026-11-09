@@ -6,8 +6,8 @@
 // header's Docs, Account and Mail doors, which the base drew and today's head does not: they open places the phone's bottom
 // bar holds (desktop-polish PL10, D-7952; the Account door's name had changed to lead with its word, D-7897, before it went),
 // the programme box's title, which is now a door into its programme view, wrapped round the base's same title span (PL10, D26
-// amended), and the projects head over each fleet screen's list with its New project door (add-project spec 2026-11-04 §2,
-// as redrawn), which the base predates; nothing else is removed or rewritten. The file renders the world ONCE: React's
+// amended), and the New project door on each fleet screen's runs line (add-project spec 2026-11-04 §2, as redrawn), which
+// the base predates; nothing else is removed or rewritten. The file renders the world ONCE: React's
 // `useId` counter is per module graph, so a second render, or a case before this one, numbers Instrument's tab ids
 // differently from the capture's single render.
 import { createHash } from 'node:crypto';
@@ -46,9 +46,9 @@ const renumberIds = (html: string): string => {
     return `_r_${seen.get(id)}_`;
   });
 };
-/** The projects head (add-project spec 2026-11-04 §2, as redrawn), once over each fleet screen's list: named "Projects"
- *  over the shared cards, the New project door alone over Instrument's table. Its button's class list is `Button`'s. */
-const PROJECTS_HEAD = /<div class="fleet-projects-head [^"]*">(?:<h2 class="[^"]*">Projects<\/h2>)?<button type="button" class="[^"]*"><svg[^>]*>[\s\S]*?<\/svg>New project<\/button><\/div>/g;
+/** The New project door (add-project spec 2026-11-04 §2, as redrawn), once on each fleet screen's runs line. Its class
+ *  list is `Button`'s. */
+const PROJECTS_HEAD = /<button type="button" class="[^"]*\bfleet-new-project\b[^"]*"><svg[^>]*>[\s\S]*?<\/svg>New project<\/button>/g;
 
 describe('an older server: no delegation frame, the base\'s fleet (delegation broker wave 4)', () => {
   it('W4-U27: origin/main\'s frame sequence renders unavailable, the base\'s markup, and no delegation word', () => {

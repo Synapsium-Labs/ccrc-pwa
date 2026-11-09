@@ -3467,7 +3467,7 @@ would land (`New workspace on <project> — <account>, N% free`) or why nothing 
 beside `Runs ·` re-forecasts every card for one model class, and each card's **+** then asks for that class;
 **Coordinator row**, the default, is the request that names no class.
 
-**New project**, at the head of the project list and in the first-run panel, creates a project there:
+**New project**, on the runs line just above the project list and in the first-run panel, creates a project there:
 **From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. The **Start a
 session** sheet adds one in place too: its list opens with a **New project** row, and a search that is a GitHub
 repository (or a new name nothing matches) offers **Clone owner/repo** (or **Create empty project**), which adds it

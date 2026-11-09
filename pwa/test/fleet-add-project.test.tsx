@@ -1,5 +1,5 @@
-// The fleet screen's "New project" door (add-project spec 2026-11-04 §2, as redrawn): a button in the head over the
-// project list, and one in the first-run panel, so a brand-new fleet with no sessions can add its first project too.
+// The fleet screen's "New project" door (add-project spec 2026-11-04 §2, as redrawn): a button on the runs line just
+// above the project list (a row of its own where no runs line is drawn), and one in the first-run panel, so a brand-new fleet with no sessions can add its first project too.
 // Both live in `FleetScreen` itself, outside the skin parts, so every skin shows them. Each opens the one sheet
 // `FleetFlows` mounts, and an add goes through the projects plane, which re-reads `GET /api/projects`. The success
 // toast's "Start session" opens the new-session sheet, which picks the new project once an account is chosen.
@@ -52,10 +52,11 @@ const door = (): HTMLElement => screen.getByRole('button', { name: PROJECT_ADD_T
 const sheetOpen = (): boolean => screen.queryByLabelText(PROJECT_ADD_TEXT.name) !== null;
 
 describe('the Add project door', () => {
-  it('sits in the head over the project list, which names it, and opens the sheet', async () => {
+  it('rides the runs line above the project list, costing no row of its own, and opens the sheet', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     mount([session()]);
-    expect(screen.getByRole('heading', { name: PROJECT_ADD_TEXT.projectsHead })).toBeInTheDocument();
+    expect(door().closest('.fleet-runs-line')).not.toBeNull();
+    expect(document.querySelector('.fleet-projects-head')).toBeNull();
     // Above the list it adds to, not under it.
     const list = document.querySelector('.fleet-list')!;
     expect(door().compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -65,7 +66,21 @@ describe('the Add project door', () => {
     await waitFor(() => expect(sheetOpen()).toBe(true));
   });
 
-  it('is in the first-run panel too, beside Start a session', async () => {
+  it('where no runs line is drawn (Instrument\'s desk column), heads the list in a row of its own', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
+    const store = makeStore();
+    render(
+      <FleetChromeProvider store={store}>
+        <FleetScreen store={store} runsLine={false} />
+        <FleetFlows />
+      </FleetChromeProvider>,
+    );
+    act(() => { store.setState({ conn: 'open', sessions: [session()], roster: TEST_ROSTER }); });
+    expect(door().closest('.fleet-projects-head')).not.toBeNull();
+    expect(document.querySelector('.fleet-runs-line')).toBeNull();
+  });
+
+  it('is in the first-run panel too, beside Start a session, and only there', async () => {
     vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
     mount([]);
     expect(screen.getByText('No sessions yet')).toBeInTheDocument();

@@ -21,10 +21,8 @@ import { BAD_REQUEST_TEXT } from './workspaceAddWords';
 
 /** The sheet's labels. Short words only: a sentence lives in one of the tables below, once. */
 export const PROJECT_ADD_TEXT = {
-  /** The doors: the fleet screen's projects head, the first-run panel, the new-session sheet's row, the palette. */
+  /** The doors: the fleet screen's (on its runs line), the first-run panel's, the new-session sheet's row. */
   open: 'New project',
-  /** The fleet screen's head over its project list, which carries the door. */
-  projectsHead: 'Projects',
   /** The form's confirm. */
   add: 'Add project',
   /** The sheet's title. */
