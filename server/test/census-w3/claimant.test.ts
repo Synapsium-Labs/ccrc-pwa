@@ -166,10 +166,12 @@ describe('the claimant client census (D-7320)', () => {
   });
   // Q3l re-pointed the guard from `$family` (the fifth field it removed) to `$claimant`, the row test it wrote (D-7324;
   // named exception): still one call, for the four claimant rows only.
-  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 2, the claimant guard and the review-rounds loop (D-7322, D-7324, D-8125)', () => {
+  // The goals read's gate (D-8126) is the third call, guarded by its own row test, `"$key" == 'goals.show'`, before it.
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 3, the claimant guard, the review-rounds loop and the goals read\'s gate (D-7322, D-7324, D-8125, D-8126)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
       [false, 'if _api_server_cap "$rwant"; then'],
       [true, 'if [[ -n "$claimant" ]] && _api_server_cap "$want"; then'],
+      [true, 'if [[ "$key" == \'goals.show\' ]] && ! _api_server_cap goals-read-v1 && _api_server_cap \'\'; then'],
     ]);
   });
 });
