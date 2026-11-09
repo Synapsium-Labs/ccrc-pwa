@@ -149,12 +149,12 @@ describe("Refined's phone header (W2 Task S5)", () => {
     render(<App />);
     act(() => useFleetStore.setState({ conn: 'open', fleetFrameSeen: true, sessions: [fleetSession({ id: 'ask-a', bucket: 'attention' })] }));
     const h = phoneBar();
-    expect(within(h).getByRole('button', { name: 'Waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
+    expect(within(h).getByRole('button', { name: 'Waiting' })).toHaveAttribute('data-command', 'go-waiting');
     act(() => useFleetStore.setState({
       waiting: waitingView({ items: [itemView({ id: 1 }), itemView({ id: 2, state: 'checking' })] }),
     }));
-    expect(within(h).getByRole('button', { name: 'Waiting on you, 2 waiting on you' })).toHaveTextContent(/2$/);
-    fireEvent.click(within(h).getByRole('button', { name: 'Waiting on you, 2 waiting on you' }));
+    expect(within(h).getByRole('button', { name: 'Waiting, 2 waiting on you' })).toHaveTextContent(/2$/);
+    fireEvent.click(within(h).getByRole('button', { name: 'Waiting, 2 waiting on you' }));
     expect(location.pathname).toBe('/waiting');
   });
 

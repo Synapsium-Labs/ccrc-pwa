@@ -20,7 +20,8 @@ export interface Place {
   readonly id: string;
   readonly icon: IconName;
   /** The word under the phone bar's icon, where the route's title is too long for a seventh of a phone; absent, the title.
-   *  The door's accessible name is the title, which begins with this word. */
+   *  The phone bar's door is named by this word too ("Waiting, 3 waiting on you"), so the text it shows is in its name
+   *  (review 1722); the desk bars name the place by its title. */
   readonly short?: string;
 }
 

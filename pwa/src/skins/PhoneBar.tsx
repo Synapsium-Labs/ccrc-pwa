@@ -4,8 +4,9 @@
 // CSS-hidden, like every width-gated part.
 //
 // ITS DOORS ARE THE CONSOLE'S PLACES, fleet first (`PLACES`, `lib/places.ts`, the one list both desk bars read
-// too), then the Search door. Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by its route's
-// title and, while it counts something, by its count too ("Inbox, 2 waiting for you", `placeBadge`); the place the page is on
+// too), then the Search door. Each place is the registry's "Go to" command (`commandDoor('go-<id>')`), named by the word it
+// shows (its route's title, or the place's `short` word where it has one: "Waiting", review 1722) and, while it counts
+// something, by its count too ("Inbox, 2 waiting for you", "Waiting, 3 waiting on you", `placeBadge`); the place the page is on
 // or under carries `aria-current="page"` (`topRouteOf`, the reader of Instrument's top bar doors too). Search is
 // `commandDoor('open-palette')`, the desk bar's search door. This file holds markup and its own class names only
 // (`styles/shell.css`).
@@ -24,17 +25,19 @@ function titleOf(id: string): string {
   return route.title;
 }
 
+/** A place's door. Its name starts with the word it shows, so the whole shown text ("Waiting 3") is in the name (label in
+ *  name, D-7897): a place with a `short` word is named by it on the phone bar, where the desk bars name it by its title. */
 function PlaceDoor({ place, here, count, word }: { place: Place; here: boolean; count: number; word: string }): ReactNode {
-  const title = titleOf(place.id);
+  const shown = place.short ?? titleOf(place.id);
   return (
     <Door
       {...commandDoor(`go-${place.id}`)}
       glyph={<Icon name={place.icon} />}
-      aria-label={count > 0 ? `${title}, ${count} ${word}` : title}
+      aria-label={count > 0 ? `${shown}, ${count} ${word}` : shown}
       aria-current={here ? 'page' : undefined}
       className="phone-bar-door"
     >
-      <span className="phone-bar-word" aria-hidden="true">{place.short ?? title}</span>
+      <span className="phone-bar-word" aria-hidden="true">{shown}</span>
       {count > 0 && ' '}
       {count > 0 && <CountBadge className="phone-bar-count" aria-hidden="true">{badgePrint(count)}</CountBadge>}
     </Door>

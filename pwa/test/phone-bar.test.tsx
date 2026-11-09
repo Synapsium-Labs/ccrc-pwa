@@ -112,7 +112,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
           expect(bar).toHaveAttribute('aria-label', 'Navigation');
           expect(doorsOf(bar!), `${width} ${path}`).toEqual(PHONE_DOORS);
           // The badge is the one count every door reads: one open item waits on the operator, one session asks nothing.
-          expect(within(bar!).getByRole('button', { name: 'Waiting on you, 1 waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
+          expect(within(bar!).getByRole('button', { name: 'Waiting, 1 waiting on you' })).toHaveAttribute('data-command', 'go-waiting');
           expect(within(bar!).getByRole('button', { name: 'Inbox' })).toBeInTheDocument();
           // Each door is named by its place's title, and the word it shows begins that name.
           for (const door of bar!.querySelectorAll<HTMLElement>('[data-command]')) {
@@ -132,7 +132,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       mount('/');
       const items = Array.from({ length: 120 }, (_, i) => itemView({ id: i + 1 }));
       act(() => useFleetStore.setState({ waiting: waitingView({ items }) }));
-      const door = within(phoneBar()!).getByRole('button', { name: 'Waiting on you, 120 waiting on you' });
+      const door = within(phoneBar()!).getByRole('button', { name: 'Waiting, 120 waiting on you' });
       const name = door.getAttribute('aria-label')!;
       expect(door.querySelector('.phone-bar-count')).toHaveTextContent(/^99\+$/);
       expect(labelInName(door.querySelector('.phone-bar-word')!.textContent!, name)).toBe(true);
@@ -141,8 +141,8 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
     });
 
     // Review 1689 F9: the word and the pill are separated by a space, so the door's whole shown text ("Runs 2") reads as
-    // words and is in its name ("Runs, 2 needs you"). The Waiting door's word is the short "Waiting", which is not run
-    // together with the count in its longer name, so the Runs door (word = title) is the one this holds.
+    // words and is in its name ("Runs, 2 needs you"). The Waiting door, named by its short word since review 1722, has its
+    // own case below.
     it('at a low count the door\'s whole shown text is in its name (review 1689 F9)', () => {
       atWidth(390);
       mount('/');
@@ -150,6 +150,20 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'sess-a', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
       const door = within(phoneBar()!).getByRole('button', { name: 'Runs, 2 needs you' });
       expect(door.querySelector('.phone-bar-count')).toHaveTextContent(/^2$/);
+      expect(labelInName(shownText(door), door.getAttribute('aria-label')!)).toBe(true);
+    });
+
+    // Review 1722, ruling 7 (Task C16 fix round 1): the Waiting door shows the short word "Waiting", so on the phone bar its
+    // name starts with that word ("Waiting, 3 waiting on you"), and its whole shown text ("Waiting 3") is in its name. With
+    // nothing waiting it shows "Waiting" and is named so. The desk bars and the route's title keep "Waiting on you".
+    it("the Waiting door's name starts with the word it shows, so its whole shown text is in its name (review 1722)", () => {
+      atWidth(390);
+      mount('/');
+      act(() => useFleetStore.setState({ waiting: waitingView({ items: [] }) }));
+      expect(within(phoneBar()!).getByRole('button', { name: 'Waiting' })).toHaveAttribute('data-command', 'go-waiting');
+      act(() => useFleetStore.setState({ waiting: waitingView({ items: [1, 2, 3].map((id) => itemView({ id })) }) }));
+      const door = within(phoneBar()!).getByRole('button', { name: 'Waiting, 3 waiting on you' });
+      expect(shownText(door)).toBe('Waiting 3');
       expect(labelInName(shownText(door), door.getAttribute('aria-label')!)).toBe(true);
     });
 
@@ -201,7 +215,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       fireEvent.click(within(phoneBar()!).getByRole('button', { name: 'Fleet' }));
       expect(location.pathname).toBe('/');
       expect(current()).toEqual(['go-fleet']);
-      fireEvent.click(within(phoneBar()!).getByRole('button', { name: /^Waiting on you/ }));
+      fireEvent.click(within(phoneBar()!).getByRole('button', { name: /^Waiting\b/ }));
       expect(location.pathname).toBe('/waiting');
       expect(current()).toEqual(['go-waiting']);
     });
