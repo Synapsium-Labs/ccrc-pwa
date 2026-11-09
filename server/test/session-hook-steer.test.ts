@@ -209,8 +209,15 @@ const writeTargets = (line: string): string[] => {
   }
   return out;
 };
-const CMD_START = String.raw`(?:^\s*|[;&|({!]\s*|\b(?:then|do|else|exec|command|sudo|time|nohup|env)\s+)`;
-const WRITER_WORD = new RegExp(`${CMD_START}(?:rm|mv|unlink|truncate|ln|cp|install|tee|dd)\\b|${CMD_START}sed\\s+(?:-[A-Za-z]*i|--in-place)`);
+// A command word starts the line, follows a separator or a leading keyword (`if`, `while`, `until` too), and may be path-prefixed or backslash-escaped.
+const CMD_START = String.raw`(?:^\s*|[;&|({!]\s*|\b(?:then|do|else|elif|if|while|until|exec|command|sudo|time|nohup|env)\s+)`;
+const CMD_PATH = String.raw`(?:\\|[\w.\/-]*\/)?`;
+const WRITER = String.raw`(?:rm|mv|unlink|truncate|ln|cp|install|tee|dd)\b|sed\s+(?:-\S+\s+)*(?:-[A-Za-z]*i|--in-place)`;
+const WRITER_WORD = new RegExp([
+  `${CMD_START}${CMD_PATH}(?:${WRITER})`,                                                       // rm "$f", /bin/rm "$f", \rm "$f", sed -E -i … "$f", sed --in-place …
+  `${CMD_START}${CMD_PATH}xargs\\b[^|;&]*?\\s${CMD_PATH}(?:${WRITER})`,                           // … | xargs rm, xargs -0 mv < "$f"
+  `${CMD_START}${CMD_PATH}find\\b[^|;&]*?\\s(?:-delete\\b|-fprint\\w*|-fls\\b|-exec(?:dir)?\\s+${CMD_PATH}(?:${WRITER}))`, // find "$f" -delete, find … -exec rm
+].join('|'));
 /** The lines that remove, move, truncate or write a path in the steer directory (seed or steer name in an operand or a redirection target). */
 const steerWriters = (text: string): string[] => {
   const names = steerNames(text);
@@ -236,11 +243,19 @@ describe('PX13: the hook never consumes, writes, moves or deletes a steer file (
   it('the scanner sees each writing shape, and no reading one', () => {
     for (const bad of ['mv "$_hs_sf" /x', 'x && unlink "$_hs_sf"', 'truncate -s 0 "$_hs_sf"', 'tee "$_hs_sf" < in', 'cp in "$_hs_sf"', 'ln -s a "$_hs_sf"',
       'dd of="$_hs_sf"', 'sed -i s/a/b/ "$_hs_sf"', '  rm -f -- "$_hs_sf"', '\tmv "$_hs_sf" /x', '  sed -i s/a/b/ "$_hs_sf"', '    if x; then\n      rm -f -- "$_hs_sf"\n    fi', 'x || rm "$_hs_sf"', '! rm "$_hs_sf"', 'else rm "$_hs_sf"', ': > "$_hs_sf"', 'echo x >> "$_hs_sf"', 'echo x >| "$_hs_sf"', 'echo x &> "$_hs_sf"', 'exec 3<> "$_hs_sf"',
-      'printf x > "$HISTORY_STEER_DIR/x"', 'rm -rf "$HOME/.ccrc/history/steer"', 'if x; then rm "$_hs_sf"; fi']) {
+      'printf x > "$HISTORY_STEER_DIR/x"', 'rm -rf "$HOME/.ccrc/history/steer"', 'if x; then rm "$_hs_sf"; fi',
+      // the remaining writer forms: after a leading keyword, path-prefixed or escaped, through xargs or find, sed -i in its other spellings
+      'if rm -f "$_hs_sf"; then', 'while rm "$_hs_sf"; do :; done', 'until mv "$_hs_sf" /x; do :; done', 'elif rm "$_hs_sf"; then',
+      '/bin/rm "$_hs_sf"', '/usr/bin/mv "$_hs_sf" /x', '\\rm "$_hs_sf"', 'x && /bin/rm -f "$_hs_sf"',
+      'xargs rm < "$_hs_sf"', 'printf %s "$_hs_sf" | xargs rm', 'printf %s "$_hs_sf" | xargs -0 -n1 mv -t /x', 'printf %s "$_hs_sf" | xargs sed -i s/a/b/',
+      'find "$_hs_sf" -delete', 'find "$_hs_sf" -exec rm {} \\;', 'find "$HISTORY_STEER_DIR" -type f -exec /bin/mv {} /x +',
+      'sed -E -i s/a/b/ "$_hs_sf"', 'sed -n -i s/a/b/ "$_hs_sf"', 'sed -E -n -i.bak s/a/b/ "$_hs_sf"', 'sed --in-place s/a/b/ "$_hs_sf"', 'sed -E --in-place=.bak s/a/b/ "$_hs_sf"']) {
       expect(steerWriters(`${SEED}${bad}`), bad).toHaveLength(1);
     }
     for (const ok of ['[[ -f "$_hs_sf" ]] && return 1', 'x=$(< "$_hs_sf")', 'cat "$_hs_sf" 2>&1', 'echo "$_hs_sf" >&2', 'echo "$_hs_sf" > /dev/null', '(( n >= 1 )) && echo "$_hs_sf"',
-      'rm -f -- "$other"', 'echo x > "$other"', '# rm "$_hs_sf"', '  # rm "$_hs_sf"', '  { IFS= read -r -d "" -n 8193 t; } 2>/dev/null < "$_hs_sf" && return 1', '  [[ -f "$_hs_sf" && -r "$_hs_sf" ]] || return 1']) {
+      'rm -f -- "$other"', 'echo x > "$other"', '# rm "$_hs_sf"', '  # rm "$_hs_sf"', '  { IFS= read -r -d "" -n 8193 t; } 2>/dev/null < "$_hs_sf" && return 1', '  [[ -f "$_hs_sf" && -r "$_hs_sf" ]] || return 1',
+      'if [[ -f "$_hs_sf" ]]; then', 'while IFS= read -r -N 8193 t; do :; done < "$_hs_sf"', 'find "$other" -name x -type f', 'find "$_hs_sf" -maxdepth 0 -type f', 'find "$_hs_sf" -exec cat {} \\;',
+      '# xargs rm "$_hs_sf"; find "$_hs_sf" -delete; rm "$_hs_sf"', 'sed -n -E s/a/b/p "$_hs_sf"', 'sed --expression=s/a/b/ "$_hs_sf"', 'printf %s "$_hs_sf" | xargs cat', 'xargs rm < "$other"']) {
       expect(steerWriters(`${SEED}${ok}`), ok).toEqual([]);
     }
   });
