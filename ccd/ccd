@@ -10637,7 +10637,7 @@ cmd_skill_ensure() {   # ccd skill-ensure --wrapper <id> — put the coordinator
   # source and the two skills have two.
   local usage="usage: ccd skill-ensure --wrapper <id>"
   [[ $# -eq 2 && $1 == --wrapper ]] || die "$usage"
-  local w="$2" rc=0 dir name src dest err before result=converged detail="" failed=0
+  local w="$2" rc=0 dir name src dest err was_same result=converged detail="" failed=0
   [[ "$w" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { echo "ccd: bad wrapper id: $w" >&2; exit 2; }
   _wrapper_rostered_now "$w" || rc=$?
   case "$rc" in
@@ -10652,11 +10652,11 @@ cmd_skill_ensure() {   # ccd skill-ensure --wrapper <id> — put the coordinator
     failed=1; detail="the config dir of $w is not on this box"
   else
     for name in coordinator worker; do
-      src="$REG/$name-skill"; dest="$dir/skills/ccrc-$name"; before=0
-      [[ -d "$dest" ]] && diff -r -q "$src" "$dest" >/dev/null 2>&1 && before=1
+      src="$REG/$name-skill"; dest="$dir/skills/ccrc-$name"; was_same=0
+      [[ -d "$dest" ]] && diff -r -q "$src" "$dest" >/dev/null 2>&1 && was_same=1
       err="$(env -u CCRC_SKILL_SRC bash "$REG/install-$name-skill.sh" --homes "$dir" 2>&1 >/dev/null)" || {
         failed=1; detail+="${detail:+; }$name: ${err:-the installer failed without a message}"; continue; }
-      (( before )) || result=installed
+      (( was_same )) || result=installed
     done
   fi
   (( failed )) && result=failed
