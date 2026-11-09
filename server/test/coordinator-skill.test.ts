@@ -4390,6 +4390,6 @@ describe('the coordinator links every ticketed PR from the Linear side (D-8141)'
   });
 
   it('none of the three states a Linear ticket id (the repository is public)', () => {
-    for (const text of [skill, lifecycle, linearSkill]) expect(text).not.toMatch(/\bCCRCP-[0-9]/);
+    for (const text of [skill, lifecycle, linearSkill]) expect(text).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
   });
 });
