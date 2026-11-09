@@ -29,8 +29,6 @@ import { type ProgrammesAnswer, type RunSummary } from '../../../shared/api';
 import { isRunClosed, runState, coordinatorOf, workerOf } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { coordinatorPresence } from '../fleet/presence';
-import { LiftCapSheet } from '../fleet/LiftCapSheet';
-import { ReviewCapBand } from '../fleet/ReviewCapBand';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { inAppClick } from '../fleet/settingsText';
@@ -214,10 +212,6 @@ function RunsBoard({
   // `SessionActionsSheet`'s single actions sheet uses rather than mounting
   // one sheet per row.
   const [abandonTarget, setAbandonTarget] = useState<RunSummary | null>(null);
-
-  // D-6911: which run's LiftCapSheet is open, or `null`. ONE sheet at screen level, on `abandonTarget`'s idiom; the
-  // "Waiting on you" band opens it.
-  const [liftTarget, setLiftTarget] = useState<RunSummary | null>(null);
 
   // Task 13, spec §4.4: the run board's own door onto a new program. ONE
   // door, rendered unconditionally below — including at zero runs, the same
@@ -466,10 +460,6 @@ function RunsBoard({
       {!finding && !noSignalYet && <WaitingBand runs={active} nowMs={now} openId={openId}
         coordinatorOpenable={(r) => coordinatorOf(r, sessionById) !== null} />}
 
-      {/* D-6911: every open work run whose review cap waits on the operator. It sits below where the Stuck band goes (Task 13)
-          until review caps join `/waiting` (Task 24); renders nothing when no run waits. */}
-      <ReviewCapBand runs={active} nowMs={now} onLift={setLiftTarget} />
-
       {finding ? <RunFindResults q={findText} store={store} openId={openId} /> : (<>
       {!noSignalYet && <RunInfoLines runs={active} />}
       {noSignalYet ? (
@@ -527,9 +517,6 @@ function RunsBoard({
       <AbandonSheet run={abandonTarget} contextLine={abandonTarget !== null && isStuckRun(abandonTarget) ? stuckLine(abandonTarget, now) : undefined}
         workspaceChild={abandonChildOf(abandonSession)} coordinatorPresence={abandonPresence}
         onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
-      {/* D-6911: the live `runs` frame carries the lift on the watcher's next tick; `loadCold()` re-reads Finished
-          for a session with no frame yet. */}
-      <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => { void loadCold(); }} />
       <StartProgramSheet open={startOpen} onClose={() => setStartOpen(false)} fleet={store}
         openRunProjects={openRunProjects} />
     </PageScaffold>

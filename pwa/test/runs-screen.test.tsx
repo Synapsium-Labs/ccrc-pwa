@@ -470,7 +470,7 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
     // Of the board's own controls, only the search box and the paused banner come ahead of the first programme.
     expect(before.some((el) => el.matches('.rf-box'))).toBe(true);
     expect(before.some((el) => el.matches('.coord-banner'))).toBe(true);
-    expect(before.some((el) => el.matches('.caps-control, .child-reclaim-banner, .review-cap-band'))).toBe(false);
+    expect(before.some((el) => el.matches('.caps-control, .child-reclaim-banner'))).toBe(false);
   });
 
   it('the Inbox and Mail still read the unpaged archive', async () => {
@@ -483,18 +483,17 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
     expect(loadRuns).toHaveBeenCalledWith();   // no limit, no before: the whole archive, as before
   });
 
-  it('ReviewCapBand sits below where the band goes: after the paused banner and the search box, before the programmes', async () => {
+  it('/runs has one surface called Waiting on you, which is none: a run whose review cap waits adds no band and no Lift cap (Task 24, F21)', async () => {
     const store = makeStore();
     act(() => {
       store.setState({ coord: COORD('set'), coordFrameSeen: true, runs: [r({ reviewCap: { rounds: 3, cap: 3, askedAt: 1, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } })], runsFrameSeen: true });
     });
     const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} />);
     await screen.findByTestId('programme-card');
-    const nodes = [...container.querySelectorAll('.rf-box, .coord-banner, .review-cap-band, .programme-card')];
-    const names = nodes.map((n) => (n.matches('.rf-box') ? 'find' : n.matches('.coord-banner') ? 'paused' : n.matches('.review-cap-band') ? 'cap' : 'group'));
-    expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('paused'));
-    expect(names.indexOf('cap')).toBeGreaterThan(names.indexOf('find'));
-    expect(names.indexOf('cap')).toBeLessThan(names.indexOf('group'));
+    expect(screen.queryByRole('group', { name: /waiting on you/i })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /waiting on you/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /lift cap/i })).toBeNull();
+    expect(container.querySelector('.review-cap-band')).toBeNull();
   });
 });
 
@@ -1559,30 +1558,6 @@ describe('the run board on the page scaffold (D-5102)', () => {
   });
 });
 
-// D-6911: the board's "Waiting on you" band sits above the groups, and its button opens the lift sheet.
-describe('the review cap band on the run board', () => {
-  it('lists a waiting run above the programme cards, and Lift cap opens the sheet', async () => {
-    const store = makeStore();
-    const waiting = r({ id: 12, reviewCap: { rounds: 3, cap: 3, askedAt: Date.now() - 60_000, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } });
-    act(() => { store.setState({ runs: [waiting], runsFrameSeen: true }); });
-    vi.spyOn(api, 'reviewCap').mockReturnValue(new Promise(() => {}));
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} />);
-    const band = screen.getByRole('group', { name: /waiting on you/i });
-    const group = await screen.findByTestId('programme-card');
-    expect(band.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(within(band).getByRole('button', { name: /lift cap/i }));
-    expect(await screen.findByText('Lift the review cap?')).toBeInTheDocument();
-    expect(api.reviewCap).toHaveBeenCalledWith(12);
-  });
-
-  it('shows no band when no run waits on its cap', () => {
-    const store = makeStore();
-    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
-    expect(screen.queryByRole('group', { name: /waiting on you/i })).toBeNull();
-  });
-});
-
 describe('Closed today, and the board\'s order (Task 20, spec §8.2 items 1 to 10, A32, o6, F27, D-8075)', () => {
   const NONE = { operator: 0, sweep: 0, coordinator: 0 };
   const line = (c: HTMLElement): HTMLElement | null => c.querySelector('[data-testid="closed-today"]');
@@ -1594,7 +1569,7 @@ describe('Closed today, and the board\'s order (Task 20, spec §8.2 items 1 to 1
     return container;
   };
 
-  it('the board\'s order is header, search, paused banner, Stuck, Closed today, Waiting band, ReviewCapBand, programmes, quiet, Finished, foot', async () => {
+  it('the board\'s order is exactly §8.2\'s, with no ReviewCapBand: header, search, paused banner, Stuck, Closed today, Waiting band, programmes, quiet, Finished, foot', async () => {
     const now = Date.now();
     const store = makeStore();
     const runs = [
@@ -1615,11 +1590,13 @@ describe('Closed today, and the board\'s order (Task 20, spec §8.2 items 1 to 1
     const marks: [string, string][] = [
       ['header', 'h1'], ['search', '#run-find-box'],
       ['paused', '.coord-banner'], ['stuck', '[data-testid="stuck-band"]'], ['closed', '[data-testid="closed-today"]'],
-      ['waiting', '[data-testid="waiting-band"]'], ['cap', '.review-cap-band'], ['cards', 'ul.programme-cards'],
+      ['waiting', '[data-testid="waiting-band"]'], ['cards', 'ul.programme-cards'],
       ['quiet', '[data-fold="quiet"]'], ['finished', '[data-fold="finished"]'], ['foot', '.runs-foot'],
     ];
     const found = marks.map(([name, sel]) => [name, container.querySelector(sel)] as const);
     for (const [name, el] of found) expect(el, name).not.toBeNull();
+    // The cap run is on the board as a card and nowhere above it: no band of its own (Task 24).
+    expect(container.querySelector('.review-cap-band')).toBeNull();
     for (let i = 1; i < found.length; i++) {
       const [pn, p] = found[i - 1]!; const [cn, c] = found[i]!;
       expect(p!.compareDocumentPosition(c!) & Node.DOCUMENT_POSITION_FOLLOWING, `${pn} before ${cn}`).toBeTruthy();

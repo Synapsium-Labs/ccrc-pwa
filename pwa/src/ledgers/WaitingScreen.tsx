@@ -9,16 +9,18 @@ import type { ReactNode } from 'react';
 import { BareRow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
+import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
   CLEARED_HEADING, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
-  COMBINED_LIST, NO_PROGRAMME_FILTER, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups, openRunsOf,
-  programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type ProgrammeGroup, type QuestionRow, type Row,
+  COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
+  openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type ProgrammeGroup, type QuestionRow, type Row,
 } from './ledgerWords';
 import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
 import { RowMain, RowMeta } from './rowParts';
+import { EndRunControls, LiftCapControl, endRunOf, useItemActs, type ItemActs } from './ItemActs';
 import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
 
@@ -58,22 +60,45 @@ const NO_RUNS: readonly RunSummary[] = [];
 const NO_PROGRAMME_KEY = ' none';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
-function ItemRow({ item, now, onOpen, current }: { item: ItemView; now: number; onOpen: (id: number) => void; current: boolean }): ReactNode {
+/** What the list draws of the controls an item or a cap carries: the sheets' openers, the runs they name, and whether they act. */
+interface RowActs { readonly acts: ItemActs; readonly runs: readonly RunSummary[] | null; readonly enabled: boolean }
+
+function ItemRow({ item, now, onOpen, current, rowActs }: {
+  item: ItemView; now: number; onOpen: (id: number) => void; current: boolean; rowActs: RowActs | null;
+}): ReactNode {
   const note = cameBackNote(item);
   const back = cameBack(item);
   const meta = item.state === 'checking' && item.tickedAt !== null ? `ticked ${ageWords(item.tickedAt, now)}` : `raised ${ageWords(item.raisedAt, now)}`;
+  // An end-request item's why holds the asker's words and, on its own line, who it reached the operator through.
+  const carries = rowActs !== null && endRunOf(item, rowActs.runs) !== null;
   return (
-    <li>
+    <li className="wl-li" data-acts={carries ? 'true' : undefined}>
       <BareRow className="wl-item" data-item={item.id} data-state={item.state} data-needed={item.neededBy}
                {...(current ? { 'aria-current': 'page' as const } : {})} onClick={() => onOpen(item.id)}>
         <span className="wl-kind">{KIND_WORD[item.kind]}</span>
-        <span className="wl-main">
-          <span className="wl-what">{item.title}</span>
-          <span className="wl-why">{item.why}</span>
+        <RowMain what={item.title} why={item.why} lines={item.action !== undefined && item.action !== null}>
           {back && note !== null && <span className="wl-bounce">{`The coordinator sent it back: ${note}`}</span>}
-        </span>
+        </RowMain>
         <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
+      {rowActs !== null && <EndRunControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
+    </li>
+  );
+}
+
+/** A run whose review cap waits: a row of its own with Lift cap on it (runs rebuild §8.7). Not a button: the control is the row's
+ *  one act, and the run's page is one tap away from the Runs screen. */
+function CapRow({ run, rowActs }: { run: RunSummary; rowActs: RowActs | null }): ReactNode {
+  const cap = reviewCapOf(run);
+  const rounds = cap === null || cap === 'unmeasured' ? null : cap;
+  return (
+    <li className="wl-li" data-acts={rowActs === null ? undefined : 'true'}>
+      <div className="wl-item wl-cap" data-run={run.id} data-state="open" data-needed="soon">
+        <span className="wl-kind">{REVIEW_CAP_WORD}</span>
+        <RowMain what={`Review cap reached: run ${run.id}`}
+                 why={`${run.programTitle ?? run.program} wave ${run.wave}${rounds === null ? '' : `: ${rounds.rounds} of ${rounds.cap} review rounds`}`} />
+      </div>
+      {rowActs !== null && capWaiting(run) === 'waiting' && <LiftCapControl run={run} acts={rowActs.acts} enabled={rowActs.enabled} />}
     </li>
   );
 }
@@ -93,15 +118,17 @@ function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpe
 
 /** One programme's rows: its items, its sessions' questions and its sessions stopped on a usage limit, as the list draws them, and as the list beside an open item
  *  draws them, with that item marked current (plan PL9). */
-export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null }: {
+export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null, rowActs = null }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
+  rowActs?: RowActs | null;
 }): ReactNode {
   return (
     <ul className="wl-items">
       {rows.map((row) => {
-        if (row.kind === 'item') return <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} />;
+        if (row.kind === 'item') return <ItemRow key={`i${row.item.id}`} item={row.item} now={now} onOpen={onOpenItem} current={row.item.id === currentId} rowActs={rowActs} />;
         // A usage-limit row carries its own two controls (D-8123); tapping the row itself opens nothing.
         if (row.kind === 'limit') return <LimitWaitRow key={`l${row.limit.sessionId}`} limit={row.limit} now={now} />;
+        if (row.kind === 'cap') return <CapRow key={`c${row.run.id}`} run={row.run} rowActs={rowActs} />;
         return <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession} />;
       })}
     </ul>
@@ -111,9 +138,10 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
+  rowActs?: RowActs | null;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -130,7 +158,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
         <SpecLink href={specHref} programme={title} className="wl-gspec" />
       </div>
-      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} />
+      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} />
     </section>
   );
 }
@@ -168,6 +196,7 @@ export function NotCurrentLine({ words }: { words: string }): ReactNode {
 
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
+  const { acts, sheets } = useItemActs(sessions);
   const pick = (programme: string | null): void => props.onFilter?.(programme);
   if (view === null || sessions === null) {
     return (
@@ -181,7 +210,10 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   }
   const heardRuns = runs ?? NO_RUNS;
   const questions = questionRows(sessions, heardRuns);
-  const groups = groupByProgramme(view.items, questions, limitRows(sessions, heardRuns));
+  // The runs whose review cap waits join the list with their Lift cap control (runs rebuild §8.7, F21).
+  const groups = groupByProgramme(view.items, questions, limitRows(sessions, heardRuns), heardRuns.filter((r) => capWaiting(r) === 'waiting'));
+  // A list drawn from the device's saved copy acts on nothing, like every other act on a saved copy.
+  const rowActs: RowActs = { acts, runs, enabled: props.notCurrent === undefined };
   const hues = fleetHues(heardRuns);
   const filter = props.programme ?? null;
   // The sessions in no programme: the one filter no item list names (it holds questions only). Stale when no such group is drawn.
@@ -230,7 +262,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                 {shown.map((g) => (
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
-                             hue={g.program === null ? null : hues.get(g.program) ?? null}
+                             hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
               </div>
@@ -242,6 +274,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
       {list.programme !== null
         ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} />
         : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />}
+      {sheets}
     </div>
   );
 }

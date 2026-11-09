@@ -114,6 +114,19 @@
 .wl-limit .wl-limit-acts .btn-primary,
 .wl-limit .wl-limit-acts .btn-ghost { width: auto; max-width: 100%; white-space: normal; text-align: center; }
 
+/* An end-request item's two controls and a review cap's Lift cap (runs rebuild §8.7 and §10, F21). They are siblings of the row's
+   button, never inside it, and sit at the right end of the row from 640 up, on their own line below that (§8.1). Buttons are the
+   design system's (the tap floor is theirs); the row keeps its own width. A cap row is no button, so it is not a pointer. */
+.wl-li { min-width: 0; }
+.wl-li[data-acts='true'] { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sp-2); align-items: center; }
+.wl-acts { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: flex-end; }
+@media (max-width: 639.98px) {
+  .wl-li[data-acts='true'] { grid-template-columns: minmax(0, 1fr); }
+  .wl-acts { justify-content: flex-start; }
+}
+.wl-item.wl-cap { cursor: default; }
+.wl-item .wl-why[data-lines='true'] { white-space: pre-line; }
+
 .wl-cleared { display: grid; gap: var(--sp-1); border-top: 1px dashed var(--edge-strong); padding-top: var(--sp-2); }
 .wl .wl-cleared-title { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); margin: 0; }
 .wl-cleared ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }

@@ -87,3 +87,12 @@ describe('every badge reads the selector', () => {
     expect(chip).not.toMatch(/waitingTotal/);
   });
 });
+
+describe('review caps join the page (Task 24, F21)', () => {
+  it('the door and a chip count a waiting cap, which /waiting lists with Lift cap', () => {
+    const entries = needsYou([itemView({ id: 1, program: 'prog-a' })], [], [capped(8), capped(9, { program: 'prog-b' } as Partial<RunSummary>)]);
+    expect(needsYouCount(entries)).toBe(3);
+    expect(needsYouCount(entries, 'prog-a')).toBe(2);
+    expect(needsYouCount(entries, 'prog-b')).toBe(1);
+  });
+});

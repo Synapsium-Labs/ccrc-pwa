@@ -874,3 +874,43 @@ describe('the refusals keep the sheet open (spec 9.1)', () => {
     expect(screen.getByText('ccd: ws-release: permission denied')).toBeInTheDocument();
   });
 });
+
+describe('the sheet through an end-request item (Task 24, spec 2026-11-04 §10; D-8076)', () => {
+  it('with an itemId the confirm calls act for that item and never the run\'s own abandon route', async () => {
+    const abandonRun = vi.fn();
+    const actItem = vi.fn().mockResolvedValue({ released: true });
+    const onDone = vi.fn();
+    render(<AbandonSheet run={run({ id: 206 })} itemId={31} onClose={() => {}} onDone={onDone} abandonRun={abandonRun} actItem={actItem} />);
+    expect(screen.getByText('Abandon run 206?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 206' }));
+    await waitFor(() => expect(actItem).toHaveBeenCalledWith(31));
+    expect(abandonRun).not.toHaveBeenCalled();
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it('without an itemId the confirm calls the run\'s abandon route as before', async () => {
+    const abandonRun = vi.fn().mockResolvedValue({ released: true });
+    const actItem = vi.fn();
+    render(<AbandonSheet run={run({ id: 206 })} onClose={() => {}} abandonRun={abandonRun} actItem={actItem} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 206' }));
+    await waitFor(() => expect(abandonRun).toHaveBeenCalledWith(206));
+    expect(actItem).not.toHaveBeenCalled();
+  });
+
+  it('an item that moved is said in the item\'s words, the arm\'s refusals in the abandon words, and the sheet stays open', async () => {
+    const onClose = vi.fn();
+    const actItem = vi.fn().mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'not-open' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'bad-transition', from: 'done', to: 'closing' }))
+      .mockRejectedValueOnce(new ApiError(404, { ok: false, error: 'unknown-item' }));
+    render(<AbandonSheet run={run({ id: 206 })} itemId={31} onClose={onClose} actItem={actItem} />);
+    const confirm = screen.getByRole('button', { name: 'Abandon run 206' });
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/This item is not open any more/)).toBeInTheDocument();
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/^This run already closed/)).toBeInTheDocument();
+    expect(screen.queryByText(/This item is not open any more/)).toBeNull();
+    fireEvent.click(confirm);
+    expect(await screen.findByText(/no such item any more/)).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

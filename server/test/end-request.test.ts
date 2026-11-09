@@ -1,7 +1,7 @@
 // D-8076 (spec 2026-11-04 §10, A22, A24): `POST /api/runs/:id/end-request`. The decider is pinned alone (`endRequestDecide`), then
 // the route over a real server and store: who may ask, who is told, what shows at once and what is held, the repeat rule, and
 // the settle that handles an item when its run starts or ends. Neutral names (prog-a, lane-a, worker-a).
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -66,6 +66,7 @@ describe('endRequestDecide', () => {
 let app: FastifyInstance | null = null;
 const teardown = watcherTeardown();
 afterEach(async () => {
+  vi.restoreAllMocks();
   await app?.close();
   app = null;
   removeTmpFixtures();
@@ -154,6 +155,23 @@ describe('POST /api/runs/:id/end-request', () => {
     expect(mail[0]!.body).toContain('Stuck in a loop.');
     expect(mail[0]!.body).toContain(`ccrc-api items withdraw ${item.id}`);
     expect(r.coord.itemHistory(item.id)[0]).toMatchObject({ act: 'raise', actor: 'ccrc' });
+  });
+
+  it('a held item is on no list or badge: the waiting read leaves it out until the hold ends, then shows it with its action', async () => {
+    const r = await rig();
+    const res = await ask(r, r.run, 'worker-a', 'Stuck in a loop.');
+    const item = r.coord.itemById(idOf(res))!;
+    const listed = async (): Promise<{ id: number; action?: { verb: string; runId: number } | null }[]> => {
+      const read = await r.app.inject({ method: 'GET', url: '/api/waiting' });
+      expect(read.statusCode, read.body).toBe(200);
+      return (read.json() as { waiting: { items: { id: number }[] } }).waiting.items;
+    };
+    expect(await listed()).toEqual([]);
+    expect(r.coord.itemsFor(null, item.raisedAt).open).toEqual([]);
+    vi.spyOn(Date, 'now').mockReturnValue(item.raisedAt + ASK_GRACE_MS);
+    const after = await listed();
+    expect(after.map((i) => i.id)).toEqual([item.id]);
+    expect(after[0]!.action).toEqual({ verb: 'end-run', runId: r.run, stuckReason: null });
   });
 
   it('a review run worker may ask for the run it reviews', async () => {

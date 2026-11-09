@@ -3,7 +3,9 @@
 // panel puts in the operator's words, and the button stays enabled so the operator can try again.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { ITEM_MOVE_REFUSALS, ANSWER_MAX, WAITS_ON_WORDS } from '../../shared/ledgers';
+import { ITEM_MOVE_REFUSALS, ANSWER_MAX, WAITS_ON_WORDS, endRunAction } from '../../shared/ledgers';
+import { api } from '../src/lib/api';
+import { run as runFixture } from './rollupFixture';
 import { LEDGER_ROUTE_REFUSALS } from '../../shared/refusal';
 import { ApiError } from '../src/lib/apiError';
 import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
@@ -448,3 +450,44 @@ describe('the item view: the spec one tap away, and links that work (PL10)', () 
   });
 });
 
+describe('an end-request item in the item view (Task 24, spec 2026-11-04 §10; D-8076)', () => {
+  const live = runFixture(7, 'coord', 'w-7');
+  const endItem = (over: Partial<ReturnType<typeof itemView>> = {}) => itemView({
+    id: 31, runId: 7, title: 'End run: Port the API, wave 1', why: 'It never started.\nIts coordinator is gone',
+    action: endRunAction(7, null), ...over,
+  });
+
+  it('carries Abandon run and Keep the run, and neither Mark done nor Dismiss', () => {
+    show(endItem(), { runs: [live] });
+    expect(screen.getByRole('button', { name: 'Abandon run' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Keep the run' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Mark done' })).toBeNull();
+    cleanup();
+    show(endItem(), { runs: [live], programmeLive: false });
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Keep the run' })).toBeTruthy();
+  });
+
+  it('Abandon run opens the single sheet and its confirm calls act; Keep the run calls decline; both step back', async () => {
+    const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
+    const decline = vi.spyOn(api, 'declineItem').mockResolvedValue({ ok: true, item: endItem({ state: 'dismissed' }) });
+    const onActed = vi.fn();
+    show(endItem(), { runs: [live], onActed });
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Abandon run 7' }));
+    await waitFor(() => expect(act).toHaveBeenCalledWith(31));
+    await waitFor(() => expect(onActed).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep the run' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Keep the run' }));
+    await waitFor(() => expect(decline).toHaveBeenCalledWith(31));
+    await waitFor(() => expect(onActed).toHaveBeenCalledTimes(2));
+  });
+
+  it('an ordinary item carries neither control, and an end-run item already closed carries none', () => {
+    show(itemView(), { runs: [live] });
+    expect(screen.queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+    cleanup();
+    show(endItem({ state: 'done', closedAt: NOW }), { runs: [live] });
+    expect(screen.queryByRole('button', { name: /Abandon run|Keep the run/ })).toBeNull();
+  });
+});

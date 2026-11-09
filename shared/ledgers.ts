@@ -150,6 +150,9 @@ export interface ItemView {
    *  `{unreadable: true}`: the box cannot read the slot (a directory it cannot search, an I/O error; review 1418 F2), so
    *  whether a value is stored is not known: neither stored nor nothing stored. */
   secretSet: { at: number; tail: string; masked: boolean; why?: SecretUnmasked } | { at: null; tail: '' } | { unreadable: true } | null;
+  /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run` today. `null` on an ordinary item, and
+   *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
+  action?: ItemAction | null;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null }[];
 }
 

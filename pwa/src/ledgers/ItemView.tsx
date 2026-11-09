@@ -33,10 +33,10 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, RadioFieldset, TextInput, TextLink } from '@ccrc/ui';
 import {
-  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
+  ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isEndRunAction, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
   type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
-import type { AuthStatus } from '../../../shared/api';
+import type { AuthStatus, FleetSession, RunSummary } from '../../../shared/api';
 import type { ProgHue } from '../fleet/programmeBoxes';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
@@ -49,6 +49,7 @@ import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
+import { EndRunControls, useItemActs, type ItemActs } from './ItemActs';
 import { ageWords, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
@@ -83,6 +84,13 @@ export interface ItemViewProps {
    *  is drawn once beside them; the fields stay enabled and keep their text, so an answer typed now is sent once live data
    *  lands. Default `true`, so every other caller is unchanged. */
   readonly current?: boolean;
+  /** The runs heard (`null` before the runs frame): an end-request item's Abandon run names its run, so it is drawn once the
+   *  run is among them. Absent, the item draws only the controls that need no run. */
+  readonly runs?: readonly RunSummary[] | null;
+  /** The fleet rows heard, for the abandon sheet's line about a child workspace. */
+  readonly sessions?: readonly FleetSession[] | null;
+  /** Told when Abandon run or Keep the run landed: the item has closed, so the page steps back to its list. */
+  readonly onActed?: () => void;
 }
 
 /** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
@@ -374,8 +382,8 @@ function Field({ label, value, onChange, maxLength, hint }: {
   );
 }
 
-function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true }:
-  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current'>): ReactNode {
+function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true, runs = null, acts }:
+  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current' | 'runs'> & { acts: ItemActs }): ReactNode {
   const [pick, setPick] = useState<string | null>(null);
   const [own, setOwn] = useState('');
   const [note, setNote] = useState('');
@@ -416,9 +424,11 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
 
   const open = item.state === 'open';
   const checking = item.state === 'checking';
+  // An end-request item has its own two controls (spec §10): its act closes it, so it is never ticked or dismissed.
+  const acting = isEndRunAction(item.action ?? null);
   // A programme with no open run has no coordinator waiting for a tick: nothing is asked, and only Dismiss is offered.
-  const ended = (open || checking) && !programmeLive;
-  const mayTick = open && programmeLive && item.kind !== 'secret';
+  const ended = (open || checking) && !programmeLive && !acting;
+  const mayTick = open && programmeLive && item.kind !== 'secret' && !acting;
   const secretOpen = open && programmeLive && item.kind === 'secret' && !unreadable;
   const removable = item.kind === 'secret' && stored !== null && item.secretSlot !== null;
   // Why the acts are off on a saved copy, said once, and only where there is an act to be off.
@@ -480,6 +490,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
       {notCurrent && <p className="wi-hint" data-current="false">{NOT_CURRENT_ACTS_WORD}</p>}
       <div className="wi-actions">
+        {acting && <EndRunControls item={item} runs={runs} acts={acts} enabled={current} />}
         {mayTick && (
           <Button variant="primary" size="fit" disabled={busy || !ready || !current}
                   onClick={() => void run(() => (answer === null || !needsAnswer ? onTick() : onTick(answer)))}>Mark done</Button>
@@ -492,7 +503,8 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   );
 }
 
-export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true }: ItemViewProps): ReactNode {
+export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true, runs = null, sessions = null, onActed }: ItemViewProps): ReactNode {
+  const { acts, sheets } = useItemActs(sessions, onActed);
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   const href = programme?.href ?? null;
@@ -525,11 +537,12 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
             <History item={item} now={now} homeProject={home} />
           </section>
         </div>
-        <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current}
+        <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current} runs={runs} acts={acts}
                {...(saveSecret === undefined ? {} : { saveSecret })} {...(removeSecret === undefined ? {} : { removeSecret })}
                {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
                {...(authStatus === undefined ? {} : { authStatus })} />
       </div>
+      {sheets}
     </div>
   );
 }

@@ -85,7 +85,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
     options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
     neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
-    secretSlot: row.secretSlot,
+    secretSlot: row.secretSlot, action: row.action,
     secretSet: secret === null ? null
       : 'unreadable' in secret ? { unreadable: true }
         // `tail: ''` for a console from before the PL6 follow-up, which reads `tail` and would say "Ends in undefined" (review

@@ -308,7 +308,7 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
 export function ItemRoute({ id, store = useFleetStore }: { id: number | null; store?: FleetStore }): ReactNode {
   const view = store((s) => s.waiting);
   const saved = store((s) => s.waitingSaved);
-  const { runs } = useHeard(store);
+  const { runs, sessions } = useHeard(store);
   const groups = useGroups(store);
   const unavailable = useUnavailable(store, view !== null);
   const named = useOpenedFrom();
@@ -341,6 +341,8 @@ export function ItemRoute({ id, store = useFleetStore }: { id: number | null; st
   } else {
     body = (
       <ItemView key={item.id} item={item} now={now} programmeLive={programmeIsLive(item.program, runs)} current={actsOpen(source)}
+                runs={runs} sessions={sessions}
+                onActed={() => { void refetchWaiting(store); navigate(way.to); }}
                 programme={{
                   name: programmeTitle(item.program, runs ?? []), hue: fleetHues(runs ?? []).get(item.program) ?? null,
                   // The band's doors (desktop-polish PL10, D-7952; D26): the programme's Goals page, and its pinned spec in the Docs reader.

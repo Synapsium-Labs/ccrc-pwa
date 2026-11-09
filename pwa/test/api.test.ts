@@ -1818,3 +1818,28 @@ describe('api.programmes (D-8075)', () => {
     expect(answer.programmes).toEqual([]);
   });
 });
+
+describe('the item acts (Task 24, spec 2026-11-04 §10; D-8076)', () => {
+  it('actItem POSTs /api/items/:id/act with no body and reads released like abandonRun', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, id: 7, state: 'failed', released: false, childReclaim: 'queued' }));
+    const a = createApi(fetchImpl as unknown as typeof fetch);
+    expect(await a.actItem(31)).toEqual({ released: false, childReclaim: 'queued' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/items/31/act');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+    // An older server sends no `released`: absence reads true, as for the run's own route.
+    const older = createApi(vi.fn().mockResolvedValue(jsonResponse(200, { ok: true })) as unknown as typeof fetch);
+    expect(await older.actItem(31)).toEqual({ released: true });
+  });
+
+  it('declineItem POSTs /api/items/:id/decline with no body', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true, item: {} }));
+    const a = createApi(fetchImpl as unknown as typeof fetch);
+    await a.declineItem(31);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/items/31/decline');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+});

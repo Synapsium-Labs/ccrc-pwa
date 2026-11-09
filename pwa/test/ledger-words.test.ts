@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
-  limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, waitingTotal,
+  limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
   type ItemList, type QuestionRow,
 } from '../src/ledgers/ledgerWords';
 import { isWaitingView } from '../src/ledgers/waitingView';
@@ -25,7 +25,7 @@ describe('groupByProgramme', () => {
       itemView({ id: 3, program: 'prog-a', neededBy: 'blocking', state: 'checking', tickedAt: NOW - MIN }),
       itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
     ], [ask('project-a-ask', 'prog-a')]);
-    const kinds = mixed[0]!.rows.map((r) => (r.kind === 'item' ? `item ${r.item.id}` : r.kind === 'question' ? `question ${r.question.sessionId}` : `limit ${r.limit.sessionId}`));
+    const kinds = mixed[0]!.rows.map((r) => (r.kind === 'item' ? `item ${r.item.id}` : r.kind === 'question' ? `question ${r.question.sessionId}` : r.kind === 'cap' ? `cap ${r.run.id}` : `limit ${r.limit.sessionId}`));
     // The question is the operator's and comes first; the item the coordinator holds follows in `orderItems` order.
     expect(kinds).toEqual(['question project-a-ask', 'item 3', 'item 4']);
   });
@@ -290,7 +290,7 @@ describe('the summary pills count the groups the list draws', () => {
   });
   it("filtered to prog-a, prog-a's alone: prog-b's blocking item and question do not reach it", () => {
     expect(shownSummary(listGroups({ at: 'waiting', programme: 'prog-a' }, groups)))
-      .toEqual({ blocking: 0, questions: 0, limits: 0, soon: 1, checking: 1, cameBack: 0 });
+      .toEqual({ blocking: 0, questions: 0, limits: 0, caps: 0, soon: 1, checking: 1, cameBack: 0 });
   });
 });
 
@@ -333,5 +333,29 @@ describe('limitRows (a session on a limit with no account to take it)', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ program: null, waiting: 1 });
     expect(itemPlace(1, COMBINED_LIST, groups)).toBeNull();
+  });
+});
+
+describe('review caps in the grouping (Task 24, F21)', () => {
+  const cap = (id: number, program: string) => runRow({ id, program, reviewCap: { rounds: 3, cap: 3, askedAt: 5, liftedAt: null } } as never);
+
+  it('a waiting cap is a row of its programme, after the questions and before the other items, and it counts in the group', () => {
+    const groups = groupByProgramme([
+      itemView({ id: 3, program: 'prog-a', neededBy: 'blocking' }), itemView({ id: 4, program: 'prog-a', neededBy: 'soon' }),
+    ], [], [], [cap(12, 'prog-a')]);
+    expect(groups[0]!.rows.map((r) => (r.kind === 'item' ? `item ${r.item.id}` : r.kind === 'cap' ? `cap ${r.run.id}` : 'q'))).toEqual(['item 3', 'cap 12', 'item 4']);
+    expect(groups[0]!.waiting).toBe(3);
+  });
+
+  it('a programme with only a cap still has a group, and the summary counts it', () => {
+    const groups = groupByProgramme([], [], [], [cap(12, 'prog-c'), cap(13, 'prog-c')]);
+    expect(groups.map((g) => [g.program, g.waiting])).toEqual([['prog-c', 2]]);
+    expect(shownSummary(groups).caps).toBe(2);
+    expect(summaryWords(shownSummary(groups)).map((w) => w.text)).toEqual(['2 review caps to lift']);
+  });
+
+  it('an item\'s place in a list ignores the cap rows', () => {
+    const groups = groupByProgramme([itemView({ id: 3, program: 'prog-a' }), itemView({ id: 4, program: 'prog-a' })], [], [], [cap(12, 'prog-a')]);
+    expect(itemPlace(4, COMBINED_LIST, groups)).toMatchObject({ index: 1, total: 2, prev: 3, next: null });
   });
 });
