@@ -383,7 +383,7 @@ describe('the controls on /waiting (Task 24)', () => {
   });
   const live = runFixture(7, 'coord', 'w-7');
   const cap = (id: number, over: object = {}) => runFixture(id, 'coord', `w-${id}`, {
-    reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null }, ...over,
+    reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null }, ...over,
   });
   const rowOf = (id: number): HTMLElement => document.querySelector<HTMLElement>(`li:has([data-item="${id}"])`)!;
 

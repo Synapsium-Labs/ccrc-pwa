@@ -473,7 +473,7 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
 
   it('the list beside an item draws a waiting review cap with its Lift cap control, as the /waiting list does', () => {
     const store = rig();
-    act(() => store.setState({ runsFrameSeen: true, runs: [runFixture(12, 'coord', 'w-12', { reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null } })] }));
+    act(() => store.setState({ runsFrameSeen: true, runs: [runFixture(12, 'coord', 'w-12', { reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } })] }));
     history.replaceState(null, '', '/waiting/4');
     render(<ItemListColumn param="4" store={store} fleet={<section aria-label="Fleet stand-in" />} />);
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
@@ -484,7 +484,7 @@ describe('moving between items (plan PL9; spec §2 "Moving between items", D23)'
 
   it('the list beside an item acts on nothing while the fleet rows are not heard: its controls are drawn disabled', () => {
     const store = rig();
-    act(() => store.setState({ fleetFrameSeen: false, runsFrameSeen: true, runs: [runFixture(12, 'coord', 'w-12', { reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null } })] }));
+    act(() => store.setState({ fleetFrameSeen: false, runsFrameSeen: true, runs: [runFixture(12, 'coord', 'w-12', { reviewCap: { rounds: 3, cap: 3, askedAt: NOW - MIN, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } })] }));
     history.replaceState(null, '', '/waiting/4');
     render(<ItemListColumn param="4" store={store} fleet={<section aria-label="Fleet stand-in" />} />);
     const beside = screen.getByRole('complementary', { name: 'The list beside this item' });
