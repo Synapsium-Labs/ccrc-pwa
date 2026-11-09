@@ -107,6 +107,39 @@ describe('a forced rescue keeps an unmeasured home the loop never walks as its f
     expect(target('claude-a', 'claude', '1')).toBe('claude-d rc=0');
   });
 
+  // An overflow lane (here the roster's non-home-able `gpt`, installed so `_default_pool` adds it) is a last resort:
+  // it is chosen only when no home-able candidate, the fallback home included, passed. The fallback home is consulted
+  // before it.
+  const installOverflow = (w: string): void => {
+    const bin = path.join(h.home, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
+  };
+
+  it('forced, crossed home unmeasured, in-pool candidates full, an overflow lane has room: the crossed home, not the overflow lane', () => {
+    seed('claude-a', 'claude-b'); tagPool('project-a', 'pool-a');
+    h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
+    installOverflow('gpt');
+    limits('claude-a', 100, 100); limits('claude', 100, 100); limits('claude-d', 100, 100); limits('gpt', 10, 10);
+    expect(target('claude-a', 'claude-b', '1')).toBe('claude-b rc=0');
+  });
+
+  it('forced, hand-set pool list that leaves home out, home-able listed accounts full, an overflow lane has room: home', () => {
+    seed('claude-a', 'claude');
+    installOverflow('gpt');
+    fs.writeFileSync(reg(`${ID}.pool`), 'claude-a claude-b claude-d gpt\n');
+    limits('claude-a', 100, 100); limits('claude-b', 100, 100); limits('claude-d', 100, 100); limits('gpt', 10, 10);
+    expect(target('claude-a', 'claude', '1')).toBe('claude rc=0');
+  });
+
+  it('forced, crossed home unmeasured, only an overflow lane has room and the home is not recoverable: the overflow lane', () => {
+    seed('claude-a', 'claude-b'); tagPool('project-a', 'pool-a');
+    h.sh(`_reg_set ${ID} crosspool "1700000000 pool-a claude-b"`);
+    installOverflow('gpt');
+    limits('claude-a', 100, 100); limits('claude', 100, 100); limits('claude-d', 100, 100); limits('claude-b', 100, 100); limits('gpt', 10, 10);
+    expect(target('claude-a', 'claude-b', '1')).toBe('gpt rc=0');
+  });
+
   it('a wake move (measured room only) still refuses the unmeasured home as a fallback', () => {
     seed('claude-a', 'claude');
     fs.writeFileSync(reg(`${ID}.pool`), 'claude-a claude-b claude-d\n');

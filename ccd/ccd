@@ -19579,11 +19579,13 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
         [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
       fi
     done
-    [[ -n "$best$obest" ]] && break                                              # found at this class
-    # D-8123: the fallback home (see `hfb` in the home-recovered arm) is returned when pass 1 found nothing measured or
-    # unmeasured to rank, so a forced rescue never turns "home was eligible" into a strand. It answers only if home can
-    # serve the intended class, exactly as the arm it fell out of would have asked.
+    [[ -n "$best" ]] && break                                                    # a home-able candidate found at this class
+    # D-8123: the fallback home (see `hfb` in the home-recovered arm) is returned when pass 1 found no home-able candidate
+    # to rank, so a forced rescue never turns "home was eligible" into a strand. It is consulted BEFORE an overflow lane
+    # (`obest`), because an overflow lane is a last resort chosen only when no home-able candidate, home included, passed.
+    # It answers only if home can serve the intended class, exactly as the arm it fell out of would have asked.
     if [[ -n "$hfb" && "$pass" -eq 1 ]]; then _class_gate "$hfb" "$cls" && { echo "$hfb"; return 0; }; fi
+    [[ -n "$obest" ]] && break                                                   # only an overflow lane found at this class
     [[ -z "$cls" ]] && break                                                     # no class: nothing more to try
     [[ "$unmeas" -gt 0 ]] && return 5                                            # a lane nobody measured: nobody decides
     [[ "$unserv" -eq 0 || "$pass" -eq 2 ]] && break                              # nothing to degrade from, or already degraded once
