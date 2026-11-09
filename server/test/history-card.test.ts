@@ -2415,6 +2415,62 @@ describe("the previous leaf a steer file quotes is read from the stored node row
     }
   });
 
+  // The steer text is composed (and the previous leaf read) only when a write is possible. A spy on the one statement that reads the
+  // previous leaf counts it through oneCard; every off-end-of-file arm must still reach the verdict it reaches with the text.
+  it('the previous leaf is read only when a write is possible: off end-of-file no composition runs, and every arm decides as it does with the text', async () => {
+    const { C, S } = await store7Imports();
+    const PREV_SQL = 'FROM nodes n JOIN memberships m';
+    for (const [name, atEof, seed, want] of [
+      ['CONTROL: at end-of-file with no file, a write composes once', true, null, 'written'],
+      ['off end-of-file, no file: none', false, null, 'absent'],
+      ['off end-of-file, this leaf as written: keep', false, 'own', 'kept'],
+      ['off end-of-file, this leaf re-rendered (another previous gist): keep', false, 'rerendered', 'kept'],
+      ['off end-of-file, another leaf (consumed): delete', false, 'other', 'deleted'],
+      ['off end-of-file, an empty file: delete (an empty text is not the line)', false, '', 'deleted'],
+      ['off end-of-file, text that is no steer file: delete', false, 'not a steer file\n', 'deleted'],
+    ] as const) {
+      const fx = await store7({});
+      try {
+        const f = path.join(libCard.historyPaths(fx.home).root, 'steer', ID7, `${E7}.txt`);
+        const own = (await fx.run()).text!;   // at end-of-file: the file as the writer makes it
+        fs.rmSync(f);
+        if (seed === 'own') fs.writeFileSync(f, own);
+        else if (seed === 'rerendered') fs.writeFileSync(f, `${own}Previous leaf, context only, do not repeat it: [stale]\n`);
+        else if (seed === 'other') fs.writeFileSync(f, own.replace(fx.nextLeaf, `L${'0'.repeat(20)}`));
+        else if (seed !== null) fs.writeFileSync(f, seed);
+        let reads = 0;
+        const spy = new Proxy(fx.db, {
+          get(target, prop) {
+            const v = Reflect.get(target, prop, target) as unknown;
+            if (typeof v !== 'function') return v;
+            if (prop !== 'prepare') return (v as (...a: unknown[]) => unknown).bind(target);
+            return (sql: string) => {
+              const st = (v as (q: string) => Record<string, unknown>).call(target, sql);
+              if (!sql.includes(PREV_SQL)) return st;
+              return new Proxy(st, {
+                get(t, p) {
+                  const m = Reflect.get(t, p, t) as unknown;
+                  if (typeof m !== 'function') return m;
+                  return (...a: unknown[]) => { if (p === 'get') reads += 1; return (m as (...x: unknown[]) => unknown).apply(t, a); };
+                },
+              });
+            };
+          },
+        }) as DatabaseSync;
+        const eofMs = Number((fx.db.prepare('SELECT eof_ms FROM ingest_files WHERE file_id = 1').get() as { eof_ms: number }).eof_ms);
+        const ictx = S.makeIngestCtx(fx.home, [], atEof ? eofMs : eofMs + 1, null);
+        C.consumeAndWriteCards(spy, ictx, S.newBudget());
+        const after = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+        expect(reads, `${name}: previous-leaf reads`).toBe(atEof ? 1 : 0);
+        if (want === 'written') expect(after).toBe(own);
+        else if (want === 'absent' || want === 'deleted') expect(after, name).toBeNull();
+        else expect(after, name).toBe(seed === 'own' ? own : `${own}Previous leaf, context only, do not repeat it: [stale]\n`);
+      } finally {
+        fx.db.close();
+      }
+    }
+  });
+
   it("prevLeafOf answers unreadable for a node_id off the grammar, null when the copy has no level-0 node, and the row's own fields otherwise", async () => {
     const { prevLeafOf } = (await import('../../ccd/history/steer.mjs')) as unknown as {
       prevLeafOf(db: DatabaseSync, copyFileId: number, epoch: { session_pk: number; seq: number }): libCard.SteerPrev | null;

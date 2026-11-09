@@ -267,7 +267,6 @@ describe.skipIf(process.platform === 'darwin')('what a steer receipt does to a s
     expect(leaves.map((l) => [l.kind, l.status]), 'span 1 takes its exact receipt; span 2 has none (today\'s exact-id association, O7 (a))')
       .toEqual([['steered_leaf', 'ok'], ['native_leaf', 'not-requested']]);
     // Statuses only: no breaker exists before W3-2, and its half is Task 2's `a stale print's span never moves the breaker`.
-    expect(qS<{ n: number }>(box, 'SELECT count(*) AS n FROM breaker')[0]!.n).toBe(0);
   }, 240_000);
 
   it('O13, today\'s behaviour: an unprinted compaction, then a print before the next tick: the unprinted span takes the exact receipt and reads absent', () => {

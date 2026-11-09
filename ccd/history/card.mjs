@@ -348,10 +348,15 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, roots, out) {
 
 /** The steer file's prediction: the card's own prediction with the steer text as its `line` (decideCardFile compares a file's
  *  text with it, as it compares a card line), composed by lib from the leaf id and the previous leaf's stored row. A skip stays
- *  a skip. The previous leaf is read only for a prediction that writes. */
-function steerPredictionOf(db, ictx, p) {
+ *  a skip. The text is composed, and the previous leaf read, only when a write is possible (`mayWrite`): decideCardFile reads
+ *  `prediction.line` for nothing but a write or the keep of an identical file, and off end-of-file the verdict of every arm
+ *  (absent: none; this leaf, as written or re-rendered: keep; another leaf, junk or unreadable: delete) is the same without
+ *  it, because a steer file this writer composed names its own leaf whole. The line is then `undefined`, which no file's text
+ *  equals (an empty file's is `''`, an unreadable one's `null`), so a junk file is still deleted. */
+function steerPredictionOf(db, ictx, p, mayWrite) {
   const prediction = p.prediction;
   if (prediction.act !== 'write') return prediction;
+  if (!mayWrite) return { ...prediction, line: undefined };
   const prev = p.copy === null || p.epoch === null ? null : prevLeafOf(db, p.copy.file_id, p.epoch);
   const { text } = composeSteerFile({ leafId: prediction.leafId, prev, children: [], pairIdx: ictx.pairIdx });
   return { ...prediction, line: text };
@@ -377,7 +382,7 @@ function steerArtifact(db, ictx, id, uuid, p, atEof, mayWrite, recorded) {
   }
   const file = steerFileOf(ictx.home, id, uuid);
   const current = dirKind === 'absent' ? { state: 'absent' } : readSteerFile(file);
-  const prediction = steerPredictionOf(db, ictx, p);
+  const prediction = steerPredictionOf(db, ictx, p, mayWrite);
   const d = decideCardFile({ current, prediction, atEof: mayWrite, artifact: 'steer' });
   const countConsumed = () => { bump(db, 'steer_consumed'); };
   // The file goes: a record that was due and is not acted on, or a consumed file whose replacement cannot be written (an unlink

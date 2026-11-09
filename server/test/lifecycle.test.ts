@@ -1470,7 +1470,9 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     const { PURGED_FILES_GRACE_MS, STEER_FILE_MAX } = await import('../../ccd/history/lib.mjs');
     expect(c!.collector, "the collector names another grace than the sweep's")
       .toContain(`the files of purged sessions after ${PURGED_FILES_GRACE_MS / 86_400_000} days`);
-    expect(c!.tier).toBe(`<=${STEER_FILE_MAX / 1024} KB per session`);
+    expect(c!.collector, 'spec §9.4: a lane file whose account left the roster is removed on the next tick')
+      .toContain('a lane file whose account left the roster is removed on the next tick');
+    expect(c!.tier).toBe(`<=${STEER_FILE_MAX / 1024} KB per session; one word per rostered account`);
   });
 
   // ── ccrc history W2-4 (spec 2026-10-05 §9.4, O17's W2-4 half; W2-D9, W2-D53) ──────────────────────────────────────
