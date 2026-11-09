@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  configDirFor, deriveRole, derivedRoleNote, loadConfig, parseReleaseSource, readReleaseSource,
+  configDirFor, deriveRole, reviewCapCoordLiftOf, derivedRoleNote, loadConfig, parseReleaseSource, readReleaseSource,
   DEFAULT_RELEASE_API_URL, DEFAULT_UPDATE_DEADLINE_MS,
 } from '../src/config.js';
 import { mungePath } from '../src/munge.js';
@@ -636,5 +636,37 @@ describe('the deps-shed thresholds (D-7278)', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('reviewCapCoordLiftOf (D-8125)', () => {
+  const warnOf = (env: NodeJS.ProcessEnv): { value: string; said: string } => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try { return { value: reviewCapCoordLiftOf(env), said: warn.mock.calls.flat().join(' ') }; } finally { warn.mockRestore(); }
+  };
+
+  it('an absent or empty value is on and silent', () => {
+    expect(warnOf({})).toEqual({ value: 'on', said: '' });
+    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: '' })).toEqual({ value: 'on', said: '' });
+  });
+
+  it('on and off read as given, silently', () => {
+    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'off' })).toEqual({ value: 'off', said: '' });
+    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'on' })).toEqual({ value: 'on', said: '' });
+  });
+
+  it('any other value warns once and reads on', () => {
+    for (const raw of ['OFF', '0']) {
+      const r = warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: raw });
+      expect(r.value, raw).toBe('on');
+      expect(r.said, raw).toContain(`CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw)} is not one of on|off; it reads as on (the default).`);
+    }
+  });
+
+  it('loadConfig carries it as cfg.reviewCapCoordLift', () => {
+    const home = mkTmp('ccrc-cfg-rclift-');
+    seedRoster(home);
+    expect(loadConfig({ CCRC_HOME: home }).reviewCapCoordLift).toBe('on');
+    expect(loadConfig({ CCRC_HOME: home, CCRC_REVIEW_CAP_COORD_LIFT: 'off' }).reviewCapCoordLift).toBe('off');
   });
 });
