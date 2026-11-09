@@ -259,7 +259,7 @@ describe('ccrc settings: a refused row carries the check\'s words and its source
     const needles = keys.flatMap(([k], i) => [...sample(k, i).split(/[\t/]/), sample(k, i)]).filter((t) => t.length >= 4);
     if (!MAC) {
       refusedRows(d, keys);
-      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(67);
+      expect(d.settings.filter((r) => r.state === 'refused')).toHaveLength(68);
       expect(BOX_SETTING_REFUSAL_WORDS.length).toBeGreaterThan(0);
       for (const r of d.settings.filter((x) => x.state === 'refused')) expect(BOX_SETTING_REFUSAL_WORDS, r.key).toContain(r.why);
     } else {

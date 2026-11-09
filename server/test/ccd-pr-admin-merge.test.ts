@@ -3,8 +3,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { spawn, spawnSync } from 'node:child_process';
+import { CCD, ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { AM_GH_STUB, AM_PROT_NONE, FLEET_LOGIN, HEAD_A, HEAD_B, MERGE_OID, amCaller, amCheckRun, amFixture, amProt, amRoute, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
 
@@ -58,8 +58,8 @@ describe('the gate before GitHub', () => {
     fs.cpSync(path.dirname(CCD), copy, { recursive: true });
     fs.rmSync(path.join(copy, 'lib', 'ccrc-settings.sh'));
     const r2 = spawnSync('bash', ['-c', 'a_src=$A_SRC a_snip=$A_SNIP; unset A_SRC A_SNIP; source "$a_src"; eval "$a_snip"'], {
-      env: h.env({ A_SRC: path.join(copy, 'ccd'),
-        A_SNIP: `${AM_GH_STUB} export TMUX_PANE=%1; cmd_pr_admin_merge ${GOOD}` }),
+      env: ghContainedEnv(h.home, h.env({ A_SRC: path.join(copy, 'ccd'),
+        A_SNIP: `${AM_GH_STUB} export TMUX_PANE=%1; cmd_pr_admin_merge ${GOOD}` }), { systemd: true, tmux: true }),
       cwd: h.home, encoding: 'utf8',
     });
     const out = r2.stdout.trim();
@@ -159,7 +159,10 @@ describe('the gate before GitHub', () => {
 
     it('refuses a pane this command is not running in: another pane\'s id on the command line names its coordinator, not the caller', () => {
       amFixture(h); amCaller(h, 'demo-quiet-basin');
-      const other = spawnSync('bash', ['-c', 'sleep 60 & echo $!'], { encoding: 'utf8' }).stdout.trim();   // a process that is not an ancestor
+      // A process that is not an ancestor. Spawned directly, never through a shell that hands it the output pipe, so nothing
+      // waits on it.
+      const sleeper = spawn('sleep', ['60'], { stdio: 'ignore', detached: true });
+      const other = String(sleeper.pid);
       try {
         fs.writeFileSync(path.join(h.home, 'am', 'tmux-pid'), other);
         const r = amRun(h, GOOD);

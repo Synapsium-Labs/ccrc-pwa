@@ -1382,15 +1382,12 @@ live session may show a limit sign with no swap before the fleet limit watchdog 
 own process, through the settings library.
 One is the coordination family's (D-8125): `CCRC_REVIEW_CAP_COORD_LIFT` (on or off; default off) lets a run's coordinator
 extend its review-round cap by three rounds at a time, with a reason; the server reads it.
+One is the admin-merge door's switch (D-8124): `CCRC_ADMIN_MERGE` (`auto` or `off`, default `auto`), read by `ccd` at each
+`ccd pr-admin-merge` call; `off` closes the door fleet-wide.
 When no account has measured room for a stopped session, the watchdog records that, and the console's Waiting on you page shows a
 row for the session with its own two controls: Swap to… (the accounts that have room, updating as limits arrive) and Wait until
 reset at the time the limit ends. Neither sends a key to the terminal.
 
-One is the coordinator's review-cap lift (D-8125): `CCRC_REVIEW_CAP_COORD_LIFT` (`on` or `off`, default `off`) lets a
-coordinator extend a reached review-round cap by three rounds, with a reason; `off` leaves the operator's lift as the only
-door. The server reads it from its own environment.
-One is the admin-merge door's switch (D-8124): `CCRC_ADMIN_MERGE` (`auto` or `off`, default `auto`), read by `ccd` at each
-`ccd pr-admin-merge` call; `off` closes the door fleet-wide.
 
 **Seeing a box's settings.** `ccrc settings` prints what each of the 71 settings a fleet or server node reads resolves to on this
 box, one row each, with where it came from (the environment, `ccrc.env`, an empty `ccrc.env` line, or the default) and

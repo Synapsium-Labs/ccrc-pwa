@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 400,
+  "d": "D-8124",
+  "reason": "the admin-merge door, `ccd pr-admin-merge`: its argv and setting gate, the coordinator caller derived from the process (pane, ancestry, registry, no hold), the merge-time reads (admin permission, merge queue and ruleset rule types, head, base, reviews, required checks, draft, the fleet's own PR, the allowed merge method), the pinned `--admin --match-head-commit` merge, its proof and its journal line; measured +369 net code lines against the merge-base; kept in ccd/ccd beside `cmd_pr_open` and `cmd_pr_state` because it uses their gh readers and the swap-log journal, and the ccd file split (2026-11-06 plan) has not yet opened a library slice for the PR verbs",
+  "added": "2026-11-09"
+}
