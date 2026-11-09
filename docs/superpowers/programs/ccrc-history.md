@@ -84,7 +84,28 @@ beyond what items 2, 3 and 5 produce.
    verbatim text, considered only if the recall report of done-item 5 shows sessions acting on superseded statements
    or reassembling scattered facts. graphify stays a read-time code join, never the store (spec §3, decision 6).
 
-## Current checkpoint — 2026-11-07
+## Current checkpoint — 2026-11-09
+
+This supersedes the 2026-11-07 checkpoint below where they differ; the current route and the definition of done above
+stand. The evidence is under "Latest rulings and evidence — 2026-11-08 to 2026-11-09".
+
+- **W3/W4 drafts (run 1190, #1876).** Fold round 7 folded the operator's packages (items 90 to 94 and 96) into both
+  drafts. Five reviews then ran, 1686, 1690, 1695, 1696 and 1700, with fix rounds 8 to 11 between them and round 12
+  after the last. Every open
+  decision is ruled except O4, each backend's compliance bar, which waits for the spike report's figures. Round 12
+  answers review 1700's wording findings. Next: one review of round 12. If it is clean, an operator item asks the
+  operator to approve the W4 addendum and accept the W3 plan (definition of done, items 2 and 3). Neither draft is
+  approved yet, and nothing is built or armed.
+- **W1.** The operator ruled W1-k, W1-e and W1-h met (items 83 to 85). W1-f and W1-i were met on 2026-11-07, and W1-d
+  is recorded. Two rows stay open: W1-b, re-measured over the week ending 2026-11-15, and W1-l, the operator's drill
+  (item 86), whose result do-item 111 waits for.
+- **Held runs.** Runs 1233 and 1236 are closed as superseded and #1969 and #1975 are closed unmerged (item 87). Run
+  1190's drafts are the remaining held run, and run 1022 stays open until the final run.
+- **The 2026-11-07 ledger update** (#2454) landed on 2026-11-08 at 21:04Z as `bda5e87a6`, on one new landing
+  attempt the operator authorised (item 97).
+- **Recall use** was reported on 2026-11-07 (definition of done, item 5).
+
+### Checkpoint of 2026-11-07
 
 This supersedes the 2026-11-02 checkpoint below where they differ; the current route and the definition of done above
 stand.
@@ -174,14 +195,96 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | W1-fix (CP-39b) | a sidecar over 8 MiB (`SIDECAR_READ_WHOLE_MAX`) is captured by the streamed arm, which reads into one reused piece | fleet | #1561 | **merged** 2026-10-26 12:55Z as `f70956cc3` at head `bb917402a`, release v0.0.725 (run 973; reviews 979 and 987; one fix round) |
 | W1-fix (CP-39c) | the export pass runs on its own slice of the run budget, and the check after a bind on a slice of its own | fleet | #1577 | **merged** 2026-10-26 as `ce7b94dab`, release v0.0.728 (run 982; review 999; accepted with no fix round); its live check passed on 2026-10-27 on v0.0.745: export due 0 and overdue 0 (597 due before), health PASS (§8) |
 | W1-fix (CP-39d) | grep drives each referrer arm from its scope; the sweep reads a registered session's mid-turn growth within a tick; W1-b's and W1-f's measures; the sweep's carried review items | fleet | #1693 | **merged** 2026-10-27 21:11Z as `5377d23c1` at head `a8e707cff`, release v0.0.767 (run 1039; reviews 1065 and 1088; one fix round); the final W2 release carries it (CP-35) |
-| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft; run 1190 awaiting-review at `2bbba7047` after fix round 6 (mail 16507, wave-done 16527); reviews 1599 and 1632 ran under the operator's cap lift and items 58 and 73, and review 1651 under the operator's autonomy direction of 2026-11-07; next, one round folds items 90 to 94 and 96, then a final review; no implementation authority |
-| 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **held/unaccepted**, draft; run 1233 awaiting-review, review rounds 3/3; no cap lift; the full study is no longer on the progress path under the later conditional skip ruling; item 87 proposes closing it as superseded |
-| 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **held/unaccepted**, draft; run 1236 awaiting-review, review rounds 1/3; review 1238 closed/read, bounded correction not sent after routing refusal; no study start now owed; item 87 proposes closing it as superseded |
+| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft; run 1190 working on fix round 12 (mail 16851, pushed `d5bb24aa9`), after fold round 7 and reviews 1686, 1690, 1695, 1696 and 1700 under the operator's cap lift and autonomy direction; every open decision is ruled but O4; next, a review of round 12, then the operator's approval item; no implementation authority |
+| 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1233 closed as failed; branch kept |
+| 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1236 closed as failed; branch kept |
 | 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 **done/released**, item 1/1, review rounds 1/3; review 1321 done/released; accepted MERGED mail preceded final close |
 | 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; accepted plan/review still required; focused steering spike and per-backend operator arming retained |
 | 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; approved addendum, accepted plan/review and B4 live still required |
 
 ## Decisions & deviations
+
+### Latest rulings and evidence — 2026-11-08 to 2026-11-09
+
+- **The operator's rulings on W1 (2026-11-08).**
+  - Item 83: "Accept W1-k as met since CP-39c". B4's export deadline was missed as worded on 2026-10-01, with no text
+    lost. Export due and overdue read 0 at CP-39c's live check (2026-10-27) and again on 2026-11-07.
+  - Item 84: "Rule W1-e met". All 37 mismatches over the 2% bound are on leaves created on 2026-10-27, and none since.
+    On 2026-11-08 the all-time mismatch count was still 40.
+  - Item 85: "Rule W1-h met on this evidence". On a read-only re-measure the coordinator made for its confirmation,
+    all 62 gateway-produced served leaves were still in the store. The same 11 sessions' exit-0 recall calls had grown to grep 146, expand 93 and tree 62.
+    **Correction to the 2026-11-07 entry:** "all exit 0" counted only the exit-0 calls. The same sessions also have
+    older non-zero exits: grep exit 7 (FTS unavailable) 86 times, all by 2026-10-25 during the FTS backlog; grep exit
+    3 (not found) 13 times by 2026-10-30; expand exit 2 (refused) 4 times by 2026-11-05. None is later than
+    2026-11-05, and none shows recall failing on that lane.
+  - Item 86: "I will run the drill". W1-l is the operator's. Do-item 111 waits for its result, which the coordinator
+    re-measures before confirming.
+- **Held runs closed (item 87, "Close both as superseded").** The first attempt stopped part-way on a refusal the
+  coordinator caused. #1969 was closed unmerged with a one-line comment. The close of run 1233 was then refused as a
+  bad request, because a work run's close needs its fingerprint and the `final` flag and the body carried neither. Under
+  the stop rule the coordinator did not resend and returned the item. The operator ticked it again. The second
+  attempt closed runs 1233 and 1236 as failed with the full body, and closed #1975 unmerged with the same comment.
+  Both branches are kept on the remote. Both child workspaces were reclaimed when their runs closed, with their
+  commits pinned in the attic and their transcripts kept.
+- **#2454 landed (item 97, "Start one new landing attempt").** It merged on 2026-11-08 at 21:04Z as `bda5e87a6`.
+- **The W3/W4 packages (2026-11-08).** The operator answered "Accept this package" on items 90 to 94 (item 90 at
+  16:24Z, the rest at 20:44Z) and "One searched cap" on item 96. So every row in the five packages takes the
+  recommendation listed in the 2026-11-07 entry below, and Task 4's per-child gist cap is one cap from 40 to 300
+  characters, found by binary search inside §7.1's fixed bounds. The drafts record each row's ruling with its
+  unchosen options.
+- **Two rows raised after the packages, and ruled (2026-11-09).**
+  - O23, how a steer receipt with no timestamp of its own counts. Review 1686 raised it, and review 1690 widened it to
+    the sweep's tick and the generic receipt. Item 116 first raised it on 2026-11-08 and was withdrawn before any answer,
+    because review 1690 showed its premise was wrong: a drain-stamped receipt does not always read late. Item 117
+    raised it again. The operator ruled **(d) with (b)** at 00:22Z: new receipts are timed (the writer reads a clock
+    from `date` when `EPOCHREALTIME` gives none, and writes `ts` only when it is valid), and an exact receipt no clock
+    could time counts as an untimed boundary does, apart. Association stays as O7 ruled.
+  - O24, whether a rebuilt store's breaker reproduces the live run's count decisions. It came from review 1690. Item
+    118 raised it. The operator ruled **(a), accept and disclose the divergence**, at 00:23Z: the replay counts each
+    leaf as the rebuilt store reads it.
+  - O4 alone stays open, waiting for the spike report's figures.
+- **The coordinator's rulings in these rounds.** Each is recorded in the drafts where it applies.
+  - Fold readings 1 and 4 are confirmed. O19's "fewer than O2's sample" means O2's `insufficient` line, a side of
+    fewer than 10 spans. P11's "conflicts" means identity collisions, and a meta conflict stays unknown in the range.
+    The other fold readings are accepted too.
+  - Ask 337 (fold round 7): P10's move of the run-id grammar falls inside W4's files, because the addendum's W4-1 file
+    row claims `shared/*.mjs` and `server/src/workflows/model.ts`. So P10 stays whole and stays the coordinator's.
+  - The shared `history-switches` regions (review 1690, F3). The coordinator's earlier word "rebases" was wrong. When
+    one of W3-1, W3-3 and W4-1 lands after another that edited those regions, the later one absorbs main only on the
+    worker's conflict triggers, by merge and never by rebase, and carries the earlier edits. The ruling sets no order
+    between W4-1 and the W3 PRs.
+  - Dispatch order (review 1695): O23 was to be ruled before the first W3-1 part that carries Task 1C or Task 1D is
+    dispatched, and O24 before W3-2 is dispatched. The operator's rulings of 2026-11-09 meet both gates, and neither
+    revises the plan first.
+  - `childrenOf` follows the same closed `directive_flag` mapping as `prevLeafOf` (review 1696, F1).
+  - `lateReceipts` compares a leaf's earliest exact receipt, ordered by `ts_ms` and then `event_key` (review 1696, V1).
+  - P20 (a)'s text is amended to "each other lister section 3.1's table names (five)" (review 1696, V8).
+  - The UTF-8 size row skips by probe and by name where bash cannot count a two-byte character as one, as
+    `session-hook-approval-deny.test.ts` does (review 1700, A2).
+- **Reviews and fix rounds on #1876.** Each round was bounded to the two drafts. The operator's review-cap lift for
+  run 1190 and the autonomy direction of 2026-11-07 covered each round. The coordinator checked each fix-round brief
+  with a short read-only workflow before sending it. Each review ran its panel as a Workflow with the reference
+  script copied verbatim. The review briefs resolve the conflict review 1651 exposed: the main loop alone runs the
+  three documentation guards, and a lens runs a suite only on its own prerequisites. Every wave-done was re-measured
+  before its review: the tip, a clean tree, the PR still a draft at that tip, and the required checks passing on the
+  fast run.
+
+  | Round | Brief (mail) | Tip | Fast run | Review | Confirmed findings |
+  |---|---|---|---|---|---|
+  | 7 (fold) | 16720 | `429967d9e` | 42525379339 | 1686 | 3: the Goal's order; O8's case and mutant (e); Task 1F's mutant (c). 5 advisory |
+  | 8 | 16773 | `057797dd3` | 42529480379 | 1690 | 3: a rebuild's count can differ from the live one's (new row O24); O23's timing premise, with a main-loop lead on the generic receipt; the coordinator's "rebases". 7 advisory |
+  | 9 | 16794 | `24efd343e` | 42534423357 | 1695 | 2: PX20's size rows missed the template's first line; the overlap left out the two test files both W3-1 and W4-1 claim (`history-lib.test.ts` and `history-sweep.test.ts`). 4 advisory |
+  | 10 | 16816 | `1b2de938f` | 42537657721 | 1696 | 1: `childrenOf` passed `directive_flag` through. 8 minor items, V1 to V8 |
+  | 11 | 16836 | `168f0e3ec` | 42541450423 | 1700 | 2: a stale untimed-receipt premise in Task 1B; the lane-map command's escaped pipe. 3 advisory, one of them informational |
+  | 12 | 16851 | `d5bb24aa9` | 42544125244, pending | next | — |
+
+  The guards the worker ran in each of rounds 7 to 11, from `server/`: 728 of 729 in the documentation guards, the
+  one failure being deviation-refs' D-7011 to D-7019 report, the stale-merge-base false positive diagnosed in the
+  2026-11-07 entry; single-definition 979 of 979; and growth-check 47 of 47. Round 12's results are still to come. None
+  of the five reviews verified the guards itself: reviews 1690 to 1700 had no installed modules, and review 1686's
+  figures came from a lens using borrowed modules, which it disclosed as unverified. So the worker's runs and CI's
+  fast run are the evidence. The review reports are copied under the
+  coordinator's clips, since a reviewer's copy is lost when its workspace is reclaimed.
 
 ### Latest rulings and evidence — 2026-11-07
 
