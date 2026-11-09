@@ -22,6 +22,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/ledgersRoutes.ts': { reason: "the programme ledgers' coordinator HTTP routes (PL3)", since: '2026-11-01' },
   'server/src/coord/reviewRoundsRoute.ts': { reason: "the coordinator's review-cap lift door (D-8125)", since: '2026-11-09' },
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
+  'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
   'server/src/token/routes.ts': { reason: "the box token's HTTP routes", since: '2026-10-20' },

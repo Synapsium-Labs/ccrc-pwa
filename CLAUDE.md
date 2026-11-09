@@ -532,7 +532,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/items/:id/return`, `POST /api/items/:id/withdraw`, `POST /api/items/:id/blocking`,
   `POST /api/programmes/:slug/spec`, `POST /api/programmes/:slug/modifications` and
   `POST /api/programmes/:slug/modifications/merged`; each is attribution-checked, then ownership-checked by
-  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) all call
+  `claimsProgramme`, and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes) and the coordinator call record's one route
+  `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
+  for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
   caller holds the token and has no cookie). The dual-credential reads, including `GET /api/feed`,
