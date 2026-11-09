@@ -1,7 +1,7 @@
 // The `registry-unmeasurable` refusal, drawn, in a real Chrome over the production build (D-5972, #549, ARCH-11b).
 // D-5971 moved the word to the table's 502 everywhere and made the four surfaces that render it inline branch on the
 // WORD instead of the status: the archive-conflict sheet (PrSheet's "Archive now", then "Archive anyway"), the abandon
-// sheet and the resume sheet's reclaim (both off a run row on /runs), and the coordinator banner's Pause. Each case
+// sheet (off a stuck row on /runs) and the resume sheet's reclaim (off the run's page), and the coordinator banner's Pause. Each case
 // answers that surface's POST with `502 { ok:false, error:'registry-unmeasurable' }` and asserts that the surface's
 // own sentence for the word is drawn, whole, inside its sheet body or banner, with no horizontal page scroll and no
 // page error, at 360, 390, 1280 and 1920 in both skins and both Phosphor palettes.
@@ -34,7 +34,8 @@ const NOW = 1_792_362_479;
 const WORKER = 'project-a-one';
 const COORD = 'project-a-coord';
 const RUN_ID = 3;
-/** The ordinary run beside it: Abandon sits on stuck rows alone (the runs rebuild, D-8074, Task 13), so Resume is acted on here. */
+/** The ordinary run beside it: Abandon sits on stuck rows alone (the runs rebuild, D-8074, Task 13). Resume left the board's rows
+ *  (Task 19, D-8075; spec §9.5): it is acted on from this run's own page, `/runs/4`, where the dead coordinator shows it. */
 const RESUME_ID = 4;
 
 const session = (id: string, ws: string, extra: object = {}): object => ({
@@ -79,6 +80,10 @@ const FIXTURE: AppFixture = {
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
     '/api/runs': { runs: [RUN, RUN2] },
+    [`/api/runs/${RESUME_ID}/record`]: { ok: true, run: RUN2, events: [], reviewedBy: [], olderEvents: 0 },
+    [`/api/runs/${RESUME_ID}`]: { ok: true, run: RUN2, spend: { measured: false, reason: 'no-sweep' } },
+    [`/api/runs/${RESUME_ID}/items`]: { ok: true, items: [] },
+    [`/api/runs/${RESUME_ID}/signals`]: { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } },
     '/api/claims': [],
     '/api/coord/caps': { caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 } },
     [`/api/sessions/${WORKER}/pr`]: { pr: MERGED_PR, draft: null, facts: null },
@@ -210,6 +215,7 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
         await page.keyboard.press('Escape');
         await page.locator('.sheet-body').waitFor({ state: 'detached' });
 
+        await page.goto(`${server!.origin}/runs/${RESUME_ID}`);
         await page.getByRole('button', { name: `Resume run ${RESUME_ID}` }).click();
         await page.getByRole('button', { name: 'That id cannot be revived' }).click();
         await page.getByLabel(`Hand run ${RESUME_ID} to this session id`).fill('project-a-two');
@@ -220,6 +226,7 @@ describe('D-5972: registry-unmeasurable at 502 is drawn by its word on all four 
         await page.locator('.sheet-body').waitFor({ state: 'detached' });
 
         // CoordBanner's Pause: the switch lives under Advanced (the runs rebuild, Task 12a, D-8074), one tap from the board's foot.
+        await page.goto(`${server!.origin}/runs`);
         await page.getByRole('link', { name: 'Advanced' }).click();
         await page.locator('.coord-banner').getByRole('button', { name: 'Pause' }).click();
         await page.locator('.coord-banner .coord-error').waitFor();

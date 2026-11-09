@@ -7,7 +7,7 @@
 // (`sessionEntries`' claimed programmes, `ArchiveSheet`'s claimed open runs, `runBelongsTo`'s id rule, `PrSheet`'s open
 // run on the workspace), and the seven run-to-session map lookups: `RunsScreen`'s three (the abandon sheet's
 // `sessionById.get(abandonTarget.sessionId)`, read through the child word the sheet is handed, and each row's worker and
-// claimant, read off the props the screen hands `RunRow`, whose real Resume door is rendered), `runWords.ts#runCard`'s
+// claimant, whose lookup `RunRow` no longer takes: the Resume door is `resumeShown`'s, asked here with `coordinatorOf`), `runWords.ts#runCard`'s
 // two, `nestFleet`'s `attentionFirst` (through the ORDER of a coordinator's children, its own block below: a card and
 // a depth do not show it) and `fleetTree`'s filter lookup (through `fleetTree`'s rows). Beside them, the
 // wire's own facts: `sessionRunOf(s)`, `sessionRunOf(s, 'open')` and `childIdsOf(run)`.
@@ -23,7 +23,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { childIdsOf, sessionRunOf, UNCHECKED_PR, type CoordCapsView, type FleetSession, type RunSummary, type SessionRun } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
-import { childMarkOf, runCard } from '../src/fleet/runWords';
+import { childMarkOf, coordinatorOf, programsWithOpenRun, resumeShown, runCard } from '../src/fleet/runWords';
 
 /** THE RETIRED GUESS, kept as the record this table was judged against (C7d deletes `runForSession` and
  *  `runBelongsTo` from `pwa/src`, D-7182). Before ARCH-61 the PWA guessed which run was a session's from the run's id
@@ -50,12 +50,12 @@ import type { AbandonChild } from '../src/fleet/AbandonSheet';
 
 /** What `RunsScreen` hands each `RunRow` and the abandon sheet, recorded beside the real components (the screen is
  *  read through its own lookups; nothing it renders is replaced). */
-const seen = vi.hoisted(() => ({ rows: [] as Array<{ run: number; session: string | null; coord: string | null }>, abandon: [] as AbandonChild[] }));
+const seen = vi.hoisted(() => ({ rows: [] as Array<{ run: number; session: string | null }>, abandon: [] as AbandonChild[] }));
 vi.mock('../src/screens/RunRow', async (orig) => {
   const m = await orig<typeof import('../src/screens/RunRow')>();
   const { createElement: h } = await import('react');
   const Spy = (p: Parameters<typeof m.RunRow>[0]) => {
-    seen.rows.push({ run: p.run.id, session: p.session?.id ?? null, coord: p.coordSession?.id ?? null });
+    seen.rows.push({ run: p.run.id, session: p.session?.id ?? null });
     return h(m.RunRow, p);
   };
   return { ...m, RunRow: Spy };
@@ -69,7 +69,7 @@ vi.mock('../src/fleet/AbandonSheet', async (orig) => {
   };
   return { ...m, AbandonSheet: Spy };
 });
-const { RunsScreen, STUCK_NOW, stuckOpen } = await import('./runs-board');
+const { RowsBoard: RunsScreen, STUCK_NOW, stuckOpen } = await import('./runs-board');
 
 const W = 'session-a';
 const C = 'coord-a';
@@ -152,7 +152,13 @@ async function board(sc: Scenario): Promise<{ rows: Map<number, { session: strin
   const rows = new Map<number, { session: string | null; coord: string | null; resume: boolean }>();
   for (const id of sc.focus) {
     const last = [...seen.rows].reverse().find((x) => x.run === id);
-    rows.set(id, { session: last?.session ?? null, coord: last?.coord ?? null, resume: screen.queryByRole('button', { name: `Resume run ${id}` }) !== null });
+    // The claimant and the Resume door are no longer the row's (Task 19, D-8075): the run page and the programme head read
+    // them, through the same two readers, so the table asks those readers on the world the board was drawn from.
+    const focused = [...sc.live, ...sc.cold].find((x) => x.id === id)!;
+    const claimant = coordinatorOf(focused, new Map(sc.sessions.map((x) => [x.id, x] as const)));
+    const door = focused.claimedBy !== null
+      && resumeShown(focused, coordinatorPresence(focused.claimedBy, claimant, true), programsWithOpenRun(sc.live).has(focused.program));
+    rows.set(id, { session: last?.session ?? null, coord: claimant?.id ?? null, resume: door });
   }
   // Abandon sits on stuck rows alone (D-8074, Task 13): the same world is drawn again with every open run stuck, and the
   // sheet's child word is read off the door in the Stuck band. The rows above came from the ordinary board.

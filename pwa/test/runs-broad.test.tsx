@@ -7,7 +7,7 @@ import type { CoordCapsView, RunSummary } from '../../shared/api';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { clearScreenCache } from '../src/lib/screenCache';
-import { RunsScreen } from './runs-board';
+import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 const NOW = Date.now();
@@ -27,6 +27,7 @@ const NO_CAPS = (): Promise<CoordCapsView> => new Promise<CoordCapsView>(() => {
 
 let width = 1300;
 beforeEach(() => {
+  stuckOpen();
   navigate('/runs', { replace: true });
   clearScreenCache();
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return this.classList?.contains('runs-column') ? width : 0; } });
@@ -45,7 +46,8 @@ afterEach(() => {
   history.replaceState(null, '', '/');
 });
 
-function mount(path: string, live: RunSummary[] = [run(410), run(411)]) {
+// The board lists no run row of its own but the Stuck band's (programme cards open programmes), so the rows these cases open are stuck ones.
+function mount(path: string, live: RunSummary[] = [run(410, { stuck: STUCK_NOW }), run(411, { stuck: STUCK_NOW })]) {
   const s = store();
   act(() => { s.setState({ runs: live, runsFrameSeen: true, sessions: [], fleetFrameSeen: true }); });
   navigate(path, { replace: true });

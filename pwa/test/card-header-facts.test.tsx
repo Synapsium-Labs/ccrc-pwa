@@ -479,8 +479,7 @@ describe('a run row and its page header', () => {
       stuck: { reason: 'owner-gone', cause: null, since: NOW - 60_000, closes: null }, waitsOn: 'coordinator', blockedBy: null,
       health: { mailParked: 2, mailOutstanding: 1, mailParkedLive: 1, mailReplayMax: 0, briefQueued: null, clearError: null, coordKickoffPendingSince: null },
     } as unknown as RunSummary;
-    const row = render(<ul><RunRow run={run} nowMs={NOW} session={null} coordSession={null} frameSeen={false} programHasOpenRun
-      onResume={() => {}} /></ul>);
+    const row = render(<ul><RunRow run={run} nowMs={NOW} session={null} /></ul>);
     const rowTexts = [...row.container.querySelectorAll('.run-state, .run-name, .run-project, .run-crossing, .run-kind, .run-tally, .run-when, .run-resumed, .run-warn-item, .run-wait')]
       .map((e) => e.textContent ?? '');
     row.unmount();

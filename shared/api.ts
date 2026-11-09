@@ -6959,6 +6959,58 @@ export interface RunFindAnswer {
   next: { beforeAt: number; beforeId: number } | null;
 }
 
+/** `GET /api/programmes` (D-8075, spec 2026-11-04 §11.6). The wave counts of one programme: each wave sits in exactly one
+ *  group, read from its work run (a review nests under its wave and is never counted apart). */
+export interface ProgrammeWaves {
+  working: number;
+  waiting: number;
+  queued: number;
+  done: number;
+  failed: number;
+}
+
+/** One reason with a clock, over a programme's stuck runs (§11.6). `armed` false is shadow ("would close"). */
+export interface ProgrammePendingClose {
+  reason: StuckReason;
+  count: number;
+  soonestAt: number;
+  armed: boolean;
+}
+
+/** How a programme with no open run ended (A26), read from its WORK runs and never from `programs.state`. `complete`:
+ *  every work run is done. `ended`: a work run failed; `neverStarted` counts the ones closed as `abandon:never-started`,
+ *  `closedBy` is who closed the newest of the failed ones. `waves` is the number of distinct work waves. */
+export interface ProgrammeEnding {
+  outcome: 'complete' | 'ended';
+  waves: number;
+  neverStarted: number;
+  closedBy: RunClosedBy | null;
+}
+
+/** One programme of `GET /api/programmes` (D-8075, spec §11.6). `stuck` and `pendingClose` are absent before the stuck
+ *  pass has run; `coordinatorGone` is absent when the server has no reading (A60). */
+export interface ProgrammeRow {
+  slug: string;
+  title: string;
+  currentWave: number | null;
+  waveOf: number | null;
+  claimedBy: string | null;
+  coordinatorGone?: boolean;
+  waves: ProgrammeWaves;
+  stuck?: number;
+  lastMoveAt: number | null;
+  /** Null while the programme has an open run, or has no work run. */
+  ending: ProgrammeEnding | null;
+  pendingClose?: ProgrammePendingClose[];
+}
+
+/** `GET /api/programmes`'s answer: the rows, and the runs closed since the operator's local midnight, by who closed them (A32). */
+export interface ProgrammesAnswer {
+  ok: true;
+  programmes: ProgrammeRow[];
+  closedToday: { operator: number; sweep: number; coordinator: number };
+}
+
 /** One row of a run's trail (D-8071, spec 2026-11-04 §11.5). `by` is who caused it: a stored session id reads 'session'.
  *  `folded` marks a span of stall observations as one row: the count, and the last one's time (`at` is the first's). */
 export interface RunRecordEvent {

@@ -29,7 +29,7 @@ import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { MailScreen } from '../src/screens/MailScreen';
-import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
+import { RunsScreen, RowsBoard, STUCK_NOW, stuckOpen } from './runs-board';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {
@@ -64,6 +64,7 @@ const readUi = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', '..', 'ui', 'src', ...seg), 'utf8');
 const fleetCss = read('fleet', 'fleet.css');
 const stuckCss = read('screens', 'stuck-band.css');
+const cardCss = read('screens', 'programme-card.css');
 const chatCss = read('session', 'chat.css');
 const tokensCss = readUi('styles', 'tokens.css');
 /** The mail strip is the design system's now, and its stylesheet travelled
@@ -519,7 +520,7 @@ describe('.run-row and .run-open — every row on the run board', () => {
     // this is what makes the row trustworthy enough to render immediately
     // rather than the "no answer yet" loading state (review finding 19).
     act(() => { store.setState({ runs: [run()], runsFrameSeen: true }); });
-    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toHaveClass('run-open');
   });
 });
@@ -593,6 +594,17 @@ describe('the Stuck band\'s heads', () => {
   });
 });
 
+// — The programme cards (the runs rebuild, D-8075, Task 18): every link and fold toggle keeps the floor —
+
+describe('the programme cards', () => {
+  it('the name, the needs-you link, the fold toggles and All runs are at least one tap tall, off the shared token', () => {
+    for (const sel of ['.programme-card .programme-card-name', '.programme-finished-row .programme-card-name',
+      '.programme-card .programme-card-marker', '.programme-fold .programme-fold-toggle', '.programme-fold .programme-finished-all']) {
+      expect(declValue(ruleIn(cardCss, sel), 'min-height'), sel).toBe('var(--tap-min)');
+    }
+  });
+});
+
 // — Build 4, Task 13: the run board's own door onto a new program, and the
 // start-a-program sheet's own confirm control (spec §4.4) —
 
@@ -603,7 +615,7 @@ describe('.program-start-door — the only door onto a new program', () => {
   it('is the class the rendered footer control actually carries', () => {
     const store = makeStore();
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+    expect(screen.getByRole('button', { name: /start a programme/i })).toHaveClass('program-start-door');
   });
 });
 

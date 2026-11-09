@@ -3,7 +3,7 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
-import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
+import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
@@ -731,6 +731,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const qs = p.toString();
       return getJson<RunFindAnswer>(`/api/runs/find${qs === '' ? '' : `?${qs}`}`, opts);
     },
+    /** `GET /api/programmes` (D-8075, spec 2026-11-04 §11.6): one row per programme and the runs closed since `since`, the
+     *  operator's local midnight in epoch ms (the server clamps it to the last 48 hours, A32). An older server has no such
+     *  route and answers 404, which a caller reads as no programme read. */
+    programmes: (since: number, opts?: ReadOpts) =>
+      getJson<ProgrammesAnswer>(`/api/programmes?since=${encodeURIComponent(String(Math.max(0, Math.floor(since))))}`, opts),
     /** `GET /api/runs/:id/record` (D-8071, spec 2026-11-04 §11.5): any run's lasting record, open or closed, however old. One
      *  read, no spend, no agent link. */
     runRecord: (id: number, opts?: ReadOpts) => getJson<RunRecordAnswer>(`/api/runs/${id}/record`, opts),

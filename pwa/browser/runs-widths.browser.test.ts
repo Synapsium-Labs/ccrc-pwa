@@ -59,18 +59,41 @@ const STUCK_RUNS = [
 ];
 const ALL_RUNS = [...RUNS, ...STUCK_RUNS];
 
+/** `GET /api/programmes` (Task 18): a row per programme the frame holds a run of, one of them quiet (no move in 23 days), and one
+ *  finished programme for the Finished fold. */
+const programmeRow = (slug: string, title: string, over: Record<string, unknown> = {}): object => ({
+  slug, title, currentWave: 2, waveOf: 5, claimedBy: 'project-a-coord', coordinatorGone: false,
+  waves: { working: 1, waiting: 0, queued: 0, done: 1, failed: 0 }, lastMoveAt: NOW - 2 * H, ending: null, ...over,
+});
+const PROGRAMMES = {
+  ok: true,
+  programmes: [
+    programmeRow('prog-a', 'Programme A with a title long enough to wrap on a phone', { waves: { working: 2, waiting: 1, queued: 1, done: 4, failed: 0 } }),
+    programmeRow('prog-b', 'Programme B'), programmeRow('prog-c', 'Prog C', { lastMoveAt: NOW - 3 * DAY }),
+    programmeRow('prog-d', 'Programme D', { stuck: 2 }), programmeRow('prog-e', 'Programme E', { stuck: 1 }),
+    programmeRow('prog-f', 'Programme F', { stuck: 1 }), programmeRow('prog-g', 'Programme G', { stuck: 1 }),
+    programmeRow('prog-h', 'Programme H', { stuck: 1, lastMoveAt: NOW - 23 * DAY }),
+    programmeRow('prog-z', 'Programme Z, finished', { ending: { outcome: 'ended', waves: 3, neverStarted: 3, closedBy: 'sweep' }, lastMoveAt: NOW - 20 * H }),
+  ],
+  closedToday: { operator: 5, sweep: 2, coordinator: 60 },
+};
+
 const FIXTURE: AppFixture = {
   api: {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a', repo: { state: 'named', slug: 'owner-a/repo-a' } }] },
-    '/api/runs': { runs: ALL_RUNS, nextBefore: null }, '/api/claims': [],
-    // Finished reads `find` (Task 11): no closed run here, so the board's rows are the open ones alone.
+    '/api/runs': { runs: ALL_RUNS, nextBefore: null }, '/api/claims': [], '/api/programmes': PROGRAMMES,
+    // Advanced reads `find` (Task 11): no closed run here.
     '/api/runs/find': { ok: true, exact: null, runs: [], reviewsOf: [], next: null },
     // The run page the number lands on reads these four; a real server answers each in this shape.
     '/api/runs/1501/record': { ok: true, run: RUNS[0], events: [], reviewedBy: [], olderEvents: 0 },
     '/api/runs/1501': { ok: true, run: RUNS[0], spend: { measured: false, reason: 'no-sweep' } },
     '/api/runs/1501/items': { ok: true, items: [] },
     '/api/runs/1501/signals': { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } },
+    '/api/runs/1604/record': { ok: true, run: STUCK_RUNS[3], events: [], reviewedBy: [], olderEvents: 0 },
+    '/api/runs/1604': { ok: true, run: STUCK_RUNS[3], spend: { measured: false, reason: 'no-sweep' } },
+    '/api/runs/1604/items': { ok: true, items: [] },
+    '/api/runs/1604/signals': { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } },
     '/api/runs/1527/record': { ok: true, run: RUNS[5], events: [], reviewedBy: [], olderEvents: 0 },
     '/api/runs/1527': { ok: true, run: RUNS[5], spend: { measured: false, reason: 'no-sweep' } },
     '/api/runs/1527/items': { ok: true, items: [] },
@@ -101,8 +124,13 @@ afterAll(async () => {
 
 async function openBoard(width: number, skin: string, theme: string): Promise<OpenedApp> {
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
+  // The cards take their last move from GET /api/programmes: a card the live frame gives no last move waits for it, and the quiet
+  // fold is drawn only once it lands. Wait for the answer and the fold, so a count never races the read.
+  const read = opened.page.waitForResponse((r) => r.url().includes('/api/programmes'), { timeout: 20_000 });
   await opened.page.goto(`${server!.origin}/runs`);
-  await opened.page.locator('.run-row').first().waitFor({ timeout: 20_000 });
+  await read;
+  await opened.page.locator('[data-fold="quiet"]').waitFor({ timeout: 20_000 });
+  await opened.page.locator('.programme-card').first().waitFor({ timeout: 20_000 });
   return opened;
 }
 
@@ -121,7 +149,7 @@ for (const width of MATRIX.widths) {
   for (const skin of MATRIX.skins) {
     for (const theme of MATRIX.themes) {
       describe(`the runs board, ${skin} ${theme} at ${width}px`, () => {
-        it('lays every row inside its box, with no sideways scroll, its wait line whole and its doors at the tap floor', async () => {
+        it('lays every card inside its box, with no sideways scroll, its links at the tap floor, one across or two by the column', async () => {
           const { ctx, page, errors } = await openBoard(width, skin, theme);
           try {
             const m = await page.evaluate(() => {
@@ -130,57 +158,84 @@ for (const width of MATRIX.widths) {
               document.body.appendChild(probe);
               const tap = probe.getBoundingClientRect().height;
               probe.remove();
-              const rows = [...document.querySelectorAll<HTMLElement>('.run-row')].map((li) => {
+              const cards = [...document.querySelectorAll<HTMLElement>('.programme-card')].map((li) => {
                 const r = li.getBoundingClientRect();
-                const wait = li.querySelector<HTMLElement>('.run-wait');
-                const w = wait?.getBoundingClientRect() ?? null;
-                const open = li.querySelector<HTMLElement>('.run-open')!.getBoundingClientRect();
-                return {
-                  title: li.title, overflow: li.scrollWidth - li.clientWidth, left: r.left, right: r.right,
-                  wait: wait === null ? null : { text: wait.textContent, left: w!.left, right: w!.right, tag: wait.tagName, h: w!.height },
-                  openH: open.height, inert: li.hasAttribute('data-inert'),
-                };
+                const links = [...li.querySelectorAll<HTMLElement>('a')].map((a) => a.getBoundingClientRect().height);
+                return { slug: li.dataset['programme'] ?? '', overflow: li.scrollWidth - li.clientWidth, left: r.left, right: r.right, top: Math.round(r.top), links };
               });
               return {
-                tap, rows, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-                spend: document.querySelectorAll('.run-spend').length, vw: innerWidth,
-                banded: document.querySelectorAll('li.run-stuck').length,
+                tap, cards, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                spend: document.querySelectorAll('.run-spend').length,
+                runRows: document.querySelectorAll('.programme-card .run-row, .programme-card [title^="run "]').length,
+                quiet: document.querySelectorAll('[data-fold="quiet"]').length, finished: document.querySelectorAll('[data-fold="finished"]').length,
               };
             });
-            // The Stuck band is a second view (spec 8.2.2): every run keeps its group row, and an opened head adds a band row.
-            expect(m.rows.length).toBe(ALL_RUNS.length + m.banded);
+            // The quiet programme (H) folds, so seven cards show.
+            expect(m.cards.map((c) => c.slug).sort()).toEqual(['prog-a', 'prog-b', 'prog-c', 'prog-d', 'prog-e', 'prog-f', 'prog-g']);
             expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
             expect(m.spend, 'the board draws no spend line (A10)').toBe(0);
-            for (const row of m.rows) {
-              expect(row.inert, `${row.title} is not inert`).toBe(false);
-              expect(row.overflow, `${row.title} fits its box`).toBeLessThanOrEqual(1);
-              expect(row.right, `${row.title} ends inside the window`).toBeLessThanOrEqual(m.vw + 1);
-              expect(row.openH, `${row.title} door at the tap floor`).toBeGreaterThanOrEqual(m.tap - 1);
-              if (row.wait !== null) {
-                expect(row.wait.left, `${row.title} wait line starts inside its row`).toBeGreaterThanOrEqual(row.left - 1);
-                expect(row.wait.right, `${row.title} wait line ends inside its row`).toBeLessThanOrEqual(row.right + 1);
-                if (row.wait.tag === 'A') expect(row.wait.h, `${row.title} wait link at the tap floor`).toBeGreaterThanOrEqual(m.tap - 1);
-              }
+            expect(m.runRows, 'a card draws no run row').toBe(0);
+            expect(m.quiet, 'the quiet fold is drawn').toBe(1);
+            expect(m.finished, 'the Finished fold is drawn').toBe(1);
+            for (const c of m.cards) {
+              expect(c.overflow, `${c.slug} fits its box`).toBeLessThanOrEqual(1);
+              expect(c.right, `${c.slug} ends inside the window`).toBeLessThanOrEqual(m.vw + 1);
+              expect(c.left, `${c.slug} starts inside the window`).toBeGreaterThanOrEqual(-1);
+              for (const h of c.links) expect(h, `${c.slug} link at the tap floor`).toBeGreaterThanOrEqual(m.tap - 1);
             }
-            const lines = m.rows.map((r) => r.wait?.text).filter((t) => t !== undefined);
-            // The board orders its rows by urgency, so the lines are compared as a set.
-            expect([...lines].sort()).toEqual([
-              'Waits for its coordinator to start it.', 'Waits behind a stuck run.',
-              'Reviews done. Waits on its coordinator.', 'No move in 9 days.',
-            ].sort());
-            expect(errors).toEqual([]);
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
           } finally {
             await ctx.close();
           }
         });
 
-        it('a tap on a row opens /runs/<id>', async () => {
+        it('a tap on a stuck row opens /runs/<id>, and a tap on a card’s name opens the programme', async () => {
           const { ctx, page, errors } = await openBoard(width, skin, theme);
           try {
-            await page.locator('.run-row[title^="run 1502"] .run-open').click();
-            await page.waitForFunction(() => location.pathname === '/runs/1502', undefined, { timeout: 20_000 });
-            expect(await here(page)).toBe('/runs/1502');
-            expect(errors).toEqual([]);
+            await openHeads(page);
+            await page.locator('li.run-stuck[title^="run 1604"] .run-open').click();
+            await page.waitForFunction(() => location.pathname === '/runs/1604', undefined, { timeout: 20_000 });
+            expect(await here(page)).toBe('/runs/1604');
+            await page.goBack();
+            await page.locator('.programme-card').first().waitFor({ timeout: 20_000 });
+            await page.locator('.programme-card[data-programme="prog-b"] a.programme-card-name').click();
+            await page.waitForFunction(() => location.pathname === '/programmes/prog-b', undefined, { timeout: 20_000 });
+            expect(await here(page)).toBe('/programmes/prog-b');
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}
+
+// Programme cards lay out by the board's own column (Task 18, spec §8.1): one across under 840, two across from 840 (860, 912 and
+// 1056 are the measured columns), and one across again in the broad list, whose pane is only part of the column. The extra
+// widths put the column on both sides of the 840 line.
+for (const width of [...MATRIX.widths, 760, 880, 960]) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      if (!(MATRIX.widths as readonly number[]).includes(width) && (skin !== REFINED || theme !== 'light')) continue;
+      describe(`the programme cards, ${skin} ${theme} at ${width}px`, () => {
+        it('are one across under 840, two across from 840, and one across in the broad list', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            const m = await page.evaluate(() => {
+              const col = document.querySelector<HTMLElement>('.runs-column')!;
+              const cards = [...document.querySelectorAll<HTMLElement>('.programme-cards .programme-card')].map((c) => c.getBoundingClientRect());
+              const first = cards[0]!;
+              const across = cards.filter((r) => Math.abs(r.top - first.top) < 4).length;
+              return { column: col.dataset['column'], colWidth: col.clientWidth, across, count: cards.length,
+                lefts: [...new Set(cards.map((r) => Math.round(r.left)))].length };
+            });
+            console.info(`cards at ${width} ${skin} ${theme}: column ${m.column} (${m.colWidth}px), ${m.across} across`);
+            expect(m.count).toBeGreaterThanOrEqual(4);
+            const want = m.column === 'broad' || m.colWidth < 840 ? 1 : 2;
+            expect(m.across, `${m.column} column of ${m.colWidth}px`).toBe(want);
+            expect(m.lefts, 'the cards stand in that many columns').toBe(want);
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
           } finally {
             await ctx.close();
           }
@@ -250,7 +305,8 @@ for (const width of MATRIX.widths) {
             if (want === 'broad') {
               expect(box.position).toBe('static');
               expect(box.top - box.paneTop!, 'the search box tops the list pane, under its own header').toBeLessThanOrEqual(80);
-              await page.locator('.run-row[title^="run 1501"] .run-open').click();
+              await openHeads(page);
+              await page.locator('li.run-stuck[title^="run 1604"] .run-open').click();
               await page.locator('.runs-detail-pane .rd-head').waitFor({ timeout: 20_000 });
               const w = await page.evaluate(() => ({
                 list: document.querySelector('.runs-list-pane')!.getBoundingClientRect().width,
@@ -282,7 +338,7 @@ for (const width of MATRIX.widths) {
             expect(line.abandonTop, 'the control sits on the first line').toBeLessThanOrEqual(line.wordTop + 4);
             expect(line.abandonLeft, 'the control sits at the right').toBeGreaterThanOrEqual(line.openRight - 1);
             expect(line.abandonRight).toBeLessThanOrEqual(line.rowRight + 1);
-            await page.locator('.run-row[title^="run 1501"] .run-open').click();
+            await page.locator('li.run-stuck[title^="run 1604"] .run-open').click();
             await page.locator('.rd-facts').first().waitFor({ timeout: 20_000 });
             const m = await page.evaluate(() => {
               const fact = document.querySelector<HTMLElement>('.rd-fact')!;
@@ -306,7 +362,7 @@ for (const width of MATRIX.widths) {
 
 describe('a broad column keeps the list\'s place when a run opens (D-8072)', () => {
   it('scrolling the list, then opening a row, leaves the scroller where it was and the row in view', async () => {
-    const many = Array.from({ length: 120 }, (_, i) => run(2000 + i, { workspace: `ws-m${i}`, sessionId: null, state: 'planned', dispatchedAt: null }));
+    const many = Array.from({ length: 120 }, (_, i) => run(2000 + i, { workspace: `ws-m${i}`, sessionId: null, state: 'planned', dispatchedAt: null, stuck: stuckOf('never-started', null, 23 * DAY) }));
     const runs = [...many.slice(0, 60), RUNS[5], ...many.slice(60)];
     const fixture: AppFixture = {
       ...FIXTURE,
@@ -328,7 +384,9 @@ describe('a broad column keeps the list\'s place when a run opens (D-8072)', () 
     const { ctx, page, errors } = opened;
     try {
       await page.goto(`${server!.origin}/runs`);
-      await page.locator('.run-row').first().waitFor({ timeout: 20_000 });
+      await page.locator('.programme-card').first().waitFor({ timeout: 20_000 });
+      // The board lists no run row of its own but the Stuck band's: the rows this case scrolls are the long head's.
+      await openHeads(page);
       expect(await page.locator('.runs-column').getAttribute('data-column')).toBe('broad');
       // Scroll the list well down, then take the row that is in the middle of the view.
       await page.evaluate(() => { document.querySelector<HTMLElement>('.shell-detail')!.scrollTop = 1200; });
@@ -619,6 +677,62 @@ for (const width of MATRIX.widths) {
               expect(r.overflow, `${r.title} fits its box`).toBeLessThanOrEqual(1);
               expect(r.right, `${r.title} ends inside the window`).toBeLessThanOrEqual(r.vw + 1);
             }
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}
+
+// Closed today and the first card's place (Task 20, spec §8.2 items 4 to 7, check 11). Closed today sits below the Stuck band and
+// above everything healthy, its three counts are links at the tap floor, and at Instrument 1920 the first programme card starts
+// under 800px (the spec's inferred figure is 742px, measured and reported below).
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`Closed today and the first card, ${skin} ${theme} at ${width}px`, () => {
+        it('sits below the Stuck band and above the first card, its counts at the tap floor, and the first card starts under 800px at Instrument 1920', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            await page.locator('[data-testid="closed-today"]').waitFor({ timeout: 20_000 });
+            const m = await page.evaluate(() => {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              document.body.appendChild(probe);
+              const tap = probe.getBoundingClientRect().height;
+              probe.remove();
+              const box = (sel: string): DOMRect => document.querySelector<HTMLElement>(sel)!.getBoundingClientRect();
+              const line = document.querySelector<HTMLElement>('[data-testid="closed-today"]')!;
+              const band = box('[data-testid="stuck-band"]');
+              const closed = line.getBoundingClientRect();
+              const card = box('.programme-card');
+              const linkBoxes = [...line.querySelectorAll('a')].map((a) => a.getBoundingClientRect());
+              const column = box('.runs-column');
+              const fin = document.querySelector<HTMLElement>('[data-fold="finished"]');
+              return {
+                finishedTop: fin === null ? -1 : fin.getBoundingClientRect().top + window.scrollY,
+                tap, text: line.textContent, bandBottom: band.bottom, closedTop: closed.top, closedBottom: closed.bottom, cardTop: card.top,
+                short: linkBoxes.filter((b) => b.height < tap - 1).length, links: linkBoxes.length,
+                outside: linkBoxes.filter((b) => b.left < column.left - 1 || b.right > column.right + 1).length,
+                page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              };
+            });
+            console.info(`first programme card top at ${width} ${skin} ${theme}: ${Math.round(m.cardTop)}px (spec inferred 742px)`);
+            console.info(`Finished fold top at ${width} ${skin} ${theme}: ${Math.round(m.finishedTop)}px (spec 17: phone 390 under 2000, Refined 1280 under 1400)`);
+            expect(m.finishedTop, 'the Finished fold is drawn').toBeGreaterThan(0);
+            if (width === 390) expect(m.finishedTop, 'Finished starts under y=2000 on a phone').toBeLessThan(2000);
+            if (width === 1280 && skin === REFINED) expect(m.finishedTop, 'Finished starts under y=1400 at Refined 1280').toBeLessThan(1400);
+            expect(m.text).toBe('Closed today: 5 by you · 2 by ccrc · 60 by coordinators');
+            expect(m.links).toBe(3);
+            expect(m.short, 'every count at the tap floor').toBe(0);
+            expect(m.outside, 'every count inside the column').toBe(0);
+            expect(m.closedTop, 'below the Stuck band').toBeGreaterThanOrEqual(m.bandBottom - 1);
+            expect(m.cardTop, 'above the first card').toBeGreaterThanOrEqual(m.closedBottom - 1);
+            expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            if (width === 1920 && skin === INSTRUMENT) expect(m.cardTop, 'the first card starts under 800px').toBeLessThan(800);
             expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
           } finally {
             await ctx.close();

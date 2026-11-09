@@ -216,6 +216,11 @@ const RESUME: AppFixture = {
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
     '/api/runs': { runs: [RUN] }, '/api/claims': [],
+    // The run page's reads (D-8072), where Resume now lives (D-8075, Task 19).
+    '/api/runs/3': { ok: true, run: RUN, spend: { measured: false, reason: 'no-sweep' } },
+    '/api/runs/3/record': { ok: true, run: RUN, events: [], reviewedBy: [], olderEvents: 0 },
+    '/api/runs/3/items': { ok: true, items: [] },
+    '/api/runs/3/signals': { ok: true, signals: { signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } } } },
     '/api/coord/caps': { caps: { maxConcurrentWorkers: 4 }, usage: { running: 1 } },
   },
   fleetFrames: [
@@ -237,7 +242,8 @@ describe('the resume sheet with reclaim open in a short viewport: the body keeps
       try {
         await page.setViewportSize({ width: view.width, height: view.height });
         await page.emulateMedia({ reducedMotion: 'reduce' });
-        await page.goto(server!.origin + '/runs');
+        // Resume left the board's rows for the run page and the programme head (D-8075, Task 19).
+        await page.goto(server!.origin + '/runs/3');
         await page.getByRole('button', { name: 'Resume run 3' }).click({ timeout: 20_000 });
         await page.getByRole('button', { name: 'That id cannot be revived' }).click();
         await page.getByLabel('Hand run 3 to this session id').waitFor({ timeout: 10_000 });

@@ -39,7 +39,7 @@ import { sessionFacts } from '../src/fleet/sessionFacts';
 import { spawnChip } from '../src/fleet/spawnWords';
 import { liveIdsIn, liveMainCheckoutIn, startedSessionFor } from '../src/fleet/startProgramPolicy';
 import { orphanNote } from '../src/fleet/orphanWords';
-import { RunRow } from '../src/screens/RunRow';
+import { resumeShown } from '../src/fleet/runWords';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
 import { useFleetStore } from '../src/stores/fleet';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../src/lib/offline';
@@ -148,7 +148,7 @@ const SITES: readonly Site[] = [
     verdict: (s) => orphanNote({ kind: 'session', depth: 0, session: WORKER() }, [RUN()], 'project-a', [], (id) => (id === s.id ? s : null), true)?.presence ?? 'no-note',
     fromPresence: (_s, p) => coordWordOf(p),
     unlisted: () => orphanNote({ kind: 'session', depth: 0, session: WORKER() }, [RUN()], 'project-a', [], () => null, true)?.presence ?? 'no-note' },
-  { name: 'RunRow.tsx (coordinatorPresence caller: the Resume door)', build: (r) => sessionOf(r),
+  { name: 'runWords.ts#resumeShown (coordinatorPresence caller: the Resume door)', build: (r) => sessionOf(r),
     verdict: (s) => resumeDoor(s, coordinatorPresence(s.id, s, true)),
     fromPresence: (_s, p) => (coordWordOf(p) === 'dead' ? 'resume' : 'none'),
     unlisted: () => resumeDoor(null, 'n/a') },
@@ -160,15 +160,11 @@ const SITES: readonly Site[] = [
     unlisted: () => String(sessionFacts({ session: WORKER(), now: NOW, coordinator: coordinatorPresence(ID, null, true) }).orphan) },
 ];
 
-/** RunRow's Resume door for a run this row claims; `n/a` asks the row with no coordinator in the frame. */
+/** The Resume door for a run its coordinator claims (`resumeShown`, the one reader the run page and the programme head ask);
+ *  `n/a` asks it with no coordinator in the frame. */
 function resumeDoor(coord: FleetSession | null, _word: string): string {
-  render(createElement('ul', null, createElement(RunRow, {
-    run: RUN(), nowMs: NOW, session: WORKER(), coordSession: coord, frameSeen: true, programHasOpenRun: true,
-    onResume: () => {},
-  })));
-  const shown = document.querySelector('.run-resume') !== null ? 'resume' : 'none';
-  cleanup();
-  return shown;
+  const run = RUN();
+  return resumeShown(run, coordinatorPresence(run.claimedBy, coord, true), true) ? 'resume' : 'none';
 }
 
 interface Cell { readonly row: TableRow; readonly verdict: string; readonly presenceReading: string }
@@ -281,7 +277,7 @@ const VERDICTS: Pin<string> = {
     server: 'alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive alive dead unknown hibernated hibernated alive alive alive alive dead unknown hibernated hibernated dead unknown hibernated hibernated unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown unknown',
     unlisted: 'unknown unknown unknown unknown', skew: 'unknown',
   },
-  'RunRow.tsx (coordinatorPresence caller: the Resume door)': {
+  'runWords.ts#resumeShown (coordinatorPresence caller: the Resume door)': {
     server: 'none none none none none none none none none none none none none none none none resume none none none none none none none resume none none none resume none none none none none none none none none none none none none none none none none none none none none none none none none none none',
     unlisted: 'none none none none', skew: 'none',
   },
@@ -613,7 +609,7 @@ const DIFFERS: Pin<string[]> = {
     unlisted: ['row absent'],
     skew: [],
   },
-  'RunRow.tsx (coordinatorPresence caller: the Resume door)': {
+  'runWords.ts#resumeShown (coordinatorPresence caller: the Resume door)': {
     server: [
       'pane gone · stopped · substrate fault',
       'pane gone · orphan · substrate fault',

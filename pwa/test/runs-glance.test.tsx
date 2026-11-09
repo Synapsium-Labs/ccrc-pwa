@@ -1,14 +1,13 @@
 // The runs page at a glance (D-6170, spec §5 W0, G5 (a)). A row is named by its
 // programme's title and wave in words, never a workspace, a branch or a run
 // number; the run number stays only in the controls' accessible names and the
-// row's title (D-5589); Abandon is drawn on open rows only; a group head prints
-// the programme's title. "today:" rows pin the answer the base gave and are
+// row's title (D-5589); Abandon is drawn on open rows only. "today:" rows pin the answer the base gave and are
 // flipped by the behaviour commits; "kept:" rows hold across them.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import type { CoordCapsView, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
+import { STUCK_NOW, stuckOpen, RowsBoard } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 beforeEach(stuckOpen);
@@ -42,7 +41,7 @@ async function board(active: RunSummary[], finished: RunSummary[] = [], sessions
     store.setState({ runs: active, runsFrameSeen: true, fleetFrameSeen: true, conn: 'open', sessions });
   });
   const load = vi.fn().mockResolvedValue({ runs: finished });
-  const { container } = render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
+  const { container } = render(<RowsBoard loadCaps={NO_CAPS} store={store} loadRuns={load} />);
   await act(async () => { await Promise.resolve(); });
   return container;
 }
@@ -56,16 +55,14 @@ describe('kept: across D-6170', () => {
     expect(within(rows(c)[0]!).getByRole('button', { name: 'Abandon run 7' })).toBeInTheDocument();
   });
 
-  it('kept: the resume door on an open run whose claimant is dead', async () => {
+  // Resume left the row (the runs rebuild, D-8075, Task 19; spec §9.5, F25): the programme page's head and the run page carry it.
+  it('no row carries Resume, whatever its claimant, open or all-terminal', async () => {
     const dead = fleetSession({ id: 'project-a-coordinator', project: 'project-a', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
     await board([run()], [], [dead]);
-    expect(screen.getByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();
-  });
-
-  it('kept: the resume door on an all-terminal programme whose claimant is dead', async () => {
-    const dead = fleetSession({ id: 'project-a-coordinator', project: 'project-a', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    expect(screen.queryByRole('button', { name: 'Resume run 7' })).toBeNull();
+    cleanup();
     await board([], [run({ state: 'done', closedAt: Date.now() - 1_000 })], [dead]);
-    expect(await screen.findByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume run 7' })).toBeNull();
   });
 
   it("kept: Abandon's accessible name carries the run number", async () => {
@@ -128,16 +125,5 @@ describe('the runs ledger at a glance (D-6170)', () => {
     const name = nameOf(rows(c)[0]!);
     expect(name).toBe('Programme A · review of wave 5');
     expect(name.match(/review/g)).toHaveLength(1);
-  });
-
-  it('the group head prints the title, and the slug only when the title is empty', async () => {
-    const c = await board([
-      run({ id: 1 }),
-      run({ id: 2, program: 'programme-b', programTitle: '' }),
-    ]);
-    const heads = [...c.querySelectorAll('.runs-group[aria-label^="program"] .runs-program')].map((n) => n.textContent).sort();
-    expect(heads).toEqual(['Programme A', 'programme-b']);
-    expect(screen.getByRole('group', { name: 'program Programme A' })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'program programme-a' })).toBeNull();
   });
 });

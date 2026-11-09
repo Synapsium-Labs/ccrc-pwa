@@ -24,19 +24,21 @@ import { inAppClick } from '../fleet/settingsText';
 import { openExternal } from '../lib/markdown';
 import { GraphChip, LastSpawnChip, UnmeasuredChip } from '../fleet/chips';
 import { formatAge, formatElapsed } from '../fleet/formatReset';
-import { coordinatorPresence, type CoordinatorPresence } from '../fleet/presence';
-import { closeLeadLine, coordinatorWord, noRunLine, RUN_PAGE_WORDS, runFacts, runWhen } from '../fleet/runDetailWords';
+import { coordinatorPresence } from '../fleet/presence';
+import { closeLeadLine, coordinatorFactWord, coordinatorWord, noRunLine, RUN_PAGE_WORDS, runFacts, runWhen } from '../fleet/runDetailWords';
 import { runSpendLine } from '../fleet/runSpendWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import {
   DISPATCH_GLYPH, DISPATCH_STALLED_WORDS, RUN_GLYPH, childReclaimChip, childReclaimTitle, coordinatorOf, crossingNote, dispatchStalledTitle,
   dispatchWindow, itemTallyLabel, anyDispatchPending, runWaitLine,
-  isRunClosed, resumeNote, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
+  isRunClosed, programsWithOpenRun, resumeNote, resumeShown, runHomeProject, runItems, runKindChip, runRowName, runState, runStateWord, runWarnings, workerOf,
 } from '../fleet/runWords';
 import { programmeSpecHref } from '../ledgers/ledgerLinks';
 import { WayBack } from '../ledgers/WaitingRoutes';
 import { LiftCapSheet } from '../fleet/LiftCapSheet';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
+import { ResumeSheet } from '../fleet/ResumeSheet';
+import { resumeHeirs } from '../fleet/resumeHeirs';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { RunTrail } from './RunTrail';
 import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
@@ -194,17 +196,17 @@ function Header({ run, worker, nowMs }: { run: RunSummary; worker: FleetSession 
   );
 }
 
-/** The controls under the header (spec §8.4, §9.4): each one tap to its place. Abandon joins them with its sheet and Resume
- *  with its picker, in later tasks. */
-function Controls({ run, coordinatorOpenable, onLift, onAbandon }: {
-  run: RunSummary; coordinatorOpenable: boolean; onLift: () => void; onAbandon?: () => void;
+/** The controls under the header (spec §8.4, §9.4): each one tap to its place. Resume is drawn when `onResume` is handed, and
+ *  the caller hands it only when `resumeShown` says so. */
+function Controls({ run, coordinatorOpenable, onLift, onAbandon, onResume }: {
+  run: RunSummary; coordinatorOpenable: boolean; onLift: () => void; onAbandon?: () => void; onResume?: () => void;
 }): ReactNode {
   const session = run.sessionId;
   const coordinator = run.claimedBy;
   const lift = capWaiting(run) === 'waiting';
   // Abandon is for an open run, whatever the stuck verdict says or lacks: it is the guard for a wrong or uncertain one (spec 8.4, 7).
   const abandon = onAbandon !== undefined && !isRunClosed(run);
-  if (session === null && !(coordinatorOpenable && coordinator !== null) && !lift && !abandon) return null;
+  if (session === null && !(coordinatorOpenable && coordinator !== null) && !lift && !abandon && onResume === undefined) return null;
   return (
     <p className="rd-controls">
       {session !== null && (
@@ -216,6 +218,9 @@ function Controls({ run, coordinatorOpenable, onLift, onAbandon }: {
         <a className={cn(GHOST_ANCHOR, 'rd-control')} href={sessionPath(coordinator)} onClick={inAppClick(sessionPath(coordinator))}>
           {RUN_PAGE_WORDS.openCoordinator}
         </a>
+      )}
+      {onResume !== undefined && (
+        <Button variant="ghost" className="rd-control" aria-label={`Resume run ${run.id}`} onClick={onResume}>{RUN_PAGE_WORDS.resume}</Button>
       )}
       {lift && <Button variant="ghost" className="rd-control" onClick={onLift}>{RUN_PAGE_WORDS.liftCap}</Button>}
       {abandon && <Button variant="ghost" className="rd-control" onClick={onAbandon}>{RUN_PAGE_WORDS.abandon}</Button>}
@@ -246,14 +251,6 @@ function Facts({ groups }: { groups: ReturnType<typeof runFacts> }): ReactNode {
       ))}
     </>
   );
-}
-
-/** The Who facts' coordinator word: the server's verdict first (spec §8.4, A46/A60), `coordinatorPresence` only when the
- *  verdict is absent. A claimant with no fleet row (an old closed run) reads gone when the server says so. */
-function coordinatorFactWord(gone: boolean | undefined, presence: CoordinatorPresence): string | null {
-  if (gone === true) return coordinatorWord('dead');
-  if (gone === false) return presence === 'dead' ? null : coordinatorWord(presence);
-  return coordinatorWord(presence);
 }
 
 /** The run's frame: the page scaffold with its way-back strip, or, in the broad pane, a plain region with neither strip nor Back
@@ -290,6 +287,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const pinnedSpec = useSpecHref(run);
   const [liftOpen, setLiftOpen] = useState(false);
   const [abandonOpen, setAbandonOpen] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
   const title = `Run ${id}`;
   if (state.kind === 'loading') {
     return <Frame pane={pane} title={title} q={q}><p role="status" className="rd-note">Loading…</p></Frame>;
@@ -324,6 +322,10 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
   const worker = workerOf(run, byId);
   const coordSession = coordinatorOf(run, byId);
   const presence = coordinatorPresence(run.claimedBy, coordSession, frameSeen);
+  // Resume (spec §8.4, §9.5, A55): the server's verdict on the coordinator, and the run open or its programme with no open run;
+  // a runs frame not yet heard hides it.
+  const programHasOpenRun = runsFrameSeen ? programsWithOpenRun(liveRuns).has(run.program) : null;
+  const resumable = run.claimedBy !== null && resumeShown(run, presence, programHasOpenRun);
   const pr = worker?.pr ?? null;
   const spend = side === undefined ? undefined : runSpendLine(side.spend)?.short;
   const programmeHref = programmeIsOpenable(run.program) ? programmePath(run.program) : null;
@@ -341,9 +343,12 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
     <Frame pane={pane} title={title} q={q}>
       <Header run={run} worker={worker} nowMs={now} />
       {lead !== null && <p className="rd-close">{lead}</p>}
-      <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} onAbandon={() => setAbandonOpen(true)} />
+      <Controls run={run} coordinatorOpenable={coordSession !== null} onLift={() => setLiftOpen(true)} onAbandon={() => setAbandonOpen(true)}
+        {...(resumable ? { onResume: () => setResumeOpen(true) } : {})} />
       <Facts groups={groups} />
       <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
+      <ResumeSheet run={resumeOpen ? run : null} heirs={resumeHeirs(sessions, runHomeProject(run) ?? run.project, run.claimedBy, frameSeen)}
+        onClose={() => setResumeOpen(false)} onDone={retry} />
       <LiftCapSheet run={liftOpen ? run : null} onClose={() => setLiftOpen(false)} onDone={retry} />
       {/* The one abandon sheet the board uses (spec 9.1); a done abandon re-reads the record, which now says who closed it and why. */}
       <AbandonSheet run={abandonOpen ? run : null} workspaceChild={abandonChildOf(worker ?? undefined)} coordinatorPresence={presence}

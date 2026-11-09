@@ -11,6 +11,7 @@ import { orderItems, waitingCount, type ItemKind, type ItemView, type WaitingVie
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { isRunClosed, sessionProgramme } from '../fleet/runWords';
+import { needsYou, needsYouCount } from './needsYou';
 import { waitingPath } from '../lib/routes';
 
 /** An item kind in the operator's words (plan PL5a). A session's own question is `QUESTION_WORD`, not an item kind. */
@@ -102,10 +103,7 @@ export function programmeWaitingCount(
   view: WaitingView | null, sessions: readonly FleetSession[] | null, runs: readonly RunSummary[] | null, program: string,
 ): number | null {
   if (view === null || sessions === null) return null;
-  return waitingTotal(
-    view.items.filter((i) => i.program === program),
-    questionRows(sessions, runs ?? []).filter((q) => q.program === program),
-  );
+  return needsYouCount(needsYou(view.items, sessions, runs ?? []), program);
 }
 
 /** The runs of one programme that are still open (`isRunClosed`, the runs board's own predicate), which is what keeps its

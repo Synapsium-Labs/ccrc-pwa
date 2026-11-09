@@ -28,13 +28,14 @@
 // not read says so; it is never drawn as a programme with no secrets.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { cn } from '@ccrc/ui';
+import { cn, useNow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
   WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
   type WaitsOn,
 } from '../../../shared/ledgers';
 import type { StepUpDeps } from '../accounts/useStepUp';
+import { markerState } from '../fleet/coordWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programWave, programmeTitle, waveOfWords } from '../fleet/runWords';
 import { api } from '../lib/api';
@@ -47,6 +48,8 @@ import { GoalsPanel, SpecLink } from './GoalsPanel';
 import { homeProjectOf, specHref } from './ledgerLinks';
 import { EMPTY_WORD, NO_FRAME_WORD, ageWords, itemPath, openRunsOf, programmeWaitingCount, type ItemList } from './ledgerWords';
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
+import { needsYou, needsYouCount } from './needsYou';
+import { HeadResumeSheet, ProgrammeHeadFacts, ProgrammeRunsSection, useProgrammeRuns, type ProgrammeRunsReaders } from './ProgrammeRuns';
 import { Back, useHeard, useUnavailable } from './WaitingRoutes';
 import { isGoalsFor } from './waitingView';
 import './ledgers.css';
@@ -77,6 +80,7 @@ function useGoalsRead(slug: string): GoalsRead {
 
 const NO_RUNS: readonly RunSummary[] = [];
 const NO_ITEMS: readonly ItemView[] = [];
+const NO_SESSIONS: readonly FleetSession[] = [];
 
 /** Reads one programme's stored secrets (`api.storedSecrets`); a test passes its own. */
 export type ReadStoredSecrets = (slug: string) => Promise<StoredSecretsAnswer>;
@@ -217,8 +221,10 @@ function WaitingCard({ slug, view, sessions, runs, unavailable, stored }: {
 
 /** `/programmes/<slug>`. Keyed by the slug where it is mounted, so one programme's Goals never show under another's name.
  *  `secrets` replaces the stored-secrets read, the Remove call and the step-up's injectables (a test's). */
-export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
+export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers }: {
   slug: string; store?: FleetStore;
+  /** The Runs section's two reads (`GET /api/programmes` and `GET /api/runs/find`), a test's. */
+  readers?: ProgrammeRunsReaders;
   secrets?: { read?: ReadStoredSecrets; remove?: RemoveSecret; stepUpDeps?: StepUpDeps };
 }): ReactNode {
   const view = store((s) => s.waiting);
@@ -242,16 +248,31 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
   // The head's Spec link reads the pin the Goals card draws: the frame's copy, else the fetched one (PL10, D-7952; D26).
   const pinned = held ?? (read !== 'reading' && read !== 'failed' ? read : null);
   const title = programmeTitle(slug, heard);
+  const runsView = useProgrammeRuns(slug, runs, readers);
+  const fleetFrameSeen = store((s) => s.fleetFrameSeen);
+  const stallQuietMs = store((s) => s.stallQuietMs);
+  const coordPaused = store((s) => markerState(s.coord?.pause) === 'set');
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const runsNow = useNow(30_000);
+  const fleetSessions = sessions ?? NO_SESSIONS;
+  const entries = view === null || sessions === null || runs === null ? [] : needsYou(view.items, sessions, runs);
+  const row = runsView.row;
+  const subWave = row !== null && row.currentWave !== null ? waveOfWords({ wave: row.currentWave, waveOf: row.waveOf }) : wave !== null ? waveOfWords(wave) : null;
   return (
     <div className="wl pv" data-program={slug} data-hue={hue}>
       <header className="pv-head" data-hue={hue}>
         <Back to={FLEET_PATH} label="Back to Fleet" />
         <span className="pv-kicker">Programme</span>
         <h1 className="pv-title">{title}</h1>
-        {wave !== null && <span className="pv-sub">{waveOfWords(wave)}</span>}
+        {subWave !== null && <span className="pv-sub">{subWave}</span>}
         <SpecLink href={specHref(pinned?.specPath ?? null, home)} programme={title} className="pv-spec" />
+        <ProgrammeHeadFacts view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null}
+          needs={needsYouCount(entries, slug)} quietMs={stallQuietMs} paused={coordPaused} nowMs={runsNow} onResume={() => setResumeOpen(true)} />
       </header>
+      <HeadResumeSheet open={resumeOpen} onClose={() => setResumeOpen(false)} view={runsView} sessions={fleetSessions}
+        fleetFrameSeen={fleetFrameSeen} title={title} project={home} />
       <div className="pv-two">
+        <div className="pv-main">
         <div className="pv-card">
           <GoalsCard read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
         </div>
@@ -259,6 +280,8 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets }: {
                      stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}
                                                    removeSecret={secrets?.remove ?? removeStoredSecret}
                                                    {...(secrets?.stepUpDeps === undefined ? {} : { stepUpDeps: secrets.stepUpDeps })} />} />
+        </div>
+        <ProgrammeRunsSection view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null} />
       </div>
     </div>
   );

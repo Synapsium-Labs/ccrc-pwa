@@ -20,6 +20,7 @@ export const RUN_PAGE_WORDS = {
   openCoordinator: 'Open the coordinator',
   liftCap: 'Lift cap',
   abandon: 'Abandon',
+  resume: 'Resume',
   /** The link back to the board under "There is no run N.". */
   toBoard: 'Back to Runs',
 } as const;
@@ -42,6 +43,15 @@ export function coordinatorWord(p: CoordinatorPresence): string | null {
   if (p === 'hibernated') return 'asleep';
   if (p === 'dead') return RUN_PAGE_WORDS.gone;
   return null;
+}
+
+/** The Who facts' coordinator word: the server's verdict first (spec §8.4, A46/A60), `coordinatorPresence` only when the
+ *  verdict is absent. A claimant with no fleet row (an old closed run) reads gone when the server says so. The run page and
+ *  the programme page's head both ask it. */
+export function coordinatorFactWord(gone: boolean | undefined, presence: CoordinatorPresence): string | null {
+  if (gone === true) return coordinatorWord('dead');
+  if (gone === false) return presence === 'dead' ? null : coordinatorWord(presence);
+  return coordinatorWord(presence);
 }
 
 export interface FactPart { readonly text: string; readonly href?: string; readonly external?: true }

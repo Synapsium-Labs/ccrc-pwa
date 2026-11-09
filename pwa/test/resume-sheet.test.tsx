@@ -590,3 +590,43 @@ it('a run with no claimant says so, and offers no door', () => {
   expect(screen.queryByRole('button', { name: /^re-kickoff$/i })).toBeNull();
   expect(screen.queryByRole('button', { name: /cannot be revived/i })).toBeNull();
 });
+
+// Step 3 and the lead sentence (the runs rebuild, Task 19, D-8075; spec 2026-11-04 §9.5).
+describe('ResumeSheet — the lead sentence, and the picker in step 3', () => {
+  const LEAD = 'Only if this work should go on. A dead programme is abandoned, not handed over.';
+  const heirs = [{ id: 'ccrc-pwa-far-mesa', name: 'Far Mesa' }, { id: 'ccrc-pwa-low-tide', name: 'Low Tide' }];
+
+  it('the lead sentence comes first', () => {
+    render(<ResumeSheet run={run()} onClose={() => {}} {...noop} />);
+    const lead = screen.getByText(LEAD);
+    expect(lead.parentElement!.firstElementChild).toBe(lead);
+    expect(lead.compareDocumentPosition(screen.getByText(/claims run 3/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('step 3 offers a picker with the typed id below it', async () => {
+    const reclaimRun = vi.fn(async () => ok);
+    render(<ResumeSheet run={run()} onClose={() => {}} {...noop} reclaimRun={reclaimRun} heirs={heirs} />);
+    fireEvent.click(screen.getByRole('button', { name: /cannot be revived/i }));
+    const picker = await screen.findByRole('combobox', { name: /hand run 3 to a coordinator/i });
+    const typed = screen.getByLabelText(/hand run 3 to this session id/i);
+    expect(picker.compareDocumentPosition(typed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect([...picker.querySelectorAll('option')].map((o) => o.textContent)).toEqual(['Choose a coordinator', 'Far Mesa', 'Low Tide']);
+    fireEvent.change(picker, { target: { value: 'ccrc-pwa-low-tide' } });
+    expect((typed as HTMLInputElement).value).toBe('ccrc-pwa-low-tide');
+    fireEvent.click(screen.getByRole('button', { name: /^reclaim$/i }));
+    await waitFor(() => expect(reclaimRun).toHaveBeenCalledWith(3, 'ccrc-pwa-low-tide'));
+  });
+
+  it('with no heirs there is no picker, and the typed id stands alone', async () => {
+    render(<ResumeSheet run={run()} onClose={() => {}} {...noop} />);
+    fireEvent.click(screen.getByRole('button', { name: /cannot be revived/i }));
+    expect(await screen.findByLabelText(/hand run 3 to this session id/i)).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
+  it('takes a hit: only the fields it names are read', () => {
+    const hit = { id: 9, program: 'p', programTitle: 'P', wave: 2, claimedBy: 'ccrc-pwa-coordinator' };
+    render(<ResumeSheet run={hit} onClose={() => {}} {...noop} />);
+    expect(screen.getByText(/claims run 9/)).toBeInTheDocument();
+  });
+});

@@ -2915,7 +2915,8 @@ button.proj-card-pool::before {
   border-radius: var(--r-md); padding: var(--sp-1) var(--sp-3);
   font: var(--fs-xs) / 1.6 var(--family-mono);
 }
-.runs-info .runs-info-link {
+.runs-info .runs-info-link,
+.closed-today .closed-today-link {
   display: inline-flex; align-items: center; min-height: var(--tap-min);
   color: inherit; text-decoration: underline; text-underline-offset: 2px;
 }
@@ -4447,3 +4448,10 @@ button.proj-card-pool::before {
 .ra-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .ra-chip[aria-pressed='true'] { background: var(--bg-surface); color: var(--ink-primary); box-shadow: inset 0 0 0 1px var(--accent); }
 .ra-older { justify-self: start; }
+
+/* Closed today (§8.2 item 5): one quiet line below the Stuck band; each count is a link at the tap floor (check 9). */
+.closed-today {
+  margin: 0; padding: 0 var(--sp-3);
+  background: var(--bg-surface); color: var(--ink-secondary);
+  border-radius: var(--r-md); font: var(--fs-xs) / 1.6 var(--family-mono);
+}

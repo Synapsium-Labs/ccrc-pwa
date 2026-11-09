@@ -209,4 +209,24 @@ describe('from a Stuck head', () => {
     act(() => { store.setState({ runs: [] }); });
     expect(screen.getByText('Abandon 2 runs?')).toBeInTheDocument();
   });
+
+  it('Closed today re-reads when the loop ends and shows the server\'s count, never one added locally (Task 20)', async () => {
+    const read = vi.fn()
+      .mockResolvedValueOnce({ ok: true, programmes: [], closedToday: { operator: 1, sweep: 0, coordinator: 0 } })
+      .mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 7, sweep: 0, coordinator: 0 } });
+    const store = makeStore();
+    const runs = [1, 2].map((i) => stuckRun(i, 'never-started'));
+    act(() => { store.setState({ runs, runsFrameSeen: true, fleetFrameSeen: true, conn: 'open', sessions: [] }); });
+    render(<><ToastHost /><RunsScreen store={store} loadProgrammes={read} /></>);
+    await act(async () => { await Promise.resolve(); });
+    expect(await screen.findByText('Closed today:', { exact: false })).toHaveTextContent('Closed today: 1 by you');
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon 2…' }));
+    await screen.findByText('Abandon 2 runs?');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const before = read.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon 2 runs' }));
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
+    expect(await screen.findByText('Closed today:', { exact: false })).toHaveTextContent('Closed today: 7 by you');
+    vi.unstubAllGlobals();
+  });
 });

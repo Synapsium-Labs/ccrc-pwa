@@ -96,11 +96,13 @@ describe('the box', () => {
     vi.spyOn(api, 'findRuns').mockImplementation(NEVER);
     Object.defineProperty(window, 'scrollY', { value: 340, configurable: true });
     mount(board([open({ id: 11 })]));
-    expect(screen.getByRole('group', { name: 'program Programme A' })).toBeInTheDocument();
+    // A card with no known last move waits for the programmes read, so the list appears once it settles.
+    await settle();
+    expect(screen.getByRole('list', { name: 'Programmes' })).toBeInTheDocument();
     type('lane');
-    expect(screen.queryByRole('group', { name: 'program Programme A' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Programmes' })).toBeNull();
     type('');
-    expect(screen.getByRole('group', { name: 'program Programme A' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Programmes' })).toBeInTheDocument();
     expect(window.scrollTo).toHaveBeenCalledWith(0, 340);
     expect(location.search).toBe('');
     Object.defineProperty(window, 'scrollY', { value: 0, configurable: true });

@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT,
          type CoordCapsView, type RunHealth, type RunSummary } from '../../shared/api';
-import { RunsScreen } from './runs-board';
+import { RowsBoard } from './runs-board';
 import { runWarnings } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -42,7 +42,7 @@ const board = (over: Partial<RunSummary>): void => {
   vi.useFakeTimers({ now: FROZEN });
   const store = makeStore();
   act(() => { store.setState({ runs: [r(over)], runsFrameSeen: true }); });
-  render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
 };
 afterEach(() => { vi.useRealTimers(); });
 
@@ -65,7 +65,7 @@ describe('the warn row says nothing it was not told', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [noHealth as RunSummary], runsFrameSeen: true }); });
     expect(() => render(
-      <RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />))
+      <RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />))
       .not.toThrow();
     expect(warn(), 'an older server was made to assert a health claim').toBeNull();
   });
@@ -94,7 +94,7 @@ describe('the warn row says nothing it was not told', () => {
       const store = makeStore();
       act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
       const closed = r({ state, closedAt: Date.now() - 10_000, dispatchedAt: null, ...wedged() });
-      render(<RunsScreen store={store} loadRuns={async () => ({ runs: [closed] })}
+      render(<RowsBoard store={store} loadRuns={async () => ({ runs: [closed] })}
                          loadCaps={NO_CAPS} />);
       await waitFor(() => expect(document.querySelector('.run-row')).not.toBeNull());
       expect(document.querySelector('[aria-label^="finished"]'),

@@ -66,9 +66,9 @@ describe('the PWA maps no ws-reclaim token — the sentence is the server’s (s
 
   it('reads the files that render the chip, and they do render it', () => {
     expect(read('pwa/src/fleet/runWords.ts')).toContain('export const childReclaimChip');
-    // The board is a screen AND its row, so this reads the family rather than
-    // a path — see `componentFamily`.
-    expect(componentFamily(root, 'pwa/src/screens/RunsScreen.tsx')).toContain('run-child-reclaim');
+    // The chip is drawn by the row. The board stopped drawing rows when the programme cards replaced its groups (the runs
+    // rebuild, Task 18, D-8075), so this reads the row's own family (`componentFamily`) until the programme page draws it.
+    expect(componentFamily(root, 'pwa/src/screens/RunRow.tsx')).toContain('run-child-reclaim');
     expect(read('pwa/src/fleet/childReclaimWords.ts')).toContain('export function childReclaimAttentionOf');
     expect(read('pwa/src/fleet/ChildReclaimBanner.tsx')).toContain('export function ChildReclaimBanner');
     expect(read('pwa/src/fleet/AbandonSheet.tsx')).toContain('export function AbandonSheet');

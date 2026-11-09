@@ -51,7 +51,8 @@ export function stuckGroups(runs: readonly RunSummary[]): { reason: StuckReason;
   return out;
 }
 
-function StuckRow({ run, nowMs, current, onAbandon }: {
+/** A stuck run's row, in the Stuck band and on its programme's page: the open door and its Abandon. */
+export function StuckRow({ run, nowMs, current, onAbandon }: {
   run: RunSummary; nowMs: number; current: boolean; onAbandon: (run: RunSummary) => void;
 }): ReactNode {
   const marker = runMarker(run, false);

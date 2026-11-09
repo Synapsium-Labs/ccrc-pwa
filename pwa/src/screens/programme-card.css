@@ -1,0 +1,53 @@
+/* The programme cards, the quiet fold and Finished (`ProgrammeCard`, the runs rebuild Task 18, D-8075; spec 2026-11-04 §8.1,
+   §8.2.2, §8.2.3). Skin tokens only; no `.programme` rule lives in `instrument.css` or `refined.css`. Every link and toggle keeps
+   the tap floor, text wraps and nothing is ellipsised. The cards lay out by the board's own column (`runs`): one across under
+   840, two across from 840, and one across again in the broad list, whose pane is only part of the column. A card is a record,
+   not a living pane: no glow, no animation, no shadow. */
+.programme-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); margin: 0; padding: 0; list-style: none; min-width: 0; }
+@container runs (min-width: 840px) {
+  .programme-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.runs-column[data-column="broad"] .programme-cards { grid-template-columns: minmax(0, 1fr); }
+.programme-card {
+  display: grid; gap: var(--sp-1); align-content: start; min-width: 0; padding: var(--sp-1) var(--sp-3);
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+  font-family: var(--family-mono); font-size: var(--fs-sm);
+}
+.programme-card .programme-card-top {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 var(--sp-2); margin: 0;
+  font-size: var(--fs-meta);
+}
+.programme-card .programme-card-lamp { color: var(--ink-secondary); }
+.programme-card .programme-card-word-stuck { color: var(--status-attention-text); }
+.programme-card .programme-card-marker {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.programme-card .programme-card-name, .programme-finished-row .programme-card-name {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); min-width: 0; color: inherit;
+  font-weight: var(--weight-medium); overflow-wrap: anywhere;
+}
+.programme-card a.programme-card-name, .programme-finished-row a.programme-card-name { text-decoration: underline; text-underline-offset: 2px; }
+.programme-card .programme-card-line { margin: 0; padding-bottom: var(--sp-1); font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+/* A fold: one toggle at the tap floor, closed by default at every width. */
+.programme-fold { display: grid; gap: var(--sp-1); margin-block: var(--sp-2); min-width: 0; }
+.programme-fold .programme-fold-toggle {
+  display: flex; flex-wrap: wrap; align-items: baseline; align-content: center; gap: 0 var(--sp-2);
+  min-height: var(--tap-min); padding: 0 var(--sp-3); background: var(--bg-surface); color: var(--ink-primary);
+  border: 0; border-radius: var(--r-md); text-align: left; cursor: pointer;
+  font: var(--weight-medium) var(--fs-xs) / 1.6 var(--family-mono);
+}
+.programme-fold-toggle .programme-fold-count { color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
+.programme-fold .programme-fold-body { display: grid; gap: var(--sp-1); min-width: 0; }
+.programme-finished { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; }
+.programme-finished-row {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 var(--sp-3);
+  min-width: 0; padding: 0 var(--sp-3); background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+  font-family: var(--family-mono); font-size: var(--fs-sm);
+}
+.programme-finished-row .programme-finished-ending { font-size: var(--fs-2xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.programme-fold .programme-finished-all {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); padding: 0 var(--sp-3);
+  background: var(--bg-surface); color: var(--ink-primary); border-radius: var(--r-md);
+  font-family: var(--family-mono); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 2px;
+}
