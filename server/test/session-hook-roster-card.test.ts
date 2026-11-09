@@ -133,7 +133,7 @@ describe('D4: the roster card, armed', () => {
     fakeApi(body, code);
     const c = hook('compact');
     expect(c).not.toContain('ccrc-roster');
-    expect(c).toContain('You are this project\'s coordinator from your first turn');   // control: the arm ran
+    expect(c).toContain('You are still this project\'s coordinator');   // control: the arm ran (compact gets the short reminder, D-8142)
   });
 
   it('caps the roster and names the runs it left out', () => {

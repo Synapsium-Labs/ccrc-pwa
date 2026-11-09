@@ -3329,7 +3329,8 @@ case "$event" in
       { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
       [ -e "$REG/$id.hold" ] && return 0
       case "$src" in
-        resume|fork) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+        # compact keeps the short reminder: Claude Code re-attaches skills already invoked, so reloading would only spend tokens.
+        resume|fork|compact) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
         *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
       esac
       return 0

@@ -118,10 +118,11 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
     expect(context(run(noSource))).toContain(FRESH);
   });
 
-  it('renders on a compact SessionStart: compaction rebuilt the context, so the role is told again', () => {
+  it('renders the short reminder on a compact SessionStart: the role is told again, but the skill is not reloaded (D-8142)', () => {
     const c = context(run(withSource('compact')));
-    expect(c).toContain(FRESH);
-    expect(c.split(FRESH)).toHaveLength(2);   // once, not twice
+    expect(c).toContain(REVIVED);
+    expect(c).not.toContain(FRESH);
+    expect(c.split(REVIVED)).toHaveLength(2);   // once, not twice
   });
 
   it('says nothing for a dispatched child (`.child` present)', () => {
