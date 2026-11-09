@@ -75,7 +75,7 @@ export function HeldByRows(
             sentence: item.sentence,
             control: (
               <>
-                {why !== null && <span className="child-reclaim-sentence">{why}</span>}
+                {why !== null && <span className="child-reclaim-sentence held-by-why">{why}</span>}
                 <Button variant="quiet" size="fit" aria-label={CLEANUP_HELD_BY_CONTROL[act].ariaLabel(item.rowId)}
                   onClick={() => setOpen({ rowId: item.rowId, act })}>
                   {CLEANUP_HELD_BY_CONTROL[act].button}

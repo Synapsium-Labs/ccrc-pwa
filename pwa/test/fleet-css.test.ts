@@ -748,6 +748,11 @@ describe('runs are not living panes', () => {
     expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'color')).toBe('var(--status-attention-text)');
     expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'flex')).toBe('1 0 100%');
   });
+
+  // Task C16 item 11 (review 1666 F4): the held-rows list's why-line takes its own line in the wrapping row.
+  it('puts the held-by why-line on its own line of the wrapping row (Task C16)', () => {
+    expect(declValue(ruleFor('.held-by-why'), 'flex')).toBe('1 0 100%');
+  });
 });
 
 // program-leverage wave 3 (F3): a readiness badge is a MEASUREMENT of a box,

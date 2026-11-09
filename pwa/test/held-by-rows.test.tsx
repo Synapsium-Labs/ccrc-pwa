@@ -302,6 +302,12 @@ describe('a forget act the fleet holds back says why', () => {
     expect(screen.getByText(line)).toBeInTheDocument();
   });
 
+  it('the line wears the held-by-why class, which puts it on its own line (Task C16, review 1666 F4)', () => {
+    const session = fleetSession({ id: 'row-a' });
+    render(<HeldByRows sessions={[session]} coord={frame([held()])} />);
+    expect(screen.getByText(RUNNING)).toHaveClass('held-by-why');
+  });
+
   it('no line shows when the act and the control agree', () => {
     render(<HeldByRows sessions={[deadSession({ id: 'row-a' }), deadSession({ id: 'row-b' })]}
       coord={frame([held(), held({ rowId: 'row-b', act: 'recheck' })])} />);
