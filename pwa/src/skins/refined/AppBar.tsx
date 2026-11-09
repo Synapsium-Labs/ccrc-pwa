@@ -30,6 +30,7 @@ function Tab({ id, here, count, word }: { id: string; here: boolean; count: numb
       className="ref-tab font-ui text-ui font-medium aria-[current=page]:text-ink-primary"
     >
       {route.title}
+      {count > 0 && ' '}
       {count > 0 && <CountBadge>{badgePrint(count)}</CountBadge>}
     </Door>
   );

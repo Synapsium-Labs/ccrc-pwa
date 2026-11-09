@@ -19,7 +19,7 @@ import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import type { AccountUsage, NotifyEvent, RunSummary } from '../../shared/api';
 import { itemView, waitingView } from './ledgersFixture';
-import { labelInName } from './labelInName';
+import { labelInName, shownText } from './labelInName';
 
 vi.mock('../src/lib/routes', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/lib/routes')>();
@@ -216,7 +216,19 @@ describe('the app bar (W2 Task S4b)', () => {
     // word, not on its pill: the word is in the name, and the printed "99" is not, by design (`badgePrint`).
     const name = tab.getAttribute('aria-label')!;
     expect(labelInName(tab.textContent!.replace(/99\+$/, ''), name)).toBe(true);
-    // No whole-text false pin: this skin joins the word and count with no space, so it would be vacuous (review 1689 F9).
+    // The whole shown text at a capped count ("Runs 99+") is not pinned: the name carries "120", so the pill's "99+" never
+    // matches it by design. The low-count case below holds the word-then-count space.
+  });
+
+  // Review 1689 F9: the tab's word and its pill are separated by a space, so the tab's whole shown text ("Runs 2") is in its name.
+  it("a tab's whole shown text is in its name at a low count (review 1689 F9)", () => {
+    atWidth(1280);
+    render(<App />);
+    const runs = [1, 2].map((id) => ({ id, program: 'p', state: 'working', closedAt: null, sessionId: null, claimedBy: 'ask' }) as unknown as RunSummary);
+    act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'ask', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
+    const tab = within(primary()).getByRole('button', { name: 'Runs, 2 needs you' });
+    expect(shownText(tab)).toMatch(/^Runs\s+2$/);
+    expect(labelInName(shownText(tab), tab.getAttribute('aria-label')!)).toBe(true);
   });
 
   // Under a coarse pointer the bar's icon doors were narrower than a finger (Settings 32 wide, the bell 28 square)

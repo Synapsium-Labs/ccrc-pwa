@@ -34,8 +34,8 @@ describe("chat's marks have one recogniser table and one plugin (chat reading Ta
     expect(holders(decl('remarkChatMarks'))).toEqual(['pwa/src/lib/remarkChatMarks.ts']);
   });
 
-  // Task L (D-8062): the resolver, the console-path decision and the arrival at a row are each declared once, so chat, the
-  // ledgers, the runs board and the accounts screen ask one mechanism each.
+  // Task L (D-8062): the resolver, the console-path decision and the arrival at a row are each declared once, so chat and
+  // the ledgers ask one resolver and one path decision, and the accounts screen, the arrival's one caller, asks one arrival.
   it('the resolver, the console-path decision and the arrival are each declared once (chat reading Task L, D-8062)', () => {
     expect(holders(decl('refHref')), 'refHref').toEqual(['pwa/src/lib/chatRefs.ts']);
     expect(holders(decl('routedHref')), 'routedHref').toEqual(['pwa/src/lib/routes.ts']);

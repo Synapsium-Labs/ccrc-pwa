@@ -132,7 +132,8 @@ export function useColdRuns(
   //
   // The newest SETTLED failure holds `state` at `error` and owns `timedOut` (reviews 1606 F2 and 1689 F1; Task C14, D-8110).
   // An older success still lands its ROWS, but clears neither failure signal; an older failure cannot replace `timedOut`.
-  // Only a success newer than that failure clears both signals. `failed` is the newest sequence that settled as a failure.
+  // Only a success newer than that failure clears both signals. `failed` is the newest failure not already outranked by
+  // an applied success (a rejection older than `applied` is ignored by the `catch`).
   const issued = useRef(0);
   const applied = useRef(0);
   const failed = useRef(0);

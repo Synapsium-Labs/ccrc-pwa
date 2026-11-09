@@ -194,6 +194,22 @@ async function measure(page: Page): Promise<Figure> {
   return { ...outer, titleInFrame, frameScroll: inner.scroll, above: outer.frameTop + titleInFrame };
 }
 
+/** Puts keyboard focus on back once the reader has settled, for a case that presses Tab next (fix round 2 of review
+ *  1722's round, D-8139). The shared library's host mount focuses the reader's iframe as it inserts it (its `focus`
+ *  adapter, which `reader/bridge.ts` passes as `true`), and that insert comes after Export reads "Export (plain view)":
+ *  the frame publishes its export body when it first renders, before its render job, its images and the lazy mount. A
+ *  focus on back before the insert is taken by the frame, and Tab then goes on from the frame to the phone bar's first
+ *  door ("Fleet", the merge queue's run 42675922760). So this waits for the reader to come up (its iframe in and
+ *  "Formatting…" gone) or to fall back to the plain view, focuses back, and waits until back holds the focus. */
+async function focusBackSettled(page: Page): Promise<void> {
+  await page.waitForFunction((note) => {
+    if ([...document.querySelectorAll('.doc-plain-note')].some((n) => n.textContent === note)) return true;
+    return document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null;
+  }, READER_FALLBACK_NOTE, { timeout: 90_000, polling: 100 });
+  await page.locator('.docs-full .docs-back').focus();
+  await page.waitForFunction(() => document.activeElement?.classList.contains('docs-back') === true, undefined, { timeout: 10_000 });
+}
+
 /** Opens the leaf at `view`, runs `check`, asks that the page threw nothing, and closes the context whatever happens. */
 async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
   const app = await openLeaf(view, tree, leaf);
@@ -729,6 +745,11 @@ describe('the desk head (desk-nav Part B)', () => {
       expect(r.nameWhole, "the page's whole name").toBe(true);
       expect(r.folded, 'every crumb is drawn').toBe(false);
       expect(r.actionsOnLine, 'one row').toBe(true);
+      // Under a mouse an icon-only action keeps its icon's own width (16 px and its padding), so the stage widths do not
+      // move: the tap-wide icon is the coarse pointer's (review 1704 F3).
+      const icons = (await rowFigure(app.page)).controls.filter((c) => ([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView, DOCS_HEAD_TEXT.openCommitted] as readonly string[]).includes(c.name));
+      expect(icons.length).toBe(4);
+      for (const c of icons) expect(c.right - c.left, `${c.name} under a mouse`).toBeCloseTo(24, 0);
       expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
@@ -749,8 +770,11 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 120_000);
 
-  it.each([INSTRUMENT, REFINED])('the modified draft, %s, under a mouse, 900 to 1480 px in 20 px steps: a wider window never shows less of the name (fix round 2, item 1)', async (skin) => {
-    const app = await openRow({ width: 900, height: 800, skin, pointer: 'fine' }, DRAFT_DEEP, 'main');
+  // Under a coarse pointer too (Task C16, D-8139): there the icons are a tap wide (review 1704 F3) and GitHub's may-differ
+  // note draws its words (review 1697 F5), so the row gives way at other widths, never less of the name at a wider one.
+  it.each([INSTRUMENT, REFINED].flatMap((skin) => (['a mouse', 'a coarse pointer'] as const).map((pointer) => [skin, pointer] as const)))('the modified draft, %s, under %s, 900 to 1480 px in 20 px steps: a wider window never shows less of the name (fix round 2, item 1)', async (skin, pointer) => {
+    const view: View = pointer === 'a mouse' ? { width: 900, height: 800, skin, pointer: 'fine' } : { width: 900, height: 800, skin, touch: true };
+    const app = await openRow(view, DRAFT_DEEP, 'main');
     try {
       const seen: [number, number, string][] = [];
       for (const w of SWEEP) {
@@ -758,10 +782,62 @@ describe('the desk head (desk-nav Part B)', () => {
         const r = await rowState(app.page);
         seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`]);
       }
-      console.log(`PHH-FIGURE ${skin} sweep draft-name ${JSON.stringify(seen)}`);
+      console.log(`PHH-FIGURE ${skin} ${pointer === 'a mouse' ? 'fine' : 'coarse'} sweep draft-name ${JSON.stringify(seen)}`);
       for (let i = 1; i < seen.length; i++) {
         expect(seen[i]![1], `the name at ${seen[i]![0]} against ${seen[i - 1]![0]}`).toBeGreaterThanOrEqual(seen[i - 1]![1] - 0.5);
       }
+    } finally {
+      await app.ctx.close();
+    }
+  }, 300_000);
+
+  // Review 1704 F2 and review 1722 F2 (Task C16, D-8139): in GitHub's refusal state, when the row is short, the action
+  // words hide first, then the middle crumbs fold, then the sentence shortens to its 12ch floor (an ellipsis, its whole
+  // words in its `title`), and the page's name gives way last. So wherever the name is whole and the words or the
+  // unfolded middle crumbs show, the sentence is whole, and a wider window never shows less of the name. Before item 2
+  // the sentence never shrank: the actions wrapped onto a line of their own below about 1100 px, and the name dropped
+  // from whole to six characters one pixel wider. After item 2 alone the sentence stood at its 12ch stub up to 1500 px
+  // while the name and the words showed. From 900 the desk sidebar takes its column, so the row is narrower at 900 (544 px
+  // in Instrument) than at 768 (752): the name is monotonic from 900, and whole at 768. Two reasons: the longest
+  // (`bad-slug`, 439 px) and a short one (no GitHub origin).
+  const REFUSAL_SWEEP = [768, ...Array.from({ length: (1600 - 900) / 20 + 1 }, (_, i) => 900 + 20 * i)];
+  const REFUSED_SHORT_DEEP = { ...DEEP_TREE, github: { state: 'none' as const } };
+  const REFUSAL_CASES = ([['the longest reason', REFUSED_DEEP], ['a short reason', REFUSED_SHORT_DEEP]] as const)
+    .flatMap(([what, tree]) => [INSTRUMENT, REFINED].flatMap((skin) => (['fine', 'coarse'] as const).map((pointer) => [what, skin, pointer, tree] as const)));
+  it.each(REFUSAL_CASES)("GitHub's refusal, %s, %s, a %s pointer, at 768 and 900 to 1600 px in 20 px steps: the sentence is whole wherever the name is and the words or the middle crumbs show, and a wider window never shows less of the name (reviews 1704 F2, 1722 F2)", async (_what, skin, pointer, tree) => {
+    const view: View = pointer === 'fine' ? { width: 768, height: 800, skin, pointer } : { width: 768, height: 800, skin, touch: true };
+    const app = await openRow(view, tree, 'main');
+    try {
+      const seen: [number, number, string, number][] = [];
+      const broken: string[] = [];
+      let whole768 = false;
+      for (const w of REFUSAL_SWEEP) {
+        await app.page.setViewportSize({ width: w, height: 800 });
+        const r = await rowState(app.page);
+        const off = await app.page.evaluate(() => {
+          const e = document.querySelector('.docs-full .docs-action-off') as HTMLElement;
+          const t = document.createRange();
+          t.selectNodeContents(e);
+          return { shown: e.getBoundingClientRect().width, text: t.getBoundingClientRect().width };
+        });
+        const offWhole = off.text <= off.shown + 0.01;
+        if (w === 768) whole768 = r.nameWhole;
+        seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`, Math.round(off.shown)]);
+        if (r.nameWhole && (r.words || !r.folded) && !offWhole) broken.push(`${w}: the sentence ${Math.round(off.shown)} of ${Math.round(off.text)} px`);
+        expect(r.scrollW, `no sideways scroll at ${w}`).toBeLessThanOrEqual(r.innerW);
+      }
+      console.log(`PHH-FIGURE ${skin} ${pointer} sweep refusal ${tree === REFUSED_DEEP ? 'long' : 'short'} ${JSON.stringify(seen)}`);
+      expect(broken, 'the sentence is cut while the name is whole and the words or the middle crumbs show').toEqual([]);
+      expect(whole768, "the page's whole name at 768").toBe(true);
+      for (let i = 2; i < seen.length; i++) {
+        expect(seen[i]![1], `the name at ${seen[i]![0]} against ${seen[i - 1]![0]}`).toBeGreaterThanOrEqual(seen[i - 1]![1] - 0.5);
+      }
+      const off = await app.page.evaluate(() => {
+        const e = document.querySelector('.docs-full .docs-action-off') as HTMLElement;
+        return { title: e.title, text: e.textContent ?? '' };
+      });
+      expect(off.title, 'the sentence keeps its whole words in its title').toBe(off.text);
+      expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
     }
@@ -823,7 +899,7 @@ describe('the desk head (desk-nav Part B)', () => {
       }
       // Keyboard focus on the first crumb, by Tab from back (a programmatic focus may not match :focus-visible): its
       // ring is drawn inside its box, and the box inside the crumbs'.
-      await app.page.locator('.docs-full .docs-back').focus();
+      await focusBackSettled(app.page);
       await app.page.keyboard.press('Tab');
       const ring = await app.page.evaluate(() => {
         const a = document.activeElement as HTMLElement;
@@ -837,6 +913,77 @@ describe('the desk head (desk-nav Part B)', () => {
       expect(ring.style, 'a ring is drawn').not.toBe('none');
       expect(ring.inset, 'the ring is drawn inside the crumb').toBe(true);
       expect(ring.inside, 'the crumb is wholly inside the crumbs').toBe(true);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  // Review 1704 F1 (Task C16, D-8139): a deep path the user unfolds with `…` wraps rather than clip its start, as the
+  // compact head's panel does. Five directories are nine crumbs and seven are eleven; their floors (about 563 and 687 px)
+  // are wider than the row at 600 (584 px) and at 900 (544 in Instrument, 564 in Refined), where one line clipped "Docs"
+  // to nothing. Every crumb is then a tap wide and wholly inside the crumbs, and the first Tab stop after back, "Docs",
+  // is seen.
+  const deepPath = (dirs: number): string => [...Array.from({ length: dirs }, (_, i) => `dir-${String.fromCharCode(97 + i)}`), NAME].join('/');
+  const DEEPER_CASES = [INSTRUMENT, REFINED].flatMap((skin) => ([5, 7] as const).flatMap((dirs) =>
+    ([[600, 960], [900, 800]] as const).map(([w, h]) => [skin, dirs, w, h] as const)));
+
+  it.each(DEEPER_CASES)('%s, %i directories, %i x %i under a mouse: the unfolded crumbs wrap, every crumb whole and the first Tab stop seen (review 1704 F1)', async (skin, dirs, width, height) => {
+    const path = deepPath(dirs);
+    const tree = treeOk({ entries: [entry(SECTION, path, { committed: { kind: 'file', blob: BLOB, size: SIZE } })] });
+    const app = await openView({ width, height, skin, pointer: 'fine' }, tree, path);
+    try {
+      await app.page.goto(`${server!.origin}/docs/${PROJECT}/${SECTION}/${path}`, { waitUntil: 'load' });
+      await app.page.waitForFunction(() => document.querySelector('.docs-full .docs-export')?.getAttribute('aria-label') === 'Export (plain view)', undefined, { timeout: 90_000 });
+      await app.page.locator('.docs-full .docs-crumbs-more').click();
+      const r = await rowState(app.page);
+      const rows = await app.page.evaluate(() => {
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        return [...document.querySelectorAll('.docs-full .docs-crumbs li')].map((li) => {
+          const b = li.getBoundingClientRect();
+          return { text: li.textContent ?? '', inside: b.left >= nav.left - 0.5 && b.right <= nav.right + 0.5 && b.top >= nav.top - 0.5 && b.bottom <= nav.bottom + 0.5 };
+        });
+      });
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} unfolded-${dirs} ${JSON.stringify({ crumbs: r.crumbs.map((c) => Math.round(c.w)), rowH: r.rowH, actionsOnLine: r.actionsOnLine })}`);
+      expect(r.crumbs.length, 'every crumb is drawn').toBe(dirs + 4);
+      for (const c of r.crumbs) {
+        expect(c.w, `${c.text} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+        expect(c.inside, `${c.text} is wholly inside the crumbs`).toBe(true);
+      }
+      for (const li of rows) expect(li.inside, `${li.text}'s item, separator included, is inside the crumbs`).toBe(true);
+      expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
+      await focusBackSettled(app.page);
+      await app.page.keyboard.press('Tab');
+      const first = await app.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement;
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        const b = a.getBoundingClientRect();
+        return { text: a.textContent ?? '', seen: Math.max(0, Math.min(b.right, nav.right) - Math.max(b.left, nav.left)), w: b.width };
+      });
+      expect(first.text, 'the first Tab stop after back').toBe(DOCS_HEAD_TEXT.index);
+      expect(first.seen, 'it is seen whole').toBeGreaterThanOrEqual(first.w - 0.5);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
+
+  // Review 1704 F3 (Task C16, D-8139): an action drawn as its icon alone was 24 x 44 under a coarse pointer, where back,
+  // the crumbs, `…` and the compact head's icons are 44 wide. On the modified draft at 1280 the words hide, so every action
+  // is an icon: each is a tap wide and a tap tall.
+  it.each([INSTRUMENT, REFINED])('the modified draft at 1280 x 800, %s, under a coarse pointer: every control in the row is a tap wide and a tap tall, the icons too (review 1704 F3)', async (skin) => {
+    const app = await openRow({ width: 1280, height: 800, skin, touch: true }, DRAFT_DEEP, 'main');
+    try {
+      const r = await rowFigure(app.page);
+      const s = await rowState(app.page);
+      console.log(`PHH-FIGURE ${skin} 1280x800 touch-draft ${JSON.stringify({ words: s.words, controls: r.controls.map((c) => [c.name, Math.round((c.right - c.left) * 10) / 10, c.height]) })}`);
+      expect(r.fine, 'a coarse pointer').toBe(false);
+      expect(s.words, 'the action words are hidden').toBe(false);
+      expect(r.controls.map((c) => c.name)).toEqual(expect.arrayContaining([DOCS_HEAD_TEXT.github, DOCS_HEAD_TEXT.share, DOCS_HEAD_TEXT.exportPlainView, DOCS_HEAD_TEXT.openCommitted]));
+      for (const c of r.controls) {
+        expect(c.right - c.left, `${c.name} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+        expect(c.height, `${c.name} is a tap tall`).toBeGreaterThanOrEqual(TAP - 0.5);
+      }
+      expect(app.errors, 'no page error').toEqual([]);
     } finally {
       await app.ctx.close();
     }

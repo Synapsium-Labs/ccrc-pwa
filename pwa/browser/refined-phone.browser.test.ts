@@ -379,7 +379,7 @@ describe("Refined's phone header and the bottom bar with the Waiting badge drawn
       const { ctx, page, errors } = await openApp(browser!, view, WITH_LIST);
       try {
         await page.goto(server!.origin + '/');
-        await page.waitForFunction(() => document.querySelector('.shell-phone-nav [aria-label="Waiting on you, 101 waiting on you"]') !== null
+        await page.waitForFunction(() => document.querySelector('.shell-phone-nav [aria-label="Waiting, 101 waiting on you"]') !== null
           && document.querySelector('.shell-phone-nav [aria-label="Inbox, 1 waiting for you"]') !== null
           && document.querySelector('.shell-phone-nav [aria-label="Runs, 120 needs you"]') !== null, undefined, { timeout: 20_000 });
         const faults = await page.evaluate(() => {

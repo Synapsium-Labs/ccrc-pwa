@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DocsHead, fullHeadFormFor, headLayoutFor } from '../src/docs/DocsHead';
+import { DocsHead } from '../src/docs/DocsHead';
+import { fullHeadFormFor, headLayoutFor } from '../src/docs/docsHeadWords';
 import { DOCS_HEAD_TEXT, fillSentence, shortCommit } from '../src/docs/docsText';
 import type { DocsLoaders } from '../src/docs/failures';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -19,12 +20,12 @@ import { COMMIT_B, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, 
 import { labelInName, shownText } from './labelInName';
 
 /** matchMedia at `width`: a min-width or max-width query answered as an engine at that width answers it. */
-function atWidth(width: number): void {
+function atWidth(width: number, pointer: { readonly coarse?: boolean } = {}): void {
   vi.stubGlobal('matchMedia', (q: string) => {
     const min = /min-width:\s*([\d.]+)px/.exec(q);
     const max = /max-width:\s*([\d.]+)px/.exec(q);
-    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
-      && (min !== null || max !== null);
+    const matches = q === '(pointer: coarse)' ? pointer.coarse === true
+      : (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1])) && (min !== null || max !== null);
     return {
       matches, media: q, onchange: null,
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
@@ -76,6 +77,103 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   history.replaceState(null, '', '/');
+});
+
+// The row's stage probe (`useRowStage`, review 1704 F7 and F9; Task C16, D-8139). jsdom lays nothing out, so a probe
+// is counted by its one read of the crumbs' box (`rowFits` reads it once and, finding no box, keeps stage 0), and the
+// observers and the font set are stood in for.
+describe("the row's stage probe (review 1704 F7, F9)", () => {
+  type Resized = (entries: { readonly contentRect: { readonly width: number } }[]) => void;
+  let resized: Resized | null = null;
+  class FakeResizeObserver {
+    constructor(cb: Resized) { resized = cb; }
+    observe(): void {}
+    disconnect(): void {}
+  }
+  /** Probes so far: reads of the crumbs' box. */
+  function countProbes(): () => number {
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect');
+    return () => spy.mock.contexts.filter((el) => (el as Element).classList.contains('docs-crumbs')).length;
+  }
+  async function settled(): Promise<void> {
+    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.export })).toBeEnabled());
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('a row that changes width by less than a pixel is probed again: the guard reads contentRect, not clientWidth (F9)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const probes = countProbes();
+    open('/docs/demo/specs/a.md', fakeLoaders());
+    await settled();
+    resized!([{ contentRect: { width: 900.25 } }]);
+    const before = probes();
+    resized!([{ contentRect: { width: 900.75 } }]);
+    expect(probes(), 'a 0.5 px change probes').toBe(before + 1);
+    resized!([{ contentRect: { width: 900.75 } }]);
+    expect(probes(), 'no change, no probe').toBe(before + 1);
+  });
+
+  /** A stand-in font set holding `faces` (more can be pushed later), its `loading` listener kept. The event it is fired
+   *  with carries what Chromium's carries: an empty `fontfaces` (review 1722 F1). */
+  function standInFonts(faces: { status: string; loaded: Promise<void> }[]): { fireLoading: () => void } {
+    let onLoading: ((e: { fontfaces: readonly unknown[] }) => void) | null = null;
+    const fonts = {
+      forEach: (f: (x: unknown) => void) => { for (const face of faces) f(face); },
+      addEventListener: (type: string, fn: never) => { if (type === 'loading') onLoading = fn; },
+      removeEventListener: () => {},
+    };
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true });
+    return { fireLoading: () => onLoading!({ fontfaces: [] }) };
+  }
+  function lateFace(status: string): { face: { status: string; loaded: Promise<void> }; load: () => void } {
+    let load!: () => void;
+    return { face: { status, loaded: new Promise<void>((r) => { load = r; }) }, load };
+  }
+
+  it('a face still unloaded at mount re-probes the row when it loads: a CSS face turns loading only at first layout (F7, review 1722 F1)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const ui = lateFace('unloaded');
+    const done = lateFace('loaded');
+    standInFonts([ui.face, done.face]);
+    try {
+      const probes = countProbes();
+      open('/docs/demo/specs/a.md', fakeLoaders());
+      await settled();
+      const before = probes();
+      ui.load();
+      await waitFor(() => expect(probes(), 'the face unloaded at mount').toBe(before + 1));
+    } finally {
+      Reflect.deleteProperty(document, 'fonts');
+    }
+  });
+
+  it('a loading event that names no face scans the set again, and a face is watched once (F7, review 1722 F1)', async () => {
+    atWidth(1280);
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+    const ui = lateFace('loading');
+    const mono = lateFace('loading');
+    const faces = [ui.face];
+    const set = standInFonts(faces);
+    try {
+      const probes = countProbes();
+      open('/docs/demo/specs/a.md', fakeLoaders());
+      await settled();
+      const before = probes();
+      faces.push(mono.face);
+      set.fireLoading();
+      set.fireLoading();
+      ui.load();
+      await waitFor(() => expect(probes(), 'the face watched at mount').toBe(before + 1));
+      mono.load();
+      await waitFor(() => expect(probes(), 'a face that starts loading later').toBe(before + 2));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(probes(), 'no face probes twice').toBe(before + 2);
+    } finally {
+      Reflect.deleteProperty(document, 'fonts');
+    }
+  });
 });
 
 describe('which head a desk page draws (desk-nav Part B)', () => {
@@ -203,6 +301,25 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     const described = gh.getAttribute('aria-describedby');
     expect(described).toBe(note.id);
     expect(document.getElementById(described ?? '')).toBe(note);
+  });
+
+  // Review 1697 F5 (Task C16, D-8139): a touch user has no hover, so a `title` never shows; under a coarse pointer the
+  // note draws its words, as the head did before the marker, and the link is still described by them.
+  it.each([
+    ['a local ref ahead of origin', '/docs/demo/specs/a.md?ref=lane-a', aheadTree()],
+    ['a modified draft', '/docs/demo/specs/a.md?ref=main', DRAFT_TREE],
+  ])("on %s under a coarse pointer, GitHub's may-differ note shows its words, not a bare marker (review 1697 F5)", async (_what, url, tree) => {
+    atWidth(1280, { coarse: true });
+    open(url, fakeLoaders({ tree: okTree(tree) }));
+    const gh = await within(await waitFor(() => row())).findByRole('link', { name: DOCS_HEAD_TEXT.github });
+    const note = await waitFor(() => {
+      const n = row().querySelector<HTMLElement>('.docs-action-note');
+      if (n === null) throw new Error('no note');
+      return n;
+    });
+    expect(shownText(note), 'its words are drawn').toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+    expect(note.textContent, 'no marker').not.toContain('≠');
+    expect(gh.getAttribute('aria-describedby')).toBe(note.id);
   });
 
   it.each([

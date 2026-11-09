@@ -566,6 +566,20 @@ describe('Door', () => {
     expect(el.firstChild?.nodeType).toBe(Node.TEXT_NODE);
     expect(el).toHaveTextContent('ccrc');
   });
+
+  // Review 1689 A11 (desktop-polish Task C16, D-8139): a glyph that draws nothing gets no span either. Zero is a ReactNode
+  // that renders "0", so it keeps its span.
+  it.each([['undefined', undefined], ['false', false], ['an empty string', '']])('a glyph of %s renders no glyph span', (_name, glyph) => {
+    render(<Door glyph={glyph} aria-label="ccrc, Fleet, the way home">ccrc</Door>);
+    const el = screen.getByRole('button', { name: 'ccrc, Fleet, the way home' });
+    expect(el.querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(el.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+  });
+
+  it('a glyph of 0 still draws its span, because 0 renders', () => {
+    render(<Door glyph={0} aria-label="Count, zero">Count</Door>);
+    expect(screen.getByRole('button', { name: 'Count, zero' }).querySelector('[aria-hidden="true"]')).toHaveTextContent('0');
+  });
 });
 
 // — Button —

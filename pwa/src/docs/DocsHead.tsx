@@ -28,6 +28,7 @@ import { navigate } from '../lib/router';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { Icon, useNow } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
+import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
   DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
   failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
@@ -352,24 +353,8 @@ export function freshnessChip(
  *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
 export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
 
-/** Which header a page draws. */
-export type HeadLayout = 'full' | 'compact';
-
-/** The header for `page` (phone-header refinement (a)): the compact row on a leaf page at the compact width, else the full header. A
- *  directory (its URL ends in `/`), a section, a project and the index keep the full header at every width. */
-export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation): HeadLayout {
-  return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';
-}
-
-/** How the full header is drawn (desk-nav Part B, D-8101; fix round 1, F2(b)): at 600 CSS px and wider, the desk head's
- *  one row and dense line (`row`); under the compact width, where only a listing or the index draws the full header,
- *  the stacked header main drew (`stacked`): the crumbs row, the truth line, then the actions in words. Part B is the
- *  head at 600 px and wider, so below it nothing changes. */
-export type FullHeadForm = 'row' | 'stacked';
-
-export function fullHeadFormFor(compactWidth: boolean): FullHeadForm {
-  return compactWidth ? 'stacked' : 'row';
-}
+/** A touch screen's pointer: no hover, so a `title` is never seen (review 1697 F5). */
+const COARSE_POINTER_QUERY = '(pointer: coarse)';
 
 /** The Page details button's dot (phone-header refinement (f)), from the freshness chip's state: `ok` a good fetch, `warn`
  *  never fetched, `failed` a failed fetch, re-list or refresh, or a stale lock. `warn` and `failed` draw the same
@@ -398,7 +383,9 @@ function exportWords(state: Exclude<ExportState, { s: 'absent' }>): string {
  *  `…` button, which shows them all. The last crumb is the page itself. `unfold`: every crumb at any width, with no `…`
  *  button (the compact head's panel, phone-header refinement (c)). `fold`: the last two behind `…` at a desk width too,
  *  when the desk row has no room for every crumb (desk-nav Part B, fix round 2: `HeadRow`). `--docs-crumbs-n` is the
- *  number of crumbs drawn, the `…` button counted, which docs.css's desk row reads for the crumbs' floor. */
+ *  number of crumbs drawn, the `…` button counted, which docs.css's desk row reads for the crumbs' floor. A list the user
+ *  unfolded with `…` is marked `data-unfolded`, and docs.css's desk row wraps it rather than clip its start (review 1704
+ *  F1), as the compact head's panel does. */
 function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean; readonly fold?: boolean }): ReactNode {
   const desktop = useMediaQuery(DESK_QUERY);
   const [whole, setWhole] = useState(false);
@@ -406,7 +393,7 @@ function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: bo
   const shown = folded ? p.crumbs.slice(-2) : p.crumbs;
   const drawn = { '--docs-crumbs-n': shown.length + (folded ? 1 : 0) } as CSSProperties;
   return (
-    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs} style={drawn}>
+    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs} style={drawn} data-unfolded={whole ? '' : undefined}>
       <ol>
         {folded && (
           <li>
@@ -532,11 +519,13 @@ function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'fil
  *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
  *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub". There the note is a
  *  marker (`≠`) that takes no room from the crumbs (fix round 1, F1): its words are its `title`, a screen reader's
- *  text inside it, and the link's accessible description. */
+ *  text inside it, and the link's accessible description. Under a coarse pointer, which has no hover to show a
+ *  `title`, the row's note draws its words instead (review 1697 F5; Task C16, D-8139). */
 function GithubAction(p: {
   readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
 }): ReactNode {
   const noteId = useId();
+  const coarse = useMediaQuery(COARSE_POINTER_QUERY);
   const link = githubBlobUrl(p.tree.github, p.tree.ref, p.target);
   const row = p.row === true;
   if (!link.ok) {
@@ -553,13 +542,13 @@ function GithubAction(p: {
       >
         {row ? <RowFace icon="folder-code" words={DOCS_HEAD_TEXT.githubShort} /> : DOCS_HEAD_TEXT.github}
       </a>
-      {noted && (row
+      {noted && (row && !coarse
         ? (
           <span id={noteId} className="docs-action-note" title={DOCS_HEAD_TEXT.githubMayDiffer}>
             <span aria-hidden="true">≠</span><span className="sr-only">{DOCS_HEAD_TEXT.githubMayDiffer}</span>
           </span>
         )
-        : <span className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>)}
+        : <span id={row ? noteId : undefined} className="docs-action-note">{DOCS_HEAD_TEXT.githubMayDiffer}</span>)}
     </>
   );
 }
@@ -813,11 +802,6 @@ export function DocsHead(p: {
   );
 }
 
-/** How far the desk row has given way (desk-nav Part B, fix round 2, D-8101): 0, every crumb and the action words; 1,
- *  every crumb and the actions as icons; 2, the actions as icons and the middle crumbs folded behind `…`. Past 2,
- *  docs.css gives way: the page's name shortens to its floor, and only then do the actions wrap onto a second line. */
-type RowStage = 0 | 1 | 2;
-
 /** Whether the page's name is cut by a fraction of a pixel, which still draws its ellipsis while the integer
  *  `scrollWidth` and `clientWidth` agree: its text's own width against its box's. Unmeasurable (no Range geometry): not. */
 function nameCut(here: HTMLElement): boolean {
@@ -845,26 +829,34 @@ function rowFits(row: HTMLElement): boolean {
 }
 
 /** The stage the row at `ref` stands at: the first of 0, 1 and 2 that fits (`rowFits`), re-measured from 0 whenever the
- *  row's width changes, its contents change outside the crumbs (an action's words, a navigation, the tree arriving) or
- *  a font loads. Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit
- *  is never painted, and starting from 0 every time makes the stage a function of the width and the words alone, so a
- *  wider row never stands further on than a narrower one. Changes inside the crumbs are the fold's own and are not
- *  watched. With no ResizeObserver (jsdom) the row stays at 0. */
+ *  row's width changes (to the subpixel: the observer's `contentRect`, since `rowFits` decides at 0.01 px and an integer
+ *  `clientWidth` misses a change under a pixel; review 1704 F9), its contents change outside the crumbs (an action's
+ *  words, a navigation, the tree arriving) or a font face finishes loading. Each face is watched on its own (review 1704
+ *  F7): the set's `loadingdone` waits for every face, so a UI font that swaps in while the mono font still loads would
+ *  change the crumbs' geometry with no probe. At mount every face not yet loaded is watched through its `loaded`
+ *  promise, `unloaded` ones too, since a CSS face turns `loading` only at the first layout; each `loading` event scans
+ *  the set again, since Chromium's event names no face (its `fontfaces` is empty); and no face is watched twice (review
+ *  1722 F1). Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit is
+ *  not painted after any of these, and starting from 0 every time makes the stage a function of the width and the words
+ *  alone, so a wider row never stands further on than a narrower one. A face that loads between the browser's paint and
+ *  its promise settling can still show one frame at the old stage. Changes inside the crumbs are the fold's own and are
+ *  not watched. With no ResizeObserver (jsdom) the row stays at 0. */
 function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
   const [stage, setStage] = useState<RowStage>(0);
   useLayoutEffect(() => {
     const row = ref.current;
     if (row === null || typeof ResizeObserver === 'undefined') return;
     const probe = (): void => {
-      for (const s of [0, 1, 2] as const) {
+      for (const s of ROW_STAGES) {
         flushSync(() => setStage(s));
-        if (s === 2 || rowFits(row)) return;
+        if (s === ROW_STAGES.at(-1) || rowFits(row)) return;
       }
     };
     let width = -1;
-    const resized = new ResizeObserver(() => {
-      if (row.clientWidth === width) return;
-      width = row.clientWidth;
+    const resized = new ResizeObserver((entries) => {
+      const w = entries.at(-1)?.contentRect.width;
+      if (w === undefined || w === width) return;
+      width = w;
       probe();
     });
     const changed = new MutationObserver((records) => {
@@ -873,11 +865,23 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
     });
     resized.observe(row);
     changed.observe(row, { childList: true, subtree: true, characterData: true });
+    let live = true;
+    const watched = new WeakSet<FontFace>();
+    const watch = (face: FontFace): void => {
+      if ((face.status !== 'unloaded' && face.status !== 'loading') || watched.has(face)) return;
+      watched.add(face);
+      void face.loaded.then(() => { if (live) probe(); }, () => undefined);
+    };
     const fonts = typeof document === 'undefined' ? undefined : document.fonts;
+    const onLoading = (): void => { fonts?.forEach?.(watch); };
+    fonts?.forEach?.(watch);
+    fonts?.addEventListener?.('loading', onLoading);
     fonts?.addEventListener?.('loadingdone', probe);
     return () => {
+      live = false;
       resized.disconnect();
       changed.disconnect();
+      fonts?.removeEventListener?.('loading', onLoading);
       fonts?.removeEventListener?.('loadingdone', probe);
     };
   }, [ref]);
@@ -887,7 +891,8 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
 /** The full head's row (desk-nav Part B, D-8101): back, the crumbs and the actions. When the row is short it gives way in
  *  the order fix round 2 ruled: the action words hide first (each icon keeps its name and `title`), then the middle
  *  crumbs fold behind `…` (`useRowStage`); then the page's name shortens to its floor, and only then do the actions wrap
- *  onto a second line (docs.css). */
+ *  onto a second line (docs.css). The last stage is marked `data-fold`: only there does GitHub's refusal sentence
+ *  shorten, before the name does (review 1722 F2). */
 function HeadRow(p: {
   readonly page: DocsPageLocation; readonly crumbs: readonly DocsCrumb[];
   readonly listed: { readonly tree: DocsTreeOk; readonly page: TreePage } | null;
@@ -896,7 +901,10 @@ function HeadRow(p: {
   const ref = useRef<HTMLDivElement>(null);
   const stage = useRowStage(ref);
   return (
-    <div className="docs-head-bar" ref={ref} data-words={stage === 0 ? undefined : 'off'}>
+    <div
+      className="docs-head-bar" ref={ref}
+      data-words={stage === 0 ? undefined : 'off'} data-fold={stage === ROW_STAGES.at(-1) ? '' : undefined}
+    >
       <BackButton page={p.page} />
       <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} fold={stage === 2} />
       {p.listed !== null && <Actions form="row" page={p.listed.page} tree={p.listed.tree} {...p.actionInputs} />}

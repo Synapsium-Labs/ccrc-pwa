@@ -3165,6 +3165,9 @@ button.proj-card-pool::before {
 }
 .child-reclaim-banner .child-reclaim-item { display: flex; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
 .child-reclaim-banner .child-reclaim-who { color: var(--ink-tertiary); }
+/* The held-rows list's why-line (HeldByRows): it takes a line of its own in the wrapping row, after the server's
+   sentence, so a long reason never squeezes the control beside it. */
+.held-by-why { flex: 1 0 100%; }
 /* Wave 6, spec §8: the caps dial, beside the pause banner and grounded the same
    way. Self-grounded (both `color` and `background`) so `design/audit.mjs` can
    recover a ground and measure the contrast — a colourless rule lands in

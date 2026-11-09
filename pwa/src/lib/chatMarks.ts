@@ -191,11 +191,19 @@ const isSpace = (c: string): boolean => c !== '' && /\s/.test(c);
 
 /** For each offset of `text`, whether the sentence that a label ending there belongs to ends in `?` (review 1592 F5).
  *  A sentence ends at a run of `.`, `!` and `?`, with any closers after it, followed by a space or the text's end; at a
- *  `)` or `]` followed by a space and a capital letter ("(#651 merged) Is it out?"); at a spaced dash; or at a line
- *  break. It is a question when its run holds a `?` ("Is #651 merged?!", "(Has #651 merged?)"). Brackets nest: an end
- *  inside a `(` or `[` that opens after the label is the aside's own, not the label's ("#651 merged (why?) and
- *  shipped."); an aside left open does not hide a following question. A line break ends every aside. One pass forward to find
- *  the marks and one back to answer every offset, so a block of many labels costs one pass. */
+ *  `)` or `]` followed by at least one space and a capital letter ("(#651 merged) Is it out?"; glued to the capital
+ *  it ends nothing); at a spaced dash; or at a line break. It is a question when its run holds a `?` ("Is #651
+ *  merged?!", "(Has #651 merged?)"). Brackets nest: an end inside a `(` or `[` that opens after the label is the
+ *  aside's own, not the label's ("#651 merged (why?) and shipped."); an aside left open does not hide a following
+ *  question. A line break ends every aside. One pass forward to find the marks and one back to answer every offset,
+ *  so a block of many labels costs one pass.
+ *
+ *  The costs of the heuristic (review 1689 A7), each pinned by a row in `chat-marks-negation.test.ts`: a `)` before a
+ *  capital word ends the sentence even when the sentence goes on, so "Is CI green (on main) OK?" keeps its green
+ *  label; a spaced dash splits a question the same way ("Is CI green — or red?"); and the zero-count rule (below)
+ *  reads any joined token of zeros as a count, so "Bound to 0.0.0.0 and CI green" gives no label. Text that is not
+ *  prose is masked as letters, so a full stop in it ends nothing ("#651 merged `step 1.` Is it out?" is one question,
+ *  A5), but a capital in it still opens a sentence after a closer ("(#651 merged) `Main` is red?", A6). */
 function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
   // Text that is not prose (inline code, link text, raw html; review 1601 F3) holds no mark: it reads as letters.
   let text = '';
@@ -216,7 +224,8 @@ function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
     else if (c === ')' || c === ']') {
       let k = i + 1;
       while (k < n && isSpace(text.charAt(k))) k += 1;
-      mark[i] = /\p{Lu}/u.test(text.charAt(k)) ? 5 : 4;
+      // The capital is read off the prose, not the masked text: masking hides sentence ends, not letters.
+      mark[i] = k > i + 1 && /\p{Lu}/u.test(prose.charAt(k)) ? 5 : 4;
     } else if (c === '.' || c === '!' || c === '?') {
       let j = i;
       while (j < n && '.!?'.includes(text.charAt(j))) j += 1;
@@ -245,18 +254,21 @@ function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
  *  text's end, or a line break), or a whole word, digits included, with any `.`, `-` or `/` joining it to more word
  *  characters (`10`, `v0.0.1003`, `no-op`, `docs/no.md` are each one word; review 1592 F3). */
 const NEGATION_TOKEN = /([.!?;,:](?=\s|$)|\n)|[\p{L}\p{M}\p{N}_]+(?:[.\-/][\p{L}\p{M}\p{N}_]+)*/gu;
-/** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2). */
+/** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2), the plurals of a hundred and a
+ *  thousand among them ("failed: 0 of hundreds"; review 1722 F5). */
 const NUMBER_WORDS = [
   'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen',
   'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty',
-  'seventy', 'eighty', 'ninety', 'hundred', 'thousand',
+  'seventy', 'eighty', 'ninety', 'hundred', 'hundreds', 'thousand', 'thousands',
 ];
 /** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N" or
- *  "out of N" (N in digits or a number word), "(of N)", "/N" with or without spaces, `%`, a dash clause, or the clause's
- *  end ("passed: 0 of 12", "failed: none.", "passed: 0 / 12", "failed: 0 — all good"; reviews 1592 F2 and 1601 F2). */
+ *  "out of N" (N in digits or a number word), "(of N)", "/N" with or without spaces, `%`, a dash clause, or the
+ *  clause's end ("passed: 0 of 12", "failed: none.", "passed: 0 / 12", "failed: 0 — all good"; reviews 1592 F2 and
+ *  1601 F2). */
 const ZERO_COUNT_AFTER = new RegExp(
   '\\s*:\\s*(?:0|zero|none)(?:'
-    + `\\s+(?:out\\s+)?of\\s+(?:\\p{N}|${NUMBER_WORDS.join('|')})`
+    // A number word ends at a word end: "ten" is not the start of "tenants".
+    + `\\s+(?:out\\s+)?of\\s+(?:\\p{N}|(?:${NUMBER_WORDS.join('|')})(?![\\p{L}\\p{N}_]))`
     + '|[^\\S\\n]*\\(\\s*(?:out\\s+)?of\\s+\\p{N}'
     + '|[^\\S\\n]*\\/[^\\S\\n]*\\p{N}'
     + '|%'
@@ -277,7 +289,8 @@ const isNegator = (word: string): boolean => {
   if (parts.length < 2) return false;
   if (parts.every((p) => STATUS_NEGATORS.includes(p))) return true;
   const [count, total] = parts;
-  return parts.length === 2 && ZERO_WORDS.includes(count!) && w.charAt(count!.length) === '/' && /^\p{N}+$/u.test(total!);
+  return parts.length === 2 && ZERO_WORDS.includes(count!) && w.charAt(count!.length) === '/'
+    && /^\p{N}+$/u.test(total!);
 };
 
 /** A stretch of the scanned text, by offsets: where a recognised name stands, or text that is not prose. */
@@ -358,6 +371,30 @@ export interface LabelContext {
   readonly offset: number;
 }
 
+/** The one walk over `text` for names, shared by `markRuns` and `nameSpans`: at each position that no word character
+ *  precedes, a recognised name is handed to `onName` with its start; its answer is where the walk goes on. Where no
+ *  name starts, `onOther` (when given) may take the position over, answering where to go on or `null` to step one
+ *  place. */
+function walkNames(
+  text: string,
+  onName: (at: number, name: { mark: Mark; end: number }) => number,
+  onOther?: (at: number) => number | null,
+): void {
+  let i = 0;
+  while (i < text.length) {
+    if (wordBefore(text, i)) {
+      i += 1;
+      continue;
+    }
+    const name = nameAt(text, i);
+    if (name !== null) {
+      i = onName(i, name);
+      continue;
+    }
+    i = onOther?.(i) ?? i + 1;
+  }
+}
+
 /** `text` split into runs: names, status words in S3's label position (right after a name or a `STATUS_SUBJECTS`
  *  word, with at most one `STATUS_LINKERS` word between), and the text between. The runs' texts joined are `text`,
  *  and no two text runs are adjacent. Never inside code: the plugin calls it on text nodes only. `context`, the node's
@@ -380,28 +417,18 @@ export function markRuns(text: string, context?: LabelContext): readonly MarkRun
     plainFrom = s.end;
     return s.end;
   };
-  let i = 0;
-  while (i < text.length) {
-    if (wordBefore(text, i)) {
-      i += 1;
-      continue;
-    }
-    const name = nameAt(text, i);
-    if (name !== null) {
-      plainUpTo(i);
-      runs.push({ kind: 'mark', mark: name.mark });
-      scan().name(i + offset, name.end + offset);
-      plainFrom = name.end;
-      i = labelAfter(name.end);
-      continue;
-    }
-    const subject = stickyAt(SUBJECT, text, i);
-    if (subject !== null && STATUS_SUBJECTS.includes(subject[0].toLowerCase())) {
-      i = labelAfter(i + subject[0].length);
-      continue;
-    }
-    i += 1;
-  }
+  walkNames(text, (at, name) => {
+    plainUpTo(at);
+    runs.push({ kind: 'mark', mark: name.mark });
+    scan().name(at + offset, name.end + offset);
+    plainFrom = name.end;
+    return labelAfter(name.end);
+  }, (at) => {
+    const subject = stickyAt(SUBJECT, text, at);
+    return subject !== null && STATUS_SUBJECTS.includes(subject[0].toLowerCase())
+      ? labelAfter(at + subject[0].length)
+      : null;
+  });
   plainUpTo(text.length);
   return runs;
 }
@@ -410,16 +437,10 @@ export function markRuns(text: string, context?: LabelContext): readonly MarkRun
  *  in (link text), so that the block's scan knows a name's own words are not negators (review 1601 F3). */
 export function nameSpans(text: string): Span[] {
   const out: Span[] = [];
-  let i = 0;
-  while (i < text.length) {
-    const name = wordBefore(text, i) ? null : nameAt(text, i);
-    if (name === null) {
-      i += 1;
-      continue;
-    }
-    out.push({ start: i, end: name.end });
-    i = name.end;
-  }
+  walkNames(text, (at, name) => {
+    out.push({ start: at, end: name.end });
+    return name.end;
+  });
   return out;
 }
 
