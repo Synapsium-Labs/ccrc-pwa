@@ -408,6 +408,8 @@ R4 puts the surface inside the console. The console gains one place.
   home). The place has three parts:
   - **Chat.** The Overlord session's own conversation, drawn by the existing chat column (`ChatList`, `Composer`) on its
     session id. Typing to the Overlord is typing to that session, exactly as today.
+    Renewals (§3.3) do not break the conversation for the operator: the chat shows a quiet "generation n" divider and
+    scrolls back into earlier generations, read from their transcripts, so it reads as one long conversation.
   - **Requests.** The open requests (§5), each with its state, its target programmes, its last news and its age. A
     request that waits on the operator is marked and sorted first.
   - **Log.** The audit log (§10): the newest acts first, filterable by kind, by programme and by reversibility, each row
