@@ -24,7 +24,7 @@
 // itself, which reach the 44px floor the spec calls an acceptance criterion,
 // and how?
 //
-// FIVE ANSWERS, AND EVERY ONE IS CHECKED, not merely stated:
+// SEVEN ANSWERS, AND EVERY ONE IS CHECKED, not merely stated:
 //
 //   TOKEN     the control's own rule declares `min-*: var(--tap-min)`.
 //             Verified against both packages' stylesheets.
@@ -39,6 +39,11 @@
 //             to `--docs-line-h` on the desk Docs head's dense line: 28px
 //             under a fine pointer, the floor under a coarse one. The rule,
 //             the token's two values and the own floor are each checked.
+//   VARIANT   an anchor takes the floor from `buttonVariants()`'s class
+//             string, which is read: a floor removed inside `@ccrc/ui` reds.
+//   INLINE    a link inside a sentence, which WCAG 2.2 SC 2.5.8 exempts.
+//             Checked in the NEGATIVE: an entry whose class gains a floor is
+//             no longer inline prose, and reds.
 //   UNDER     measured below the floor, deliberately unchanged. The entry
 //             carries the measurement. Checked in the NEGATIVE: the moment
 //             such a control gains the token this reds and asks for it to be
@@ -641,7 +646,10 @@ describe('hand-drawn controls', () => {
     const tokens = readFileSync(path.join(PKG, 'ui', 'src', 'styles', 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     const defs = [...tokens.matchAll(/--docs-line-h\s*:\s*([^;]+);/g)].map((m) => m[1]!.trim());
     expect(defs, 'the line height: the floor, and 28px under a fine pointer').toEqual(['var(--tap-min)', '28px']);
-    expect(tokens, 'the 28px is inside @media (pointer: fine)').toMatch(/@media \(pointer: fine\)\s*\{\s*:root\s*\{\s*--docs-line-h:\s*28px;/);
+    // The `:root` block inside `@media (pointer: fine)`, read whole, so a token declared beside it, before or after, does
+    // not move the check (review 1722 N2).
+    const fine = /@media \(pointer: fine\)\s*\{\s*:root\s*\{([^}]*)\}/.exec(tokens)?.[1] ?? '';
+    expect(fine, 'the 28px is inside @media (pointer: fine)').toMatch(/(?:^|;|\s)--docs-line-h:\s*28px;/);
   });
 
   it('verifies every VARIANT claim against the design system itself', () => {

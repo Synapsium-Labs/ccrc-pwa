@@ -136,7 +136,7 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       const name = door.getAttribute('aria-label')!;
       expect(door.querySelector('.phone-bar-count')).toHaveTextContent(/^99\+$/);
       expect(labelInName(door.querySelector('.phone-bar-word')!.textContent!, name)).toBe(true);
-      // The whole shown text at a capped count ("Waiting99+") is not pinned: `labelInName` reads the name's words, and the name
+      // The whole shown text at a capped count ("Waiting 99+") is not pinned: `labelInName` reads the name's words, and the name
       // carries "120", so the pill's "99+" never matches it by design. The low-count case below holds the word-then-count space.
     });
 

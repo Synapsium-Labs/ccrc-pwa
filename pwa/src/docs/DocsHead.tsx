@@ -854,8 +854,8 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
     };
     let width = -1;
     const resized = new ResizeObserver((entries) => {
-      const w = entries.at(-1)?.contentRect.width ?? row.getBoundingClientRect().width;
-      if (w === width) return;
+      const w = entries.at(-1)?.contentRect.width;
+      if (w === undefined || w === width) return;
       width = w;
       probe();
     });

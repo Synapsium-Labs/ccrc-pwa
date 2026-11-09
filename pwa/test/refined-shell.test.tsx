@@ -216,7 +216,7 @@ describe('the app bar (W2 Task S4b)', () => {
     // word, not on its pill: the word is in the name, and the printed "99" is not, by design (`badgePrint`).
     const name = tab.getAttribute('aria-label')!;
     expect(labelInName(tab.textContent!.replace(/99\+$/, ''), name)).toBe(true);
-    // The whole shown text at a capped count ("Runs99+") is not pinned: the name carries "120", so the pill's "99+" never
+    // The whole shown text at a capped count ("Runs 99+") is not pinned: the name carries "120", so the pill's "99+" never
     // matches it by design. The low-count case below holds the word-then-count space.
   });
 
