@@ -949,9 +949,11 @@ export const REDISCOVERY = Object.freeze({
 // stratify and this file's own folds, so counts add and no summary is ever added to another. A node report is data: a
 // row or an answer off the shapes count writes is refused, never folded or coerced: a row's turns and recall_calls (a
 // non-negative integer on a measured row, null on an unmeasured one) and each counter's measured value (its spec's
-// `answer`), and a row's ab_state (one of AB_STATES) with its unrealised (exactly ab_state !== AB_OK), which the strata
-// key on. NOT checked, named: a row's store_id against its node report's, its ts_ms, family, boundary_uuid, ccrc_id and
-// generation, and any extra field; and echo_hits' unreadable keys, which are free names (lib exports no vocabulary of
+// `answer`), and a row's ab_state (one of AB_STATES) with its unrealised (exactly ab_state !== AB_OK): stratify keys on
+// `unrealised` alone, and ab_state is checked as a word of the vocabulary and as the pair's other half. Also checked, because
+// combine sums or sorts them: each node report's `excluded.unmeasured.count` (a non-negative integer) and the entries of its
+// `dropped.changed` and `dropped.unrealised.*` lists (strings). NOT checked, named: a row's store_id against its node
+// report's, its ts_ms, family, boundary_uuid, ccrc_id and generation, and any extra field; and echo_hits' unreadable keys, which are free names (lib exports no vocabulary of
 // expandEntryBody's states to build an allowed set from), summed by foldEcho as numbers, never dropped or coerced.
 
 export const COUNTERS_COMBINED_KIND = 'ccrc-history-w2-counters-combined';
@@ -1005,6 +1007,16 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
     if (!Array.isArray(x)) throw new TypeError(`combine: ${what} is not a list`);
     return x;
   };
+  /** A list of keys: a list, every entry a string (combine sorts them). */
+  const keyList = (x, what) => {
+    if (list(x, what).some((e) => typeof e !== 'string')) throw new TypeError(`combine: ${what} holds an entry that is no string`);
+    return x;
+  };
+  /** A node report's unmeasured-window count: a non-negative integer, or the sum below would concatenate or go negative. */
+  const countOf = (r) => {
+    if (!isCount(r.excluded.unmeasured.count)) throw new TypeError(`combine: excluded.unmeasured.count is ${JSON.stringify(r.excluded.unmeasured.count ?? null)}, where a non-negative integer is the shape`);
+    return r.excluded.unmeasured.count;
+  };
   const sorted = (xs) => [...xs].sort();
   try {
     const reps = nodes.map(({ value: r }) => r);
@@ -1020,12 +1032,12 @@ export function combineReports(nodes, { measures = COUNTER_MEASURES, ownSha256 =
       excluded: {
         not_found: sorted(reps.flatMap((r) => list(r.excluded.not_found, 'excluded.not_found'))),
         zero_windows: sorted(reps.flatMap((r) => list(r.excluded.zero_windows, 'excluded.zero_windows'))),
-        unmeasured: { count: reps.reduce((n, r) => n + r.excluded.unmeasured.count, 0), keys: sorted(reps.flatMap((r) => list(r.excluded.unmeasured.keys, 'excluded.unmeasured.keys'))) },
+        unmeasured: { count: reps.reduce((n, r) => n + countOf(r), 0), keys: sorted(reps.flatMap((r) => list(r.excluded.unmeasured.keys, 'excluded.unmeasured.keys'))) },
         not_listed: sorted(reps.flatMap((r) => list(r.excluded.not_listed, 'excluded.not_listed'))),
       },
       dropped: {
-        changed: sorted(reps.flatMap((r) => list(r.dropped.changed, 'dropped.changed'))),
-        unrealised: Object.fromEntries(AB_STATES.filter((st) => st !== AB_OK).map((st) => [st, sorted(reps.flatMap((r) => list(r.dropped.unrealised[st], `dropped.unrealised.${st}`)))])),
+        changed: sorted(reps.flatMap((r) => keyList(r.dropped.changed, 'dropped.changed'))),
+        unrealised: Object.fromEntries(AB_STATES.filter((st) => st !== AB_OK).map((st) => [st, sorted(reps.flatMap((r) => keyList(r.dropped.unrealised[st], `dropped.unrealised.${st}`)))])),
       },
       recall_off_gaps: reps.flatMap((r) => list(r.recall_off_gaps, 'recall_off_gaps'))
         .sort((a, b) => (a.store_id < b.store_id ? -1 : a.store_id > b.store_id ? 1 : a.ts_ms - b.ts_ms)),

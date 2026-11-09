@@ -14,6 +14,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as ctrMod from '../../deploy/history-counters.mjs';
+import * as gateMod from '../../deploy/history-gate.mjs';
+import * as drvMod from '../../deploy/history-replay.mjs';
 import * as storeMod from '../../ccd/history/store.mjs';
 import { historyPaths } from '../../ccd/history/lib.mjs';
 import { mkTmp } from './tmpHelpers.js';
@@ -21,6 +23,8 @@ import { mkTmp } from './tmpHelpers.js';
 type R = Record<string, any>;
 const ctr = ctrMod as unknown as R;
 const store = storeMod as unknown as R;
+const gate = gateMod as unknown as R;
+const drv = drvMod as unknown as R;
 
 const T0 = 1_800_000_000_000;
 const SINCE = T0;
@@ -702,6 +706,62 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
       expect(word(base)).toMatch(/out-refused/);
       expect(word(['spike', '--db', p.dbFile, '--session', 'cohort', '--since', String(UNTIL), '--until', String(SINCE), '--out', `${out}.2`])).toMatch(/args-invalid/);
     });
+  });
+});
+
+/** A hand-built node report in the shape count writes, with one unmeasured window: what combine reads, field by field. */
+const NODE_STORE = '00000000-0000-4000-8000-0000000006c1';
+const NODE_SHA = 'cd'.repeat(32);
+function nodeReport(over: R = {}, row: R = {}): R {
+  const ab = drv.AB_STATES as string[];
+  const measures = Object.fromEntries((ctr.COUNTER_NAMES as string[]).map((n) => [n, { state: 'unmeasured', why: 'window-unmeasured' }]));
+  return {
+    kind: ctr.COUNTERS_KIND, v: 1, counters_def: { id: 'v1', sha256: gate.COUNTERS_DEF_V1_SHA256 }, k: gate.K, k_unit: gate.K_UNIT,
+    record_sha256: 'ab'.repeat(32), script_sha256: NODE_SHA, read_ms: T0, code_changed: false, store_id: NODE_STORE, record_nodes: [NODE_STORE],
+    user_version: 2, window: { start_ms: T0, end_ms: T0 + 1 }, sources: {},
+    excluded: { not_found: [], zero_windows: [], unmeasured: { count: 0, keys: [] }, not_listed: [] },
+    dropped: { changed: [], unrealised: Object.fromEntries(ab.slice(1).map((st) => [st, []])) }, recall_off_gaps: [],
+    windows: [{ arm: 'treatment', producer: 'anthropic', changed: false, unrealised: false, ab_state: ab[0], state: 'unmeasured', turns: null, recall_calls: null, measures, ...row }],
+    ...over,
+  };
+}
+/** combine over one node report; a refusal as {word, detail}, null when it combines. */
+function combineRefusal(r: R): { word: string; detail: string } | null {
+  try {
+    ctr.combineReports([{ sha256: 'ee'.repeat(32), value: r }], { ownSha256: NODE_SHA });
+    return null;
+  } catch (e) {
+    if (e instanceof Error && e.name === 'DriverRefusal') return { word: (e as R)['word'], detail: (e as R)['detail'] };
+    throw e;
+  }
+}
+
+describe('combine: review 966\'s carries (W3 Task 1D Step 4)', () => {
+  const nonOk = (): string => (drv.AB_STATES as string[])[1]!;
+  it('the hand-built node report combines (CONTROL for the refusals below)', () => {
+    expect(combineRefusal(nodeReport())).toBeNull();
+  });
+
+  it('combine checks every node-report field it names as unchecked: excluded.unmeasured.count and the dropped lists', () => {
+    const bad = /^counters-shape: combine: /;
+    const cases: Array<[string, R]> = [
+      ['a string count', nodeReport({ excluded: { not_found: [], zero_windows: [], unmeasured: { count: '3', keys: [] }, not_listed: [] } })],
+      ['a negative count', nodeReport({ excluded: { not_found: [], zero_windows: [], unmeasured: { count: -1, keys: [] }, not_listed: [] } })],
+      ['a non-string in dropped.changed', nodeReport({ dropped: { changed: [7], unrealised: Object.fromEntries((drv.AB_STATES as string[]).slice(1).map((st) => [st, []])) } })],
+      ['a non-string in a dropped.unrealised list', nodeReport({ dropped: { changed: [], unrealised: Object.fromEntries((drv.AB_STATES as string[]).slice(1).map((st) => [st, st === nonOk() ? [{}] : []])) } })],
+    ];
+    for (const [label, r] of cases) {
+      const f = combineRefusal(r);
+      expect(f?.word, label).toBe('input-invalid');
+      expect(f?.detail, label).toMatch(bad);
+    }
+  });
+
+  it('an unknown ab_state word with unrealised: true is refused', () => {
+    // unrealised true is what any word but the first makes it, so only the AB_STATES check itself can refuse this row
+    const f = combineRefusal(nodeReport({}, { ab_state: 'no-such-state', unrealised: true }));
+    expect(f?.word).toBe('input-invalid');
+    expect(f?.detail).toMatch(/a row's ab_state is "no-such-state", which is none of AB_STATES/);
   });
 });
 
