@@ -85,12 +85,15 @@ export interface BlockWakeFacts {
   build: string | null;
   /** The coordinator ran a turn after the row was made. */
   turnSince: boolean;
+  /** The row's own condition (`disk` or `memory`) read not-ok at some sweep after the row was made. A condition that was
+   *  never seen failing has not cleared: it reads ok because it was ok all along. */
+  sawNotOk: boolean;
 }
 
 /**
  * P7: whether a parked thread's wake is due, judged on the lane facts that already watch its condition (spec §8.2).
  * `wake-mail` tells the coordinator; `wake-quiet` ends the block without a mail (the resumed session is the wake itself);
- * `none` waits. Doubt waits for the lapse: an `unknown` fact, a null build on either side, a `capacity` wake (wave A8)
+ * `none` waits. A `disk` or `memory` wake is a clearing, so it needs a not-ok reading after the row (`sawNotOk`) before an ok one counts. Doubt waits for the lapse: an `unknown` fact, a null build on either side, a `capacity` wake (wave A8)
  * and a wake word that no longer reads are all `none`. A woken row, a non-block and a condition row past its expiry
  * (it lapsed, and the coord-ball rung may fire again) are never woken.
  */
@@ -99,8 +102,8 @@ export function blockWakeDue(row: CallRow, f: BlockWakeFacts): BlockWakeVerdict 
   if (row.wakeOn.startsWith('time:')) return f.now >= Number(row.wakeOn.slice(5)) ? 'wake-mail' : 'none';
   if (row.expiresAt === null || row.expiresAt <= f.now) return 'none';
   switch (row.wakeOn) {
-    case 'disk': return f.disk === 'ok' ? 'wake-mail' : 'none';
-    case 'memory': return f.memory === 'clear' ? 'wake-mail' : 'none';
+    case 'disk': return f.disk === 'ok' && f.sawNotOk ? 'wake-mail' : 'none';
+    case 'memory': return f.memory === 'clear' && f.sawNotOk ? 'wake-mail' : 'none';
     case 'update': return f.build !== null && row.build !== null && f.build !== row.build ? 'wake-mail' : 'none';
     case 'account-room': return f.turnSince ? 'wake-quiet' : 'none';
     default: return 'none';

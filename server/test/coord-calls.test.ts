@@ -176,7 +176,7 @@ describe('blockWakeDue', () => {
   const b = (wakeOn: string, o: Partial<CallRow> = {}) =>
     row({ class: 'block', question: null, options: null, wakeOn: wakeOn as CallRow['wakeOn'], expiresAt: NOW + DAY, build: 'b1', ...o });
   const f = (o: Partial<Parameters<typeof blockWakeDue>[1]> = {}): Parameters<typeof blockWakeDue>[1] =>
-    ({ now: NOW, disk: 'unknown', memory: 'unknown', build: 'b1', turnSince: false, ...o });
+    ({ now: NOW, disk: 'unknown', memory: 'unknown', build: 'b1', turnSince: false, sawNotOk: true, ...o });
   it('time: waits before its time and mails at and after it', () => {
     const t = b(`time:${T}`, { expiresAt: T });
     expect(blockWakeDue(t, f({ now: T - 1 }))).toBe('none');

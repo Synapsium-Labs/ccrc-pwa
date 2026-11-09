@@ -115,6 +115,14 @@ export function blocksToWake(db: DatabaseSync, madeBy: string, now: number): Cal
   ).all(madeBy, now) as unknown as CallRowRaw[]).map(callRowOf);
 }
 
+/** Every coordinator with a block the wake lane still judges (the same rows `blocksToWake` reads), run-holding or not. */
+export function blockClaimants(db: DatabaseSync, now: number): string[] {
+  return (db.prepare(
+    "SELECT DISTINCT madeBy FROM coordinator_calls WHERE class = 'block' AND wokenAt IS NULL " +
+    "AND (wakeOn LIKE 'time:%' OR expiresAt > ?) ORDER BY madeBy",
+  ).all(now) as unknown as Array<{ madeBy: string }>).map((r) => r.madeBy);
+}
+
 /** The operator's Seen. THE ONLY WRITER of `seenAt`. */
 export function markCallSeen(db: DatabaseSync, id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' {
   const row = callById(db, id);

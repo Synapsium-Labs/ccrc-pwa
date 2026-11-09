@@ -2911,6 +2911,8 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
+      void this.sweepBlockWakes(sessions, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.
@@ -6775,7 +6777,6 @@ export class FleetWatcher {
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
-    await this.wakeBlocks(store, id, mark, c.ballOnly === true && !refused ? () => this.stallMarkRead(id, ident, lr) : null, now);
     if (c.ballOnly === true) {
       this.judgeCoordBall(store, si, project, now);
       return;
@@ -6795,6 +6796,47 @@ export class FleetWatcher {
     this.judgeCoordBall(store, si, project, now);
   }
 
+  /** The `blockWakes` lane (design 2026-11-09 §8.2, P7): every coordinator with an unwoken block is visited, whether or not it
+   *  claims an open run and whatever the stall watch's arming is. The stall watch used to carry this and so stopped a
+   *  time or a clearing wake when it was switched off or when the coordinator's last run had closed. PUBLIC for
+   *  `stall-sweep.test.ts`. */
+  async sweepBlockWakes(sessions: readonly FleetSession[], tick: StallTick): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    await this.runLane('blockWakes', async () => {
+      const now = Date.now();
+      let ids: string[];
+      try {
+        ids = store.blockClaimants(now);
+      } catch (err) {
+        console.warn(`ccrc-server: block wake claimants unreadable (${err instanceof Error ? err.message : String(err)}) — held this sweep`);
+        return;
+      }
+      const live = new Set<string>();
+      for (const id of ids) {
+        try {
+          const refused = tick.refused.has(id);
+          // The turn marker is read only for an `account-room` block (wakeBlocks asks lazily); a refused id reads as unmeasured.
+          const readMark = async (): Promise<TurnMarkRead> => {
+            if (refused) return STALL_MARK_UNREAD;
+            const s = sessions.find((x) => x.id === id);
+            const lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
+            return this.stallMarkRead(id, this.stallUuid(tick, id), lr);
+          };
+          await this.wakeBlocks(store, id, STALL_MARK_UNREAD, readMark, now, live);
+        } catch (err) {
+          console.warn(`ccrc-server: block wake of ${id} failed (${err instanceof Error ? err.message : String(err)}) — the next coordinator still runs`);
+        }
+      }
+      for (const k of this.blockNotOkSeen) if (!live.has(k)) this.blockNotOkSeen.delete(k);
+    });
+  }
+
+  /** The `disk`/`memory` blocks (`<call id>`) whose condition read not-ok at a sweep after the row was made. In memory: a
+   *  restart forgets it, and the block then waits for its 24-hour lapse rather than wake on a clearing nobody saw. */
+  private readonly blockNotOkSeen = new Set<string>();
+
   /** Block wakes (design 2026-11-09 §8.2, P7): a parked thread's wake request is judged on the lanes that already watch its
    *  condition. The lane measures the facts (the disk alarm's last block, the memory gate's last reading, the running build,
    *  the coordinator's own turn marker), `blockWakeDue` decides, and this applies it: `markBlockWoken` is the compare-and-set
@@ -6802,7 +6844,7 @@ export class FleetWatcher {
    *  was not measured is `unknown` and waits for the lapse. `readMark` is the marker read for a coordinator the pass keeps no
    *  marker clock for, taken only when an `account-room` block is waiting. */
   private async wakeBlocks(
-    store: WatcherCoordPort, id: string, mark: TurnMarkRead, readMark: (() => Promise<TurnMarkRead>) | null, now: number,
+    store: WatcherCoordPort, id: string, mark: TurnMarkRead, readMark: (() => Promise<TurnMarkRead>) | null, now: number, live: Set<string>,
   ): Promise<void> {
     let rows: CallRow[];
     try {
@@ -6822,7 +6864,12 @@ export class FleetWatcher {
     // own stop marker must not release the block before the coordinator has resumed.
     const lastTurn = turnMark.ok ? (turnMark.turnAt ?? 0) : 0;
     for (const row of rows) {
+      const key = String(row.id);
+      if ((row.wakeOn === 'disk' && diskLevel !== 'unmeasured' && diskLevel !== 'ok')
+        || (row.wakeOn === 'memory' && memLevel !== 'unmeasured' && memLevel !== 'ok')) this.blockNotOkSeen.add(key);
+      if (this.blockNotOkSeen.has(key)) live.add(key);
       const due = blockWakeDue(row, {
+        sawNotOk: this.blockNotOkSeen.has(key),
         now,
         disk: diskLevel === 'unmeasured' ? 'unknown' : diskLevel === 'ok' ? 'ok' : 'not-ok',
         memory: memLevel === 'unmeasured' ? 'unknown' : memLevel === 'ok' ? 'clear' : 'not-clear',

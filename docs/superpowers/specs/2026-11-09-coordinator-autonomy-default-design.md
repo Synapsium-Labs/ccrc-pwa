@@ -542,7 +542,11 @@ added in rev 2.
   - update: the roll finishing.
 
   This is a reason for the existing wake lanes to fire, not a new wake lane. Each wake goes through the wake budget's
-  rate.
+  rate. The one place that judges them is the `blockWakes` row of the lane schedule, at the stall sweep's beat. It does
+  not depend on the stall watch's switch or on the coordinator holding an open run: it visits every coordinator with an
+  unwoken block. A `disk` or `memory` wake counts only after the lane has seen that condition not ok since the row was
+  made, so a block recorded while the alarm already read ok waits for its 24-hour lapse. The not-ok sightings are
+  in memory, so a server restart forgets them.
 - **When a `block` row lapses** (author's call). A time wake expires at its time. A condition wake expires when its
   condition clears, or 24 hours after it was recorded if the condition never cleared. After that the `coord-ball`
   mail rung (§8.3) may fire for that coordinator again.

@@ -10513,6 +10513,7 @@ export class CoordStore {
   bigCallsIn(fromMs: number, toMs: number): CallRow[] { return calls.bigCallsIn(this.db, fromMs, toMs); }
   callsForOperator(now: number): { open: CallRow[]; cleared: CallRow[] } { return calls.callsForOperator(this.db, now); }
   liveBlocksOf(madeBy: string, now: number): CallRow[] { return calls.liveBlocksOf(this.db, madeBy, now); }
+  blockClaimants(now: number): string[] { return calls.blockClaimants(this.db, now); }
   blocksToWake(madeBy: string, now: number): CallRow[] { return calls.blocksToWake(this.db, madeBy, now); }
   callById(id: number): CallRow | null { return calls.callById(this.db, id); }
   markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }

@@ -2731,21 +2731,28 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     const wakeMail = (coord: CoordStore): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith('wake: call '));
     const wokenAt = (coord: CoordStore, id: number): number | null => coord.callById(id)!.wokenAt;
     const SWEEP_T = T0 + 5 * 60_000;
+    // The wakes ride their own lane (`sweepBlockWakes`), not the stall pass.
+    const sweepWakes = async (w: FleetWatcher, sess: readonly FleetSession[], tick: StallTick, from: number, to: number): Promise<void> => {
+      for (let t = from; t <= to; t += STALL_SWEEP_MS) {
+        at(t);
+        await w.sweepBlockWakes(sess, tick);
+      }
+    };
 
     it('time: nothing before its time; at it, one mail, and a later sweep sends no more', async () => {
       const { coord, w } = await setup();
       const when = SWEEP_T + 2 * STALL_SWEEP_MS;
       const id = park(coord, `time:${when}`, T0 + 1000);
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, when - 1);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, when - 1);
       expect(wakeMail(coord)).toEqual([]);
       expect(wokenAt(coord, id)).toBeNull();
-      await sweepThrough(w, sessions, LIVE, tickWith(), when, when);
+      await sweepWakes(w, sessions, tickWith(), when, when);
       const sent = wakeMail(coord);
       expect(sent).toHaveLength(1);
       expect(sent[0]!.toId).toBe(COORD);
       expect(sent[0]!.subject).toBe(`wake: call ${id} (time:${when})`);
       expect(mailBody(coord, sent[0]!.id)).toContain('waiting on the box');
-      await sweepThrough(w, sessions, LIVE, tickWith(), when + STALL_SWEEP_MS, when + 3 * STALL_SWEEP_MS);
+      await sweepWakes(w, sessions, tickWith(), when + STALL_SWEEP_MS, when + 3 * STALL_SWEEP_MS);
       expect(wakeMail(coord)).toHaveLength(1);
     });
 
@@ -2753,12 +2760,12 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       const { coord, w } = await setup();
       const id = park(coord, 'disk', T0 + 1000);
       const level = vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'critical' });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T);
       level.mockReturnValue(null);
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
       expect(wakeMail(coord)).toEqual([]);
       level.mockReturnValue({ level: 'ok' });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + 2 * STALL_SWEEP_MS, SWEEP_T + 2 * STALL_SWEEP_MS);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T + 2 * STALL_SWEEP_MS, SWEEP_T + 2 * STALL_SWEEP_MS);
       expect(wakeMail(coord)).toHaveLength(1);
       expect(wokenAt(coord, id)).not.toBeNull();
     });
@@ -2767,10 +2774,10 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       const { coord, w } = await setup();
       park(coord, 'memory', T0 + 1000);
       const reading = vi.spyOn(probe(w).pressureLane, 'memoryReading').mockReturnValue({ level: 'warn', headroomBytes: null });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T);
       expect(wakeMail(coord)).toEqual([]);
       reading.mockReturnValue({ level: 'ok', headroomBytes: null });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
       expect(wakeMail(coord)).toHaveLength(1);
     });
 
@@ -2778,20 +2785,20 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       const { coord, w } = await setup();
       park(coord, 'update', T0 + 1000, 'build-a');
       probe(w).deps.build = { version: 'build-a' };
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T);
       expect(wakeMail(coord)).toEqual([]);
       probe(w).deps.build = { version: 'build-b' };
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T + STALL_SWEEP_MS, SWEEP_T + STALL_SWEEP_MS);
       expect(wakeMail(coord)).toHaveLength(1);
     });
 
     it('account-room: a turn since the row wakes it quietly, with no mail; no turn since waits', async () => {
       const { h, coord, w } = await setup();
       const early = park(coord, 'account-room', T0 + 10 * 60_000);
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T);
       expect(wokenAt(coord, early)).toBeNull();
       seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, stopAt: T0 + 12 * 60_000, at: T0 + 12 * 60_000, turnAt: T0 + 11 * 60_000 });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + 10 * 60_000, SWEEP_T + 10 * 60_000);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T + 10 * 60_000, SWEEP_T + 10 * 60_000);
       expect(wokenAt(coord, early)).not.toBeNull();
       expect(wakeMail(coord)).toEqual([]);
     });
@@ -2801,7 +2808,7 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       const id = park(coord, 'account-room', T0 + 10 * 60_000);
       // the turn began before the row was recorded and ended after it
       seedTurnMark(h.home, COORD, { sessionId: COORD_UUID, stopAt: T0 + 12 * 60_000, at: T0 + 12 * 60_000, turnAt: T0 + 5 * 60_000 });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T + 10 * 60_000, SWEEP_T + 10 * 60_000);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T + 10 * 60_000, SWEEP_T + 10 * 60_000);
       expect(wokenAt(coord, id)).toBeNull();
     });
 
@@ -2809,20 +2816,63 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       const { coord, w } = await setup();
       park(coord, 'disk', T0 + 1000);
       vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'critical' });
+      await sweepWakes(w, sessions, tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
       await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT, RUNG_AT + 2 * STALL_SWEEP_MS);
       expect(ballMail(coord)).toEqual([]);                  // the live block holds the rung
       vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
-      await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT + 3 * STALL_SWEEP_MS, RUNG_AT + 4 * STALL_SWEEP_MS);
+      for (const k of [3, 4]) {
+        await sweepWakes(w, sessions, tickWith(), RUNG_AT + k * STALL_SWEEP_MS, RUNG_AT + k * STALL_SWEEP_MS);
+        await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT + k * STALL_SWEEP_MS, RUNG_AT + k * STALL_SWEEP_MS);
+      }
       expect(wakeMail(coord)).toHaveLength(1);
       expect(coord.liveBlocksOf(COORD, RUNG_AT + 4 * STALL_SWEEP_MS)).toEqual([]);
-      expect(ballMail(coord)).toHaveLength(1);
+      // The wake mail is itself a prompt to the coordinator, so the rung no longer fires in the same sweep as the wake.
+    });
+
+    it('disk: a block recorded while the alarm already reads ok is not woken (it never cleared)', async () => {
+      const { coord, w } = await setup();
+      const id = park(coord, 'disk', T0 + 1000);
+      vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T + 3 * STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toEqual([]);
+      expect(wokenAt(coord, id)).toBeNull();
+    });
+
+    it('memory: a block recorded while the gate already reads ok is not woken', async () => {
+      const { coord, w } = await setup();
+      park(coord, 'memory', T0 + 1000);
+      vi.spyOn(probe(w).pressureLane, 'memoryReading').mockReturnValue({ level: 'ok', headroomBytes: null });
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T + 3 * STALL_SWEEP_MS);
+      expect(wakeMail(coord)).toEqual([]);
+    });
+
+    it('the stall watch switched off does not stop a wake', async () => {
+      const { coord, w } = await setup();
+      const when = SWEEP_T + STALL_SWEEP_MS;
+      park(coord, `time:${when}`, T0 + 1000);
+      at(when);
+      await w.sweepStalls(sessions, ['stall-watch-disabled', ...LIVE], tickWith());
+      await w.sweepBlockWakes(sessions, tickWith());
+      expect(wakeMail(coord)).toHaveLength(1);
+    });
+
+    it('a coordinator with no open run is woken too', async () => {
+      const { coord, w } = await setup();
+      const when = SWEEP_T + STALL_SWEEP_MS;
+      const id = coord.insertCall('demo-program', 'idle-coordinator', {
+        class: 'block', runId: null, question: null, options: null, chosen: 'between waves', why: 'w', reversible: true,
+        wakeOn: `time:${when}` as never,
+      }, 'b1', T0 + 1000);
+      await sweepWakes(w, sessions, tickWith(), when, when);
+      expect(wakeMail(coord).map((m) => m.toId)).toEqual(['idle-coordinator']);
+      expect(wokenAt(coord, id)).not.toBeNull();
     });
 
     it('an expired condition row is not mailed, and is never marked woken by the lane', async () => {
       const { coord, w } = await setup();
       const id = park(coord, 'disk', T0 - 25 * 3_600_000);  // recorded 25 hours before: lapsed at +24 h
       vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T);
       expect(wakeMail(coord)).toEqual([]);
       expect(wokenAt(coord, id)).toBeNull();
     });
@@ -2832,7 +2882,7 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       const id = park(coord, 'disk', T0 + 1000);
       vi.spyOn(probe(w).diskAlarm, 'block').mockReturnValue({ level: 'ok' });
       expect(coord.markBlockWoken(id, SWEEP_T - 1)).toBe(true);    // another pass got there first
-      await sweepThrough(w, sessions, LIVE, tickWith(), SWEEP_T, SWEEP_T);
+      await sweepWakes(w, sessions, tickWith(), SWEEP_T, SWEEP_T);
       expect(wakeMail(coord)).toEqual([]);
     });
   });
