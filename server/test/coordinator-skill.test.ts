@@ -2008,7 +2008,7 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
   it('tells the coordinator to extend at the cap, before a fourth open is refused, and not to type its identity (D-8125)', () => {
     expect(allSkillText).toContain('before you open a fourth');
     expect(allSkillText).toContain('the operator is not pushed');
-    expect(allSkillText).not.toContain('"byUuid":"<your uuid>"');
+    expect(allSkillText).not.toContain('review-rounds`) with `{"byId"');
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {
