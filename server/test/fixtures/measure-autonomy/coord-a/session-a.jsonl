@@ -1,0 +1,19 @@
+{"type": "user", "uuid": "a-u-1", "timestamp": "2026-11-02T09:00:00.000Z", "message": {"role": "user", "content": "start the wave"}}
+{"type": "assistant", "uuid": "a-a-2", "timestamp": "2026-11-02T09:01:00.000Z", "message": {"id": "a-msg-3", "role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Skill", "input": {"skill": "ccrc-coordinator"}}], "stop_reason": "tool_use"}}
+{"type": "user", "uuid": "a-r-4", "timestamp": "2026-11-02T09:01:00.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}
+{"type": "assistant", "uuid": "a-a-5", "timestamp": "2026-11-02T09:02:00.000Z", "message": {"id": "a-msg-6", "role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "Bash", "input": {"command": "ccrc-api runs open --program demo --wave 1"}}], "stop_reason": "tool_use"}}
+{"type": "user", "uuid": "a-r-7", "timestamp": "2026-11-02T09:02:00.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "ok"}]}}
+{"type": "assistant", "uuid": "a-a-8", "timestamp": "2026-11-02T09:10:00.000Z", "message": {"id": "a-msg-9", "role": "assistant", "content": [{"type": "text", "text": "Which of the two layouts should I use?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "a-s-10", "timestamp": "2026-11-02T09:10:00.000Z"}
+{"type": "user", "uuid": "a-u-11", "timestamp": "2026-11-02T09:40:00.000Z", "message": {"role": "user", "content": "use the first"}}
+{"type": "assistant", "uuid": "a-a-12", "timestamp": "2026-11-02T09:50:00.000Z", "message": {"id": "a-msg-13", "role": "assistant", "content": [{"type": "text", "text": "Done with that. Anything else?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "a-s-14", "timestamp": "2026-11-02T09:50:00.000Z"}
+{"type": "user", "uuid": "a-u-15", "timestamp": "2026-11-02T10:00:00.000Z", "message": {"role": "user", "content": "```ccrc-mail\nid: 1\nfrom: coord-x\nto: coord-a\nkind: info\nsubject: wake\n--\nbody\n```"}}
+{"type": "assistant", "uuid": "a-a-16", "timestamp": "2026-11-02T10:10:00.000Z", "message": {"id": "a-msg-17", "role": "assistant", "content": [{"type": "text", "text": "Should the retry count be raised?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "a-s-18", "timestamp": "2026-11-02T10:10:00.000Z"}
+{"type": "user", "uuid": "a-u-19", "timestamp": "2026-11-02T10:20:00.000Z", "message": {"role": "user", "content": "This session is being continued from a summary"}, "isCompactSummary": true}
+{"type": "assistant", "uuid": "a-a-20", "timestamp": "2026-11-02T10:30:00.000Z", "message": {"id": "a-msg-21", "role": "assistant", "content": [{"type": "text", "text": "All finished, nothing to ask."}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "uuid": "a-s-22", "timestamp": "2026-11-02T10:30:00.000Z"}
+{"type": "user", "uuid": "a-u-23", "timestamp": "2026-11-02T10:40:00.000Z", "message": {"role": "user", "content": "thanks"}}
+{"type": "assistant", "isSidechain": true, "uuid": "a-sa-24", "timestamp": "2026-11-02T10:45:00.000Z", "message": {"id": "a-msg-25", "role": "assistant", "content": [{"type": "text", "text": "sub?"}], "stop_reason": "end_turn"}}
+{"type": "system", "subtype": "turn_duration", "isSidechain": true, "uuid": "a-ss-26", "timestamp": "2026-11-02T10:45:00.000Z"}
