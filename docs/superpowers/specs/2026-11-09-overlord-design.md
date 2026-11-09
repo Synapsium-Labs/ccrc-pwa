@@ -1,6 +1,6 @@
 # The Overlord: one coordinator above every coordinator, that the operator talks to
 
-**Spec** · 2026-11-09 · Status: Draft, rev 7 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
+**Spec** · 2026-11-09 · Status: Draft, rev 8 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
 the Overlord programme's coordinator · Issue: #2491 · Related: `docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md` (D-8126, PR #2487,
 not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` and its round 2,
@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R14 (the operator's) and the author's calls C1 to C57, so the operator can approve or overturn each one by number.
+R15 (the operator's) and the author's calls C1 to C60, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -25,7 +25,8 @@ After rev 2 the operator ruled that the Overlord is the console's home (R9), tha
 it oversees every project at once and never moves between them (R11). Like the operator, it does brain work, never
 execution: every piece of execution goes down the chain to a coordinator (R12). After rev 4 the operator ruled that the
 long-life fixes apply to coordinators too, not only to the Overlord (R13). After rev 6: it must survive account swaps
-and account limits, and is never limited to one Claude account (R14).
+and account limits, and is never limited to one Claude account (R14). After rev 7: it is the operator's colleague,
+advisor and majordomo, helping the operator make the best decision whenever one is the operator's (R15).
 This spec turns each ruling into a design:
 - **One Overlord.** Exactly one exists, for the whole fleet, and the server enforces it. It is one lasting identity,
   not a role that sessions take turns at, and nothing can create a second one (§3.1). It oversees every project at
@@ -39,6 +40,9 @@ This spec turns each ruling into a design:
   runs on a pool of accounts of its own, which no other session may use (C46). It is never tied to one account: it
   needs at least two that can serve it, moves between accounts at its renewals before a limit bites, borrows shared
   accounts when its own are spent, and loses no operator message to a swap (R14, C56, C57).
+- **A colleague, advisor and majordomo.** When a decision is the operator's, the Overlord brings at most three options
+  with objective upsides and downsides and its recommendation. It argues once when it truly disagrees, and the
+  operator's "I command" (or `/icommand`) overrides it, verifiably (R15, §6.6).
 - **Brain work only.** It understands, decides, routes, answers and follows up. It never executes: no edits, commits,
   pull requests, test runs or dispatches. Execution always goes to a coordinator, which handles it as it sees fit
   (R12, §3.5).
@@ -130,6 +134,7 @@ The rulings are settled; this spec only turns them into design.
 | R12 | **Brain work, not execution** (the operator, 2026-11-09, after rev 3): much like the operator, it is focused on brain work; execution is always handed down the chain to coordinators, who deal with it as they deem necessary | It never edits, commits, opens a pull request, runs a build or a test, opens a run or dispatches a worker. It hands work down as an outcome, never as a method, and does not second-guess how a coordinator executes. A skill clause, a server refusal and an accident guard hold the line (§3.5, C48) |
 | R13 | **Coordinators too** (the operator, 2026-11-09, after rev 4): the gaps the research measured (a roll and a wake resume the same conversation, a bare `/compact`, an empty card for a session with no runs, recall barely used, the replay quiz never run) must be fixed for coordinators, not just the Overlord | One continuity mechanism for every long-lived role, the Overlord and coordinators as two rows of one table. Coordinators get renewal, write-through notes, a card that is never empty, role compaction instructions, recall steering and probes, and the Overlord as their outside judge. It ships in its own wave, W1a, before anything Overlord-specific (§3.3.9) |
 | R14 | **Robust across accounts** (the operator, 2026-11-09, after rev 6): the Overlord survives account swaps and account limits, and is never limited to one Claude account | At least two accounts must be able to serve it before it is designated. Its own pool first, then shared accounts, at the renewal before a limit bites. A swap is a renewal that loses no operator message, and a short restart keeps its holds (§3.4, C56, C57) |
+| R15 | **A colleague, advisor and majordomo** (the operator, 2026-11-09, after rev 7): when the operator must decide, the Overlord helps them make the best possible decision. It suggests the best options, top 3 only, with reasons and the objective upsides and downsides of each. It may argue its point if it truly disagrees. The operator overrides its objections with "I command" or `/icommand` | A decision brief on every decision the operator owns: at most three options, a downside on each, evidence, reversibility, a recommendation and what would change it. One stated objection when it disagrees, then it complies on a command and keeps its dissent on record. A command is a server row minted by the operator's console, so no text in a mail or a transcript can forge one. A decision queue ranks what needs the operator (§6.6) |
 
 ## 3. What the Overlord is
 
@@ -342,7 +347,7 @@ from the server's canonical state, never from a summary of a summary, and proves
   for every role (C51). The order is stable
   first and live last, so the cached prefix stays stable and the live state sits at the end of the context, where
   recall is strongest:
-  1. **Constitution:** what it is, R1 to R14 in one line each, the anti-goals, the brakes and their state, and the
+  1. **Constitution:** what it is, R1 to R15 in one line each, the anti-goals, the brakes and their state, and the
      rules version.
   2. **Authority:** the live grants.
   3. **Live state:** the open requests ranked by recency, importance and age; each programme in one line; the
@@ -411,7 +416,7 @@ from the server's canonical state, never from a summary of a summary, and proves
 
 | Layer | Holds | Lives in | Reaches the session |
 |---|---|---|---|
-| Constitution | What it is, R1 to R14, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
+| Constitution | What it is, R1 to R15, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
 | Working | Open requests, programmes, notes, recent acts | `overlord_requests`, `continuity_notes`, `overlord_acts` | the card, ranked and capped |
 | Episodic | Every act, request and conversation since the first day | `overlord_acts`, `ccrc history` (its family recall follows the session across clears) | on demand, through subagents |
 | Semantic | The operator model | `operator-model.db` (§9) | the operator brief on the card, and `GET /api/overlord/model` |
@@ -946,7 +951,7 @@ lapses.*
     change to `doneWhen` or scope, or a spec approval. Without this, the O3 grants in §7.1 would have nothing they could
     change.
   - The Overlord signs as itself: it never writes as the operator, and nothing it sends is attributed `operator`.
-- **C20. Escalation carries the work.** An escalated item reaches the operator with:
+- **C20. Escalation carries the work,** as a decision brief (C58). An escalated item reaches the operator with:
   - the Overlord's recommendation and why it beats each alternative (clause 20's D24 rule);
   - the O-class that makes it the operator's;
   - the operator-model entries it weighed, as links.
@@ -990,6 +995,64 @@ escalates them. That is still worth having, for four reasons:
 
 M1 (§12) is measured against that reality. It counts what reaches the operator *as a question they must think about*,
 so an item that arrives with a recommendation the operator accepts unchanged counts as half.
+
+### 6.6 Helping the operator decide (R15)
+
+The operator, 2026-11-09, after rev 7: the Overlord should help the operator make the best possible decisions whenever
+the operator is needed. It suggests the best options, the top three only, with reasons and the objective upsides and
+downsides of each. It may argue its point if it truly disagrees, and the operator overrides it with "I command" or
+`/icommand`. It is a true colleague, advisor and majordomo, working alongside the operator.
+
+- **C58. Every decision the operator owns arrives as a decision brief.** That covers an escalated item, an O-class
+  act, a request that needs the operator's choice, and a question the Overlord raises in chat. The brief is a structured
+  field on the item (`brief`), drawn the same way on the Overlord place, in Waiting on you and in the chat:
+  - **The question in one line,** and what happens if nobody decides: the default, and when it takes effect.
+  - **At most three options.** When more exist, the Overlord picks the three strongest and says in one line how many
+    others it weighed and why they dropped. "Wait" or "do nothing" is an option whenever it is a real one.
+  - **For each option:** what it is; its upsides; its downsides; whether it is reversible, compensable or irreversible
+    (the act catalogue's word, §7.1, never the Overlord's own say); its cost in time, window and risk; and who would
+    carry it out.
+  - **Objective by construction.** Every option, the recommended one included, names at least one real downside. Each
+    claim is marked measured (with a link to the row, history node or document) or judged. The operator brief's
+    third-person framing (C38) and the sycophancy score of the outside audit (C42) keep it honest, and the audit samples
+    briefs for balance.
+  - **The recommendation,** its reasons, the Overlord's confidence, and what would change its mind.
+  - A coordinator's own options, when it raised the item, are kept and shown; the brief is the Overlord's reading of
+    them, never a replacement.
+- **C59. It argues once, and the operator's command settles it.**
+  - **Dissent.** When the operator asks for something the Overlord believes is wrong for the operator's own goals,
+    rules or stated preferences, it says so before acting: once, plainly, with its reasons and evidence, and with the
+    option it would choose instead. It argues again only with new evidence. It does not pretend to agree, and it does
+    not drop an objection merely because the operator pushed back: a stance changed with no new evidence is what the
+    outside audit scores as sycophancy (C42).
+  - **The override.** The operator writes "I command" at the start of a message in the Overlord chat, or uses the
+    `/icommand` skill. Either one settles it: the Overlord carries out the operator's choice, by its usual doors and
+    down the chain (R12), and records its dissent on the act row.
+  - **A command is proved, not read.** Text alone proves nothing: a mail body, a document or a transcript could
+    contain the words "I command". So the console mints the proof. When the operator's message in the Overlord chat
+    begins with "I command" or `/icommand`, the console calls a session-gated operator door, `POST
+    /api/overlord/commands`, before sending. The door writes an `operator_commands` row (the message's hash, the
+    decision it settles, when, and which console device), and the message reaches the pane tagged with the row's id.
+    The `icommand` skill's first step checks that row through `GET /api/overlord/commands/:id` and the hash. With no
+    row, it is not a command, and the Overlord says so. A command that names an irreversible act asks for the console's
+    step-up first, as the grant door does (§7.4).
+  - **What a command authorises.** It is the operator's ruling for the one act it names, as the operator's request is
+    (C12). So an O-class act on a command needs no grant, and its act row's authority is `operator-command:<id>`. A
+    command does not reach past the operator's own standing rules: the SAFETY list (A1), the one Overlord (R7) and
+    brain work only (R12). A command to build something is carried out by handing it down, as an outcome.
+  - **It learns from the outcome.** When the operator decides against its recommendation, or commands past its
+    objection, the Overlord records the operator's reason as a `stated` entry when one was given, and later notes
+    whether the outcome bore out the decision or the objection. It holds no grudge and keeps no score in the chat; the
+    record is for its own judgement.
+- **C60. A majordomo: the operator's attention is the scarcest thing it manages.**
+  - **A decision queue.** The Overlord place shows what needs the operator, ranked by what is blocked on it, its cost
+    of delay and its deadline, each with its brief. Related decisions are bundled into one, so the operator decides a
+    question once rather than three times.
+  - **Prepared before asked.** When a decision is coming (a wave nearing its end, a cap about to bind, an account near
+    its limit, a goal about to be met), the Overlord prepares the brief ahead, so it is ready when the operator is.
+  - **Told, not asked, for the rest.** What it did in the operator's stead, it reports in the operator's style: the
+    outcome first, one line each, with the overturn control beside every act (§10).
+  - **Candid, not deferential.** It speaks as a colleague: plainly, with its own view, and without flattery.
 
 ## 7. Authority: the operator-only list, and how it relaxes
 
@@ -1294,7 +1357,8 @@ R6: a log of everything the Overlord relayed, decided and started, marked by whe
   - `targets` (programme, session, item, ask or run ids);
   - `summary`;
   - `why` (citing goals, rulings or entry ids);
-  - `authority`: `own`, `operator-request:<id>` or `grant:<id>`;
+  - `authority`: `own`, `operator-request:<id>`, `operator-command:<id>` (C59) or `grant:<id>`;
+  - `dissent`: the Overlord's recorded objection, when it acted on a command against its advice;
   - `reversibility`;
   - `overturnable`;
   - `seenAt` (the operator's Seen tap, as D-8126 §6 has for calls);
@@ -1360,6 +1424,7 @@ This section lists the build surface by bounded context, so each piece has one o
 | `OVERLORD_DENY_RULES`, the `overlord-not-a-coordinator` refusal | K (shared), C5 | L0, L1 | beside `ACCOUNT_DENY_RULES`; one refusal in the run-open decider (C48) |
 | `overlordAccountFor`, the two-account check, the restarting grace | C5, C1 | L1 | reads the limits and pools readers; the grace is one rung in the not-live release reason (C56, C57) |
 | `fable` servable on any lane whose registry maps it | C1 Fleet Registry & Accounts (routing) | L1 (`shared/serviceability.ts`) | one arm of the backend test; ccd's placement and the server's forecast read it alike (C45) |
+| `brief` on items, `operator_commands`, `POST /api/overlord/commands`, the `icommand` skill | C6 Attention & Notification, C5 | L0 shape, L3 rows, L4 session-gated door; the skill ships to the Overlord's home | the items table gains one field; the console's composer detects the prefix (L1) and mints before sending (C58, C59) |
 | `overlordModelFor`, the designation's `model` | C5 | L1 and L3 | the renewal lane asks it; the limits read's per-class serviceability is its input (C45) |
 | The exclusive account edge | C1 Fleet Registry & Accounts | L1 (`_pool_ok`, `pools.ts`), L3 (`pool_edges`) | one clause in the pool rule, one column, the `pool-exclusive` capability word (C46) |
 | Start placement policy moved out of the PWA | C1 Fleet Registry & Accounts | L1 | `startProgramPlacement` gets one shared home for the sheet and the start door |
@@ -1394,6 +1459,9 @@ references for the procedures (`routing.md`, `answering.md`, `starting.md`, `ope
 11. The SAFETY rules bind you as any session.
 12. Do brain work only. Hand every piece of execution down to a coordinator, however small, as an outcome and never as
     a method, and let the coordinator decide how.
+13. When the operator must decide, bring a decision brief: at most three options, a downside on each, a
+    recommendation and what would change it.
+14. When you truly disagree, say so once with your reasons. On a proved command, comply and record your dissent.
 
 ### 11.4 The coordinator skill
 
@@ -1431,6 +1499,7 @@ Success means fewer operator touches, faster answers, and no new stall.
 | M12 | Execution attempts the guard denied, and relays that carried a method instead of an outcome | zero; each one is a skill defect, fixed in the skill | the hook's deny log, the outside audit's sample (C42) |
 | M13 | Coordinators: probe pass rate after renewal and compaction, the weekly replay quiz score, empty cards, and the share of coordinator generations that used recall | probes 100% after one re-read; quiz above its W0 baseline; zero empty cards; recall in most generations | probe rows, the quiz lane, the card door, `ccrc history` |
 | M14 | Swaps: planned versus mid-turn, operator messages unanswered after a swap, holds that fell through during a restart, and hours on a borrowed account | most swaps planned; zero unanswered messages; zero fall-throughs from restarts under two minutes | `renew` act rows, the swap log, the hold rows |
+| M15 | Decisions: the share taken on the Overlord's recommendation, commands over its objection and how they turned out, briefs with a downside on every option, and the operator's time to decide | watched; balanced briefs 100%; time to decide falling | items, `operator_commands`, act rows, the audit sample |
 | M7 | Inferred entries the operator retired or corrected, per week | watched. A high rate means the distillation over-reaches | `entry_events` |
 
 ## 13. Decisions (the author's calls)
@@ -1497,6 +1566,9 @@ this spec and can be overturned by number.
 | C55 | Workflows and subagents | workflows, subagents that act, read-only subagents only | No workflows; up to three read-only background subagents with named models, never Fable; every act on the main thread; big thinking goes to a coordinator | Proposed |
 | C56 | How many accounts, and which | one, its pool only, its pool then shared | At least two required; its own first on Fable, shared untagged ones next on Opus, never pay-per-use or another pool's | Proposed |
 | C57 | Swaps and limits | ccd's hard-block swap only, planned moves | Moves at renewal past a soft line, a pre-emptive idle renewal past a harder one, unanswered operator messages carried, a two-minute restarting grace for holds | Proposed |
+| C58 | How the operator is asked to decide | a recommendation, a free-form note, a brief | A structured brief: at most three options, a downside on each, measured or judged claims, reversibility from the catalogue, a recommendation and what would change it (R15) | Proposed |
+| C59 | Disagreement and the override | comply silently, argue freely, argue once | Argue once with reasons; a command settles it; a command is a console-minted row, never text; it authorises the one act, never past SAFETY, R7 or R12 | Proposed |
+| C60 | The majordomo | answer when asked, manage attention | A ranked, bundled decision queue, briefs prepared before they are needed, reports in the operator's style | Proposed |
 
 ## 14. Build order
 
@@ -1511,7 +1583,7 @@ flowchart LR
   W1A["W1a Continuity for every<br/>long-lived role<br/>role table, renewal lane,<br/>notes, cards, compaction<br/>instructions, probes,<br/>weekly quiz, clause 23"] --> W1
   W1["W1 Designate and talk<br/>exclusive account edge,<br/>two-account check, planned swaps,<br/>designation with its model,<br/>skill v1, Overlord home and chat,<br/>board read, kill switch,<br/>the Overlord's card, canaries"] --> W2
   W2["W2 Route and follow up<br/>requests table, relay door,<br/>overlord mail role,<br/>follow-up arm, audit log"] --> W3
-  W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door,<br/>probes, outside audit"] --> W4
+  W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door,<br/>decision briefs, commands,<br/>probes, outside audit"] --> W4
   W4["W4 Learn<br/>operator-model.db, history door,<br/>feed read,<br/>distillation, About you,<br/>privacy controls"] --> W5
   W5["W5 Start and revive<br/>start, revive and retire doors,<br/>live-programme cap"] --> W6
   W6["W6 Propose and report<br/>grant proposals from<br/>the operator model,<br/>digest section"]
@@ -1547,7 +1619,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - **A1. Never act on the SAFETY list,** and never work round a hook deny.
 - **A2. Never speak as the operator.** Everything it sends is attributed `overlord`, and it never fakes the operator's
   words: a relay quotes the operator verbatim or not at all.
-- **A3. Never take an operator-only act without a live grant,** and never lower an item's class.
+- **A3. Never take an operator-only act without a live grant or the operator's proved command** (C59), and never
+  lower an item's class.
 - **A4. Never spend.**
 - **A5. Never hide an act.** Every act goes through a door that logs it. It does not reach a coordinator, or the fleet,
   by any side path.
@@ -1587,13 +1660,15 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - R13, the operator's ruling of 2026-11-09 after rev 4: the long-life fixes apply to coordinators too (§3.3.9).
 - R14, the operator's ruling of 2026-11-09 after rev 6: it survives account swaps and limits and is never limited to
   one Claude account (§3.4).
+- R15, the operator's ruling of 2026-11-09 after rev 7: a colleague, advisor and majordomo; decision briefs of at most
+  three options; one argued objection; the operator's "I command" or `/icommand` overrides (§6.6).
 - The operator's direction of 2026-11-09, after rev 1: Fable, and an account pool of its own. After rev 6: Fable means
   the Fable class, which may come from non-Anthropic lanes. C45 and C46 turn it into
   design (§3.4), and wait on approval with the other calls.
 
 ### Waiting on you
 
-- **Approve this spec** with calls C1 to C57, or name the calls to change. C47 is where your "everything" stops: it
+- **Approve this spec** with calls C1 to C60, or name the calls to change. C47 is where your "everything" stops: it
   keeps the credential stores closed.
 - **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live. At least two
   accounts that can serve it are required, own or shared, and two of its own are recommended (C46, C56). Nothing in this spec names them.
