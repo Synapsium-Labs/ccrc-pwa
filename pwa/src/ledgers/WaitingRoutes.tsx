@@ -43,6 +43,8 @@ import {
   goalsBack, listGroups, listOfFromWord, placeWords, positionWords, programmeIsLive, questionRows, resolveList, type ItemList,
   type ItemPlace, type ProgrammeGroup,
 } from './ledgerWords';
+import { capWaiting } from '../fleet/reviewCapWords';
+import { useItemActs } from './ItemActs';
 import { ListGroup, NotCurrentLine, WaitingScreen } from './WaitingScreen';
 import { actsOpen, itemSource, listSource } from './savedCopy';
 import { refetchWaiting } from './waitingStore';
@@ -140,7 +142,12 @@ function useOpenedFrom(): ItemList {
 function useGroups(store: FleetStore): ProgrammeGroup[] | null {
   const view = store((s) => s.waiting);
   const { sessions, runs } = useHeard(store);
-  return view === null ? null : groupByProgramme(view.items, questionRows(sessions ?? [], runs ?? []), limitRows(sessions ?? [], runs ?? []));
+  if (view === null) return null;
+  const heard = runs ?? [];
+  // The runs whose review cap waits are rows of the list too (runs rebuild §8.7), as `WaitingScreen` draws them.
+  return groupByProgramme(
+    view.items, questionRows(sessions ?? [], heard), limitRows(sessions ?? [], heard), heard.filter((r) => capWaiting(r) === 'waiting'),
+  );
 }
 
 /** The list the item's URL names, settled by the one stale-list rule (`resolveList`); the named list itself before the first
@@ -276,7 +283,8 @@ function ItemNav({ id, back, place, left, title }: {
  *  frame places the stack under its bar (Refined) draws it there, and none here: one stack is mounted at any width. */
 export function ItemListColumn({ param, fleet, store = useFleetStore }: { param: string | null; fleet: ReactNode; store?: FleetStore }): ReactNode {
   const groups = useGroups(store);
-  const { runs } = useHeard(store);
+  const { runs, sessions } = useHeard(store);
+  const { acts, sheets } = useItemActs(sessions);
   const named = useOpenedFrom();
   const settled = useSettledList(named, groups);
   const set = useFrameSet();
@@ -295,9 +303,11 @@ export function ItemListColumn({ param, fleet, store = useFleetStore }: { param:
         {drawnGroups.map((g) => (
           <ListGroup key={g.program ?? ''} group={g} runs={runs} now={now} currentId={id}
                      hue={g.program === null ? null : hues.get(g.program) ?? null}
+                     rowActs={{ acts, runs, enabled: true }}
                      onOpenItem={(next) => navigate(itemPath(next, list))} onOpenSession={(sid) => navigate(sessionPath(sid))} />
         ))}
       </aside>
+      {sheets}
     </>
   );
 }
