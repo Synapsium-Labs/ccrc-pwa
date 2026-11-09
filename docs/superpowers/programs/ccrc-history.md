@@ -90,12 +90,11 @@ This supersedes the 2026-11-07 checkpoint below where they differ; the current r
 stand. The evidence is under "Latest rulings and evidence — 2026-11-08 to 2026-11-09".
 
 - **W3/W4 drafts (run 1190, #1876).** Fold round 7 folded the operator's packages (items 90 to 94 and 96) into both
-  drafts. Five reviews then ran, 1686, 1690, 1695, 1696 and 1700, with fix rounds 8 to 11 between them and round 12
-  after the last. Every open
-  decision is ruled except O4, each backend's compliance bar, which waits for the spike report's figures. Round 12
-  answers review 1700's wording findings. Next: one review of round 12. If it is clean, an operator item asks the
-  operator to approve the W4 addendum and accept the W3 plan (definition of done, items 2 and 3). Neither draft is
-  approved yet, and nothing is built or armed.
+  drafts. Seven reviews then ran, 1686, 1690, 1695, 1696, 1700, 1701 and 1702, with fix rounds 8 to 13 between them.
+  Every open decision is ruled except O4, each backend's compliance bar, which waits for the spike report's figures.
+  The drafts stand at `49b73ebc4`: review 1702 confirmed one wording residue, which the coordinator ruled stays (below).
+  Item 121 asks the operator to approve the W4 addendum and accept the W3 plan (definition of done, items 2 and 3).
+  Neither draft is approved yet, and nothing is built or armed.
 - **W1.** The operator ruled W1-k, W1-e and W1-h met (items 83 to 85). W1-f and W1-i were met on 2026-11-07, and W1-d
   is recorded. Two rows stay open: W1-b, re-measured over the week ending 2026-11-15, and W1-l, the operator's drill
   (item 86), whose result do-item 111 waits for.
@@ -195,7 +194,7 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | W1-fix (CP-39b) | a sidecar over 8 MiB (`SIDECAR_READ_WHOLE_MAX`) is captured by the streamed arm, which reads into one reused piece | fleet | #1561 | **merged** 2026-10-26 12:55Z as `f70956cc3` at head `bb917402a`, release v0.0.725 (run 973; reviews 979 and 987; one fix round) |
 | W1-fix (CP-39c) | the export pass runs on its own slice of the run budget, and the check after a bind on a slice of its own | fleet | #1577 | **merged** 2026-10-26 as `ce7b94dab`, release v0.0.728 (run 982; review 999; accepted with no fix round); its live check passed on 2026-10-27 on v0.0.745: export due 0 and overdue 0 (597 due before), health PASS (§8) |
 | W1-fix (CP-39d) | grep drives each referrer arm from its scope; the sweep reads a registered session's mid-turn growth within a tick; W1-b's and W1-f's measures; the sweep's carried review items | fleet | #1693 | **merged** 2026-10-27 21:11Z as `5377d23c1` at head `a8e707cff`, release v0.0.767 (run 1039; reviews 1065 and 1088; one fix round); the final W2 release carries it (CP-35) |
-| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft; run 1190 working on fix round 12 (mail 16851, pushed `d5bb24aa9`), after fold round 7 and reviews 1686, 1690, 1695, 1696 and 1700 under the operator's cap lift and autonomy direction; every open decision is ruled but O4; next, a review of round 12, then the operator's approval item; no implementation authority |
+| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft at `49b73ebc4`; run 1190 awaiting-review after fix round 13 and reviews 1686, 1690, 1695, 1696, 1700, 1701 and 1702, under the operator's cap lift and autonomy direction; every open decision is ruled but O4; item 121 asks the operator to approve the W4 addendum and accept the W3 plan; no implementation authority |
 | 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1233 closed as failed; branch kept |
 | 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1236 closed as failed; branch kept |
 | 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 **done/released**, item 1/1, review rounds 1/3; review 1321 done/released; accepted MERGED mail preceded final close |
@@ -261,6 +260,13 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
   - P20 (a)'s text is amended to "each other lister section 3.1's table names (five)" (review 1696, V8).
   - The UTF-8 size row skips by probe and by name where bash cannot count a two-byte character as one, as
     `session-hook-approval-deny.test.ts` does (review 1700, A2).
+  - The coordinator's own phrase in round 12, "today's stored-time reading", wrongly suggested that code compares a
+    receipt's time with its boundary today. No code does: `pickReceipt` takes an exact receipt by its id. The comparison
+    is O13 (d)'s, applied to the stored time, which is option (a). Round 13 carried the coordinator's exact text into
+    four sentences (review 1701, F1 and F2).
+  - The O23 row's option (a), "as today's stored time reads it", stays as written (review 1702, F1). It records the
+    options as they stood when the operator ruled item 117, it is accurate for the generic shape, and "O23 in detail"
+    states the exact shape precisely.
 - **Reviews and fix rounds on #1876.** Each round was bounded to the two drafts. The operator's review-cap lift for
   run 1190 and the autonomy direction of 2026-11-07 covered each round. The coordinator checked each fix-round brief
   with a short read-only workflow before sending it. Each review ran its panel as a Workflow with the reference
@@ -276,12 +282,13 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
   | 9 | 16794 | `24efd343e` | 42534423357 | 1695 | 2: PX20's size rows missed the template's first line; the overlap left out the two test files both W3-1 and W4-1 claim (`history-lib.test.ts` and `history-sweep.test.ts`). 4 advisory |
   | 10 | 16816 | `1b2de938f` | 42537657721 | 1696 | 1: `childrenOf` passed `directive_flag` through. 8 minor items, V1 to V8 |
   | 11 | 16836 | `168f0e3ec` | 42541450423 | 1700 | 2: a stale untimed-receipt premise in Task 1B; the lane-map command's escaped pipe. 3 advisory, one of them informational |
-  | 12 | 16851 | `d5bb24aa9` | 42544125244, pending | next | — |
+  | 12 | 16851 | `d5bb24aa9` | 42544125244 | 1701 | 2: the coordinator's "today's" wording implied a comparison no code makes; Task 2 kept the same sentence. 1 advisory |
+  | 13 | 16856 | `49b73ebc4` | 42546129809 | 1702 | 1: the O23 row's option (a) keeps the same phrase, ruled to stay |
 
-  The guards the worker ran in each of rounds 7 to 11, from `server/`: 728 of 729 in the documentation guards, the
+  The guards the worker ran in each of rounds 7 to 13, from `server/`: 728 of 729 in the documentation guards, the
   one failure being deviation-refs' D-7011 to D-7019 report, the stale-merge-base false positive diagnosed in the
-  2026-11-07 entry; single-definition 979 of 979; and growth-check 47 of 47. Round 12's results are still to come. None
-  of the five reviews verified the guards itself: reviews 1690 to 1700 had no installed modules, and review 1686's
+  2026-11-07 entry; single-definition 979 of 979; and growth-check 47 of 47. None
+  of the seven reviews verified the guards itself: reviews 1690 to 1702 had no installed modules, and review 1686's
   figures came from a lens using borrowed modules, which it disclosed as unverified. So the worker's runs and CI's
   fast run are the evidence. The review reports are copied under the
   coordinator's clips, since a reviewer's copy is lost when its workspace is reclaimed.
