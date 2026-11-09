@@ -18,8 +18,10 @@ The `items` subcommand runs on the SERVER box, over the coordination database, R
     python3 deploy/measure-autonomy.py items --db PATH [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--out DIR]
 
   M3, per programme: operator items raised (`operator_items.raisedAt` in the window) plus asks released to the operator
-  (`asks.releasedAt` in the window with a `releaseReason` or a parent of `operator`: the rows `askDecision`
-  (server/src/coord/digest.ts) does not read as a coordinator's decision), over programme-days with an open run. An ask
+  (the asks that reached the operator: a coordinator-parent ask moved off the coordinator, state released, declined,
+  answering or answered with `releasedAt` in the window (the sweep's lapse by `CoordStore.releaseAsk`, the parent's
+  hand-over by `declineAsk`, and a row minted released with a `releaseReason`), and an operator-parent ask whose `at`
+  is in the window; a `stale` row is in neither, nobody decided it), over programme-days with an open run. An ask
   belongs to the programme of its `runId`; an ask with no run is counted in `unattributed-asks` and in no programme. A
   run is open from `runs.openedAt` to its terminal `run_events` row (toState done, failed or unknown), else to its
   `closedAt`, else to the window's end; a UTC day counts when any run of the programme was open for any part of it.
@@ -29,8 +31,13 @@ The `items` subcommand runs on the SERVER box, over the coordination database, R
   blocked (escalated)" (rung 2), and nothing else records it (the latch is in memory). This reads that one source. A
   flagged coordinator-hour is a distinct (session, UTC hour) holding at least one such row, a lower bound: the arm
   records no recovery row, and the feed keeps only its newest rows (`FEED_RETENTION`).
+  M6 is valid only while the arm delivers live. `applyStallSession` writes no `feed_events` row when `stallNotifyDelivery`
+  reads shadow (a wave-1 arm, until the box's stall-watch markers read live AND escalate): a run-less coordinator then
+  leaves a console warning and nothing else (not measurable), and a coordinator with a run leaves a `run_events` row
+  whose detail starts `stall-shadow:coord-blocked:`. `m6-shadow-rows` counts those rows in the window; a non-zero value
+  means the weeks above under-count and the figure is not a baseline.
 Rows printed: `programmes`, `unattributed-asks`, `m3-p1`.. (`items=N asks=N days=N value=V`, an ordinal in slug order, never
-a slug), `m3-all`, and `m6-YYYY-MM-DD` (the week's Monday). `--out` gets `items.json` (the same figures with the slugs).
+a slug), `m3-all`, `m6-shadow-rows` and `m6-YYYY-MM-DD` (the week's Monday). `--out` gets `items.json` (the same figures with the slugs).
 
 The `sample` and `score` subcommands are the M4 reading (spec §5.1's split rule). `sample` runs on the SERVER box over the
 same read-only connection as `items`; `score` reads one local CSV and touches no database.
@@ -441,6 +448,14 @@ def figure(v):
     return str(round(v, 2))
 
 
+# An ask that reached the operator (M3). A coordinator-parent row counts when it left the coordinator (released by the
+# lapse, declined by the hand-over, or minted released) at `releasedAt`; a stale row was decided by nobody. An
+# operator-parent row is minted held and was the operator's from the start, so it counts by `at`, stale ones left out.
+REACHED_OPERATOR = (
+    '((a.parentId <> ? AND a.releasedAt >= ? AND a.releasedAt < ? AND a.state IN (\'released\', \'declined\', \'answering\', \'answered\')) '
+    'OR (a.parentId = ? AND a.at >= ? AND a.at < ? AND a.state <> \'stale\'))')
+
+
 def cmd_items(a):
     con = open_ro(a.db)
     lo = int(parse_day(a.since, '--since') * 1000) if a.since else 0
@@ -454,13 +469,14 @@ def cmd_items(a):
         items = dict(con.execute(
             'SELECT program, COUNT(*) FROM operator_items WHERE raisedAt >= ? AND raisedAt < ? GROUP BY program', (lo, hi)).fetchall())
         asks = con.execute(
-            'SELECT r.program, COUNT(*) FROM asks a JOIN runs r ON r.id = a.runId '
-            'WHERE a.releasedAt >= ? AND a.releasedAt < ? AND (a.releaseReason IS NOT NULL OR a.parentId = ?) GROUP BY r.program',
-            (lo, hi, OPERATOR_PRINCIPAL)).fetchall()
+            'SELECT r.program, COUNT(*) FROM asks a JOIN runs r ON r.id = a.runId WHERE ' + REACHED_OPERATOR + ' GROUP BY r.program',
+            (OPERATOR_PRINCIPAL, lo, hi, OPERATOR_PRINCIPAL, lo, hi)).fetchall()
         unattributed = con.execute(
-            'SELECT COUNT(*) FROM asks a LEFT JOIN runs r ON r.id = a.runId '
-            'WHERE a.releasedAt >= ? AND a.releasedAt < ? AND (a.releaseReason IS NOT NULL OR a.parentId = ?) AND r.id IS NULL',
-            (lo, hi, OPERATOR_PRINCIPAL)).fetchone()[0]
+            'SELECT COUNT(*) FROM asks a LEFT JOIN runs r ON r.id = a.runId WHERE (' + REACHED_OPERATOR + ') AND r.id IS NULL',
+            (OPERATOR_PRINCIPAL, lo, hi, OPERATOR_PRINCIPAL, lo, hi)).fetchone()[0]
+        shadow = con.execute(
+            'SELECT COUNT(*) FROM run_events WHERE detail LIKE ? AND at >= ? AND at < ?',
+            ('stall-shadow:coord-blocked:%', lo, hi)).fetchone()[0]
         blocked = con.execute(
             'SELECT sessionId, at FROM feed_events WHERE kind = ? AND (title LIKE ? OR title LIKE ?) AND at >= ? AND at < ?',
             ('run', BLOCKED_TITLE + ' \u203a%', BLOCKED_TITLE + ' (escalated)%', lo, hi)).fetchall()
@@ -485,6 +501,7 @@ def cmd_items(a):
         print(f'm3-p{n}: items={r["items"]} asks={r["asks"]} days={r["days"]} value={figure(r["value"])}')
     all_v = (tot_i + tot_a) / tot_d if tot_d else 0.0
     print(f'm3-all: items={tot_i} asks={tot_a} days={tot_d} value={figure(all_v)}')
+    print(f'm6-shadow-rows: {shadow}')
     hours = {}
     for sid, at in blocked:
         hours.setdefault(week_monday(at), set()).add((sid, at // HOUR_MS))
@@ -495,7 +512,7 @@ def cmd_items(a):
         os.makedirs(a.out, exist_ok=True)
         with open(os.path.join(a.out, 'items.json'), 'w', encoding='utf8') as f:
             json.dump({'programmes': rows_out, 'all': {'items': tot_i, 'asks': tot_a, 'days': tot_d, 'value': all_v},
-                       'unattributedAsks': unattributed, 'm6': weeks}, f, indent=1)
+                       'unattributedAsks': unattributed, 'm6': weeks, 'm6ShadowRows': shadow}, f, indent=1)
 
 
 PART_CLASSES = ('routine', 'big') + tuple(f'o{n}' for n in range(1, 7)) + tuple(f'p{n}' for n in range(1, 5))

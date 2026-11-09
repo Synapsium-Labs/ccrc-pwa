@@ -64,6 +64,12 @@ describe('measure-autonomy transcripts', () => {
   it('counts a coordinator by intent as well as by the skill, and one that loaded the skill but opened no run not at all', () => {
     const b = census(tree('coord-b'));
     expect(b.table['coordinators']).toBe('1');
+    // intent and a dispatched run, no Skill use: a coordinator by intent alone
+    expect(census(tree('coord-intent')).table['coordinators']).toBe('1');
+    // the skill loaded, no run opened or dispatched: not a coordinator
+    const s = census(tree('coord-skill-only'));
+    expect(s.table['transcripts']).toBe('1');
+    expect(s.table['coordinators']).toBe('0');
   });
 
   it('removes a swap copy by message id', () => {
@@ -172,7 +178,7 @@ describe('measure-autonomy transcripts', () => {
 const T = (iso: string): number => Date.parse(iso);
 
 /** A fixture `coord.db`: programme `alpha` (one run open from 2026-11-02 10:00 to 2026-11-03 08:00 = 2 UTC days, 3 items,
- *  1 ask released to the operator), programme `beta` (one run open 2026-11-04 01:00 to 05:00 = 1 day, nothing raised),
+ *  4 asks that reached the operator), programme `beta` (one run open 2026-11-04 01:00 to 05:00 = 1 day, nothing raised),
  *  plus rows the counts must not take: an item raised before the window, an ask the coordinator answered. */
 function fixtureDb(): string {
   const dbPath = path.join(mkTmp('ccrc-autonomy-db-'), 'coord.db');
@@ -187,6 +193,8 @@ function fixtureDb(): string {
   ev.run(alphaRun, T('2026-11-02T10:05:00Z'), 'planned', 'dispatched', 'coordinator');
   ev.run(alphaRun, T('2026-11-03T08:00:00Z'), 'closing', 'done', 'coordinator');
   ev.run(betaRun, T('2026-11-04T05:00:00Z'), 'closing', 'done', 'coordinator');
+  ev.run(alphaRun, T('2026-11-03T06:00:00Z'), 'dispatched', 'dispatched', 'watcher');
+  db.prepare('UPDATE run_events SET detail = ? WHERE runId = ? AND at = ?').run('stall-shadow:coord-blocked:1:5', alphaRun, T('2026-11-03T06:00:00Z'));
   const item = db.prepare(
     "INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, neededBy, state, raisedAt) " +
     "VALUES (?, NULL, 'coord', 'decision', 't', 'w', '[]', 'soon', 'open', ?)");
@@ -196,6 +204,14 @@ function fixtureDb(): string {
     "releasedAt, releaseReason) VALUES (?, 'child', ?, ?, 'k', 1, 'd', 'q', '[]', ?, ?, ?, ?, ?)");
   ask.run(T('2026-11-02T13:00:00Z'), 'parent-1', alphaRun, 'released', null, null, T('2026-11-02T13:00:00Z'), 'parent-not-live');
   ask.run(T('2026-11-02T14:00:00Z'), 'parent-1', alphaRun, 'answered', 'parent-1', T('2026-11-02T14:01:00Z'), null, null);
+  // reached the operator through a coordinator: the sweep's lapse and the parent's own hand-over (releaseReason null)
+  ask.run(T('2026-11-02T15:00:00Z'), 'parent-1', alphaRun, 'released', null, null, T('2026-11-02T15:30:00Z'), null);
+  ask.run(T('2026-11-02T16:00:00Z'), 'parent-1', alphaRun, 'declined', null, null, T('2026-11-02T16:05:00Z'), null);
+  // asked of the operator directly: counted by `at` when the operator answered it, not when it went stale
+  ask.run(T('2026-11-02T17:00:00Z'), 'operator', alphaRun, 'answered', 'operator', T('2026-11-02T17:10:00Z'), null, null);
+  ask.run(T('2026-11-02T18:00:00Z'), 'operator', alphaRun, 'stale', null, null, T('2026-11-02T18:20:00Z'), null);
+  // decided by nobody: the dialog vanished while a coordinator held it
+  ask.run(T('2026-11-02T19:00:00Z'), 'parent-1', alphaRun, 'stale', null, null, T('2026-11-02T19:10:00Z'), null);
   const feed = db.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body) VALUES ('e', ?, ?, 'run', ?, ?, 'b')");
   let seq = 0;
   const blocked = (iso: string, session: string, title = '⚠ coordinator blocked › ws'): void => { feed.run(++seq, T(iso), session, title); };
@@ -212,14 +228,14 @@ const itemsRun = (args: string[]) => run(['items', ...args]);
 const WINDOW = ['--since', '2026-11-02', '--until', '2026-11-16'];
 
 describe('measure-autonomy items', () => {
-  it('reads M3 per programme-day: 2.0, 0.0 and 1.33 over all', () => {
+  it('reads M3 per programme-day: 3.5, 0.0 and 2.33 over all', () => {
     const r = itemsRun(['--db', fixtureDb(), ...WINDOW]);
     expect(r.status, r.stderr).toBe(0);
     const t = rows(r.stdout);
     expect(t['programmes']).toBe('2');
-    expect(t['m3-p1']).toBe('items=3 asks=1 days=2 value=2.0');
+    expect(t['m3-p1']).toBe('items=3 asks=4 days=2 value=3.5');
     expect(t['m3-p2']).toBe('items=0 asks=0 days=1 value=0.0');
-    expect(t['m3-all']).toBe('items=3 asks=1 days=3 value=1.33');
+    expect(t['m3-all']).toBe('items=3 asks=4 days=3 value=2.33');
   });
 
   it('prints no programme slug, only an ordinal', () => {
@@ -236,7 +252,7 @@ describe('measure-autonomy items', () => {
 
   it('does not count an ask the coordinator answered', () => {
     const t = rows(itemsRun(['--db', fixtureDb(), ...WINDOW]).stdout);
-    expect(t['m3-p1']).toContain('asks=1 ');
+    expect(t['m3-p1']).toContain('asks=4 ');   // not the answered one, not the two stale ones
   });
 
   it('reads M6 per week: coordinator-hours flagged by coord-blocked', () => {
@@ -244,6 +260,11 @@ describe('measure-autonomy items', () => {
     // week of 2026-11-02: c1 at 10:00 and 11:00, c2 at 10:00 = 3; week of 2026-11-09: c1 = 1; the other arm is not counted
     expect(t['m6-2026-11-02']).toBe('3');
     expect(t['m6-2026-11-09']).toBe('1');
+  });
+
+  it('counts the shadow observations the feed does not carry, so an unarmed box is not read as zero', () => {
+    const t = rows(itemsRun(['--db', fixtureDb(), ...WINDOW]).stdout);
+    expect(t['m6-shadow-rows']).toBe('1');
   });
 
   it('writes items.json only under --out', () => {
