@@ -1,6 +1,7 @@
 // The coordination store, ring L3 (the 08-10 spec's adapter list): every coordination read and write runs a
 // `node:sqlite` statement on the connection it is handed. That import is type-only, so the facts alone would read
 // L1; this declaration is what makes a runtime import of `CoordStore` from an L1 file an outward edge (#2370).
+import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
@@ -5670,13 +5671,18 @@ export class CoordStore {
   }
 
   /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
-   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
-   *  so this query is economy, never a permission. */
+   *  `startedAtOrBefore`, oldest stamp first. D-8126: also a planned run with no session whose newest `run_events` row at
+   *  or after its stamp begins `DISPATCH_ORPHANED_EVENT` (the dispatch said a spawn may exist that no run owns), whatever
+   *  the stamp: a later re-dispatch restamps, which puts the older event before the stamp and hides it. Ids only: the
+   *  executor reads each run whole (`run(id)`) and decides on it, so this query is economy, never a permission. */
   stalledDispatchRunIds(startedAtOrBefore: number): number[] {
     return (this.db.prepare(
       "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
-      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
-    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+      'AND dispatchStartedAt IS NOT NULL AND (dispatchStartedAt <= ? OR substr(COALESCE((' +
+      'SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.at >= runs.dispatchStartedAt ' +
+      "ORDER BY e.id DESC LIMIT 1), ''), 1, ?) = ?) ORDER BY dispatchStartedAt, id",
+    ).all(startedAtOrBefore, DISPATCH_ORPHANED_EVENT.length, DISPATCH_ORPHANED_EVENT) as { idText: string }[])
+      .map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
   }
 
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────

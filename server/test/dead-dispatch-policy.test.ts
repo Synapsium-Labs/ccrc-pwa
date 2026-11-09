@@ -49,6 +49,17 @@ describe('deadDispatchVerdict', () => {
     expect(why({ ...base, run: { ...run, dispatchStartedAt: NOW } })).toBe('in-flight');
   });
 
+  it('an orphaned spawn (D-8126) is past the bound whatever its stamp, and every other guard still applies', () => {
+    const young = { ...run, dispatchStartedAt: NOW };
+    expect(why({ ...base, run: young })).toBe('in-flight');
+    expect(deadDispatchVerdict({ ...base, run: young, orphaned: true })).toEqual({ kind: 'dead', claimedBy: 'project-a-coord', startedAt: NOW });
+    expect(why({ ...base, run: young, orphaned: true, armed: false })).toBe('switch-off');
+    expect(why({ ...base, run: young, orphaned: true, registry: { listed: false } })).toBe('registry-unmeasured');
+    expect(why({ ...base, run: { ...young, sessionId: 'project-a-w1' }, orphaned: true })).toBe('bound');
+    expect(why({ ...base, run: { ...young, claimedBy: null }, orphaned: true })).toBe('unclaimed');
+    expect(why({ ...withRecords([ws({ child: { kind: 'child', runId: 7 } })]), run: young, orphaned: true })).toBe('child-workspace');
+  });
+
   it('a box that minted without the child marker (`child-omitted:` journaled) cannot prove there is no workspace', () => {
     expect(why({ ...base, childOmitted: true })).toBe('unmarked-box');
   });

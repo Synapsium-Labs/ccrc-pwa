@@ -101,6 +101,8 @@ export interface DeadDispatchFacts {
   readonly registry: DeadDispatchRegistry;
   /** D-7563: the one child's measured facts; absent when no single child was measured. */
   readonly returned?: ReturnedChildFacts;
+  /** D-8126: the run's newest journal row since its stamp is a `dispatch-orphaned:` event: the bound is not waited out. */
+  readonly orphaned?: boolean;
   readonly now: number;
   readonly boundMs: number;
 }
@@ -146,7 +148,7 @@ export function deadDispatchVerdict(f: DeadDispatchFacts): DeadDispatchVerdict {
   if (run.state !== 'planned') return keep('not-planned');
   if (run.sessionId !== null) return keep('bound');
   if (run.dispatchStartedAt === null) return keep('no-stamp');
-  if (f.now - run.dispatchStartedAt < f.boundMs) return keep('in-flight');
+  if (f.orphaned !== true && f.now - run.dispatchStartedAt < f.boundMs) return keep('in-flight');
   if (run.claimedBy === null) return keep('unclaimed');
   if (f.childOmitted) return keep('unmarked-box');
   if (f.registry.refused > 0) return keep('registry-unmeasured', `${f.registry.refused} listed name(s) refused`);

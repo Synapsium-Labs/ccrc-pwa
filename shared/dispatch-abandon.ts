@@ -64,8 +64,16 @@ export const DISPATCH_ABANDON_SUBJECT = 'dispatch-abandoned';
 /** The coordinator's mail body: what was abandoned, why, and what to do. */
 export function dispatchAbandonMailBody(m: {
   runId: number; program: string; wave: number; project: string; startedAt: number; boundMs: number;
+  /** D-8126: the orphaned refusal's name, when the dispatch itself said a spawn may exist that no run owns. */
+  orphaned?: string | null;
 }): string {
   const minutes = Math.round(m.boundMs / 60_000);
+  if (m.orphaned !== undefined && m.orphaned !== null) {
+    return `Run #${m.runId} (${m.program}, wave ${m.wave}, project ${m.project}) was abandoned by the server: its dispatch `
+      + `started at ${new Date(m.startedAt).toISOString()} and refused after its spawn (${DISPATCH_ORPHANED_EVENT}${m.orphaned}), `
+      + 'so no run names the workspace it may have made, and no workspace names this run. The run is closed failed. '
+      + 'Open a new run and dispatch it again if the work is still wanted.';
+  }
   return `Run #${m.runId} (${m.program}, wave ${m.wave}, project ${m.project}) was abandoned by the server: its dispatch `
     + `started at ${new Date(m.startedAt).toISOString()} and never came back. After ${minutes} min no workspace names `
     + 'the run and no dispatch for it is still running, so the run is closed failed. '

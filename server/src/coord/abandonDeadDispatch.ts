@@ -9,8 +9,9 @@
 // transaction. Nothing here writes a run state.
 //
 // In order, every doubt "not this time":
-//   1. the store's candidates (`stalledDispatchRunIds`: planned, no session, stamped at or before `now - bound`);
-//      none, and nothing else is read;
+//   1. the store's candidates (`stalledDispatchRunIds`: planned, no session, stamped at or before `now - bound`, or
+//      (D-8126) whose newest journal row since the stamp is a `DISPATCH_ORPHANED_EVENT`, which the verdict then does not
+//      make wait out the bound); none, and nothing else is read;
 //   2. per candidate, the facts — the switch (Settings' row), the run read whole, its journal, ONE measured registry
 //      read (rows, refused names, and the cleanup pause from the same listing) — and `deadDispatchVerdict` (L1);
 //   3. a dead one is handed to the abandon arm with this file's re-measure as its guard: the same facts read again,
@@ -53,7 +54,7 @@ import { measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readSwitches } from '../../../shared/switches.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, DISPATCH_BIND_EVENT, dispatchAbandonMailBody,
+  DISPATCH_ABANDON_EVENT, DISPATCH_ABANDON_SUBJECT, DISPATCH_BIND_EVENT, DISPATCH_ORPHANED_EVENT, dispatchAbandonMailBody,
 } from '../../../shared/dispatch-abandon.js';
 import {
   deadDispatchVerdict, dispatchAbandonViewOf, type DeadDispatchRegistry, type DeadDispatchVerdict, type ReturnedChildFacts,
@@ -130,25 +131,35 @@ async function returnedChildOf(
   return { id: sid, pane, namedBy: named.ok ? named.runs.length : 'unreadable', unboundBefore: unbound.includes(sid) };
 }
 
+/** D-8126: the refusal's name when the run's newest journal row at or after its dispatch stamp is a
+ *  `dispatch-orphaned:` event (the store's candidate rule, read again on the run's own journal), else null. */
+function orphanOf(events: readonly { at: number; detail: string | null }[], stamp: number | null): string | null {
+  if (stamp === null) return null;
+  const since = events.filter((e) => e.at >= stamp);
+  const last = since.length === 0 ? undefined : since[since.length - 1]!.detail;
+  return last !== undefined && last !== null && last.startsWith(DISPATCH_ORPHANED_EVENT) ? last.slice(DISPATCH_ORPHANED_EVENT.length) : null;
+}
+
 /** Every fact the verdict needs for run `id`, read now, and the verdict. A run the store cannot read is kept. */
 export async function deadDispatchOf(deps: Pick<AbandonDeadDispatchDeps, 'coord' | 'io' | 'cfg' | 'tmux' | 'now'>, id: number):
-  Promise<{ verdict: DeadDispatchVerdict; run: { program: string; wave: number; waveOf: number | null; project: string } | null }> {
+  Promise<{ verdict: DeadDispatchVerdict; run: { program: string; wave: number; waveOf: number | null; project: string } | null; orphan: string | null }> {
   const read = deps.coord.run(id);
   if (!read.ok || read.run === null) {
-    return { verdict: { kind: 'keep', why: 'run-unreadable', detail: read.ok ? 'the run is gone' : read.detail }, run: null };
+    return { verdict: { kind: 'keep', why: 'run-unreadable', detail: read.ok ? 'the run is gone' : read.detail }, run: null, orphan: null };
   }
   const run = read.run;
   const armed = dispatchAbandonViewOf(deps.coord.dispatchAbandonSetting(), deps.cfg.dispatchAbandonMs).armed;
   const events = deps.coord.runEvents(id);
   const childOmitted = events.some((e) => e.detail !== null && e.detail.startsWith('child-omitted:'));
   const unbound = events.flatMap((e) => { const u = unboundSessionOf(e.detail); return u === null ? [] : [u]; });
+  const orphan = orphanOf(events, run.dispatchStartedAt);
   const registry = await registryFacts(deps);
   const returned = await returnedChildOf(deps, id, registry, unbound);
   // The instant is read AFTER the registry's and tmux's round trips, so the age is never older than what was measured.
   const verdict = deadDispatchVerdict({
-    armed, run, childOmitted, registry, ...(returned === undefined ? {} : { returned }), now: deps.now(), boundMs: deps.cfg.dispatchAbandonMs,
+    armed, run, childOmitted, registry, ...(orphan === null ? {} : { orphaned: true }), ...(returned === undefined ? {} : { returned }), now: deps.now(), boundMs: deps.cfg.dispatchAbandonMs,
   });
-  return { verdict, run: { program: run.program, wave: run.wave, waveOf: run.waveOf, project: run.project } };
+  return { verdict, run: { program: run.program, wave: run.wave, waveOf: run.waveOf, project: run.project }, orphan };
 }
 
 /** Why a run was not abandoned: a keep's reason (and detail), or `bind` (D-7563) where the re-measure of an abandon
@@ -199,7 +210,9 @@ export async function abandonDeadDispatches(deps: AbandonDeadDispatchDeps): Prom
         const r = first.run!;
         queueSystemMail(deps.coord, { program: r.program, wave: r.wave, waveOf: r.waveOf }, {
           fromId: 'operator', toId: claimedBy, runId: id, kind: 'status', subject: DISPATCH_ABANDON_SUBJECT,
-          body: dispatchAbandonMailBody({ runId: id, program: r.program, wave: r.wave, project: r.project, startedAt, boundMs }),
+          body: dispatchAbandonMailBody({
+            runId: id, program: r.program, wave: r.wave, project: r.project, startedAt, boundMs, orphaned: first.orphan,
+          }),
         });
         mailed = true;
       } catch (err) {
