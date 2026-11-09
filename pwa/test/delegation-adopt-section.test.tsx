@@ -137,6 +137,14 @@ describe('the read: the card says what the lane says (D-8114)', () => {
     expect(counts).not.toMatch(/until the next pass/);
   });
 
+  // Review 1727 F2: live and suspended are unchanged too, so their counts line still names the figure.
+  it.each<DelegationAdoptionHealth['mode']>(['live', 'suspended'])('mode %s, would keep 4: the counts line still names the figure and says nothing of the next pass (item 131)', (mode) => {
+    owned(view({ adoption: health({ mode, wouldAdopt: 4 }) }));
+    const counts = screen.getByText(/^Last pass:/).textContent ?? '';
+    expect(counts).toContain('would keep 4');
+    expect(counts).not.toMatch(/until the next pass/);
+  });
+
   it('the four modes read differently from one another', () => {
     const lines = (['live', 'shadow', 'suspended', 'unmeasured'] as const).map((mode) => delegationAdoptModeLine(health({ mode })));
     expect(new Set(lines).size).toBe(4);
