@@ -11737,8 +11737,8 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     'node:fs': '{ lstatSync, readFileSync, realpathSync, writeFileSync }',
     'node:path': 'path',
     'node:url': '{ fileURLToPath, pathToFileURL }',
-    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex }',
-    '../ccd/history/store.mjs': '{ StoreError, openReader, userVersion }',
+    '../ccd/history/lib.mjs': '{ BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor }',
+    '../ccd/history/store.mjs': '{ StoreError, blobPlainTextMeasured, openReader, userVersion }',
     '../ccd/history/derive.mjs': '{ epochOfUuid, holdingCopyOf }',
     '../ccd/history/recall.mjs': '{ expandEntryBody }',
     './history-gate.mjs': '{ ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf }',
@@ -11762,7 +11762,7 @@ w6cDescribe('W2-6 Task 1: the counter module, its frame and its pins (W2-D86, W2
     w6cExpect(importViolations(real), 'the counter itself').toEqual([]);
     const variants: Array<[string, string]> = [
       ['derive', real.replace('import { StoreError', "import { keptOf } from '../ccd/history/derive-extra.mjs';\nimport { StoreError")],
-      ['openWriter', real.replace('{ StoreError, openReader, userVersion }', '{ StoreError, openReader, openWriter, userVersion }')],
+      ['openWriter', real.replace('{ StoreError, blobPlainTextMeasured, openReader, userVersion }', '{ StoreError, blobPlainTextMeasured, openReader, openWriter, userVersion }')],
       ['missing', real.replace("import { fileURLToPath, pathToFileURL } from 'node:url';\n", '')],
       ['dynamic', `${real}\nconst m = await import('node:zlib');\n`],
       ['env', real.replace('process.exitCode = main(process.argv.slice(2));', 'process.exitCode = main(process.argv.slice(2), process.env);')],

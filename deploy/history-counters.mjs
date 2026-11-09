@@ -31,8 +31,8 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, sha256Hex } from '../ccd/history/lib.mjs';
-import { StoreError, openReader, userVersion } from '../ccd/history/store.mjs';
+import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
+import { StoreError, blobPlainTextMeasured, openReader, userVersion } from '../ccd/history/store.mjs';
 import { epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
 import { ASSIGNMENT_ARMS, COUNTERS_DEF_V1, COUNTERS_DEF_V1_SHA256, K, K_UNIT, assembleReports, buildWindows, changedFamilies, familyKey, turnsOf, windowCopyOf, windowOf } from './history-gate.mjs';
@@ -54,6 +54,19 @@ export const COUNTER_UNMEASURED = Object.freeze([
   'boundary-uncopied',   // no copy holds the boundary (holdingCopyOf answered null), which card.mjs reads as none (D-6562)
   'no-measured-tick',    // no ticks row at or before the boundary has a measured lag
   'card-wait',           // the card's delivery window was still open at the read instant
+  // W3 Task 1D (the spike report; spec 2026-10-05 section 7.5, plan O17 to O23), in place so the pins on the lists around them hold:
+  'sweep-behind',        // the newest ticks row had files_behind above 0: a span not yet ingested is invisible (O22)
+  'sweep-unmeasured',    // no ticks row at all: nothing shows that the sweep had caught up
+  'stale-print',         // a span printed to under another leaf's id: it reads not-requested, so its block was never tested (O22)
+  'boundary-untimed',    // a boundary with no ts_ms cannot be placed in or out of the range, or compared with a receipt (O13, O21)
+  'producer-unknown',    // a cohort span whose producer is still unknown when the report runs (O22's second addition)
+  'summary-missing',     // the leaf names no summary blob (a raw leaf)
+  'summary-absent',      // the summary blob is gone or tombstoned (blobPlainTextMeasured: absent)
+  'summary-oversize',    // the summary blob is recorded past the decode bound (blobPlainTextMeasured: oversize)
+  'summary-undecodable', // the summary blob does not decode (blobPlainTextMeasured: undecodable)
+  'duration-absent',     // a set with no boundary duration (boundaries.duration_ms is NULL when Claude Code gave no count)
+  'echo-absent',         // a manual boundary with no <local-command-stdout> row before the next boundary (G16)
+  'sample-short',        // a side of O19's comparison has under O2's sample of spans: never met, the absolute counts print beside
   'row-moved',           // a window row's line no longer holds the uuid measure-history.py printed (re-discovery)
   'body-unparseable',    // a turn or span body expandEntryBody answered unparseable (D-6238): it could hide a path
   'body-tombstone',      // the same, tombstone
@@ -387,6 +400,8 @@ export const COUNTER_FLAG_SPECS = Object.freeze({
   supersedes: 'string', 'supersedes-sha256': 'string', measure: 'string', 'measure-sha256': 'string',
   'verify-ab': 'string', 'verify-ab-sha256': 'string', store: 'string', out: 'string', 'allow-code-change': 'bool',
   'node-report': 'list', 'node-report-sha256': 'list',
+  // W3 Task 1D: the spike arm's own flags (`--out` is shared: a file, not a directory, for the spike)
+  db: 'string', session: 'list', since: 'string', until: 'string',
 });
 /** Each subcommand's flags, required and optional, and its entry. A flag outside both lists is args-invalid. */
 export const COUNTER_FORMS = Object.freeze({
@@ -405,7 +420,7 @@ export const COUNTER_FORMS = Object.freeze({
 export const COUNTER_SUBCOMMANDS = Object.freeze(Object.keys(COUNTER_FORMS));
 
 function checkFormFlags(sub, flags) {
-  const form = COUNTER_FORMS[sub];
+  const form = ALL_FORMS[sub];
   for (const k of form.required) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
   for (const k of Object.keys(flags)) if (!form.required.includes(k) && !form.optional.includes(k)) refuse('args-invalid', `--${k} is not a ${sub} flag`);
 }
@@ -1028,6 +1043,559 @@ export function combineCommand(flags) {
   return writeReport(flags.out, COUNTERS_COMBINED_FILE, combineReports(nodes));
 }
 
+// ── W3 Task 1D: the read-only spike report (spec 2026-10-05 §7.5; plan 2026-10-29-ccrc-history-w3-steering.md Task 1D;
+// O5 (this file is its home), O12, O13, O17 to O23) ────────────────────────────────────────────────────────────────
+// `history-counters.mjs spike` reports, per backend, what the steered cohort's compactions looked like: compliance by
+// status, the receipts' footprints, the stored model refs, the headroom figures (`summaryUnclosed`, `cutShapes`,
+// `cutUntestable`, `analysisOnly`), the compaction durations and the manual echo, each beside O21's baseline. It states
+// figures and never a pass or fail: the operator reads the gate at CP-63. It prints counts and aggregates only, never
+// text, and it opens the store read-only (openCounterStore).
+//
+// Every figure is read per span from stored rows. The node-wide `counters` table is never read for a figure, since it
+// keeps one cumulative count per name with no session and no time column (W2-D87). O18's ruling lets the node-wide
+// `leaf_reason:*` counters print beside the reasons; this report does not, because history-replay.test.ts's W2-D87 census
+// refuses any code line of this file that reads that table. A figure that could not be measured is unmeasured with a
+// COUNTER_UNMEASURED word, never 0 and never met.
+
+/** O2's sample: a side of O19's comparison with fewer spans than this reads unmeasured (the coordinator, 2026-11-08). */
+const SPIKE_SAMPLE_MIN = 10;
+/** A leaf's receipt line: a status outside these two had a receipt (a raw leaf never looks one up). */
+const SPIKE_UNRECEIPTED = Object.freeze(['not-requested', 'parse-failed']);
+const SPIKE_ECHO_OPEN = '<local-command-stdout>';
+/** The spike report's kind, and the envelope the CLI arm wraps it in. */
+export const SPIKE_KIND = 'ccrc-history-w3-spike';
+
+const SPIKE_STMTS = new WeakMap();
+
+/** The spike's statements on one read handle, prepared once per handle. Every one is a SELECT. */
+function spikeStmts(db) {
+  let s = SPIKE_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    mains: db.prepare(`SELECT b.entry_id AS entry_id, b.transcript_pk AS transcript_pk, b.trigger AS trigger, b.pre_tokens AS pre_tokens,
+        b.duration_ms AS duration_ms, b.anchor_uuid AS anchor_uuid, e.uuid AS uuid, e.ts_ms AS ts_ms, t.cc_session_uuid AS cc_uuid
+      FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id JOIN transcripts t ON t.transcript_pk = b.transcript_pk
+      WHERE t.agent_id = '' ORDER BY b.entry_id`),
+    named: db.prepare('SELECT session_pk, merged_into FROM sessions WHERE ccrc_id = ?'),
+    parent: db.prepare('SELECT merged_into FROM sessions WHERE session_pk = ?'),
+    // derive's epochOf: the confirmed epoch of an unmerged family, the lowest session_pk first
+    epochOf: db.prepare(`SELECT e.session_pk AS session_pk, s.ccrc_id AS ccrc_id
+      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+      WHERE e.cc_session_uuid = ? AND e.confirmed_ms IS NOT NULL AND s.merged_into IS NULL
+      ORDER BY e.session_pk LIMIT 1`),
+    printed: db.prepare('SELECT 1 AS hit FROM steer_receipts WHERE (ccrc_id = ? OR cc_session_uuid = ?) AND ts_ms >= ? AND ts_ms < ? LIMIT 1'),
+    copyRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
+        e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms, e.model AS model, e.blob_id AS blob_id,
+        CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary
+      FROM memberships m JOIN entries e ON e.entry_id = m.entry_id LEFT JOIN boundaries b ON b.entry_id = e.entry_id
+      WHERE m.file_id = ? ORDER BY m.line`),
+    node: db.prepare('SELECT kind, summary_blob_id, parser_version FROM nodes WHERE node_id = ?'),
+    blob: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
+    // a leaf's exact receipts, in derive's receipt order, with the word that says where each one's time came from
+    exact: db.prepare(`SELECT r.ts_ms AS ts_ms, p.ts_source AS ts_source FROM steer_receipts r
+      LEFT JOIN spool_receipts p ON p.event_key = r.event_key WHERE r.leaf_id = ? ORDER BY r.ts_ms, r.event_key`),
+    exactOfSession: db.prepare("SELECT leaf_id, ts_ms FROM steer_receipts WHERE cc_session_uuid = ? AND leaf_id <> ''"),
+    modelRefs: db.prepare("SELECT count(*) AS n FROM node_refs WHERE node_id = ? AND origin = 'model'"),
+    newestTick: db.prepare('SELECT files_behind FROM ticks ORDER BY ts_ms DESC, tick_id DESC LIMIT 1'),
+    pairs: db.prepare('SELECT len, sha256 FROM redact_hashes'),
+  };
+  SPIKE_STMTS.set(db, s);
+  return s;
+}
+
+/** Nearest rank: the value at rank ⌈p·n⌉ of the ascending list (history-gate.mjs's declared percentile rule). `pct` is a
+ *  whole percent, so the rank is computed in integers.  @param {number[]} sorted  @param {number} pct */
+function nearestRank(sorted, pct) {
+  return sorted[Math.max(1, Math.ceil((pct * sorted.length) / 100)) - 1];
+}
+const ascending = (xs) => [...xs].sort((a, b) => a - b);
+
+/** A tally of unmeasured spans by word; a word outside COUNTER_UNMEASURED is a defect that throws (unmeasured()). */
+function newTally() {
+  return { count: 0, why: {} };
+}
+function tallyOne(t, word) {
+  unmeasured(word);
+  t.count += 1;
+  t.why[word] = (t.why[word] ?? 0) + 1;
+}
+
+/** The sessions the report names: every `sessions` row with each id, merged rows followed to the row derivation attaches
+ *  nodes to (the unmerged one). Counts only: how many ids were found.
+ *  @returns {{ roots: Set<number>, found: number }} */
+function cohortRoots(s, ids) {
+  const roots = new Set();
+  let found = 0;
+  for (const id of ids) {
+    const rows = s.named.all(id);
+    if (rows.length > 0) found += 1;
+    for (const r of rows) {
+      let pk = Number(r.session_pk);
+      for (let hop = 0; hop < 64; hop += 1) {
+        const up = s.parent.get(pk)?.merged_into;
+        if (up === null || up === undefined) break;
+        pk = Number(up);
+      }
+      roots.add(pk);
+    }
+  }
+  return { roots, found };
+}
+
+/** The pair index lib's redactField reads, from the stored pairs alone (makePairIndex's shape: length to the set of hex
+ *  digests; no belt, since this report reads no secret file), built once and only when a text needs redacting. */
+function storedPairIndex(s) {
+  const byLen = new Map();
+  for (const r of s.pairs.all()) {
+    const len = Number(r.len);
+    if (!byLen.has(len)) byLen.set(len, new Set());
+    byLen.get(len).add(Buffer.from(r.sha256).toString('hex'));
+  }
+  return { byLen, belt: null };
+}
+
+/** O17 (a), O20 (b): what one span's stored text shows of a cut. A tag the rule tests is `<analysis>` (any span) and
+ *  `<ccrc-leaf` or `<ccrc-node` (a receipted span only: a native summary's quoted block is never read). A cut shape is an
+ *  `<analysis>` never closed with no `<summary>` open after it, or a block opened with no close after it. An unclosed
+ *  `<summary>` alone is no cut shape: it is RG12's native shape. A span holding no tested tag is `untestable`, which counts
+ *  as no cut shape seen and is never worded as no truncation proven.
+ *  @returns {'cut' | 'untestable' | 'none'} */
+function cutShapeOf(text, receipted) {
+  let tested = false;
+  let cut = false;
+  const a = text.lastIndexOf('<analysis>');
+  if (a >= 0) {
+    tested = true;
+    if (text.indexOf('</analysis>', a) < 0 && text.indexOf('<summary>', a) < 0) cut = true;
+  }
+  if (receipted) {
+    for (const kind of ['leaf', 'node']) {
+      const open = new RegExp(`<ccrc-${kind}(?![A-Za-z0-9_-])`, 'g');
+      const close = `</ccrc-${kind}>`;
+      for (let m = open.exec(text); m !== null; m = open.exec(text)) {
+        tested = true;
+        const c = text.indexOf(close, m.index);
+        if (c < 0) {
+          cut = true;
+          break;
+        }
+        open.lastIndex = c + close.length;
+      }
+    }
+  }
+  return cut ? 'cut' : tested ? 'none' : 'untestable';
+}
+
+/** A stored echo or summary body as text: a string, or the text blocks of a list.  @param {unknown} body */
+function bodyText(body) {
+  if (typeof body === 'string') return body;
+  if (!Array.isArray(body)) return null;
+  return body.filter((b) => b !== null && typeof b === 'object' && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n');
+}
+
+/** One span the report sees: its boundary, its copy's rows, its producer and its leaf, with the reads it needs (the
+ *  summary text, the receipts, the echo) made once, on first ask. */
+function newSpan(rs, s, shared, b) {
+  const tsMs = b.ts_ms === null ? null : Number(b.ts_ms);
+  const holding = holdingCopyOf(rs.db, { entry_id: b.entry_id, transcript_pk: b.transcript_pk });
+  let copy = null;
+  let at = -1;
+  let backend = 'unknown';
+  if (holding !== null) {
+    const fileId = Number(holding.file_id);
+    copy = shared.copies.get(fileId);
+    if (copy === undefined) {
+      const rows = s.copyRows.all(fileId);
+      copy = { rows, index: new Map(rows.map((r, i) => [r.uuid, i])) };
+      shared.copies.set(fileId, copy);
+    }
+    at = copy.index.get(b.uuid) ?? -1;
+    // §6.2's rule as derive applies it: the summary row the boundary's anchor picks, else the boundary, in the copy that holds it
+    const meta = copy.meta ?? (copy.meta = copy.rows.map((r) => ({ uuid: r.uuid, isCompactSummary: r.is_compact_summary === 1, isEcho: r.type === 'user' && r.provenance === 'harness' })));
+    const pick = summaryRowFor({ boundaryUuid: b.uuid, anchorUuid: b.anchor_uuid, rows: meta });
+    const summaryAt = pick.uuid === null ? undefined : copy.index.get(pick.uuid);
+    backend = at < 0 ? 'unknown' : producerOfCopy(copy.rows, summaryAt ?? at);
+  }
+  const found = boundaryLeafOf(rs, b.uuid);
+  const leaf = found.state === 'leaf' ? (() => {
+    const n = s.node.get(found.node_id);
+    return { id: found.node_id, status: found.status, kind: String(n.kind), summaryBlobId: n.summary_blob_id === null ? null : Number(n.summary_blob_id), parserVersion: Number(n.parser_version) };
+  })() : null;
+  const span = {
+    tsMs, backend, copy, at, leaf, leafWord: leaf === null ? found.why : null,
+    trigger: b.trigger === null ? null : String(b.trigger), durationMs: b.duration_ms === null ? null : Number(b.duration_ms),
+    preTokens: b.pre_tokens === null ? null : Number(b.pre_tokens), ccUuid: String(b.cc_uuid),
+    receipted: leaf !== null && !SPIKE_UNRECEIPTED.includes(leaf.status),
+    memo: {},
+  };
+  return span;
+}
+
+/** The span's stored summary text, or the word that kept it from being one. Read once.  @returns {{ text: string } | { why: string }} */
+function summaryTextOf(rs, s, span) {
+  if (span.memo.text !== undefined) return span.memo.text;
+  let out;
+  if (span.leaf === null) out = { why: span.leafWord };
+  else if (span.leaf.summaryBlobId === null) out = { why: 'summary-missing' };
+  else {
+    const b = s.blob.get(span.leaf.summaryBlobId);
+    if (b === undefined || b.z === null) out = { why: 'summary-absent' };
+    else {
+      const m = blobPlainTextMeasured(b.z, false, null, Number(b.raw_len));
+      out = m.state === 'text' ? { text: m.text } : { why: `summary-${m.state}` };
+    }
+  }
+  span.memo.text = out;
+  return out;
+}
+
+/** A leaf's exact receipts, earliest first, in derive's order: by ts_ms then event_key, as pickReceipt picks.  @returns {Array<{ tsMs: number, drainStamped: boolean }>} */
+function exactReceiptsOf(s, span) {
+  if (span.leaf === null) return [];
+  return s.exact.all(span.leaf.id).map((r) => ({ tsMs: Number(r.ts_ms), drainStamped: r.ts_source === 'received' }));
+}
+
+/** O13, O23 (b), the coordinator's reading of V1: the earliest exact receipt decides. One the drain stamped is no clock's
+ *  time, so it is compared with nothing and counted apart; a timed one is late when it falls after its boundary.
+ *  @returns {'none' | 'late' | 'on-time' | 'untimed'} */
+function receiptTimingOf(exact, span) {
+  const [first] = exact;
+  if (first === undefined) return 'none';
+  if (first.drainStamped) return 'untimed';
+  return first.tsMs > span.tsMs ? 'late' : 'on-time';
+}
+
+/** A span's receipt window, the one pickReceipt gives it (derive's receiptWindow): after the previous boundary of its copy,
+ *  up to its own. */
+function previousBoundaryMs(span) {
+  if (span.copy === null) return null;
+  for (let i = span.at - 1; i >= 0; i -= 1) {
+    if (span.copy.rows[i].is_boundary === 1) return span.copy.rows[i].ts_ms === null ? null : Number(span.copy.rows[i].ts_ms);
+  }
+  return null;
+}
+
+/** Does the span's window hold an exact receipt of another leaf? That is a span printed to under an earlier span's id, by a
+ *  stale print or in a late receipt's shape (O13, O22). */
+function isStalePrint(s, shared, span) {
+  if (span.leaf === null || span.tsMs === null) return false;
+  let all = shared.exactBySession.get(span.ccUuid);
+  if (all === undefined) {
+    all = s.exactOfSession.all(span.ccUuid).map((r) => ({ leafId: String(r.leaf_id), tsMs: Number(r.ts_ms) }));
+    shared.exactBySession.set(span.ccUuid, all);
+  }
+  const after = previousBoundaryMs(span);
+  return all.some((r) => r.leafId !== span.leaf.id && (after === null || r.tsMs > after) && r.tsMs <= span.tsMs);
+}
+
+/** G16: the first user row of provenance `harness` after a manual boundary, in its holding copy and before the next
+ *  boundary, whose text starts `<local-command-stdout>`: its length in characters. A candidate expandEntryBody cannot read
+ *  could be the echo, so it is unmeasured under its own body word.
+ *  @returns {{ chars: number } | { why: string }} */
+function echoCharsOf(rs, span) {
+  if (span.copy === null) return { why: 'boundary-uncopied' };
+  const rows = span.copy.rows;
+  for (let i = span.at + 1; i < rows.length && rows[i].is_boundary !== 1; i += 1) {
+    const r = rows[i];
+    if (r.type !== 'user' || r.provenance !== 'harness') continue;
+    const k = expandEntryBody(rs, { entry_id: Number(r.entry_id), blob_id: Number(r.blob_id) });
+    if (k.state !== 'body') return { why: `body-${k.state}` };
+    const text = bodyText(k.body);
+    if (text !== null && text.trimStart().startsWith(SPIKE_ECHO_OPEN)) return { chars: text.length };
+  }
+  return { why: 'echo-absent' };
+}
+
+/** A headroom figure over per-span results: each `{hit}` was read, each `{why}` was not. `runWords` are the run's
+ *  contamination: any one leaves the figure unmeasured whatever the spans say (O22). The figure is measured only when
+ *  neither a span nor the run is unmeasured. */
+function headFigure(results, runWords) {
+  const un = newTally();
+  let count = 0;
+  let of = 0;
+  for (const r of results) {
+    if (r.why !== undefined) tallyOne(un, r.why);
+    else {
+      of += 1;
+      if (r.hit) count += 1;
+    }
+  }
+  const why = [...new Set([...runWords, ...Object.keys(un.why)])].sort();
+  return { state: why.length === 0 ? 'measured' : 'unmeasured', why, count, of, unmeasured: un };
+}
+
+/** A set of durations (or echo lengths) as nearest-rank figures; a set with no value is unmeasured, never 0. */
+function durationSet(spans) {
+  const values = [];
+  const pre = [];
+  let absent = 0;
+  for (const x of spans) {
+    if (x.durationMs === null) absent += 1;
+    else values.push(x.durationMs);
+    if (x.preTokens !== null) pre.push(x.preTokens);
+  }
+  if (values.length === 0) return unmeasured('duration-absent');
+  const v = ascending(values);
+  return measured({ n: v.length, p50: nearestRank(v, 50), p95: nearestRank(v, 95), preTokensP50: pre.length === 0 ? null : nearestRank(ascending(pre), 50), absent });
+}
+
+/** One backend's figures for one side (the cohort's, or O21's baseline), over the spans placed in range. `untimed` are the
+ *  side's spans the range cannot place. `runWords` is the run's contamination of this side's headroom figures. */
+function spikeFigures(rs, s, shared, { side, spans, untimed, runWords, run }) {
+  const cohort = side === 'cohort';
+  const placed = spans;
+  const pop = {
+    spans: placed.length, untimed: untimed.length, leafAbsent: 0, leafAmbiguous: 0, rawLeaf: 0, parseFailed: 0, notRequested: 0, receipted: 0,
+    parserVersions: {},
+  };
+  const compUn = newTally();
+  const statuses = [];
+  const lateStatuses = [];
+  const reasons = { 'no-receipt': 0, 'no-block': 0, none: 0, 'reason-not-stored': 0, 'no-outcome': 0, 'out-of-vocabulary': 0 };
+  const reasonUn = newTally();
+  const lateUn = newTally();
+  const staleUn = newTally();
+  let late = 0;
+  let untimedReceipts = 0;
+  let multi = 0;
+  let stale = 0;
+  const refCounts = [];
+  let okWithNone = 0;
+  const unclosed = [];
+  const cuts = [];
+  const untestable = [];
+  const analysis = [];
+  const durSpans = [];
+  const echoSpans = [];
+  for (let i = 0; i < untimed.length; i += 1) {
+    tallyOne(lateUn, 'boundary-untimed');
+    tallyOne(staleUn, 'boundary-untimed');
+  }
+  for (const x of placed) {
+    if (x.leaf === null) {
+      if (x.leafWord === 'leaf-ambiguous') pop.leafAmbiguous += 1;
+      else pop.leafAbsent += 1;
+      tallyOne(compUn, x.leafWord);
+      tallyOne(reasonUn, x.leafWord);
+    } else {
+      const st = x.leaf.status;
+      pop.parserVersions[x.leaf.parserVersion] = (pop.parserVersions[x.leaf.parserVersion] ?? 0) + 1;
+      if (x.leaf.kind === 'raw_leaf') pop.rawLeaf += 1;
+      if (st === 'parse-failed') pop.parseFailed += 1;
+      if (st === 'not-requested') pop.notRequested += 1;
+      if (x.receipted) pop.receipted += 1;
+      const reason = st === 'not-requested' ? 'no-receipt' : st === 'absent' ? 'no-block' : st === 'ok' ? 'none'
+        : st === 'invalid' || st === 'degraded' ? 'reason-not-stored' : st === 'parse-failed' ? 'no-outcome' : 'out-of-vocabulary';
+      reasons[reason] += 1;
+    }
+    // the receipts' footprints
+    const exact = exactReceiptsOf(s, x);
+    const timing = receiptTimingOf(exact, x);
+    if (timing === 'late') late += 1;
+    if (timing === 'untimed') untimedReceipts += 1;
+    if (exact.length >= 2) multi += 1;
+    const isStale = isStalePrint(s, shared, x);
+    if (isStale) stale += 1;
+    // compliance: the receipted leaves, with and without the late ones
+    if (x.receipted) {
+      statuses.push(x.leaf.status);
+      if (timing !== 'late') lateStatuses.push(x.leaf.status);
+    }
+    if (x.leaf !== null && x.leaf.kind === 'steered_leaf') {
+      const n = Number(s.modelRefs.get(x.leaf.id).n);
+      refCounts.push(n);
+      if (x.leaf.status === 'ok' && n === 0) okWithNone += 1;
+    }
+    // the stored summary: one read feeds the unclosed share, the cut shapes and analysis_only
+    const t = summaryTextOf(rs, s, x);
+    const inShare = cohort ? x.receipted : true;
+    if (t.why !== undefined) {
+      unclosed.push({ why: t.why });
+      cuts.push({ why: t.why });
+      untestable.push({ why: t.why });
+      if (x.receipted && x.leaf.status === 'absent') analysis.push({ why: t.why });
+    } else {
+      unclosed.push(inShare ? { hit: summaryParts(t.text).unclosed } : { skip: true });
+      if (isStale) {
+        cuts.push({ why: 'stale-print' });
+        untestable.push({ why: 'stale-print' });
+      } else {
+        const shape = cutShapeOf(t.text, x.receipted);
+        cuts.push({ hit: shape === 'cut' });
+        untestable.push({ hit: shape === 'untestable' });
+      }
+      if (x.receipted && x.leaf.status === 'absent') {
+        const blocks = parseBlocks(redactField(t.text, shared.pairIdx ?? (shared.pairIdx = storedPairIndex(s))));
+        const sel = selectBlock({ blocks, kind: 'leaf', computedId: x.leaf.id, generic: exact.length === 0 });
+        analysis.push({ hit: sel.block === null && blocks.some((b) => b.inAnalysis) });
+      }
+    }
+    if (x.receipted || !cohort) durSpans.push(x);
+    if (x.trigger === 'manual') echoSpans.push(x);
+  }
+  const compliance = {
+    receipted: statuses.length,
+    all: statuses.length === 0 ? null : foldCompliance(statuses),
+    withoutLate: lateStatuses.length === 0 ? null : foldCompliance(lateStatuses),
+    unmeasured: compUn,
+  };
+  const sorted = ascending(refCounts);
+  const unclosedFigure = headFigure(unclosed.filter((r) => r.skip !== true), runWords);
+  const durations = {
+    all: durationSet(durSpans),
+    manual: durationSet(durSpans.filter((x) => x.trigger === 'manual')),
+    auto: durationSet(durSpans.filter((x) => x.trigger === 'auto')),
+  };
+  const echoLengths = [];
+  const echoUn = newTally();
+  for (const x of echoSpans) {
+    const e = echoCharsOf(rs, x);
+    if (e.chars !== undefined) echoLengths.push(e.chars);
+    else tallyOne(echoUn, e.why);
+  }
+  const echoSorted = ascending(echoLengths);
+  const echoFirst = Object.keys(echoUn.why).sort()[0];
+  return {
+    run,
+    population: pop,
+    compliance,
+    reasons: { ...reasons, unmeasured: reasonUn },
+    multiReceipt: multi,
+    lateReceipts: { count: late, unmeasured: lateUn },
+    untimedReceipts,
+    stalePrint: { count: stale, unmeasured: staleUn },
+    modelRefs: { leaves: sorted.length, p50: sorted.length === 0 ? null : nearestRank(sorted, 50), okWithNone },
+    summaryUnclosed: { ...unclosedFigure, share: { num: unclosedFigure.count, den: unclosedFigure.of } },
+    cutShapes: headFigure(cuts, runWords),
+    cutUntestable: headFigure(untestable, runWords),
+    analysisOnly: headFigure(analysis, []),
+    durationMs: durations,
+    echoChars: {
+      set: echoSorted.length === 0 ? unmeasured(echoFirst ?? 'echo-absent') : measured({ n: echoSorted.length, p50: nearestRank(echoSorted, 50), unmeasured: echoUn }),
+    },
+  };
+}
+
+/** O19 (b): the cohort's unclosed share is at most the baseline's. Either side unmeasured, or under O2's sample of spans,
+ *  reads unmeasured (never met); the absolute counts are the figures' own, beside it. */
+function compareUnclosed(coh, base) {
+  if (coh.state === 'unmeasured') return unmeasured(coh.why[0]);
+  if (base.state === 'unmeasured') return unmeasured(base.why[0]);
+  if (coh.of < SPIKE_SAMPLE_MIN || base.of < SPIKE_SAMPLE_MIN) return unmeasured('sample-short');
+  return measured({ cohort: coh.share, baseline: base.share, atMost: coh.count * base.of <= base.count * coh.of });
+}
+
+/** The spike report (spec §7.5; plan Task 1D). `db` is a read handle (openCounterStore's); `sessions` are `ccrc_id`s;
+ *  the range is `[sinceMs, untilMs)` by each boundary's `ts_ms`. Never writes, and prints no text.
+ *  @param {{ db: object, sessions: string[], sinceMs: number, untilMs: number }} a */
+export function spikeReport({ db, sessions, sinceMs, untilMs }) {
+  if (!Array.isArray(sessions) || sessions.length === 0 || !sessions.every((x) => typeof x === 'string' && x !== '')) throw new TypeError('spikeReport: sessions are ccrc ids');
+  if (!Number.isSafeInteger(sinceMs) || !Number.isSafeInteger(untilMs) || sinceMs >= untilMs) throw new TypeError('spikeReport: the range is [sinceMs, untilMs) with sinceMs below untilMs');
+  const rs = { db, storeId: '', version: userVersion(db), schema: SCHEMA_ADDED, close: () => undefined };
+  const s = spikeStmts(db);
+  const { roots, found } = cohortRoots(s, sessions);
+  const shared = { copies: new Map(), exactBySession: new Map(), pairIdx: null };
+  /** Per side: the spans placed in range, and the ones the range cannot place. */
+  const sides = { cohort: { placed: [], untimed: [] }, baseline: { placed: [], untimed: [] } };
+  const printed = new Map();
+  for (const b of s.mains.all()) {
+    const ts = b.ts_ms === null ? null : Number(b.ts_ms);
+    if (ts !== null && (ts < sinceMs || ts >= untilMs)) continue;
+    const ep = s.epochOf.get(b.cc_uuid);
+    if (ep === undefined) continue;
+    const named = roots.has(Number(ep.session_pk));
+    if (!named) {
+      // O21 (a): a session with a steer receipt in the range was printed to, whoever owns it, so none of its spans joins the baseline
+      const key = `${ep.ccrc_id}\0${b.cc_uuid}`;
+      if (!printed.has(key)) printed.set(key, s.printed.get(ep.ccrc_id, b.cc_uuid, sinceMs, untilMs) !== undefined);
+      if (printed.get(key)) continue;
+    }
+    const span = newSpan(rs, s, shared, b);
+    (ts === null ? sides[named ? 'cohort' : 'baseline'].untimed : sides[named ? 'cohort' : 'baseline'].placed).push(span);
+  }
+  const tick = s.newestTick.get();
+  const sweep = tick === undefined ? { state: 'unmeasured', filesBehind: null }
+    : { state: Number(tick.files_behind) === 0 ? 'caught-up' : 'behind', filesBehind: Number(tick.files_behind) };
+  const cohortAll = [...sides.cohort.placed, ...sides.cohort.untimed];
+  const producerUnknown = cohortAll.filter((x) => x.backend === 'unknown').length;
+  const run = {
+    sinceMs, untilMs, sessions: { named: sessions.length, found }, sweep, producerUnknown,
+    boundaryUntimed: { cohort: sides.cohort.untimed.length, baseline: sides.baseline.untimed.length },
+  };
+  // O22 (b): the run's contamination, each word its own state. The sweep behind and a boundary no range can place leave every
+  // headroom figure unmeasured; a producer still unknown does too (it can hide a cut from either backend).
+  const sweepWords = sweep.state === 'behind' ? ['sweep-behind'] : sweep.state === 'unmeasured' ? ['sweep-unmeasured'] : [];
+  const cohortWords = [...sweepWords, ...(sides.cohort.untimed.length > 0 ? ['boundary-untimed'] : []), ...(producerUnknown > 0 ? ['producer-unknown'] : [])];
+  const perBackend = {};
+  const baseline = {};
+  for (const be of BACKENDS) {
+    const pick = (side) => ({ placed: sides[side].placed.filter((x) => x.backend === be), untimed: sides[side].untimed.filter((x) => x.backend === be) });
+    const c = pick('cohort');
+    const b = pick('baseline');
+    perBackend[be] = spikeFigures(rs, s, shared, { side: 'cohort', spans: c.placed, untimed: c.untimed, runWords: cohortWords, run });
+    baseline[be] = spikeFigures(rs, s, shared, { side: 'baseline', spans: b.placed, untimed: b.untimed, runWords: [...sweepWords, ...(b.untimed.length > 0 ? ['boundary-untimed'] : [])], run });
+  }
+  for (const be of BACKENDS) {
+    const c = perBackend[be];
+    const b = baseline[be];
+    c.summaryUnclosed.comparison = compareUnclosed(c.summaryUnclosed, b.summaryUnclosed);
+    // §10.7's added p50: p50(cohort) ÷ p50(baseline) − 1, as the difference over the baseline's p50; nothing adjusts for pre_tokens
+    const cd = c.durationMs.all;
+    const bd = b.durationMs.all;
+    c.durationMs.addedP50 = cd.state === 'measured' && bd.state === 'measured' && bd.value.p50 > 0
+      ? measured({ num: cd.value.p50 - bd.value.p50, den: bd.value.p50 }) : unmeasured('duration-absent');
+    const ce = c.echoChars.set;
+    const bech = b.echoChars.set;
+    c.echoChars.addedP50 = ce.state === 'measured' && bech.state === 'measured' ? measured(ce.value.p50 - bech.value.p50) : unmeasured('echo-absent');
+  }
+  return { perBackend, baseline };
+}
+
+// ── the spike arm (O5): `history-counters.mjs spike --db <history.db> --session <id> [--session <id>] --since <ms> --until <ms> --out <file>`
+const SPIKE_INT = /^(0|[1-9][0-9]*)$/;
+function spikeInt(name, text) {
+  const n = Number(text);
+  if (!SPIKE_INT.test(text) || !Number.isSafeInteger(n)) refuse('args-invalid', `--${name} wants a millisecond count, got ${JSON.stringify(text)}`);
+  return n;
+}
+
+/** The spike form: every flag required, none optional. `--out` names a FILE that does not exist yet (the report is one
+ *  JSON document, 0600), not a directory as the counters' own `--out` does. */
+export const SPIKE_FORM = Object.freeze({
+  required: Object.freeze(['db', 'session', 'since', 'until', 'out']),
+  optional: Object.freeze([]),
+  run: (flags) => spikeCommand(flags),
+});
+/** Every subcommand's form: the counters' two, and the spike. COUNTER_SUBCOMMANDS stays the counters' own pair. */
+const ALL_FORMS = Object.freeze({ ...COUNTER_FORMS, spike: SPIKE_FORM });
+
+/** spike: the flags; a fresh --out; the store read-only; the report in memory; and only then --out, written once, 0600, as
+ *  the envelope's canonical JSON and one newline. stderr carries `sha256 <hex>` of the bytes written. */
+export function spikeCommand(flags) {
+  checkFormFlags('spike', flags);
+  const since = spikeInt('since', flags.since);
+  const until = spikeInt('until', flags.until);
+  if (since >= until) refuse('args-invalid', '--since must be below --until');
+  if (typeof flags.db !== 'string' || !path.isAbsolute(flags.db)) refuse('args-invalid', '--db names no absolute path');
+  refuseUnlessFresh(flags.out);
+  const rs = openCounterStore(flags.db);
+  let report;
+  try {
+    report = { kind: SPIKE_KIND, v: 1, script_sha256: scriptSha256(), store_id: rs.storeId, user_version: rs.version,
+      ...spikeReport({ db: rs.db, sessions: flags.session, sinceMs: since, untilMs: until }) };
+  } finally {
+    rs.close();
+  }
+  const text = `${canonicalJson(report)}\n`;
+  try {
+    writeFileSync(path.resolve(flags.out), text, { mode: 0o600, flag: 'wx' });
+  } catch (e) {
+    refuse('out-refused', `spike unwritable ${String(/** @type {{ code?: unknown }} */ (e)?.code ?? 'unknown')}`);
+  }
+  process.stderr.write(`sha256 ${sha256Hex(text)}\n`);
+  return EXIT.OK;
+}
+
 // ── the measures, composed (W2-D87): every counter's spec, in COUNTER_NAMES' order ──────────────────────────────────
 
 /** One CounterSpec per counter, keyed and ordered as COUNTER_NAMES (countersReport throws on anything else). Each
@@ -1045,8 +1613,8 @@ export const COUNTER_MEASURES = Object.freeze({
 export function main(argv, deps = COUNT_DEPS) {
   try {
     process.umask(0o077);
-    const { sub, flags } = parseArgs(argv, { specs: COUNTER_FLAG_SPECS, subs: COUNTER_SUBCOMMANDS });
-    return COUNTER_FORMS[sub].run(flags, deps);
+    const { sub, flags } = parseArgs(argv, { specs: COUNTER_FLAG_SPECS, subs: Object.keys(ALL_FORMS) });
+    return ALL_FORMS[sub].run(flags, deps);
   } catch (e) {
     if (e instanceof DriverRefusal) {
       process.stderr.write(`${PREFIX}: ${e.word}: ${e.detail}\n`);
