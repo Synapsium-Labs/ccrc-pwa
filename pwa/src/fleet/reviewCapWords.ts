@@ -3,7 +3,7 @@
 // `reviewCapOf` is the only place `RunSummary.reviewCap` is read. A `RunSummary` is cast, never revived, so an older
 // server's row carries no `reviewCap` key at all: that reads `'unmeasured'`, never as "not waiting", and every caller
 // below says nothing for it rather than claiming the cap is clear.
-import { REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_WORDS, type NotifyEvent, type ReviewCapStatus, type ReviewFindings, type RunSummary } from '../../../shared/api';
+import { REVIEW_FINDINGS_NONE_OPEN, REVIEW_FINDINGS_WORDS, type CoordLiftRecord, type NotifyEvent, type ReviewCapStatus, type ReviewFindings, type RunSummary } from '../../../shared/api';
 import { eventRunId } from '../lib/feed';
 import { isRunClosed } from './runWords';
 
@@ -11,13 +11,32 @@ import { isRunClosed } from './runWords';
 export const reviewCapOf = (run: { reviewCap?: ReviewCapStatus | null }): ReviewCapStatus | 'unmeasured' | null =>
   run.reviewCap === undefined ? 'unmeasured' : run.reviewCap;
 
-/** Whether this run waits on the operator for its review cap. `waiting` is a raised ask with no lift, `lifted` a raised
- *  ask the operator lifted. A closed run is never waiting, and an unmeasured cap says nothing. */
-export function capWaiting(run: RunSummary): 'waiting' | 'lifted' | null {
+/** The two D-8125 fields an older server never sends, read as absent. `ReviewCapStatus` types them required (this
+ *  server always sends them), so the reader narrows through a partial view rather than trusting the type. */
+const handledAtOf = (cap: ReviewCapStatus): number | null => (cap as Partial<ReviewCapStatus>).askHandledAt ?? null;
+
+/** The run's last coordinator lift, or null (none, or an older server that sends no `coordLift`). */
+export const coordLiftOf = (cap: ReviewCapStatus): CoordLiftRecord | null => (cap as Partial<ReviewCapStatus>).coordLift ?? null;
+
+/** Whether this run waits on the operator for its review cap. `waiting` is a raised ask that nobody has lifted or
+ *  handled, `lifted` a raised ask the operator lifted, `coordinator` a cap its coordinator extended (D-8125) whose ask
+ *  is closed or was never raised. A closed run is never waiting, and an unmeasured cap says nothing. An older server's
+ *  row (no `askHandledAt`, no `coordLift`) reads exactly as before. */
+export function capWaiting(run: RunSummary): 'waiting' | 'lifted' | 'coordinator' | null {
   if (isRunClosed(run)) return null;
   const cap = reviewCapOf(run);
-  if (cap === null || cap === 'unmeasured' || cap.askedAt === null) return null;
-  return cap.liftedAt === null ? 'waiting' : 'lifted';
+  if (cap === null || cap === 'unmeasured') return null;
+  if (cap.askedAt !== null) {
+    if (cap.liftedAt !== null) return 'lifted';
+    if (handledAtOf(cap) === null) return 'waiting';
+  }
+  return coordLiftOf(cap) === null ? null : 'coordinator';
+}
+
+/** "Cap lifted by its coordinator: <reason>" with the reason as the server sent it, or null when no coordinator lifted. */
+export function coordLiftLine(cap: ReviewCapStatus): string | null {
+  const lift = coordLiftOf(cap);
+  return lift === null ? null : `Cap lifted by its coordinator: ${lift.reason}`;
 }
 
 /** The last review's findings as the sheet lists them: the lines a read report gave, or one sentence saying why there

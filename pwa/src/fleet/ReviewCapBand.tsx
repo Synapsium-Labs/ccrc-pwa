@@ -1,12 +1,12 @@
 // The run board's "Waiting on you" band (D-6911, #1410): every open work run whose review cap's ask is raised. A run
 // not yet lifted carries the Lift cap door, which hands the run to the board's one `LiftCapSheet`; a lifted run says
-// when it was lifted, until the run closes. On a band, not on the run card, because `RunRow.tsx` was under another
+// when it was lifted, and a cap its coordinator extended says who and why (D-8125, no button), until the run closes. On a band, not on the run card, because `RunRow.tsx` was under another
 // wave's claim when this shipped (D-6911); a later wave may move the door onto the card.
 import type { ReactNode } from 'react';
 import type { RunSummary } from '../../../shared/api';
 import { Button } from '@ccrc/ui';
 import { formatAge } from './formatReset';
-import { capWaiting, reviewCapOf } from './reviewCapWords';
+import { capWaiting, coordLiftLine, reviewCapOf } from './reviewCapWords';
 import './fleet.css';
 
 export function ReviewCapBand({ runs, nowMs, onLift }: {
@@ -33,6 +33,8 @@ export function ReviewCapBand({ runs, nowMs, onLift }: {
                   Lift cap
                 </Button>
               </>
+            ) : waiting === 'coordinator' ? (
+              <span>{`Run ${run.id}: ${coordLiftLine(cap) ?? ''} · ${cap.rounds} of ${cap.cap} rounds`}</span>
             ) : (
               <span>{`Run ${run.id}: review cap lifted ${formatAge(cap.liftedAt === null ? null : Math.floor((nowMs - cap.liftedAt) / 1000))}`}</span>
             )}

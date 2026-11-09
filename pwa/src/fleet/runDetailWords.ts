@@ -1,9 +1,10 @@
 // The run page's words and its facts (the runs rebuild, D-8072; spec 2026-11-04 §8.4). Pure (L1): the screen mounts what
 // this returns and decides nothing. The facts come in the spec's order under four labelled groups, and a fact that is absent
 // is left out, except "Last move", which says "None recorded". The trail is a fifth group, drawn by its own component.
-import type { RunHit, RunSignals, RunSummary } from '../../../shared/api';
+import type { ReviewCapStatus, RunHit, RunSignals, RunSummary } from '../../../shared/api';
 import type { CoordinatorPresence } from './presence';
 import { closedLine } from './closeWords';
+import { coordLiftLine, coordLiftOf, reviewCapOf } from './reviewCapWords';
 import { waveLabel } from './runWords';
 
 export const RUN_PAGE_WORDS = {
@@ -87,6 +88,16 @@ function suiteAndChecks(s: RunSignals['signals']): string | null {
   return parts.length === 0 ? null : parts.join(' · ');
 }
 
+/** The Review cap fact (D-8125): "3 of 6 rounds", then who lifted it. The operator's lift wins over a coordinator's, as
+ *  it removes the cap; a coordinator lift says its reason and, past the first, how many times. */
+function reviewCapParts(cap: ReviewCapStatus): readonly FactPart[] {
+  const rounds = `${cap.rounds} of ${cap.cap} rounds`;
+  const lift = coordLiftOf(cap);
+  if (cap.liftedAt !== null) return txt(`${rounds} · Lifted by the operator`);
+  if (lift === null) return txt(rounds);
+  return txt(`${rounds} · ${coordLiftLine(cap)}${lift.count > 1 ? `, ${lift.count} times` : ''}`);
+}
+
 /** The facts, in §8.4's order, under their groups. A group with no fact is left out. */
 export function runFacts(input: FactInput): FactGroup[] {
   const { run } = input;
@@ -120,6 +131,8 @@ export function runFacts(input: FactInput): FactGroup[] {
   if (run.workspace !== null) work.push(fact('workspace', 'Workspace', txt(run.workspace)));
   if (run.branch !== null) work.push(fact('branch', 'Branch', txt(run.branch)));
   if (input.pr !== null) work.push(fact('pr', 'Pull requests', [input.pr.href === null ? { text: input.pr.text } : { text: input.pr.text, href: input.pr.href, external: true }]));
+  const cap = reviewCapOf(run);
+  if (cap !== null && cap !== 'unmeasured') work.push(fact('reviewCap', 'Review cap', reviewCapParts(cap)));
   if (input.items !== undefined) work.push(fact('items', 'Items done', txt(`${input.items.done} of ${input.items.total}`)));
   const checks = input.signals === undefined ? null : suiteAndChecks(input.signals);
   if (checks !== null) work.push(fact('checks', 'Suite and checks', txt(checks)));

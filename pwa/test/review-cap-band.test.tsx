@@ -1,7 +1,7 @@
 // D-6911: the run board's "Waiting on you" band for the review cap. TDD red-first.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { cleanup, render, screen, fireEvent, within } from '@testing-library/react';
-import type { ReviewCapStatus, RunSummary } from '../../shared/api';
+import type { CoordLiftRecord, ReviewCapStatus, RunSummary } from '../../shared/api';
 import { ReviewCapBand } from '../src/fleet/ReviewCapBand';
 import { NOW, MIN, run } from './rollupFixture';
 
@@ -42,5 +42,18 @@ describe('ReviewCapBand', () => {
   it('renders nothing when no run is waiting or lifted', () => {
     const { container } = render(<ReviewCapBand runs={[closed, review, older()]} nowMs={NOW} onLift={() => {}} />);
     expect(container.innerHTML).toBe('');
+  });
+});
+
+describe('ReviewCapBand, a cap its coordinator lifted (D-8125)', () => {
+  const lift: CoordLiftRecord = { at: NOW - MIN, by: 'coord-a', reason: 'two major findings, converging', rounds: 3, capBefore: 3, capAfter: 6, count: 1 };
+  const handled = run(22, 'coord', 'w-22', { reviewCap: cap({ cap: 6, granted: 3, askHandledAt: NOW - MIN, coordLift: lift }) });
+
+  it('says who lifted it and why, with the rounds, and offers no Lift cap button', () => {
+    render(<ReviewCapBand runs={[handled]} nowMs={NOW} onLift={() => {}} />);
+    const rows = within(screen.getByRole('group', { name: /waiting on you/i })).getAllByRole('listitem');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toBe('Run 22: Cap lifted by its coordinator: two major findings, converging · 3 of 6 rounds');
+    expect(within(rows[0]!).queryByRole('button')).toBeNull();
   });
 });
