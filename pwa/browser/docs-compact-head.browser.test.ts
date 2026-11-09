@@ -775,27 +775,43 @@ describe('the desk head (desk-nav Part B)', () => {
     }
   }, 300_000);
 
-  // Review 1704 F2 (Task C16, D-8139): in GitHub's refusal state the sentence gives way (an ellipsis from a small basis,
-  // its whole words in its `title`) before the page's name does, so a wider window never shows less of the name here
-  // either. Before, the sentence (439 px) never shrank: the actions wrapped to a line of their own below about 1100 px,
-  // handing the name a whole line, and the name dropped from whole to six characters one pixel wider; at 768 it showed
-  // six characters on one line. From 900 the desk sidebar takes its column, so the row is narrower at 900 (544 px in
-  // Instrument) than at 768 (752): the sweep is monotonic from 900, as the draft's is, and 768 shows the whole name.
-  const REFUSAL_SWEEP = [768, ...SWEEP.filter((w) => w <= 1320)];
-  it.each([INSTRUMENT, REFINED].flatMap((skin) => (['fine', 'coarse'] as const).map((pointer) => [skin, pointer] as const)))("GitHub's refusal, %s, a %s pointer, at 768 and 900 to 1320 px in 20 px steps: a wider window never shows less of the name (review 1704 F2)", async (skin, pointer) => {
+  // Review 1704 F2 and review 1722 F2 (Task C16, D-8139): in GitHub's refusal state, when the row is short, the action
+  // words hide first, then the middle crumbs fold, then the sentence shortens to its 12ch floor (an ellipsis, its whole
+  // words in its `title`), and the page's name gives way last. So wherever the name is whole and the words or the
+  // unfolded middle crumbs show, the sentence is whole, and a wider window never shows less of the name. Before item 2
+  // the sentence never shrank: the actions wrapped onto a line of their own below about 1100 px, and the name dropped
+  // from whole to six characters one pixel wider. After item 2 alone the sentence stood at its 12ch stub up to 1500 px
+  // while the name and the words showed. From 900 the desk sidebar takes its column, so the row is narrower at 900 (544 px
+  // in Instrument) than at 768 (752): the name is monotonic from 900, and whole at 768. Two reasons: the longest
+  // (`bad-slug`, 439 px) and a short one (no GitHub origin).
+  const REFUSAL_SWEEP = [768, ...Array.from({ length: (1600 - 900) / 20 + 1 }, (_, i) => 900 + 20 * i)];
+  const REFUSED_SHORT_DEEP = { ...DEEP_TREE, github: { state: 'none' as const } };
+  const REFUSAL_CASES = ([['the longest reason', REFUSED_DEEP], ['a short reason', REFUSED_SHORT_DEEP]] as const)
+    .flatMap(([what, tree]) => [INSTRUMENT, REFINED].flatMap((skin) => (['fine', 'coarse'] as const).map((pointer) => [what, skin, pointer, tree] as const)));
+  it.each(REFUSAL_CASES)("GitHub's refusal, %s, %s, a %s pointer, at 768 and 900 to 1600 px in 20 px steps: the sentence is whole wherever the name is and the words or the middle crumbs show, and a wider window never shows less of the name (reviews 1704 F2, 1722 F2)", async (_what, skin, pointer, tree) => {
     const view: View = pointer === 'fine' ? { width: 768, height: 800, skin, pointer } : { width: 768, height: 800, skin, touch: true };
-    const app = await openRow(view, REFUSED_DEEP, 'main');
+    const app = await openRow(view, tree, 'main');
     try {
-      const seen: [number, number, string][] = [];
+      const seen: [number, number, string, number][] = [];
+      const broken: string[] = [];
       let whole768 = false;
       for (const w of REFUSAL_SWEEP) {
         await app.page.setViewportSize({ width: w, height: 800 });
         const r = await rowState(app.page);
+        const off = await app.page.evaluate(() => {
+          const e = document.querySelector('.docs-full .docs-action-off') as HTMLElement;
+          const t = document.createRange();
+          t.selectNodeContents(e);
+          return { shown: e.getBoundingClientRect().width, text: t.getBoundingClientRect().width };
+        });
+        const offWhole = off.text <= off.shown + 0.01;
         if (w === 768) whole768 = r.nameWhole;
-        seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`]);
+        seen.push([w, Math.round(r.seen * 10) / 10, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`, Math.round(off.shown)]);
+        if (r.nameWhole && (r.words || !r.folded) && !offWhole) broken.push(`${w}: the sentence ${Math.round(off.shown)} of ${Math.round(off.text)} px`);
         expect(r.scrollW, `no sideways scroll at ${w}`).toBeLessThanOrEqual(r.innerW);
       }
-      console.log(`PHH-FIGURE ${skin} ${pointer} sweep refusal-name ${JSON.stringify(seen)}`);
+      console.log(`PHH-FIGURE ${skin} ${pointer} sweep refusal ${tree === REFUSED_DEEP ? 'long' : 'short'} ${JSON.stringify(seen)}`);
+      expect(broken, 'the sentence is cut while the name is whole and the words or the middle crumbs show').toEqual([]);
       expect(whole768, "the page's whole name at 768").toBe(true);
       for (let i = 2; i < seen.length; i++) {
         expect(seen[i]![1], `the name at ${seen[i]![0]} against ${seen[i - 1]![0]}`).toBeGreaterThanOrEqual(seen[i - 1]![1] - 0.5);

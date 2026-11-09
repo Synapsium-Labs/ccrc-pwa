@@ -891,7 +891,8 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
 /** The full head's row (desk-nav Part B, D-8101): back, the crumbs and the actions. When the row is short it gives way in
  *  the order fix round 2 ruled: the action words hide first (each icon keeps its name and `title`), then the middle
  *  crumbs fold behind `…` (`useRowStage`); then the page's name shortens to its floor, and only then do the actions wrap
- *  onto a second line (docs.css). */
+ *  onto a second line (docs.css). The last stage is marked `data-fold`: only there does GitHub's refusal sentence
+ *  shorten, before the name does (review 1722 F2). */
 function HeadRow(p: {
   readonly page: DocsPageLocation; readonly crumbs: readonly DocsCrumb[];
   readonly listed: { readonly tree: DocsTreeOk; readonly page: TreePage } | null;
@@ -900,7 +901,10 @@ function HeadRow(p: {
   const ref = useRef<HTMLDivElement>(null);
   const stage = useRowStage(ref);
   return (
-    <div className="docs-head-bar" ref={ref} data-words={stage === 0 ? undefined : 'off'}>
+    <div
+      className="docs-head-bar" ref={ref}
+      data-words={stage === 0 ? undefined : 'off'} data-fold={stage === ROW_STAGES.at(-1) ? '' : undefined}
+    >
       <BackButton page={p.page} />
       <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} fold={stage === 2} />
       {p.listed !== null && <Actions form="row" page={p.listed.page} tree={p.listed.tree} {...p.actionInputs} />}
