@@ -4094,11 +4094,20 @@ from a fixed table (`ROUTES`, pinned closed by `ccrc-api-closed.test.ts`):
 `runs list|open|dispatch|advance|close|items|items-list|signals|route`,
 `mail list|send|fetch|ack`, `peers list`, `lifecycle list`,
 `claims list|take|release`, `ledger list|allocate`, `landing show|entries|order`,
-`asks list|answer|release` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
+`asks list|answer|release`, `goals show` and `feed list` — plus `whoami`, which reads this session's `{id, uuid}` from its
 tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
+
+**`goals show <slug>` reads a programme's goals** (`GET /api/programmes/:slug/goals`, behind the
+`goals-read-v1` server capability). The route takes either credential: a live console session or the box token, so a
+coordinator reads it cookieless through `ccrc-api` and the console reads the same route with its session; with
+`CCRC_AUTH` off it answers as it always did. The answer is `{ ok, goals, openItems }`. `goals` is the pin
+(`specPath`, `inShort`, `inShortAt`), the modifications and `doneWhen`, the stored definition of done: a list of 1 to 12
+statements of 2,000 characters or fewer, or `null` for a programme with none. `goals pin` stores it with the pin and
+`goals modify` with a modification; a pin that omits it keeps the stored list. `openItems` is each open item cut to
+`id`, `kind`, `title` and `neededBy`, with no reason, answer or secret. Any coordinator may read any programme's pin.
 **The `linear` group** (`linear workspaces|teams|issue|comments|search|statuses|projects|labels|users|create|update|comment`,
 #1444) is how every session works with Linear, in every workspace the operator has added a key for in Settings → Linear:
 the server holds the keys and calls Linear through its proxy routes, so no session signs in to Linear, holds a key or
