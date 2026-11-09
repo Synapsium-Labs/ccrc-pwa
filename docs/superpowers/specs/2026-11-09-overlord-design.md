@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R7 (the operator's) and the author's calls C1 to C35, so the operator can approve or overturn each one by number.
+R8 (the operator's) and the author's calls C1 to C44, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -20,9 +20,13 @@ from the programme's goals and from a private, operator-reviewed database of how
 what is truly the operator's.
 
 **What is decided.** The operator ruled the ticket's six open questions on 2026-11-09 (R1 to R6, §2), and ruled the
-same day that there is one and only one Overlord (R7). This spec turns each ruling into a design:
+same day that there is one and only one Overlord (R7), which must live a very long time without memory loss (R8).
+This spec turns each ruling into a design:
 - **One Overlord.** Exactly one exists, for the whole fleet, and the server enforces it. It is one lasting identity,
   not a role that sessions take turns at, and nothing can create a second one (§3.1).
+- **A long life.** One Overlord, many generations. The server renews its context from canonical state before it grows
+  long, re-anchors it on every start, proves it remembers with canaries and probes, and audits it daily from outside
+  (§3.3).
 - **Authority.** Authority starts as D-8126's operator-only list, unchanged. It is relaxed one named act at a time
   through operator grants that the server enforces (§7).
 - **Knowledge.** Knowledge of the operator is a private store on the server box. It is fed from rulings, from the
@@ -102,6 +106,7 @@ The rulings are settled; this spec only turns them into design.
 | R5 | **Spawning.** Think of it as the operator. It uses ccrc's own tooling the way the operator does, possibly with some extras. Spell out which extras, and why each one is needed | It uses the operator's doors through Overlord doors that log every act. Six extras (E1 to E6) are named with their reasons, and a list of what it explicitly does not get (§8) |
 | R6 | **Audit.** A log of everything it relayed, decided and started. Not every item can be reversed, so the log marks which items can be overturned and which cannot | One table, `overlord_acts`, written in the same transaction as the act. Reversibility is derived from the act's kind. Overturns go through the one correction door (§10) |
 | R7 | **One and only one Overlord** (the operator, 2026-11-09, after rev 1) | One identity for the whole fleet, enforced by the server. A second can never be started, designated, spawned or nested. Replacing its session is a handover of the same Overlord, never a second one (§3.1) |
+| R8 | **Live a very long time** (the operator, 2026-11-09, after rev 1): no memory loss or the other known problems of long-running sessions; use every context, compaction and history technique ccrc has, and research more | One Overlord, many generations: the server renews its context from canonical state before it grows long, re-anchors it on every start, proves it remembers with canaries and probes, and audits it daily from outside (§3.3) |
 
 ## 3. What the Overlord is
 
@@ -151,8 +156,8 @@ same Overlord comes back, never a new one beside it. The server enforces this, n
 ### 3.2 Its parts
 
 - **C1. A session, not a server process.** The Overlord is a Claude Code session running the new `ccrc-overlord` skill.
-  - What this reuses: the console's chat, `ccrc history`, compaction, account swaps, the hibernate lane and the mail
-    lane, all as they are.
+  - What this reuses: the console's chat, `ccrc history`, compaction, account swaps and the mail lane. §3.3 changes how
+    compaction, swaps and rolls apply to it, and it is never hibernated (C4).
   - Rejected: an agent loop inside the server. It would be a second runtime with none of the fleet's tooling, and the
     server would start making judgements, which breaks "decide in L1, act in L4".
 - **C2. Designated once, by the operator.** The singleton row, `overlord_designation`, holds the session id, when it
@@ -181,7 +186,7 @@ same Overlord comes back, never a new one beside it. The server enforces this, n
   - A compaction, a restart or a swap loses nothing.
   - On start, and after any compaction, the skill reads `GET /api/overlord/board` (§5.2) and its open requests before
     doing anything else.
-  - The roster card re-injects one line saying it is the Overlord, the way D-8126 §9.2 re-injects clause 21.
+  - The Overlord card (C38) re-anchors it at every start, and §3.3 says how it stays whole for months.
 - **C6. Model.** It runs Opus at high effort, per the fleet's standing model policy: Opus orchestrates, and a
   credits-billed model is never chosen by a session (O2). Long reading goes to subagents that name their model:
   Sonnet for reading and distilling, Haiku for listing. Its own context stays free for routing and judgement.
@@ -191,6 +196,208 @@ same Overlord comes back, never a new one beside it. The server enforces this, n
   - A new kill switch, `overlord-disabled`, is a Settings row and a file. While it is set, every Overlord door refuses
     and routing reverts to today's.
   - The Overlord never sets or clears any of these.
+
+### 3.3 Living a very long time (R8)
+
+The operator, 2026-11-09: the Overlord must live for a very long time without memory loss or the other known problems
+of long-running sessions, using every technique ccrc has for context, compaction and history, and researching what
+else helps. This section is that design. It rests on two pieces of research done for this spec on 2026-11-09:
+- a survey of ccrc's own machinery;
+- a survey of published work.
+
+The sources are named where they are used. Claims about Claude Code settings are sourced from its documentation and
+are verified against the installed version in the W0 spike (§14) before anything depends on them.
+
+**What the research found.**
+- **ccrc today guards a session against one event at a time:** a compaction, a restart or a swap. Nothing renews a
+  session's context, and nothing measures memory loss or drift over weeks. Measured in the tree:
+  - A roll (`rollLane.ts`) and a hibernation wake both resume the *same* conversation.
+  - Auto-compact types a bare `/compact` with no instructions.
+  - The roster card is empty for a session that claims no runs.
+  - In a week, 7 of 368 session families used history recall at all.
+  - The history replay quiz that would measure recall was built but never run.
+- **Published work agrees on the failure modes** (sourced):
+  - Output quality falls as the context grows, even on easy tasks (Chroma's "context rot" study, 18 models; Anthropic's
+    context-engineering guidance).
+  - Recall is weakest in the middle of a long context (Liu et al., 2024).
+  - Models lose about 39% from single-turn to multi-turn work, because they commit to early assumptions
+    (arXiv 2505.06120).
+  - Summaries of summaries lose most of what they carry: 35% against 93% for tiered memory on one benchmark (MemGPT,
+    as cited by Zep).
+  - Goals drift over long horizons in every model tested (arXiv 2505.02709).
+  - Sycophancy grows with alignment tuning (arXiv 2505.23840).
+  - An agent grading its own work skews positive (Anthropic, harness design).
+- **So one conversation compacted for months degrades by design.** Each compaction summarises the last one, and
+  errors become canon.
+
+The answer is **one Overlord, many generations**: the same session (R7), renewed from the server's canonical state
+before its context grows long, with drift measured from outside.
+
+```mermaid
+flowchart TD
+  A["Generation n<br/>works, writing every decision<br/>and open thread to the server"] --> B{"Renewal due?<br/>context ceiling, 2 compactions,<br/>failed probe, quiet window,<br/>new build"}
+  B -- "no" --> A
+  B -- "yes, and idle" --> C["Server checkpoints<br/>notes, last operator turns,<br/>advisory handover note"]
+  C --> D["Server clears the conversation<br/>same session id, same Overlord"]
+  D --> E["SessionStart injects the Overlord card<br/>rules, grants, open requests,<br/>programmes, operator brief, canaries"]
+  E --> F{"Probes pass?"}
+  F -- "yes" --> G["Generation n+1 works"]
+  F -- "no" --> H["Re-read, probe again,<br/>then tell the operator"]
+  G --> A
+```
+*Figure 2. One Overlord, many generations. The server decides when to renew and does it. The new generation starts
+from the server's canonical state, never from a summary of a summary, and proves it before it acts.*
+
+#### 3.3.1 Generations, not one immortal conversation
+
+- **C36. Renewal is the server's act, in the same session.** A generation is one conversation of the one Overlord
+  session. A renewal ends it and starts the next, in the same pane and under the same session id: R7's one Overlord,
+  with a fresh context.
+  - Claude Code rotates the uuid on `/clear`, and the registry follows it (`_sync_uuid`). The designation binds the
+    session id (C2), so nothing else changes.
+  - One L1 decider, `renewalDue`, rules on each tick. An L4 lane acts: it checkpoints, then clears, then the
+    SessionStart card rehydrates.
+  - It renews only between turns: the session idle, and no held question with less than a minute left. Otherwise it
+    waits. The holds' fall-through (C22) still protects every question while it waits.
+- **Triggers** (each is a row in `renewalDue`'s table; the defaults are the author's calls):
+  - Context above the ceiling: 250k tokens or 50% of the window, whichever is lower.
+  - Two compactions within one generation.
+  - A failed probe (§3.3.5) that a re-read did not fix.
+  - The daily quiet window. The default is the operator's quietest hour, learned from the operator model, else 04:00
+    UTC.
+  - A new ccrc install or Claude Code build (the roll lane's "behind" test): the Overlord renews onto it instead of
+    resuming the old conversation.
+- **Every renewal is an act row** (`renew`, reversibility `reversible`, since nothing is lost). It carries the
+  generation number, the card hash it started from, and why it was due. The Overlord place shows the generation
+  number.
+
+#### 3.3.2 Write-through: nothing lives only in its head
+
+- **C37. Every decision, commitment and open thread is on the server at the moment it is made.** Decisions are already
+  act rows (§10) and requests are rows (§5). What is left is the Overlord's working notes: what each open thread waits
+  for and what it intends next. They go in `overlord_notes`, one short row per thread, keyed to a request, a programme
+  or nothing. The Overlord rewrites a note whenever its intent changes. A renewal or a crash loses at most the turn in
+  progress. This is the structured note-taking and progress-file pattern of Anthropic's long-running harness work,
+  with the server as the file.
+- **The checkpoint at renewal is assembled by the server,** not written by the model:
+  - the notes;
+  - the last 10 operator turns and the Overlord's replies, verbatim from the transcript (the server's transcript
+    reader), so tone and open threads carry over;
+  - the generation's own handover note. The Overlord writes it at the end of a generation, at most 2,000 characters,
+    and it is shown to the next generation marked **advisory**: canonical rows outrank it wherever they disagree.
+
+#### 3.3.3 The Overlord card: who it is, re-anchored every time
+
+- **C38. One server-rendered card**, `GET /api/overlord/card`, injected by the session hook at every SessionStart
+  (startup, clear, compact and resume) for the designated session only. This is the roster card's mechanism with an
+  Overlord arm, and it fills the gap that a session claiming no runs gets an empty roster card. The order is stable
+  first and live last, so the cached prefix stays stable and the live state sits at the end of the context, where
+  recall is strongest:
+  1. **Constitution:** what it is, R1 to R8 in one line each, the anti-goals, the brakes and their state, and the
+     rules version.
+  2. **Authority:** the live grants.
+  3. **Live state:** the open requests ranked by recency, importance and age; each programme in one line; the
+     notes; and the acts of the last 24 hours ranked the same way (the Generative Agents retrieval score).
+  4. **The operator brief:** the stated entries that apply now, phrased in the third person ("the operator prefers X,
+     since date"), which the research ties to less sycophancy.
+  5. **The checkpoint** (§3.3.2), at renewal only.
+  6. **Canaries:** the card's hash and the rules version (§3.3.5).
+
+  Budget: 15k tokens, enforced by the server, which trims live state by rank and never trims the constitution.
+- **A one-line delta on every operator prompt.** A `UserPromptSubmit` hook adds the rules version, the card hash and the
+  counts of open requests and holds. This is a cheap re-anchor at the end of the context, where recency helps.
+- **The skill keeps its most important clauses first.** After a compaction, Claude Code restores a skill only up to
+  5k tokens, cutting from the end (sourced). The constitution clauses of `ccrc-overlord` therefore come first, and
+  the procedures live in references.
+
+#### 3.3.4 Compaction: a bounded fallback, never the plan
+
+- **C39. Renewal comes before compaction.** Compaction stays only as a fallback inside one generation.
+  - The Overlord's route record sets ccd's auto-compact threshold above the renewal ceiling, so renewal fires first.
+  - Claude Code's own auto-compact window is lowered for the Overlord. By default, on a 1M window it compacts only near
+    967k tokens, deep in the zone where quality has already fallen (sourced: Claude Code model configuration).
+  - Claude Code's idle compaction is switched off for the Overlord, where the installed version supports it. Today it
+    compacts an idle session after about 55 minutes and starts no turn afterwards (D-5373 measured this).
+- **When a compaction does happen,** three things protect what it keeps:
+  - The PreCompact hook supplies the Overlord's own summary instructions: keep request and act ids, open commitments
+    and the operator's recent corrections; drop tool output. Claude Code takes PreCompact output as the summary
+    instructions (sourced; verified in W0).
+  - The SessionStart(compact) card re-anchors it (§3.3.3).
+  - The history line points at the lossless record.
+- The second compaction in a generation makes renewal due.
+
+#### 3.3.5 Knowing it remembers: canaries, probes and an outside audit
+
+- **C40. Canaries.** Every Overlord door call carries the card hash and the rules version the Overlord last read.
+  - A door refuses a stale rules version with `stale-card`. The Overlord then re-reads the card and retries.
+  - A rule change, a new grant or a revoked one bumps the rules version, so a generation can never act on authority it
+    has not read.
+  - This is deterministic: no model judges it.
+- **C41. Probes after every renewal and compaction.** The server picks 3 to 5 questions whose answers are in its own
+  rows, one from each of the LongMemEval ability classes the research names as the weakest:
+  - an extracted fact ("what is request 412 waiting on?");
+  - a knowledge update (a preference that was superseded);
+  - a temporal question ("which programme moved last?");
+  - an abstention (a question with no answer on record).
+
+  The Overlord answers through `ccrc-api overlord probe`, and the server grades by exact match.
+  - On a fail, the Overlord re-reads the card and is probed again.
+  - On a second fail, renewal is due. A fail right after a renewal tells the operator: the card itself is missing
+    something.
+- **C42. A daily outside audit.** The agent that did the work is never the one that judges it (Anthropic's harness
+  research).
+  - Once a day a fresh reviewer session is dispatched by a server lane, on the reviewer skill's pattern. It reads a
+    sample of the day's acts against the constitution, the goals and the operator model, and scores:
+    - rule adherence;
+    - goal alignment;
+    - consistency: the same question answered the same way across generations;
+    - sycophancy: a stance changed with no new evidence.
+  - A **golden set** keeps the scores honest. These are past questions the operator answered personally; the auditor
+    puts them to the Overlord and compares the answers with the operator's real ones. The shadow week (§14) seeds it.
+  - The scores land in `overlord_audits`, on the Overlord place and in the digest. A drop of more than 10 points
+    against the 14-day mean raises an operator item.
+
+#### 3.3.6 Memory over months: five layers
+
+| Layer | Holds | Lives in | Reaches the session |
+|---|---|---|---|
+| Constitution | What it is, R1 to R8, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
+| Working | Open requests, programmes, notes, recent acts | `overlord_requests`, `overlord_notes`, `overlord_acts` | the card, ranked and capped |
+| Episodic | Every act, request and conversation since the first day | `overlord_acts`, `ccrc history` (its family recall follows the session across clears) | on demand, through subagents |
+| Semantic | The operator model | `operator-model.db` (§9) | the operator brief on the card, and `GET /api/overlord/model` |
+| Procedural | How to route, answer, start, learn | the skill's references | when a procedure is needed |
+
+- **C43. The operator model keeps time** (bi-temporal: the research's Zep result).
+  - An entry gains `validFrom`, `invalidAt` and `supersedes`. A changed preference supersedes the old one, which stays
+    on record.
+  - The card shows only the valid rows. So the Overlord is never asked to *remember* that something changed: the change
+    is a row.
+- **Consolidation while it is quiet** (sleep-time compute). The daily distillation (§9.2) also does two things:
+  - It writes a monthly episodic digest of acts and requests, so a question about last spring reads one page, not ten
+    thousand rows.
+  - It flags contradictions between entries. These go to the operator as items and are never resolved silently.
+- **Nothing in the episodic layer is pruned.** The card is pruned; the record is not. The Overlord's history family
+  stays within the history store's cap like any other.
+
+#### 3.3.7 Keeping each generation lean
+
+- **C44.**
+  - **Every read goes through a subagent** that returns under 2k tokens: mail bodies, PR states, logs, documents. This
+    is the Claude Code equivalent of the API's tool-result clearing, which Claude Code does not expose.
+  - **One model and effort per generation.** No `/model` mid-generation, because it resets the cached prefix.
+    Escalation goes through a subagent, or the next generation starts on the new model.
+  - **The board and card reads are compact by construction:** ids and one-liners, never bodies.
+
+#### 3.3.8 Swaps, rolls, sleep and restarts
+
+- **A swap never lands the Overlord on a summary.** Today a swap landing resumes from Claude Code's summary, which is
+  lossy (`ccd/ccd`). For the Overlord, a swap is followed by a renewal: the new generation rebuilds from the server, so
+  a swap loses nothing by construction.
+- **A roll is a renewal** (C36's last trigger), never a resume of an old conversation onto a new build.
+- **It never hibernates** (C4). A restart keeps the session id and starts a generation from the card.
+- **History stays whole.** The Overlord's own conversations are in `ccrc history` across every generation, and the
+  history line on its card points at the last generation's node. The steering of W3 (`<ccrc-leaf>` blocks, once
+  armed) applies to its compactions like any session's.
 
 ## 4. Where the operator talks to it
 
@@ -251,7 +458,7 @@ stateDiagram-v2
   done --> [*]
   dropped --> [*]
 ```
-*Figure 2. A request's life. "Done" needs the Overlord's own re-measurement, the same discipline a coordinator applies
+*Figure 3. A request's life. "Done" needs the Overlord's own re-measurement, the same discipline a coordinator applies
 to a wave-done claim. A request the Overlord can finish alone (a question about the fleet, a setting it may change)
 goes straight to done.*
 
@@ -288,7 +495,7 @@ flowchart TD
   G -- "yes, in so many words" --> H["Relay, with goals modify<br/>citing the operator's words"]
   G -- "no" --> I["Start a new programme<br/>for the request (§8)"]
 ```
-*Figure 3. How a request finds its owner. A programme whose goals cover the work keeps it, even when it is busy:
+*Figure 4. How a request finds its owner. A programme whose goals cover the work keeps it, even when it is busy:
 two coordinators on one goal would conflict. A new programme is the answer when nothing covers the work, because the
 operator's own request authorises starting it.*
 
@@ -373,7 +580,7 @@ sequenceDiagram
   O->>S: escalate with recommendation and class
   S->>P: Waiting on you item and push, as today
 ```
-*Figure 4. One more hop. A question the coordinator cannot settle goes to the Overlord before the operator. The
+*Figure 5. One more hop. A question the coordinator cannot settle goes to the Overlord before the operator. The
 Overlord either rules or escalates with a recommendation. The operator sees only what the Overlord escalates, or what
 lapses.*
 
@@ -512,7 +719,7 @@ flowchart LR
   E -- "yes" --> F["Act, and log it<br/>with the grant id"]
   E -- "no" --> G["403 operator-only<br/>the Overlord escalates"]
 ```
-*Figure 5. Every Overlord door asks one decider. The grants table starts empty, so on day one the Overlord holds
+*Figure 6. Every Overlord door asks one decider. The grants table starts empty, so on day one the Overlord holds
 exactly the authority D-8126 gives a coordinator, plus the extras of §8, and nothing on the operator-only list.*
 
 ### 7.3 What never relaxes
@@ -618,6 +825,7 @@ the operator reviews and corrects it, and how it stays private.
     - `confidence`;
     - `share`: `ccrc` or `overlord-only`, see §9.4;
     - `status`: `active`, `retired` or `superseded`;
+    - `validFrom`, `invalidAt`, `supersedes` (C43);
     - `sources` (references, see below);
     - `createdAt`, `updatedAt`;
     - `lastUsedAt`, `useCount`.
@@ -654,7 +862,7 @@ flowchart LR
   M --> R["About you screen<br/>review, correct, retire"]
   M --> U["Overlord decisions<br/>entries cited on each act"]
 ```
-*Figure 6. Five feeds, one store. Rulings come through one server-side union reader. The operator's prompts to other
+*Figure 7. Five feeds, one store. Rulings come through one server-side union reader. The operator's prompts to other
 sessions come through `ccrc history`'s read verbs on the fleet box. The chat and the operator's own corrections feed
 it directly.*
 
@@ -859,6 +1067,9 @@ Success means fewer operator touches, faster answers, and no new stall.
 | M4 | Overturn rate of Overlord acts | watched, not targeted. A rise means the model or the procedure is wrong | `overlord_acts.overturnedAt` |
 | M5 | Requests: time to first coordinator ack, and the share closed `done` | ack under 1 h | `overlord_requests` |
 | M6 | Programmes with no movement for longer than the stall threshold | none that the Overlord did not report | the stall watch |
+| M8 | Probe pass rate after renewal and compaction | 100% after one re-read | the probe rows |
+| M9 | Outside audit scores, and agreement with the golden set | stable or rising; golden agreement at least 90% | `overlord_audits` |
+| M10 | Context at renewal, and compactions per generation | under the ceiling; at most one compaction | `renew` act rows, the compactions journal |
 | M7 | Inferred entries the operator retired or corrected, per week | watched. A high rate means the distillation over-reaches | `entry_events` |
 
 ## 13. Decisions (the author's calls)
@@ -903,6 +1114,15 @@ this spec and can be overturned by number.
 | C33 | Where a started coordinator lives | a main checkout, a named workspace | Always a named workspace, so ids never collide | Proposed |
 | C34 | Who the kickoff is from | operator, overlord | `overlord`, with a new template that quotes the operator's words verbatim | Proposed |
 | C35 | Where the private-name check runs | the server, the skill | The skill, with the fleet's local scan: the private list stays in one place | Proposed |
+| C36 | How it lives for months | one compacted conversation, a new session per rollover, generations of the same session | Generations of the same session, renewed by the server from canonical state (R7 and R8 together) | Proposed |
+| C37 | What a renewal may lose | the context, at most one turn | At most the turn in progress: every decision, commitment and open thread is written through | Proposed |
+| C38 | How it is re-anchored | the skill alone, a server card at every start | A server-rendered card at every start, stable first and live last, 15k tokens, plus a one-line delta per prompt | Proposed |
+| C39 | Compaction's role | the main mechanism, a fallback | A fallback: lowered window, idle compaction off, Overlord summary instructions, two then renew | Proposed |
+| C40 | Stale-memory guard | none, canaries | Canaries: doors refuse a stale rules version | Proposed |
+| C41 | Proving it remembers | trust, probes | Server-graded probes after every renewal and compaction | Proposed |
+| C42 | Drift | self-assessment, an outside audit | A daily outside audit with a golden set of the operator's own answers | Proposed |
+| C43 | Changing preferences | overwrite, bi-temporal | Bi-temporal entries: a change is a row, never something to remember | Proposed |
+| C44 | Context hygiene | ad hoc, rules | Reads through subagents, one model per generation, compact reads | Proposed |
 
 ## 14. Build order
 
@@ -911,15 +1131,18 @@ depends only on the waves before it.
 
 ```mermaid
 flowchart LR
-  P0["Prerequisites<br/>D-8126 merged and built<br/>(calls record, goals read,<br/>decision procedure)<br/>D-8125 merged"] --> W1
-  W1["W1 Designate and talk<br/>designation, skill v1,<br/>Overlord place with chat,<br/>board read, kill switch"] --> W2
+  P0["Prerequisites<br/>D-8126 merged and built<br/>(calls record, goals read,<br/>decision procedure)<br/>D-8125 merged"] --> W0
+  W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card"] --> W1
+  W1["W1 Designate and talk<br/>designation, skill v1,<br/>Overlord place with chat,<br/>board read, kill switch,<br/>card, notes, renewal, canaries"] --> W2
   W2["W2 Route and follow up<br/>requests table, relay door,<br/>overlord mail role,<br/>follow-up arm, audit log"] --> W3
-  W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door"] --> W4
+  W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door,<br/>probes, outside audit"] --> W4
   W4["W4 Learn<br/>operator-model.db, feed read,<br/>distillation, About you,<br/>privacy controls"] --> W5
   W5["W5 Start and revive<br/>start, revive and retire doors,<br/>live-programme cap"] --> W6
   W6["W6 Propose and report<br/>grant proposals from<br/>the operator model,<br/>digest section"]
 ```
-*Figure 7. Six waves after two prerequisites. W3 is where the operator's load drops, and its grants door lets the
+*Figure 8. A spike and six waves after two prerequisites. The spike proves the Claude Code settings §3.3 depends on,
+and W1 builds the long life in from the first day: the card, the notes, renewal and canaries. Probes and the outside
+audit ride W3, beside the shadow week that seeds their golden set. W3 is where the operator's load drops, and its grants door lets the
 operator make the first relaxations right after the shadow week. W4 makes the answers the operator's own. W6 lets the
 Overlord propose relaxations from what it has learned. Nothing in any wave is irreversible.*
 
@@ -969,6 +1192,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 
 - R1 to R6, the operator's rulings of 2026-11-09 on the six open questions of #2491 (§2).
 - R7, the operator's ruling of 2026-11-09: there is one and only one Overlord (§3.1).
+- R8, the operator's direction of 2026-11-09: it lives a very long time without memory loss (§3.3).
 
 ### Waiting on you
 
@@ -981,7 +1205,7 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
   every entry kept `overlord-only`, and any project switchable off. No session gains a cross-project read. The other
   arms are ccrc projects only, or no prompts at all (rulings and the Overlord chat only). The answer sets the size of
   W4 and its privacy review.
-- **Approve this spec** with calls C1 to C35, or name the calls to change.
+- **Approve this spec** with calls C1 to C44, or name the calls to change.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions, and D-8125 (PR #2490). This programme's wave 1
   starts when both have merged.
 
