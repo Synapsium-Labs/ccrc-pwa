@@ -1,0 +1,44 @@
+/* The group abandon sheet (D-8074, Task 14). It takes `.abandon-sheet`'s ground and ink (fleet.css); only the list is its own.
+   Each row is one control, the whole line, so it reaches the floor as a single target. Text wraps, nothing is ellipsised. */
+.group-abandon-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.group-abandon-sheet .group-abandon-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--sp-2) 0;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.group-abandon-box {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sp-5);
+  height: var(--sp-5);
+  border: 1px solid currentColor;
+  border-radius: var(--r-sm);
+}
+.group-abandon-text,
+.group-abandon-result {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.group-abandon-name { font-weight: 600; }
+.group-abandon-text .abandon-line,
+.group-abandon-result .abandon-line,
+.group-abandon-result .abandon-error { margin: 0; font-size: var(--fs-sm); }

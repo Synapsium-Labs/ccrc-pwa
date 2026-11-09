@@ -155,9 +155,12 @@ describe('the group control and the held-back line', () => {
     expect(screen.getByText('1 holds a workspace or session: one at a time')).toBeInTheDocument();
   });
 
-  it('the group control is drawn disabled until Task 14 wires its sheet', async () => {
+  it('the group control is a live tap: with one free run it opens that run\'s sheet (Task 14)', async () => {
     await board([stuckRun(1, 'never-started', null, 9 * D)]);
-    expect(screen.getByRole('button', { name: 'Abandon 1…' })).toBeDisabled();
+    const control = screen.getByRole('button', { name: 'Abandon 1…' });
+    expect(control).toBeEnabled();
+    fireEvent.click(control);
+    expect(await screen.findByText('Abandon run 1?')).toBeInTheDocument();
   });
 });
 

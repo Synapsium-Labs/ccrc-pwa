@@ -522,8 +522,9 @@ function RunsBoard({
       <CoordBanner store={store} onlyWhilePaused />
 
       {/* The Stuck band (§8.2 item 4): one head per reason, right under the paused banner, so no healthy work sits above it.
-          The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. Task 14 wires the group control. */}
-      {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget} />}
+          The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. The group control opens the group sheet (Task 14). */}
+      {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget}
+        presence={(r) => coordinatorPresence(r.claimedBy, coordinatorOf(r, sessionById), fleetFrameSeen)} onGroupDone={() => { void loadCold(); }} />}
 
       {/* D-6911: every open work run whose review cap waits on the operator. It sits below where the Stuck band goes (Task 13)
           until review caps join `/waiting` (Task 24); renders nothing when no run waits. */}

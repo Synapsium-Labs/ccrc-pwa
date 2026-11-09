@@ -236,6 +236,12 @@ const CONTROLS: Record<string, string> = {
   'fleet/AbandonSheet.tsx <a> (computed)':
     'VARIANT buttonVariants. The abandon sheet\'s two stand-alone links (the runs rebuild, D-8073): "See this run" and, under '
     + '"This run already closed.", "Open record": `GHOST_ANCHOR`, the ghost button on an anchor, whose `min-h-tap` this census checks.',
+  'fleet/GroupAbandonSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. The group sheet\'s "Open record" links (the runs rebuild, D-8074): `GHOST_ANCHOR`, the ghost button on an anchor, '
+    + 'whose `min-h-tap` this census checks.',
+  'fleet/GroupAbandonSheet.tsx <button> group-abandon-row':
+    'TOKEN. A ticked run in the group sheet (D-8074): the whole line is one `role="checkbox"` button, and `.group-abandon-sheet .group-abandon-row` '
+    + 'declares the floor.',
   'accounts/RunFrame.tsx <a> (computed)':
     'VARIANT buttonVariants. The sign-in URL card\'s Open ↗ (accounts plan Task A22, D-7849): the primary at ≥900 (52px, '
     + '`acct-open-primary`) and the ghost below 900 (`GHOST_ANCHOR`). An anchor, not a button, because it opens the '
