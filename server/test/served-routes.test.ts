@@ -57,7 +57,7 @@ async function get(url: string): Promise<{ status: number; body: Record<string, 
 const FLEET_ROW_KEYS = [
   'archivedAt', 'archivedBytes', 'ask', 'askSummary', 'background', 'boardProject', 'branch', 'browserMcp', 'bucket', 'bucketSince',
   'child', 'ctxPct', 'deadSince', 'dialogPending', 'effort', 'graphGateDenials', 'graphQueries', 'held', 'hibernatedAt',
-  'home', 'hookState', 'id', 'lastEnd', 'lifecycle', 'limits', 'model', 'name', 'openRun', 'paneCols', 'pr', 'presence',
+  'home', 'hookState', 'id', 'lastEnd', 'lifecycle', 'limitWait', 'limits', 'model', 'name', 'openRun', 'paneCols', 'pr', 'presence',
   'project', 'releasedFrom', 'role', 'route', 'run', 'spawnState', 'started', 'status', 'statusUnmeasured',
   'statusUpdatedAt', 'stoppedBy', 'stranded', 'subagents', 'substrate', 'swapBlocked', 'tasks', 'title', 'ultracode',
   'unmeasured', 'usage', 'version', 'withCoordinator', 'workdir', 'workspace', 'wrapper',

@@ -875,6 +875,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-history-sweep.timer ~/.config/systemd/user/ccd-history-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.service ~/.config/systemd/user/ccd-scope-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-scope-sweep.timer ~/.config/systemd/user/ccd-scope-sweep.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.service ~/.config/systemd/user/ccd-limit-watchdog.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-limit-watchdog.timer ~/.config/systemd/user/ccd-limit-watchdog.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.service ~/.config/systemd/user/ccd-land-probe.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-land-probe.timer ~/.config/systemd/user/ccd-land-probe.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-testbox-times.service ~/.config/systemd/user/ccd-testbox-times.service \
@@ -1051,6 +1053,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-tmp-sweep.timer \
     && systemctl --user enable --now ccd-history-sweep.timer \
     && systemctl --user enable --now ccd-scope-sweep.timer \
+    && systemctl --user enable --now ccd-limit-watchdog.timer \
     && systemctl --user enable --now ccd-land-probe.timer \
     && systemctl --user enable --now ccd-testbox-times.timer \
     && systemctl --user enable --now ccd-carry-dedupe.timer \

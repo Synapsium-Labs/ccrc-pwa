@@ -830,7 +830,7 @@ describe('the review findings: every egress of session text is masked (D-5995)',
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
     hookState: null, askSummary: `paste ${ORKEY} then ${OAT}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
-    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, limitWait: null, substrate: null,
     started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
   });
   const clean = (body: string): void => {
@@ -1817,7 +1817,7 @@ describe('the post-merge audit\'s follow-ups: what the answer hook did not see (
     dialogPending: false, version: null, model: null, effort: null, ultracode: false,
     branch: null, ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
     hookState: null, askSummary: `paste ${ORKEY} and ${CMP}`, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
-    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+    unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, limitWait: null, substrate: null,
     started: true, spawnState: null, ask: { state: 'held', parentId: `claude-${SKNAME}-parent`, answeredBy: null }, usage: null, boardProject: SKNAME, route: null, child: { kind: 'none' }, role: 'coordinator', releasedFrom: null,
   } as FleetSession);
   const KEPT = ['id', 'wrapper', 'home', 'project', 'workdir', 'workspace', 'name', 'boardProject', 'ask'] as const;

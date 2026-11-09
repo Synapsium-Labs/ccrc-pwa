@@ -2396,7 +2396,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 19 request-id routes (15 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's floor is 97 agent-WS operations [registry-read-census:fleet]
@@ -3976,6 +3976,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // cannot interleave with another write to the same session.
     const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
     return r.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: withoutCcdRefusal(r.stderr) });
+  });
+
+  // D-8123: the operator's "Wait until reset" on a session the limit watchdog found no room for. Session-gated like the swap
+  // route (no box token reaches it), and it moves nothing: ccd appends `choice=wait` to the session's OPEN `limitwait` record
+  // and the watchdog then forces no move for it. `not-waiting` is ccd's refusal, a record that closed (the session landed, or
+  // its limit cleared) before the tap arrived: a 409 the row reads as "it moved on its own". Through the per-session queue,
+  // so the tap cannot interleave with a swap or a send for the same session.
+  app.post('/api/sessions/:id/limit-wait', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return refuseRoute(reply, 'bad-session-id');
+    if (!(await knownId(id))) return refuseRoute(reply, 'unknown-session');
+    if (!ccdCan(deps.fleetState, 'limitWait')) return refuseRoute(reply, 'unsupported');
+    const argv = CCD_ARGV.limitWait(id);
+    const r = await sendDeps.queue.run(id, () => deps.runCcd(argv));
+    if (r.ok) return { ok: true };
+    // The not-ran arm first (D-6840): a ccd that never ran has said nothing, so its words are not read for a refusal.
+    if (r.ran === false) return ccd502(reply, r);
+    if (/^ccd: not-waiting\b/m.test(r.stderr)) return refuseRoute(reply, 'not-waiting');
+    return ccd502(reply, r);
   });
 
   app.post('/api/sessions/:id/hold', async (req, reply) => {

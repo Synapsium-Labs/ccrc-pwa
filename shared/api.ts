@@ -469,6 +469,17 @@ export interface FleetSession {
    *  onto and "no strand recorded" over a flagged row is the direction that
    *  makes the loud cell silent. */
   readonly stranded: { readonly at: number; readonly reason: string } | null;
+  /** The limit watchdog's "no account has measured room" record — `$REG/<id>.limitwait` (D-8123), the Waiting on you item's
+   *  source: the session shows a usage-limit sign and the watchdog found no account to move it to. `since` and `reset` are
+   *  epoch MS (converted from the registry's seconds in `fleet.ts`, like `stranded.at`); `reset` is null when neither the
+   *  transcript's banner nor the account's window states one. `account` is the wrapper at the limit. `waiting` is true once
+   *  the operator chose "Wait until reset" (`POST /api/sessions/:id/limit-wait`); the row then reads "Waiting until HH:MM"
+   *  and keeps "Swap to…". Null when no record stands (closed by a landing or by a pass with no sign) and for a record the
+   *  server could not read: an item with unknown fields would be a fabricated fact.
+   *
+   *  `reviveFleetSession`: absent → null (an older server's frame, or a snapshot from before the field), and a present value
+   *  this build cannot read → null, because it is a display line that gates nothing server-side. */
+  readonly limitWait: { readonly since: number; readonly reset: number | null; readonly account: string; readonly waiting: boolean } | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -2941,6 +2952,20 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
  *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
  *  Absent → null (an older snapshot predates the axis); present-but-malformed
  *  rejects the session. */
+/** D-8123: `FleetSession.limitWait` off raw JSON. Absent or null → null (an older server); a value that is not exactly the
+ *  four-field shape → null, never a rejected session: the record is the Waiting on you row's source and a row the build cannot
+ *  draw is better absent than half-drawn. */
+const reviveLimitWait = (o: RawObj, k: string): { since: number; reset: number | null; account: string; waiting: boolean } | null => {
+  const v = o[k];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
+  const s = v as RawObj;
+  const since = s['since'], reset = s['reset'], account = s['account'], waiting = s['waiting'];
+  if (typeof since !== 'number' || !Number.isFinite(since)) return null;
+  if (reset !== null && (typeof reset !== 'number' || !Number.isFinite(reset))) return null;
+  if (typeof account !== 'string' || account === '' || typeof waiting !== 'boolean') return null;
+  return { since, reset, account, waiting };
+};
+
 const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;
@@ -3429,6 +3454,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
       stranded: reviveStranded(o, 'stranded'),
+      limitWait: reviveLimitWait(o, 'limitWait'),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light
@@ -4565,6 +4591,7 @@ export const RESTART_CAUSE_WORDS = {
   'swap-auto-rescue': 'swapped off a blocked account',
   'swap-auto': 'swapped automatically',   // D-5348: an automatic swap whose arm is not named
   'swap-manual': 'swapped by hand',
+  'limit-resume': 'restarted after a limit reset',   // D-8123: the fleet watchdog's in-place restart once an awaited reset passed
   unknown: 'cause unknown',
 } as const;
 export type RestartCause = keyof typeof RESTART_CAUSE_WORDS;
@@ -10316,11 +10343,12 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate' | 'limit-rescue';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
   'browser-tools': true,
   'memory-gate': true,
+  'limit-rescue': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
 
@@ -10331,7 +10359,7 @@ export const BOX_SETTING_APPLIES: readonly BoxSettingApplies[] = Object.keys(BOX
 
 export interface BoxSettingSpec { cls: BoxSettingClass; family: BoxSettingFamily; roles: readonly NodeRole[]; applies: BoxSettingApplies }
 
-/** All 93 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
+/** All 97 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
 export const BOX_SETTING_TABLE = {
   CCRC_BACKUP_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
   CCRC_BACKUP_DATA_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
@@ -10429,11 +10457,14 @@ export const BOX_SETTING_TABLE = {
   CCRC_WAKE_HEADROOM_MIN_GIB: { cls: 'value', family: 'memory-gate', roles: ['server', 'both'], applies: 'run' },
   CCRC_SWEEP_BATCH: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_SWEEP_PRESSURE_WAIT_S: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
+  // D-8123: a lone rescue's random wait cap, and the minutes the fleet limit watchdog lets a limit sign stand (both read by ccd on the fleet box).
+  CCRC_RESCUE_SOLO_JITTER_S: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_LIMIT_WATCHDOG_MIN: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
 export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
 /** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
 export const BOX_SETTING_SPECS: Readonly<Record<BoxSettingName, BoxSettingSpec>> = BOX_SETTING_TABLE;
-/** Version 2's row list and order: every name the table does not omit (65). */
+/** Version 2's row list and order: every name the table does not omit (69). */
 export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SETTING_TABLE) as BoxSettingName[]).filter((k) => BOX_SETTING_SPECS[k].cls !== 'omit');
 
 /** The words a refused row's `why` is one of (D22): every sentence `_set_says` prints for the shown keys, de-duplicated. A list on
@@ -10456,6 +10487,8 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'a whole number from 2 to 9999',
   'a whole number of GiB from 0 to 1024',
   'a whole number of bytes from 1 to 18 digits',
+  'a whole number of minutes from 0 to 1440',
+  'a whole number of seconds from 0 to 120',
   'a whole number of seconds from 0 to 3600',
   'a whole number of seconds from 0 to 9223372036854775807',
   'a whole number of seconds, 0 or more',

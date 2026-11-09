@@ -9,19 +9,19 @@ import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { ItemView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { capWaiting } from '../fleet/reviewCapWords';
-import { boundOpenRun, claimedRunsOf } from '../fleet/runWords';
+import { boundOpenRun, claimedRunsOf, sessionProgramme } from '../fleet/runWords';
 
 /** One thing that waits on the operator. `programme` is the slug, `''` for a session in none. `runId` is the run the
  *  entry is about: an item's run, a question's OPEN bound run (else the first open run it claims), a cap's run. */
 export interface NeedsYouEntry {
   readonly programme: string;
   readonly runId: number | null;
-  readonly kind: 'item' | 'question' | 'review-cap';
+  readonly kind: 'item' | 'question' | 'review-cap' | 'limit';
 }
 
 /** The kinds the `/waiting` page lists today. A review cap joins that page with its Lift cap control later in the rebuild
- *  (Task 24), and until then the page's own count is these two kinds. */
-const LISTED_ON_WAITING: ReadonlySet<NeedsYouEntry['kind']> = new Set(['item', 'question']);
+ *  (Task 24), and until then the page's own count is these kinds. A usage-limit row (D-8123) is listed there with its own controls. */
+const LISTED_ON_WAITING: ReadonlySet<NeedsYouEntry['kind']> = new Set(['item', 'question', 'limit']);
 
 /** Every OPEN run an asking session is the operator's question for: the one it is bound to as a worker, then each it claims
  *  as a coordinator. The entry names the first; the Runs badge counts them all. */
@@ -41,6 +41,11 @@ export function needsYou(
     if (!operatorAsk(s)) continue;
     const run = runsOfAsk(s, runs)[0] ?? null;
     out.push({ programme: run?.program ?? '', runId: run?.id ?? null, kind: 'question' });
+  }
+  // D-8123: a session on a usage limit no account has room for waits on the operator too (never hidden), filed under its programme.
+  for (const s of sessions) {
+    if (s.limitWait === null || s.limitWait === undefined) continue;
+    out.push({ programme: sessionProgramme(s, runs) ?? '', runId: null, kind: 'limit' });
   }
   for (const r of runs) if (capWaiting(r) === 'waiting') out.push({ programme: r.program, runId: r.id, kind: 'review-cap' });
   return out;

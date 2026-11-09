@@ -59,7 +59,8 @@ export function runsLineLabel(runs: readonly Pick<RunSummary, 'state'>[] | null)
 }
 
 /** What the Waiting on you door counts (PL5a, spec §2): the open items (sent-back ones are open again) plus the sessions
- *  asking a question; an item being checked is the coordinator's and does not count. `null` before the waiting frame or
+ *  asking a question and the sessions stopped on a usage limit with no account to take them (D-8123); an item being checked
+ *  is the coordinator's and does not count. `null` before the waiting frame or
  *  before the fleet frame: "not heard yet" is not zero. `runs` may be `null` (no runs frame yet): a question's programme is
  *  then unknown, which changes no count. */
 export function waitingItemsCount(

@@ -902,6 +902,8 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // degrade-rather-than-die idiom as the two sweeps above it.
       '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-scope-sweep.timer',
+      // D-8123: the fleet limit watchdog's timer, on the sweeps' gate and idiom.
+      '--user enable --now ccd-limit-watchdog.timer',
       // landing order wave 3b: the conflict radar's timer, on the sweeps' gate and degrade-rather-than-die idiom.
       '--user enable --now ccd-land-probe.timer',
       // test box TB11 (D-7413): the durations timer, on the radar's gate and idiom.

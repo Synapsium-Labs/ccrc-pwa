@@ -670,6 +670,7 @@ describe('an affinity move waits while the turn marker reports background work',
     decide();
     expect(moved()).toBe(true);
     fs.rmSync(regPath('lastswap'), { force: true }); fs.rmSync(path.join(h.home, 'detached'));
+    fs.rmSync(regPath('dispatching'), { force: true });   // the first move's unit is over: `cmd_swap` freed its claim (D-8123)
     fs.rmSync(path.join(reg(), '.affslot'), { recursive: true });   // the first move took the slot: an unmeasured `cur` is guarded (D-6181)
     marker({ state: 'failed', bg: 3 });
     decide();

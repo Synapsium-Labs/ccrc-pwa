@@ -800,9 +800,11 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
   // must call `_operator_choice_keep` as the statement before its stop, or a
   // stop after which no spawn follows, with the reason. A NEW function that
   // stops a session is in neither list, and this reds until it is classified.
-  it('every stop in ccd is classified: four keep the operator\'s choice first, the rest end the row', () => {
+  it('every stop in ccd is classified: five keep the operator\'s choice first, the rest end the row', () => {
     // `cmd_hibernate` (D-5242) is a stop a spawn follows: `ensure` or `start` wakes it from the record.
-    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive', 'cmd_hibernate'];
+    // `_watchdog_resume_run` (D-8123) is the fleet watchdog's in-place restart after an awaited limit reset: the stop, then
+    // `cmd_ensure`'s spawn on the same account, laid out as `cmd_swap`'s three lines are.
+    const KEEPS = ['cmd_stop', 'cmd_swap', 'cmd_ws_archive', 'cmd_hibernate', '_watchdog_resume_run'];
     // EVERY SPAWN READS, at ONE choke point: `_spawn_start` calls the keep itself — a
     // revival follows no ccd stop (Claude Code exited, most often a pane-scope OOM kill,
     // and `_supervised_start`'s two unsupervised fallbacks and ws-restore are spawns
@@ -838,7 +840,7 @@ describe('every stop that a spawn follows keeps the operator\'s choice first', (
       // its kill — the statement after the stop's own — unmarks on failure, so a live session is never marked.
       const GUARD = /^ {2}\[\[ -e "\$REG\/\$id\.choicekept" \]\] \|\| _operator_choice_keep "\$id"/;
       const UNMARK = /tmux kill-session -t "\$\(_tmux_t "\$id"\)" 2>\/dev\/null \|\| _operator_choice_unmark "\$id"/;
-      if (fn === 'cmd_swap') {
+      if (fn === 'cmd_swap' || fn === '_watchdog_resume_run') {
         expect(src[i]).toMatch(GUARD);
         expect(src[i + 1]).toMatch(/^ {2}_svc_stop "claude-session@\$id"/);
         expect(src[i + 2]).toMatch(UNMARK);

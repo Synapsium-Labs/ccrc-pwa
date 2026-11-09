@@ -23,6 +23,7 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   stopId: ['demo-quiet-basin', 'pwa'],
   stopPair: ['claude', 'demo', 'pwa'],
   forget: ['claude-acme-demo'],
+  limitWait: ['claude-acme-demo'],
   // D-5242: the dec rides after the one positional, as an unattended lane sends it; the bare `['hibernate']` grant
   // admits it with no widening.
   hibernate: ['demo-quiet-basin', { surface: 'agent', actor: 'sweep:hibernate', reason: null }],

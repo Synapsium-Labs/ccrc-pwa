@@ -138,11 +138,16 @@ import {
  *  once per episode: narrow 58/24 -> 68/26 and cooldown 65/24 -> 75/26 (one evidence probe: the transcript path,
  *  the pane's birth and `_limit_read`, then kept for TRANSCRIPT_ARM_INTERVAL, so ticks 2-4 read it back), and leaving
  *  114/43 -> 116/45 and fable-leaving 122/47 -> 124/49 (the `idle-gate` stand-down line, once per episode).
+ *
+ *  RAISED BY D-8123 FOR THE NARROW FIXTURE ONLY (a pane under the reader width still gets the transcript rung; macOS
+ *  bash 5.3): the narrow tick no longer returns at its top, it asks `_session_hard_blocked` first, which re-measures
+ *  the pane (`_pane_measurable`, one `list-panes` and one `awk`) and reads the stale-press stamp, the cached `tscan`
+ *  verdict and the transcript. Every other fixture is on a measurable pane and does not move. narrow 51/17 -> 57/19.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 90, execs: 33 },
   busy: { forks: 90, execs: 33 },
-  narrow: { forks: 51, execs: 17 },
+  narrow: { forks: 57, execs: 19 },
   'away-over-ceiling': { forks: 90, execs: 33 },
   'hard-blocked': { forks: 127, execs: 37 },
   cooldown: { forks: 65, execs: 24 },

@@ -461,6 +461,11 @@ export const EXEC_WHITELIST = {
     // draft, the turn marker's `bg` and `crons` both 0, no hold, no opt-out, no fresh swap, nobody attached) is ccd's
     // own, re-measured on the box at the act.
     ['hibernate'],
+    // `limit-wait` (D-8123) is the operator's "Wait until reset" choice on a session the limit watchdog found no room for:
+    // one registry-line append to an OPEN `$REG/<id>.limitwait`, refused `not-waiting` otherwise. One token wide for `forget`'s
+    // reason: the verb takes the id and nothing else, ccd re-asserts exact arity and the id grammar, and it moves no session
+    // and sends no key. The server sends it only behind `ccd caps`' `limit-wait`.
+    ['limit-wait'],
     ['pr-state', '--session'],
     ['pr-state', '--project'],
     // D-6784: the checks lane's read-only PR read; the verb takes only --project and --sessions.

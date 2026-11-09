@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 46 id-taking calls across 14 files.
+// THE CLAIM: 47 id-taking calls across 14 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -46,7 +46,7 @@ const srcRoot = path.resolve(here, '..', 'src');
  *  is a tsc error here (`typecheck-tests`) and a red first case below, until someone decides which it is. */
 const ID_BUILDERS = {
   start: 'no-id', enable: 'no-id', startCross: 'no-id', enableCross: 'no-id',
-  ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', swap: 'id', swapCross: 'id',
+  ensure: 'id', stopId: 'id', stopPair: 'id', forget: 'id', limitWait: 'id', swap: 'id', swapCross: 'id',
   swapInterrupt: 'id', swapCrossInterrupt: 'id', hibernate: 'id',
   wsAdd: 'no-id', wsAddNamed: 'no-id', wsAddWorker: 'no-id', wsAddWorkerBase: 'no-id',
   prStateSession: 'id', prStateProject: 'no-id', prStatePr: 'no-id', prTrainProve: 'no-id',
@@ -93,6 +93,7 @@ const ID_PROBE = {
   stopId: [PROBE_ID, 'pwa'],
   stopPair: [PROBE_ID, 'demo', 'pwa'],
   forget: [PROBE_ID],
+  limitWait: [PROBE_ID],
   swap: [PROBE_ID, 'acct-a'],
   swapCross: [PROBE_ID, 'acct-a'],
   swapInterrupt: [PROBE_ID, 'acct-a'],
@@ -470,6 +471,8 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/archive', builder: 'wsArchive', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/restore', builder: 'wsRestore', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/forget', builder: 'forget', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
+  // D-8123: the operator's "Wait until reset"; `forget`'s gate exactly.
+  { file: 'server.ts', scope: 'POST /api/sessions/:id/limit-wait', builder: 'limitWait', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/hold', builder: 'wsHold', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/release', builder: 'wsRelease', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/title', builder: 'wsTitle', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
@@ -527,7 +530,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(31);
+    expect(ID_KEYS).toHaveLength(32);
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];

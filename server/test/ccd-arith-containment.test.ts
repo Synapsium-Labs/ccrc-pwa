@@ -279,7 +279,13 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_auto_compact_check (lastcompact)',      anchors: ['$((now - last))', 'COMPACT_COOLDOWN'], arith: '$((' },
     { fn: '_auto_compact_check (lastswap)',         anchors: ['$((now - lastswap))', 'COMPACT_COOLDOWN'], arith: '$((' },
     { fn: '_spawn_start (fromswap)',                anchors: ['- lastswap ))', '-lt 300'],            arith: '$((' },
-    { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
+    // D-8123: the jitter ceiling moved out of `_dispatch_swap` into `_rescue_jitter_max` (a lone rescue's cap), and the draw
+    // into `_jitter_draw`; the guard that matters, SWAP_JITTER's own digits test before its `-gt`, is on the first row. The
+    // other-dispatch test reads every OTHER session's `lastswap`, a registry field of the same class as the rows above.
+    { fn: '_rescue_jitter_max (SWAP_JITTER)',        anchors: ['"$sj" -gt 0'],                         arith: '-gt' },
+    { fn: '_rescue_jitter_max (lastswap in flight)', anchors: ['$((now - t))', '$((sj + 60))'],        arith: '$((' },
+    { fn: '_rescue_jitter_max (solo cap)',           anchors: ['"$solo" -lt "$sj"'],                   arith: '-lt' },
+    { fn: '_dispatch_swap (jitter ceiling)',         anchors: ['"$jmax" -gt 0'],                       arith: '-gt' },
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
     { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
     // Routing slice 4, controller ruling S4-R7: `routetries` (`<n> <epoch>`) is the
