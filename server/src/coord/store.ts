@@ -10678,7 +10678,8 @@ export class CoordStore {
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
-  setSpecPin(program: string, specPath: string, inShort: string, now: number): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen); }
+  setDoneWhen(program: string, doneWhen: readonly string[], now: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now); }
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }

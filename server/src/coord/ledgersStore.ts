@@ -11,7 +11,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, isCloseRefusedAction, isEndRunAction, nextItemState, parseItemAction, recommendationOf,
+  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, nextItemState,
+  parseItemAction, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
@@ -323,9 +324,25 @@ export function itemHistory(db: DatabaseSync, id: number): ItemEventRow[] {
 }
 
 /** Pins a spec to a programme with the copy of its "In short" (spec §4). The route has checked the path (`isSpecPath`),
- *  the length, and that the caller claims the programme; a slug with no programme row changes nothing. */
-export function setSpecPin(db: DatabaseSync, program: string, specPath: string, inShort: string, now: number): void {
-  db.prepare('UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ? WHERE slug = ?').run(specPath, inShort, now, program);
+ *  the length, and that the caller claims the programme; a slug with no programme row changes nothing. `doneWhen` is the
+ *  programme's definition of done (D-8126): a list replaces the stored one, `null` leaves a stored list as it is (a
+ *  re-pin without one keeps it). Required, so every caller is visited. */
+export function setSpecPin(
+  db: DatabaseSync, program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null,
+): void {
+  if (doneWhen === null) {
+    db.prepare('UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ? WHERE slug = ?').run(specPath, inShort, now, program);
+    return;
+  }
+  db.prepare('UPDATE programs SET specPath = ?, inShort = ?, inShortAt = ?, doneWhen = ? WHERE slug = ?')
+    .run(specPath, inShort, now, JSON.stringify(doneWhen), program);
+}
+
+/** Replaces the programme's definition of done (D-8126), the modification route's writer. The caller has shaped the list
+ *  (`doneWhenOf`) and checked ownership; a slug with no programme row changes nothing. `now` is the caller's clock, kept
+ *  for the signature's symmetry with the other writers; the column carries no time of its own. */
+export function setDoneWhen(db: DatabaseSync, program: string, doneWhen: readonly string[], _now: number): void {
+  db.prepare('UPDATE programs SET doneWhen = ? WHERE slug = ?').run(JSON.stringify(doneWhen), program);
 }
 
 /** Records one change since approval; `mergedAt` stays NULL until `markModificationsMerged`. Returns the id. */
@@ -345,16 +362,28 @@ export function markModificationsMerged(db: DatabaseSync, program: string, pr: n
   return Number(res.changes);
 }
 
+/** A stored definition of done read back: the parsed list when it passes `doneWhenOf`, else null (absence permits). */
+function storedDoneWhen(raw: string | null): string[] | null {
+  if (raw === null) return null;
+  try {
+    const r = doneWhenOf(JSON.parse(raw));
+    return r.ok ? r.doneWhen : null;
+  } catch {
+    return null;
+  }
+}
+
 /** What Goals shows for one programme: the pin, its In short copy and the modifications, newest first. A programme with
  *  no pin (or no row) reads null fields and, if it has none, an empty list. */
 export function goalsFor(db: DatabaseSync, program: string): GoalsView {
-  const pin = db.prepare('SELECT specPath, inShort, inShortAt FROM programs WHERE slug = ?').get(program) as
-    { specPath: string | null; inShort: string | null; inShortAt: number | null } | undefined;
+  const pin = db.prepare('SELECT specPath, inShort, inShortAt, doneWhen FROM programs WHERE slug = ?').get(program) as
+    { specPath: string | null; inShort: string | null; inShortAt: number | null; doneWhen: string | null } | undefined;
   const mods = db.prepare(
     'SELECT id, at, text, ruling, itemId, pr, mergedAt FROM programme_modifications WHERE program = ? ORDER BY at DESC, id DESC',
   ).all(program) as unknown as { id: number; at: number; text: string; ruling: string | null; itemId: number | null; pr: number | null; mergedAt: number | null }[];
   return {
     program, specPath: pin?.specPath ?? null, inShort: pin?.inShort ?? null, inShortAt: pin?.inShortAt ?? null,
+    doneWhen: storedDoneWhen(pin?.doneWhen ?? null),
     modifications: mods.map((m) => ({ id: m.id, at: m.at, text: m.text, ruling: m.ruling, itemId: m.itemId, pr: m.pr, merged: m.mergedAt !== null })),
   };
 }

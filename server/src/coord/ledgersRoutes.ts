@@ -431,7 +431,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     if (inShort === null) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badInShort, { detail: `inShort is 1 to ${IN_SHORT_MAX} characters` });
     if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
-    coord.setSpecPin(slug, specPath, inShort, deps.now());
+    coord.setSpecPin(slug, specPath, inShort, deps.now(), null);   // A2-3 passes the route's doneWhen
     changed();
     return reply.code(200).send({ ok: true });
   });
