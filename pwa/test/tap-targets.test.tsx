@@ -989,15 +989,18 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
       expect(px).toBeLessThan(Number.parseFloat(declValue(rootBody(tokensCss), '--tap-min') ?? 'NaN'));
     });
 
-    it('is defined only in tokens.css, those two times: no skin or sheet under ui/src or pwa/src redefines it (fix round 1, F6)', () => {
+    it('is defined only in tokens.css, those two times: no skin, sheet or inline style under ui/src or pwa/src redefines it (fix round 1, F6; fix round 2, F9(a))', () => {
       const roots = [path.join(import.meta.dirname, '..', '..', 'ui', 'src'), path.join(import.meta.dirname, '..', 'src')];
+      // A declaration in a sheet (`--docs-line-h: …`), and in TSX an inline style's key, quoted and perhaps cast and
+      // bracketed (`{ '--docs-line-h': … }`, `{ ['--docs-line-h' as string]: … }`), or a `setProperty('--docs-line-h', …)`.
+      const DEF = /--docs-line-h(?:['"`](?:\s+as\s+[\w.]+)?\s*\]?)?\s*:|setProperty\(\s*['"`]--docs-line-h['"`]/g;
       const defs: string[] = [];
       const walk = (dir: string): void => {
         for (const e of readdirSync(dir, { withFileTypes: true })) {
           const at = path.join(dir, e.name);
           if (e.isDirectory()) walk(at);
           else if (/\.(css|tsx?)$/.test(e.name)) {
-            const n = (stripComments(readFileSync(at, 'utf8')).match(/--docs-line-h\s*:/g) ?? []).length;
+            const n = (stripComments(readFileSync(at, 'utf8')).match(DEF) ?? []).length;
             for (let i = 0; i < n; i++) defs.push(path.relative(path.join(import.meta.dirname, '..', '..'), at).split(path.sep).join('/'));
           }
         }

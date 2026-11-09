@@ -231,6 +231,7 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     open('/docs/demo/specs/a.md', fakeLoaders());
     await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
     const via = head().querySelector<HTMLElement>(':scope > .docs-truth .docs-truth-via');
+    expect(via).not.toBeNull();
     expect(via?.textContent).not.toBe('');
     expect(via?.getAttribute('title')).toBe(via?.textContent);
   });
