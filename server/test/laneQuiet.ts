@@ -16,8 +16,13 @@
 // its own class. All three only read through the fleet io (the test box poll: the testbox op, a registry listing and
 // the runs-log day files) and keep the answer in memory: none writes a log (nor a file) today, so none can cause the
 // teardown flake. Nor does it see the synchronous tail a sweep runs after its row's run settles (the delegation frame's
-// emit, a few microtasks after the slot clears). A tick-fired writer that logs must run through a row (or be awaited by
-// `settled()`) before this guard can see it.
+// emit, a few microtasks after the slot clears). Nor the calls the collector lane's pass QUEUES and never awaits
+// (`watch.ts`, `collectLearn`'s `learnCollect` and `collectAct`'s `retireExecutor(… collectTempRoot …)`): they settle on
+// the session queue, after the `collect` row's run has ended, and each can `console.warn` (a failed fold, a job that
+// threw). That writer class is latent today: `collectPass` returns early unless `ccd caps` grants the collect verb and the
+// reclaim-pause cap, `testDeps` builds neither, and the one fixture that arms the lane (`collectLaneFixture.ts`) awaits
+// its own jobs (review 1724 F4). A tick-fired writer that logs must run through a row (or be awaited by `settled()`)
+// before this guard can see it.
 //
 // `guardQuietAtTestEnd` registers, for the test running now, a check that NO row has a run in flight when it ends. It
 // does not wait for them: a case that ticks drains the watcher itself (`drainTick`), and a case that forgot goes red
