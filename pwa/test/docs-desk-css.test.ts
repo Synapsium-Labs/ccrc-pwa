@@ -36,9 +36,11 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(declValue(ruleIn(docsCss, `${ROW} :focus-visible`), 'outline-offset')).toBe('-2px');
   });
 
-  it('the crumbs have a real floor: three crumbs at a tap each is their basis, so the row breaks before they go under it (F1)', () => {
+  it('the crumbs have a real floor: the crumbs drawn at a tap each is their basis, so the row breaks before they go under it (F1; fix round 2, item 2)', () => {
     const crumbs = ruleIn(docsCss, '.docs-full .docs-crumbs');
-    const floor = 'calc(3*(var(--tap-min)+1ch+var(--sp-1))+1ch+2*var(--sp-1))';
+    // `--docs-crumbs-n` is the number of crumbs drawn, the `…` button counted (`Crumbs`), each a tap beside its separator,
+    // with the gaps between them and the page's own one more character.
+    const floor = 'calc(var(--docs-crumbs-n,3)*(var(--tap-min)+1ch+2*var(--sp-1))+1ch-var(--sp-1))';
     expect(declValue(crumbs, 'flex')?.replace(/\s+/g, ''), 'grow from the floor, never shrink under it on a shared line').toBe(`11${floor}`);
     // The floor is the basis, not a minimum: a short path takes no more room than its words (max-content).
     expect(declValue(crumbs, 'max-width')).toBe('max-content');
@@ -56,6 +58,8 @@ describe('the desk head in docs.css (desk-nav Part B)', () => {
     expect(declValue(last, 'min-width')?.replace(/\s+/g, ''), 'the page\'s own name keeps a tap and one more character').toBe('calc(var(--tap-min)+2ch+var(--sp-1))');
     expect(shrinkOf(last)).toBe(1);
     expect(shrinkOf(middle), 'the middle crumbs shrink first').toBeGreaterThan(shrinkOf(last));
+    // A crumb link is a tap wide even when its words are shorter ("Docs"), and gives way no further (fix round 2, item 2).
+    expect(declValue(ruleIn(docsCss, '.docs-full .docs-crumb'), 'min-width')).toBe('var(--tap-min)');
     for (const sel of ['.docs-full .docs-crumb', '.docs-full .docs-crumb-here']) {
       const r = ruleIn(docsCss, sel);
       expect(declValue(r, 'overflow'), sel).toBe('hidden');

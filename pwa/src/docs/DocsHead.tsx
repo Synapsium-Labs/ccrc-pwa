@@ -14,7 +14,7 @@
 // and the truth line sits under it on one line.
 import {
   useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
-  type KeyboardEvent, type ReactNode,
+  type CSSProperties, type KeyboardEvent, type ReactNode,
 } from 'react';
 import { flushSync } from 'react-dom';
 import {
@@ -396,14 +396,17 @@ function exportWords(state: Exclude<ExportState, { s: 'absent' }>): string {
 
 /** The crumbs (spec 4.4's layout): every crumb on a desktop; on a phone (under 900 px) the last two behind a leading
  *  `…` button, which shows them all. The last crumb is the page itself. `unfold`: every crumb at any width, with no `…`
- *  button (the compact head's panel, phone-header refinement (c)). */
-function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean }): ReactNode {
+ *  button (the compact head's panel, phone-header refinement (c)). `fold`: the last two behind `…` at a desk width too,
+ *  when the desk row has no room for every crumb (desk-nav Part B, fix round 2: `HeadRow`). `--docs-crumbs-n` is the
+ *  number of crumbs drawn, the `…` button counted, which docs.css's desk row reads for the crumbs' floor. */
+function Crumbs(p: { readonly crumbs: readonly DocsCrumb[]; readonly unfold?: boolean; readonly fold?: boolean }): ReactNode {
   const desktop = useMediaQuery(DESK_QUERY);
   const [whole, setWhole] = useState(false);
-  const folded = p.unfold !== true && !desktop && !whole && p.crumbs.length > 2;
+  const folded = p.unfold !== true && (!desktop || p.fold === true) && !whole && p.crumbs.length > 2;
   const shown = folded ? p.crumbs.slice(-2) : p.crumbs;
+  const drawn = { '--docs-crumbs-n': shown.length + (folded ? 1 : 0) } as CSSProperties;
   return (
-    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs}>
+    <nav className="docs-crumbs" aria-label={DOCS_HEAD_TEXT.crumbs} style={drawn}>
       <ol>
         {folded && (
           <li>
@@ -810,9 +813,10 @@ export function DocsHead(p: {
   );
 }
 
-/** How far the desk row has given way (desk-nav Part B, fix round 2, D-8101): 0, the action words shown; 1, the actions
- *  as icons. Past 1, docs.css gives way: the crumbs shorten, and only then do the actions wrap onto a second line. */
-type RowStage = 0 | 1;
+/** How far the desk row has given way (desk-nav Part B, fix round 2, D-8101): 0, every crumb and the action words; 1,
+ *  every crumb and the actions as icons; 2, the actions as icons and the middle crumbs folded behind `…`. Past 2,
+ *  docs.css gives way: the page's name shortens to its floor, and only then do the actions wrap onto a second line. */
+type RowStage = 0 | 1 | 2;
 
 /** Whether the row, as now laid out, shows the page's whole name, every drawn crumb whole inside the crumbs' box (none
  *  clipped at the start), and the actions on the crumbs' line. A row not laid out (no box: jsdom, a hidden head) fits. */
@@ -831,7 +835,7 @@ function rowFits(row: HTMLElement): boolean {
   return actions === null || actions.getBoundingClientRect().top < box.bottom - 0.5;
 }
 
-/** The stage the row at `ref` stands at: the first of 0 and 1 that fits (`rowFits`), re-measured from 0 whenever the
+/** The stage the row at `ref` stands at: the first of 0, 1 and 2 that fits (`rowFits`), re-measured from 0 whenever the
  *  row's width changes, its contents change outside the crumbs (an action's words, a navigation, the tree arriving) or
  *  a font loads. Each try renders synchronously (`flushSync`) from the observer's callback, so a stage that does not fit
  *  is never painted, and starting from 0 every time makes the stage a function of the width and the words alone, so a
@@ -843,9 +847,9 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
     const row = ref.current;
     if (row === null || typeof ResizeObserver === 'undefined') return;
     const probe = (): void => {
-      for (const s of [0, 1] as const) {
+      for (const s of [0, 1, 2] as const) {
         flushSync(() => setStage(s));
-        if (s === 1 || rowFits(row)) return;
+        if (s === 2 || rowFits(row)) return;
       }
     };
     let width = -1;
@@ -872,8 +876,9 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
 }
 
 /** The full head's row (desk-nav Part B, D-8101): back, the crumbs and the actions. When the row is short it gives way in
- *  the order fix round 2 ruled: the action words hide first (each icon keeps its name and `title`, `useRowStage`); then
- *  the crumbs shorten, and only then do the actions wrap onto a second line (docs.css). */
+ *  the order fix round 2 ruled: the action words hide first (each icon keeps its name and `title`), then the middle
+ *  crumbs fold behind `…` (`useRowStage`); then the page's name shortens to its floor, and only then do the actions wrap
+ *  onto a second line (docs.css). */
 function HeadRow(p: {
   readonly page: DocsPageLocation; readonly crumbs: readonly DocsCrumb[];
   readonly listed: { readonly tree: DocsTreeOk; readonly page: TreePage } | null;
@@ -884,7 +889,7 @@ function HeadRow(p: {
   return (
     <div className="docs-head-bar" ref={ref} data-words={stage === 0 ? undefined : 'off'}>
       <BackButton page={p.page} />
-      <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
+      <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} fold={stage === 2} />
       {p.listed !== null && <Actions form="row" page={p.listed.page} tree={p.listed.tree} {...p.actionInputs} />}
     </div>
   );

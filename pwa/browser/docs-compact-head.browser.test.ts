@@ -678,6 +678,7 @@ describe('the desk head (desk-nav Part B)', () => {
   // Fix round 2: the ORDER in which the row gives way when room runs short (desk-nav Part B, D-8101). The action words
   // hide first (each icon keeps its name), then the middle crumbs fold behind `…`, then the page's name shortens to its
   // floor, and only then do the actions wrap onto a second line.
+  const DRAFT_LONG = draftTree(DEEP);
   /** Opens `path?ref=` at `view` with `tree`, once the actions have settled (Export reads "Export (plain view)"). */
   async function openRow(view: View, tree: ReturnType<typeof treeOk>, ref: string): Promise<OpenedApp> {
     const app = await openView(view, tree, DEEP);
@@ -764,6 +765,79 @@ describe('the desk head (desk-nav Part B)', () => {
       await app.ctx.close();
     }
   }, 300_000);
+
+  const CRUMB_STATES = [
+    ["GitHub's refusal", REFUSED_DEEP, 'main'],
+    ['a modified draft, deep, on a long branch', DRAFT_LONG, LONG_BRANCH],
+    ['a committed deep leaf', DEEP_TREE, 'main'],
+  ] as const;
+  const CRUMB_CASES = CRUMB_STATES.flatMap(([what, tree, ref]) =>
+    [INSTRUMENT, REFINED].flatMap((skin) => (['fine', 'coarse'] as const).map((pointer) => [what, skin, pointer, tree, ref] as const)));
+
+  it.each(CRUMB_CASES)('%s, %s, a %s pointer, 900 to 1480 px in 20 px steps: every drawn crumb is a tap wide and wholly inside the crumbs (fix round 2, item 2)', async (what, skin, pointer, tree, ref) => {
+    const view: View = pointer === 'fine' ? { width: 900, height: 800, skin, pointer } : { width: 900, height: 800, skin, touch: true };
+    const app = await openRow(view, tree, ref);
+    try {
+      const log: [number, string, number][] = [];
+      for (const w of SWEEP) {
+        await app.page.setViewportSize({ width: w, height: 800 });
+        const r = await rowState(app.page);
+        log.push([w, `${r.words ? 'w' : 'i'}${r.folded ? 'f' : 'u'}${r.actionsOnLine ? '1' : '2'}`, Math.round(Math.min(...r.crumbs.map((c) => c.w)) * 10) / 10]);
+        for (const c of r.crumbs) {
+          expect(c.w, `${what} at ${w}: ${c.text} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+          expect(c.inside, `${what} at ${w}: ${c.text} is wholly inside the crumbs`).toBe(true);
+        }
+        expect(r.scrollW, `${what} at ${w}: no sideways scroll`).toBeLessThanOrEqual(r.innerW);
+      }
+      console.log(`PHH-FIGURE ${skin} ${pointer} sweep crumbs ${what} ${JSON.stringify(log)}`);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 300_000);
+
+  // `…` unfolds every crumb: the crumbs' floor is then five crumbs' (their basis counts the crumbs drawn), so the row
+  // wraps the actions before any crumb goes under it. The draft whose head is narrowed by hand to 460 px is the case a
+  // fixed three-crumb basis clips: three floors and the icons fit one line there, five do not.
+  const UNFOLD_CASES = [INSTRUMENT, REFINED].flatMap((skin) => ([
+    ['a modified draft, its head 460 px wide', 1280, 800, DRAFT_DEEP, 'main', 460],
+    ['a modified draft on a long branch', 768, 1024, DRAFT_LONG, LONG_BRANCH, null],
+  ] as const).map(([what, w, h, tree, ref, narrow]) => [what, skin, w, h, tree, ref, narrow] as const));
+
+  it.each(UNFOLD_CASES)('%s, %s, %i x %i under a mouse: `…` unfolds every crumb, and each is still a tap wide and wholly visible, its focus ring too (fix round 2, item 2)', async (what, skin, width, height, tree, ref, narrow) => {
+    const app = await openRow({ width, height, skin, pointer: 'fine' }, tree, ref);
+    try {
+      if (narrow !== null) {
+        await app.page.evaluate((w) => { (document.querySelector('.docs-head.docs-full') as HTMLElement).style.width = `${w}px`; }, narrow);
+      }
+      await app.page.locator('.docs-full .docs-crumbs-more').waitFor({ timeout: 10_000 });
+      await app.page.locator('.docs-full .docs-crumbs-more').click();
+      const r = await rowState(app.page);
+      console.log(`PHH-FIGURE ${skin} ${width}x${height} unfolded ${what} ${JSON.stringify({ crumbs: r.crumbs.map((c) => Math.round(c.w)), rowH: r.rowH, actionsOnLine: r.actionsOnLine })}`);
+      expect(r.folded, 'every crumb is drawn').toBe(false);
+      expect(r.crumbs.length).toBe(5);
+      for (const c of r.crumbs) {
+        expect(c.w, `${c.text} is a tap wide`).toBeGreaterThanOrEqual(TAP - 0.5);
+        expect(c.inside, `${c.text} is wholly inside the crumbs`).toBe(true);
+      }
+      // Keyboard focus on the first crumb: its ring is drawn inside its box, and the box inside the crumbs'.
+      await app.page.keyboard.press('Shift');
+      await app.page.locator('.docs-full .docs-crumb').first().focus();
+      const ring = await app.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement;
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        const b = a.getBoundingClientRect();
+        const cs = getComputedStyle(a);
+        const off = Number.parseFloat(cs.outlineOffset) + Number.parseFloat(cs.outlineWidth);
+        return { inset: off <= 0.5, inside: b.left >= nav.left - 0.5 && b.right <= nav.right + 0.5, style: cs.outlineStyle };
+      });
+      expect(ring.style, 'a ring is drawn').not.toBe('none');
+      expect(ring.inset, 'the ring is drawn inside the crumb').toBe(true);
+      expect(ring.inside, 'the crumb is wholly inside the crumbs').toBe(true);
+    } finally {
+      await app.ctx.close();
+    }
+  }, 120_000);
 
   it.each([
     [1280, 800],

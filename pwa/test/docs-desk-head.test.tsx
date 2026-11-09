@@ -293,7 +293,7 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
 
 // Fix round 2 (D-8101): the order in which the row gives way. jsdom lays nothing out, so a fake ResizeObserver reports the
 // row once and the page's crumb reads as cut or whole by the stage the row stands at; the pixels are the browser file's.
-describe('the desk row gives way in order: the words first (fix round 2)', () => {
+describe('the desk row gives way in order: the words, then the middle crumbs (fix round 2)', () => {
   const DEEP = treeOk({ entries: [entry('specs', 'd/e/x.md')] });
 
   /** A ResizeObserver that reports its element once, a microtask after `observe`, as an engine reports a first size. */
@@ -320,6 +320,20 @@ describe('the desk row gives way in order: the words first (fix round 2)', () =>
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 0, 10, 44));
   }
 
+  it('the crumbs tell docs.css how many are drawn, the `…` button counted: every crumb at a desk, three folded', async () => {
+    atWidth(1280);
+    open('/docs/demo/specs/d/e/x.md', fakeLoaders({ tree: okTree(DEEP) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    const nav = (): HTMLElement => row().querySelector<HTMLElement>('.docs-crumbs')!;
+    expect(nav().style.getPropertyValue('--docs-crumbs-n')).toBe('6');
+    cleanup();
+    atWidth(768);
+    open('/docs/demo/specs/d/e/x.md', fakeLoaders({ tree: okTree(DEEP) }));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share });
+    expect(row().querySelector('.docs-crumbs-more')).not.toBeNull();
+    expect(nav().style.getPropertyValue('--docs-crumbs-n')).toBe('3');
+  });
+
   it('a row that is never measured (no ResizeObserver) keeps the words and every crumb', async () => {
     atWidth(1280);
     vi.stubGlobal('ResizeObserver', undefined);
@@ -332,6 +346,8 @@ describe('the desk row gives way in order: the words first (fix round 2)', () =>
   it.each([
     ['the name is whole with the words', () => true, null, false],
     ['the name is whole only as icons: the words hide first, every crumb still drawn', (off: boolean) => off, 'off', false],
+    ['the name is whole only with the crumbs folded: the words hide, then the middle crumbs fold', (off: boolean, folded: boolean) => off && folded, 'off', true],
+    ['the name is never whole: the words hide and the crumbs fold, and the rest is the stylesheet\'s', () => false, 'off', true],
   ] as const)('%s', async (_what, whole, words, folded) => {
     atWidth(1280);
     layOut(whole);
