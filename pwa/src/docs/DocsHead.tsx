@@ -28,6 +28,7 @@ import { navigate } from '../lib/router';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { Icon, useNow } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
+import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
   DOCS_HEAD_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
   failureSentence, fillSentence, kib, relationSentence, servedRefText, shortCommit, slotSentence, worktreeLabel,
@@ -354,25 +355,6 @@ export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
 
 /** A touch screen's pointer: no hover, so a `title` is never seen (review 1697 F5). */
 const COARSE_POINTER_QUERY = '(pointer: coarse)';
-
-/** Which header a page draws. */
-export type HeadLayout = 'full' | 'compact';
-
-/** The header for `page` (phone-header refinement (a)): the compact row on a leaf page at the compact width, else the full header. A
- *  directory (its URL ends in `/`), a section, a project and the index keep the full header at every width. */
-export function headLayoutFor(compactWidth: boolean, page: DocsPageLocation): HeadLayout {
-  return compactWidth && page.kind === 'path' && !page.dirSlash ? 'compact' : 'full';
-}
-
-/** How the full header is drawn (desk-nav Part B, D-8101; fix round 1, F2(b)): at 600 CSS px and wider, the desk head's
- *  one row and dense line (`row`); under the compact width, where only a listing or the index draws the full header,
- *  the stacked header main drew (`stacked`): the crumbs row, the truth line, then the actions in words. Part B is the
- *  head at 600 px and wider, so below it nothing changes. */
-export type FullHeadForm = 'row' | 'stacked';
-
-export function fullHeadFormFor(compactWidth: boolean): FullHeadForm {
-  return compactWidth ? 'stacked' : 'row';
-}
 
 /** The Page details button's dot (phone-header refinement (f)), from the freshness chip's state: `ok` a good fetch, `warn`
  *  never fetched, `failed` a failed fetch, re-list or refresh, or a stale lock. `warn` and `failed` draw the same
@@ -820,11 +802,6 @@ export function DocsHead(p: {
   );
 }
 
-/** How far the desk row has given way (desk-nav Part B, fix round 2, D-8101): 0, every crumb and the action words; 1,
- *  every crumb and the actions as icons; 2, the actions as icons and the middle crumbs folded behind `…`. Past 2,
- *  docs.css gives way: the page's name shortens to its floor, and only then do the actions wrap onto a second line. */
-type RowStage = 0 | 1 | 2;
-
 /** Whether the page's name is cut by a fraction of a pixel, which still draws its ellipsis while the integer
  *  `scrollWidth` and `clientWidth` agree: its text's own width against its box's. Unmeasurable (no Range geometry): not. */
 function nameCut(here: HTMLElement): boolean {
@@ -867,9 +844,9 @@ function useRowStage(ref: { readonly current: HTMLElement | null }): RowStage {
     const row = ref.current;
     if (row === null || typeof ResizeObserver === 'undefined') return;
     const probe = (): void => {
-      for (const s of [0, 1, 2] as const) {
+      for (const s of ROW_STAGES) {
         flushSync(() => setStage(s));
-        if (s === 2 || rowFits(row)) return;
+        if (s === ROW_STAGES.at(-1) || rowFits(row)) return;
       }
     };
     let width = -1;
