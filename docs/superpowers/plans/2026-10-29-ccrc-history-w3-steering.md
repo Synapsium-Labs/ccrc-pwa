@@ -1202,7 +1202,7 @@ Spec §7.7's failure table, row by row:
 
 ## Deviations found
 
-W3-1 (run 1713) defines the eight below, the departures the coordinator approved for it and numbered at dispatch, dated 2026-11-09, each by its slug under "Build questions and proposed departures". The other slugs there stay unnumbered until their PR: `history-steer-breaker-first-derivation` is W3-2's, and `history-steer-stale-receipt-window` was ruled out by O7 (a).
+W3-1 (run 1713) defines the nine below: the eight departures the coordinator approved for it and numbered at dispatch, each by its slug under "Build questions and proposed departures", and D-8135, which it licensed during the build under the slug it gave; all dated 2026-11-09. The other slugs there stay unnumbered until their PR: `history-steer-breaker-first-derivation` is W3-2's, and `history-steer-stale-receipt-window` was ruled out by O7 (a).
 
 - **D-8127 — `history-steer-module`** (2026-11-09). The steer file's IO lives in a new `ccd/history/steer.mjs`, called from `card.mjs`'s card step, not from `sweep.mjs` as §7.6 says; the decisions stay in lib.
 - **D-8128 — `history-steer-on-the-card-lifecycle`** (2026-11-09). The steer file shares the card's lifecycle: `decideCardFile` gains an `artifact` argument rather than a second decider, and each withdrawal arm unlinks both artifacts.
@@ -1212,3 +1212,4 @@ W3-1 (run 1713) defines the eight below, the departures the coordinator approved
 - **D-8132 — `history-steer-spike-report`** (2026-11-09, taken by O5). The spike report is `history-counters.mjs spike`, its existing owner.
 - **D-8133 — `history-steer-spike-per-leaf-figures`** (2026-11-09). The spike's headroom and `analysis_only` figures are evaluated per leaf from stored summaries with lib's own rules, never from the node-wide counters, which carry no session or time.
 - **D-8134 — `history-steer-spike-pr-scope`** (2026-11-09, taken by O10 (a)). An ordering departure from CP-61: the print, the receipt and Task 1F's parser change land in the spike PR.
+- **D-8135 — `history-steer-hook-growth`** (2026-11-09, licensed by the coordinator from its held block). W3-1 grows `ccd/session-hook.sh` past growth-check's limit, which the plan anticipates ("Every PR that grows `ccd/session-hook.sh` runs `GROWTH_CHECK=1` growth-check in its gate. A waiver counts only once it is committed."); the growth is waived by `server/test/growth-waivers/D-8135-ccd-session-hook-sh.json` at its measured figure, and stays inline because the hook loads no library and the tail rule puts every W3 edit in this file's tail.
