@@ -30771,8 +30771,8 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
   #
   # rc 1, and the caller spawns as today, when: this is the swap's own `|| cmd_ensure` fallback re-entering
   # (CCD_WAKE_MOVE=1: it must never move twice); the row has never run (no `started`: there is no transcript to
-  # carry, and `ccd swap` would refuse it); the session is alive (a live pane is the rescue's business, and nothing
-  # here may stop it); the account has headroom; or no account has MEASURED room (`CCD_RESCUE_MEASURED_ONLY=1`
+  # carry, and `ccd swap` would refuse it); the session is not positively absent (a live pane is the rescue's business, and nothing
+  # here may stop it; an `unknown` probe counts as possibly live); the account has headroom; or no account has MEASURED room (`CCD_RESCUE_MEASURED_ONLY=1`
   # skips an unmeasured candidate and an unmeasured home). A no-room answer is logged once per wake.
   #
   # NO KEYS ARE SENT, ever: the move ends nothing that is running and resumes the conversation on the target through
@@ -30786,7 +30786,13 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
   WAKE_MOVE_TARGET=""
   [[ "${CCD_WAKE_MOVE:-}" == 1 ]] && return 1
   _reg_get_to started "$id" started; [[ "$started" == 1 ]] || return 1
-  _alive "$id" && return 1
+  # DESTRUCTIVE CALLER: the swap this dispatches stops the unit and kills the tmux session, so only a POSITIVE absence
+  # passes (`_alive` reads `unknown` as dead, which is the collapse its comment forbids to destructive callers, as
+  # `_ws_status`, `cmd_forget` and `cmd_hibernate` do): the verdict `gone`, or no tmux server at all (`unknown` with
+  # PROBE_SUBSTRATE=absent: a cold box has no server to hold a session). A probe that timed out or read something it
+  # cannot classify is `unknown` on a substrate that may be serving a live, mid-turn session: nothing is moved.
+  _session_probe "$id"
+  [[ "$PROBE_VERDICT" == gone || ( "$PROBE_VERDICT" == unknown && "$PROBE_SUBSTRATE" == absent ) ]] || return 1
   _reg_get_to wrapper "$id" wrapper; [[ -n "$wrapper" ]] || return 1
   _avail "$wrapper" && return 1
   _home_measured_to home "$id"; hrc=$?

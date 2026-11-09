@@ -44,12 +44,13 @@ const regGet = (f: string): string | null => h.reg(ID, f);
 const detached = (): string[] => h.calls().filter((l) => l.startsWith('detached '));
 const started = (): string[] => h.calls().filter((l) => l.startsWith('supervised-start'));
 
-/** The clock seam, a dead session, and the two seams the verbs end in. */
-const STUBS = `
+/** The clock seam, a session positively gone (`_session_probe`), and the two seams the verbs end in. */
+const SEAMS = `
   date() { if [[ "\${1:-}" == +%s && -n "\${FAKE_NOW:-}" ]]; then echo "$FAKE_NOW"; else command date "$@"; fi; };
-  _alive() { return 1; };
   _supervised_start() { echo "supervised-start $*" >> "$HOME/ccd-calls"; return 0; };
   _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };`;
+const STUBS = `${SEAMS}
+  _session_probe() { PROBE_VERDICT=gone; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; };`;
 const env = (extra: Record<string, string> = {}): Record<string, string> => ({ FAKE_NOW: String(T0), TMUX: '', ...extra });
 
 describe('a wake or start onto an account at its ceiling moves first', () => {
@@ -110,9 +111,41 @@ describe('a wake or start onto an account at its ceiling moves first', () => {
 
   it('a live session is never moved by the wake path', () => {
     seed(); limits('claude', 100, 100); limits('claude-a', 5, 5);
-    h.sh(`${STUBS} _alive() { return 0; }; _wake_ceiling_move ${ID}; echo "rc=$?" >> "$HOME/ccd-calls"`, env());
+    h.sh(`${STUBS} _session_probe() { PROBE_VERDICT=live; PROBE_DETAIL=""; PROBE_SUBSTRATE=present; }; _wake_ceiling_move ${ID}; echo "rc=$?" >> "$HOME/ccd-calls"`, env());
     expect(detached()).toEqual([]);
     expect(h.calls()).toContain('rc=1');
+  });
+
+  it('an unanswered liveness probe (tmux has-session times out) is not a dead session: nothing is dispatched', () => {
+    seed(); limits('claude', 100, 100); limits('claude-a', 5, 5);
+    // The real `_session_probe` over a `tmux` stub that answers like `timeout` killing a wedged server: rc 124, no output.
+    const real = `tmux() { return 124; };`;
+    h.sh(`${SEAMS} ${real} _wake_ceiling_move ${ID}; echo "rc=$?" >> "$HOME/ccd-calls"; _session_verdict ${ID} >> "$HOME/ccd-calls"`, env());
+    expect(h.calls()).toContain('rc=1');
+    expect(h.calls()).toContain('unknown');
+    expect(detached()).toEqual([]);
+    expect(swapLog()).toBe('');
+    expect(regGet('lastswap')).toBeNull();
+    // cmd_ensure falls through to the spawn it always did, and never to the swap
+    h.sh(`${SEAMS} ${real} cmd_ensure ${ID}`, env());
+    expect(detached()).toEqual([]);
+    expect(started().length).toBe(1);
+  });
+
+  it('no tmux server at all (a cold box) is a positive absence: the wake still moves', () => {
+    seed(); limits('claude', 100, 100); limits('claude-a', 5, 5);
+    const cold = `tmux() { echo "no server running on /tmp/tmux-1000/default"; return 1; };`;
+    h.sh(`${SEAMS} ${cold} cmd_ensure ${ID}`, env());
+    expect(detached().length).toBe(1);
+    expect(started()).toEqual([]);
+  });
+
+  it('a probe that errors in a way it cannot classify (permission denied) is not a dead session', () => {
+    seed(); limits('claude', 100, 100); limits('claude-a', 5, 5);
+    const odd = `tmux() { echo "error connecting to /tmp/tmux-1000/default (Permission denied)"; return 1; };`;
+    h.sh(`${SEAMS} ${odd} cmd_ensure ${ID}`, env());
+    expect(detached()).toEqual([]);
+    expect(started().length).toBe(1);
   });
 
   it('cmd_start of a stopped session at its ceiling moves the same way', () => {
