@@ -41,7 +41,7 @@ import { prevLeafOf, readSteerFile, writeSteerFile } from './steer.mjs';
 
 /** A path's kind by lstat, never following a link: 'dir', 'file', 'link', 'other', 'absent' (ENOENT), or
  *  'unmeasured' (any other failure; never read as absent). */
-function lstatKind(p) {
+export function lstatKind(p) {
   let st;
   try { st = lstatSync(p); } catch (e) { return e && e.code === 'ENOENT' ? 'absent' : 'unmeasured'; }
   if (st.isSymbolicLink()) return 'link';
