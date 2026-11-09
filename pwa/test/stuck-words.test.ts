@@ -3,8 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { STUCK_CAUSES, type RunStuck, type RunSummary, type StuckCause, type StuckReason } from '../../shared/api';
 import {
-  STUCK_HEAD_ORDER, STUCK_HEADING, closeWhen, groupControlWords, heldBack, heldBackLine, oldestAge, oldestDays, runMarker,
-  stuckAge, stuckLine, stuckNext,
+  STUCK_HEAD_ORDER, STUCK_HEADING, cardWord, closeWhen, groupControlWords, heldBack, heldBackLine, oldestAge, oldestDays,
+  programmeStuckLine, runMarker, stuckAge, stuckLine, stuckNext,
 } from '../src/fleet/stuckWords';
 
 const H = 3_600_000;
@@ -126,5 +126,46 @@ describe('the heads', () => {
     expect(oldestAge(runs, now)).toBe('28 days');
     expect(oldestAge([{ stuck: { reason: 'overtaken', cause: null, since: now - 5 * H, closes: null } }], now)).toBe('5 h');
     expect(oldestAge([], now)).toBeNull();
+  });
+});
+
+describe('the programme card words (D-8075; spec §8.2.2, A37, o5)', () => {
+  const s = (closes: RunStuck['closes']): RunStuck => ({ reason: 'owner-gone', cause: null, since: now - D, closes });
+  const at20 = { at: now + 20 * H, armed: false };
+  const armed20 = { at: now + 20 * H, armed: true };
+
+  it('words a mixed programme by the runs a clock counts', () => {
+    expect(programmeStuckLine([s(null), s(null), s(at20)], now)).toBe('3 stuck · ccrc would close 1 in 20 h');
+    expect(programmeStuckLine([s(null), s(null), s(armed20)], now)).toBe('3 stuck · ccrc closes 1 in 20 h');
+    expect(programmeStuckLine([s(null), s(null), s(null)], now)).toBe('3 stuck · nothing closes them on its own');
+    expect(programmeStuckLine([s(armed20), s(armed20), s(armed20)], now)).toBe('3 stuck · ccrc closes them in 20 h');
+    expect(programmeStuckLine([s(null)], now)).toBe('1 stuck · nothing closes it on its own');
+    expect(programmeStuckLine([s(armed20)], now)).toBe('1 stuck · ccrc closes it in 20 h');
+    expect(programmeStuckLine([s(at20)], now)).toBe('1 stuck · ccrc would close it in 20 h');
+  });
+
+  it('the soonest time shows when times differ', () => {
+    const later = { at: now + 30 * H, armed: true };
+    expect(programmeStuckLine([s(later), s(armed20)], now)).toBe('2 stuck · ccrc closes them in 20 h');
+    expect(programmeStuckLine([s(later), s(armed20), s(null)], now)).toBe('3 stuck · ccrc closes 2 in 20 h');
+  });
+
+  it('armed wins over shadow: shadow runs are not counted beside armed ones', () => {
+    expect(programmeStuckLine([s(at20), s({ at: now + 5 * H, armed: true })], now)).toBe('2 stuck · ccrc closes 1 in 5 h');
+  });
+
+  it('the zero forms read now and soon', () => {
+    expect(programmeStuckLine([s(null), s({ at: now, armed: false })], now)).toBe('2 stuck · ccrc would close 1 now');
+    expect(programmeStuckLine([s(null), s({ at: now - H, armed: true })], now)).toBe('2 stuck · ccrc closes 1 soon');
+    expect(programmeStuckLine([s({ at: now, armed: false })], now)).toBe('1 stuck · ccrc would close it now');
+  });
+
+  it('the word keeps the motion, and stuck wins when every open run is stuck or waits behind one', () => {
+    expect(cardWord('moving', false)).toBe('moving');
+    expect(cardWord('stalled', false)).toBe('stalled');
+    expect(cardWord('paused', false)).toBe('paused');
+    expect(cardWord('moving', true)).toBe('stuck');
+    expect(cardWord('stalled', true)).toBe('stuck');
+    expect(cardWord('paused', true)).toBe('paused');
   });
 });

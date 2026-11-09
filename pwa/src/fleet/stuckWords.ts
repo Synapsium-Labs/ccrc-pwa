@@ -124,3 +124,26 @@ export function oldestAge(runs: readonly Pick<RunSummary, 'stuck'>[], nowMs: num
   for (const r of runs) if (r.stuck != null && r.stuck.since < since) since = r.stuck.since;
   return since === Infinity ? null : stuckAge(since, nowMs);
 }
+
+/** A programme card's word (spec §8.2.2, check 10, o5): the motion, unless every open run is stuck or waits behind a stuck run,
+ *  which reads stuck. The operator's pause outranks it: nothing is expected to move while coordination is paused. */
+export function cardWord(motion: 'paused' | 'stalled' | 'moving', everyOpenRunStuck: boolean): 'paused' | 'stuck' | 'stalled' | 'moving' {
+  if (motion === 'paused') return 'paused';
+  return everyOpenRunStuck ? 'stuck' : motion;
+}
+
+/** A programme card's context line when a run is stuck (spec §8.2.2, check 3, A37): the count, then what happens next. Armed
+ *  clocks are counted and shadow ones are not when the two mix; the time is the soonest of those counted; "them"/"it" when
+ *  the counted runs are every stuck run, else their number. Zero reads "soon" when armed and "now" in shadow (§7). */
+export function programmeStuckLine(stuck: readonly RunStuck[], nowMs: number): string {
+  const total = stuck.length;
+  const clocks = stuck.flatMap((s) => (s.closes === null ? [] : [s.closes]));
+  const head = `${total} stuck`;
+  if (clocks.length === 0) return `${head} · nothing closes ${total === 1 ? 'it' : 'them'} on its own`;
+  const armed = clocks.some((c) => c.armed);
+  const counted = clocks.filter((c) => c.armed === armed);
+  const soonest = Math.min(...counted.map((c) => c.at));
+  const when = closeWhen(soonest, nowMs) ?? (armed ? 'soon' : 'now');
+  const who = counted.length === total ? (total === 1 ? 'it' : 'them') : String(counted.length);
+  return `${head} · ccrc ${armed ? 'closes' : 'would close'} ${who} ${when}`;
+}

@@ -966,7 +966,7 @@ export const waveOfWords = (r: { wave: number; waveOf: number | null }): string 
 /** A programme's title in words (D-6170): the first non-blank `programTitle`
  *  any of `runs` carries for `program`, else the slug. A whitespace-only title
  *  is no title. The one reader: the ledger's group head, `runRowName` and
- *  `groupRuns` all ask it. */
+ *  the programme card (`openCards`) all ask it. */
 export const programmeTitle = (
   program: string,
   runs: readonly { program: string; programTitle?: string | null }[],

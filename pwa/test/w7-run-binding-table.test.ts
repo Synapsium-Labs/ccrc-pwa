@@ -69,7 +69,7 @@ vi.mock('../src/fleet/AbandonSheet', async (orig) => {
   };
   return { ...m, AbandonSheet: Spy };
 });
-const { RunsScreen, STUCK_NOW, stuckOpen } = await import('./runs-board');
+const { RowsBoard: RunsScreen, STUCK_NOW, stuckOpen } = await import('./runs-board');
 
 const W = 'session-a';
 const C = 'coord-a';

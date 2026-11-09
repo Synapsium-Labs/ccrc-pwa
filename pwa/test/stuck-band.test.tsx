@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { RunStuck, RunSummary, StuckCause, StuckReason } from '../../shared/api';
-import { RunsScreen } from './runs-board';
+import { RunsScreen, RowsBoard } from './runs-board';
 import { fleetSession } from './fleetFixture';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -213,11 +213,13 @@ describe('the rows', () => {
     expect(within(sheet).getByText('A later wave moved on 9 days ago · Nothing closes this on its own')).toBeInTheDocument();
   });
 
-  it('a stuck run is listed in the band and also stays in its programme group (the band is a second view)', async () => {
+  it('a stuck run is listed in the band and its programme card still counts it (the band is a second view)', async () => {
     const c = await board([stuckRun(1, 'overtaken', null, 9 * D), run(2, { state: 'working', sessionId: 's', workspace: 'w' })]);
     fireEvent.click(toggle('Overtaken'));
-    expect(c.querySelectorAll('li.run-row')).toHaveLength(3);
-    expect(c.querySelectorAll('.runs-group li.run-row')).toHaveLength(2);
+    expect(c.querySelectorAll('li.run-row')).toHaveLength(1);
+    const cards = [...c.querySelectorAll('.programme-card')];
+    expect(cards.some((card) => /1 stuck/.test(card.textContent ?? ''))).toBe(true);
+    expect(cards.length).toBeGreaterThanOrEqual(1);
   });
 
   it('an owner-gone stuck run keeps its Resume door in its programme group (the band is a second view)', async () => {
@@ -227,7 +229,7 @@ describe('the rows', () => {
       store.setState({ runs: [stuckRun(7, 'owner-gone', 'coordinator-archived', 49 * D)], runsFrameSeen: true, fleetFrameSeen: true, conn: 'open',
         sessions: [dead] });
     });
-    const { container } = render(<RunsScreen store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
+    const { container } = render(<RowsBoard store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
     await act(async () => { await Promise.resolve(); });
     expect(container.querySelector('.runs-group')!.querySelector('li.run-row')).not.toBeNull();
     expect(within(container.querySelector('.runs-group') as HTMLElement).getByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();

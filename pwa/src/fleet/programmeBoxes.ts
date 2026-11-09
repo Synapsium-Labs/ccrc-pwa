@@ -210,14 +210,23 @@ function lead(claimed: readonly RunSummary[]): LeadFacts {
 export const boxNeeds = (b: ProgrammeBoxView): boolean =>
   operatorAsk(b.coordinator) || b.children.some((r) => r.kind === 'session' && operatorAsk(r.session));
 
-/** The box's state: needs, then paused, then stalled, then moving. Never stalled without a threshold and a move. */
+/** The pure state step (spec 2026-11-04 §8.2.2): the operator's pause, then stalled (no move within the quiet threshold),
+ *  then moving. It needs no coordinator row, so a programme card whose coordinator is gone calls it too. Never stalled without
+ *  a threshold and a move. */
+export function motionState(
+  lastMoveAt: number | null, now: number, quietMs: number | null, paused: boolean,
+): 'paused' | 'stalled' | 'moving' {
+  if (paused) return 'paused';
+  if (quietMs !== null && lastMoveAt !== null && now - lastMoveAt >= quietMs) return 'stalled';
+  return 'moving';
+}
+
+/** The box's state: needs, then the motion step (`motionState`). */
 export function boxState(
   b: ProgrammeBoxView, rowsNeed: boolean, now: number, quietMs: number | null, paused: boolean,
 ): BoxState {
   if (rowsNeed) return 'needs';
-  if (paused) return 'paused';
-  if (quietMs !== null && b.lastMoveAt !== null && now - b.lastMoveAt >= quietMs) return 'stalled';
-  return 'moving';
+  return motionState(b.lastMoveAt, now, quietMs, paused);
 }
 
 /** A span in `formatReset`'s units: `3m`, `2h 10m`, `3d 4h`. */
@@ -229,8 +238,13 @@ export function movementWords(b: ProgrammeBoxView, state: BoxState, now: number)
   if (b.lastMoveAt === null) return '';
   if (state === 'paused') return 'paused';
   if (state === 'stalled') return `no move ${span(b.lastMoveAt, now)}${b.waiting === null ? '' : ` · ${RUN_WORD[b.waiting]}`}`;
-  return now - b.lastMoveAt < 60_000 ? 'moved just now' : `moved ${span(b.lastMoveAt, now)} ago`;
+  return movedWords(b.lastMoveAt, now);
 }
+
+/** The app's elapsed form for a last move (o9): `moved 12m ago`, `moved just now` under a minute. The programme card reads it
+ *  too, so the two never word a move two ways. */
+export const movedWords = (lastMoveAt: number, now: number): string =>
+  now - lastMoveAt < 60_000 ? 'moved just now' : `moved ${span(lastMoveAt, now)} ago`;
 
 const RANK: Record<BoxState, number> = { needs: 0, stalled: 1, moving: 2, paused: 2 };
 

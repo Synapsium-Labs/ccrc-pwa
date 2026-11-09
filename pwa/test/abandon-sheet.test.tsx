@@ -26,7 +26,7 @@ import { coordinatorGoneOf, runRowName } from '../src/fleet/runWords';
 import * as router from '../src/lib/router';
 import { ToastHost } from '@ccrc/ui';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
+import { RunsScreen, STUCK_NOW, stuckOpen, RowsBoard } from './runs-board';
 import { ApiError, COORD_UNSUPPORTED_TEXT, UNSUPPORTED_VERB_TEXT } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -82,7 +82,7 @@ it("the run number survives in Abandon's and Resume's accessible names and the r
       sessions: [fleetSession({ id: 'ccrc-pwa-coordinator', project: 'ccrc-pwa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' })],
     });
   });
-  const { container } = render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  const { container } = render(<RowsBoard store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
   expect(screen.getByRole('button', { name: 'Abandon run 3' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Resume run 4' })).toBeInTheDocument();
   const row = container.querySelector<HTMLElement>('li.run-stuck')!;

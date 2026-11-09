@@ -1,14 +1,13 @@
 // The runs page at a glance (D-6170, spec §5 W0, G5 (a)). A row is named by its
 // programme's title and wave in words, never a workspace, a branch or a run
 // number; the run number stays only in the controls' accessible names and the
-// row's title (D-5589); Abandon is drawn on open rows only; a group head prints
-// the programme's title. "today:" rows pin the answer the base gave and are
+// row's title (D-5589); Abandon is drawn on open rows only. "today:" rows pin the answer the base gave and are
 // flipped by the behaviour commits; "kept:" rows hold across them.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import type { CoordCapsView, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { RunsScreen, STUCK_NOW, stuckOpen } from './runs-board';
+import { STUCK_NOW, stuckOpen, RowsBoard } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 beforeEach(stuckOpen);
@@ -42,7 +41,7 @@ async function board(active: RunSummary[], finished: RunSummary[] = [], sessions
     store.setState({ runs: active, runsFrameSeen: true, fleetFrameSeen: true, conn: 'open', sessions });
   });
   const load = vi.fn().mockResolvedValue({ runs: finished });
-  const { container } = render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={load} />);
+  const { container } = render(<RowsBoard loadCaps={NO_CAPS} store={store} loadRuns={load} />);
   await act(async () => { await Promise.resolve(); });
   return container;
 }
@@ -128,16 +127,5 @@ describe('the runs ledger at a glance (D-6170)', () => {
     const name = nameOf(rows(c)[0]!);
     expect(name).toBe('Programme A · review of wave 5');
     expect(name.match(/review/g)).toHaveLength(1);
-  });
-
-  it('the group head prints the title, and the slug only when the title is empty', async () => {
-    const c = await board([
-      run({ id: 1 }),
-      run({ id: 2, program: 'programme-b', programTitle: '' }),
-    ]);
-    const heads = [...c.querySelectorAll('.runs-group[aria-label^="program"] .runs-program')].map((n) => n.textContent).sort();
-    expect(heads).toEqual(['Programme A', 'programme-b']);
-    expect(screen.getByRole('group', { name: 'program Programme A' })).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'program programme-a' })).toBeNull();
   });
 });
