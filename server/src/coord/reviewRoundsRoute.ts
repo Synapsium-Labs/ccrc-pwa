@@ -3,7 +3,9 @@
 // `coordLiftVerdict` in `reviewcap.ts`, `claimsProgramme` for ownership).
 //
 // The box token authenticates the box; `{byId, byUuid}` is attribution re-measured against the registry
-// (`requireAttribution`), which is freshness, not forgery-proofness, like every coordinator lane. Ownership is decided from
+// (`requireAttribution`), which is freshness, not forgery-proofness, like every coordinator lane. D-8125 author's call: the
+// door accepts this trust model (the same box-token lane dispatch and run moves use) rather than a new session-bound
+// credential; the bound on a misuse is the grant itself (REVIEW_ROUND_CAP rounds per lift, journaled, noticed, switchable off). Ownership is decided from
 // the server's own rows: the run's `claimedBy`, or an open claim on its programme. A worker is neither.
 //
 // THE ORDER (a cheaper refusal is never reached after an expensive one): not configured; the box token; the body's shape

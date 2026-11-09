@@ -468,13 +468,15 @@ export function wakeGateConfigOf(env: NodeJS.ProcessEnv): WakeGateConfig {
 export type ReviewCapCoordLift = 'on' | 'off';
 
 /** `CCRC_REVIEW_CAP_COORD_LIFT` from the environment (D-8125). Absent or empty is `on` and silent; `on` and `off` read as
- *  given; any other value says so once and reads `on` (the default). */
+ *  given (case and surrounding space aside). This switch RESTRICTS authority, so any other value (`false`, `0`, `no`) says so
+ *  once and reads `off`: a mistyped kill switch must never leave coordinator lifts running. */
 export function reviewCapCoordLiftOf(env: NodeJS.ProcessEnv): ReviewCapCoordLift {
   const raw = env['CCRC_REVIEW_CAP_COORD_LIFT'];
-  if (raw === undefined || raw === '' || raw === 'on') return 'on';
-  if (raw === 'off') return 'off';
-  console.warn(`ccrc-server: CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw.slice(0, 40))} is not one of on|off; it reads as on (the default).`);
-  return 'on';
+  const v = raw?.trim().toLowerCase();
+  if (raw === undefined || v === '' || v === 'on') return 'on';
+  if (v === 'off') return 'off';
+  console.warn(`ccrc-server: CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw.slice(0, 40))} is not one of on|off; it reads as off (coordinator lifts disabled) because the switch restricts authority.`);
+  return 'off';
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {

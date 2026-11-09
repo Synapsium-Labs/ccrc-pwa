@@ -655,11 +655,16 @@ describe('reviewCapCoordLiftOf (D-8125)', () => {
     expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'on' })).toEqual({ value: 'on', said: '' });
   });
 
-  it('any other value warns once and reads on', () => {
-    for (const raw of ['OFF', '0']) {
+  it('case and surrounding space do not change on or off', () => {
+    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: ' OFF ' })).toEqual({ value: 'off', said: '' });
+    expect(warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: 'On' })).toEqual({ value: 'on', said: '' });
+  });
+
+  it('any other value warns once and reads off: the switch restricts authority, so it fails closed', () => {
+    for (const raw of ['false', '0', 'no', 'disabled', 'nope']) {
       const r = warnOf({ CCRC_REVIEW_CAP_COORD_LIFT: raw });
-      expect(r.value, raw).toBe('on');
-      expect(r.said, raw).toContain(`CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw)} is not one of on|off; it reads as on (the default).`);
+      expect(r.value, raw).toBe('off');
+      expect(r.said, raw).toContain(`CCRC_REVIEW_CAP_COORD_LIFT=${JSON.stringify(raw)} is not one of on|off; it reads as off`);
     }
   });
 
