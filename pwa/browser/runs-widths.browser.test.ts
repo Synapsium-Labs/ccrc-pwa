@@ -144,9 +144,11 @@ for (const width of MATRIX.widths) {
               return {
                 tap, rows, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
                 spend: document.querySelectorAll('.run-spend').length, vw: innerWidth,
+                banded: document.querySelectorAll('li.run-stuck').length,
               };
             });
-            expect(m.rows.length).toBe(RUNS.length);
+            // The Stuck band is a second view (spec 8.2.2): every run keeps its group row, and an opened head adds a band row.
+            expect(m.rows.length).toBe(ALL_RUNS.length + m.banded);
             expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
             expect(m.spend, 'the board draws no spend line (A10)').toBe(0);
             for (const row of m.rows) {
@@ -271,7 +273,7 @@ for (const width of MATRIX.widths) {
           try {
             // Abandon sits on stuck rows alone (Task 13): at the right end of the row's first line, at every width.
             await openHeads(page);
-            const line = await page.locator('.run-row[title^="run 1607"]').evaluate((li) => {
+            const line = await page.locator('li.run-stuck[title^="run 1607"]').evaluate((li) => {
               const open = li.querySelector('.run-open')!.getBoundingClientRect();
               const abandon = li.querySelector('.run-abandon')!.getBoundingClientRect();
               const word = li.querySelector('.run-name')!.getBoundingClientRect();

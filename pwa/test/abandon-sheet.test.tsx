@@ -488,8 +488,9 @@ describe('the run board’s abandon control (Task 12, spec §4.3)', () => {
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
     // No session to open, yet the row opens the run's page (A9), and the release valve (an ambiguous-dispatch wedge is
     // exactly a `planned` run with no session) is still there.
-    expect(screen.getByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /abandon run 3/i })).toBeInTheDocument();
+    // The run is stuck, so the band lists it and its programme group keeps it too (a second view, not a move).
+    expect(screen.getAllByRole('button', { name: /Build 4: transcript surface · wave 3 of 4/i }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByRole('button', { name: /abandon run 3/i }).length).toBeGreaterThanOrEqual(1);
   });
 });
 
