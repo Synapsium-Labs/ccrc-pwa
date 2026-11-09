@@ -91,16 +91,27 @@ describe('the box token comes first, before the body and before any await (plan 
 
 describe('the client rows and the server agree (review 1331 F8)', () => {
   const rows = clientRoutes().filter((c) => /^(items|goals)\./.test(c.key));
-  it('the client has exactly the nine items and goals rows', () => {
+  it('the client has exactly the ten items and goals rows', () => {
     expect(rows.map((c) => c.key).sort()).toEqual(
-      ['goals.merged', 'goals.modify', 'goals.pin', 'items.block', 'items.confirm', 'items.list', 'items.raise', 'items.return', 'items.withdraw']);
+      ['goals.merged', 'goals.modify', 'goals.pin', 'goals.show', 'items.block', 'items.confirm', 'items.list', 'items.raise', 'items.return', 'items.withdraw']);
   });
   // Every one of the nine is gated by the box token first, so a registered route answers 401 to a call with no token
   // and a path nobody registered answers 404: a rename on either side turns this red.
-  it.each(rows.map((c) => [c.key, c.method, c.path] as const))('%s (%s %s) is a route the server registers', async (_key, method, rowPath) => {
+  // goals.show is the one read that is exempt from the cookie gate and authenticated by its own route (session or box
+  // token), so it is probed on its own below rather than through the token-first 401 loop.
+  it.each(rows.filter((c) => c.key !== 'goals.show').map((c) => [c.key, c.method, c.path] as const))('%s (%s %s) is a route the server registers', async (_key, method, rowPath) => {
     const r = await rig();
     const res = await r.app.inject({ method: method as 'GET' | 'POST', url: rowPath.replace('{id}', 'prog-a') });
     expect(res.statusCode, `${method} ${rowPath}: ${res.body}`).toBe(401);
+  });
+});
+
+describe('goals.show is a registered route with its own credential rule', () => {
+  it('GET /api/programmes/{id}/goals is registered (the rig runs with auth off, so it answers rather than 404)', async () => {
+    const r = await rig();
+    const row = clientRoutes().find((c) => c.key === 'goals.show')!;
+    const res = await r.app.inject({ method: row.method as 'GET', url: row.path.replace('{id}', 'prog-a') });
+    expect(res.statusCode, res.body).toBe(200);
   });
 });
 
