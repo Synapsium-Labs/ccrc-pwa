@@ -474,6 +474,8 @@ export const EXEC_WHITELIST = {
     // train proofs in the registry, nothing else.
     ['pr-train-prove', '--project'],
     ['pr-open',  '--session'],
+    // D-8147: the visibility reader; one `gh api` read of a project's repository, nothing written.
+    ['repo-visibility', '--project'],
     ['ws-archive', '--session'],
     ['ws-restore', '--session'],
     ['ws-audit', '--session'],

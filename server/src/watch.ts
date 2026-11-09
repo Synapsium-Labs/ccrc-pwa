@@ -90,6 +90,7 @@ import type { BoxSettingsHeld } from './update/boxSettings.js';
 import { BoxSettingsLane } from './update/boxSettingsLane.js';
 import { DiskAlarmLane } from './diskAlarmLane.js';
 import { PressureLane } from './pressureLane.js';
+import { VisibilityLane } from './linking/visibilityLane.js';
 import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
@@ -1065,6 +1066,8 @@ export class FleetWatcher {
   private readonly diskAlarm = new DiskAlarmLane(() => this.deps);
   /** The host-pressure beat (#1170): its last reading classifies a stalled link. */
   private readonly pressureLane = new PressureLane(() => this.deps);
+  /** D-8147: one repository-visibility reading per PR pass at most. */
+  private readonly visibilityLane = new VisibilityLane(() => this.deps);
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -8519,6 +8522,7 @@ export class FleetWatcher {
         if (!proved.ok) console.warn(`ccrc-server: train prover of ${project} failed (${failureDetail(proved)})`);
       }
     }
+    void this.visibilityLane.tick(projects, now);   // D-8147: never awaited, never throws
     this.sweepMerged(records);
     this.sweepLanding(records);
   }

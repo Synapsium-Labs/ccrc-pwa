@@ -5747,6 +5747,23 @@ _gh_fail_reason() {   # gh's stderr text -> ONE word on stdout: unauthenticated 
   esac
 }
 
+# D-8147: one `gh api repos/{slug}` read -> "<visibility>\t<default_branch>" on stdout; on failure prints ONE word
+# (`_gh_fail_reason`'s, or `unavailable` for a timeout) and returns non-zero. Bounded by `_plat_timeout`.
+_gh_repo_meta() {   # slug -> "<visibility>\t<default_branch>"
+  local errf out rc err
+  errf=$(_plat_mktemp)
+  out=$(_plat_timeout "$PR_GH_TIMEOUT" gh api "repos/$1" --jq '[.visibility,.default_branch]|@tsv' 2>"$errf"); rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc == 124 )); then printf '%s\n' unavailable; return 1; fi
+  if (( rc != 0 )); then _gh_fail_reason "$err"; return 1; fi
+  printf '%s\n' "$out"
+}
+
+# D-8147: the pull request template's path in a main checkout, the one definition `pr-state` and `repo-visibility` read.
+_pr_template_file() {   # main -> the path (present or not)
+  printf '%s\n' "$1/.github/pull_request_template.md"
+}
+
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
                   # the answer object instead and returns non-zero. NEVER
                   # partially prints.
@@ -9179,6 +9196,7 @@ prefer
 project-add
 project-pool
 reclaim-pause
+repo-visibility
 route
 start
 stop
@@ -11660,12 +11678,29 @@ _pr_state_one() {   # id main repo rows [answered-at-ms] [rows-head-branch] -> o
     fi
   fi
   tmpl=""
-  [[ -f "$main/.github/pull_request_template.md" ]] && tmpl=$(cat "$main/.github/pull_request_template.md")
+  local tmplf; tmplf=$(_pr_template_file "$main")
+  [[ -f "$tmplf" ]] && tmpl=$(cat "$tmplf")
   # The train proof (D-7362) under the verb's budget (`_PR_TRAIN_DEADLINE`,
   # none when this is called on its own), keeping what it proves.
   _pr_train_proofs "$main" "$repo" "$branch" "$baseShort" 1 "$rows"
   printf '%s' "$rows" | _pr_py state "$id" "$project" "$main" "$repo" "$branch" "$base" \
     "$baseShort" "$tip" "$ahead" "$dirty" "$tmpl" "$REG" "$answeredAt"
+}
+
+cmd_repo_visibility() {   # ccd repo-visibility --project <p>  (D-8147)
+  # One `gh api repos/{slug}` read: the repository's visibility and default branch, plus whether the main checkout holds
+  # the pull request template. rc 0 and one JSON line on an answer; rc 1 and {"reason":...} on a failure. Read-only.
+  [[ $# -eq 2 && $1 == --project ]] || die "usage: ccd repo-visibility --project <p>"
+  [[ "$2" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad project"
+  local main="$PROJECTS_ROOT/$2" slug meta vis branch tmpl=absent
+  slug=$(_gh_repo_slug "$main") || { printf '{"reason":"no-remote"}\n'; return 1; }
+  meta=$(_gh_repo_meta "$slug") || { printf '{"reason":"%s"}\n' "$meta"; return 1; }
+  [[ "$meta" == *$'\t'* ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  vis=${meta%%$'\t'*}; branch=${meta#*$'\t'}
+  case "$vis" in public|private|internal) ;; *) printf '{"reason":"bad-answer"}\n'; return 1 ;; esac
+  [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || { printf '{"reason":"bad-answer"}\n'; return 1; }
+  [[ -f "$(_pr_template_file "$main")" ]] && tmpl=present
+  printf '{"slug":"%s","visibility":"%s","defaultBranch":"%s","template":"%s"}\n' "$slug" "$vis" "$branch" "$tmpl"
 }
 
 cmd_pr_state() {   # ccd pr-state --session <id> | ccd pr-state --project <project> [--pr <n>]
@@ -47542,11 +47577,12 @@ case "${1:-}" in
   pr-state)  shift; cmd_pr_state "$@" ;;
   pr-landing) shift; cmd_pr_landing "$@" ;;
   pr-train-prove) shift; cmd_pr_train_prove "$@" ;;
+  repo-visibility) shift; cmd_repo_visibility "$@" ;;
   docs-index) shift; cmd_docs_index "$@" ;;
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-admin-merge|pr-state|pr-train-prove|repo-visibility|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

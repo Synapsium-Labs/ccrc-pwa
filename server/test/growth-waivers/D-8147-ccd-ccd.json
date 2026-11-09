@@ -1,0 +1,7 @@
+{
+  "file": "ccd/ccd",
+  "maxDelta": 160,
+  "d": "D-8147",
+  "reason": "the linking standard's two verbs: `repo-visibility` (one gh api read of a project's repository visibility and default branch, with the template's presence) and `pr-template` (a branch and a pull request that add the pull request template), with their helpers `_gh_repo_meta` and `_pr_template_file`, usage-line words, caps entries and dispatch rows; the repo-visibility half measures about +36 net lines against the merge-base, the budget covers the second verb; kept inline because both verbs reuse the file's gh readers (`_gh_repo_slug`, `_gh_fail_reason`, `_plat_timeout`) and registry-free project grammar, which are not in a library",
+  "added": "2026-11-09"
+}

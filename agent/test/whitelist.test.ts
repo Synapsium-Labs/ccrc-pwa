@@ -354,6 +354,12 @@ describe('whitelist.isExecAllowed', () => {
     expect(isExecAllowed('ccd', ['project-add', 'demo'])).toBe(false);
   });
 
+  it('grants repo-visibility ONLY with --project (D-8147)', () => {
+    expect(isExecAllowed('ccd', ['repo-visibility', '--project', 'demo'])).toBe(true);
+    expect(isExecAllowed('ccd', ['repo-visibility', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['repo-visibility'])).toBe(false);
+  });
+
   it('grants project-pool ONLY with --project, in both directions', () => {
     // The flag is not a confirmation token here, it is the verb's whole
     // argument surface — and prefix matching leaves everything after it
