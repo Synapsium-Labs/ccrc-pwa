@@ -6,7 +6,8 @@
 // shard whose every test passed ("EnvironmentTeardownError: Closing rpc while onUserConsoleLog was pending"). The
 // remedy is `quietAtTestEnd` (or `quietWatcher`, or `drainWatcher` in the file's own teardown) in `laneQuiet.ts`.
 //
-// WHAT THIS PINS: a file whose text builds a watcher also names one of the TEARDOWN forms (`QUIETS`), or stands on
+// WHAT THIS PINS: a file whose text builds a watcher also names one of the TEARDOWN forms (`QUIETS`, or a
+// `watcherTeardown()` whose `remove(` it calls, which quiets through `quietWatcher`), or stands on
 // `EXEMPT` with its reason. `EXEMPT` may only shrink: its size is pinned, an entry whose file no longer builds a watcher
 // or now quiets one goes red until it is removed, and a new builder that quiets nothing goes red until it does.
 // `closeDelegation()` and `drainTick()` are not teardown forms: each is partial (the first leaves the server-caps beat
@@ -30,6 +31,11 @@ const TEST_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BUILDS = new RegExp(['new Fleet', 'Watcher\\('].join(''));
 /** The teardown forms (see the header): `closeDelegation(` and `drainTick(` are partial, so they are not here. */
 const QUIETS = /\b(quietAtTestEnd|quietWatcher|drainWatcher)\(/;
+/** `watcherTeardown()` (`watcherTeardown.ts`, D-6179) quiets what it tracks, through `quietWatcher`, in its `remove`:
+ *  a file that registers it counts only when it also calls a `remove(` (review 1724 F2). */
+const TEARDOWN_REGISTERED = /\bwatcherTeardown\(/;
+const TEARDOWN_REMOVED = /\.remove\(/;
+const quiets = (src: string): boolean => QUIETS.test(src) || (TEARDOWN_REGISTERED.test(src) && TEARDOWN_REMOVED.test(src));
 
 /** Every `.ts` file under `server/test`, relative to it, sorted. `node_modules` and fixture trees are not entered. */
 function testFiles(): string[] {
@@ -78,7 +84,7 @@ const EXEMPT: Record<string, string> = {
   'claimantClientFixture.ts': RIG,
   'claims-no-hold.test.ts': MEASURED,
   'collectLaneFixture.ts': PARTIAL('drainTick(), in a rig'),
-  'coord-abandon.test.ts': MEASURED,
+  'coord-abandon.test.ts': MEASURED + '; it registers watcherTeardown() but never calls its remove(), so it quiets nothing',
   'coordinator-intent-route.test.ts': PARTIAL('closeDelegation()'),
   'ctx-pressure.test.ts': MEASURED,
   'dead-coordinator-lane.test.ts': MEASURED,
@@ -106,7 +112,6 @@ const EXEMPT: Record<string, string> = {
   'fleet-health.test.ts': MEASURED,
   'fleet-identity-composition.test.ts': MEASURED,
   'fleetListingFixture.ts': RIG,
-  'fleetws.test.ts': MEASURED,
   'hibernate-census.test.ts': MEASURED,
   'host-pressure.test.ts': MEASURED,
   'idle-compact-nudge-lane.test.ts': MEASURED,
@@ -126,7 +131,6 @@ const EXEMPT: Record<string, string> = {
   'questions-clock-pin.test.ts': MEASURED,
   'questions-instances.test.ts': MEASURED,
   'questions-sequence-pin.test.ts': MEASURED,
-  'radar-fleet-frames.test.ts': MEASURED,
   'radar-lane.test.ts': MEASURED,
   'readiness-sweep.test.ts': MEASURED,
   'reclaim-pause-pin.test.ts': MEASURED,
@@ -137,8 +141,6 @@ const EXEMPT: Record<string, string> = {
   'roll-wake-admission.test.ts': MEASURED,
   'run-find.test.ts': MEASURED,
   'run-record.test.ts': MEASURED,
-  'run-stuck-skew.test.ts': MEASURED,
-  'runs-frame-move.test.ts': MEASURED,
   'runs-page.test.ts': MEASURED,
   'served-account-acts.test.ts': MEASURED,
   'served-routes.test.ts': MEASURED,
@@ -161,12 +163,11 @@ const EXEMPT: Record<string, string> = {
   'update-rollout-follow.test.ts': MEASURED,
   'update-routes.test.ts': MEASURED,
   'usage-sweep-lane.test.ts': MEASURED,
-  'watcherTeardown.test.ts': MEASURED,
 };
 /** The pinned size of `EXEMPT`: lower it when an entry goes; raising it is a decision a reviewer sees. Raised once, from
  *  95 by the 13 partial quiets (fix round 1 of C17, review 1724 F1): a correction of what the census measured, not a
- *  new loud builder. It only falls from here. */
-const EXEMPT_CEILING = 108;
+ *  new loud builder. It only falls from here: to 103 when `watcherTeardown` came to quiet through `quietWatcher` (F2). */
+const EXEMPT_CEILING = 103;
 
 describe('every test that builds a FleetWatcher quiets it, or is exempt with its reason (D-8140)', () => {
   const files = testFiles();
@@ -179,22 +180,25 @@ describe('every test that builds a FleetWatcher quiets it, or is exempt with its
   });
 
   it('a builder quiets its watcher, or stands on EXEMPT', () => {
-    const loud = builders.filter((f) => !QUIETS.test(text.get(f)!) && !(f in EXEMPT));
+    const loud = builders.filter((f) => !quiets(text.get(f)!) && !(f in EXEMPT));
     expect(loud, 'build a watcher, quiet none, and are not exempt: register quietAtTestEnd (laneQuiet.ts)').toEqual([]);
   });
 
-  it('a partial or mid-test call does not quiet a file; a teardown form does (review 1724 F1)', () => {
+  it('a partial or mid-test call does not quiet a file; a teardown form does (review 1724 F1, F2)', () => {
     const build = 'const w = new Fleet' + 'Watcher(deps, bus, 10_000);';
     const midTest = `it('x', async () => { ${build} await w.tick(); await w.closeDelegation(); });`;
     expect(BUILDS.test(midTest), 'the sample builds a watcher').toBe(true);
-    expect(QUIETS.test(midTest), 'a mid-test closeDelegation() alone').toBe(false);
-    expect(QUIETS.test(midTest.replace('w.closeDelegation()', 'drainTick(w)')), 'a drainTick() alone').toBe(false);
-    expect(QUIETS.test(`afterEach(() => w.closeDelegation()); ${midTest}`), 'closeDelegation() in afterEach').toBe(false);
-    expect(QUIETS.test(midTest.replace(build, `const w = quietAtTestEnd(${build.slice(10, -1)});`)), 'quietAtTestEnd').toBe(true);
+    expect(quiets(midTest), 'a mid-test closeDelegation() alone').toBe(false);
+    expect(quiets(midTest.replace('w.closeDelegation()', 'drainTick(w)')), 'a drainTick() alone').toBe(false);
+    expect(quiets(`afterEach(() => w.closeDelegation()); ${midTest}`), 'closeDelegation() in afterEach').toBe(false);
+    expect(quiets(midTest.replace(build, `const w = quietAtTestEnd(${build.slice(10, -1)});`)), 'quietAtTestEnd').toBe(true);
+    const tracked = midTest.replace(build, `const w = t.track(${build.slice(10, -1)});`);
+    expect(quiets(`const t = watcherTeardown(); ${tracked}`), 'watcherTeardown() never removed').toBe(false);
+    expect(quiets(`const t = watcherTeardown(); afterEach(() => t.remove(home)); ${tracked}`), 'watcherTeardown() removed').toBe(true);
   });
 
   it('EXEMPT only shrinks: every entry still builds a watcher and still quiets none, and its size is pinned', () => {
-    const stale = Object.keys(EXEMPT).filter((f) => !builders.includes(f) || QUIETS.test(text.get(f)!));
+    const stale = Object.keys(EXEMPT).filter((f) => !builders.includes(f) || quiets(text.get(f)!));
     expect(stale, 'no longer need their exemption: remove them and lower EXEMPT_CEILING').toEqual([]);
     expect(Object.keys(EXEMPT).length).toBe(EXEMPT_CEILING);
     for (const [f, why] of Object.entries(EXEMPT)) expect(why.length, `${f}: an exemption names its reason`).toBeGreaterThan(10);
