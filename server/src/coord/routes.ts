@@ -338,7 +338,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
  *  `sendDispatchOutcome` just above: byte-identical to the shapes the route
  *  used to build inline, and the same totality guard (fix round 1,
  *  finding 1/3) — see that function's own docstring for the measurement. */
-function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
+export function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
   if (r.ok) {
     return reply.code(200).send({ ok: true, id: r.id, state: r.state, released: r.released,
       childReclaim: r.childReclaim, ...(r.childReclaimWhy === undefined ? {} : { childReclaimWhy: r.childReclaimWhy }) });
@@ -510,7 +510,7 @@ export interface CoordRoutesHandle {
    *  arm would refuse for a run from its row alone, read without acting, so a caller that ends several runs can find
    *  the one it cannot move before it ends the first. */
   withAbandon<T>(coord: CoordStore, fn: (
-    abandon: (runId: number) => Promise<CloseOutcome>,
+    abandon: (runId: number, detail?: string) => Promise<CloseOutcome>,
     refusalOf: (runId: number) => Extract<CloseOutcome, { ok: false }> | null,
   ) => Promise<T>): Promise<T>;
   /** The SAME hold, handed `closeRun`'s abandon arm as the DEAD-COORDINATOR LANE runs it (workspace lifecycle spec
@@ -646,11 +646,12 @@ export function registerCoordRoutes(
    *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
    *  queue — handed to `fn` INSIDE `coordMutex`. ONE spelling, two callers: that route, and the archive door's
    *  `{programme:'end'}` through the handle this function returns. */
-  const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId) => closeRun(
+  const withAbandon: CoordRoutesHandle['withAbandon'] = (coord, fn) => coordMutex.run(() => fn((runId, detail) => closeRun(
     { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState,
       childReclaim: childReclaimPort(deps, coord) },
-    // D-8071: the run's reason from the stuck verdict's reader, read HERE, inside the hold; null with no verdict.
-    runId, { intent: 'abandon' }, 'operator', abandonDetail(watcher?.runVerdicts.of(runId) ?? null)), (runId) => abandonRefusal(coord, runId)));
+    // D-8071: the run's reason from the stuck verdict's reader, read HERE, inside the hold; null with no verdict. D-8076: the
+    // operator's act on an end-request item names the item instead (`abandon:requested:<item>`), a detail only the act passes.
+    runId, { intent: 'abandon' }, 'operator', detail ?? abandonDetail(watcher?.runVerdicts.of(runId) ?? null)), (runId) => abandonRefusal(coord, runId)));
 
   /** The dead-coordinator lane's abandon (workspace lifecycle spec §5.4) — `withAbandon`'s deps, `'sweep'` and the
    *  crashed id, inside the same `coordMutex`. Handed to the watcher by `buildServer`. */

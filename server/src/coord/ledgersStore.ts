@@ -9,7 +9,7 @@
 // Everything here is keyed on the programme's SLUG (spec §3.4). The moves are decided by `nextItemState` in
 // `shared/ledgers.ts` and by nothing in this file: `moveItemInTx` is THE ONLY WRITER of `operator_items.state`.
 import type { DatabaseSync } from 'node:sqlite';
-import type { MailDeliveryState, StuckReason } from '../../../shared/api.js';
+import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, isEndRunAction, nextItemState, parseItemAction, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
@@ -245,6 +245,29 @@ export function settleEndRequestsInTx(db: DatabaseSync, runId: number, note: str
   for (const item of openEndRequestsOf(db, runId)) {
     const res = moveItemInTx(db, item.id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
     if (res.ok) settled += 1;
+  }
+  return settled;
+}
+
+/** The mend for a death between the operator's act and its item (spec 2026-11-04 §10, "The act", step 3): the abandon committed
+ *  with `abandon:requested:<item>`, which the run's own transition leaves to the act, and the server died before the item moved.
+ *  Every open end-request item whose run is already closed moves `settle` (ccrc) with `note`, each in its own transaction. Run
+ *  from the waiting read, so the item is gone within one read. The move is `moveItemInTx`'s, the only writer of the state. */
+export function settleEndRequestsOfClosedRuns(db: DatabaseSync, note: string, now: number): number {
+  const states = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
+  const closed = TERMINAL_RUN_STATES.map((st) => `'${st}'`).join(', ');
+  const ids = db.prepare(
+    `SELECT i.id AS id FROM operator_items i JOIN runs r ON r.id = i.runId WHERE i.action IS NOT NULL AND i.state IN (${states}) ` +
+    `AND r.state IN (${closed}) ORDER BY i.id`,
+  ).all() as unknown as { id: number }[];
+  let settled = 0;
+  for (const { id } of ids) {
+    const res = tx(db, () => {
+      const item = itemById(db, id);
+      if (item === null || !isEndRunAction(item.action)) return null;
+      return moveItemInTx(db, id, 'settle', 'ccrc', { note }, now, { programmeHasOpenRun: true });
+    });
+    if (res?.ok === true) settled += 1;
   }
   return settled;
 }

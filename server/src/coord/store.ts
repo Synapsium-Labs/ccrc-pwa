@@ -10452,6 +10452,8 @@ export class CoordStore {
   raiseItemWithMail<T>(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T): number { return ledgers.raiseItemWithMail(this.db, input, now, actor, queue).id; }
   /** One move and its mail in ONE transaction (the withdraw and decline of an end request tell the asker, A22). */
   moveItemWithMail<T>(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }, queue: (item: ItemRow) => T) { return ledgers.moveItemWithMail(this.db, id, act, actor, fields, now, ctx, queue); }
+  /** Open end-request items whose run has closed move `settle`, with `note`: the mend for a death between the operator's act and its item. Returns how many moved. */
+  settleEndRequestsOfClosedRuns(note: string, now: number): number { return ledgers.settleEndRequestsOfClosedRuns(this.db, note, now); }
   /** The run's open end request (held or not), or null; at most one is ever raised (`already-asked`). */
   openEndRequestOf(runId: number): ItemRow | null { return ledgers.openEndRequestsOf(this.db, runId)[0] ?? null; }
   /** The run's newest end request that ended in a decline or a withdraw (A24), or null. */

@@ -2027,6 +2027,15 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // mention.
     expect(allSkillText).not.toContain('/api/claims/:id/break');
   });
+
+  it("never names the operator's act and decline doors — the abandon door's sibling, reachable by the operator alone", () => {
+    // D-8076 (spec 2026-11-04 §10): `POST /api/items/:id/act` ends a run through the abandon arm and `POST
+    // /api/items/:id/decline` keeps it. A session ASKS (`end-request`); neither door is in any corpus file, and the
+    // sibling-door pin above (the abandon route) stays beside them.
+    expect(allSkillText).not.toContain('/api/items/:id/act');
+    expect(allSkillText).not.toContain('/api/items/:id/decline');
+    expect(allSkillText).not.toMatch(/items (?:act|decline)\b/);
+  });
 });
 
 // ── program-leverage wave 1 (F1): the coordinator-resume runbook ───────────

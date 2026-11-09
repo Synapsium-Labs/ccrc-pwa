@@ -64,7 +64,7 @@ import { SHAPE_ONLY_MASKER, type SecretMasker } from './accounts/mask.js';
 import { maskBody, maskedError, maskFleetFrame } from './accounts/egress.js';
 import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
-import { registerCoordRoutes, type OperatorDoorWiring } from './coord/routes.js';
+import { registerCoordRoutes, sendCloseOutcome, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
@@ -2550,6 +2550,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
     coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
+    // The operator's act on an end-request item runs the abandon arm in the same hold the abandon route uses (D-8076).
+    withAbandon: coordRoutes.withAbandon, sendClose: sendCloseOutcome,
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
   });

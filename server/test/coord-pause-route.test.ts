@@ -583,3 +583,33 @@ describe('the token gate is total, with the operator routes excluded BY NAME', (
     }
   });
 });
+
+// D-8076 (spec 2026-11-04 §10, "The pins, in both directions"): the operator's act on an end-request item reaches the abandon arm
+// by the serialiser's hold, never by the abandon route, and the abandon route itself keeps its D-280 shape.
+describe("the operator's act and decline consult no box token, and the abandon route's body is still unread", () => {
+  const LEDGERS = readFileSync(path.resolve(__dirname, '../src/coord/ledgersRoutes.ts'), 'utf8');
+  const ROUTES = readFileSync(path.resolve(__dirname, '../src/coord/routes.ts'), 'utf8');
+  const handlerIn = (src: string, route: string): string => {
+    const at = src.indexOf(`app.post('${route}'`);
+    expect(at, `${route} moved or was renamed`).toBeGreaterThan(-1);
+    const next = src.slice(at + 1).search(/\n  app\.(?:get|post|put|delete)\(/);
+    return src.slice(at, next === -1 ? undefined : at + 1 + next);
+  };
+
+  it.each(['/api/items/:id/act', '/api/items/:id/decline'])('%s consults no box token and reads no body', (route) => {
+    const body = handlerIn(LEDGERS, route);
+    expect(body).not.toMatch(/requireMailToken|checkMailToken|x-ccrc-mail-token/);
+    expect(body).not.toMatch(/req\.body/);
+  });
+
+  it('is in neither the UNGATED nor the SESSION_ONLY set of coord/routes.ts, which it is not registered in', () => {
+    expect(ROUTES).not.toContain("'/api/items/:id/act'");
+    expect(ROUTES).not.toContain("'/api/items/:id/decline'");
+  });
+
+  it('POST /api/runs/:id/abandon still reads no body and passes no detail of its own', () => {
+    const body = handlerIn(ROUTES, '/api/runs/:id/abandon');
+    expect(body).not.toMatch(/req\.body/);
+    expect(body).toContain('abandon(id)');
+  });
+});

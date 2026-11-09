@@ -36,6 +36,19 @@ const client = (): string => fs.readFileSync(CCRC_API, 'utf8');
 
 const routeKeys = (): Set<string> => new Set(clientRoutes().map((r) => r.key));
 
+// D-8076 (spec 2026-11-04 §10): the operator's act and decline of an end-request item are absent from the client, like the
+// abandon door: a session asks with `end-request` and has no verb that ends a run or keeps one.
+describe("the operator's act and decline are not in ccrc-api's table", () => {
+  it('no client row reaches /api/items/:id/act or /decline, and the client text never spells them', () => {
+    const paths = clientRoutes().map((r) => r.path);
+    for (const door of ['/api/items/:id/act', '/api/items/:id/decline']) {
+      expect(paths, `${door} is a row of the client: a session could end a run`).not.toContain(door);
+    }
+    const text = fs.readFileSync(CCRC_API, 'utf8');
+    expect(text).not.toMatch(/\/act\b|\/decline\b/);
+  });
+});
+
 /** The client with its comments stripped. The negative flag scans below MUST
  *  read this and not the raw file: `ccrc-api`'s own header names every flag it
  *  deliberately does not have ("no `--url`, no `--host`, no `--path`, no
