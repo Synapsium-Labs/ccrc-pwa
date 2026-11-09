@@ -34,6 +34,10 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan) | planned as run 1532; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Task 9 now writes Settings access and Task 10 closes. Before dispatch: amendment review, complete exact-tip checks and plan merge |
 
 ## Decisions & deviations
+- **2026-11-09: R7 brief closure 17090 accepted; CI then found the missing plan definition.**
+  - Same reviewer as 17088, resumed with explicit `model: opus`, `effort: high`, `subagent_type: general-purpose`; reported actual `claude-opus-5-5`, numeric 15 separately. All five findings closed, no new Critical or Important. Coverage remains narrow: no live-claims/allocator/registry/CI check, source gate/checker not executed, Find inventory reused its parsing rules. This is not a second independent approval or product validation.
+  - Exact R7 run 42708641856 failed `test/deviation-refs.test.ts`'s real-tree floor assertion in server 5/12: tracked D-8143 in this programme ledger exceeded the plans' definition-derived high-water 8142 (actual floor 8193, expected 8192). This is a real documentation defect, not a flake. The same already-issued D-8143 definition is now entered in the adoption plan's `## Deviations found`; its Global Constraints and Task 10 reconcile the existing entry rather than deferring it. No new number, allocator call, test edit or guard weakening.
+  - The plan's three replacements preserve every Find line and all 40 mutation rows. Only the checker's pinned plan hash changes; its source/matching logic and 38-path scope stay identical. Brief/artifact hashes below are refreshed. New exact-head CI and focused closure still gate entry landing; R7's passed checks are not inherited. Claim 3862 release still occurs after entry landing and before dispatch. Run 1532 remains planned/undispatched.
 - **2026-11-09: focused A-brief review 17088; five corrections before dispatch.**
   - Fresh reviewer invocation retained `model: opus`, `effort: high`, `subagent_type: general-purpose`; reported actual `claude-opus-5-5`, numeric 15 separately. Zero Critical, two Important, three Minor. The earlier plan/source/phone/routing checks passed within its stated limits; no new broad plan or product review is claimed. Focused closure of these corrections is still owed.
   - I-1: claim 3862 is the coordinator's five-document entry claim and includes the take-up plan Task 10 must edit. It is not an implementation-path claim. Release 3862 after entry landing and before dispatch, verify it ended, and require the worker to claim the take-up plan with its other edit paths. None of Task 8's three specs is in 3862; fresh claims on all three remain mandatory. The coordinator later claims only disjoint programme documents before further ledger edits; no live shared-plan claim is retained over the worker.
@@ -629,7 +633,7 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 ## Current next-wave brief — A, library 1.1 take-up and Settings access
 
-**Entry status:** reviewed brief with five focused corrections awaiting closure; no dispatch. Protected plan landing, fresh exact-head/claim/source checks and claim 3862 release are mandatory. Open B1 before A closes; first rollout containing B1 is server-first. F owns deployed acceptance; retirement is operator-only.
+**Entry status:** R7's five findings closed; the subsequent CI high-water correction awaits exact-head CI and focused closure. No dispatch. Protected plan landing, fresh exact-head/claim/source checks and claim 3862 release are mandatory. Open B1 before A closes; first rollout containing B1 is server-first. F owns deployed acceptance; retirement is operator-only.
 
 ### A — released library take-up and Settings access
 
@@ -640,7 +644,7 @@ Source pin `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` is C16 #2497 merged; C16 c
 
 Plan Files/byte-identical constraints apply to worker BASE→HEAD. No extra edit without scoped leave; markup census is run-only. Claim before subagent edits. Coordinator owns the programme ledger, not the worker SDD progress ledger. Scratch is session-temp.
 
-Task 1: all T1 predicates. Extract ledger “A Find-check artifact” Python to session temp, SHA256 `359a1ba56f323eabfeee7ac43c44a8f83f560adf13b1a094819e5ec9d412eb86`; run `python3 -I <script> <plan> HEAD <fresh-receipt.json>` at repo root. It asserts exact plan SHA256 before its line inventory and source gate. Expected SOURCE-BASE-OK then FINDS-OK: 83 directives, 82 baseline, one Task 4 interim Find deferred until Task 3. Miss → stop-and-ask. Before edits, fresh post-C16 PHH-FIGURE / T10-FIGURES worst BASE through ccrc test; no historical geometry substitution.
+Task 1: all T1 predicates. Extract ledger “A Find-check artifact” Python to session temp, SHA256 `879266d892d51fa0eb5a67ad27cdfefa6375a52a036e9cda002650ee3ab46f98`; run `python3 -I <script> <plan> HEAD <fresh-receipt.json>` at repo root. It asserts exact plan SHA256 before its line inventory and source gate. Expected SOURCE-BASE-OK then FINDS-OK: 83 directives, 82 baseline, one Task 4 interim Find deferred until Task 3. Miss → stop-and-ask. Before edits, fresh post-C16 PHH-FIGURE / T10-FIGURES worst BASE through ccrc test; no historical geometry substitution.
 
 CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome (worker rechecks).
 
@@ -650,7 +654,7 @@ Exact `@synapsium-labs/docserver@1.1.0`, v1.1.0 at `50cef012aa671974473d19c2acd7
 Item 48 approved Q1–Q3: after-ready only if every supplied Mermaid block holds; otherwise on-request. Frame Aa only. Share/Export/View on GitHub in title details, no extra menu. Both original blocks follow verbatim. Record E17-READING does-not-hold; E17-BLOCKS 2; arm B with a block. Never average/replace the failure or treat auto/1.0.0 as after-ready/1.1.0 evidence. E18 coverage limits remain; no repeated historical phone request.
 
 #### Issued departure and routing
-Issued block 8143–8146. D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request. Three reserve numbers 8144, 8145, 8146 remain unused; never mint mid-wave. Task 10 copies/reconciles the coordinator's definition and any reserve actually used, with unused numbers written bare. Existing run; no replacement/reopen.
+Issued block 8143–8146. D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request. Three reserve numbers 8144, 8145, 8146 remain unused; never mint mid-wave. Task 10 reconciles the plan's definition and any reserve actually used, with unused numbers written bare. Existing run; no replacement/reopen.
 
 Shape: dependent implementation chain. Route class opus, effort high, subagent sonnet, workflow off, compact 40, browser on. Native sonnet/high implementers; only Task 8 mechanical docs may use sonnet/medium. Per-task reviewers: opus/high for 4/5/6/7/9; sonnet/high for 2/3; sonnet/medium for 8. Task 10 internal held-out pass: three opus/high lenses (correctness; spec/boundaries; reproduction/evidence), critical/important findings each receive three independent sonnet/high refuters and majority adjudication, minors one advisory refuter. Explicit model/effort; no inheritance/Fable. Retain actual model/configuration; missing/mismatched reads are unverified. No worker Workflow. Subagent prompts forbid mail, pattern kills, gh writes, token argv and approval-prompting shell forms.
 
@@ -706,7 +710,7 @@ door: 48 counted, 0 ignored; session cookie sent
 
 ### A Find-check artifact
 
-Copy only this Python fence to session temp, preserving its final newline. Script SHA256 `359a1ba56f323eabfeee7ac43c44a8f83f560adf13b1a094819e5ec9d412eb86`. It asserts adoption-plan SHA256 `f3f079d388bf5ce15b90aadbee14643eaf2f410f8108c9e211d46152daca3287` before using the line mappings. Run from repository root with the plan path, actual BASE and a new receipt path. It compares the explicit 38-path File Structure scope below, not broad byte-identical roots, plan or programme ledger. It deliberately defers Task 4's intermediate call until Task 3. A plan revision requires a fresh inventory and pinned hash, not silent reuse. Only read-only git commands and a new receipt write; no product execution.
+Copy only this Python fence to session temp, preserving its final newline. Script SHA256 `879266d892d51fa0eb5a67ad27cdfefa6375a52a036e9cda002650ee3ab46f98`. It asserts adoption-plan SHA256 `996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330` before using the line mappings. Run from repository root with the plan path, actual BASE and a new receipt path. It compares the explicit 38-path File Structure scope below, not broad byte-identical roots, plan or programme ledger. It deliberately defers Task 4's intermediate call until Task 3. A plan revision requires a fresh inventory and pinned hash, not silent reuse. Only read-only git commands and a new receipt write; no product execution.
 
 ```python
 """Check the adoption plan's explicit Find inventory against an immutable git base.
@@ -716,7 +720,7 @@ from pathlib import Path
 import subprocess, re, json, sys, hashlib, datetime
 plan=Path(sys.argv[1]); base=sys.argv[2]; output=Path(sys.argv[3])
 assert not output.exists(), 'Use a fresh receipt path.'
-expected_plan_sha256='f3f079d388bf5ce15b90aadbee14643eaf2f410f8108c9e211d46152daca3287'
+expected_plan_sha256='996cd54a1ebacd332e92ec655d4001331cba76d557e4986d988759d9618b7330'
 assert hashlib.sha256(plan.read_bytes()).hexdigest()==expected_plan_sha256, 'Plan bytes changed: re-inventory; do not reuse these line mappings.'
 source_pin='8b0fab68f1de802f3952b8ec24f2ee93f76a8574'
 # Exactly the File Structure paths, expanding shorthand and the three specs.
