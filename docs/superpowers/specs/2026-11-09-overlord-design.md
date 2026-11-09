@@ -1310,7 +1310,7 @@ of the listed options cannot pass an instruction on.
 | May a hold be taken? | §6.4 | Code | The readiness word and the admission rule (H19, H20) |
 | Is this quote, or this request, the operator's? | C12, C13 | Code | The record of the operator's messages (H7) |
 | Is a request done? | Figure 3 | Code | The done test's predicates (H22) |
-| What class is this question? | §6.1, C21 | Code, then the decision model | The floor by kind and by release reason comes first (H17). For an unclassed question the model chooses among none and O1 to O6. The class is the highest of the coordinator's, the floor's, the model's and the Overlord's own. It can only rise |
+| What class is this question? | §6.1, C21 | Code, then the decision model | The floor by kind and by release reason comes first (H17). The model then chooses among none and O1 to O6, and its answer counts only when it is higher. The class is the highest of the coordinator's, the floor's, the model's and the Overlord's own. It can only rise, and `unknown` never becomes none on a model's word |
 | Can the Overlord finish it alone? | Figure 4 | Code, then the Overlord | Only a request whose every act is a read or an answer (H22) |
 | Is it inside an existing programme's goals and definition of done? | Figure 4 | The decision model, then the Overlord | One yes-or-no question for each candidate programme, all in one request, on the request's words and that programme's goals. One clear yes gives a shortlist of one. Several, or `unsure`: the Overlord decides, with the probabilities in its packet. All no: the new-programme path |
 | Can the owner take it? Does it split cleanly? | Figure 4, C11 | Code, then the Overlord | Caps, open requests and the overlap of claimed paths (H23) are code. The judgement is the Overlord's |
@@ -1841,8 +1841,8 @@ so an item that arrives with a recommendation the operator accepts unchanged cou
 
 Amended by H17, H18 and H30:
 - **"Catches over-asking" is narrower than it reads.** An item with no class is `unknown`, not none. The Overlord
-  may send it back with the goal that answers it, or escalate it. It answers it only once the question is clearly
-  not operator-only (§6.7).
+  may send it back with the goal that answers it, or escalate it. It answers such an item only after its
+  coordinator raises it again with a class the Overlord may answer (§6.7).
 - **Day-one items are not delayed.** They reach the operator at once, and the brief follows (H18).
 - **The half credit rewards the wrong thing.** An answer accepted unchanged, with the recommendation in view, is
   partly the Overlord marking its own work through a tired operator. Only answers given blind, or plainly examined,
@@ -1922,8 +1922,9 @@ downsides of each. It may argue its point if it truly disagrees, and the operato
   - **What `unknown` admits.** Two acts: escalate it with a recommendation, or return it as over-asked, which
     sends it back with the goal that answers it, so that the coordinator decides it under D-8126 or raises it again
     with a class. Under D-8126 a coordinator raises items only for O1 to O6, so an item with no class is more
-    likely operator-only than not. A decision model may lift `unknown` to none when the question is clearly not
-    operator-only (§3.7). With the model off, `unknown` stays.
+    likely operator-only than not. Nothing lowers `unknown` to none but the coordinator raising the item again
+    with a class: not the Overlord, and not a decision model, which may only raise a class (§3.7). A decision
+    model's reading helps the Overlord choose between the two acts, and both are safe.
   - **Asks carry a class.** A coordinator's release names its reason: `operator-only` with the class, or
     `cannot-decide`. An operator-only release skips the Overlord's tier. `answer-ask` takes the ask's effective
     class: the highest of the coordinator's, the floor's, the decision model's and the one the Overlord must state
@@ -3104,8 +3105,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
   9. **"Never sleeps" (H1).** A hard rule, or a policy you can switch off once a wake is measured to fit the
      windows.
   10. **One per server (H3).** Is that what "one and only one" means, should you ever run more than one server?
-  11. **An item with no class (H17).** It is treated as possibly yours: sent back or escalated, and answered only
-      once it is clearly not operator-only.
+  11. **An item with no class (H17).** It is treated as possibly yours: sent back or escalated, and never
+      answered until its coordinator gives it a class.
 
 ### Later
 
