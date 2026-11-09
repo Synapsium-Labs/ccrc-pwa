@@ -75,7 +75,7 @@ const PROGRAMMES = {
     programmeRow('prog-h', 'Programme H', { stuck: 1, lastMoveAt: NOW - 23 * DAY }),
     programmeRow('prog-z', 'Programme Z, finished', { ending: { outcome: 'ended', waves: 3, neverStarted: 3, closedBy: 'sweep' }, lastMoveAt: NOW - 20 * H }),
   ],
-  closedToday: { operator: 0, sweep: 0, coordinator: 0 },
+  closedToday: { operator: 5, sweep: 2, coordinator: 60 },
 };
 
 const FIXTURE: AppFixture = {
@@ -677,6 +677,56 @@ for (const width of MATRIX.widths) {
               expect(r.overflow, `${r.title} fits its box`).toBeLessThanOrEqual(1);
               expect(r.right, `${r.title} ends inside the window`).toBeLessThanOrEqual(r.vw + 1);
             }
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}
+
+// Closed today and the first card's place (Task 20, spec §8.2 items 4 to 7, check 11). Closed today sits below the Stuck band and
+// above everything healthy, its three counts are links at the tap floor, and at Instrument 1920 the first programme card starts
+// under 800px (the spec's inferred figure is 742px, measured and reported below).
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`Closed today and the first card, ${skin} ${theme} at ${width}px`, () => {
+        it('sits below the Stuck band and above the first card, its counts at the tap floor, and the first card starts under 800px at Instrument 1920', async () => {
+          const { ctx, page, errors } = await openBoard(width, skin, theme);
+          try {
+            await page.locator('[data-testid="closed-today"]').waitFor({ timeout: 20_000 });
+            const m = await page.evaluate(() => {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              document.body.appendChild(probe);
+              const tap = probe.getBoundingClientRect().height;
+              probe.remove();
+              const box = (sel: string): DOMRect => document.querySelector<HTMLElement>(sel)!.getBoundingClientRect();
+              const line = document.querySelector<HTMLElement>('[data-testid="closed-today"]')!;
+              const band = box('[data-testid="stuck-band"]');
+              const closed = line.getBoundingClientRect();
+              const card = box('.programme-card');
+              const linkBoxes = [...line.querySelectorAll('a')].map((a) => a.getBoundingClientRect());
+              const column = box('.runs-column');
+              return {
+                tap, text: line.textContent, bandBottom: band.bottom, closedTop: closed.top, closedBottom: closed.bottom, cardTop: card.top,
+                short: linkBoxes.filter((b) => b.height < tap - 1).length, links: linkBoxes.length,
+                outside: linkBoxes.filter((b) => b.left < column.left - 1 || b.right > column.right + 1).length,
+                page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              };
+            });
+            console.info(`first programme card top at ${width} ${skin} ${theme}: ${Math.round(m.cardTop)}px (spec inferred 742px)`);
+            expect(m.text).toBe('Closed today: 5 by you · 2 by ccrc · 60 by coordinators');
+            expect(m.links).toBe(3);
+            expect(m.short, 'every count at the tap floor').toBe(0);
+            expect(m.outside, 'every count inside the column').toBe(0);
+            expect(m.closedTop, 'below the Stuck band').toBeGreaterThanOrEqual(m.bandBottom - 1);
+            expect(m.cardTop, 'above the first card').toBeGreaterThanOrEqual(m.closedBottom - 1);
+            expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            if (width === 1920 && skin === INSTRUMENT) expect(m.cardTop, 'the first card starts under 800px').toBeLessThan(800);
             expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
           } finally {
             await ctx.close();

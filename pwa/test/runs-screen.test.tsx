@@ -8,6 +8,7 @@ import { RunsScreen, STUCK_NOW, foundRows, programmeRow, programmesAnswer, stuck
 import { RunsAdvancedScreen } from '../src/screens/RunsAdvancedScreen';
 import { MailScreen } from '../src/screens/MailScreen';
 import { navigate } from '../src/lib/router';
+import { runsAdvancedPath } from '../src/lib/routes';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, boundOpenRun, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
@@ -450,7 +451,7 @@ describe('the top of the board (Task 12a, spec §8.2, §8.6, D-8074)', () => {
 
   it('Start a programme sits in the header’s actions slot', () => {
     render(<RunsScreen store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
-    const door = screen.getByRole('button', { name: /start a program/i });
+    const door = screen.getByRole('button', { name: /start a programme/i });
     expect(door).toHaveClass('program-start-door');
     const heading = screen.getByRole('heading', { level: 1 });
     // The scaffold's header holds the title and the actions: the door shares the heading's header, not the body.
@@ -535,12 +536,12 @@ describe('the program-start door mounts on /runs (Task 13, spec §4.4)', () => {
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
     expect(await screen.findByText(/no runs/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+    expect(screen.getByRole('button', { name: /start a programme/i })).toHaveClass('program-start-door');
   });
 
   it('opens the sheet on tap', async () => {
     render(<RunsScreen loadCaps={NO_CAPS} store={makeStore()} loadRuns={async () => ({ runs: [] })} />);
-    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /start a programme/i }));
     expect(await screen.findByText(/the coordinator picks up from there/i)).toBeInTheDocument();
   });
 });
@@ -554,9 +555,9 @@ describe('the run board tells the start sheet which projects already have a run 
   // program" door, and a run row for `ccrc-pwa` is on screen in two of the three
   // cases, so the project row needs a needle nothing else carries.
   const openAndPick = async (): Promise<void> => {
-    fireEvent.click(await screen.findByRole('button', { name: /start a program/i }));
-    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'build9-demo' } });
-    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: 'Build 9 demo' } });
+    fireEvent.click(await screen.findByRole('button', { name: /start a programme/i }));
+    fireEvent.change(screen.getByLabelText(/programme slug/i), { target: { value: 'build9-demo' } });
+    fireEvent.change(screen.getByLabelText(/programme title/i), { target: { value: 'Build 9 demo' } });
     fireEvent.click(await screen.findByRole('button', { name: /\/home\/u\/projects\/ccrc-pwa/ }));
   };
 
@@ -1505,10 +1506,10 @@ describe('the board’s doors', () => {
     const store = makeStore();
     act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={async () => ({ runs: [] })} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Start a program' }));
-    expect(await screen.findByLabelText(/program slug/i)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Start a programme' }));
+    expect(await screen.findByLabelText(/programme slug/i)).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId('sheet-overlay').at(-1)!);
-    await waitFor(() => expect(screen.queryByLabelText(/program slug/i)).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText(/programme slug/i)).toBeNull());
   });
 });
 
@@ -1579,5 +1580,108 @@ describe('the review cap band on the run board', () => {
     act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
     render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
     expect(screen.queryByRole('group', { name: /waiting on you/i })).toBeNull();
+  });
+});
+
+describe('Closed today, and the board\'s order (Task 20, spec §8.2 items 1 to 10, A32, o6, F27, D-8075)', () => {
+  const NONE = { operator: 0, sweep: 0, coordinator: 0 };
+  const line = (c: HTMLElement): HTMLElement | null => c.querySelector('[data-testid="closed-today"]');
+  const board = async (closedToday: typeof NONE, runs: RunSummary[] = [r()]): Promise<HTMLElement> => {
+    const store = makeStore();
+    act(() => { store.setState({ runs, runsFrameSeen: true, conn: 'open' }); });
+    const { container } = render(<RunsScreen store={store} loadProgrammes={programmesAnswer([programmeRow('build4-transcript-surface', { lastMoveAt: Date.now() })], closedToday)} />);
+    await act(async () => { await Promise.resolve(); });
+    return container;
+  };
+
+  it('the board\'s order is header, search, paused banner, Stuck, Closed today, Waiting band, ReviewCapBand, programmes, quiet, Finished, foot', async () => {
+    const now = Date.now();
+    const store = makeStore();
+    const runs = [
+      r({ id: 1, program: 'p-live', programTitle: 'Live', stuck: STUCK_NOW }),
+      r({ id: 2, program: 'p-wait', programTitle: 'Wait', state: 'awaiting-review', waitsOn: 'coordinator', lastMoveAt: now - 3 * 86_400_000 }),
+      r({ id: 3, program: 'p-cap', programTitle: 'Cap', reviewCap: { rounds: 3, cap: 3, askedAt: now - 60_000, liftedAt: null } }),
+      r({ id: 4, program: 'p-quiet', programTitle: 'Quiet', sessionId: 'q', workspace: 'q' }),
+    ];
+    act(() => { store.setState({ runs, runsFrameSeen: true, conn: 'open', coord: { pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
+    const rows = [
+      programmeRow('p-live', { lastMoveAt: now }), programmeRow('p-wait', { lastMoveAt: now }), programmeRow('p-cap', { lastMoveAt: now }),
+      programmeRow('p-quiet', { lastMoveAt: now - 9 * 86_400_000 }),
+      programmeRow('p-done', { lastMoveAt: now - 3_600_000, ending: { outcome: 'complete', waves: 2, neverStarted: 0, closedBy: null } }),
+    ];
+    const { container } = render(<RunsScreen store={store} loadCaps={NO_CAPS} loadProgrammes={programmesAnswer(rows, { operator: 5, sweep: 0, coordinator: 60 })} />);
+    await act(async () => { await Promise.resolve(); });
+    await screen.findByText(/Closed today/);
+    const marks: [string, string][] = [
+      ['header', 'h1'], ['search', '#run-find-box'],
+      ['paused', '.coord-banner'], ['stuck', '[data-testid="stuck-band"]'], ['closed', '[data-testid="closed-today"]'],
+      ['waiting', '[data-testid="waiting-band"]'], ['cap', '.review-cap-band'], ['cards', 'ul.programme-cards'],
+      ['quiet', '[data-fold="quiet"]'], ['finished', '[data-fold="finished"]'], ['foot', '.runs-foot'],
+    ];
+    const found = marks.map(([name, sel]) => [name, container.querySelector(sel)] as const);
+    for (const [name, el] of found) expect(el, name).not.toBeNull();
+    for (let i = 1; i < found.length; i++) {
+      const [pn, p] = found[i - 1]!; const [cn, c] = found[i]!;
+      expect(p!.compareDocumentPosition(c!) & Node.DOCUMENT_POSITION_FOLLOWING, `${pn} before ${cn}`).toBeTruthy();
+    }
+  });
+
+  it('Closed today links each count through runsAdvancedPath with its filter and closedSince', async () => {
+    const c = await board({ operator: 5, sweep: 2, coordinator: 60 });
+    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+    const links = within(line(c)!).getAllByRole('link');
+    expect(links.map((a) => a.textContent)).toEqual(['5 by you', '2 by ccrc', '60 by coordinators']);
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      runsAdvancedPath('by-you', midnight.getTime()), runsAdvancedPath('by-ccrc', midnight.getTime()), runsAdvancedPath('by-coordinators', midnight.getTime()),
+    ]);
+    fireEvent.click(links[0]!);
+    expect(location.pathname + location.search).toBe(runsAdvancedPath('by-you', midnight.getTime()));
+  });
+
+  it('it shows only once a close landed today', async () => {
+    expect(line(await board(NONE))).toBeNull();
+  });
+
+  it('a zero count is left out: Closed today: 5 by you · 60 by coordinators (o6)', async () => {
+    const c = await board({ operator: 5, sweep: 0, coordinator: 60 });
+    expect(line(c)!.textContent).toBe('Closed today: 5 by you · 60 by coordinators');
+  });
+
+  it('midnight is the operator\'s local day', async () => {
+    const read = vi.fn(async () => ({ ok: true as const, programmes: [], closedToday: NONE }));
+    const store = makeStore();
+    act(() => { store.setState({ runs: [], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadProgrammes={read} />);
+    await act(async () => { await Promise.resolve(); });
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    expect(read).toHaveBeenCalledWith(d.getTime());
+  });
+
+  it('Closed today re-reads when a group loop ends and never adds locally', async () => {
+    const read = vi.fn()
+      .mockResolvedValueOnce({ ok: true, programmes: [], closedToday: { operator: 1, sweep: 0, coordinator: 0 } })
+      .mockResolvedValue({ ok: true, programmes: [], closedToday: { operator: 4, sweep: 0, coordinator: 0 } });
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true, conn: 'open' }); });
+    const { container } = render(<RunsScreen store={store} loadProgrammes={read} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(line(container)!.textContent).toBe('Closed today: 1 by you');
+    // A run leaves the frame: the count is whatever the server then says, never one added here.
+    act(() => { store.setState({ runs: [] }); });
+    await act(async () => { await Promise.resolve(); });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(line(container)!.textContent).toBe('Closed today: 4 by you');
+  });
+
+  it('Start a programme replaces every "program" on this screen', async () => {
+    const c = await board(NONE);
+    const door = screen.getByRole('button', { name: 'Start a programme' });
+    fireEvent.click(door);
+    await screen.findByLabelText('Programme slug');
+    expect(screen.getByLabelText('Programme title')).toBeInTheDocument();
+    const words = (document.body.textContent ?? '') + [...document.querySelectorAll('[placeholder],[aria-label],[title]')]
+      .map((e) => `${e.getAttribute('placeholder') ?? ''} ${e.getAttribute('aria-label') ?? ''} ${e.getAttribute('title') ?? ''}`).join(' ');
+    expect(words.match(/\b[Pp]rograms?\b/g)).toBeNull();
+    expect(c).toBeTruthy();
   });
 });

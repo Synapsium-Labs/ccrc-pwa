@@ -268,15 +268,15 @@ export function StartProgramSheet({
   );
 
   return (
-    <Sheet open={open} onClose={onClose} eyebrow="new program" title="Start a program">
+    <Sheet open={open} onClose={onClose} eyebrow="new programme" title="Start a programme">
       <div className="program-start-sheet">
         <p className="sheet-copy">
           Slug, title, and the project it runs in — the coordinator picks up from there.
         </p>
         <TextInput
           className={TEXT_INPUT_STACKED}
-          placeholder="Program slug (e.g. build4-conversation-and-controls)"
-          aria-label="Program slug"
+          placeholder="Programme slug (e.g. build4-conversation-and-controls)"
+          aria-label="Programme slug"
           aria-invalid={showKickoffError}
           aria-describedby={showKickoffError ? 'program-kickoff-error' : undefined}
           value={slug}
@@ -287,8 +287,8 @@ export function StartProgramSheet({
         )}
         <TextInput
           className={TEXT_INPUT_STACKED}
-          placeholder="Program title"
-          aria-label="Program title"
+          placeholder="Programme title"
+          aria-label="Programme title"
           aria-invalid={title !== '' && kickoffOversize}
           aria-describedby={title !== '' && kickoffOversize ? 'program-kickoff-error' : undefined}
           value={title}
@@ -322,7 +322,7 @@ export function StartProgramSheet({
                       truthiness test. */}
                   {p.readiness === undefined ? null : p.readiness === null ? (
                     <span className="proj-ready" data-verdict="pending"
-                      title="measuring program readiness">
+                      title="measuring programme readiness">
                       {READY_PENDING_GLYPH} checking
                     </span>
                   ) : (
@@ -384,7 +384,7 @@ export function StartProgramSheet({
             // arm cannot tell them apart without recomputing the id.
             <p className="program-start-existing">
               {`${existing.id} is already running in ${project.name} — open it, or pick another project. `
-                + 'Starting here would either make that session the coordinator for this program, '
+                + 'Starting here would either make that session the coordinator for this programme, '
                 + 'whatever it was started for, or leave the project running two coordinators.'}
             </p>
           ) : runVerdict === 'open-run' || runVerdict === 'unmeasured' ? (
@@ -439,11 +439,11 @@ export function StartProgramSheet({
               <p className="program-start-refuse">
                 {runVerdict === 'open-run'
                   ? `${project.name} already has a run open — open it from the run board, or pick `
-                    + 'another project. A second program here leaves the project with two coordinators, '
+                    + 'another project. A second programme here leaves the project with two coordinators, '
                     + 'and coordinator mail that carries no run id then has more than one active '
-                    + 'program to choose from, which the server refuses rather than guesses.'
+                    + 'programme to choose from, which the server refuses rather than guesses.'
                   : 'The run board has not answered yet, so this sheet cannot tell whether '
-                    + `${project.name} already has a program running. It will know in a moment — or `
+                    + `${project.name} already has a programme running. It will know in a moment — or `
                     + 'open the run board and look.'}
               </p>
               {recovery}

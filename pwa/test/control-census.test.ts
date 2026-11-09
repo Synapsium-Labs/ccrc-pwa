@@ -296,6 +296,7 @@ const CONTROLS: Record<string, string> = {
   'ledgers/ProgrammeRuns.tsx <a> pv-coordinator-link': 'TOKEN. The head\'s link to the programme\'s coordinator (D-8075): `.pv-head .pv-coordinator-link` declares the floor.',
   'screens/RunDetailScreen.tsx <a> rd-wait-link': 'TOKEN. The link a planned run behind a stuck run draws in the header (the runs rebuild, D-8072): `.rd-wait-link` declares the floor.',
   'screens/RunRow.tsx <a> run-wait': 'TOKEN. The link a planned run behind a stuck run draws (the runs rebuild, D-8072): `.run-row a.run-wait` declares the floor.',
+  'screens/RunsScreen.tsx <a> closed-today-link': 'TOKEN. Closed today\'s three counts (§8.2 item 5, check 9): `.closed-today .closed-today-link` declares the floor.',
   'screens/RunsScreen.tsx <a> runs-info-link': 'TOKEN. The board\'s information line, when it names one run (D-8072): `.runs-info .runs-info-link` declares the floor.',
   'session/ChatList.tsx <button> jump-latest': 'TOKEN. The jump-to-latest affordance.',
   'session/Composer.tsx <button> draft-cancel': 'TOKEN. The draft cancel.',

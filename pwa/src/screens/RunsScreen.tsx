@@ -25,7 +25,7 @@
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { type RunSummary } from '../../../shared/api';
+import { type ProgrammesAnswer, type RunSummary } from '../../../shared/api';
 import { isRunClosed, runState, coordinatorOf, workerOf } from '../fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { coordinatorPresence } from '../fleet/presence';
@@ -35,7 +35,7 @@ import { CoordBanner } from '../fleet/CoordBanner';
 import { StartProgramSheet } from '../fleet/StartProgramSheet';
 import { inAppClick } from '../fleet/settingsText';
 import { navigate, useLocation } from '../lib/router';
-import { runParam, runPath, runQueryOf, runsAdvancedPath } from '../lib/routes';
+import { runParam, runPath, runQueryOf, runsAdvancedPath, type RunsFilter } from '../lib/routes';
 import { peek, put, runsBoardKey } from '../lib/screenCache';
 import { backToFleet } from '../command/door';
 import { Button, EmptyState, PageScaffold, cn, useNow } from '@ccrc/ui';
@@ -54,7 +54,7 @@ import { stuckLine } from '../fleet/stuckWords';
 import { RunDetailScreen } from './RunDetailScreen';
 import { useMeasuredColumn } from './runColumn';
 import { RUN_FIND_ID, RunFindBox, RunFindResults } from './RunFind';
-import { finishedProgrammes, openCards, quietSplit, sortCards, usePrograms, type ProgrammesReader } from './usePrograms';
+import { finishedProgrammes, localMidnight, openCards, quietSplit, sortCards, usePrograms, type ProgrammesReader } from './usePrograms';
 
 
 /** The board's scroll place: the nearest scrolling ancestor of the search box (the desktop pane), else the document. */
@@ -69,6 +69,33 @@ function readBoardScroll(): { scroller: HTMLElement | null; top: number } {
 /** The board's words for no open run, and for a read that ran out of time (§8.2). */
 const NO_RUNS_OPEN = 'No runs open.';
 export const COULD_NOT_LOAD = 'Could not load runs. Try again.';
+
+/** Closed today (§8.2 item 5, A32, o6): the runs closed since the operator's local midnight, by who closed them, each count a
+ *  link to All runs with that filter and the same `closedSince` the read used. A zero count is left out, and the line is
+ *  absent until some close landed. The counts are the server's: the board re-reads when a group loop ends, and never adds. */
+function ClosedToday({ counts, midnight }: { counts: ProgrammesAnswer['closedToday']; midnight: number }): ReactNode {
+  const parts: { filter: RunsFilter; n: number; who: string }[] = [
+    { filter: 'by-you', n: counts.operator, who: 'you' },
+    { filter: 'by-ccrc', n: counts.sweep, who: 'ccrc' },
+    { filter: 'by-coordinators', n: counts.coordinator, who: 'coordinators' },
+  ];
+  const shown = parts.filter((p) => p.n > 0);
+  if (shown.length === 0) return null;
+  return (
+    <p className="closed-today" data-testid="closed-today">
+      {'Closed today: '}
+      {shown.map((p, i) => {
+        const href = runsAdvancedPath(p.filter, midnight);
+        return (
+          <span key={p.filter}>
+            {i > 0 && ' · '}
+            <a className="closed-today-link" href={href} onClick={inAppClick(href)}>{`${p.n} by ${p.who}`}</a>
+          </span>
+        );
+      })}
+    </p>
+  );
+}
 
 /** The board's information lines (§8.2 item 5, n2, A62): a run no act can move is told, with no control and no count. An
  *  `unknown` run is in a state a newer server wrote; a run at `closing` is finished by the lane that put it there. One run
@@ -404,7 +431,7 @@ function RunsBoard({
       back={backToFleet('runs-back')}
       actions={(
         <Button variant="quiet" size="fit" className="program-start-door text-xs leading-none" onClick={() => setStartOpen(true)}>
-          Start a program
+          Start a programme
         </Button>
       )}
     >
@@ -430,6 +457,10 @@ function RunsBoard({
           The band is a second view of the stuck runs, not a move (§8.2.2): they stay in their programme's rows and counts. The group control opens the group sheet (Task 14). */}
       {!finding && !noSignalYet && <StuckBand runs={active} nowMs={now} openId={openId} onAbandon={setAbandonTarget}
         presence={(r) => coordinatorPresence(r.claimedBy, coordinatorOf(r, sessionById), fleetFrameSeen)} onGroupDone={() => { void loadCold(); }} />}
+
+      {/* Closed today (§8.2 item 5): below the Stuck band, above everything healthy, so no healthy work sits above the band
+          (check 12). The counts come from the programmes read, which asks from the operator's local midnight. */}
+      {!finding && !noSignalYet && programmes.answer !== null && <ClosedToday counts={programmes.answer.closedToday} midnight={localMidnight(now)} />}
 
       {/* Waiting on its coordinator (§8.2 item 6): one folded row below Stuck; a stuck run is in the Stuck band alone (R2). */}
       {!finding && !noSignalYet && <WaitingBand runs={active} nowMs={now} openId={openId}

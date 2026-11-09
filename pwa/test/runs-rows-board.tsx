@@ -492,7 +492,7 @@ function RunsBoard({
       back={backToFleet('runs-back')}
       actions={(
         <Button variant="quiet" size="fit" className="program-start-door text-xs leading-none" onClick={() => setStartOpen(true)}>
-          Start a program
+          Start a programme
         </Button>
       )}
     >

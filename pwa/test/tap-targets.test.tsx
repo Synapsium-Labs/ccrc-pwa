@@ -615,7 +615,7 @@ describe('.program-start-door — the only door onto a new program', () => {
   it('is the class the rendered footer control actually carries', () => {
     const store = makeStore();
     render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
-    expect(screen.getByRole('button', { name: /start a program/i })).toHaveClass('program-start-door');
+    expect(screen.getByRole('button', { name: /start a programme/i })).toHaveClass('program-start-door');
   });
 });
 
