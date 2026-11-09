@@ -802,7 +802,8 @@ describe('Build 7 nouns', () => {
     // Programme ledgers (plan PL2): `ledgersStore.ts` is `store.ts`'s ledger SQL moved out of the god-file (ARCH-01), so it holds the handle for the
     // same reason `store.ts` does; it names it by `import type`, as `tx.ts` does, and every function takes it as an argument.
     // D-8125: `reviewCapStore.ts` is the review-cap SQL moved out of `store.ts` the same way (`ledgersStore.ts`' idiom).
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts']);
+    // The coordinator call record (D-8126, wave A3): `coordCallsStore.ts` is `ledgersStore.ts`'s twin, the same way and for the same reason.
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'coordCallsStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

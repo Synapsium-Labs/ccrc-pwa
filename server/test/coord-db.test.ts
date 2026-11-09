@@ -703,10 +703,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071)
     // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073)
     // and MIGRATIONS[47] (review_cap.granted and askHandledAt, review_cap_lifts, D-8125)
-    // and MIGRATIONS[48] (operator_items.action and heldUntil, D-8076),
-    // and MIGRATIONS[49] (programs.doneWhen, D-8126).
-    expect(COORD_SCHEMA_VERSION).toBe(50);
-    expect(MIGRATIONS.length).toBe(50);
+    // and MIGRATIONS[48] (operator_items.action and heldUntil, D-8076)
+    // and MIGRATIONS[49] (programs.doneWhen, D-8126),
+    // and MIGRATIONS[50] (coordinator_calls, D-8126).
+    expect(COORD_SCHEMA_VERSION).toBe(51);
+    expect(MIGRATIONS.length).toBe(51);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -782,8 +783,8 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073)
     // and MIGRATIONS[47] (review_cap.granted and askHandledAt, review_cap_lifts, D-8125)
     // and MIGRATIONS[48] (operator_items.action and heldUntil, D-8076)
-    // and MIGRATIONS[49] (programs.doneWhen, D-8126); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(50);
+    // and MIGRATIONS[49] (programs.doneWhen, D-8126) and MIGRATIONS[50] (coordinator_calls, D-8126); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(51);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
