@@ -160,10 +160,10 @@ once (`DelegationAdoptSection.tsx`, "THE REFOCUS"):
 | F3 | a reading that shows the tap's choice settles the request in flight | jsdom: a poll shows the chosen reading while the write is in flight; the focus lands on that radio once, and the later answer moves nothing | the reading no longer settles the request: 1 red |
 | F4 | in mode `unmeasured` the sheet says the last pass could not read whether keeping was on, so the card cannot say how many until the next pass (`confirmUnreadPass`). Live and suspended keep `confirmUntilNextPass`. R2-4's row now covers live and suspended. | jsdom: mode unmeasured, would keep 4. The sheet names no figure and does not say "did not count". | unmeasured given `confirmUntilNextPass` again: 1 red |
 | F5 | text: the words module's mode-line comment and the sheet's doc comment, the section header, README (`adoption` null: "cannot say how many", with no "until the next pass") | text | none |
-| F6 | a rejected write waits for its re-read's view | jsdom: a rejected write, then a re-read that refuses both choices; the focus is on the result line, never a disabled radio. Browser: the same at 0 ms and 600 ms, never a disabled radio or the page (red at aa2b39feb, so the row can go red) | no wait for the re-read: jsdom 1 red; browser 2 red (both 600 ms rows) |
+| F6 | a rejected write waits for its re-read's view | jsdom: a rejected write, then a re-read that refuses both choices; the focus is on an element in the card that is not an INPUT and holds text, never a disabled radio. Browser: the same at 0 ms and 600 ms, never a disabled radio or the page (red at aa2b39feb, so the row can go red) | no wait for the re-read: jsdom 1 red; browser 2 red (both 600 ms rows) |
 | F7 | the words census also builds `delegationAdoptRefusedLine(T.on, 'sign-in-unarmed')` | the census | "now" in that line only: the new census red, aa2b39feb's census green |
 
-Each browser row was run at both 390 and 1280 px.
+The 16 focus rows ran at 390 px (refined, phosphor) and 1280 px (instrument, light); the 8 layout rows run at four widths (360, 390, 1280 and 1920) in both skins.
 
 | Answer timing | 390, red at aa2b39feb | 1280, red at aa2b39feb | Both widths, at this tip |
 |---|---|---|---|
@@ -174,3 +174,39 @@ Each browser row was run at both 390 and 1280 px.
 For F1's rejected Keep them row, the radio of the reading is enabled after the re-read. R2-1 and R2-3 therefore put the focus on
 that radio, and the text it holds is its label. The row asserts an element inside the card that holds text, with a radio read by
 its label, and never the page.
+
+## Fix round 4 (review 1709)
+
+Review 1709 found every fix round 3 ruling closed as ruled. Its findings 1 to 8 were ruled as follows. Each red row below was
+measured red at 848e7ae09, with that tip's card and words files in place, and green at this tip. Each mutant was applied to a
+saved copy, the copy was restored afterwards, and its sha256 was checked.
+
+- One confirm sends one write (finding 1). The sheet's confirm button stays on screen, focused and live through the sheet's
+  exit. The card therefore records which choice the sheet is open for (`confirmFor`). A confirm call is taken only while that
+  choice is Keep them, and taking it spends it. Closing the sheet clears it. Do not keep still goes out at once, and a
+  confirm made after the sheet has gone and been reopened sends again. The guard is in the card; nothing under `ui/` changed.
+- A rejected write whose re-read changes the reading (finding 2). The same commit clears the result line, so the refocus
+  uses the result line only while it stays on screen. The card tracks this in `lineUp`, beside the line's `say` and `clear`.
+  Otherwise the refocus goes to the refusal line for the reading the page shows, either refusal line, or the unmeasured
+  note.
+- A request waiting for the settled view's reading notes when the card shows that reading (`reached`, finding 3). If another
+  reading arrives after that, the request is dropped, so a later poll never fires it.
+- The refocus reads the radio the page shows checked (`r.checked && !r.disabled`) when it fires, never a value that an
+  effect writes later (finding 6). The same checked radio picks the refusal line.
+- In mode `unmeasured`, the sheet says "The last pass could not read everything it needs, so this card cannot say how many
+  until the next pass." The mode line says "The server could not read everything it needs at the last pass." Both are true
+  whether the breaker or the marker was unread, and neither names a figure (finding 4). Live and suspended keep
+  `confirmUntilNextPass`, and shadow still names the figure.
+
+| Finding | What changed | Row, red at 848e7ae09, then green | Mutant |
+|---|---|---|---|
+| 1 | `confirmKeep`: the sheet's confirm is taken only while the sheet is open for Keep them, once | Browser, through the shipped Settings wiring, at 390 and 1280 px, with the stub answering at 0 ms. Rows: confirm Keep them, then Enter at +60 ms and Space at +120 ms, gives exactly one POST; the same after a 500 reply. Both rows are red at both widths at 848e7ae09, which sent 3 POSTs. A third row, reopening after the exit and confirming, sends a second POST; it is green at 848e7ae09, as it should be. | The guard removed: 4 of 36 browser rows red (the two rows at both widths) |
+| 2 | The result line is used only while it stays (`lineUp`). The refusal line comes from the checked radio. | jsdom: Keep them set; a rejected tap on Do not keep; a re-read with the state clear and both choices refused (`landed` 7). The focus is not BODY, not an INPUT, holds text and is in the card. Browser: the same at 0 ms, at both widths. All of these are red at 848e7ae09. | `statusRef` used regardless: 2 jsdom rows red (both directions); 2 of 36 browser rows red (this shape at both widths) |
+| 2, the other direction | as above | jsdom: Keep them answered 500 while the switch moved; a re-read reads on with sign-in dark. This row is red at 848e7ae09: in jsdom the order is fixed. Browser: the same at 0 ms, at both widths. These rows are green at 848e7ae09 and under the mutant, because in Chrome the order depends on timing (review 1709 measured 2 of 8 and 16 of 24 on BODY). They stay as rows that can only catch a regression. | the jsdom row is in the 2 above |
+| 3 | `reached`, and the drop | jsdom: a stand-in dialog holds the focus, as the sheet does through its exit (jsdom has no exit animation). Keep them is answered on; its view arrives; a poll reads off; the dialog leaves; a later poll reads on. The focus stays on BODY. Browser, at both widths: Keep them is answered on at 0 ms. As soon as on is checked, the page re-polls, and the stub then reads off. The row asserts that this off landed while the sheet was still in the document; otherwise the row measures nothing and fails. A later poll reads on, and the focus does not move. All of these are red at 848e7ae09. | Today's plain return at the reading wait: 1 jsdom row red; 2 of 36 browser rows red |
+| 4 | the words, as ruled | The F4 row at mode unmeasured, `wouldAdopt` 4. Neither the sheet nor the mode line says "whether keeping" or names the figure. The row is red at 848e7ae09. The words census passes. | Fix round 3's sheet sentence restored: 1 red |
+| 5 | test only | jsdom: Keep them settles and the focus is on the radio. The focus moves to the page. A later poll lands (`landed` 1), and the focus stays on BODY. This row is green at 848e7ae09, which already clears the request when it fires. | The clear of the request when it fires removed: 2 jsdom rows red (this row and fix round 3's F2 row) |
+| 6 | the radio comes from the DOM (`r.checked && !r.disabled`) | jsdom: in one commit outside `act`, as the app commits, the sheet stand-in's removal and a poll that changes the reading from on to off. The sheet watch's observer runs before the card's passive effects. The focus is the off radio, never the on radio. The row is red at 848e7ae09, so it can go red. | Radio found by `value === now`: 1 red |
+| 7, 8 | text | README: "a pass with keeping on"; the unreadable answer waits for its re-read too; one confirm sends one write; the request is dropped when another reading replaces the settled one. This note: what the jsdom F6 row asserts, and which rows ran at which widths. | none |
+
+The memo observation (a failed poll now re-renders the Settings page once a minute) is unchanged, as ruled.
