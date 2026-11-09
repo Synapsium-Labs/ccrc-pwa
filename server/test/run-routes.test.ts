@@ -4308,7 +4308,7 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
       const lift = await app.inject({ method: 'POST', url: '/api/coord/review-cap', payload: { run: workId } });
       expect(lift.statusCode).toBe(200);
       expect(lift.json()).toEqual({ ok: true, run: workId, rounds: 3, cap: 3, lifted: true });
-      expect(w.coord.reviewCapLifted(workId)).toBe(true);
+      expect(w.coord.reviewCapGate(workId).liftedAt !== null).toBe(true);
       expect((await postOpen(app, REVIEW(workId, { title: 'R4' }))).statusCode).toBe(200);
       expect(w.coord.reviewRounds(workId)).toBe(4);
     });

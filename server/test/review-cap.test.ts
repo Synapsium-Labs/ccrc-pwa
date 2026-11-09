@@ -7,7 +7,7 @@
 //   raise the ask on every refusal .............. "raised exactly once" (second refusal adds a notice)
 //   count only `planned` review runs ............ rounds 1-3 case (the failed rounds are not counted)
 //   delete the store's guard .................... both the refusal case and the lifted case (never refuses)
-//   `reviewCapLifted` always false .............. the lifted case (the 4th stays refused)
+//   `reviewCapGate` never lifted .......... the lifted case (the 4th stays refused)
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

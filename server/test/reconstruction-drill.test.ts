@@ -290,6 +290,11 @@ describe('the reconstruction drill', () => {
                                          // reviews open before the cap refuses again: the PERMISSIVE
                                          // direction, not a safe one (review 951 F3). Not rebuilt because
                                          // its inputs are not rebuilt, never because losing it is safe.
+      'reviewCapLifts',                  // D-8125: `review_cap_lifts` (the coordinator lift journal) and the grant
+                                         // beside the ask in `review_cap` live in coord.db alone and no artifact
+                                         // mirrors them. A DB loss resets the grant to 0 and forgets who lifted and
+                                         // why: the cap then stands at 3, the NARROWER direction, and the operator's
+                                         // lift still works.
       'hadChild',                        // D-8068: migration 41's column, and no artifact stamps it. The live
                                          // `.child` mark names only the minting run, and a reclaimed child has
                                          // none. So a DB loss reads every rebuilt row false, and those rows get
@@ -377,7 +382,7 @@ describe('the reconstruction drill', () => {
     for (const field of UNRECOVERABLE) {
       expect(Object.keys(r), `${field} was reconstructed after all`).not.toContain(field);
     }
-    expect(UNRECOVERABLE.length).toBe(22);
+    expect(UNRECOVERABLE.length).toBe(23);
   });
 
   it('refuses to invent a program when the ledger is missing', () => {

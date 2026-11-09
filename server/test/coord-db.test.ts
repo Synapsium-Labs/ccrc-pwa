@@ -701,9 +701,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[43] (runs.closedBy and runs.closeDetail, D-8071),
     // and MIGRATIONS[44] (gone_since, D-8071),
     // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071)
-    // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073).
-    expect(COORD_SCHEMA_VERSION).toBe(47);
-    expect(MIGRATIONS.length).toBe(47);
+    // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073)
+    // and MIGRATIONS[47] (review_cap.granted and askHandledAt, review_cap_lifts, D-8125).
+    expect(COORD_SCHEMA_VERSION).toBe(48);
+    expect(MIGRATIONS.length).toBe(48);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -776,8 +777,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[43] (runs.closedBy and runs.closeDetail, D-8071)
     // and MIGRATIONS[44] (gone_since, D-8071)
     // and MIGRATIONS[45] (the runs_by_closed_at index, D-8071)
-    // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(47);
+    // and MIGRATIONS[46] (run_close_untold and mail_deliveries.wake, D-8073)
+    // and MIGRATIONS[47] (review_cap.granted and askHandledAt, review_cap_lifts, D-8125); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(48);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2383,5 +2385,44 @@ describe('coord.db: mail_deliveries.revivedFrom, a revived park\'s heir names it
     expect(b.prepare('SELECT state, revivedFrom FROM mail_deliveries').all()).toEqual([{ state: 'queued', revivedFrom: null }]);
     warnSpy.mockRestore();
     b.close();
+  });
+});
+
+describe('coord.db: review_cap.granted, askHandledAt and review_cap_lifts (D-8125)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE review_cap_lifts')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: string | null }
+  it('adds two nullable columns with no default and the journal table with its index', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates review_cap_lifts').toBeGreaterThanOrEqual(48);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = db.prepare("SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info('review_cap')").all() as unknown as ColumnInfo[];
+    for (const name of ['granted', 'askHandledAt']) {
+      const c = cols.find((x) => x.name === name);
+      expect(c, `review_cap.${name}`).toMatchObject({ type: 'INTEGER', notnull: 0, dflt_value: null });
+    }
+    expect(db.prepare("SELECT name FROM pragma_table_info('review_cap_lifts') ORDER BY cid").all().map((r) => (r as { name: string }).name))
+      .toEqual(['id', 'workRunId', 'at', 'byId', 'reason', 'rounds', 'capBefore', 'capAfter', 'closedAskAt']);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'review_cap_lifts_by_run'").all()).toHaveLength(1);
+    db.close();
+  });
+
+  it('reaches a file at the version before it and keeps a review_cap row intact, granted NULL', () => {
+    expect(SLOT).toBeGreaterThanOrEqual(48);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+      raw.exec('INSERT INTO review_cap (workRunId, askedAt, liftedAt) VALUES (1, 7, 9)');
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT workRunId, askedAt, liftedAt, granted, askHandledAt FROM review_cap').get())
+      .toEqual({ workRunId: 1, askedAt: 7, liftedAt: 9, granted: null, askHandledAt: null });
+    db.close();
   });
 });
