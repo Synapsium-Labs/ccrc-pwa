@@ -81,6 +81,7 @@ const ROWS = [
   { verb: 'forget', from: ['held'], refusal: 'held', by: 'ccd', precondition: 'a program holds the row' },
   { verb: 'forget', from: ['asleep'], refusal: 'hibernated', by: 'ccd', precondition: 'the row is asleep, not gone' },
   { verb: 'forget', from: ['live'], refusal: 'session-live', by: 'ccd', precondition: 'the session is still running' },
+  { verb: 'forget', from: ['workspace'], refusal: 'workspace-unreadable', by: 'ccd', precondition: 'the row\'s workspace field could not be read, so whether it is a workspace is unproven' },
   { verb: 'forget', from: ['live'], refusal: 'session-verdict-unknown', by: 'ccd', precondition: 'tmux did not answer, so liveness is unproven' },
   { verb: 'forget', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },
   { verb: 'reap', from: ['rowless'], refusal: 'no-such-session', by: 'ccd', precondition: 'no registry row names the id' },

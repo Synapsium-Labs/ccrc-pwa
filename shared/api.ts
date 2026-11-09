@@ -9150,6 +9150,7 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown' | 'hibernated'  // tmux did not answer: fail-shut, nothing removed; `hibernated` (D-5242): forget on a sleeping row, wake or stop it first
+  | 'workspace-unreadable'     // forget (D-8140): the row's workspace field could not be read, so whether it is a workspace is unproven; nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands // @anchor purge-refusal-union
   | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
@@ -9195,6 +9196,8 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'This session is still running. Stop it first, then try again.',
   'session-verdict-unknown':
     'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
+  'workspace-unreadable':
+    'ccrc could not read whether this session is a workspace, so it removed nothing.',
   'spawn-failed':
     'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
   // D-2605. The act itself COMPLETED — this token only ever rides a `_lc_fail`

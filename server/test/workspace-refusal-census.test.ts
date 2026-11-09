@@ -61,6 +61,7 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('forget', 'held', 'held', 'ccd', 'a program holds the row'),
   e('forget', 'asleep', 'hibernated', 'ccd', 'the row is asleep, not gone'),
   e('forget', 'live', 'session-live', 'ccd', 'the session is still running'),
+  e('forget', 'workspace', 'workspace-unreadable', 'ccd', 'the row\'s workspace field could not be read, so whether it is a workspace is unproven'),
   e('forget', 'live', 'session-verdict-unknown', 'ccd', 'tmux did not answer, so liveness is unproven'),
   e('forget', 'rowless', 'no-such-session', 'ccd', 'no registry row names the id'),
   // reap (ws-reap, ws-rm): archived -> retired, with a proof ladder every rung of which is a refusal.
@@ -171,8 +172,8 @@ describe('workspace refusal census (ARCH-41, #776): today’s client-read refusa
   it('pins the per-verb edge counts exactly (a verb gaining or losing a refusal is a decision, not drift)', () => {
     const counts: Record<string, number> = {};
     for (const x of WORKSPACE_REFUSAL_CENSUS) counts[x.verb] = (counts[x.verb] ?? 0) + 1;
-    expect(counts).toEqual({ archive: 7, restore: 4, forget: 6, reap: 43, expire: 20, reclaim: 16, collect: 10 });
-    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(106);
+    expect(counts).toEqual({ archive: 7, restore: 4, forget: 7, reap: 43, expire: 20, reclaim: 16, collect: 10 });
+    expect(WORKSPACE_REFUSAL_CENSUS.length).toBe(107);
   });
 
   it('every edge’s code is read by a client: an archive wire word, a SENTENCES key or an LC_REFUSAL_WORD key', () => {

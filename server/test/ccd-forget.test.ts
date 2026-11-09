@@ -108,6 +108,29 @@ describe('ccd forget', () => {
     expect(h.reg(id, 'uuid')).not.toBeNull();
   });
 
+  // D-8140 (C17 item 6, review 1580 F12): the workspace field is READ, not folded. An unreadable `.workspace` used to
+  // read as "not a workspace", so a workspace row could be forgotten past the audited path. rc 2 refuses with its own
+  // word, never `session-verdict-unknown` (tmux did not answer); rc 1 (absent) goes on, as the purge case above shows.
+  it.each([
+    ['unreadable (mode 000)', (f: string) => { fs.writeFileSync(f, 'demo\n'); fs.chmodSync(f, 0o000); }],
+    ['a directory', (f: string) => { fs.mkdirSync(f); }],
+  ])('refuses when the workspace field is %s: workspace-unreadable, the row untouched', (_n, plant) => {
+    const id = deadWrapperSession('sess-a');
+    const field = path.join(h.home, '.cc-sessions', `${id}.workspace`);
+    plant(field);
+    try {
+      const r = shFail(`${DEAD} cmd_forget ${id}`);
+      expect(r.code).not.toBe(0);
+      expect(refusalsOf(h.home)).toEqual([{ act: 'forget', token: 'workspace-unreadable' }]);
+      expect(h.reg(id, 'uuid'), 'a refusal must not purge anything').not.toBeNull();
+      const calls = path.join(h.home, 'ccd-calls');
+      expect(fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '', 'nothing was unsupervised or killed')
+        .not.toMatch(/unsupervise|kill-session/);
+    } finally {
+      if (fs.statSync(field).isFile()) fs.chmodSync(field, 0o644);
+    }
+  });
+
   it('refuses an id it has no record of, and a bad id shape outright', () => {
     expect(shFail(`${DEAD} cmd_forget nope-never`).stderr).toContain('no such session');
     expect(shFail(`${DEAD} cmd_forget 'a/b'`).code).not.toBe(0);
