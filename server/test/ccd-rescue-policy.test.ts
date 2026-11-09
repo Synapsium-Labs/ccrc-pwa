@@ -933,6 +933,63 @@ describe('rule 3: spread, no bounce, and the chain wait', () => {
     expect(h.sh(`_rescue_history ${ID}; echo "rc=$?"`)).toBe('rc=2');
   });
 
+  // D-8123: the fleet watchdog's forced rescue and the wake move are rescues the history must see, in the same swap.log
+  // shape the tick's own `auto-rescue` line has, or one pass that forces several sessions lands them all on one account and
+  // a session moved off an account whose telemetry read under the ceiling is rescued straight back onto it.
+  const histLine = (ago: number, line: string): void => {
+    h.sh(`printf '%(%F %T)T %s\\n' "$(( $(date +%s) - ${ago} ))" ${JSON.stringify(line)} >> "$REG/swap.log"`);
+  };
+  const history = (): string =>
+    h.sh(`_rescue_history ${ID}; echo "rc=$? $RESCUE_COUNT|$RESCUE_SKIP_LEFT|$RESCUE_SKIP_RECENT"`);
+
+  it('a watchdog-rescue of ANOTHER session is a spread target', () => {
+    seed();
+    histLine(60, 'watchdog-rescue other-sess: claude -> claude-a [home=claude] sign=banner for=300s');
+    expect(history()).toBe('rc=0 0||claude-a');
+  });
+
+  it('a wake-rescue of ANOTHER session is a spread target', () => {
+    seed();
+    histLine(60, 'wake-rescue other-sess: claude (ceiling five=100 seven=5) -> claude-b [home=claude]');
+    expect(history()).toBe('rc=0 0||claude-b');
+  });
+
+  it('a watchdog-rescue of THIS session that landed counts and marks its source left; one that never landed does not', () => {
+    seed();
+    histLine(300, `watchdog-rescue ${ID}: claude -> claude-a [home=claude] sign=pane for=300s`);
+    histLine(295, `swap ${ID}: claude -> claude-a (uuid ${UUID})`);
+    expect(history()).toBe('rc=0 1|claude|claude-a');
+    fs.rmSync(regFile('swap.log'));
+    histLine(300, `watchdog-rescue ${ID}: claude -> claude-b [home=claude] sign=pane for=300s`);
+    expect(history()).toBe('rc=0 0||claude-b');
+  });
+
+  it('a wake-rescue of THIS session that landed counts and marks its source left', () => {
+    seed();
+    histLine(300, `wake-rescue ${ID}: claude (ceiling five=100 seven=5) -> claude-a [home=claude]`);
+    histLine(295, `swap ${ID}: claude -> claude-a (uuid ${UUID})`);
+    expect(history()).toBe('rc=0 1|claude|claude-a');
+  });
+
+  it('do not bounce: a session the watchdog moved off claude is not rescued back onto it', () => {
+    seed(); lanes();
+    // claude's telemetry reads under the ceiling again (the watchdog fired on a pane sign while it read low); the session
+    // then blocks on claude-a and the only lane with room besides claude-a is claude-b and claude.
+    const t = now();
+    for (const [w, five] of [['claude', 10], ['claude-a', 100], ['claude-b', 100], ['claude-d', 100]] as const) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify({ five, seven: 5, ts: t, fiveResetAt: t + 10000, sevenResetAt: t + 400000 }));
+    }
+    histLine(300, `watchdog-rescue ${ID}: claude -> claude-a [home=claude] sign=banner for=300s`);
+    histLine(295, `swap ${ID}: claude -> claude-a (uuid ${UUID})`);
+    expect(h.sh(`_rescue_target ${ID} claude-a '' 1 0; echo "rc=$?"`)).toBe('rc=1');
+  });
+
+  it('the watchdog\'s own spread: a second session of the same pass is not sent where the first just went while another has room', () => {
+    seed(); lanes();
+    histLine(2, 'watchdog-rescue other-sess: claude -> claude-a [home=claude] sign=banner for=300s');
+    expect(h.sh(`_rescue_target ${ID} claude claude 1 0; echo "rc=$?"`)).toMatch(/^claude-[bd]\nrc=0$/);
+  });
+
   it('a NON-rescue tick is `_swap_target` byte for byte: no skip list reaches the affinity path', () => {
     seed();
     pastLog(120, 'auto-rescue other-sess: claude-d (blocked) -> claude-a [home=claude-d]');

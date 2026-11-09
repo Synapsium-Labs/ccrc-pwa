@@ -75,6 +75,19 @@ const writeTranscript = (lines_: string[], id = ID): string => {
   return p;
 };
 
+/** The hook's turn marker at a Stop (`at`/`stopAt` in ms): `done` with `bg` background tasks, last Stop at second `atS`. */
+const bgMarker = (bg: number, atS: number, kinds = 'subagent', id = ID): void => {
+  const uuid = `${UUID.slice(0, -1)}${id.slice(-1).charCodeAt(0) % 10}`;
+  fs.writeFileSync(regFile(`${id}.turn.json`), `{"v":1,"sessionId":"${uuid}","state":"done","at":${atS * 1000},"stopAt":${atS * 1000},"bg":${bg},"bgKinds":"${kinds}"}\n`);
+};
+
+/** Claude Code's live status file for the stub pane's process (`_swap_idle_gate`'s reader): `idle`, last touched an hour ago. */
+const processStatus = (status: 'idle' | 'busy' = 'idle', wrapper = 'claude', touchedAgo = 3600): void => {
+  const dir = h.sh(`_cfg_dir_to d ${wrapper}; echo "$d"`);
+  fs.mkdirSync(path.join(dir, 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sessions', `${PID}.json`), JSON.stringify({ status, statusUpdatedAt: (T0 - touchedAgo) * 1000 }));
+};
+
 const BORDER = '────────────────────────────';
 const PROMPT = `${BORDER}\n❯ \n${BORDER}\n  ? for shortcuts`;
 const BANNER_LINE = "  ⎿  You've hit your session limit · resets 9:10pm (UTC)";
@@ -235,7 +248,7 @@ describe('the other rungs', () => {
   });
 
   it('the account rung: five or seven at SWAP_CEILING on a fresh reading, with an ordinary prompt', () => {
-    seed(); limits('claude', 10, 98); limits('claude-a', 5, 5);
+    seed(); limits('claude', 10, 98); limits('claude-a', 5, 5); processStatus();
     pass(PROMPT, T0); pass(PROMPT, T0 + 300);
     expect(lines('watchdog-rescue')).toEqual([expect.stringMatching(/sign=account for=300s$/)]);
   });
@@ -259,7 +272,8 @@ describe('the account-only sign waits for a running turn', () => {
     seed(); limits('claude', 10, 99); limits('claude-a', 5, 5);
     pass(BUSY, T0); pass(BUSY, T0 + 300); pass(BUSY, T0 + 360);
     expect(dispatches()).toEqual([]);
-    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/watchdog-hold lane-a-project-a: running$/)]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/watchdog-hold lane-a-project-a: running: a turn or background work/)]);
+    processStatus();
     pass(PROMPT, T0 + 420);
     expect(lines('watchdog-rescue')).toEqual([expect.stringMatching(/sign=account for=420s$/)]);
     expect(dispatches()).toHaveLength(1);
@@ -269,6 +283,18 @@ describe('the account-only sign waits for a running turn', () => {
     seed(); fleet();
     const both = `${BUSY}\n${BANNER_LINE}`;
     pass(both, T0); pass(both, T0 + 300);
+    expect(lines('watchdog-rescue')).toHaveLength(1);
+  });
+
+  it('an idle prompt with a subagent or background shell running holds an account-only sign (the idle gate reads the turn marker)', () => {
+    seed(); limits('claude', 10, 99); limits('claude-a', 5, 5); processStatus();
+    // The hook's line at the last Stop: `done` with two background tasks, a Stop a minute before the pass.
+    bgMarker(2, T0 - 60, 'subagent,shell');
+    pass(PROMPT, T0); pass(PROMPT, T0 + 300); pass(PROMPT, T0 + 600);
+    expect(dispatches()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/watchdog-hold lane-a-project-a: running: a turn or background work/)]);
+    bgMarker(0, T0 + 650, '');
+    pass(PROMPT, T0 + 660);
     expect(lines('watchdog-rescue')).toHaveLength(1);
   });
 
@@ -307,7 +333,7 @@ describe('no account has measured room', () => {
   });
 
   it('the account-only sign records the wait but does not strand a session that is not blocked', () => {
-    seed(); limits('claude', 99, 10); limits('claude-a', 100, 100); limits('claude-b', 100, 100);
+    seed(); limits('claude', 99, 10); limits('claude-a', 100, 100); limits('claude-b', 100, 100); processStatus();
     pass(PROMPT, T0); pass(PROMPT, T0 + 300);
     expect(field(ID, 'limitwait')).toMatch(/^state=open since=1900000300 reset=- account=claude sign=account$/);
     expect(field(ID, 'stranded')).toBeNull();
@@ -460,7 +486,52 @@ describe('the act gate (cmd_swap\'s watchdog arm)', () => {
   it('an account-only sign with a turn running at the act backs off', () => {
     seed(); limits('claude', 10, 99);
     expect(gate(BUSY)).toBe('rc=1');
-    expect(lines('rescue-backoff')).toEqual([expect.stringMatching(/rescue-backoff lane-a-project-a: running$/)]);
+    expect(lines('rescue-backoff')).toEqual([expect.stringMatching(/rescue-backoff lane-a-project-a: a turn or background work is running$/)]);
+  });
+
+  it('an account-only sign at an idle prompt with background work running backs off too (the idle gate, not the pane alone)', () => {
+    seed(); limits('claude', 10, 99); processStatus();
+    bgMarker(1, T0 - 60, 'shell');
+    expect(gate(PROMPT)).toBe('rc=1');
+    expect(lines('rescue-backoff')).toEqual([expect.stringMatching(/rescue-backoff lane-a-project-a: a turn or background work is running$/)]);
+  });
+
+  it('an account-only sign at a clean idle prompt proceeds', () => {
+    seed(); limits('claude', 10, 99); processStatus();
+    expect(gate(PROMPT)).toBe('rc=0');
+  });
+
+  it('a pane sign proceeds without the process status file (a session that has stopped is held by nothing)', () => {
+    seed(); fleet();
+    expect(gate(BANNER)).toBe('rc=0');
+  });
+
+  it('a session the operator stopped during the jitter is not revived: watchdog-cancel, lastswap put back', () => {
+    seed(); fleet(); h.sh(`_reg_set ${ID} lastswap ${T0}`);
+    writeTranscript([limitRow(T0 - 60)]);   // the transcript rung would still read the old limit row
+    fs.writeFileSync(regFile(`${ID}.stopped`), '');
+    expect(gate(PROMPT, '', { CCD_SWAP_PREV: '777' })).toBe('rc=1');
+    expect(lines('watchdog-cancel')).toEqual([expect.stringMatching(/watchdog-cancel lane-a-project-a: stopped$/)]);
+    expect(field(ID, 'lastswap')).toBe('777');
+  });
+
+  it('a hibernated session is not woken by the swap either', () => {
+    seed(); fleet();
+    fs.writeFileSync(regFile(`${ID}.hibernated`), '');
+    expect(gate(BANNER)).toBe('rc=1');
+    expect(lines('watchdog-cancel')).toEqual([expect.stringMatching(/watchdog-cancel lane-a-project-a: hibernated$/)]);
+  });
+
+  it('a session that is no longer live (a probe that finds no pane) is not respawned', () => {
+    seed(); fleet(); writeTranscript([limitRow(T0 - 60)]);
+    expect(gate(PROMPT, '_session_probe() { PROBE_VERDICT=gone; PROBE_SUBSTRATE=present; };')).toBe('rc=1');
+    expect(lines('watchdog-cancel')).toEqual([expect.stringMatching(/watchdog-cancel lane-a-project-a: not live \(gone\)$/)]);
+  });
+
+  it('an unanswered probe cancels as well: the act is not taken on a session nobody can see', () => {
+    seed(); fleet();
+    expect(gate(BANNER, '_session_probe() { PROBE_VERDICT=unknown; PROBE_SUBSTRATE=present; };')).toBe('rc=1');
+    expect(lines('watchdog-cancel')).toEqual([expect.stringMatching(/not live \(unknown\)$/)]);
   });
 
   it('cmd_swap runs it for the watchdog arm and names the cause swap-auto-rescue', () => {
@@ -483,7 +554,7 @@ describe('Wait until reset: the operator\'s choice is honoured, then the session
   });
 
   it('the reset passed and its own account has measured room: watchdog-resume, same account, in a transient unit', () => {
-    seed(); limits('claude', 10, 10); limits('claude-a', 5, 5); waitRecord(String(T0 - 60));
+    seed(); limits('claude', 10, 10); limits('claude-a', 5, 5); waitRecord(String(T0 - 60)); processStatus();
     pass(BANNER, T0);
     expect(lines('watchdog-resume')).toEqual([expect.stringMatching(/watchdog-resume lane-a-project-a: claude after reset$/)]);
     // The unit sources the ccd BODY (the installed `~/.local/bin/ccd` is a launcher) and runs the restart function.
@@ -502,12 +573,67 @@ describe('Wait until reset: the operator\'s choice is honoured, then the session
     expect(lines('watchdog-resume')).toEqual([]);
   });
 
-  it('a reset that is not known ("-"): the wait ends when its own account has measured room', () => {
-    seed(); fleet(); waitRecord('-');
+  it('a reset that is not known ("-") never ends the wait by the clock, even on an account that reads low', () => {
+    // `_limitwait_open` writes `-` for a pane, banner or menu sign whose account reads under the ceiling: the stale low
+    // reading is exactly the case where "the account has room" is wrong, and a restart would hit the limit again.
+    seed(); fleet(); waitRecord('-'); processStatus();
     pass(BANNER, T0); expect(detached()).toEqual([]);
     limits('claude', 30, 30);
-    pass(BANNER, T0 + 60);
+    pass(BANNER, T0 + 60); pass(BANNER, T0 + 3600); pass(BANNER, T0 + 86400);
+    expect(detached()).toEqual([]);
+    expect(lines('watchdog-resume')).toEqual([]);
+    expect(dispatches()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/watchdog-hold lane-a-project-a: the wait has no reset time/)]);   // said once
+    expect(field(ID, 'limitwait')).toMatch(/^state=open .* choice=wait/);
+  });
+
+  it('a wait with no reset still ends when the sign clears on its own', () => {
+    seed(); limits('claude', 30, 30); waitRecord('-'); processStatus();
+    pass(BANNER, T0);
+    pass(PROMPT, T0 + 60);
+    expect(detached()).toEqual([]);
+    expect(field(ID, 'limitwait')).toMatch(/^state=closed .* end=clear until=\d+$/);
+  });
+
+  it('a reset that has passed while the session moved inside SWAP_COOLDOWN (a tick rescue just dispatched): no second move', () => {
+    seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60)); processStatus();
+    h.sh(`_reg_set ${ID} lastswap ${T0 - 30}`);
+    pass(BANNER, T0);
+    expect(detached()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/the session moved 30s ago/)]);
+    pass(BANNER, T0 + 900);   // the cooldown over: the restart goes ahead
     expect(detached()).toHaveLength(1);
+  });
+
+  it('a reset that has passed while a swap dispatch is pending (its claim is younger than the jitter window): no second move', () => {
+    seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60)); processStatus();
+    fs.writeFileSync(regFile(`${ID}.dispatching`), `${T0 - 20}\n`);
+    pass(BANNER, T0);
+    expect(detached()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/a swap dispatched at \d+ is still pending/)]);
+    fs.writeFileSync(regFile(`${ID}.dispatching`), `${T0 + 100 - 400}\n`);   // older than SWAP_JITTER + 60: a dead claim
+    pass(BANNER, T0 + 100);
+    expect(detached()).toHaveLength(1);
+  });
+
+  it('a reset that has passed while a turn runs (Claude Code continued by itself): the turn is not killed', () => {
+    seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60));
+    processStatus('busy');
+    pass(BANNER, T0);
+    expect(detached()).toEqual([]);
+    expect(lines('watchdog-hold')).toEqual([expect.stringMatching(/not at a clean turn boundary/)]);
+    processStatus('idle');
+    pass(`${BUSY}\n${BANNER_LINE}`, T0 + 60);    // the pane still reads `esc to interrupt`
+    expect(detached()).toEqual([]);
+    pass(BANNER, T0 + 120);
+    expect(detached()).toHaveLength(1);
+  });
+
+  it('a reset that has passed while background work is live: not restarted', () => {
+    seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60)); processStatus();
+    bgMarker(1, T0 - 100, 'subagent');
+    pass(BANNER, T0);
+    expect(detached()).toEqual([]);
   });
 
   it('the sign gone on its own closes the wait without restarting anything', () => {
@@ -522,7 +648,7 @@ describe('Wait until reset: the operator\'s choice is honoured, then the session
       seed(id);
       h.sh(`_reg_set ${id} limitwait "state=open since=${T0 - 400} reset=${T0 - 60} account=claude sign=banner choice=wait at=${T0 - 300}"`);
     }
-    limits('claude', 10, 10); limits('claude-a', 5, 5);
+    limits('claude', 10, 10); limits('claude-a', 5, 5); processStatus();
     pass(BANNER, T0);
     expect(detached()).toHaveLength(3);
     expect(lines('watchdog-resume')).toHaveLength(3);
@@ -539,13 +665,13 @@ describe('Wait until reset: the operator\'s choice is honoured, then the session
       seed(id);
       h.sh(`_reg_set ${id} limitwait "state=open since=${T0 - 400} reset=${T0 - 60} account=claude sign=banner choice=wait at=${T0 - 300}"`);
     }
-    limits('claude', 10, 10);
+    limits('claude', 10, 10); processStatus();
     pass(BANNER, T0, '_svc_run_detached() { return 1; };');
     expect(lines('dispatch FAILED')).toHaveLength(4);
   });
 
   it('a failed unit start puts lastswap back and leaves the wait open', () => {
-    seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60)); h.sh(`_reg_set ${ID} lastswap 55`);
+    seed(); limits('claude', 10, 10); waitRecord(String(T0 - 60)); processStatus(); h.sh(`_reg_set ${ID} lastswap 55`);
     pass(BANNER, T0, '_svc_run_detached() { return 1; };');
     expect(field(ID, 'lastswap')).toBe('55');
     expect(field(ID, 'limitwait')).toMatch(/^state=open /);

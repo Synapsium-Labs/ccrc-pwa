@@ -137,6 +137,25 @@ describe('_pane_limit_menu: the rate-limit menu is the question row plus a numbe
   it('a numbered cursor row naming some other option is not the menu', () => {
     expect(menu('  What do you want to do?\n\n  ❯ 1. Open the file')).toBe('no');
   });
+
+  // Claude Code 2.1.318 with `tengu_jade_anvil_4` on lists the paid option FIRST, so the cursor rests on it; extra usage
+  // enabled, a team or enterprise account, and usage-based billing each reword a label. The question is also the title of
+  // the spend-limit nudge, so a label from the menu's own set stays required.
+  it.each([
+    ['extra usage on: the paid option is first and reads "Add funds to continue with usage credits"', '  ❯ 1. Add funds to continue with usage credits\n    2. Stop and wait for limit to reset'],
+    ['a team or enterprise account: "Ask your admin for more usage" is first', '  ❯ 1. Ask your admin for more usage\n    2. Upgrade your plan\n    3. Stop and wait for limit to reset'],
+    ['the flag on and the plan row first: "Upgrade your plan"', '  ❯ 1. Upgrade your plan\n    2. Stop and wait for limit to reset'],
+    ['usage-based billing: the stop row is just "Stop"', '  ❯ 1. Stop\n    2. Switch to usage'],
+    ['usage-based billing with the paid row first: "Add funds to continue with usage"', '  ❯ 1. Add funds to continue with usage \u00b7 $5.00\n    2. Stop'],
+    ['the paid row with a price after it', '  ❯ 1. Switch to usage credits \u00b7 $5.00\n    2. Stop and wait for limit to reset'],
+  ])('%s', (_name, rows) => {
+    expect(menu(`  What do you want to do?\n\n${rows}\n\n  Enter to confirm \u00b7 Esc to cancel`)).toBe('yes');
+  });
+
+  it('a cursor row that merely starts with "Stop" or "Upgrade your plan" is not the menu, and neither is the nudge', () => {
+    expect(menu('  What do you want to do?\n\n  ❯ 1. Stop the build')).toBe('no');
+    expect(menu('  What do you want to do?\n\n  ❯ 1. Upgrade your plan for higher session limits every month')).toBe('no');
+  });
 });
 
 describe('_pane_limit_capture_to: the whole pane only while the menu is up', () => {
@@ -169,6 +188,15 @@ describe('the whole-pane banner read', () => {
     tick(MENU_FIXTURE);   // today: no banner in tail -8, and no limit row in the transcript
     expect(lines('auto-rescue')).toEqual([expect.stringMatching(/ via=banner /)]);
     expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a rescue`]);
+    expect(keystrokes()).toEqual([]);
+  });
+
+  it('the flag-on ordering (the paid option first, the cursor on it): the banner above the menu is still found, via=banner', () => {
+    seed();
+    const flagOn = MENU_FIXTURE.replace(/❯ 1\. [^\n]*/, '❯ 1. Add funds to continue with usage credits');
+    expect(plain(flagOn)).toContain('1. Add funds to continue with usage credits');
+    tick(flagOn);
+    expect(lines('auto-rescue')).toEqual([expect.stringMatching(/ via=banner /)]);
     expect(keystrokes()).toEqual([]);
   });
 

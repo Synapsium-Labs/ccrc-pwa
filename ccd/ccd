@@ -19920,15 +19920,21 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
 
 _pane_limit_menu() {   # pane text -> success iff Claude Code's rate-limit menu is up (D-8123)
   # THE MENU OPENS BY ITSELF when a limit lands and pushes the banner above it out of the tick's `tail -8`. It is Claude
-  # Code's own question, `What do you want to do?`, over a numbered list whose cursor row (`❯ 1. Stop and wait for limit
-  # to reset`) names one of its options. BOTH must be on the text: the question alone could be prose, and a cursor row
-  # alone could be any other list. If Claude Code rewords the menu this stops matching and detection falls back to the
-  # transcript rung within TRANSCRIPT_ARM_INTERVAL, with no key sent either way (the plan's known limits). The menu is
-  # never answered: the rescue ends the session and resumes it on another account, because an Enter or a digit here can
-  # pick "Switch to usage credits".
+  # Code's own question, `What do you want to do?`, over a numbered list with a cursor row (`❯ 1. <label>`) that names
+  # one of its options. BOTH must be on the text: the question alone could be prose (and another Claude Code dialog, the
+  # spend-limit nudge, carries the same title), and a cursor row alone could be any other list. The LABELS are the
+  # bundle's (2.1.318): the paid option is `Switch to usage credits`, or `Add funds to continue with usage credits` once
+  # extra usage is enabled, or `Ask your admin for more usage` on a team or enterprise account (and `usage` for
+  # `usage credits` on usage-based billing); `Upgrade your plan` is a row of its own; the stop option is `Stop and wait
+  # for limit to reset`, or just `Stop` on usage-based billing. With the `tengu_jade_anvil_4` flag the paid option is
+  # row 1, so the cursor rests on it, not on the stop row. The paid labels match as prefixes (a price can follow them),
+  # the two short ones only as a whole row. If Claude Code rewords the menu this stops matching and detection falls
+  # back to the transcript rung within TRANSCRIPT_ARM_INTERVAL, with no key sent either way (the plan's known limits).
+  # The menu is never answered: the rescue ends the session and resumes it on another account, because an Enter or a
+  # digit here can pick "Switch to usage credits".
   # BUILTINS ONLY, no process: `_session_hard_blocked` asks this on every tick's pane, and the steady tick's fork budget
   # (`ccd-tick-budget.test.ts`) counts every `grep` a healthy session pays.
-  local _re=$'(^|\n)[[:space:]]*❯[[:space:]]*[0-9]+\\.[[:space:]]+(Stop and wait for limit to reset|Switch to usage credits)'
+  local _re=$'(^|\n)[[:space:]]*❯[[:space:]]*[0-9]+\\.[[:space:]]+(Stop and wait for limit to reset|Switch to usage|Add funds to continue with usage|Ask your admin for more usage|(Stop|Upgrade your plan)[[:space:]]*(\n|$))'
   [[ "$1" == *"What do you want to do?"* && "$1" =~ $_re ]]
 }
 
@@ -29186,6 +29192,11 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   # dispatch the swap refused never left its account, so it neither counts
   # toward the chain wait nor marks that account left. The spread list keeps
   # every dispatch, landed or in flight — a move still carrying is the herd.
+  # THE FLEET WATCHDOG'S FORCED RESCUE (`watchdog-rescue <id>: A -> B …`) AND THE WAKE MOVE (`wake-rescue <id>: A (ceiling …)
+  # -> B …`) ARE RESCUES TOO (D-8123), and read as such: a pass that forces three sessions, or a box wake that brings several
+  # up on one full account, must see the targets the earlier ones took (the spread list), and a session moved off A by the
+  # watchdog while A's telemetry still read under the ceiling must not be rescued back onto A (do not bounce). Both land
+  # through the same `swap <id>:` line.
   # UNMEASURABLE IS TODAY'S BEHAVIOUR: no chain wait, no skip. A log that does
   # not exist yet is a MEASURED empty history (rc 0), not an unreadable one, and
   # so is a tail with no rescue in it (`grep` rc 1). A forged line cannot crash
@@ -29196,10 +29207,12 @@ _rescue_history() {   # id -> 0 measured (RESCUE_COUNT, RESCUE_SKIP_LEFT, RESCUE
   [[ -e "$REG/swap.log" ]] || return 0
   [[ -f "$REG/swap.log" && -r "$REG/swap.log" ]] || return 2
   command -v python3 >/dev/null 2>&1 || return 2
-  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
+  out=$(tail -c "$RESCUE_LOG_TAIL_BYTES" "$REG/swap.log" 2>/dev/null | { grep -F -e ' auto-rescue ' -e ' watchdog-rescue ' -e ' wake-rescue ' -e ' swap ' || (( $? == 1 )); } | python3 -c '
 import re, sys, time
 sid, now, chain, spread = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 pat = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) auto-rescue (\S+): (\S+) \(blocked\) -> (\S+)(.*)$")
+wd = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) watchdog-rescue (\S+): (\S+) -> (\S+)(.*)$")
+wake = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) wake-rescue (\S+): (\S+) \(ceiling [^)]*\) -> (\S+)(.*)$")
 land = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d swap (\S+): (\S+) -> (\S+) \(uuid ")
 count, left, recent, in_left, in_recent, pending = 0, [], [], set(), set(), None
 for raw in sys.stdin.buffer:
@@ -29213,7 +29226,7 @@ for raw in sys.stdin.buffer:
                 in_left.add(pending[0]); left.append(pending[0])
             pending = None
         continue
-    m = pat.match(line)
+    m = pat.match(line) or wd.match(line) or wake.match(line)
     if not m:
         continue
     try:
@@ -31166,26 +31179,42 @@ _watchdog_sign_to() {   # var id -> var = pane|banner|menu|transcript|account, o
   return 0
 }
 
-_wd_running() {   # id -> rc 0 iff the pane shows a turn running, or cannot be read well enough to say it is not (an account-only sign waits)
-  local id="$1" tail
-  _pane_measurable "$id" || return 0
-  tail=$(tmux capture-pane -t "$(_tmux_t "$id")" -p 2>/dev/null | tail -8)
-  [[ -n "$tail" ]] || return 0
-  grep -q "esc to interrupt" <<<"$tail"
+_wd_running() {   # id -> rc 0 iff the session is NOT at a clean turn boundary, or cannot be read well enough to say it is (an account-only sign waits)
+  # `_swap_idle_gate` is the affinity move's own question, and the watchdog asks it and not the pane alone: the pane misses a
+  # running subagent or background shell, which the gate reads from the live process status file and the turn marker, and
+  # relocating the session kills them. A narrow pane, an unreadable status file, a prompt that is not up, an `esc to
+  # interrupt`, a touch inside SWAP_CEIL_QUIET and live background work all hold. Used for the account-only sign
+  # (decision and act); a pane, banner, menu or transcript sign is a session that has stopped, which nothing holds.
+  ! _swap_idle_gate "$1"
 }
 
 _swap_watchdog_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelled or backed off (logged, `lastswap` restored, nothing stopped)
-  # Re-asks the decision's own question at the act, after the dispatch's jitter: no sign any more -> `watchdog-cancel`; output
-  # since the decision, or a turn running under an account-only sign -> `rescue-backoff`. A DRAFT OR A STALE-PRESS DOES NOT
+  # Re-asks the decision's own question at the act, after the dispatch's jitter: stopped, hibernated or no longer live, or no
+  # sign any more -> `watchdog-cancel`; output since the decision, or (under an account-only sign) a session not at a clean turn
+  # boundary, `_swap_idle_gate`'s question -> `rescue-backoff`. A DRAFT OR A STALE-PRESS DOES NOT
   # BACK OFF (ruled): the watchdog is the net for exactly the session those holds keep on a limit. Never reads or writes the input box.
-  local id="$1" sign="" word=""
+  local id="$1" sign="" word="" why=""
+  # THE OPERATOR MAY HAVE STOPPED THE SESSION DURING THE JITTER. `_watchdog_one` asked at the decision; `cmd_swap` refuses
+  # `.hibernated` but not `.stopped`, and its tail respawns a session (`cmd_ensure` also removes `.stopped`). A stopped
+  # pane cannot be measured and the transcript rung would still read the old limit row, so the gate asks again, first.
+  if [[ -e "$REG/$id.stopped" ]]; then why=stopped
+  elif [[ -e "$REG/$id.hibernated" ]]; then why=hibernated
+  else
+    _session_probe "$id"
+    [[ "$PROBE_VERDICT" == live ]] || why="not live ($PROBE_VERDICT)"
+  fi
+  if [[ -n "$why" ]]; then
+    echo "$(date '+%F %T') watchdog-cancel $id: $why" >> "$REG/swap.log"
+    _swap_lastswap_restore "$id"
+    return 1
+  fi
   _watchdog_sign_to sign "$id"
   if [[ -z "$sign" ]]; then
     echo "$(date '+%F %T') watchdog-cancel $id: no limit sign" >> "$REG/swap.log"
     _swap_lastswap_restore "$id"
     return 1
   fi
-  [[ "$sign" == account ]] && _wd_running "$id" && word=running
+  [[ "$sign" == account ]] && _wd_running "$id" && word="a turn or background work is running"
   [[ -z "$word" ]] && _swap_output_since "${CCD_SWAP_TX:-}" "${CCD_SWAP_TX_BYTES:-}" && word="output since decision"
   [[ -n "$word" ]] || return 0
   echo "$(date '+%F %T') rescue-backoff $id: $word" >> "$REG/swap.log"
@@ -31204,24 +31233,50 @@ _watchdog_resume_run() {   # id — the transient unit's body: the stop-and-ensu
 }
 
 _watchdog_resume_here() {   # id -> rc 0 the session was restarted in place | 1 still waiting (or nothing to resume)
-  # The operator chose "Wait until reset" (`choice=wait` on an open limitwait). Past the record's reset, or at once when the
-  # reset is unknown (`-`), and once the session's OWN account has MEASURED room (both windows it applies, under the ceiling,
-  # `_limit_score`), the conversation is restarted in place: `_end_record id limit-resume`, then `_watchdog_resume_run` in
-  # its own transient unit. Claude Code's own continuation is not guaranteed to fire at the reset, and the banner can
-  # still be on the pane. `lastswap` is stamped as the wake move does (a restart is a move to the supervisor's cooldown,
-  # and a banner the old process wrote is then carried in, not a block) and put back when the unit cannot start.
-  local id="$1" w="" lw="" reset prev="" now score
+  # The operator chose "Wait until reset" (`choice=wait` on an open limitwait). Once the record's reset has passed, once the
+  # session's OWN account has MEASURED room (both windows it applies, under the ceiling, `_limit_score`), and once nothing
+  # else is moving or running the session, the conversation is restarted in place: `_end_record id limit-resume`, then
+  # `_watchdog_resume_run` in its own transient unit. Claude Code's own continuation is not guaranteed to fire at the reset,
+  # and the banner can still be on the pane.
+  # A RESET THAT IS NOT KNOWN (`-`) NEVER ENDS THE WAIT BY THE CLOCK. `_limitwait_open` writes `-` for a pane, banner or
+  # menu sign whose account reads under the ceiling: a stale low reading, or a limit five and seven do not show. Such an
+  # account "has room" the whole time, and restarting on it would put the session straight back on the limit. The wait ends
+  # when the sign clears on its own (`_watchdog_clear`, end=clear) or the operator moves the session.
+  # THE HOLDS, past the reset: a move already under way (`lastswap` inside SWAP_COOLDOWN, or a dispatch claim younger than
+  # SWAP_JITTER + 60 s, the window `_dispatch_swap` keeps) would be a second move on top of it; and `_swap_idle_gate`, the
+  # affinity move's own question, says whether a turn Claude Code continued by itself, a subagent, a background shell or a
+  # touch is on the session, any of which a restart would kill. `lastswap` is stamped as the wake move does (a restart is a
+  # move to the supervisor's cooldown, and a banner the old process wrote is then carried in, not a block) and put back when
+  # the unit cannot start.
+  local id="$1" w="" lw="" reset prev="" now score claim=""
   _reg_get_to lw "$id" limitwait || return 1
   [[ "$(_rw_field "$lw" state)" == open && "$(_rw_field "$lw" choice)" == wait ]] || return 1
   _reg_read_to w "$id" wrapper && [[ -n "$w" ]] || return 1
   [[ "$(_rw_field "$lw" account)" == "$w" ]] || return 1   # a record about another account says nothing about this one
   _now_s_to now
   reset="$(_rw_field "$lw" reset)"
-  if [[ "$reset" =~ ^[0-9]+$ ]]; then (( now >= 10#$reset )) || return 1; fi
+  if [[ ! "$reset" =~ ^[0-9]+$ ]]; then
+    _watchdog_hold "$id" noreset "the wait has no reset time; it ends when the limit clears or the session is moved, never by the clock"
+    return 1
+  fi
+  (( now >= 10#$reset )) || return 1
   score=$(_limit_score "$w")
   [[ "$score" =~ ^[0-9]+$ ]] && (( 10#$score < SWAP_CEILING )) || return 1
-  (( WD_FORCED < WATCHDOG_PER_PASS )) || return 1   # eligible, but this pass has moved its share: next pass
   _reg_get_to prev "$id" lastswap || prev=""
+  if [[ "$prev" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$prev >= 0 && now - 10#$prev < SWAP_COOLDOWN )); then
+    _watchdog_hold "$id" resumemoved "the reset has passed but the session moved $(( now - 10#$prev ))s ago (lastswap); the wait resumes it after SWAP_COOLDOWN"
+    return 1
+  fi
+  _file_read_to claim "$REG/$id.dispatching" || claim=""
+  if [[ "$claim" =~ ^[0-9]{1,12}$ ]] && (( now - 10#$claim >= 0 && now - 10#$claim < ${SWAP_JITTER:-0} + 60 )); then
+    _watchdog_hold "$id" resumepending "the reset has passed but a swap dispatched at $claim is still pending"
+    return 1
+  fi
+  if ! _swap_idle_gate "$id"; then
+    _watchdog_hold "$id" resumebusy "the reset has passed but the session is not at a clean turn boundary (a turn, background work or a recent touch); it restarts when it is"
+    return 1
+  fi
+  (( WD_FORCED < WATCHDOG_PER_PASS )) || return 1   # eligible, but this pass has moved its share: next pass
   _end_record "$id" limit-resume
   _reg_set "$id" lastswap "$now"
   echo "$(date '+%F %T') watchdog-resume $id: $w after reset" >> "$REG/swap.log"
@@ -31294,7 +31349,9 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
     esac
   fi
   if [[ "$sign" == account ]] && _wd_running "$id"; then
-    if _pane_measurable "$id"; then _watchdog_hold "$id" held running
+    # `_swap_idle_gate`'s question, the affinity move's own: a turn, a subagent or background shell, a touch inside
+    # SWAP_CEIL_QUIET, or a pane too narrow to tell. The act gate asks it again after the jitter.
+    if _pane_measurable "$id"; then _watchdog_hold "$id" held "running: a turn or background work holds an account-only sign"
     else _watchdog_hold "$id" held "the pane is too narrow to tell whether a turn is running"; fi
     return 0
   fi
