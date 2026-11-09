@@ -17,6 +17,7 @@ import { END_REQUEST_REFUSALS, LEDGER_ROUTE_REFUSALS, type EndRequestRefusal } f
 import { TERMINAL_RUN_STATES, type RunState, type StuckReason } from '../../../shared/api.js';
 import { ITEM_TEXT_MAX, ITEM_TITLE_MAX, endRunAction, outsideDocLink } from '../../../shared/ledgers.js';
 import type { CoordStore, RunRow } from './store.js';
+import { coordinatorOfRun, workerOfRun } from './bindingReads.js';
 import { endRequestAskMail } from './ledgersMail.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 
@@ -36,7 +37,10 @@ export type EndRequestWhy = EndRequestRefusal | 'run-closed';
 export interface EndRequestFacts {
   readonly now: number;
   readonly askerId: string;
-  readonly run: { readonly state: RunState; readonly claimedBy: string | null; readonly sessionId: string | null };
+  readonly run: { readonly state: RunState };
+  /** The run's coordinator and its worker, as the binding readers (`coordinatorOfRun`, `workerOfRun`) answer them. */
+  readonly coordinator: string | null;
+  readonly worker: string | null;
   readonly reviewWorkers: readonly string[];
   /** True when the run's coordinator reads gone, or the run has none. */
   readonly coordinatorGone: boolean;
@@ -56,8 +60,8 @@ const isTerminal = (s: RunState): boolean => (TERMINAL_RUN_STATES as readonly st
 
 /** The decision, in the order the spec lists them: who may ask, a closed run, one open request per run, no quick repeat. */
 export function endRequestDecide(f: EndRequestFacts): EndRequestDecision {
-  const asCoordinator = f.run.claimedBy !== null && f.askerId === f.run.claimedBy;
-  const asWorker = f.askerId === f.run.sessionId || f.reviewWorkers.includes(f.askerId);
+  const asCoordinator = f.coordinator !== null && f.askerId === f.coordinator;
+  const asWorker = f.askerId === f.worker || f.reviewWorkers.includes(f.askerId);
   if (!asCoordinator && !asWorker) return { kind: 'refuse', why: END_REQUEST_REFUSALS.notYours };
   if (isTerminal(f.run.state)) return { kind: 'refuse', why: 'run-closed' };
   if (f.openItem !== null) return { kind: 'refuse', why: END_REQUEST_REFUSALS.alreadyAsked };
@@ -115,8 +119,9 @@ export function endRequestRun(deps: EndRequestDeps, runId: number, askerId: stri
   const now = deps.now();
   const verdict = deps.verdictOf(runId);
   const open = deps.coord.openEndRequestOf(runId);
+  const coordinator = coordinatorOfRun(deps.coord, runId);
   const facts: EndRequestFacts = {
-    now, askerId, run, reviewWorkers: deps.coord.reviewWorkersOf(runId),
+    now, askerId, run, coordinator, worker: workerOfRun(deps.coord, runId), reviewWorkers: deps.coord.reviewWorkersOf(runId),
     coordinatorGone: run.claimedBy === null || verdict?.coordinatorGone === true,
     openItem: open === null ? null : { id: open.id },
     lastEnded: deps.coord.lastEndedEndRequest(runId),
@@ -129,7 +134,7 @@ export function endRequestRun(deps: EndRequestDeps, runId: number, askerId: stri
       ...(itemId === undefined ? {} : { itemId }) };
   }
   const action = endRunAction(runId, facts.stuckReason);
-  const actor = askerId === run.claimedBy ? 'coordinator' : 'ccrc';
+  const actor = coordinator !== null && askerId === coordinator ? 'coordinator' : 'ccrc';
   const mailTo = decision.heldUntil !== null && run.claimedBy !== null ? run.claimedBy : null;
   const input = {
     program: run.program, runId, raisedBy: askerId, kind: 'do' as const, title: endRequestTitle(run),

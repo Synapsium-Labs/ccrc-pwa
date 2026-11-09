@@ -27,7 +27,7 @@ const HOUR = 3_600_000;
 
 const facts = (over: Partial<EndRequestFacts> = {}): EndRequestFacts => ({
   now: 1_000_000, askerId: 'worker-a',
-  run: { state: 'working', claimedBy: 'lane-a', sessionId: 'worker-a' },
+  run: { state: 'working' }, coordinator: 'lane-a', worker: 'worker-a',
   reviewWorkers: [], coordinatorGone: false, openItem: null, lastEnded: null, stuckReason: null, ...over,
 });
 
@@ -48,8 +48,8 @@ describe('endRequestDecide', () => {
     expect(endRequestDecide(facts({ askerId: 'stranger' }))).toEqual({ kind: 'refuse', why: 'not-yours' });
   });
   it('run-closed', () => {
-    expect(endRequestDecide(facts({ run: { state: 'done', claimedBy: 'lane-a', sessionId: 'worker-a' } }))).toEqual({ kind: 'refuse', why: 'run-closed' });
-    expect(endRequestDecide(facts({ run: { state: 'failed', claimedBy: 'lane-a', sessionId: 'worker-a' } })).kind).toBe('refuse');
+    expect(endRequestDecide(facts({ run: { state: 'done' } }))).toEqual({ kind: 'refuse', why: 'run-closed' });
+    expect(endRequestDecide(facts({ run: { state: 'failed' } })).kind).toBe('refuse');
   });
   it('already-asked', () => {
     expect(endRequestDecide(facts({ openItem: { id: 4 } }))).toEqual({ kind: 'refuse', why: 'already-asked' });
