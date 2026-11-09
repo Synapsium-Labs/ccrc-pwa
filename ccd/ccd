@@ -12425,7 +12425,7 @@ cmd_pr_open() {   # ccd pr-open --session <id> --title <t> --body-b64 <b64> --dr
 AM_HOLD_WAVE_RE='^program:[A-Za-z0-9._-]+ wave:[0-9]+(/[0-9]+)?( run:[0-9]+)?$'
 AM_HOLD_MAX=127
 AM_HOLD_READ=128   # the hook's CCRC_ID_MAX: what `_ct_read` reads of a hold, so AM_HOLD_MAX is its off-by-one
-AM_WHO='?'; AM_WHY=""; AM_REPO=""; AM_PR=""; AM_HEAD=""; AM_HOME=""; AM_REG=""; AM_UID=""
+AM_WHO='?'; AM_WHY=""; AM_REPO=""; AM_PR=""; AM_HEAD=""; AM_BASE=""; AM_HOME=""; AM_REG=""; AM_UID=""
 # WHO IS ASKING, AND WHERE THE SWITCH LIVES, ARE DERIVED FROM THE PROCESS, NEVER FROM THE ENVIRONMENT THE CALLER SETS.
 # A command line can carry `TMUX_PANE=%7`, a `TMUX` pointing at a socket of its own making, a `TMUX_TMPDIR`, a `HOME`
 # holding a ccrc.env that says auto, and a `PATH` with a shim in front; the session hook sees none of that once a quoted
@@ -12664,12 +12664,17 @@ _AM_STRICT_JQ='
   any($rules[] | select(.type == "required_status_checks") | .parameters.strict_required_status_checks_policy; (. // false) != false)
   or (($prot.required_status_checks // {}).strict // false) != false'
 
-# The fresh read just before the merge: state, draft, head and decision, typed before they are read out as four words.
+# The fresh read just before the merge: state, draft, head, base and decision, typed before they are read out as five words.
+# The base is read again because `--match-head-commit` pins the head and not the base: a retarget (by hand, or GitHub's own
+# when a stacked parent merges and its branch goes) leaves the head as it was while every rule-derived verdict was judged
+# against the old base.
 _AM_FRESH_JQ='
   if (.state | IN("OPEN", "CLOSED", "MERGED")) and (.isDraft | type) == "boolean"
      and (.headRefOid | type) == "string" and (.headRefOid | test("\\A[0-9a-f]{40}\\z"))
+     and (.baseRefName | type) == "string" and (.baseRefName | test("\\A[A-Za-z0-9._/-]+\\z"))
+     and (.baseRefName | startswith("-") | not)
      and ((.reviewDecision == null) or ((.reviewDecision | type) == "string" and (.reviewDecision | test("\\A[A-Z_]*\\z"))))
-  then "ok \(.state) \(.isDraft) \(.headRefOid) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)"
+  then "ok \(.state) \(.isDraft) \(.headRefOid) \(.baseRefName) \(if .reviewDecision == null or .reviewDecision == "" then "NONE" else .reviewDecision end)"
   else "unreadable" end'
 # The read-back: the merge commit id, only when the PR is MERGED at the bound head ($sha); otherwise nothing.
 # shellcheck disable=SC2016  # $sha is a jq variable (--arg), not shell
@@ -12722,6 +12727,7 @@ _am_reads() {   # -> AM_METHOD and AM_CHECKS when every condition holds; otherwi
   v=$(jq -r "$_AM_PR_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
   [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
   read -r _ state draft phead base dec <<<"$v"
+  AM_BASE="$base"   # the base every rule-derived verdict below is judged against; `_am_act` re-reads it
   [[ "$state" == OPEN ]]  || _am_refuse "$AM_WHO" not-open "the PR is $state"
   [[ "$draft" == false ]] || _am_refuse "$AM_WHO" draft "the PR is a draft"
   [[ "$phead" == "$sha" ]] || _am_refuse "$AM_WHO" not-at-head "the PR head is $phead"
@@ -12830,12 +12836,13 @@ cmd_pr_admin_merge() {   # ccd pr-admin-merge --repo <owner/repo> --pr <n> --hea
 # path; a merge gh answered but the read-back cannot prove is `unproven`, reported and not retried. The flag that makes
 # this an admin merge is spelled exactly once in this verb, on that one call.
 _am_act() {   # -> MERGED line (rc 0), or a REFUSED line (exit 2); uses AM_METHOD and AM_CHECKS from `_am_reads`
-  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead dec rc=0 err oid
-  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json headRefOid,reviewDecision,state,isDraft
+  local repo="$AM_REPO" pr="$AM_PR" sha="$AM_HEAD" v state draft phead pbase dec rc=0 err oid
+  _am_read "the PR read" "$_AM_ONE_OBJ" pr view "$pr" -R "$repo" --json headRefOid,baseRefName,reviewDecision,state,isDraft
   v=$(jq -r "$_AM_FRESH_JQ" <<<"$AM_OUT" 2>/dev/null) || v=unreadable
   [[ "$v" == 'ok '* ]] || _am_unreadable "the PR read"
-  read -r _ state draft phead dec <<<"$v"
+  read -r _ state draft phead pbase dec <<<"$v"
   [[ "$phead" == "$sha" ]]       || _am_refuse "$AM_WHO" head-moved "the PR head moved to $phead since the checks"
+  [[ "$pbase" == "$AM_BASE" ]]   || _am_refuse "$AM_WHO" base-moved "the PR base moved from $AM_BASE to $pbase since the checks"
   [[ "$state" == OPEN ]]         || _am_refuse "$AM_WHO" not-open "the PR is $state"
   [[ "$draft" == false ]]        || _am_refuse "$AM_WHO" draft "the PR is a draft"
   [[ "$dec" != CHANGES_REQUESTED ]] || _am_refuse "$AM_WHO" changes-requested "reviewDecision=CHANGES_REQUESTED"

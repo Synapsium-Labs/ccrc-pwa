@@ -59,7 +59,7 @@ export interface AmOver {
   repo?: unknown;
   /** `gh pr view 42 …` */
   pr?: unknown;
-  /** the fresh `gh pr view 42 --json headRefOid,reviewDecision,state,isDraft` just before the merge; default: \`pr\`'s answer */
+  /** the fresh `gh pr view 42 --json headRefOid,baseRefName,reviewDecision,state,isDraft` just before the merge; default: \`pr\`'s answer */
   fresh?: unknown;
   /** the read-back after the merge (\`--json state,headRefOid,mergeCommit\`); default: MERGED at HEAD_A with MERGE_OID */
   readback?: unknown;
@@ -112,7 +112,7 @@ export function amFixture(h: PrHarness, over: AmOver = {}): void {
     number: 42, state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '',
   });
   route('pr view 42 -R owner-a/repo-a --json state,isDraft,headRefOid,baseRefName,reviewDecision', 'pr.json', pr);
-  route('pr view 42 -R owner-a/repo-a --json headRefOid,reviewDecision,state,isDraft', 'fresh.json', pick(over.fresh, pr));
+  route('pr view 42 -R owner-a/repo-a --json headRefOid,baseRefName,reviewDecision,state,isDraft', 'fresh.json', pick(over.fresh, pr));
   route('pr view 42 -R owner-a/repo-a --json state,headRefOid,mergeCommit', 'readback.json', pick(over.readback, {
     state: 'MERGED', headRefOid: HEAD_A, mergeCommit: { oid: MERGE_OID },
   }));

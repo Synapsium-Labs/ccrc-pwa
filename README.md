@@ -5615,13 +5615,13 @@ none of the rules `--admin` would get past and the door cannot judge for itself 
 either), and, where strict up-to-date applies (a ruleset's `strict_required_status_checks_policy` or classic
 `required_status_checks.strict`), that the head is not behind the base (a compare read); and that the repository allows
 a merge method the door will use, a merge commit preferred and a squash only where the repository allows nothing else
-(a rebase-only repository is refused, and so is one that allows a squash and a rebase but no merge commit). Just before the merge it reads the PR again, and runs `gh pr merge <n> -R <owner/repo> --admin
+(a rebase-only repository is refused, and so is one that allows a squash and a rebase but no merge commit). Just before the merge it reads the PR again (head, base, draft, state and decision; a base that is no longer the one the checks were judged against is `base-moved`, because the head pin does not pin the base), and runs `gh pr merge <n> -R <owner/repo> --admin
 --<method> --match-head-commit <sha>`, so a push that lands after the checks cannot slip in; then it reads the PR back.
 Its stdout is exactly one line. `MERGED <owner/repo>#<n> head=<sha> method=<m> merge=<oid> checks=<…>` (rc 0), or
 `REFUSED <reason>: <detail>` (rc 2) with `<reason>` one of `setting-off`, `setting-unread`, `caller-unknown`,
 `not-coordinator`, `unreadable`, `not-admin`, `not-open`, `draft`, `not-at-head`, `merge-queue`,
 `protection-unreadable`, `unenforced-rules`, `behind-base`, `changes-requested`, `checks-not-green`, `method-none`,
-`rebase-only`, `squash-not-only`, `head-moved`, `github-refused` or `unproven`; `unproven` means `gh` answered but the read-back does not show the merge at that head,
+`rebase-only`, `squash-not-only`, `head-moved`, `base-moved`, `github-refused` or `unproven`; `unproven` means `gh` answered but the read-back does not show the merge at that head,
 so it is reported and never retried. Every call that got past the argument shapes leaves one line in `$REG/swap.log`:
 `admin-merge <who>: <owner/repo>#<n> head=<sha> method=<m> checks=<…> result=merged merge=<oid>`, or
 `admin-merge-refused <who or ?>: <owner/repo>#<n> head=<sha> reason=<reason>`. The hook's worker deny covers the door as

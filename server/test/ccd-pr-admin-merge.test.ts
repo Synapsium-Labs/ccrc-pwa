@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { CCD, ccdSource } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
-import { AM_GH_STUB, AM_PROT_NONE, HEAD_A, HEAD_B, MERGE_OID, amCaller, amCheckRun, amFixture, amProt, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
+import { AM_GH_STUB, AM_PROT_NONE, HEAD_A, HEAD_B, MERGE_OID, amCaller, amCheckRun, amFixture, amProt, amRoute, amRun, boxEnv, swapLog } from './ccdAdminMergeFixture.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-am-'); });
@@ -607,19 +607,46 @@ describe('the merge', () => {
   });
 
   it('refuses when the head moved between the checks and the merge', () => {
-    amFixture(h, { fresh: { state: 'OPEN', isDraft: false, headRefOid: HEAD_B, reviewDecision: '' } });
+    amFixture(h, { fresh: { state: 'OPEN', isDraft: false, headRefOid: HEAD_B, baseRefName: 'main', reviewDecision: '' } });
     const r = amRun(h, ARGV);
     expect([r.code, r.stdout.trim()]).toEqual([2, `REFUSED head-moved: the PR head moved to ${HEAD_B} since the checks`]);
     expect(merges()).toEqual([]);
     expect(lastJournal()).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=head-moved$`));
   });
 
+  it('refuses base-moved when the PR was retargeted between the reads, however the head pin would pass', () => {
+    // `dev` (admin, no queue, nothing required) when the reads judge it; `main` (which carries a queue) at the fresh read.
+    // The head is the same, so `--match-head-commit` alone would pass and `--admin` would land it past the queue.
+    amFixture(h, { pr: { number: 42, state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'dev', reviewDecision: '' },
+                   fresh: { state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '' } });
+    amRoute(h, 'api --paginate repos/owner-a/repo-a/rules/branches/dev', 'rules-dev.json', []);
+    amRoute(h, 'api -i repos/owner-a/repo-a/branches/dev/protection', 'protection-dev.txt', AM_PROT_NONE);
+    const r = amRun(h, ARGV);
+    expect([r.code, r.stdout.trim()]).toEqual([2, 'REFUSED base-moved: the PR base moved from dev to main since the checks']);
+    expect(merges()).toEqual([]);
+    expect(lastJournal()).toMatch(new RegExp(` admin-merge-refused demo-quiet-basin: owner-a/repo-a#42 head=${HEAD_A} reason=base-moved$`));
+    // control: the same retarget-free PR on `dev` merges, so the refusal above is the base check and nothing else
+    amFixture(h, { pr: { number: 42, state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'dev', reviewDecision: '' } });
+    amRoute(h, 'api --paginate repos/owner-a/repo-a/rules/branches/dev', 'rules-dev.json', []);
+    amRoute(h, 'api -i repos/owner-a/repo-a/branches/dev/protection', 'protection-dev.txt', AM_PROT_NONE);
+    expect(amRun(h, ARGV).stdout.trim()).toMatch(/^MERGED /);
+  });
+
+  it('the fresh read refuses an unreadable or option-shaped base', () => {
+    for (const baseRefName of [undefined, '-x', 7, 'a b']) {
+      amFixture(h, { fresh: { state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName, reviewDecision: '' } });
+      const r = amRun(h, ARGV);
+      expect([r.code, r.stdout.trim()]).toEqual([2, 'REFUSED unreadable: the PR read']);
+    }
+    expect(merges()).toEqual([]);
+  });
+
   it('the fresh read refuses a draft, a closed PR and a changes-requested decision that appeared after the reads', () => {
     for (const [fresh, line] of [
-      [{ state: 'OPEN', isDraft: true, headRefOid: HEAD_A, reviewDecision: '' }, 'REFUSED draft: the PR is a draft'],
-      [{ state: 'CLOSED', isDraft: false, headRefOid: HEAD_A, reviewDecision: '' }, 'REFUSED not-open: the PR is CLOSED'],
-      [{ state: 'OPEN', isDraft: false, headRefOid: HEAD_A, reviewDecision: 'CHANGES_REQUESTED' }, 'REFUSED changes-requested: reviewDecision=CHANGES_REQUESTED'],
-      [{ state: 'OPEN', isDraft: false, headRefOid: 'nope', reviewDecision: '' }, 'REFUSED unreadable: the PR read'],
+      [{ state: 'OPEN', isDraft: true, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '' }, 'REFUSED draft: the PR is a draft'],
+      [{ state: 'CLOSED', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: '' }, 'REFUSED not-open: the PR is CLOSED'],
+      [{ state: 'OPEN', isDraft: false, headRefOid: HEAD_A, baseRefName: 'main', reviewDecision: 'CHANGES_REQUESTED' }, 'REFUSED changes-requested: reviewDecision=CHANGES_REQUESTED'],
+      [{ state: 'OPEN', isDraft: false, headRefOid: 'nope', baseRefName: 'main', reviewDecision: '' }, 'REFUSED unreadable: the PR read'],
     ] as const) {
       amFixture(h, { fresh });
       const r = amRun(h, ARGV);

@@ -133,7 +133,7 @@ ccd pr-admin-merge --repo <owner/repo> --pr <n> --head <40-hex sha>
   - `REFUSED <reason>: <detail>`, rc 2, where `<reason>` is one of
     `setting-off`, `setting-unread`, `caller-unknown`, `not-coordinator`, `unreadable`, `not-admin`, `not-open`,
     `draft`, `not-at-head`, `merge-queue`, `protection-unreadable`, `changes-requested`, `checks-not-green`,
-    `method-none`, `rebase-only`, `head-moved`, `github-refused`, `unproven`.
+    `method-none`, `rebase-only`, `head-moved`, `base-moved`, `github-refused`, `unproven`.
   - `unproven` means gh answered the merge but the read-back did not show MERGED at `<sha>`: GitHub may have merged,
     so it is reported, never retried.
 - The order of the checks, cheapest and local first, each a refusal on failure: argv, setting, caller, repository read
