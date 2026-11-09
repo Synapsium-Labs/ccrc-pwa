@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
-import { DELEGATION_PASS_SLOW_PREFIX, FleetWatcher } from '../src/watch.js';
+import { FleetWatcher } from '../src/watch.js';
 import { questionsTestView } from '../src/coord/questions.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -334,6 +334,10 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     const f = fixture({ push, sessions: ['ccrc-pwa/cc-a'] });
     const askId = await mintHold(f, 'cc-a', 'coord-1');
     expect(f.coord.releaseAsk(askId, T0 + 1)).toBe(true);        // held -> released, by "someone else"
+    // D-8140 (C17 item 3): mintHold's ticks start a delegation pass that is not this sweep's, and the clock jump below
+    // used to land inside it, so the pass logged (its slow line, or its compaction line) into the spy. It is awaited
+    // to its end here, before the spy, so nothing but this sweep can write to it.
+    await f.w.closeDelegation();
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     at(T0 + ASK_GRACE_MS + 1);
@@ -343,9 +347,8 @@ describe('sweepAsks — the release sweep (Task 7)', () => {
     expect(heldMap(f.w).has('cc-a')).toBe(false);
     expect(okAsk(f.coord.askById(askId))!.state).toBe('released');      // untouched, not rewritten
     // Silent: distinguishes this branch from the exhaustiveness fallback
-    // ('held'/'unknown'), which warns. The clock jump above can land inside a
-    // delegation pass, which then logs itself slow; that line is not this sweep's.
-    expect(warn.mock.calls.filter(([m]) => !String(m).startsWith(DELEGATION_PASS_SLOW_PREFIX))).toEqual([]);
+    // ('held'/'unknown'), which warns.
+    expect(warn.mock.calls).toEqual([]);
   });
 
   // RULING F9, branch 3: the row itself is gone — a lost coord.db. Its loss
