@@ -58,8 +58,15 @@ interface Span {
   refs?: Array<[string, string, string]>;
   /** The whole text length of a `<local-command-stdout>` row stored after the summary. */
   echo?: number;
+  /** The echo row's whole text, when a case needs particular characters (it overrides `echo`). */
+  echoText?: string;
 }
-interface Sess { id: string; spans: Span[] }
+interface Sess {
+  id: string;
+  spans: Span[];
+  /** false stores the session's epoch unconfirmed (derive leaves its boundaries waiting); default true. */
+  confirmed?: boolean;
+}
 interface Receipt { session: string; leaf: string; ts: number; source?: 'line' | 'received' }
 interface Plan {
   sessions: Sess[];
@@ -103,7 +110,7 @@ function plant(plan: Plan): Planted {
       const pk = si + 1;
       const cc = ccUuidOf(pk);
       db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (?, ?, '', 'demo', 1)").run(pk, s.id);
-      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'hook', 1)").run(pk, cc);
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (?, 1, ?, 'startup', 'hook', ?)").run(pk, cc, s.confirmed === false ? null : 1);
       db.prepare("INSERT INTO transcripts (transcript_pk, cc_session_uuid, agent_id) VALUES (?, ?, '')").run(pk, cc);
       db.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (?, 1, ?, '', ?, 'live', 1)").run(pk, 8000 + pk, pk);
       let line = 0;
@@ -124,10 +131,10 @@ function plant(plan: Plan): Planted {
         const how = sp.summary ?? 'text';
         const sBlob = blobOf(`s-${tag}`, sp.text ?? CLOSED, how === 'tombstone' ? { tomb: true } : how === 'oversize' ? { rawLen: 2 ** 40 } : {});
         put(`s-${tag}`, 'user', null, 'summary', sBlob, ts === null ? null : ts + 1, 1);
-        if (sp.echo !== undefined) {
+        if (sp.echo !== undefined || sp.echoText !== undefined) {
           const open = '<local-command-stdout>';
           const close = '</local-command-stdout>';
-          const body = `${open}${'e'.repeat(sp.echo - open.length - close.length)}${close}`;
+          const body = sp.echoText ?? `${open}${'e'.repeat((sp.echo ?? 0) - open.length - close.length)}${close}`;
           put(`e-${tag}`, 'user', null, 'harness', blobOf(`e-${tag}`, body), at + 2);
         }
         if (sp.model !== null) put(`a-${tag}`, 'assistant', sp.model ?? MODEL_A, 'model', blobOf(`a-${tag}`, [{ type: 'text', text: 'ok' }]), sp.replyTs ?? at + 3);
@@ -175,6 +182,16 @@ function addReply(p: Planted, key: string, model: string, ts: number): void {
     const top = db.prepare('SELECT max(line) AS m FROM memberships WHERE file_id = ?').get(sp.fileId) as { m: number };
     db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (?, ?, ?)').run(sp.fileId, Number(e.entry_id), Number(top.m) + 1);
     db.exec('COMMIT');
+  } finally {
+    store.closeWriter(db);
+  }
+}
+
+/** Removes rows from a planted store, as a store that lost them would stand (one statement, then closed). */
+function remove(p: Planted, sql: string, ...args: number[]): void {
+  const db = store.openWriter(p.dbFile);
+  try {
+    db.prepare(sql).run(...args);
   } finally {
     store.closeWriter(db);
   }
@@ -574,6 +591,89 @@ describe('the spike report (spec 7.5; W3 Task 1D)', () => {
       }));
       expect(A(r).lateReceipts.count).toBe(0);
       expect(A(r).multiReceipt).toBe(1);
+    });
+  });
+
+  describe('never a span dropped, never an empty cohort measured (fix round 1)', () => {
+    it('spike keeps a span whose epoch is unconfirmed: it reads leaf-absent and leaves headroom unmeasured', () => {
+      const r = run({
+        sessions: [
+          { id: 'cohort', confirmed: false, spans: [S('u1', { leaf: 'none' }), S('u2', { leaf: 'none' })] },
+          { id: 'base', confirmed: false, spans: [S('b1', { leaf: 'none' })] },
+        ],
+      });
+      expect([A(r).population.spans, A(r).population.leafAbsent]).toEqual([2, 2]);
+      expect(A(r).cutShapes.state).toBe('unmeasured');
+      expect(A(r).cutShapes.unmeasured).toEqual({ count: 2, why: { 'leaf-absent': 2 } });
+      expect(r.baseline.anthropic.population.spans).toBe(1);
+      expect(r.baseline.anthropic.cutShapes.state).toBe('unmeasured');
+      expect(A(r).summaryUnclosed.comparison.state).toBe('unmeasured');
+    });
+
+    it('spike counts a span no session can claim, and leaves every backend\'s headroom unmeasured', () => {
+      const p = plant({ sessions: [
+        { id: 'cohort', spans: [S('a', { status: 'ok' }), S('o', { status: 'ok', model: MODEL_O })] },
+        { id: 'ghost', spans: [S('g1'), S('g2', { ts: null })] },
+      ] });
+      remove(p, 'DELETE FROM epochs WHERE session_pk = ?', 2);
+      const r = spike(p);
+      expect(A(r).run.unattributed).toBe(2);
+      for (const side of [r.perBackend, r.baseline]) {
+        for (const b of ['anthropic', 'other']) expect(side[b].cutShapes.why, b).toContain('span-unattributed');
+      }
+      expect(A(r).summaryUnclosed.state).toBe('unmeasured');
+    });
+
+    it('spike reads a headroom figure over no spans as unmeasured, never 0 of 0', () => {
+      const out = run(one([S('far', { ts: UNTIL + 5 })]));
+      for (const f of ['summaryUnclosed', 'cutShapes', 'cutUntestable']) {
+        expect([A(out)[f].state, A(out)[f].of], f).toEqual(['unmeasured', 0]);
+        expect(A(out)[f].why, f).toContain('no-spans');
+      }
+      // a session that matches nothing is that report, and says how many of its ids were found
+      const none = run(one([S('a', { status: 'ok' })]), { sessions: ['nobody'] });
+      expect(A(none).run.sessions).toEqual({ named: 1, found: 0 });
+      expect(A(none).cutShapes.why).toContain('no-spans');
+    });
+
+    it('the spike arm refuses a --session that matches no session, and an empty one', () => {
+      const p = plant(one([S('t', { status: 'ok' })]));
+      const dir = mkTmp('ccrc-counters-spike-out-');
+      const argv = (out: string, ...ids: string[]): string[] => ['spike', '--db', p.dbFile, ...ids.flatMap((i) => ['--session', i]), '--since', String(SINCE), '--until', String(UNTIL), '--out', out];
+      const bad = inProcess(() => ctr.main(argv(path.join(dir, 'a.json'), 'cohort', 'nobody')));
+      expect(bad.code).toBe(2);
+      expect(bad.stderr).toMatch(/args-invalid.*1 of 2/);
+      expect(bad.stderr).not.toMatch(/nobody/);
+      expect(fs.existsSync(path.join(dir, 'a.json'))).toBe(false);
+      const empty = inProcess(() => ctr.main(argv(path.join(dir, 'b.json'), '')));
+      expect(empty.code).toBe(2);
+      expect(empty.stderr).toMatch(/args-invalid/);
+    });
+
+    it('addedP50 names a zero baseline p50 apart from an absent duration', () => {
+      const r = run({ sessions: [
+        { id: 'cohort', spans: [S('c', { status: 'ok', duration: 100 })] },
+        { id: 'base', spans: [S('b', { duration: 0 })] },
+      ] });
+      expect(A(r).durationMs.addedP50).toEqual({ state: 'unmeasured', why: 'baseline-zero' });
+    });
+
+    it('echoChars counts characters, not UTF-16 units', () => {
+      const text = `<local-command-stdout>${'\u{1F600}'.repeat(5)}</local-command-stdout>`;
+      const r = run(one([S('m', { status: 'ok', trigger: 'manual', echoText: text })]));
+      expect([...text].length).toBe(50);
+      expect(text.length).toBe(55);
+      expect(A(r).echoChars.set.value.p50).toBe(50);
+    });
+
+    it('a boundary no copy holds is labelled boundary-uncopied, not producer-unknown', () => {
+      const p = plant(one([S('s1', { status: 'ok' }), S('s2', { status: 'ok' })]));
+      remove(p, 'DELETE FROM memberships WHERE entry_id = ?', p.spans.get('s2')!.entryId);
+      const r = spike(p);
+      expect(r.perBackend.unknown.population.spans).toBe(1);
+      expect(A(r).run).toMatchObject({ uncopied: 1, producerUnknown: 0 });
+      expect(A(r).cutShapes.why).toContain('boundary-uncopied');
+      expect(A(r).cutShapes.why).not.toContain('producer-unknown');
     });
   });
 

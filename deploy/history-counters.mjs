@@ -27,7 +27,7 @@
 // brings in.
 // Its words are the driver's DRIVER_REASONS (W2-D12, W2-D59), thrown through its refuse, never a list of this file's own.
 // A refusal prints `ccrc history-counters: <word>: <detail>` on stderr and exits EXIT.REFUSED (2); a defect exits
-// EXIT.INTERNAL (1). Environment: none. main reads no process environment, and --store names the store.
+// EXIT.INTERNAL (1). Environment: none. main reads no process environment: `count` names its store with --store and `spike` with --db.
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -67,6 +67,9 @@ export const COUNTER_UNMEASURED = Object.freeze([
   'duration-absent',     // a set with no boundary duration (boundaries.duration_ms is NULL when Claude Code gave no count)
   'echo-absent',         // a manual boundary with no <local-command-stdout> row before the next boundary (G16)
   'sample-short',        // a side of O19's comparison has under O2's sample of spans: never met, the absolute counts print beside
+  'no-spans',            // a headroom figure over no span at all (nothing in range, or no session matched): never 0 of 0
+  'span-unattributed',   // a main boundary in range whose cc session no epoch row names: it joins neither side, so no headroom is measured
+  'baseline-zero',       // the added p50 over a baseline whose p50 is 0: no ratio exists
   'row-moved',           // a window row's line no longer holds the uuid measure-history.py printed (re-discovery)
   'body-unparseable',    // a turn or span body expandEntryBody answered unparseable (D-6238): it could hide a path
   'body-tombstone',      // the same, tombstone
@@ -1078,11 +1081,10 @@ function spikeStmts(db) {
       WHERE t.agent_id = '' ORDER BY b.entry_id`),
     named: db.prepare('SELECT session_pk, merged_into FROM sessions WHERE ccrc_id = ?'),
     parent: db.prepare('SELECT merged_into FROM sessions WHERE session_pk = ?'),
-    // derive's epochOf: the confirmed epoch of an unmerged family, the lowest session_pk first
-    epochOf: db.prepare(`SELECT e.session_pk AS session_pk, s.ccrc_id AS ccrc_id
-      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
-      WHERE e.cc_session_uuid = ? AND e.confirmed_ms IS NOT NULL AND s.merged_into IS NULL
-      ORDER BY e.session_pk LIMIT 1`),
+    // any epoch row of a cc session, confirmed or not: derive's epochOfUuid answers the confirmed one, and a span whose epoch is
+    // unconfirmed (derive's `waiting`) still belongs to a session
+    anyEpoch: db.prepare(`SELECT e.session_pk AS session_pk, s.ccrc_id AS ccrc_id
+      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk WHERE e.cc_session_uuid = ? ORDER BY e.session_pk LIMIT 1`),
     printed: db.prepare('SELECT 1 AS hit FROM steer_receipts WHERE (ccrc_id = ? OR cc_session_uuid = ?) AND ts_ms >= ? AND ts_ms < ? LIMIT 1'),
     copyRows: db.prepare(`SELECT m.line AS line, e.entry_id AS entry_id, e.uuid AS uuid, e.type AS type, e.provenance AS provenance,
         e.is_compact_summary AS is_compact_summary, e.ts_ms AS ts_ms, e.model AS model, e.blob_id AS blob_id,
@@ -1129,17 +1131,20 @@ function cohortRoots(s, ids) {
   for (const id of ids) {
     const rows = s.named.all(id);
     if (rows.length > 0) found += 1;
-    for (const r of rows) {
-      let pk = Number(r.session_pk);
-      for (let hop = 0; hop < 64; hop += 1) {
-        const up = s.parent.get(pk)?.merged_into;
-        if (up === null || up === undefined) break;
-        pk = Number(up);
-      }
-      roots.add(pk);
-    }
+    for (const r of rows) roots.add(rootOf(s, Number(r.session_pk)));
   }
   return { roots, found };
+}
+
+/** A session followed through `merged_into` to the unmerged row derivation attaches nodes to (bounded against a cycle). */
+function rootOf(s, sessionPk) {
+  let pk = sessionPk;
+  for (let hop = 0; hop < 64; hop += 1) {
+    const up = s.parent.get(pk)?.merged_into;
+    if (up === null || up === undefined) break;
+    pk = Number(up);
+  }
+  return pk;
 }
 
 /** The pair index lib's redactField reads, from the stored pairs alone (makePairIndex's shape: length to the set of hex
@@ -1301,7 +1306,7 @@ function echoCharsOf(rs, span) {
     const k = expandEntryBody(rs, { entry_id: Number(r.entry_id), blob_id: Number(r.blob_id) });
     if (k.state !== 'body') return { why: `body-${k.state}` };
     const text = bodyText(k.body);
-    if (text !== null && text.trimStart().startsWith(SPIKE_ECHO_OPEN)) return { chars: text.length };
+    if (text !== null && text.trimStart().startsWith(SPIKE_ECHO_OPEN)) return { chars: [...text].length };
   }
   return { why: 'echo-absent' };
 }
@@ -1309,7 +1314,7 @@ function echoCharsOf(rs, span) {
 /** A headroom figure over per-span results: each `{hit}` was read, each `{why}` was not. `runWords` are the run's
  *  contamination: any one leaves the figure unmeasured whatever the spans say (O22). The figure is measured only when
  *  neither a span nor the run is unmeasured. */
-function headFigure(results, runWords) {
+function headFigure(results, runWords, { emptyIsNoReading = true } = {}) {
   const un = newTally();
   let count = 0;
   let of = 0;
@@ -1320,7 +1325,8 @@ function headFigure(results, runWords) {
       if (r.hit) count += 1;
     }
   }
-  const why = [...new Set([...runWords, ...Object.keys(un.why)])].sort();
+  // a figure over no span at all is no reading: unmeasured, never 0 of 0
+  const why = [...new Set([...runWords, ...(emptyIsNoReading && results.length === 0 ? ['no-spans'] : []), ...Object.keys(un.why)])].sort();
   return { state: why.length === 0 ? 'measured' : 'unmeasured', why, count, of, unmeasured: un };
 }
 
@@ -1468,7 +1474,7 @@ function spikeFigures(rs, s, shared, { side, spans, untimed, runWords, run }) {
     summaryUnclosed: { ...unclosedFigure, share: { num: unclosedFigure.count, den: unclosedFigure.of } },
     cutShapes: headFigure(cuts, runWords),
     cutUntestable: headFigure(untestable, runWords),
-    analysisOnly: headFigure(analysis, []),
+    analysisOnly: headFigure(analysis, [], { emptyIsNoReading: false }),   // no headroom figure: no receipted absent leaf is a true 0
     durationMs: durations,
     echoChars: {
       set: echoSorted.length === 0 ? unmeasured(echoFirst ?? 'echo-absent') : measured({ n: echoSorted.length, p50: nearestRank(echoSorted, 50), unmeasured: echoUn }),
@@ -1498,11 +1504,22 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   /** Per side: the spans placed in range, and the ones the range cannot place. */
   const sides = { cohort: { placed: [], untimed: [] }, baseline: { placed: [], untimed: [] } };
   const printed = new Map();
+  let unattributed = 0;
   for (const b of s.mains.all()) {
     const ts = b.ts_ms === null ? null : Number(b.ts_ms);
     if (ts !== null && (ts < sinceMs || ts >= untilMs)) continue;
-    const ep = s.epochOf.get(b.cc_uuid);
-    if (ep === undefined) continue;
+    // derive's own epoch rule; a span whose epoch is not confirmed (derive's `waiting`) still belongs to its session and joins its
+    // side, reading `leaf-absent`. One no epoch row names cannot be placed on either side: counted, and it leaves every headroom
+    // figure unmeasured, never dropped
+    let ep = epochOfUuid(db, b.cc_uuid);
+    if (ep === null) {
+      const any = s.anyEpoch.get(b.cc_uuid);
+      ep = any === undefined ? null : { session_pk: rootOf(s, Number(any.session_pk)), ccrc_id: any.ccrc_id };
+    }
+    if (ep === null) {
+      unattributed += 1;
+      continue;
+    }
     const named = roots.has(Number(ep.session_pk));
     if (!named) {
       // O21 (a): a session with a steer receipt in the range was printed to, whoever owns it, so none of its spans joins the baseline
@@ -1517,15 +1534,19 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
   const sweep = tick === undefined ? { state: 'unmeasured', filesBehind: null }
     : { state: Number(tick.files_behind) === 0 ? 'caught-up' : 'behind', filesBehind: Number(tick.files_behind) };
   const cohortAll = [...sides.cohort.placed, ...sides.cohort.untimed];
-  const producerUnknown = cohortAll.filter((x) => x.backend === 'unknown').length;
+  // a boundary no copy holds has no producer to read: its own state, apart from a producer not yet stored
+  const uncopied = cohortAll.filter((x) => x.copy === null).length;
+  const producerUnknown = cohortAll.filter((x) => x.backend === 'unknown' && x.copy !== null).length;
   const run = {
-    sinceMs, untilMs, sessions: { named: sessions.length, found }, sweep, producerUnknown,
+    sinceMs, untilMs, sessions: { named: sessions.length, found }, sweep, producerUnknown, uncopied, unattributed,
     boundaryUntimed: { cohort: sides.cohort.untimed.length, baseline: sides.baseline.untimed.length },
   };
   // O22 (b): the run's contamination, each word its own state. The sweep behind and a boundary no range can place leave every
   // headroom figure unmeasured; a producer still unknown does too (it can hide a cut from either backend).
   const sweepWords = sweep.state === 'behind' ? ['sweep-behind'] : sweep.state === 'unmeasured' ? ['sweep-unmeasured'] : [];
-  const cohortWords = [...sweepWords, ...(sides.cohort.untimed.length > 0 ? ['boundary-untimed'] : []), ...(producerUnknown > 0 ? ['producer-unknown'] : [])];
+  const attributionWords = unattributed > 0 ? ['span-unattributed'] : [];
+  const cohortWords = [...sweepWords, ...attributionWords, ...(sides.cohort.untimed.length > 0 ? ['boundary-untimed'] : []),
+    ...(producerUnknown > 0 ? ['producer-unknown'] : []), ...(uncopied > 0 ? ['boundary-uncopied'] : [])];
   const perBackend = {};
   const baseline = {};
   for (const be of BACKENDS) {
@@ -1533,7 +1554,7 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     const c = pick('cohort');
     const b = pick('baseline');
     perBackend[be] = spikeFigures(rs, s, shared, { side: 'cohort', spans: c.placed, untimed: c.untimed, runWords: cohortWords, run });
-    baseline[be] = spikeFigures(rs, s, shared, { side: 'baseline', spans: b.placed, untimed: b.untimed, runWords: [...sweepWords, ...(b.untimed.length > 0 ? ['boundary-untimed'] : [])], run });
+    baseline[be] = spikeFigures(rs, s, shared, { side: 'baseline', spans: b.placed, untimed: b.untimed, runWords: [...sweepWords, ...attributionWords, ...(b.untimed.length > 0 ? ['boundary-untimed'] : [])], run });
   }
   for (const be of BACKENDS) {
     const c = perBackend[be];
@@ -1542,8 +1563,8 @@ export function spikeReport({ db, sessions, sinceMs, untilMs }) {
     // §10.7's added p50: p50(cohort) ÷ p50(baseline) − 1, as the difference over the baseline's p50; nothing adjusts for pre_tokens
     const cd = c.durationMs.all;
     const bd = b.durationMs.all;
-    c.durationMs.addedP50 = cd.state === 'measured' && bd.state === 'measured' && bd.value.p50 > 0
-      ? measured({ num: cd.value.p50 - bd.value.p50, den: bd.value.p50 }) : unmeasured('duration-absent');
+    c.durationMs.addedP50 = cd.state !== 'measured' || bd.state !== 'measured' ? unmeasured('duration-absent')
+      : bd.value.p50 === 0 ? unmeasured('baseline-zero') : measured({ num: cd.value.p50 - bd.value.p50, den: bd.value.p50 });
     const ce = c.echoChars.set;
     const bech = b.echoChars.set;
     c.echoChars.addedP50 = ce.state === 'measured' && bech.state === 'measured' ? measured(ce.value.p50 - bech.value.p50) : unmeasured('echo-absent');
@@ -1577,6 +1598,7 @@ export function spikeCommand(flags) {
   const until = spikeInt('until', flags.until);
   if (since >= until) refuse('args-invalid', '--since must be below --until');
   if (typeof flags.db !== 'string' || !path.isAbsolute(flags.db)) refuse('args-invalid', '--db names no absolute path');
+  if (flags.session.some((id) => id === '')) refuse('args-invalid', '--session wants a ccrc id, got an empty value');
   refuseUnlessFresh(flags.out);
   const rs = openCounterStore(flags.db);
   let report;
@@ -1586,6 +1608,9 @@ export function spikeCommand(flags) {
   } finally {
     rs.close();
   }
+  // a --session that matches no `sessions` row reads as an empty cohort: refused, with the counts and never an id
+  const { named, found } = report.perBackend.anthropic.run.sessions;
+  if (found < named) refuse('args-invalid', `${found} of ${named} --session ids match a session in the store`);
   const text = `${canonicalJson(report)}\n`;
   try {
     writeFileSync(path.resolve(flags.out), text, { mode: 0o600, flag: 'wx' });
