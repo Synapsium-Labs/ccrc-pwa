@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ccdSource, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-limit-watchdog-'); });
@@ -465,7 +465,7 @@ describe('the act gate (cmd_swap\'s watchdog arm)', () => {
 
   it('cmd_swap runs it for the watchdog arm and names the cause swap-auto-rescue', () => {
     expect(h.sh('CCD_SWAP_AUTO=1 CCD_SWAP_ARM=watchdog _swap_end_cause')).toBe('swap-auto-rescue');
-    expect(fs.readFileSync(path.join(__dirname, '../../ccd/ccd'), 'utf8')).toMatch(/watchdog\) +_swap_watchdog_act_gate "\$id" "\$cur" \|\| return 0 ;;/);
+    expect(ccdSource()).toMatch(/watchdog\) +_swap_watchdog_act_gate "\$id" "\$cur" \|\| return 0 ;;/);
   });
 });
 

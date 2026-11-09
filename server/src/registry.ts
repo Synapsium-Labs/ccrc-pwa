@@ -436,7 +436,19 @@ export interface SessionRecord {
    * or `unreadable` (listed, but not one of the two). Absent: no record (a spawn before that ccd). Read only when listed.
    */
   browserMcp?: BrowserMcpApplied;
+  /**
+   * `$REG/<id>.limitwait` — the limit watchdog's "no account has measured room" record (D-8123), the Waiting on you item's
+   * source: `state=open since=<epoch> reset=<epoch|-> account=<w> sign=<sign>[ choice=wait at=<epoch>]`, epoch SECONDS here
+   * (the frame converts to ms, as for `stranded`). Read only when listed, THREE-VALUED like `.stranded`: an item, `null`
+   * (listed and measured: closed, empty or malformed, so no item), or `'unreadable'` (listed, its bytes did not come back:
+   * not an item, because `since`, `reset` and `account` are unknown, and not clean, so the row cache cannot stretch one
+   * glitch to its bound). Absent: the file is not listed.
+   */
+  limitWait?: LimitWaitMark | 'unreadable' | null;
 }
+
+/** The OPEN limitwait record, as the registry reads it (epoch seconds). `waiting`: the operator chose "Wait until reset". */
+export interface LimitWaitMark { since: number; reset: number | null; account: string; waiting: boolean }
 
 /**
  * The accessor an identity-sensitive consumer must go through to read
@@ -672,6 +684,18 @@ export function browserMcpOf(read: MeasuredRead | null): BrowserMcpApplied | nul
   return read.ok && (read.content === 'on' || read.content === 'off') ? read.content : 'unreadable';
 }
 
+/** `$REG/<id>.limitwait`'s ONE reader (D-8123): `null` for an unlisted field, one that vanished between the listing and the read, a closed record, an empty one or one that does
+ *  not match the whole line grammar ccd writes (a torn or hand-edited record is matched, never evaluated); `'unreadable'` for a
+ *  listed field whose bytes did not come back. The grammar is `_limitwait_open`'s and `_limitwait_choose`'s. */
+const LIMIT_WAIT_LINE = /^state=open since=([0-9]{1,12}) reset=([0-9]{1,12}|-) account=([A-Za-z0-9._-]+) sign=(?:pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12})?$/;
+export function limitWaitOf(read: MeasuredRead | null): LimitWaitMark | null | 'unreadable' {
+  if (read === null) return null;
+  if (!read.ok) return read.reason === 'absent' ? null : 'unreadable';   // listed, then gone before the read: no record
+  const m = LIMIT_WAIT_LINE.exec(read.content.replace(/\n$/, ''));
+  if (m === null) return null;
+  return { since: Number(m[1]), reset: m[2] === '-' ? null : Number(m[2]), account: m[3]!, waiting: m[4] !== undefined };
+}
+
 /** `$REG/<id>.childshell`'s ONE reader (plan Task 15, D-5391), the same three readings. */
 export function childShellOf(read: MeasuredRead | null): ChildShellMark {
   if (read === null) return { kind: 'none' };
@@ -881,7 +905,7 @@ async function buildRecord(
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
     routeFieldReads, degradedRead, inertRead, childRead, lastEndRaw, denyRead, shellRead, hibernatedRead,
-    namedRead, titleRaw, browserRead] = await Promise.all([
+    namedRead, titleRaw, browserRead, limitWaitRead] = await Promise.all([
     // The identity triple (`wrapper`, `workdir`, `uuid`) and `hold` are read whatever the listing says (D-6388): the
     // plan (C1) rules them unconditional. Every other field's one-listing window is accepted: its presence is as of
     // the listing, and a file created after it is seen on the next read.
@@ -931,6 +955,8 @@ async function buildRecord(
     listedField('title'),
     // D-8121: the spawn's browser MCP record, read only when listed — a row spawned before it costs no read.
     listedOnlyMeasured('browsermcp'),
+    // D-8123: the limit watchdog's no-room record, read only when listed — a row that never had one costs no read.
+    listedOnlyMeasured('limitwait'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.has(id + '.uuid')`
@@ -1264,6 +1290,7 @@ async function buildRecord(
     ...(denyRead === null ? {} : { denySettings: denySettingsOf(denyRead) }),
     ...(shellRead === null ? {} : { childShell: childShellOf(shellRead) }),
     ...(browserRead === null ? {} : { browserMcp: browserMcpOf(browserRead)! }),
+    ...(limitWaitRead === null ? {} : { limitWait: limitWaitOf(limitWaitRead) }),
   };
 }
 
@@ -1684,7 +1711,7 @@ export function parseHibernated(raw: string | null): number | null {
 /** A record NO field of which is unmeasured or unreadable (spec §2.1: "no unmeasured or unreadable field"): nothing
  *  unmeasured, no lifecycle field unmeasured, a project and a branch that did not read as `unreadable` (a MEASURED
  *  absence, a main checkout's ordinary state, is clean), no plain field (`listedField`) that failed to read, no unreadable route field, a readable hold,
- *  substrate and strand marker, and no `unreadable` child, deny-settings, child-shell or browser MCP mark. The one predicate for "may be reused or cached" (the row cache uses this too).
+ *  substrate and strand marker, and no `unreadable` child, deny-settings, child-shell, browser MCP or limit-wait mark. The one predicate for "may be reused or cached" (the row cache uses this too).
  *  `namedByOperator` is a boolean that is true for a readable AND an unreadable operator-name read, so the record
  *  cannot tell them apart and no clause can be written for it. */
 export function isCleanRecord(rec: SessionRecord): boolean {
@@ -1700,5 +1727,6 @@ export function isCleanRecord(rec: SessionRecord): boolean {
     && rec.child.kind !== 'unreadable'
     && rec.denySettings?.kind !== 'unreadable'
     && rec.childShell?.kind !== 'unreadable'
-    && rec.browserMcp !== 'unreadable';
+    && rec.browserMcp !== 'unreadable'
+    && rec.limitWait !== 'unreadable';
 }

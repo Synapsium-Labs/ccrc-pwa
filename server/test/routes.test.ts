@@ -343,6 +343,7 @@ describe('knownId route census', () => {
       { method: 'POST', routePath: '/api/sessions/:id/archive', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/restore', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/forget', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/limit-wait', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/hold', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/release', args: 'id' },
       // Named workspaces S9: the rename route, behind the same gate as every other write to a named session.
@@ -353,8 +354,9 @@ describe('knownId route census', () => {
     // W7 C7p (D-7194): 22 -> 21 and 18 -> 17 POST with `POST /api/sessions/:id/ask` retired, 20 and 16 with
     // `/dialog/multi`, 19 and 15 with `/dialog/text`, 18 and 14 with `/dialog`; the operator's answers are gated by the
     // same `knownId` inside the family's door (`coord/routes.ts`, through its wiring).
-    expect(requestGates).toHaveLength(18);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(14);
+    // D-8123: 18 -> 19 and 14 -> 15 POST with `POST /api/sessions/:id/limit-wait`, gated by `knownId` as `/forget` is.
+    expect(requestGates).toHaveLength(19);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(15);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');

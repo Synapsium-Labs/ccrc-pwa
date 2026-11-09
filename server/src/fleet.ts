@@ -950,6 +950,12 @@ export async function assembleFleetWithPanePids(
       stranded: r.stranded === null
         ? null
         : { at: r.stranded.at * 1000, reason: r.stranded.reason },
+      // D-8123: the limit watchdog's no-room record, seconds→MS at THIS seam like `stranded`. A closed record, an absent file
+      // and a listed one that would not read are all null: an item with unknown `since`, `reset` and `account` is not shown.
+      limitWait: r.limitWait === undefined || r.limitWait === null || r.limitWait === 'unreadable'
+        ? null
+        : { since: r.limitWait.since * 1000, reset: r.limitWait.reset === null ? null : r.limitWait.reset * 1000,
+            account: r.limitWait.account, waiting: r.limitWait.waiting },
       // Same seconds→MS conversion, at THIS seam only, like `stoppedBy` and
       // `swapBlocked` above. An unreadable marker's fail-shut `{at: 0}` rides
       // through as 0 (not a real 1970 stamp — the PWA renders text-only when

@@ -11,10 +11,8 @@ import { ccdSource } from './ccdWsHelpers.js';
 /** The functions that decide or perform a limit rescue without a supervisor tick, or that move a session off a limit. */
 const GUARDED = [
   'cmd_limit_watchdog', '_watchdog_one', '_watchdog_sign_to', '_swap_watchdog_act_gate', '_watchdog_resume_here',
-  '_watchdog_resume_run', '_limitwait_open', '_limitwait_close', '_wake_ceiling_move',
+  '_watchdog_resume_run', '_limitwait_open', '_limitwait_close', '_limitwait_choose', 'cmd_limit_wait', '_wake_ceiling_move',
 ];
-/** Added by Task 10; checked once it exists. */
-const WHEN_PRESENT = ['cmd_limit_wait'];
 
 /** The body of `name() { … }` at column 0, up to the closing brace at column 0. */
 function body(src: string, name: string): string | null {
@@ -34,13 +32,6 @@ describe('the limit-rescue code sends no key', () => {
     expect(b!.length, `${name} is empty`).toBeGreaterThan(40);
     // Comments may NAME the forbidden words; only code lines count.
     const code = b!.split('\n').filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/\s#\s.*$/, '')).join('\n');
-    expect(code).not.toMatch(SENDS);
-  });
-
-  it.each(WHEN_PRESENT)('%s, when it exists, contains no key sender', (name) => {
-    const b = body(src, name);
-    if (b === null) return;
-    const code = b.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     expect(code).not.toMatch(SENDS);
   });
 

@@ -43,7 +43,7 @@ export const fleetSession = (over: Partial<FleetSession> = {}): FleetSession => 
   hookState: null, askSummary: null, subagents: null, background: null, withCoordinator: null, lastEnd: null, hibernatedAt: null,
   graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, limitWait: null,
   substrate: null, started: true, spawnState: null, ask: null, usage: null,
   boardProject: null, route: null, child: { kind: 'none' }, role: null, releasedFrom: null,
   ...over,

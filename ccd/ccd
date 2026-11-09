@@ -9405,6 +9405,7 @@ EOF
   echo ws-title-v1; echo ws-wrapper-v1; echo ws-title   # the verb itself (S9), which the server offers Rename on; it rides here, not in the list above
   echo refusal-v1   # #560: `_lc_refuse` prints `ccd-refusal: <act> <word>` on stderr before its die; the server reads it first and keeps its prose matchers as the fallback
   echo limit-watchdog   # D-8123: the fleet limit watchdog's one pass, run by ccd-limit-watchdog.timer; never sent by the server
+  echo limit-wait   # D-8123: the operator's "Wait until reset" choice on an open limitwait record; sent by POST /api/sessions/:id/limit-wait, behind `verbSupported`
   echo swap-busy-v1; echo hibernate  # cmd_swap re-measures at the act and takes --interrupt (D-5240): the server sends the flag only behind this word; `hibernate` (D-5242) is a verb, sent only behind `verbSupported`
 }
 
@@ -30660,6 +30661,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # is falsified by the session having just moved.
   _strand_clear "$id"
   _rescuewait_close "$id" swap   # and so is a rescue wait, whoever asked for the move (session-continuity §5.4)
+  _limitwait_close "$id" swap    # and the watchdog's no-room record: the session is on another account now (D-8123)
   # ONCE, AT THE TAIL. The guard above runs a SECOND time when the swap
   # re-execs itself detached, so a line written there would tell the operator
   # they crossed twice.
@@ -31097,6 +31099,38 @@ _limitwait_close() {   # id end-word — close an open record: `state=closed` wi
   _now_s_to now
   _reg_set "$id" limitwait "${rec/state=open/state=closed} end=$end until=$now" || return 0
   return 0
+}
+
+_limitwait_choose() {   # id -> record `choice=wait at=<now>` on an OPEN limitwait. rc 0 recorded (or already chosen) | 1 not open | 2 could not write
+  # The second and last write to `$REG/<id>.limitwait` (the first is `_limitwait_open`, the end is `_limitwait_close`): the
+  # operator's own tap, behind `ccd limit-wait`. A record that is not exactly `state=open` (closed by a landing or by a pass
+  # with no sign, absent, or a hand-edited line) is refused, never evaluated. The first choice stands: a second tap keeps its time.
+  local id="$1" rec="" now re='^state=open since=[0-9]{1,12} reset=([0-9]{1,12}|-) account=[A-Za-z0-9._-]+ sign=(pane|banner|menu|transcript|account)( choice=wait at=[0-9]{1,12})?$'
+  _reg_get_to rec "$id" limitwait || return 1
+  [[ "$rec" =~ $re ]] || return 1   # the whole line is matched, never evaluated: a torn or hand-edited record is no record
+  [[ -n "${BASH_REMATCH[3]}" ]] && return 0
+  _now_s_to now
+  _reg_set "$id" limitwait "$rec choice=wait at=$now" || return 2
+  echo "$(date '+%F %T') limit-wait $id: choice=wait account=$(_rw_field "$rec" account) sign=$(_rw_field "$rec" sign)" >> "$REG/swap.log"
+  return 0
+}
+
+cmd_limit_wait() {   # <id> — the operator chose "Wait until reset" on a session the watchdog found no room for (D-8123)
+  # Granted to the agent as the bare `['limit-wait']` prefix (agent/src/whitelist.ts, `forget`'s shape), where tokens after the
+  # prefix are unconstrained, so the arity rule is the only thing bounding what a caller can put here. The route that sends it is
+  # session-gated like the swap route; it moves nothing and sends no key. The watchdog reads the choice on its next pass
+  # (`_watchdog_one`): it forces no move for this session, and restarts it in place once its reset has passed
+  # (`_watchdog_resume_here`). Refused with `not-waiting` unless the record is open, so a tap that arrives after a landing is
+  # told so, never recorded against nothing.
+  [[ $# -eq 1 ]] || die "usage: ccd limit-wait <id>"
+  local id="$1" rc=0
+  [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "limit-wait: '$id' is not a session id"
+  _limitwait_choose "$id" || rc=$?
+  case "$rc" in
+    0) echo "limit-wait: $id waits until the limit resets; the watchdog moves nothing and restarts it once its account has room" ;;
+    1) die "not-waiting: $id has no open limit-wait record (it moved, or its limit cleared)" ;;
+    *) die "limit-wait: could not record the choice for $id" ;;
+  esac
 }
 
 _watchdog_sign_to() {   # var id -> var = pane|banner|menu|transcript|account, or "" when the session shows no limit sign (rc 0 always)
@@ -46965,6 +46999,7 @@ case "${1:-}" in
   scope-sweep-busy) shift; cmd_scope_sweep_busy "$@" ;;
   delegation-adopt) shift; cmd_delegation_adopt "$@" ;;
   limit-watchdog) shift; cmd_limit_watchdog "$@" ;;
+  limit-wait) shift; cmd_limit_wait "$@" ;;
   win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
@@ -46979,6 +47014,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|pr-open|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

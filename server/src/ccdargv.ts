@@ -451,6 +451,11 @@ export const CCD_ARGV = {
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */
   forget:    (id: string) => argv(['forget', id]),
+  /** The operator's "Wait until reset" on a session the limit watchdog found no room for (D-8123): ccd appends
+   *  `choice=wait` to the session's OPEN `$REG/<id>.limitwait` record and refuses anything else `not-waiting`. ONE
+   *  positional, the id, `forget`'s shape; it moves nothing and sends no key. Sent only behind `verbSupported` (the box's
+   *  `ccd caps` lists `limit-wait`). */
+  limitWait: (id: string) => argv(['limit-wait', id]),
   /** Put a long-idle session to sleep (`hibernate-long-idle-sessions` (D-5242)): ccd re-measures box-local idle at the
    *  act (the live word, the pane, a draft, the turn marker's `bg` and `crons`, a hold, an opt-out, a fresh swap and an
    *  attached terminal) and refuses `session-busy: <reason>` at exit 3 otherwise, touching nothing. ONE positional, the
@@ -1459,6 +1464,8 @@ export const CCD_CAN = {
   start: 'none', enable: 'none', startCross: 'none', enableCross: 'none', ensure: 'none',
   stopId: 'none', stopPair: 'none',
   forget: verbRow('forget'),
+  // D-8123: a new verb, gated as `forget` is: an older ccd that does not list it is refused 501, never sent a usage error.
+  limitWait: verbRow('limit-wait'),
   hibernate: verbRow('hibernate'),
   swap: 'none', swapCross: 'none', swapInterrupt: 'none', swapCrossInterrupt: 'none',
   wsAdd: 'none', wsAddWorker: 'none',

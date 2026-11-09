@@ -257,7 +257,9 @@ describe('the scanner is looking at something', () => {
     // `POST /api/questions/:id/answer` answers it.
     // 57 since the project add's `POST /api/projects` (add-project spec 2026-11-04 §4): session-gated when armed, NOT
     // EXEMPT, no box token.
-    expect(scanRoutes('server.ts').length).toBe(57);
+    // 58 since `POST /api/sessions/:id/limit-wait` (D-8123, the operator's "Wait until reset" on a limit the watchdog found no room
+    // for): session-gated like the swap route, NOT EXEMPT, no box token.
+    expect(scanRoutes('server.ts').length).toBe(58);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -553,7 +555,9 @@ describe('the scanner is looking at something', () => {
     // 190 since `GET`/`POST /api/coord/delegation-adopt` (D-8112), session-gated and NOT EXEMPT, no box token: the HTTP half
     // 185 -> 187, the gated count 115 -> 117, the exempt-HTTP count stays 70.
     // 191 since D-8075's `GET /api/programmes`: session-gated, NOT EXEMPT: the HTTP half 187 -> 188.
-    expect(ROUTES.length).toBe(191);
+    // 192 since `POST /api/sessions/:id/limit-wait` (D-8123), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 188 -> 189, the gated count 117 -> 118, the exempt-HTTP count stays 70.
+    expect(ROUTES.length).toBe(192);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`

@@ -521,6 +521,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     stopId: ['stop', '--surface', 'pwa', 'demo-quiet-basin'],
     stopPair: ['stop', '--surface', 'pwa', 'claude', 'demo'],
     forget: ['forget', 'claude-acme-demo'],
+    limitWait: ['limit-wait', 'claude-acme-demo'],
     hibernate: ['hibernate', 'demo-quiet-basin', '--surface', 'agent', '--actor', 'sweep:hibernate'],
     swap: ['swap', 'demo-quiet-basin', 'claude9'],
     // LEADING flag, before the positionals — the token order is

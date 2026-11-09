@@ -469,6 +469,17 @@ export interface FleetSession {
    *  onto and "no strand recorded" over a flagged row is the direction that
    *  makes the loud cell silent. */
   readonly stranded: { readonly at: number; readonly reason: string } | null;
+  /** The limit watchdog's "no account has measured room" record — `$REG/<id>.limitwait` (D-8123), the Waiting on you item's
+   *  source: the session shows a usage-limit sign and the watchdog found no account to move it to. `since` and `reset` are
+   *  epoch MS (converted from the registry's seconds in `fleet.ts`, like `stranded.at`); `reset` is null when neither the
+   *  transcript's banner nor the account's window states one. `account` is the wrapper at the limit. `waiting` is true once
+   *  the operator chose "Wait until reset" (`POST /api/sessions/:id/limit-wait`); the row then reads "Waiting until HH:MM"
+   *  and keeps "Swap to…". Null when no record stands (closed by a landing or by a pass with no sign) and for a record the
+   *  server could not read: an item with unknown fields would be a fabricated fact.
+   *
+   *  `reviveFleetSession`: absent → null (an older server's frame, or a snapshot from before the field), and a present value
+   *  this build cannot read → null, because it is a display line that gates nothing server-side. */
+  readonly limitWait: { readonly since: number; readonly reset: number | null; readonly account: string; readonly waiting: boolean } | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -2941,6 +2952,20 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
  *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
  *  Absent → null (an older snapshot predates the axis); present-but-malformed
  *  rejects the session. */
+/** D-8123: `FleetSession.limitWait` off raw JSON. Absent or null → null (an older server); a value that is not exactly the
+ *  four-field shape → null, never a rejected session: the record is the Waiting on you row's source and a row the build cannot
+ *  draw is better absent than half-drawn. */
+const reviveLimitWait = (o: RawObj, k: string): { since: number; reset: number | null; account: string; waiting: boolean } | null => {
+  const v = o[k];
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null;
+  const s = v as RawObj;
+  const since = s['since'], reset = s['reset'], account = s['account'], waiting = s['waiting'];
+  if (typeof since !== 'number' || !Number.isFinite(since)) return null;
+  if (reset !== null && (typeof reset !== 'number' || !Number.isFinite(reset))) return null;
+  if (typeof account !== 'string' || account === '' || typeof waiting !== 'boolean') return null;
+  return { since, reset, account, waiting };
+};
+
 const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;
@@ -3429,6 +3454,7 @@ export function reviveFleetSession(raw: unknown, unnamedSpawnWord: UnnamedSpawnW
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
       stranded: reviveStranded(o, 'stranded'),
+      limitWait: reviveLimitWait(o, 'limitWait'),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light
