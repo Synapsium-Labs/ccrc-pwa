@@ -9705,11 +9705,16 @@ function cardLeafOf(text) {
  *    another leaf                → consumed: write at end-of-file, else delete;
  *    no card line, unreadable    → write at end-of-file, else delete;
  *    a skip                      → delete; consumed when it is a fork skip whose plain id the file's leaf no
- *                                  longer prefixes. */
-export function decideCardFile({ current, prediction, atEof }) {
+ *                                  longer prefixes.
+ *  `artifact: 'steer'` (W3 Task 1B) applies the same arms to the steer file: its leaf is `steerLeafOf`'s, the whole id, and
+ *  `prediction.line` is the steer text the writer composed for the prediction. The default keeps every card call as it was. */
+export function decideCardFile({ current, prediction, atEof, artifact = 'card' }) {
+  if (artifact !== 'card' && artifact !== 'steer') throw new TypeError(`decideCardFile: not an artifact: ${JSON.stringify(artifact)}`);
   const present = current.state !== 'absent';
   const text = current.state === 'value' ? current.value.replace(/\n$/, '') : null;
-  const was = text === null ? null : cardLeafOf(text);
+  // The steer file names its leaf whole (an id), the card by a display prefix; both are compared by `startsWith` below, and
+  // `prediction.line` is the artifact's own text (the steer file's is what the writer composed for the prediction).
+  const was = text === null ? null : artifact === 'steer' ? steerLeafOf(text) : cardLeafOf(text);
   if (prediction.act !== 'write') {
     const moved = was !== null && typeof prediction.plainLeafId === 'string' && !prediction.plainLeafId.startsWith(was);
     return { act: present ? 'delete' : 'none', consumed: moved };
@@ -9744,6 +9749,46 @@ export function decideCardGenFile({ current, generation, card, mayWrite }) {
 export function cardGenFileOf(home, id, uuid) {
   if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`cardGenFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
   return `${cardDirOf(home, id)}/${uuid}.gen`;
+}
+
+// ── The steer file, the card step's second artifact (W3 Task 1B; spec 2026-10-05 §7.1, §9.4) ───────────────────────────────
+/** `~/.ccrc/history/steer/<id>/<uuid>.txt`: the steer file the sweep writes for a session's next compaction. The directory
+ *  also holds, beside the id directories, `steer/.lanes/` (the lane map, Task 3's): a dot-leading name is never a session id. */
+export const STEER_DIR = 'steer';
+
+/** Whether a name is a session id the steer directory may hold: idOk, and no leading dot, so `steer/.lanes` is never read as
+ *  one (idOk's grammar admits a dot, and the card directory has no such sibling). */
+export function steerIdOk(id) {
+  return idOk(id) && !id.startsWith('.');
+}
+
+/** `~/.ccrc/history/steer/<id>`. The id passes steerIdOk before the path exists, as cardDirOf's passes idOk. */
+export function steerDirOf(home, id) {
+  if (!steerIdOk(id)) throw new TypeError(`steerDirOf: not a session id: ${JSON.stringify(id)}`);
+  return `${historyPaths(home).root}/${STEER_DIR}/${id}`;
+}
+
+/** `~/.ccrc/history/steer/<id>/<uuid>.txt`: one session's steer file, keyed on the uuid the hook reads as `psid`. Checked like
+ *  cardFileOf (the id by steerIdOk, the uuid by UUID_RE, before any path is formed). */
+export function steerFileOf(home, id, uuid) {
+  if (typeof uuid !== 'string' || !UUID_RE.test(uuid)) throw new TypeError(`steerFileOf: not a session uuid: ${JSON.stringify(uuid)}`);
+  return `${steerDirOf(home, id)}/${uuid}.txt`;
+}
+
+const STEER_LEAF_LINE_RE = /^<ccrc-leaf id="(L[0-9a-f]{20})" v="1">$/;
+
+/** The leaf id a steer file names: the `id` of its `<ccrc-leaf` line, and only when the file's first line is the template's
+ *  (STEER_FIRST_LINE), so a file that is not one of ours, or the generic variant (no id), names none. The match is per line,
+ *  so the text may keep or lose its one trailing LF. */
+export function steerLeafOf(text) {
+  if (typeof text !== 'string') return null;
+  const lines = text.split('\n');
+  if (lines[0] !== STEER_FIRST_LINE) return null;
+  for (const line of lines) {
+    const m = STEER_LEAF_LINE_RE.exec(line);
+    if (m !== null) return m[1];
+  }
+  return null;
 }
 
 /** The rows after a boundary, in its holding copy, that the delivery measure reads for the SessionStart attachment

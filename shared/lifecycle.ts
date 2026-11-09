@@ -163,6 +163,15 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['ccd/history/sweep.mjs (through card.mjs)'],
     collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the prediction is ingested, or when the id\'s next prediction names another uuid; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days, the record included)',
     bound: 'one prediction per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=512 B per session', ruling: null },
+  // ccrc history, W3-1 (spec 2026-10-05 §7.1, §9.4): the steer file, a second artifact of the card's per-session step. The sweep
+  // writes one per session id through card.mjs on the card's own lifecycle (decided by the same lib deciders), deletes it once
+  // the boundary that consumed it is ingested, withdraws it on a pass that runs no card step, and collects it with its purged
+  // session. The hook only reads it. `steer/.lanes/<wrapper>` is the lane map, which a later W3 task writes and whose own
+  // collection (a lane file whose account left the roster) that task adds to this row; `steer/.lanes/` is never entered here.
+  { name: 'history-steer-files', root: '~/.ccrc/history/steer/<id>/, and the lane map steer/.lanes/<wrapper>', pattern: 'R',
+    creators: ['ccd/history/sweep.mjs (through card.mjs)'],
+    collector: 'ccd-history-sweep (deleted on consumption: when the boundary that consumed the file is ingested, or when the id\'s next prediction names another leaf; withdrawn by a pass that runs no card step; the files of purged sessions after 7 days)',
+    bound: 'one steer file per session id, until consumed or withdrawn, or 7 days after its session is purged', tier: '<=8 KB per session', ruling: null },
   // ccrc history, W2-4 (spec 2026-10-05 §9.4, §10.2; W2-D9, W2-D53): the replay driver's --out. The operator names it;
   // the driver creates it 0700 under umask 077 with its marker, or reuses one that still passes every check, so a
   // stopped batch resumes. Nothing in the tree removes it: it holds one W2 run's evidence until the decision is recorded.

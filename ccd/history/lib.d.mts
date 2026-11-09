@@ -800,6 +800,12 @@ export function quoteGist(gist: string, pairIdx: PairIndex, max?: number): strin
 export function nodeRangeText(earliestMs: number | null, latestMs: number | null): string;
 export interface SteerPrev { id: string; range: string; kind: string; status?: string | undefined; gist: string; flag: boolean }
 export function composeSteerFile(i: { leafId: string; prev: SteerPrev | null; children: readonly unknown[]; pairIdx: PairIndex }): { text: string; bytes: number };
+// --- W3 Task 1B: the steer file on the card's lifecycle (spec §7.1, §9.4)
+export const STEER_DIR: 'steer';
+export function steerIdOk(id: string): boolean;
+export function steerDirOf(home: string, id: string): string;
+export function steerFileOf(home: string, id: string, uuid: string): string;
+export function steerLeafOf(text: string): string | null;
 export function gistSha(gist: string): string;
 export interface Block {
   kind: 'leaf' | 'node'; attrs: Record<string, string>; gist: string | null; expand: string | null;
@@ -1100,7 +1106,7 @@ export type CardPrediction =
   | { act: 'skip'; reason: 'no-epoch' | 'no-rows' };
 export function predictedSpanStart(i: { firstRowUuid: string | null; lastBoundary: CardBoundary | null }): string | null;
 export function planCardPrediction(i: CardPredictionInputs): CardPrediction;
-export function decideCardFile(i: { current: Presence<string>; prediction: CardPrediction; atEof: boolean }):
+export function decideCardFile(i: { current: Presence<string>; prediction: CardPrediction; atEof: boolean; artifact?: 'card' | 'steer' }):
   { act: 'keep' | 'write' | 'delete' | 'none'; consumed: boolean };
 export function decideCardGenFile(i: {
   current: Presence<string>; generation: string; card: 'keep' | 'write' | 'delete' | 'none'; mayWrite: boolean;

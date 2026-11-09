@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import {
   STEER_LEAF_TEMPLATE, STEER_FIRST_LINE, STEER_GENERIC_TEXT, PREV_GIST_MAX, STEER_FILE_MAX, PARENT_ADDON_MAX,
-  escapeArchive, quoteGist, nodeRangeText, composeSteerFile, makePairIndex, secretPairs, historyPaths,
+  escapeArchive, quoteGist, nodeRangeText, composeSteerFile, makePairIndex, secretPairs, historyPaths, leafId,
   type SteerPrev,
 } from '../../ccd/history/lib.mjs';
 import * as H from './historyHelpers.js';
@@ -166,5 +166,186 @@ describe.skipIf(process.platform === 'darwin')('nodeRangeText parity with the tr
     expect(line, r.stdout).toBeDefined();
     expect(line).toContain(` ${nodeRangeText(EARLY, LATE)} `);
     expect(nodeRangeText(EARLY, LATE)).toBe('2026-10-29T07:05Z..2026-10-29T09:40Z');
+  });
+});
+
+// ===========================================================================
+// W3 Task 1B: the receipt-side characterizations (spec §7.4 item 2; plan Review Focus 3, O13, O23). Each runs REAL sweep
+// ticks over a fixture HOME, as history-derive.test.ts does, and pins what today's drain, `pickReceipt` and `leafFields`
+// answer. None of them touches the card step, so each is green before Task 1B's code exists: they are CHARACTERIZATIONS
+// of W1-B2's merged association, which O7's ruling (a) keeps and O13's (d) and O23's (d) with (b) read in Tasks 1D and 2.
+// ===========================================================================
+describe.skipIf(process.platform === 'darwin')('what a steer receipt does to a span today (spec 7.4 item 2; W3 Task 1B)', () => {
+  const SLUG = '-home-u-worktrees-p-steer-demo';
+  const GEN = '0189abcd-1234-4678-9abc-00000000a5b1';
+  const HOUR = 3_600_000;
+  const DAYMS = 86_400_000;
+  type Seq = ReturnType<typeof FX.compactionSequence>;
+  const sidS = (n: number): string => `0189abcd-1234-4678-9abc-${n.toString(16).padStart(12, '0')}`;
+  const firstUuid = (s: Seq): string => String(s.rows[0]!['uuid']);
+  const rowMs = (s: Seq, uuid: string): number => Date.parse(String(s.rows.find((r) => r['uuid'] === uuid)!['timestamp']));
+
+  /** One session: its registry rows, its transcript, and the SessionStart(startup) line the hook spools. */
+  function plantS(box: H.HistoryBox, id: string, uuid: string, rows: readonly FX.Row[]): void {
+    H.plantSession(box, id, { uuid, generation: GEN, project: 'demo', workdir: '/home/u/worktrees/p/steer-demo' });
+    H.plantTranscript(box, 'claude', SLUG, uuid, [...rows]);
+    H.spoolLine(box, id, { v: 1, ev: 'SessionStart', id, sid: uuid, src: 'startup', reg: uuid, gen: GEN });
+  }
+  /** Scheduled passes: the first makes the store and renames the spool, the next drains and derives, the rest let every leaf meet its readiness. */
+  function settleS(box: H.HistoryBox, passes = 4): void {
+    for (let i = 0; i < passes; i += 1) {
+      const r = H.runSweep(box);
+      expect(r.code, `${r.stderr}${r.stdout}`).toBe(0);
+    }
+  }
+  function qS<T>(box: H.HistoryBox, sql: string, ...args: (string | number)[]): T[] {
+    const db = H.openStoreRO(box);
+    try { return db.prepare(sql).all(...args) as unknown as T[]; } finally { db.close(); }
+  }
+  interface LeafS { node_id: string; kind: string; status: string; gist: string | null; boundary_ms: number }
+  const leavesS = (box: H.HistoryBox, uuid: string): LeafS[] => qS<LeafS>(box,
+    `SELECT n.node_id, n.kind, n.status, n.gist, e.ts_ms AS boundary_ms FROM nodes n
+     JOIN boundaries b ON b.entry_id = n.boundary_entry_id JOIN entries e ON e.entry_id = b.entry_id
+     JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE t.cc_session_uuid = ? AND n.depth = 0 ORDER BY b.ord`, uuid);
+  /** A summary that ends in one steered block, whose gist is its own (so no leaf reads as a carried copy). */
+  const withBlock = (id: string | undefined, gist: string): string => [
+    '<summary>', '1. Primary Request and Intent:', '   A steering fixture.', '</summary>',
+    FX.steeredBlock({ id, gist, expand: 'steering, receipts', refs: 'server/test/history-steer.test.ts' }),
+  ].join('\n');
+  /** The sequence, built twice: the first build fixes each leaf's id (the uuids depend on the seed and the shape alone), the
+   *  second puts the id the receipt will name into the summary's block. `blockFor(k, ids)` answers summary k's text. */
+  function sequenceWithIds(o: { n: number; seed: number; uuid: string; startMs: number }, ccrcId: string,
+    blockFor: (k: number, ids: readonly string[]) => string | null): { seq: Seq; ids: string[] } {
+    const probe = FX.compactionSequence({ n: o.n, trigger: 'manual', seed: o.seed, sessionId: o.uuid, startMs: o.startMs });
+    const ids = [leafId(ccrcId, o.uuid, firstUuid(probe)), ...probe.headUuids.slice(0, o.n - 1).map((h) => leafId(ccrcId, o.uuid, h))];
+    const seq = FX.compactionSequence({
+      n: o.n, trigger: 'manual', seed: o.seed, sessionId: o.uuid, startMs: o.startMs,
+      summaryText: (k) => blockFor(k, ids) ?? FX.fixtureSummaryText(k),
+    });
+    expect(seq.boundaryUuids, 'the second build mints the same uuids').toEqual(probe.boundaryUuids);
+    return { seq, ids };
+  }
+  /** Rewrites the rows' times: rows before `cutIdx` end an hour ago, rows from it on start an hour from now, each 1 s after the one before. */
+  function retime(rows: readonly FX.Row[], cutIdx: number): FX.Row[] {
+    const now = Date.now();
+    return rows.map((r, i) => ({ ...r, timestamp: new Date(i < cutIdx ? now - HOUR + i * 1000 : now + HOUR + (i - cutIdx) * 1000).toISOString() }));
+  }
+  const spoolSteer = (box: H.HistoryBox, id: string, uuid: string, leaf: string, ts?: number): void => {
+    H.spoolLine(box, id, { v: 1, ev: 'steer', id, sid: uuid, leaf, ...(ts === undefined ? {} : { ts }) });
+  };
+
+  it('PX5, end to end: a requested span whose block carries a wrong id is degraded id-mismatch, data kept, computed id assigned', () => {
+    const box = H.makeHistoryBox('ccrc-hist-steer-px5-');
+    const [ID, U] = ['steer-px5', sidS(0x5a1)];
+    const GIST = 'The block names another leaf, so the receipt marks it degraded and keeps its data.';
+    const WRONG = `L${'f'.repeat(20)}`;
+    const { seq, ids } = sequenceWithIds({ n: 1, seed: 0x5a1, uuid: U, startMs: Date.now() - DAYMS }, ID, () => withBlock(WRONG, GIST));
+    plantS(box, ID, U, seq.rows);
+    spoolSteer(box, ID, U, ids[0]!, rowMs(seq, seq.boundaryUuids[0]!) - 500);   // the receipt names the COMPUTED id
+    settleS(box);
+    const [leaf] = leavesS(box, U);
+    expect(leaf, 'one leaf').toBeDefined();
+    expect({ node_id: leaf!.node_id, kind: leaf!.kind, status: leaf!.status, gist: leaf!.gist })
+      .toEqual({ node_id: ids[0], kind: 'steered_leaf', status: 'degraded', gist: GIST });
+    const c = H.counters(box);
+    expect(c['id_mismatch']).toBe(1);
+    expect(c['leaf_reason:id-mismatch:anthropic']).toBe(1);
+  }, 240_000);
+
+  it('a stale print leaves its span not-requested (Review Focus 3): two receipts name span 1\'s id, and span 2 reads not-requested with no receipt', () => {
+    const box = H.makeHistoryBox('ccrc-hist-steer-stale-');
+    const [ID, U] = ['steer-stale', sidS(0x5a2)];
+    const { seq, ids } = sequenceWithIds({ n: 2, seed: 0x5a2, uuid: U, startMs: Date.now() - DAYMS }, ID,
+      (k, all) => withBlock(all[0], `Stale print fixture, span ${k + 1}: the model copied the first span's id both times.`));
+    plantS(box, ID, U, seq.rows);
+    // Both compactions printed span 1's id (the sweep had not re-minted between them); each receipt is timed before its own boundary.
+    spoolSteer(box, ID, U, ids[0]!, rowMs(seq, seq.boundaryUuids[0]!) - 500);
+    spoolSteer(box, ID, U, ids[0]!, rowMs(seq, seq.boundaryUuids[1]!) - 500);
+    settleS(box);
+    const leaves = leavesS(box, U);
+    expect(leaves.map((l) => l.node_id)).toEqual(ids);
+    expect(leaves.map((l) => [l.kind, l.status]), 'span 1 takes its exact receipt; span 2 has none (today\'s exact-id association, O7 (a))')
+      .toEqual([['steered_leaf', 'ok'], ['native_leaf', 'not-requested']]);
+    // Statuses only: no breaker exists before W3-2, and its half is Task 2's `a stale print's span never moves the breaker`.
+    expect(qS<{ n: number }>(box, 'SELECT count(*) AS n FROM breaker')[0]!.n).toBe(0);
+  }, 240_000);
+
+  it('O13, today\'s behaviour: an unprinted compaction, then a print before the next tick: the unprinted span takes the exact receipt and reads absent', () => {
+    const box = H.makeHistoryBox('ccrc-hist-steer-o13-');
+    const [ID, U] = ['steer-o13', sidS(0x5a3)];
+    // Span 1's compaction printed nothing, so its summary has no block; the print came after its boundary, for span 1's id.
+    const { seq, ids } = sequenceWithIds({ n: 2, seed: 0x5a3, uuid: U, startMs: Date.now() - DAYMS }, ID, () => null);
+    plantS(box, ID, U, seq.rows);
+    spoolSteer(box, ID, U, ids[0]!, rowMs(seq, seq.boundaryUuids[0]!) + 500);   // timed AFTER span 1's boundary
+    settleS(box);
+    expect(leavesS(box, U).map((l) => [l.node_id, l.status])).toEqual([[ids[0], 'absent'], [ids[1], 'not-requested']]);
+    expect(H.counters(box)['leaf_reason:no-block:anthropic']).toBe(1);
+  }, 240_000);
+
+  describe('a receipt with no ts is stamped with the file\'s journaling time by the drain (O23; review 1686 A2, review 1690 F2)', () => {
+    /** The stored time of the one steer receipt, and the word that says where it came from. */
+    const stored = (box: H.HistoryBox): { ts_ms: number; ts_source: string; received_ms: number } => {
+      const rows = qS<{ ts_ms: number; ts_source: string; received_ms: number }>(box,
+        `SELECT s.ts_ms AS ts_ms, p.ts_source AS ts_source, p.received_ms AS received_ms FROM steer_receipts s
+         JOIN spool_receipts p ON p.event_key = s.event_key`);
+      expect(rows, 'exactly one steer receipt').toHaveLength(1);
+      return rows[0]!;
+    };
+
+    it('an exact receipt with no ts, drained a tick after its boundary, is stamped after it and its span is requested', () => {
+      const box = H.makeHistoryBox('ccrc-hist-steer-untimed-after-');
+      const [ID, U] = ['steer-untimed-a', sidS(0x5a4)];
+      const { seq, ids } = sequenceWithIds({ n: 1, seed: 0x5a4, uuid: U, startMs: Date.now() - DAYMS }, ID,
+        (_k, all) => withBlock(all[0], 'An untimed exact receipt, stamped after its boundary: the span is still requested.'));
+      plantS(box, ID, U, seq.rows);
+      spoolSteer(box, ID, U, ids[0]!);   // no ts: the grammar allows it
+      settleS(box);
+      const r = stored(box);
+      expect(r.ts_source, 'drain-stamped').toBe('received');
+      expect(r.ts_ms, 'the stored time is the journaling time').toBe(r.received_ms);
+      expect(r.ts_ms, 'it falls after the boundary').toBeGreaterThan(leavesS(box, U)[0]!.boundary_ms);
+      expect(leavesS(box, U).map((l) => [l.kind, l.status]), 'pickReceipt matches the exact id with no window: requested, block parsed').toEqual([['steered_leaf', 'ok']]);
+    }, 240_000);
+
+    it('an exact receipt with no ts, drained by a tick between its print and its boundary, is stamped before the boundary and its span is requested', () => {
+      const box = H.makeHistoryBox('ccrc-hist-steer-untimed-before-');
+      const [ID, U] = ['steer-untimed-b', sidS(0x5a5)];
+      const probe = FX.compactionSequence({ n: 1, trigger: 'manual', seed: 0x5a5, sessionId: U, startMs: Date.now() });
+      const cut = probe.rows.findIndex((r) => r['uuid'] === probe.boundaryUuids[0]);
+      // Retiming changes no uuid, so the id the block names is the probe's. The boundary is an hour from now: the compaction is still running.
+      const ids0 = leafId(ID, U, firstUuid(probe));
+      const seq = FX.compactionSequence({
+        n: 1, trigger: 'manual', seed: 0x5a5, sessionId: U, startMs: Date.now(),
+        summaryText: () => withBlock(ids0, 'An untimed exact receipt, stamped before its boundary: the span is still requested.'),
+      });
+      plantS(box, ID, U, retime(seq.rows, cut));
+      spoolSteer(box, ID, U, ids0);
+      settleS(box);
+      const r = stored(box);
+      expect(r.ts_source).toBe('received');
+      expect(r.ts_ms).toBe(r.received_ms);
+      expect(r.ts_ms, 'it falls before the boundary').toBeLessThan(leavesS(box, U)[0]!.boundary_ms);
+      expect(leavesS(box, U).map((l) => [l.kind, l.status])).toEqual([['steered_leaf', 'ok']]);
+    }, 240_000);
+
+    it('a generic receipt with no ts, drained a tick after its boundary, leaves its span not-requested and is taken by the next span', () => {
+      const box = H.makeHistoryBox('ccrc-hist-steer-untimed-generic-');
+      const [ID, U] = ['steer-untimed-g', sidS(0x5a6)];
+      const seq = FX.compactionSequence({ n: 2, trigger: 'manual', seed: 0x5a6, sessionId: U, startMs: Date.now(),
+        summaryText: (k) => (k === 0 ? withBlock(undefined, 'A generic receipt stamped after span 1 is no part of span 1.') : FX.fixtureSummaryText(k)) });
+      const cut = seq.rows.findIndex((r) => r['uuid'] === seq.boundaryUuids[1]);
+      // Span 1's boundary is an hour ago, span 2's an hour from now: the drain's tick falls between them.
+      plantS(box, ID, U, retime(seq.rows, cut));
+      spoolSteer(box, ID, U, '');   // generic, and no ts
+      settleS(box);
+      const r = stored(box);
+      expect(r.ts_source).toBe('received');
+      const leaves = leavesS(box, U);
+      expect(leaves, 'two leaves').toHaveLength(2);
+      expect(r.ts_ms).toBeGreaterThan(leaves[0]!.boundary_ms);
+      expect(r.ts_ms).toBeLessThan(leaves[1]!.boundary_ms);
+      expect(leaves.map((l) => [l.kind, l.status]), 'span 1 reads not-requested (its window ends at its boundary); span 2 takes the receipt and, printing nothing, reads absent')
+        .toEqual([['native_leaf', 'not-requested'], ['native_leaf', 'absent']]);
+    }, 240_000);
   });
 });

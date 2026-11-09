@@ -19,17 +19,25 @@
 // removed (coordinator ruling R-recalloff-keep), each an unlink that never goes through a link. What it only reads:
 // scope/<id>, to count each consumption by its compaction's scope (ruling RC3). Nothing here journals: a prediction is
 // derived again at the next end-of-file after any rebuild. A write that fails is counted and never ends the tick.
+//
+// W3 Task 1B: the steer file, steer/<id>/<uuid>.txt (spec §7.1, §9.4), is a SECOND ARTIFACT of the same per-session step: a
+// prediction of the same next leaf, valid until the boundary that consumes it is ingested. It is decided by the same lib
+// deciders (decideCardFile with artifact 'steer', decideCardWithdraw, the generation record's `recorded`), acted on in oneCard
+// from the card's own prediction, atEof and mayWrite, withdrawn wherever the card is, and collected with its purged session.
+// Its IO (read, previous-leaf read, write) is steer.mjs's; its text is lib's composeSteerFile. The hook never consumes,
+// deletes or writes it (PX13): every removal here is the sweep's.
 import {
   closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, rmdirSync, unlinkSync,
 } from 'node:fs';
 import {
-  CARD_ATTACHMENT_MAX_BYTES, CARD_DIR, CARD_LINE_MAX, CARD_MEASURE_ROWS, SCOPE_DIR, UUID_RE, cardDirOf, cardFileOf,
-  cardGenFileOf, cardIdsIn, cardWindowComplete, consumedBoundaryTs, decideCardDelivery, decideCardFile, decideCardGenFile,
-  decideCardWithdraw, decideConsumedScope, decidePurgedEntry, eofAfterBoundary, historyPaths, idOk, leafId, planCardPrediction,
-  predictedSpanStart, producerOf, scopeMarkerOf,
+  CARD_ATTACHMENT_MAX_BYTES, CARD_DIR, CARD_LINE_MAX, CARD_MEASURE_ROWS, SCOPE_DIR, STEER_DIR, UUID_RE, cardDirOf, cardFileOf,
+  cardGenFileOf, cardIdsIn, cardWindowComplete, composeSteerFile, consumedBoundaryTs, decideCardDelivery, decideCardFile,
+  decideCardGenFile, decideCardWithdraw, decideConsumedScope, decidePurgedEntry, eofAfterBoundary, historyPaths, idOk, leafId,
+  planCardPrediction, predictedSpanStart, producerOf, scopeMarkerOf, steerDirOf, steerFileOf, steerIdOk,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx, writeFileAtomic } from './store.mjs';
 import { epochCopySlots, epochOfUuid, holdingCopyOf } from './derive.mjs';
+import { prevLeafOf, readSteerFile, writeSteerFile } from './steer.mjs';
 
 /** A path's kind by lstat, never following a link: 'dir', 'file', 'link', 'other', 'absent' (ENOENT), or
  *  'unmeasured' (any other failure; never read as absent). */
@@ -41,7 +49,7 @@ function lstatKind(p) {
   return st.isFile() ? 'file' : 'other';
 }
 
-/** `scope/` and `card/` under the history root, made 0700 when absent (§5.1, §5.2): the hook writes its markers into
+/** `scope/`, `card/` and `steer/` under the history root, made 0700 when absent (§5.1, §5.2, §9.4): the hook writes its markers into
  *  `scope/`, reads `card/` and gates its render reserve on `card/` existing, and never makes a directory (S4). So a
  *  box with history is armed by its sweep's first tick, and a box without history (a server, a refused store, a
  *  `history-off` box: no tick runs) never is. A path there that is a link, a file or unmeasurable is refused, left as
@@ -49,7 +57,7 @@ function lstatKind(p) {
 export function ensureHistoryDirs(db, home) {
   const root = historyPaths(home).root;
   const out = {};
-  for (const name of [SCOPE_DIR, CARD_DIR]) {
+  for (const name of [SCOPE_DIR, CARD_DIR, STEER_DIR]) {
     const dir = `${root}/${name}`;
     const kind = lstatKind(dir);
     let state = kind === 'dir' ? 'present' : 'refused';
@@ -162,11 +170,20 @@ function registeredPairs(ictx) {
 /** Every `card/<id>/<uuid>.txt` on disk under a real `card/<id>` directory, so a prediction the registry no longer
  *  names is still consumed when its boundary is ingested. Other names are not this writer's and are not read. */
 function cardFilesUnder(root) {
+  return filesUnder(root, idOk);
+}
+
+/** `steer/<id>/<uuid>.txt` likewise, by the steer directory's own id rule (steerIdOk: `steer/.lanes/` is never entered). */
+function steerFilesUnder(root) {
+  return filesUnder(root, steerIdOk);
+}
+
+function filesUnder(root, idGate) {
   const out = [];
   let ids;
   try { ids = readdirSync(root); } catch { return out; }
   for (const id of ids) {
-    if (!idOk(id) || lstatKind(`${root}/${id}`) !== 'dir') continue;
+    if (!idGate(id) || lstatKind(`${root}/${id}`) !== 'dir') continue;
     let names;
     try { names = readdirSync(`${root}/${id}`); } catch { continue; }
     for (const n of names) {
@@ -199,6 +216,7 @@ function predict(db, s, id, uuid) {
   return {
     copy: copy ?? null,
     ccrcId,
+    epoch: ep,
     prediction: planCardPrediction({
       ccrcId, ccUuid: uuid, firstRowUuid, lastBoundary, plainBoundOther, slots,
       newestCondensed: newest === undefined ? null : newest.node_id, familyIds,
@@ -249,15 +267,13 @@ function consumedScopeOf(s, home, id, uuid, current, copy, ccrcId) {
  *  replacement cannot be written goes too, recorded or not (an unlink succeeds there as well), so the hook never serves
  *  the previous compaction's leaf as this one; it is counted card_consumed once it is gone, and not while it stands (the
  *  next tick decides it again). D-5059 (history-card-consumed-write-fails-closed) */
-function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
-  const { copy, ccrcId, prediction } = predict(db, s, id, uuid);
-  const atEof = registered && copy !== null && copy.eof_ms !== null && Number(copy.eof_ms) === ictx.nowMs;
-  const mayWrite = atEof && ictx.budgetLeft(budget);
+function cardArtifact(db, s, ictx, id, uuid, p, atEof, mayWrite, out) {
+  const { copy, ccrcId, prediction } = p;
   const dir = cardDirOf(ictx.home, id);
   const dirKind = lstatKind(dir);
   if (dirKind !== 'dir' && dirKind !== 'absent') {
     if (atEof) bump(db, 'card_dir_refused');
-    return;
+    return true;   // no record was due: the steer file is not held by a card directory that cannot be entered
   }
   const file = cardFileOf(ictx.home, id, uuid);
   const genFile = cardGenFileOf(ictx.home, id, uuid);   // the record's name is lib's alone. D-5049 (history-card-gen-path-helper)
@@ -302,7 +318,7 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
       if (gone && !recorded) bump(db, 'card_unrecorded_removed');
       if (gone && d.consumed) countConsumed();
     }
-    return;
+    return recorded;
   }
   if (d.act === 'write') {
     // The id's other predictions go once this one is on disk. A cleanup that fails is counted on its own and never
@@ -313,24 +329,111 @@ function oneCard(db, s, ictx, budget, id, uuid, registered, out) {
   }
   if (d.act === 'delete') out.deleted += 1;
   if (d.consumed) countConsumed();
+  return true;
 }
 
-/** The consumer and the writer (§8.6 Timing, §9.2 step 6), over every session the registry names and every card file
- *  on disk, in a stable order, stopping at history-off. The run's budget is read before each WRITE (oneCard), never
- *  before the consume and delete decision, so a spent budget still consumes (ruling RC2). */
+/** One (id, uuid): the card's prediction, then the steer file, both from ONE measurement of the same prediction, atEof and
+ *  mayWrite. The card's step answers whether the generation record it was due to act on was acted on (`recorded`), which
+ *  the steer file reads: a record due and not acted on takes the steer file with the card's prediction (R-recalloff-keep, as
+ *  the hook's recall-off copy reads that record: O9 (a), ruled). A write is due only at end-of-file of the copy the registry's
+ *  session appends to, this tick (its eof_ms is this tick's start: B1's recordExamined), and only while the run's budget is
+ *  left: the budget bounds a WRITE, never the consume and delete decision (ruling RC2). */
+function oneCard(db, s, ictx, budget, id, uuid, registered, roots, out) {
+  const p = predict(db, s, id, uuid);
+  const atEof = registered && p.copy !== null && p.copy.eof_ms !== null && Number(p.copy.eof_ms) === ictx.nowMs;
+  const mayWrite = atEof && ictx.budgetLeft(budget);
+  const recorded = roots.card ? cardArtifact(db, s, ictx, id, uuid, p, atEof, mayWrite, out) : true;
+  if (roots.steer && steerIdOk(id)) steerArtifact(db, ictx, id, uuid, p, atEof, mayWrite, recorded);
+}
+
+/** The steer file's prediction: the card's own prediction with the steer text as its `line` (decideCardFile compares a file's
+ *  text with it, as it compares a card line), composed by lib from the leaf id and the previous leaf's stored row. A skip stays
+ *  a skip. The previous leaf is read only for a prediction that writes. */
+function steerPredictionOf(db, ictx, p) {
+  const prediction = p.prediction;
+  if (prediction.act !== 'write') return prediction;
+  const prev = p.copy === null || p.epoch === null ? null : prevLeafOf(db, p.copy.file_id, p.epoch);
+  const { text } = composeSteerFile({ leafId: prediction.leafId, prev, children: [], pairIdx: ictx.pairIdx });
+  return { ...prediction, line: text };
+}
+
+/** The steer file for one (id, uuid), on the card's lifecycle (W3 Task 1B). A `steer/<id>` that is a link or not a directory is
+ *  never read or written through (counted `steer_dir_refused` at end-of-file). The act is lib's decideCardFile with artifact
+ *  'steer'; the arms are the card's, counted apart:
+ *    steer_written            a file written;
+ *    steer_consumed           a file whose boundary was ingested, once it is gone (written over, deleted, or unlinked after a
+ *                             failed write: not while it stands, so the next tick decides it again);
+ *    steer_write_failed       the write (or its directory) failed;
+ *    steer_unrecorded_removed the card's generation record was due and not acted on, and this file went with the prediction;
+ *    steer_cleanup_failed     the id's other files could not all be removed after a write that landed.
+ *  A CONSUMED file whose replacement cannot be written is unlinked too, so the hook never serves the last compaction's id as
+ *  this one's (D-5059's arm). */
+function steerArtifact(db, ictx, id, uuid, p, atEof, mayWrite, recorded) {
+  const dir = steerDirOf(ictx.home, id);
+  const dirKind = lstatKind(dir);
+  if (dirKind !== 'dir' && dirKind !== 'absent') {
+    if (atEof) bump(db, 'steer_dir_refused');
+    return;
+  }
+  const file = steerFileOf(ictx.home, id, uuid);
+  const current = dirKind === 'absent' ? { state: 'absent' } : readSteerFile(file);
+  const prediction = steerPredictionOf(db, ictx, p);
+  const d = decideCardFile({ current, prediction, atEof: mayWrite, artifact: 'steer' });
+  const countConsumed = () => { bump(db, 'steer_consumed'); };
+  // The file goes: a record that was due and is not acted on, or a consumed file whose replacement cannot be written (an unlink
+  // succeeds where a write meets ENOSPC). An absent file fails the unlink with ENOENT and is not counted.
+  const failClosed = () => {
+    let gone = false;
+    try {
+      unlinkSync(file);
+      gone = true;
+    } catch { /* none stands, or it cannot be removed either: the next tick decides it again, counting nothing now */ }
+    if (gone && !recorded) bump(db, 'steer_unrecorded_removed');
+    if (gone && d.consumed) countConsumed();
+  };
+  if (!recorded) {
+    failClosed();
+    return;
+  }
+  try {
+    if (dirKind === 'absent' && d.act === 'write') mkdirSync(dir, { mode: 0o700 });
+    if (d.act === 'write') {
+      writeSteerFile(file, prediction.line);
+    } else if (d.act === 'delete') {
+      unlinkSync(file);
+    }
+  } catch {
+    bump(db, 'steer_write_failed');
+    if (d.consumed) failClosed();
+    return;
+  }
+  if (d.act === 'write') {
+    try { removeOtherCards(dir, uuid); } catch { bump(db, 'steer_cleanup_failed'); }
+    bump(db, 'steer_written');
+  }
+  if (d.consumed) countConsumed();
+}
+
+/** The consumer and the writer (§8.6 Timing, §9.2 step 6), over every session the registry names and every card file and
+ *  steer file on disk, in a stable order, stopping at history-off. The run's budget is read before each WRITE (oneCard), never
+ *  before the consume and delete decision, so a spent budget still consumes (ruling RC2). A history root's `card/` or `steer/`
+ *  that is no real directory (absent before the tick's last step has made it, or a refused link) is not entered, and the other
+ *  artifact is still acted on. */
 export function consumeAndWriteCards(db, ictx, budget) {
   const out = { written: 0, consumed: 0, deleted: 0 };
-  const root = `${historyPaths(ictx.home).root}/${CARD_DIR}`;
-  if (lstatKind(root) !== 'dir') return out;
+  const base = historyPaths(ictx.home).root;
+  const roots = { card: lstatKind(`${base}/${CARD_DIR}`) === 'dir', steer: lstatKind(`${base}/${STEER_DIR}`) === 'dir' };
+  if (!roots.card && !roots.steer) return out;
   const s = cardStmts(db);
   const live = registeredPairs(ictx);
   const cands = new Map();
   for (const [id, uuid] of live) cands.set(`${id}/${uuid}`, { id, uuid });
-  for (const c of cardFilesUnder(root)) cands.set(`${c.id}/${c.uuid}`, c);
+  if (roots.card) for (const c of cardFilesUnder(`${base}/${CARD_DIR}`)) cands.set(`${c.id}/${c.uuid}`, c);
+  if (roots.steer) for (const c of steerFilesUnder(`${base}/${STEER_DIR}`)) cands.set(`${c.id}/${c.uuid}`, c);
   for (const key of [...cands.keys()].sort()) {
     if (ictx.historyOff()) break;
     const { id, uuid } = cands.get(key);
-    oneCard(db, s, ictx, budget, id, uuid, live.get(id) === uuid, out);
+    oneCard(db, s, ictx, budget, id, uuid, live.get(id) === uuid, roots, out);
   }
   return out;
 }
@@ -351,14 +454,15 @@ export function cardStep(db, ictx, budget) {
 // compaction in that state would be served a stale line. So such a pass withdraws them all. lib decideCardWithdraw
 // says whether, and under which reason word; this only measures and unlinks. D-4740 (history-card-withdrawn-when-not-ticking)
 
-/** Withdraws every `card/<id>/<uuid>.txt` when lib's decideCardWithdraw says the pass `pass` does. The path is
- *  lstat-checked where a link could be walked through: a `card/` (here) or a `card/<id>` (cardFilesUnder) that is a
- *  link or not a directory is never entered. Each name is then only unlinked, which removes a link itself, never its
+/** Withdraws every `card/<id>/<uuid>.txt`, and every `steer/<id>/<uuid>.txt` with it (W3 Task 1B), when lib's decideCardWithdraw
+ *  says the pass `pass` does. The path is lstat-checked where a link could be walked through: a `card/` or `steer/` (here) or a
+ *  `card/<id>` or `steer/<id>` (filesUnder) that is a link or not a directory is never entered. Each name is then only unlinked, which removes a link itself, never its
  *  target, and refuses a directory; a name that cannot be unlinked is left for the next pass that withdraws. Counted
- *  `card_withdrawn:<reason>` on `db`; a pass with no DB open (a hold before the open, where nothing is counted: IV2)
- *  prints `history-sweep: card_withdrawn:<reason> <n>` through `out` instead, beside its own word. A run pass that kept
- *  the rest passes `skipped` (ingestTick's uuids) and then also withdraws those sessions' predictions
- *  (withdrawSkippedCards, below; D-5061). Answers the number withdrawn. */
+ *  `card_withdrawn:<reason>` on `db` (the steer files, `steer_withdrawn:<reason>`); a pass with no DB open (a hold before the
+ *  open, where nothing is counted: IV2) prints `history-sweep: card_withdrawn:<reason> <n>` through `out` instead (and
+ *  `history-sweep: steer_withdrawn:<reason> <n>`), beside its own word. A run pass that kept the rest passes `skipped`
+ *  (ingestTick's uuids) and then also withdraws those sessions' predictions (withdrawSkippedCards, below; D-5061). Answers the
+ *  number of card predictions withdrawn. */
 export function withdrawCards(db, home, pass, out, skipped) {
   const n = withdrawAllCards(db, home, pass, out);
   return n + (skipped === undefined || db === null ? 0 : withdrawSkippedCards(db, home, skipped));
@@ -367,43 +471,60 @@ export function withdrawCards(db, home, pass, out, skipped) {
 function withdrawAllCards(db, home, pass, out) {
   const d = decideCardWithdraw(pass);
   if (d.act !== 'withdraw') return 0;
-  const root = `${historyPaths(home).root}/${CARD_DIR}`;
-  if (lstatKind(root) !== 'dir') return 0;
-  let n = 0;
-  for (const { id, uuid } of cardFilesUnder(root)) {
-    try {
-      unlinkSync(cardFileOf(home, id, uuid));
-      n += 1;
-    } catch { /* a directory under a card name, or a name already gone: left for the next pass that withdraws */ }
+  // The steer file goes with the card's prediction under the same verdict (W3 Task 1B), counted apart: `steer_withdrawn:<reason>`,
+  // or a line beside the card's on a hold with no DB.
+  let cards = 0;
+  for (const [counter, dirName, filesOf, fileOf] of ARTIFACTS) {
+    const root = `${historyPaths(home).root}/${dirName}`;
+    if (lstatKind(root) !== 'dir') continue;
+    let n = 0;
+    for (const { id, uuid } of filesOf(root)) {
+      try {
+        unlinkSync(fileOf(home, id, uuid));
+        n += 1;
+      } catch { /* a directory under a card name, or a name already gone: left for the next pass that withdraws */ }
+    }
+    if (n > 0 && db !== null) bump(db, `${counter}_withdrawn:${d.reason}`, n);
+    if (n > 0 && db === null) out(`history-sweep: ${counter}_withdrawn:${d.reason} ${n}`);
+    if (counter === 'card') cards = n;
   }
-  if (n > 0 && db !== null) bump(db, `card_withdrawn:${d.reason}`, n);
-  if (n > 0 && db === null) out(`history-sweep: card_withdrawn:${d.reason} ${n}`);
-  return n;
+  return cards;
 }
 
-/** Withdraws the predictions of the sessions whose transcript copy this pass could not read (the read error of D-4340), admission
+/** The artifacts of the per-session step, in the order they are acted on: the counter family, the directory under the history
+ *  root, the files on disk and a file's path. */
+const ARTIFACTS = [
+  ['card', CARD_DIR, cardFilesUnder, cardFileOf],
+  ['steer', STEER_DIR, steerFilesUnder, steerFileOf],
+];
+
+/** Withdraws the predictions (and steer files) of the sessions whose transcript copy this pass could not read (the read error of D-4340), admission
  *  refused or whose parse crashed, `skipped` being ingestTick's uuids: such a copy was not read to its end, so it may hold the boundary
  *  that consumes the standing line, and the pass keeps the rest. lib's decideCardWithdraw (arm 'copy') decides per
  *  prediction; the record beside a prediction is left as it is. Answers the number withdrawn. The lost-hint shape stays: a boundary whose hint was lost
  *  and whose copy no pass has read waits for the 30-minute scan. D-5061 (history-card-withdraw-on-a-skipped-copy) */
 export function withdrawSkippedCards(db, home, skipped) {
   if (skipped.size === 0) return 0;
-  const root = `${historyPaths(home).root}/${CARD_DIR}`;
-  if (lstatKind(root) !== 'dir') return 0;
   const uuids = [...skipped];
-  let n = 0;
-  let reason = null;   // lib's word for the last prediction withdrawn: the arm answers one word, which is counted as lib spells it
-  for (const { id, uuid } of cardFilesUnder(root)) {
-    const d = decideCardWithdraw({ arm: 'copy', uuid, skipped: uuids });
-    if (d.act !== 'withdraw') continue;
-    try {
-      unlinkSync(cardFileOf(home, id, uuid));
-      n += 1;
-      reason = d.reason;
-    } catch { /* a directory under a card name, or a name already gone: left for the next pass that skips the copy */ }
+  let cards = 0;
+  for (const [counter, dirName, filesOf, fileOf] of ARTIFACTS) {
+    const root = `${historyPaths(home).root}/${dirName}`;
+    if (lstatKind(root) !== 'dir') continue;
+    let n = 0;
+    let reason = null;   // lib's word for the last prediction withdrawn: the arm answers one word, which is counted as lib spells it
+    for (const { id, uuid } of filesOf(root)) {
+      const d = decideCardWithdraw({ arm: 'copy', uuid, skipped: uuids });
+      if (d.act !== 'withdraw') continue;
+      try {
+        unlinkSync(fileOf(home, id, uuid));
+        n += 1;
+        reason = d.reason;
+      } catch { /* a directory under a card name, or a name already gone: left for the next pass that skips the copy */ }
+    }
+    if (n > 0) bump(db, `${counter}_withdrawn:${reason}`, n);
+    if (counter === 'card') cards = n;
   }
-  if (n > 0) bump(db, `card_withdrawn:${reason}`, n);
-  return n;
+  return cards;
 }
 
 // ── Card delivery, measured from the transcript (spec §8.6 "Delivery is measured, not receipted", RV17; §10.7 W1-e;
@@ -582,25 +703,26 @@ function removePurgedEntry(p) {
   }
 }
 
-/** The scan's collection of purged sessions' scope markers and card directories (§9.4), counted
- *  `scope_files_purged` and `card_files_purged`. A registry directory that cannot be listed measures no session absent,
+/** The scan's collection of purged sessions' scope markers, card directories and steer directories (§9.4), counted
+ *  `scope_files_purged`, `card_files_purged` and `steer_files_purged`. `steer/.lanes/` is never entered. A registry directory that cannot be listed measures no session absent,
  *  so then nothing is removed. */
 export function collectPurgedHistoryFiles(db, home, nowMs) {
   const P = historyPaths(home);
-  const out = { scope: 0, card: 0 };
+  const out = { scope: 0, card: 0, steer: 0 };
   if (lstatKind(P.reg) !== 'dir') return out;
-  for (const [kind, name] of [['scope', SCOPE_DIR], ['card', CARD_DIR]]) {
+  for (const [kind, name, idGate] of [['scope', SCOPE_DIR, idOk], ['card', CARD_DIR, idOk], ['steer', STEER_DIR, steerIdOk]]) {
     const dir = `${P.root}/${name}`;
     if (lstatKind(dir) !== 'dir') continue;
     let ids;
     try { ids = readdirSync(dir).sort(); } catch { continue; }
     for (const id of ids) {
-      if (!idOk(id)) continue;
+      if (!idGate(id)) continue;   // steer/.lanes/ is never entered: it is the lane map's, not a session's
       const verdict = decidePurgedEntry({ reg: registryKind(P.reg, id), newestMtimeMs: newestMtimeMs(`${dir}/${id}`), nowMs });
       if (verdict === 'remove' && removePurgedEntry(`${dir}/${id}`)) out[kind] += 1;
     }
   }
   if (out.scope > 0) bump(db, 'scope_files_purged', out.scope);
   if (out.card > 0) bump(db, 'card_files_purged', out.card);
+  if (out.steer > 0) bump(db, 'steer_files_purged', out.steer);
   return out;
 }
