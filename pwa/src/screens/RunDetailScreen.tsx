@@ -41,6 +41,7 @@ import { ResumeSheet } from '../fleet/ResumeSheet';
 import { resumeHeirs } from '../fleet/resumeHeirs';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { RunTrail } from './RunTrail';
+import { RunCalls } from './RunCalls';
 import { runQueryOf, programmeIsOpenable, programmePath, runPath, runsSearchPath, sessionPath } from '../lib/routes';
 import { useLocation } from '../lib/router';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -349,6 +350,7 @@ export function RunDetailScreen({ id, store = useFleetStore, pane = false }: { i
       <RunTrail events={state.answer.events} olderEvents={state.answer.olderEvents} />
       <ResumeSheet run={resumeOpen ? run : null} heirs={resumeHeirs(sessions, runHomeProject(run) ?? run.project, run.claimedBy, frameSeen)}
         onClose={() => setResumeOpen(false)} onDone={retry} />
+      <RunCalls calls={state.answer.calls} />
       <LiftCapSheet run={liftOpen ? run : null} onClose={() => setLiftOpen(false)} onDone={retry} />
       {/* The one abandon sheet the board uses (spec 9.1); a done abandon re-reads the record, which now says who closed it and why. */}
       <AbandonSheet run={abandonOpen ? run : null} workspaceChild={abandonChildOf(worker ?? undefined)} coordinatorPresence={presence}

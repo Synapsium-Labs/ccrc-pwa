@@ -361,6 +361,10 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. The digest\'s correction box (D-5300): `.digest-correct-input` is '
     + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because it '
     + 'opens at three rows for a sentence and grows by its own resize handle.',
+  'ledgers/OverturnSheet.tsx <textarea> wl-overturn-note':
+    'TOKEN. The Overturn sheet\'s note box (D-8126): `.wl-overturn-note` is '
+    + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because the '
+    + 'operator writes a sentence into it and it grows by its own resize handle.',
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '

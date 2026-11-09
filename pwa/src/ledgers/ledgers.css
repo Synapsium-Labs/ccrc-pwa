@@ -383,5 +383,5 @@
 .wl-overturn-options { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
 .wl-overturn-option { overflow-wrap: anywhere; }
 .wl-overturn-option[data-chosen='true'] { font-weight: 600; }
-.wl-overturn-note { width: 100%; box-sizing: border-box; min-width: 0; }
+.wl-overturn-note { width: 100%; box-sizing: border-box; min-width: 0; min-height: calc(var(--tap-min) * 2); }
 .wl-overturn-error { margin: 0; font-size: var(--fs-meta); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }

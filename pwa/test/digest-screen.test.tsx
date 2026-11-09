@@ -127,3 +127,25 @@ describe('the digest screen\'s helpers', () => {
       .toBe('1 decision · 1 allowed');
   });
 });
+
+describe('call lines (D-8126)', () => {
+  const callLineRow = line({ rowKind: 'call', id: 7, kind: 'big-call', childId: '', text: 'Which store?', tool: null, class: null, answer: 'Postgres', reason: 'it is already in use' });
+  const withCall = { ...DIGEST, lines: [callLineRow] };
+  it('the wire guard keeps a call line, and it names the call, the chosen option and the reason', async () => {
+    expect(asDigestAnswer(withCall)?.lines).toHaveLength(1);
+    render(<DigestScreen day="2026-10-18" load={vi.fn().mockResolvedValue(withCall)} />);
+    const row = (await screen.findByText('called')).closest('li')!;
+    expect(row.querySelector('.digest-what')?.textContent).toBe('call');
+    expect(row.textContent).toContain('Which store?');
+    expect(row.textContent).toContain('chose: Postgres · reason: it is already in use');
+    expect(row.querySelector('.digest-child')).toBeNull();
+  });
+  it('its correction posts rowKind call', async () => {
+    const correct = vi.fn().mockResolvedValue({ ok: true, mailId: 9, deliveryId: 11 });
+    render(<DigestScreen day="2026-10-18" load={vi.fn().mockResolvedValue(withCall)} correct={correct} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Correct call 7' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Use SQLite.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send correction' }));
+    await waitFor(() => expect(correct).toHaveBeenCalledWith({ rowKind: 'call', id: 7, text: 'Use SQLite.' }));
+  });
+});

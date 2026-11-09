@@ -1,7 +1,7 @@
 // The run page's words and its facts (the runs rebuild, D-8072; spec 2026-11-04 §8.4). Pure (L1): the screen mounts what
 // this returns and decides nothing. The facts come in the spec's order under four labelled groups, and a fact that is absent
 // is left out, except "Last move", which says "None recorded". The trail is a fifth group, drawn by its own component.
-import type { ReviewCapStatus, RunHit, RunSignals, RunSummary } from '../../../shared/api';
+import type { CallView, ReviewCapStatus, RunHit, RunSignals, RunSummary } from '../../../shared/api';
 import type { CoordinatorPresence } from './presence';
 import { closedLine } from './closeWords';
 import { coordLiftLine, coordLiftOf, reviewCapOf } from './reviewCapWords';
@@ -151,4 +151,20 @@ export function runFacts(input: FactInput): FactGroup[] {
 export function closeLeadLine(run: RunSummary, fmt: (ms: number) => string = runWhen): string | null {
   if (run.state !== 'done' && run.state !== 'failed') return null;
   return typeof run.closedAt === 'number' ? closedLine(run, fmt) : null;
+}
+
+/** The run page's collapsed "Calls" section heading (D-8126): every class of call that names the run. */
+export const RUN_CALLS_WORDS = (n: number): string => `Calls (${n})`;
+
+const CALL_CLASS_WORD: Readonly<Record<CallView['class'], string>> = { routine: 'routine', big: 'big', block: 'parked' };
+
+/** One call on the run page, read only: its class, the question when it asked one, the option chosen, the reason, and when. */
+export function runCallLine(c: CallView, fmt: (ms: number) => string = runWhen): string {
+  const parts: string[] = [CALL_CLASS_WORD[c.class]];
+  if (c.question !== null && c.question !== '') parts.push(c.question);
+  parts.push(`Chose: ${c.chosen}`);
+  if (c.why !== '') parts.push(`Because: ${c.why}`);
+  if (c.overturnedAt !== null) parts.push('Overturned');
+  parts.push(fmt(c.at));
+  return parts.join(' · ');
 }

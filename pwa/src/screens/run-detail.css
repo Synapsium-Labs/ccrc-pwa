@@ -52,3 +52,7 @@
 }
 
 .rd-head > p.rd-wait a.rd-wait-link { display: inline-flex; align-items: center; min-height: var(--tap-min); text-decoration: underline; text-underline-offset: 2px; }
+
+/* The run's Calls (D-8126): collapsed, read only, wrapping at every width. */
+.rd-calls-list { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: grid; gap: var(--sp-2); }
+.rd-call { min-width: 0; overflow-wrap: anywhere; }

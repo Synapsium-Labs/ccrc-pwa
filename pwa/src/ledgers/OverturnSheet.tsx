@@ -54,7 +54,7 @@ export function OverturnSheet({ call, send, onClose }: {
         <textarea
           className="wl-overturn-note"
           aria-label="What should it have decided?"
-          placeholder="What should it have decided? This is mailed to the coordinator as written."
+          placeholder="What should it have chosen instead? Your words are mailed to the coordinator as written."
           value={note}
           maxLength={DIGEST_CORRECTION_MAX_CHARS}
           rows={3}
