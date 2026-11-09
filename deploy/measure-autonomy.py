@@ -32,6 +32,19 @@ The `items` subcommand runs on the SERVER box, over the coordination database, R
 Rows printed: `programmes`, `unattributed-asks`, `m3-p1`.. (`items=N asks=N days=N value=V`, an ordinal in slug order, never
 a slug), `m3-all`, and `m6-YYYY-MM-DD` (the week's Monday). `--out` gets `items.json` (the same figures with the slugs).
 
+The `sample` and `score` subcommands are the M4 reading (spec §5.1's split rule). `sample` runs on the SERVER box over the
+same read-only connection as `items`; `score` reads one local CSV and touches no database.
+
+    python3 deploy/measure-autonomy.py sample --db PATH --out DIR [--n 30] [--seed 1] [--since D] [--until D]
+    python3 deploy/measure-autonomy.py score FILE
+
+  `sample` draws `n` operator items raised in the window (all of them when fewer), with `random.Random(seed)` over the
+  ids in ascending order, so a re-run with the same seed and window draws the same ids. It writes `sample.csv` (columns
+  id, kind, title, why, parts; `parts` empty) under `--out`, the only place it writes. A reviewer fills `parts` with one
+  class per PART of the question, `;`-separated: `routine`, `big`, `o1`..`o6` or `p1`..`p4`. `score` prints `parts`, the
+  count per class, `routine-or-big` and `m4` (that share of all parts, a percentage), and exits 2 naming the row for an
+  empty `parts` or an unknown class.
+
 Rows printed (one `name: value` per line):
   transcripts     transcript files read
   coordinators    transcripts that are a coordinator by `is_coordinator`, with at least one row of their own after
@@ -43,7 +56,7 @@ Files under --out: `waits.json` (every Wait, with an `id`), `waits-over-1h.csv` 
 parts; `parts` is left empty for a reviewer).
 Exit 0 measured; 2 an input missing or refused.
 """
-import argparse, csv, datetime, glob, json, os, re, sqlite3, sys, time, urllib.parse
+import argparse, csv, datetime, glob, json, os, random, re, sqlite3, sys, time, urllib.parse
 
 # `shared/api.ts`'s IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX and MAIL_ENVELOPE_FENCE: second spellings, bound
 # to the first by measure-autonomy.test.ts, which reds when they differ.
@@ -485,6 +498,62 @@ def cmd_items(a):
                        'unattributedAsks': unattributed, 'm6': weeks}, f, indent=1)
 
 
+PART_CLASSES = ('routine', 'big') + tuple(f'o{n}' for n in range(1, 7)) + tuple(f'p{n}' for n in range(1, 5))
+SAMPLE_COLUMNS = ('id', 'kind', 'title', 'why', 'parts')
+
+
+def cmd_sample(a):
+    if a.n < 1:
+        fail('--n must be at least 1')
+    con = open_ro(a.db)
+    lo = int(parse_day(a.since, '--since') * 1000) if a.since else 0
+    hi = int(parse_day(a.until, '--until') * 1000) if a.until else int((time.time() // 86400 + 1) * DAY_MS)
+    try:
+        pool = con.execute(
+            'SELECT id, kind, title, why FROM operator_items WHERE raisedAt >= ? AND raisedAt < ? ORDER BY id', (lo, hi)).fetchall()
+    except sqlite3.Error as e:
+        fail(f'cannot read the database: {e}')
+    finally:
+        con.close()
+    drawn = sorted(random.Random(a.seed).sample(pool, min(a.n, len(pool))))
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, 'sample.csv'), 'w', encoding='utf8', newline='') as f:
+        w = csv.writer(f, lineterminator='\n')
+        w.writerow(SAMPLE_COLUMNS)
+        for r in drawn:
+            w.writerow([r[0], r[1], r[2], r[3], ''])
+    print(f'pool: {len(pool)}')
+    print(f'sampled: {len(drawn)}')
+
+
+def cmd_score(a):
+    if not os.path.isfile(a.file):
+        fail(f'no file at {a.file}')
+    with open(a.file, encoding='utf8', newline='') as f:
+        rd = csv.DictReader(f)
+        if not rd.fieldnames or 'id' not in rd.fieldnames or 'parts' not in rd.fieldnames:
+            fail('the file needs the columns id and parts')
+        counts = dict.fromkeys(PART_CLASSES, 0)
+        for n, row in enumerate(rd, 1):
+            rid = (row.get('id') or '').strip() or f'line {n + 1}'
+            raw = (row.get('parts') or '').strip()
+            if not raw:
+                fail(f'row {rid}: parts is empty')
+            for part in raw.split(';'):
+                cls = part.strip()
+                if cls not in counts:
+                    fail(f'row {rid}: unknown class {cls!r}')
+                counts[cls] += 1
+    total = sum(counts.values())
+    easy = counts['routine'] + counts['big']
+    print(f'parts: {total}')
+    for c in PART_CLASSES:
+        if counts[c]:
+            print(f'class-{c}: {counts[c]}')
+    print(f'routine-or-big: {easy}')
+    print(f'm4: {round(100 * easy / total, 1) if total else 0.0}')
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog='measure-autonomy.py', description=__doc__.split('\n')[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -500,6 +569,17 @@ def main(argv):
     i.add_argument('--until')
     i.add_argument('--out')
     i.set_defaults(fn=cmd_items)
+    m = sub.add_parser('sample', help='draw operator items for the M4 review (the server box)')
+    m.add_argument('--db', required=True)
+    m.add_argument('--n', type=int, default=30)
+    m.add_argument('--seed', type=int, default=1)
+    m.add_argument('--since')
+    m.add_argument('--until')
+    m.add_argument('--out', required=True)
+    m.set_defaults(fn=cmd_sample)
+    sc = sub.add_parser('score', help='the M4 share from a reviewer-filled sample.csv')
+    sc.add_argument('file')
+    sc.set_defaults(fn=cmd_score)
     a = ap.parse_args(argv)
     a.fn(a)
 
