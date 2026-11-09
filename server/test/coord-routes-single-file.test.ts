@@ -13,6 +13,9 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.resolve(here, '..', 'src');
 const COORD_ROUTES = path.join('coord', 'routes.ts');
+/** The one other file that registers a coordination path (D-8125): the coordinator's review-rounds door. The skill test
+ *  scans it beside `coord/routes.ts` (`registeredCoordRoutes`), so its route is still named in the corpus. */
+const COORD_ROUTE_FILES: readonly string[] = [COORD_ROUTES, path.join('coord', 'reviewRoundsRoute.ts')];
 
 /** The coordination surface by path prefix. `/api/fleet` is NOT here — it is
  *  server.ts's own read and always was; `/api/feed` and `/api/lifecycle` are
@@ -43,9 +46,9 @@ const registrations = (): Reg[] => {
 const isCoord = (p: string): boolean => COORD_PREFIXES.some((pre) => p.startsWith(pre));
 
 describe('all coordination routes live in coord/routes.ts (D17)', () => {
-  it('no file but coord/routes.ts registers a coordination path', () => {
+  it('no file but coord/routes.ts (and the review-rounds door) registers a coordination path', () => {
     const strays = registrations()
-      .filter((r) => isCoord(r.routePath) && r.file !== COORD_ROUTES)
+      .filter((r) => isCoord(r.routePath) && !COORD_ROUTE_FILES.includes(r.file))
       .map((r) => `${r.file}: app.${r.verb}('${r.routePath}')`);
     expect(strays, 'coordinator-skill.test.ts scans coord/routes.ts ONLY — a route here is ' +
       'named nowhere').toEqual([]);
