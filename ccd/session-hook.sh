@@ -2619,7 +2619,8 @@ CARD_MAX_CHARS=2400
 #        `$id` and `$CT_N` are above), the advice and the armed-gate sentence
 #        (longer than the kill-switch one)
 #   1107 held case A 860 + co-tenant 245 + the two joins, as argued above (the
-#        role subject is shorter than case A and never beside it)
+#        role subject is at most 860 characters, both texts, pinned by
+#        `session-hook-role-card.test.ts`, and never beside it)
 # 2400 - 903 - 1107 = 390 characters of names. The list stops before a name
 # that would pass it, so every subject after graphify is said whole; the
 # real-directory arm has no list and is unchanged at 719.
@@ -3305,16 +3306,19 @@ case "$event" in
     # shape this file can fail in, since the server reads the state it writes.
     CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD_ROSTER=""; CARD=""
     COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
-    # THE ROLE SUBJECT (manual-sessions-are-coordinators, D-5301; spec 2026-10-17 §8). Every session that is
-    # not a dispatched child is its project's coordinator. THE ROLE IS DERIVED, NEVER MARKED: `.child` is
+    # THE ROLE SUBJECT (manual-sessions-are-coordinators, D-5301; spec 2026-10-17 §8; the role from the first turn, D-8142).
+    # Every session that is not a dispatched child is its project's coordinator. THE ROLE IS DERIVED, NEVER MARKED: `.child` is
     # written only by a dispatch (`ws-add --no-rc --child <run>`), so every path the operator creates a
     # session by (the PWA "+", the create-session and start-programme sheets, the CLI) leaves a row without
     # it. It reads exactly two names, `$REG/<id>.child` and `$REG/<id>.hold`, writes none and quotes no
     # registry byte. EXISTENCE, NOT CONTENT: a directory, an unreadable file or a dangling `.child` link (D-5301,
     # `_ws_expire_not_child`'s `-e`/`-L` reading) still counts as present, so doubt is silence for a child.
-    # ONCE PER CONTEXT, BY SOURCE (D-5359): a `resume` or `fork` carries the transcript that already received it, so
-    # it says nothing there (no "shown" marker exists or is added); startup, clear, compact and a
-    # source-less start are fresh or rebuilt contexts. Mutually exclusive with every held sentence, so
+    # TWO TEXTS, BY SOURCE (D-8142, which overturns D-5301's "no eager skill load" and D-5359's resume/fork silence): startup,
+    # clear, compact and a source-less start are fresh or rebuilt contexts and are told to load the `ccrc-coordinator` skill NOW
+    # and to read their programme's goals; a `resume` or `fork` carries a transcript that already received the fresh text, so it
+    # gets a SHORTER reminder (load the skill only if this context lacks it). No "shown" marker exists or is added. Both texts
+    # keep the same last sentence ("your own go to the operator"), so a rebase over the autonomy plan's edit replaces one
+    # sentence. Mutually exclusive with every held sentence, and each text is under 860 characters, held case A's bound, so
     # `CARD_MAX_CHARS`'s structural worst case (graphify + held case A + co-tenant) is unchanged; a linked tree's
     # diff list is bounded so that worst case still fits (`CARD_DIFF_LIST_MAX_CHARS`).
     # DEFINED HERE (D-5358), in the arm, not beside `_hook_hold_card`: nothing new goes above the tail line
@@ -3322,10 +3326,12 @@ case "$event" in
     _hook_role_card() {
       CARD_ROLE=""
       [ -e "$CCRC_CARD_OFF" ] && return 0
-      case "$src" in resume|fork) return 0 ;; esac
       { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
       [ -e "$REG/$id.hold" ] && return 0
-      CARD_ROLE="ccrc-role: You are a coordinator for this project. For work worth splitting, run the \`ccrc-coordinator\` skill and dispatch; your children's questions and permission prompts come to you first; your own go to the operator."
+      case "$src" in
+        resume|fork) CARD_ROLE="ccrc-role: You are still this project's coordinator. If the \`ccrc-coordinator\` skill is not loaded in this context, load it now. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+        *) CARD_ROLE="ccrc-role: You are this project's coordinator from your first turn. Load the \`ccrc-coordinator\` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (\`docs/superpowers/programs/<slug>.md\`) before you plan or ask. Your children's questions and permission prompts come to you first; your own go to the operator." ;;
+      esac
       return 0
     }
     # THE ROSTER CARD (D4, #757): a coordinator's open runs, re-read from the server and put back into its context on

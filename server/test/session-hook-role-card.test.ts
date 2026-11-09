@@ -27,8 +27,11 @@ import { mkTmp } from './tmpHelpers.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 
-/** Spec §8's sentence, verbatim. */
-const SENTENCE = 'You are a coordinator for this project. For work worth splitting, run the `ccrc-coordinator` skill and dispatch; your children\'s questions and permission prompts come to you first; your own go to the operator.';
+/** The two texts of D-8142 (plan decision 2), verbatim, without the `ccrc-role: ` prefix. */
+const FRESH = 'You are this project\'s coordinator from your first turn. Load the `ccrc-coordinator` skill now, before anything else, and act as it says. When your work belongs to a programme, read its goals and definition of done in its ledger (`docs/superpowers/programs/<slug>.md`) before you plan or ask. Your children\'s questions and permission prompts come to you first; your own go to the operator.';
+const REVIVED = 'You are still this project\'s coordinator. If the `ccrc-coordinator` skill is not loaded in this context, load it now. Your children\'s questions and permission prompts come to you first; your own go to the operator.';
+/** The silence probe: every role text starts with this prefix. */
+const ROLE = 'ccrc-role:';
 
 /** The row's generation, exactly 36 bytes and no LF, as ccd writes it. */
 const GENERATION = '0189abcd-1234-5678-9abc-0123456789ab';
@@ -90,39 +93,48 @@ const context = (stdout: string): string => {
   expect(env.hookSpecificOutput.hookEventName).toBe('SessionStart');
   return env.hookSpecificOutput.additionalContext;
 };
+const SOURCES = ['startup', 'resume', 'fork'] as const;
+/** Silence on every source that can carry a card: startup, resume and fork. */
+const silentOnEverySource = (): void => {
+  for (const source of SOURCES) expect(context(run(withSource(source))), source).not.toContain(ROLE);
+};
 const hookstate = (): Record<string, unknown> =>
   JSON.parse(fs.readFileSync(path.join(reg(), `${id}.hookstate.json`), 'utf8')) as Record<string, unknown>;
 
 describe('the role card (D-5301): a row with no `.child` and no hold is its project\'s coordinator', () => {
-  it('renders the sentence for a row with neither marker (the PWA "+", POST /api/sessions and the CLI alike)', () => {
+  it('renders the fresh card for a row with neither marker (the PWA "+", POST /api/sessions and the CLI alike)', () => {
     const c = context(run(startup()));
-    expect(c).toContain(SENTENCE);
-    expect(c.split(SENTENCE)).toHaveLength(2);   // once, not twice
+    expect(c).toContain(FRESH);
+    expect(c.split(FRESH)).toHaveLength(2);   // once, not twice
+    expect(c).not.toContain(REVIVED);
+    expect(c).toContain('`ccrc-coordinator`');
+    expect(c).toMatch(/\bnow\b/);
+    expect(c).not.toContain('For work worth splitting');
   });
 
   it('renders on a clear and on a source-less SessionStart (an older harness), both fresh contexts', () => {
-    expect(context(run(withSource('clear')))).toContain(SENTENCE);
+    expect(context(run(withSource('clear')))).toContain(FRESH);
     const { source: _s, ...noSource } = startup() as { source: string } & Record<string, unknown>;
-    expect(context(run(noSource))).toContain(SENTENCE);
+    expect(context(run(noSource))).toContain(FRESH);
   });
 
   it('renders on a compact SessionStart: compaction rebuilt the context, so the role is told again', () => {
     const c = context(run(withSource('compact')));
-    expect(c).toContain(SENTENCE);
-    expect(c.split(SENTENCE)).toHaveLength(2);   // once, not twice
+    expect(c).toContain(FRESH);
+    expect(c.split(FRESH)).toHaveLength(2);   // once, not twice
   });
 
   it('says nothing for a dispatched child (`.child` present)', () => {
     useId('project-a-quiet-basin');
     fs.writeFileSync(path.join(reg(), `${id}.child`), 'run-a\n');
-    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    silentOnEverySource();
     expect(hookstate()).toMatchObject({ state: 'done' });   // control: the arm ran
   });
 
   it('a `.child` it cannot read still reads as a child: doubt is silence', () => {
     useId('project-a-quiet-basin');
     fs.mkdirSync(path.join(reg(), `${id}.child`));
-    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    silentOnEverySource();
   });
 
   it('a dangling `.child` symlink still reads as a child (D-5301): doubt is silence', () => {
@@ -130,7 +142,7 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
     // this same shape as a child (`! -e && ! -L`), and so does the card.
     useId('project-a-quiet-basin');
     fs.symlinkSync(path.join(home, 'nowhere', 'run-a'), path.join(reg(), `${id}.child`));
-    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    silentOnEverySource();
     expect(hookstate()).toMatchObject({ state: 'done' });   // control: the arm ran
   });
 
@@ -139,28 +151,38 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
     fs.writeFileSync(hold, 'program:prog-a wave:1/2 run:7\n');
     const held = context(run(startup()));
     expect(held).toContain('ccrc-program:');                   // control: the hold card spoke
-    expect(held).not.toContain('coordinator for this project');
+    for (const source of SOURCES) expect(context(run(withSource(source))), source).not.toContain(ROLE);
     fs.writeFileSync(hold, '');                                 // an empty hold is still HELD
-    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    silentOnEverySource();
     fs.rmSync(hold); fs.mkdirSync(hold);                        // and so is an unreadable one
-    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    silentOnEverySource();
   });
 
-  it('says nothing on a resumed SessionStart, whose transcript already carries the start card', () => {
-    expect(context(run(withSource('resume')))).not.toContain('coordinator for this project');
+  it('a resumed SessionStart gets the shorter reminder (D-8142 overturns D-5359)', () => {
+    const c = context(run(withSource('resume')));
+    expect(c).toContain(REVIVED);
+    expect(c.split(REVIVED)).toHaveLength(2);
+    expect(c).not.toContain(FRESH);
     expect(hookstate()).toMatchObject({ state: 'done' });   // control: the arm ran
   });
 
-  it('says nothing on a fork, which copies a transcript that already carries it', () => {
+  it('a fork gets the shorter reminder too', () => {
     // No committed capture has a `fork` SessionStart; this is the startup key set with the
     // source the hook's spool arm already names (`startup|resume|clear|fork`). DERIVED.
-    expect(context(run(withSource('fork')))).not.toContain('coordinator for this project');
+    const c = context(run(withSource('fork')));
+    expect(c).toContain(REVIVED);
+    expect(c).not.toContain(FRESH);
+  });
+
+  it('the role card fits the budget CARD_DIFF_LIST_MAX_CHARS assumes (held case A\'s 860)', () => {
+    expect(`ccrc-role: ${FRESH}`.length).toBeLessThanOrEqual(860);
+    expect(`ccrc-role: ${REVIVED}`.length).toBeLessThanOrEqual(860);
   });
 
   it('honours the standing cards\' kill switch', () => {
     fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     fs.writeFileSync(path.join(home, '.ccrc', 'ccrc-card-off'), '');
-    expect(context(run(startup()))).not.toContain('coordinator for this project');
+    silentOnEverySource();
   });
 
   it('writes no marker: beside the per-event state every SessionStart writes, the registry is unchanged', () => {
@@ -168,6 +190,7 @@ describe('the role card (D-5301): a row with no `.child` and no hold is its proj
     const mine = (n: string): boolean => n !== `${id}.hookstate.json` && n !== `${id}.turn.json`;
     const before = fs.readdirSync(reg()).filter(mine).sort();
     run(startup());
+    run(withSource('resume'));
     const after = fs.readdirSync(reg()).filter(mine).sort();
     expect(after).toEqual(before);
   });
