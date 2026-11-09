@@ -10457,7 +10457,7 @@ export class CoordStore {
   /** The run's open end request (held or not), or null; at most one is ever raised (`already-asked`). */
   openEndRequestOf(runId: number): ItemRow | null { return ledgers.openEndRequestsOf(this.db, runId)[0] ?? null; }
   /** The run's newest end request that ended in a decline or a withdraw (A24), or null. */
-  lastEndedEndRequest(runId: number) { return ledgers.lastEndedEndRequest(this.db, runId); }
+  lastEndedEndRequest(runId: number, askerId: string) { return ledgers.lastEndedEndRequest(this.db, runId, askerId); }
   /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
   setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }

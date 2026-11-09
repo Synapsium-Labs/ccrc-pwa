@@ -153,7 +153,8 @@ describe('POST /api/runs/:id/end-request', () => {
     expect(mail).toHaveLength(1);
     expect(mail[0]!.subject).toContain(`item ${item.id}`);
     expect(mail[0]!.body).toContain('Stuck in a loop.');
-    expect(mail[0]!.body).toContain(`ccrc-api items withdraw ${item.id}`);
+    expect(mail[0]!.body).toContain(`"$API" items withdraw ${item.id} --json - <<JSON`);
+    expect(mail[0]!.body).toContain('"byId":"<your id>","byUuid":"<your uuid>"');
     expect(r.coord.itemHistory(item.id)[0]).toMatchObject({ act: 'raise', actor: 'ccrc' });
   });
 

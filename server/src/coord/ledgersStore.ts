@@ -72,11 +72,10 @@ function itemRowOf(r: ItemRowRaw): ItemRow {
   };
 }
 
-/** The `action` column, parsed. A value that is not an `ItemAction` is a corrupt file and throws, naming the item. */
-function actionOf(id: number, text: string): ItemAction {
-  const a = parseItemAction(text);
-  if (a === null) throw new Error(`operator item ${id}: action is not an item action`);
-  return a;
+/** The `action` column, parsed. A verb this build does not understand (a newer build's row after a rollback) reads as no
+ *  action: the item has no controls here and is an ordinary item, rather than taking every reader down. */
+function actionOf(_id: number, text: string): ItemAction | null {
+  return parseItemAction(text);
 }
 
 /** One `operator_item_events` row. Callers hold the transaction. */
@@ -217,13 +216,14 @@ export function openEndRequestsOf(db: DatabaseSync, runId: number): ItemRow[] {
   ).all(runId) as unknown as ItemRowRaw[]).map(itemRowOf).filter((i) => isEndRunAction(i.action));
 }
 
-/** The newest end request of a run that ended in a decline or a withdraw: who asked, when it ended and the reason it was
- *  raised under (A24). An item settled `done` is not one. */
-export function lastEndedEndRequest(db: DatabaseSync, runId: number): { askerId: string; at: number; stuckReason: StuckReason | null } | null {
+/** The newest end request of a run raised BY THIS ASKER that ended in a decline or a withdraw: who asked, when it ended and
+ *  the reason it was raised under (A24). Scoped to the asker, so two parties to one run taking turns cannot hide each
+ *  other's ended request from the repeat rule. An item settled `done` is not one. */
+export function lastEndedEndRequest(db: DatabaseSync, runId: number, askerId: string): { askerId: string; at: number; stuckReason: StuckReason | null } | null {
   const rows = db.prepare(
-    `SELECT ${ITEM_COLS} FROM operator_items WHERE runId = ? AND action IS NOT NULL AND state IN ('withdrawn', 'dismissed') ` +
+    `SELECT ${ITEM_COLS} FROM operator_items WHERE runId = ? AND raisedBy = ? AND action IS NOT NULL AND state IN ('withdrawn', 'dismissed') ` +
     'ORDER BY closedAt DESC, id DESC',
-  ).all(runId) as unknown as ItemRowRaw[];
+  ).all(runId, askerId) as unknown as ItemRowRaw[];
   for (const r of rows) {
     const item = itemRowOf(r);
     if (isEndRunAction(item.action) && item.closedAt !== null) {

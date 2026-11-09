@@ -124,7 +124,7 @@ export function endRequestRun(deps: EndRequestDeps, runId: number, askerId: stri
     now, askerId, run, coordinator, worker: workerOfRun(deps.coord, runId), reviewWorkers: deps.coord.reviewWorkersOf(runId),
     coordinatorGone: run.claimedBy === null || verdict?.coordinatorGone === true,
     openItem: open === null ? null : { id: open.id },
-    lastEnded: deps.coord.lastEndedEndRequest(runId),
+    lastEnded: deps.coord.lastEndedEndRequest(runId, askerId),
     stuckReason: verdict?.reason ?? null,
   };
   const decision = endRequestDecide(facts);

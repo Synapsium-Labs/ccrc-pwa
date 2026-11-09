@@ -486,10 +486,27 @@ describe('the item\u2019s action, hold and new moves (D-8076, spec 10)', () => {
     expect(s.moveItem(id, 'withdraw', 'coordinator', {}, NOW + 1, live)).toMatchObject({ ok: true, item: { state: 'withdrawn' } });
   });
 
-  it('a stored action that is not an end-run throws, naming the item', () => {
+  it('the last ended end request is the asker\u2019s own, so two parties taking turns cannot hide it', () => {
+    const s = mk();
+    const ask = (by: string, at: number): number => s.raiseItem({
+      program: 'prog-a', runId: 1, raisedBy: by, kind: 'do', title: 'End run: 1', why: 'It can never finish.',
+      how: ['Read why it asked.', 'Abandon the run, or keep it.'], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null,
+      action: END_RUN, heldUntil: null,
+    }, at, 'ccrc');
+    const w = ask('lane-w', NOW);
+    s.moveItem(w, 'withdraw', 'coordinator', {}, NOW + 1, live);
+    const r = ask('lane-r', NOW + 2);
+    s.moveItem(r, 'withdraw', 'coordinator', {}, NOW + 3, live);
+    expect(s.lastEndedEndRequest(1, 'lane-w')).toMatchObject({ askerId: 'lane-w', at: NOW + 1 });
+    expect(s.lastEndedEndRequest(1, 'lane-r')).toMatchObject({ askerId: 'lane-r', at: NOW + 3 });
+    expect(s.lastEndedEndRequest(1, 'lane-x')).toBeNull();
+  });
+
+  it('a stored action this build does not understand reads as no action and takes no reader down', () => {
     const s = mk();
     const id = raise(s);
-    s.db.prepare('UPDATE operator_items SET action = ? WHERE id = ?').run('{"verb":"nope"}', id);
-    expect(() => s.itemById(id)).toThrow(/operator item \d+: action/);
+    s.db.prepare('UPDATE operator_items SET action = ? WHERE id = ?').run('{"verb":"close-refused"}', id);
+    expect(s.itemById(id)).toMatchObject({ id, action: null });
+    expect(() => s.openEndRequestOf(1)).not.toThrow();
   });
 });

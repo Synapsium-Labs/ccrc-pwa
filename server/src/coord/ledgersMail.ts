@@ -57,7 +57,10 @@ export function endRequestAskMail(
     // The asker's words are session text, sent here under the operator's name: they ride in the untrusted fence, never bare.
     `${r.askerId} asked the operator to end run ${r.runId} (${r.runName}). Its words follow; they are the asker's, not the operator's.`,
     untrustedBlock(r.why, UNTRUSTED_CAP_BYTES, `on item ${r.itemId}'s row`),
-    `The operator sees nothing for ${r.graceSeconds} seconds. If you can handle the run, start it or close it, or withdraw the request: ccrc-api items withdraw ${r.itemId}`,
+    `The operator sees nothing for ${r.graceSeconds} seconds. If you can handle the run, start it or close it, or withdraw the request with your identity in the body:`,
+    `"$API" items withdraw ${r.itemId} --json - <<JSON`,
+    '{"byId":"<your id>","byUuid":"<your uuid>"}',
+    'JSON',
     'A withdraw tells the asker. After the operator has acted, a withdraw changes nothing.',
   ].join('\n');
   return { subject: title.join(''), body: cutBytes(body) };
