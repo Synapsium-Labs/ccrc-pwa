@@ -1185,6 +1185,14 @@ Test `server/test/measure-autonomy.test.ts`.
 - Nothing yet. Each wave's PR records here what it built, its migration slot where it has one, and its baseline or
   readings.
 
+**A1 baseline (taken 2026-11-09; counts only).**
+- Transcript census (`transcripts`, fleet box, window 2026-10-26 to 2026-11-09, 13 coordinators, 17,426 transcripts read):
+  typed-reply waits 125 (24 over an hour, 198.01 h, median 0.04 h, p90 4.07 h); dialogs 44 (11 over an hour, 34.82 h,
+  median 0.24 h, p90 2.54 h); all 169 (35 over an hour, 232.83 h, median 0.06 h, p90 3.15 h). §10's figures were taken
+  over a different window (14 days to 2026-10-25), so the two are beside each other, not subtracted.
+- M3, M4 and M6 over the coordination database (`items`, `sample --n 30 --seed 1`, `score`): not yet taken. The
+  coordination database lives on the server box; the builder was not permitted to reach it. The reviewer takes them.
+
 ### Waiting on you
 
 - §15 Q4: does D-8126 supersede the 2026-09-22 debugging ceiling (row 49)? Until it is answered, row 49 keeps the
