@@ -30792,6 +30792,21 @@ _wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 
   _home_measured_to home "$id"; hrc=$?
   _limit_field_to five "$wrapper" five 0; _limit_field_to seven "$wrapper" seven 0
   _now_s_to now
+  # IN-FLIGHT GUARD (`ensure` stays idempotent): between the dispatch and the swap's registry flip (stop, the transcript
+  # carry: seconds to minutes) the row is not alive, `started` is 1 and `wrapper` is still the full account, so a second
+  # ensure or start (a double tap on the PWA revive, a revive plus a mail wake) would dispatch a second `ccd swap` to the
+  # same target and double-restart the session. `cmd_swap` has no per-id lock. A `lastswap` younger than SWAP_JITTER + 60
+  # whose newest swap.log line for this id is OUR `wake-rescue` (the swap writes its own `swap <id>:` line only after
+  # the flip, and a refusal restores `lastswap`) means that move is still in flight: answer as if dispatched.
+  _reg_get_to prev "$id" lastswap
+  if [[ "$prev" =~ ^[0-9]+$ && $(( now - prev )) -ge 0 && $(( now - prev )) -lt $(( SWAP_JITTER + 60 )) && -f "$REG/swap.log" ]]; then
+    q=$(tail -n 2000 "$REG/swap.log" 2>/dev/null | grep -E " (wake-rescue|swap) ${id//./\\.}:" | tail -n 1)
+    if [[ "$q" == *" wake-rescue $id: "* ]]; then
+      target="${q##*-> }"; target="${target%% *}"
+      WAKE_MOVE_TARGET="${target:-its new account}"
+      return 0
+    fi
+  fi
   target=$(CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
   if [[ -z "$target" || "$target" == "$wrapper" ]] || (( trc != 0 && trc != 6 )); then
     echo "$(date '+%F %T') wake-ceiling-stay $id: $wrapper at its ceiling and no account has measured room" >> "$REG/swap.log"

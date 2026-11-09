@@ -40,7 +40,7 @@ const limits = (w: string, five: number, seven: number, opts: { fiveResetAt?: nu
 };
 const swapLog = (): string => (fs.existsSync(regFile('swap.log')) ? fs.readFileSync(regFile('swap.log'), 'utf8') : '');
 const lines = (word: string): string[] => swapLog().split('\n').filter((l) => l.includes(` ${word} `));
-const regGet = (f: string): string => h.reg(ID, f);
+const regGet = (f: string): string | null => h.reg(ID, f);
 const detached = (): string[] => h.calls().filter((l) => l.startsWith('detached '));
 const started = (): string[] => h.calls().filter((l) => l.startsWith('supervised-start'));
 
@@ -130,6 +130,28 @@ describe('a wake or start onto an account at its ceiling moves first', () => {
     h.sh(`${STUBS} cmd_ensure ${ID}`, env());
     expect(detached()).toEqual([]);
     expect(started().length).toBe(1);
+  });
+
+  it('a second ensure or start while the move is in flight does not dispatch a second swap', () => {
+    seed(); touchReg(`${ID}.hibernated`); limits('claude', 10, 100, { sevenResetAt: T0 + 86400 }); limits('claude-a', 20, 30);
+    h.sh(`${STUBS} cmd_ensure ${ID}`, env());
+    const again = h.sh(`${STUBS} cmd_ensure ${ID}; echo "rc=$?"; cmd_start ${ID}; echo "rc=$?"`, env({ FAKE_NOW: String(T0 + 30) }));
+    expect(again).toMatch(/rc=0[\s\S]*rc=0/);
+    expect(detached().length).toBe(1);
+    expect(started()).toEqual([]);
+    expect(lines('wake-rescue').length).toBe(1);
+  });
+
+  it('once the swap has logged its own line, or the window has passed, a dead session at the ceiling moves again', () => {
+    seed(); touchReg(`${ID}.hibernated`); limits('claude', 10, 100, { sevenResetAt: T0 + 86400 }); limits('claude-a', 20, 30);
+    h.sh(`${STUBS} cmd_ensure ${ID}`, env());
+    // the swap flipped the row and logged its line; the session died again inside the window: not "in flight"
+    fs.appendFileSync(regFile('swap.log'), `2026-11-09 10:00:01 swap ${ID}: claude -> claude-a (uuid ${UUID})\n`);
+    h.sh(`${STUBS} cmd_ensure ${ID}`, env({ FAKE_NOW: String(T0 + 30) }));
+    expect(detached().length).toBe(2);
+    // a stale wake-rescue (window passed) moves again too
+    h.sh(`${STUBS} cmd_ensure ${ID}`, env({ FAKE_NOW: String(T0 + 30 + 1000) }));
+    expect(detached().length).toBe(3);
   });
 
   it('sends no keys', () => {
