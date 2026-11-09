@@ -168,6 +168,7 @@ describe('the closed route table', () => {
     // The coordinator's escalation/demotion/manual-override door (routing
     // spec 2026-09-14 §5.3, slice 5, Task 4) — never `ccd route` directly.
     [['runs', 'route', '12'], 'POST', '/api/runs/12/route'],
+    [['runs', 'review-rounds', '12'], 'POST', '/api/runs/12/review-rounds'],
     [['mail', 'list'], 'GET', '/api/mail'],
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
@@ -272,7 +273,8 @@ describe('the closed route table', () => {
     // Fifty-five since the programme ledgers' nine (plan PL3).
     // Fifty-seven since the landing line's two attributed writes (landing order wave 5f).
     // Fifty-eight since `leases.retain` (delegation broker wave 5, PR8, W5-R15).
-    expect(keys).toHaveLength(58);
+    // Fifty-nine since `runs.review-rounds` (the coordinator's review-cap extension, D-8125).
+    expect(keys).toHaveLength(59);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -286,7 +288,7 @@ describe('the closed route table', () => {
       37: 'thirty-seven', 38: 'thirty-eight', 39: 'thirty-nine', 40: 'forty', 41: 'forty-one', 42: 'forty-two',
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
-      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight',
+      56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -440,7 +442,7 @@ describe('the four claimant rows send the question door family, and refuse local
     const rows: string[][] = [
       ['runs', 'list', '--closed', '1'], ['runs', 'open', '--json', '-'], ['runs', 'dispatch', '12'], ['runs', 'advance', '12'],
       ['runs', 'close', '12'], ['runs', 'items', '12'], ['runs', 'items-list', '12'], ['runs', 'signals', '12'],
-      ['runs', 'route', '12'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
+      ['runs', 'route', '12'], ['runs', 'review-rounds', '12', '--json', '-'], ['mail', 'list', '--to', 'x'], ['mail', 'send', '--json', '-'], ['mail', 'fetch', '7'],
       ['mail', 'ack', '7'], ['peers', 'list'], ['lifecycle', 'list'], ['claims', 'list'], ['claims', 'take', '--json', '-'],
       ['claims', 'release', '3'], ['ledger', 'list'], ['ledger', 'allocate', '--json', '-'], ['landing', 'show', '--project', 'project-a'],
       ['landing', 'entries', '--json', '-'], ['landing', 'order', '--json', '-'], ['asks', 'list'], ['feed', 'list'],
@@ -1515,5 +1517,54 @@ describe('runs open carries its claimant\'s identity (D-5298)', () => {
     await run(['runs', verb, '12', '--json', '-'], body, { TMUX_PANE: '%7' });
     expect(seen).toHaveLength(1);
     expect(seen[0]!.body).toBe(body);
+  });
+});
+
+describe('runs review-rounds: the coordinator\'s cap extension refuses locally only on a current cap file without review-rounds-v1 (D-8125)', () => {
+  const capFile = (): string => path.join(home, '.ccrc', SERVER_CAPS_FILE);
+  const nowS = (): number => Math.floor(Date.now() / 1000);
+  const writeCaps = (words: readonly string[] = SERVER_CAPS, at = nowS()): void => {
+    fs.writeFileSync(capFile(), renderServerCaps(words, at));
+  };
+  const BODY = '{"byId":"coord-a","byUuid":"u","reason":"two real majors open, down from four"}';
+  const sent = { method: 'POST', url: '/api/runs/7/review-rounds', auth: TOKEN, body: BODY };
+
+  it('is a POST row on /api/runs/{id}/review-rounds that takes the id', () => {
+    const row = clientRoutes().find((r) => r.key === 'runs.review-rounds');
+    expect(row, 'the table has no [runs.review-rounds] row').toBeDefined();
+    expect([row!.method, row!.path]).toEqual(['POST', '/api/runs/{id}/review-rounds']);
+  });
+
+  it('posts the body unchanged with no cap file', async () => {
+    fs.rmSync(capFile(), { force: true });
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    expect(seen).toEqual([sent]);
+  });
+
+  it('posts the body unchanged with a current cap file listing review-rounds-v1', async () => {
+    writeCaps();
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    expect(seen).toEqual([sent]);
+  });
+
+  it('a current cap file with questions-v1 only is refused no-review-rounds-door, nothing sent', async () => {
+    writeCaps(['questions-v1']);
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    expect([r.status, JSON.parse(r.stdout)]).toEqual([2, { ok: false, error: 'no-review-rounds-door',
+      detail: "this box's server predates the coordinator's review-rounds door; the cap is the operator's to lift" }]);
+    expect(seen).toEqual([]);
+  });
+
+  it('a current cap file listing no words is refused too', async () => {
+    writeCaps([]);
+    const r = await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'no-review-rounds-door']);
+    expect(seen).toEqual([]);
+  });
+
+  it('a cap file older than the lease sends (the server\'s 404 is then the answer)', async () => {
+    writeCaps(['questions-v1'], nowS() - 181);
+    await run(['runs', 'review-rounds', '7', '--json', '-'], BODY);
+    expect(seen).toEqual([sent]);
   });
 });

@@ -21,10 +21,11 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, fifty-eight rows, and nothing else; the
+#   * The route comes from ROUTES below, fifty-nine rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
-#     current cap file says the server lacks `questions-v1` (D-7328).
+#     current cap file says the server lacks `questions-v1` (D-7328); `runs
+#     review-rounds` is refused the same way for `review-rounds-v1` (D-8125).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -87,7 +88,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Fifty-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Fifty-nine rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -116,6 +117,11 @@ declare -A ROUTES=(
   # skill clause 1). Body rides `--json`, the same shape every other POST
   # row here uses.
   [runs.route]='POST|/api/runs/{id}/route|yes|-'
+  # The coordinator's bounded cap extension (D-8125): when a work run has reached its review-round cap, the run's claiming
+  # coordinator asks for REVIEW_ROUND_CAP more rounds, with a reason. The body rides `--json -` as
+  # `{"byId":…,"byUuid":…,"reason":"…"}`, the attribution pair the caller's own (`ccrc-api whoami`), as `claims.take` and
+  # `asks.answer` carry theirs. The operator's removal of the cap has no row here and never will.
+  [runs.review-rounds]='POST|/api/runs/{id}/review-rounds|yes|-'
   # `--program` joins through `runs.program`; `--to` and `--program` are
   # MUTUALLY EXCLUSIVE — exactly one, both or neither is a 400 (D-2057;
   # routes.ts's own `(to === null) === (program === null)` guard, not
@@ -666,6 +672,21 @@ main() {
   # whitespace-stripped copy, with the same stated limits) is left alone, so a contrary kind reaches the server and is
   # answered there; a bodyless call is sent as the kind alone, which both doors refuse alike; a body that is not a JSON
   # object is refused here and nothing is sent.
+  # THE SECOND LOCAL REFUSAL, `runs review-rounds` (D-8125), on the same rule as above and a single call line: a CURRENT,
+  # well-formed cap file that omits `review-rounds-v1` says this box's server predates the door, so `no-review-rounds-door`
+  # is answered and nothing is sent; an absent, stale or torn file sends, and the server's 404 is then the answer.
+  if [[ "$key" == 'runs.review-rounds' ]]; then
+    local rwant rserved='door'
+    for rwant in review-rounds-v1 ''; do
+      if _api_server_cap "$rwant"; then
+        [[ -n "$rwant" ]] || rserved=''
+        break
+      fi
+    done
+    [[ -n "$rserved" ]] || refuse 'no-review-rounds-door' \
+      "this box's server predates the coordinator's review-rounds door; the cap is the operator's to lift"
+  fi
+
   local claimant=''
   if [[ "$tmpl" == '/api/questions/'* ]]; then
     claimant="${tmpl#/api/questions/}"

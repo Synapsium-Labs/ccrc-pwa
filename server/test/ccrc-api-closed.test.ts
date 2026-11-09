@@ -356,6 +356,7 @@ describe('the client stays closed', () => {
     // The landing line's two attributed writes (landing order wave 5f: `landing.entries`, `landing.order`) took it to fifty-seven;
     // each takes the caller's own body, `byId` and `byUuid` included, and fills none, so the two fills below stay two.
     // `leases.retain` (delegation broker wave 5, PR8) took it to fifty-eight; it takes the caller's own body and fills none.
+    // `runs.review-rounds` (the coordinator's review-cap extension, D-8125) took it to fifty-nine; it takes the caller's own body and fills none.
     // The third fill is the question door family's `kind` (K5 Q3j): on the four claimant rows only, the client splices a
     // `kind` read from the row's family template, never from the caller, so it is counted by its own scan below rather
     // than by the two keyed fills' spelling. Since Q3l (D-7324) the template is the row's path and is always sent, so
@@ -364,7 +365,7 @@ describe('the client stays closed', () => {
     const filled = [...code.matchAll(/^\s*if \[\[ "\$key" == '([a-z.-]+)' && -n "\$body" \]\]; then$/gm)]
       .map((m) => m[1]!).sort();
     expect(filled).toEqual(['ledger.allocate', 'runs.open']);
-    expect(routeKeys().size).toBe(58);
+    expect(routeKeys().size).toBe(59);
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);
