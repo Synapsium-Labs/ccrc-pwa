@@ -194,6 +194,22 @@ async function measure(page: Page): Promise<Figure> {
   return { ...outer, titleInFrame, frameScroll: inner.scroll, above: outer.frameTop + titleInFrame };
 }
 
+/** Puts keyboard focus on back once the reader has settled, for a case that presses Tab next (fix round 2 of review
+ *  1722's round, D-8139). The shared library's host mount focuses the reader's iframe as it inserts it (its `focus`
+ *  adapter, which `reader/bridge.ts` passes as `true`), and that insert comes after Export reads "Export (plain view)":
+ *  the frame publishes its export body when it first renders, before its render job, its images and the lazy mount. A
+ *  focus on back before the insert is taken by the frame, and Tab then goes on from the frame to the phone bar's first
+ *  door ("Fleet", the merge queue's run 42675922760). So this waits for the reader to come up (its iframe in and
+ *  "Formatting…" gone) or to fall back to the plain view, focuses back, and waits until back holds the focus. */
+async function focusBackSettled(page: Page): Promise<void> {
+  await page.waitForFunction((note) => {
+    if ([...document.querySelectorAll('.doc-plain-note')].some((n) => n.textContent === note)) return true;
+    return document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null;
+  }, READER_FALLBACK_NOTE, { timeout: 90_000, polling: 100 });
+  await page.locator('.docs-full .docs-back').focus();
+  await page.waitForFunction(() => document.activeElement?.classList.contains('docs-back') === true, undefined, { timeout: 10_000 });
+}
+
 /** Opens the leaf at `view`, runs `check`, asks that the page threw nothing, and closes the context whatever happens. */
 async function at(view: View, check: (app: OpenedApp) => Promise<void>, tree = COMMITTED_TREE, leaf = NAME): Promise<void> {
   const app = await openLeaf(view, tree, leaf);
@@ -883,7 +899,7 @@ describe('the desk head (desk-nav Part B)', () => {
       }
       // Keyboard focus on the first crumb, by Tab from back (a programmatic focus may not match :focus-visible): its
       // ring is drawn inside its box, and the box inside the crumbs'.
-      await app.page.locator('.docs-full .docs-back').focus();
+      await focusBackSettled(app.page);
       await app.page.keyboard.press('Tab');
       const ring = await app.page.evaluate(() => {
         const a = document.activeElement as HTMLElement;
@@ -935,7 +951,7 @@ describe('the desk head (desk-nav Part B)', () => {
       }
       for (const li of rows) expect(li.inside, `${li.text}'s item, separator included, is inside the crumbs`).toBe(true);
       expect(r.scrollW, 'no sideways scroll').toBeLessThanOrEqual(r.innerW);
-      await app.page.locator('.docs-full .docs-back').focus();
+      await focusBackSettled(app.page);
       await app.page.keyboard.press('Tab');
       const first = await app.page.evaluate(() => {
         const a = document.activeElement as HTMLElement;
