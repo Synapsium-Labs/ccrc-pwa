@@ -1,6 +1,6 @@
 # The Overlord: one coordinator above every coordinator, that the operator talks to
 
-**Spec** · 2026-11-09 · Status: Draft, rev 6 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
+**Spec** · 2026-11-09 · Status: Draft, rev 7 (a builder's check applied), for the operator's review · Programme: Overlord (slug `overlord`) · Owner:
 the Overlord programme's coordinator · Issue: #2491 · Related: `docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md` (D-8126, PR #2487,
 not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` and its round 2,
@@ -9,7 +9,7 @@ not yet merged), D-8125 (PR #2490, a coordinator lifts its own review cap),
 placement, #749), `docs/superpowers/specs/2026-11-04-runs-screen-rebuild-design.md` (D-8115), `ccd/coordinator-skill/`
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. Rulings are numbered R1 to
-R13 (the operator's) and the author's calls C1 to C55, so the operator can approve or overturn each one by number.
+R14 (the operator's) and the author's calls C1 to C57, so the operator can approve or overturn each one by number.
 
 ## In short
 
@@ -24,7 +24,8 @@ same day that there is one and only one Overlord (R7), which must live a very lo
 After rev 2 the operator ruled that the Overlord is the console's home (R9), that it may read everything (R10), and that
 it oversees every project at once and never moves between them (R11). Like the operator, it does brain work, never
 execution: every piece of execution goes down the chain to a coordinator (R12). After rev 4 the operator ruled that the
-long-life fixes apply to coordinators too, not only to the Overlord (R13).
+long-life fixes apply to coordinators too, not only to the Overlord (R13). After rev 6: it must survive account swaps
+and account limits, and is never limited to one Claude account (R14).
 This spec turns each ruling into a design:
 - **One Overlord.** Exactly one exists, for the whole fleet, and the server enforces it. It is one lasting identity,
   not a role that sessions take turns at, and nothing can create a second one (§3.1). It oversees every project at
@@ -33,8 +34,11 @@ This spec turns each ruling into a design:
   long, re-anchors it on every start, proves it remembers with canaries and probes, and audits it daily from outside
   (§3.3). Coordinators get the same fixes through the same mechanism, with the Overlord as one role of it (R13,
   §3.3.9).
-- **Its model and its accounts.** It runs Fable, the newest of the family, because the operator selected it (C45). It
-  runs on a pool of accounts of its own, which no other session may use and which it never leaves (C46, §3.4).
+- **Its model and its accounts.** It runs the Fable class, the top model tier, from any provider whose lane maps it,
+  because the operator selected it (C45). It
+  runs on a pool of accounts of its own, which no other session may use (C46). It is never tied to one account: it
+  needs at least two that can serve it, moves between accounts at its renewals before a limit bites, borrows shared
+  accounts when its own are spent, and loses no operator message to a swap (R14, C56, C57).
 - **Brain work only.** It understands, decides, routes, answers and follows up. It never executes: no edits, commits,
   pull requests, test runs or dispatches. Execution always goes to a coordinator, which handles it as it sees fit
   (R12, §3.5).
@@ -125,6 +129,7 @@ The rulings are settled; this spec only turns them into design.
 | R11 | **It oversees every project at once** (the operator, 2026-11-09, after rev 2): it never moves from one project to another; it is omniscient within the operator's ccrc environment | There is no move between projects. Its session always runs in the dedicated `overlord` project, which is only where its pane lives. Replacing a lost session is a rebind inside that project (§3.1, C2) |
 | R12 | **Brain work, not execution** (the operator, 2026-11-09, after rev 3): much like the operator, it is focused on brain work; execution is always handed down the chain to coordinators, who deal with it as they deem necessary | It never edits, commits, opens a pull request, runs a build or a test, opens a run or dispatches a worker. It hands work down as an outcome, never as a method, and does not second-guess how a coordinator executes. A skill clause, a server refusal and an accident guard hold the line (§3.5, C48) |
 | R13 | **Coordinators too** (the operator, 2026-11-09, after rev 4): the gaps the research measured (a roll and a wake resume the same conversation, a bare `/compact`, an empty card for a session with no runs, recall barely used, the replay quiz never run) must be fixed for coordinators, not just the Overlord | One continuity mechanism for every long-lived role, the Overlord and coordinators as two rows of one table. Coordinators get renewal, write-through notes, a card that is never empty, role compaction instructions, recall steering and probes, and the Overlord as their outside judge. It ships in its own wave, W1a, before anything Overlord-specific (§3.3.9) |
+| R14 | **Robust across accounts** (the operator, 2026-11-09, after rev 6): the Overlord survives account swaps and account limits, and is never limited to one Claude account | At least two accounts must be able to serve it before it is designated. Its own pool first, then shared accounts, at the renewal before a limit bites. A swap is a renewal that loses no operator message, and a short restart keeps its holds (§3.4, C56, C57) |
 
 ## 3. What the Overlord is
 
@@ -337,7 +342,7 @@ from the server's canonical state, never from a summary of a summary, and proves
   for every role (C51). The order is stable
   first and live last, so the cached prefix stays stable and the live state sits at the end of the context, where
   recall is strongest:
-  1. **Constitution:** what it is, R1 to R13 in one line each, the anti-goals, the brakes and their state, and the
+  1. **Constitution:** what it is, R1 to R14 in one line each, the anti-goals, the brakes and their state, and the
      rules version.
   2. **Authority:** the live grants.
   3. **Live state:** the open requests ranked by recency, importance and age; each programme in one line; the
@@ -406,7 +411,7 @@ from the server's canonical state, never from a summary of a summary, and proves
 
 | Layer | Holds | Lives in | Reaches the session |
 |---|---|---|---|
-| Constitution | What it is, R1 to R13, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
+| Constitution | What it is, R1 to R14, anti-goals, brakes, grants | the `ccrc-overlord` skill, `overlord_grants` | first in every card, and the skill's first clauses |
 | Working | Open requests, programmes, notes, recent acts | `overlord_requests`, `continuity_notes`, `overlord_acts` | the card, ranked and capped |
 | Episodic | Every act, request and conversation since the first day | `overlord_acts`, `ccrc history` (its family recall follows the session across clears) | on demand, through subagents |
 | Semantic | The operator model | `operator-model.db` (§9) | the operator brief on the card, and `GET /api/overlord/model` |
@@ -437,7 +442,7 @@ from the server's canonical state, never from a summary of a summary, and proves
 
 - **A swap never lands the Overlord on a summary.** Today a swap landing resumes from Claude Code's summary, which is
   lossy (`ccd/ccd`). For the Overlord, a swap is followed by a renewal: the new generation rebuilds from the server, so
-  a swap loses nothing by construction.
+  a swap loses nothing by construction. §3.4 (C57) makes swaps rare, early and safe for the operator's messages.
 - **A roll is a renewal** (C36's last trigger), never a resume of an old conversation onto a new build.
 - **It never hibernates** (C4). A restart keeps the session id and starts a generation from the card.
 - **History stays whole.** The Overlord's own conversations are in `ccrc history` across every generation, and the
@@ -593,10 +598,22 @@ an account, nor take theirs.
     operator's session-gated doors write it: designate, rebind, and a Settings row. This is the D-6790 rule kept whole:
     Fable runs only when the operator selects it, and every box-token write that names `fable` is still refused
     (`409 fable-operator-only`). The Overlord cannot pick its own model, and no other session can borrow the choice.
-  - **A class, never a version.** It asks for the class `fable`. The class follows its family's newest model through
-    the fleet's model-class auto-advance (the operator's ruling of 2026-10-07), so it runs the newest Fable today (5.2,
-    as the operator says) and moves to the next one without anyone touching it. The move lands at a renewal, never
-    inside a generation (C44).
+  - **A class, never a version, and never one provider.** It asks for the class `fable`: the top tier of the fleet's
+    model-class registry, which maps each class to a model per lane. On an Anthropic lane that is Anthropic's newest
+    Fable (5.2 today, as the operator says). On another provider's lane it is whatever that lane's registry maps to
+    `fable`, such as a GPT lane's top model through its LiteLLM bridge (the operator, 2026-11-09, after rev 6). Each
+    lane's class follows its family's newest model through the model-class auto-advance (the operator's ruling of
+    2026-10-07), so nobody pins a version. A change of model lands at a renewal, never inside a generation (C44).
+  - **One rule changes for that.** Today `shared/serviceability.ts` answers the `fable` class `unservable` (`backend`)
+    on every lane that is not an Anthropic backend. It becomes: `fable` is unservable on a lane whose registry has no
+    `fable` slot, and otherwise is judged by that lane's own limits. Anthropic's Fable share against its cap stays the
+    Anthropic arm of the test. The server's forecast and ccd's placement read the same answer, as they do today, and
+    `projected-home.test.ts` drives both. D-6790 is untouched: whichever lane serves it, `fable` stays the operator's
+    to select.
+  - **Moving between providers is clean.** Every move of the Overlord is a renewal from the card (C57), so no
+    conversation is carried from one provider to another. A model change from one provider's Fable to another's is one
+    `renew` act row, and the probes after it (C41) check the new generation like any other. The outside audit (C42)
+    records which lane and model each generation ran, so a weaker provider shows up in the scores.
   - **The server applies the choice at each renewal.** One L1 decider, `overlordModelFor`, answers the model for the
     next generation: the designated model when the pool has an account that can serve it, else `opus`. "Can serve" is
     the limits read the fleet already makes for each class: for Fable it is the sweep's estimate of the account's Fable
@@ -613,13 +630,16 @@ an account, nor take theirs.
     Overlord's blind spots.
   - **How a generation starts on another model** is measured in W0: the class write and a relaunch, or a `/model`
     typed after the clear and before the first prompt. The typed form saves the account's default model (the
-    auto-advance spec's D19). That side effect is harmless here only because the accounts are the Overlord's alone
-    (C46).
+    auto-advance spec's D19), so it is used only on the Overlord's own accounts (C46). On a borrowed account (C56) a
+    model change rides a relaunch, never a typed `/model`.
+  - **On a borrowed account it runs Opus.** Fable's weight on a shared account would come out of other sessions'
+    windows, so `overlordModelFor` answers Fable only on the Overlord's own accounts.
 - **C46. A pool of accounts of its own, exclusive both ways.**
   - **Its side.** The Overlord lives in its own project (`overlord`, C2), and the operator tags that project
     with a pool that only the Overlord's project uses (written here as `<overlord-pool>`; real pool names are the
     operator's data and stay out of this repository). `ccd` already keeps a tagged project in its pool: placement,
-    the auto-swap and every manual verb (the pools spec's ruling 6). The Overlord never crosses out of its pool.
+    the auto-swap and every manual verb (the pools spec's ruling 6). "In the pool" has always meant "servable for the
+    pool", which includes untagged accounts; C56 uses that to borrow when its own accounts are spent.
   - **The other side is new: an exclusive account.** Today an untagged project may land on any account, a tagged one
     included ("untagged is unconstrained"), so a pool alone does not keep other sessions off the Overlord's accounts.
     An account's pool edge gains `exclusive`, off by default. An exclusive account serves only projects tagged with its
@@ -632,15 +652,49 @@ an account, nor take theirs.
     edge. A `ccd` that predates it would ignore the flag and fail open, so the box advertises a capability word
     (`pool-exclusive`), and the server refuses to set `exclusive` while the fleet box does not advertise it
     (`pool-exclusive-unenforced`). Nothing is exclusive until it can be enforced.
-  - **How many accounts.** At least two are recommended, so an account at its ceiling swaps to the other inside the
-    pool, and each account carries its own Fable share. Which accounts, and how many, is the operator's choice in
+  - **How many accounts.** At least two of its own are recommended, so an account at its ceiling swaps to the other
+    inside the pool, and each account carries its own Fable share. Two that can serve it, own or shared, are required
+    (C56). Which accounts, and how many, is the operator's choice in
     Settings; the spec names none. Account management stays the operator's: the Overlord never tags, untags or edits
     an account or a pool (§8, "does not get").
-  - **When the pool is exhausted.** The pools spec's ruling 6 stands: stay in the pool, never cross, make it loud. For
-    the Overlord, a stranded session is a session that is not live, so every hold falls through to the operator (C23),
-    and an operator item says which accounts are at their ceilings and when the first resets. No coordinator waits.
+  - **When its own accounts are spent,** it borrows a shared one (C56). Only when no account it may use has headroom is
+    it stranded, and then every hold falls through to the operator (C23) and an operator item says when the first
+    account resets. No coordinator waits.
   - **The coordinators it starts never use its accounts.** They are placed by their own projects' pools (C32), and the
     exclusive edge keeps them off the Overlord's pool even when their project is untagged.
+
+- **C56. Never one account (R14).**
+  - **At least two, or no designation.** The designate and rebind doors count the enabled, non-pay-per-use accounts that
+    can serve the `overlord` project, its own and shared together, and refuse fewer than two (`overlord-single-account`).
+    Settings shows a warning while it has fewer than two of its own. An account disabled, signed out or withdrawn later
+    raises an operator item when the count drops below two.
+  - **An order of preference.** First its own accounts (C46), on its designated model. Then untagged shared accounts,
+    which the pool rule already lets a tagged project use, on Opus (C45). Never a pay-per-use lane unless the operator
+    puts one in its pool (D-8098), and never another pool's tagged account. `ccd` places and swaps, as for every session;
+    the server writes the Overlord's ordered account list on its registry row through the route verb it already
+    composes. W0 measures whether the auto-swap's pick honours that order. If it does not, the fix is one preference
+    rule in the swap target's choice: listed order before load.
+  - **It goes home.** When one of its own accounts regains headroom, the next renewal moves it back off the borrowed one
+    (the pools machinery's rehome, at a renewal rather than mid-work).
+- **C57. Swaps are planned, early and safe.**
+  - **The renewal is the moment to move.** At each renewal `overlordModelFor`'s sibling, `overlordAccountFor`, reads the
+    limits the fleet already measures. When the current account is past a soft line (by default 70% of either its
+    five-hour or its weekly window), the renewal restarts the session on the account with the most headroom: one
+    clean start, between turns, from the card. The idle quiet-window renewal (C36) makes this happen at least daily.
+  - **A pre-emptive swap at idle.** Between renewals, when the current account passes a harder line (by default 85%)
+    and the Overlord is idle, the renewal lane renews it onto another account at once, rather than waiting for ccd's
+    hard-block swap in the middle of a turn.
+  - **A swap mid-turn loses at most that turn, and never the operator's message.** If a limit still hits mid-turn, ccd
+    swaps as it does for any session, and the renewal follows (§3.3.8). The server knows the operator's last message
+    in the Overlord chat and whether a reply followed it. An unanswered message goes into the checkpoint marked
+    unanswered, and the new generation answers it first.
+  - **A short restart keeps its holds.** A swap or renewal in progress reads as restarting, not dead. Holds taken for the
+    Overlord survive a restart of up to two minutes before they fall through (`overlord-not-live` waits that long
+    while the registry says restarting, and fires at once on a measured death). Coordinators therefore see no burst of
+    escalations at every swap.
+  - **When everything is limited,** it waits for the earliest reset, as the continuity programme's waits already do,
+    with holds falling through and an operator item naming the reset time.
+  - **W0 measures it:** a swap at idle and one mid-turn, each followed by a renewal, with the probes passing after both.
 
 ### 3.5 Brain work, never execution (R12)
 
@@ -1304,6 +1358,8 @@ This section lists the build surface by bounded context, so each piece has one o
 | `CONTINUITY_ROLES`, `renewalDue`, `compactInstructionsFor` | K (shared), C3 Session Conversation | L0, L1 | one role table; the Overlord and coordinators are rows (C49 to C51) |
 | The renewal lane, `continuity_notes`, `GET /api/sessions/:id/card`, `ccrc-api probe` | C3, C5 | L3 and L4 | the roll and hibernate lanes call the renewal lane instead of resuming; the roster card gains role renderers (C49 to C52) |
 | `OVERLORD_DENY_RULES`, the `overlord-not-a-coordinator` refusal | K (shared), C5 | L0, L1 | beside `ACCOUNT_DENY_RULES`; one refusal in the run-open decider (C48) |
+| `overlordAccountFor`, the two-account check, the restarting grace | C5, C1 | L1 | reads the limits and pools readers; the grace is one rung in the not-live release reason (C56, C57) |
+| `fable` servable on any lane whose registry maps it | C1 Fleet Registry & Accounts (routing) | L1 (`shared/serviceability.ts`) | one arm of the backend test; ccd's placement and the server's forecast read it alike (C45) |
 | `overlordModelFor`, the designation's `model` | C5 | L1 and L3 | the renewal lane asks it; the limits read's per-class serviceability is its input (C45) |
 | The exclusive account edge | C1 Fleet Registry & Accounts | L1 (`_pool_ok`, `pools.ts`), L3 (`pool_edges`) | one clause in the pool rule, one column, the `pool-exclusive` capability word (C46) |
 | Start placement policy moved out of the PWA | C1 Fleet Registry & Accounts | L1 | `startProgramPlacement` gets one shared home for the sheet and the start door |
@@ -1374,6 +1430,7 @@ Success means fewer operator touches, faster answers, and no new stall.
 | M11 | Generations on the designated model, and minutes stranded with no servable account | Fable for at least 90% of generations; stranded minutes watched | `renew` act rows, the pools journal |
 | M12 | Execution attempts the guard denied, and relays that carried a method instead of an outcome | zero; each one is a skill defect, fixed in the skill | the hook's deny log, the outside audit's sample (C42) |
 | M13 | Coordinators: probe pass rate after renewal and compaction, the weekly replay quiz score, empty cards, and the share of coordinator generations that used recall | probes 100% after one re-read; quiz above its W0 baseline; zero empty cards; recall in most generations | probe rows, the quiz lane, the card door, `ccrc history` |
+| M14 | Swaps: planned versus mid-turn, operator messages unanswered after a swap, holds that fell through during a restart, and hours on a borrowed account | most swaps planned; zero unanswered messages; zero fall-throughs from restarts under two minutes | `renew` act rows, the swap log, the hold rows |
 | M7 | Inferred entries the operator retired or corrected, per week | watched. A high rate means the distillation over-reaches | `entry_events` |
 
 ## 13. Decisions (the author's calls)
@@ -1427,7 +1484,7 @@ this spec and can be overturned by number.
 | C42 | Drift | self-assessment, an outside audit | A daily outside audit with a golden set of the operator's own answers | Proposed |
 | C43 | Changing preferences | overwrite, bi-temporal | Bi-temporal entries: a change is a row, never something to remember | Proposed |
 | C44 | Context hygiene | ad hoc, rules | Reads through subagents, one model per generation, compact reads | Proposed |
-| C45 | How its model is chosen and kept | the session, the operator once, the operator plus the server | The operator's choice on the designation; the server applies it at each renewal, falls back to Opus at Fable's cap and returns after | Proposed |
+| C45 | How its model is chosen and kept | the session, the operator once, the operator plus the server | The operator's choice on the designation, as a class (`fable`), served by any provider's lane that maps it; the server applies it at each renewal, falls back to Opus when no lane can serve it and returns after | Proposed |
 | C46 | Its accounts | shared, a tagged pool, a tagged pool with exclusive accounts | A pool of its own, with an `exclusive` edge so no other session lands on its accounts; enforced on both boxes before it can be set | Proposed |
 | C47 | What it may read | operator prompts only, everything | Everything the console reads plus every project's full history (R10); credential stores stay closed | Proposed |
 | C48 | What it does itself | some small execution, none | None: brain work only (R12); every piece of execution goes to a coordinator as an outcome; skill clause, run-open refusal and a deny set hold the line | Proposed |
@@ -1438,6 +1495,8 @@ this spec and can be overturned by number.
 | C53 | Lossless history | mentioned in passing, the episodic layer | The episodic layer of every long-lived role: generations stay one family, one PreCompact print owned by history W3, leaves read before transcripts | Proposed |
 | C54 | Code graphs | unused, its context, its routing | Routing through history's `touched` and the graph's blast radius, read by subagents; the graphify card withheld from the Overlord | Proposed |
 | C55 | Workflows and subagents | workflows, subagents that act, read-only subagents only | No workflows; up to three read-only background subagents with named models, never Fable; every act on the main thread; big thinking goes to a coordinator | Proposed |
+| C56 | How many accounts, and which | one, its pool only, its pool then shared | At least two required; its own first on Fable, shared untagged ones next on Opus, never pay-per-use or another pool's | Proposed |
+| C57 | Swaps and limits | ccd's hard-block swap only, planned moves | Moves at renewal past a soft line, a pre-emptive idle renewal past a harder one, unanswered operator messages carried, a two-minute restarting grace for holds | Proposed |
 
 ## 14. Build order
 
@@ -1447,10 +1506,10 @@ depends only on the waves before it.
 ```mermaid
 flowchart LR
   P0["Prerequisites<br/>D-8126 merged and built<br/>(calls record, goals read,<br/>decision procedure)<br/>D-8125 merged"] --> W1
-  W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card,<br/>a model change at renewal,<br/>replay quiz baseline"] --> W1A
+  W0["W0 Longevity spike<br/>verify Claude Code knobs:<br/>PreCompact instructions,<br/>compact window, idle compaction,<br/>clear in place with a card,<br/>a model change at renewal,<br/>swaps at idle and mid-turn,<br/>replay quiz baseline"] --> W1A
   H3["ccrc history W3-1<br/>(its own programme)"] -.-> W1A
   W1A["W1a Continuity for every<br/>long-lived role<br/>role table, renewal lane,<br/>notes, cards, compaction<br/>instructions, probes,<br/>weekly quiz, clause 23"] --> W1
-  W1["W1 Designate and talk<br/>exclusive account edge,<br/>designation with its model,<br/>skill v1, Overlord home and chat,<br/>board read, kill switch,<br/>the Overlord's card, canaries"] --> W2
+  W1["W1 Designate and talk<br/>exclusive account edge,<br/>two-account check, planned swaps,<br/>designation with its model,<br/>skill v1, Overlord home and chat,<br/>board read, kill switch,<br/>the Overlord's card, canaries"] --> W2
   W2["W2 Route and follow up<br/>requests table, relay door,<br/>overlord mail role,<br/>follow-up arm, audit log"] --> W3
   W3["W3 Answer first<br/>Overlord hold tier for items<br/>and asks, answer and<br/>escalate doors, act catalogue,<br/>authority decider, grants door,<br/>probes, outside audit"] --> W4
   W4["W4 Learn<br/>operator-model.db, history door,<br/>feed read,<br/>distillation, About you,<br/>privacy controls"] --> W5
@@ -1511,7 +1570,8 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 | Too many coordinators | Window spend and box load rise | The live-programme cap (C28) and the fleet's own admission |
 | Fable's weekly cap or window weight | The Overlord's accounts run out sooner than on Opus | The accounts are its own (C46), so the cost lands nowhere else. Reading goes to cheaper subagents (C44). Opus takes over at the cap and Fable returns after (C45). M11 watches it |
 | The Overlord drifts into execution | It grows a context full of diffs and logs, and coordinators lose ownership | The skill clause, A9, the run-open refusal, the deny set, M12 and the outside audit's sample (C48) |
-| The Overlord's pool is exhausted | No account can serve it | Holds fall through to the operator (C23), an operator item names the reset, and two or more accounts are recommended (C46) |
+| Every account it may use is limited | No account can serve it | Two accounts required, shared ones borrowed, moves before limits bite (C56, C57); then holds fall through and an operator item names the reset |
+| A swap drops the operator's message or bursts escalations | The operator repeats themselves; coordinators see noise | Unanswered messages carried into the checkpoint; a two-minute restarting grace for holds (C57); M14 |
 
 ## Where things stand
 
@@ -1525,15 +1585,18 @@ Overlord propose relaxations from what it has learned. Nothing in any wave is ir
 - R12, the operator's ruling of 2026-11-09 after rev 3: brain work only; execution always goes down the chain to
   coordinators (§3.5).
 - R13, the operator's ruling of 2026-11-09 after rev 4: the long-life fixes apply to coordinators too (§3.3.9).
-- The operator's direction of 2026-11-09, after rev 1: Fable, and an account pool of its own. C45 and C46 turn it into
+- R14, the operator's ruling of 2026-11-09 after rev 6: it survives account swaps and limits and is never limited to
+  one Claude account (§3.4).
+- The operator's direction of 2026-11-09, after rev 1: Fable, and an account pool of its own. After rev 6: Fable means
+  the Fable class, which may come from non-Anthropic lanes. C45 and C46 turn it into
   design (§3.4), and wait on approval with the other calls.
 
 ### Waiting on you
 
-- **Approve this spec** with calls C1 to C55, or name the calls to change. C47 is where your "everything" stops: it
+- **Approve this spec** with calls C1 to C57, or name the calls to change. C47 is where your "everything" stops: it
   keeps the credential stores closed.
-- **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live; at least two
-  are recommended (C46). Nothing in this spec names them.
+- **Which accounts form the Overlord's pool.** You tag them in Settings once W1's exclusive edge is live. At least two
+  accounts that can serve it are required, own or shared, and two of its own are recommended (C46, C56). Nothing in this spec names them.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions, and D-8125 (PR #2490). The Overlord's W1
   starts when both have merged; W0 and W1a, the coordinators' fixes, do not wait for them.
 
