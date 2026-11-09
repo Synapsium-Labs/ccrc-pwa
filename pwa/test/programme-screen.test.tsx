@@ -8,7 +8,7 @@ import type { GoalsView, StoredSecretsAnswer } from '../../shared/ledgers';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
-import { PROGRAM_SLUG_MAX_CHARS } from '../../shared/api';
+import { PROGRAM_SLUG_MAX_CHARS, type ProgrammeRow, type RunHit } from '../../shared/api';
 import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath, shellViewOf, topRouteOf } from '../src/lib/routes';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
 import { STORED_TEXT, type RemoveSecret } from '../src/ledgers/ItemView';
@@ -537,5 +537,200 @@ describe('the programme screen\'s Stored secrets (the operator\'s ruling on prog
     await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
     act(() => store.setState({ waiting: at(null) }));
     await waitFor(() => expect(read).toHaveBeenCalledTimes(4));
+  });
+});
+
+// The Runs section and Resume on the programme page (the runs rebuild, Task 19, D-8075; spec 2026-11-04 §8.5, §9.5, A55, F25).
+// The page's two run reads are the test's own (`readers`); a hit is what `find` sends for a closed run.
+describe('the programme page: Runs', () => {
+  const T = Date.UTC(2026, 10, 2, 11, 20);
+  const answerRow = (over: Partial<ProgrammeRow> = {}): ProgrammeRow => ({
+    slug: 'prog-a', title: 'Programme A', currentWave: 2, waveOf: 5, claimedBy: 'coord-a',
+    waves: { working: 1, waiting: 0, queued: 0, done: 1, failed: 0 }, lastMoveAt: Date.now() - 60_000, ending: null, ...over,
+  });
+  const hit = (over: Record<string, unknown> = {}): RunHit => ({
+    id: 5, program: 'prog-a', programTitle: 'Programme A', runTitle: null, wave: 1, waveOf: 5, kind: 'work', reviews: null, state: 'done',
+    project: 'project-a', workspace: null, branch: null, claimedBy: 'coord-a', openedAt: T - 1000, closedAt: T, closedBy: 'coordinator',
+    closeDetail: null, ...over,
+  }) as unknown as RunHit;
+  const readersOf = (rows: ProgrammeRow[], hits: RunHit[] | 'fail' = []) => {
+    const find = vi.fn(async () => {
+      if (hits === 'fail') throw new TypeError('offline');
+      return { ok: true as const, exact: null, runs: hits, reviewsOf: [], next: null };
+    });
+    return { find, readers: { find, programmes: async () => ({ ok: true as const, programmes: rows, closedToday: { operator: 0, sweep: 0, coordinator: 0 } }) } };
+  };
+  const coord = (over: Record<string, unknown> = {}) => fleetSession({ id: 'coord-a', project: 'project-a', role: 'coordinator', status: 'idle', lifecycle: 'running', ...over } as never);
+  const runs = (...over: Record<string, unknown>[]) => over.map((o) => runRow({ program: 'prog-a', programTitle: 'Programme A', homeProject: 'project-a', claimedBy: 'coord-a', workspace: null, branch: null, ...o } as never));
+  const resumeButtons = (): HTMLElement[] => screen.queryAllByRole('button', { name: /^resume/i });
+
+  it('the header is a superset of the card: lamp and word, the line, the coordinator and its word, the wave counts', async () => {
+    const { readers } = readersOf([answerRow()]);
+    render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1, wave: 2, waveOf: 5 }), sessions: [coord()] })} readers={readers} />);
+    const facts = await screen.findByTestId('programme-facts');
+    await waitFor(() => expect(within(facts).getByText(/1 working · 0 waiting · 0 queued · 1 done/)).toBeTruthy());
+    expect(within(facts).getByText('moving')).toBeTruthy();
+    expect(within(facts).getByText(/^1 working · 1 done · moved/)).toBeTruthy();
+    expect(within(facts).getByText('coord-a').closest('a')?.getAttribute('href')).toBe('/s/coord-a');
+    expect(facts.textContent).toContain('alive');
+    expect(screen.getByText('wave 2 of 5')).toBeTruthy();
+  });
+
+  it('an answer without a list (a proxy\'s {}) draws the page, the facts counted from the open runs, and never throws', async () => {
+    const empty = { programmes: (async () => ({})) as never, find: (async () => ({})) as never };
+    render(<ProgrammeScreen slug="prog-a" store={heard()} readers={empty} />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Programme A' })).toBeTruthy();
+    expect(screen.getByTestId('programme-facts')).toBeTruthy();
+  });
+
+  it('the header carries the pending-close line per reason', async () => {
+    const { readers } = readersOf([answerRow({ pendingClose: [
+      { reason: 'owner-gone', count: 2, soonestAt: Date.now() + 3 * 3_600_000 - 1000, armed: true },
+      { reason: 'overtaken', count: 1, soonestAt: Date.now() + 5 * 60_000, armed: false },
+    ] })]);
+    render(<ProgrammeScreen slug="prog-a" store={heard()} readers={readers} />);
+    expect(await screen.findByText('Owner gone: 2 · ccrc closes them in 3 h')).toBeTruthy();
+    expect(screen.getByText(/^Overtaken by later waves: 1 · ccrc would close it in \d+ min$/)).toBeTruthy();
+  });
+
+  it('open waves newest first with reviews nested', async () => {
+    const { readers } = readersOf([answerRow()]);
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs(
+      { id: 10, wave: 1 }, { id: 11, wave: 2 }, { id: 12, wave: 2, kind: 'review', reviews: 11 }) })} readers={readers} />);
+    await screen.findByTestId('programme-facts');
+    const waves = [...view.container.querySelectorAll('.programme-wave')].map((w) => [...w.querySelectorAll('li.run-row')].map((r) => (r as HTMLElement).title));
+    expect(waves).toEqual([['run 11', 'run 12'], ['run 10']]);
+  });
+
+  it('a stuck row carries its Abandon, and a healthy row none', async () => {
+    const { readers } = readersOf([answerRow()]);
+    const stuck = { reason: 'overtaken', cause: null, since: Date.now() - 86_400_000, closes: null };
+    render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 10, wave: 1, stuck }, { id: 11, wave: 2 }) })} readers={readers} />);
+    await screen.findByTestId('programme-facts');
+    expect(screen.getByRole('button', { name: 'Abandon run 10' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Abandon run 11' })).toBeNull();
+  });
+
+  it('closed waves read through find with their close word and line', async () => {
+    const { readers, find } = readersOf([answerRow()], [
+      hit({ id: 5, state: 'done', closedBy: 'coordinator' }),
+      hit({ id: 4, state: 'failed', closedAt: T - 86_400_000, closedBy: 'operator', closeDetail: 'abandon:overtaken' }),
+    ]);
+    render(<ProgrammeScreen slug="prog-a" store={heard()} readers={readers} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Closed waves/ }));
+    expect(find).toHaveBeenCalledWith(expect.objectContaining({ program: 'prog-a', scope: 'closed' }));
+    const section = screen.getByTestId('programme-runs');
+    expect(within(section).getByText('done')).toBeTruthy();
+    expect(within(section).getByText(/^Closed by the coordinator, /)).toBeTruthy();
+    expect(within(section).getByText('closed by you: overtaken')).toBeTruthy();
+  });
+
+  it('done reads with Closed by the coordinator on its line, and the date alone after a word that names the closer', async () => {
+    const { readers } = readersOf([answerRow()], [hit({ id: 4, state: 'failed', closedBy: 'sweep', closeDetail: 'expired:never-started' })]);
+    render(<ProgrammeScreen slug="prog-a" store={heard()} readers={readers} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Closed waves/ }));
+    const row = screen.getByText('closed by ccrc: never started').closest('li')!;
+    expect(row.textContent).not.toMatch(/Closed by/);
+    expect(row.textContent).toMatch(/2 Nov/);
+  });
+
+  it('a failed closed waves read says Could not load closed waves. Try again. in the fold alone', async () => {
+    const { readers, find } = readersOf([answerRow()], 'fail');
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1 }) })} readers={readers} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Closed waves/ }));
+    expect(screen.getByRole('alert').textContent).toContain('Could not load closed waves. Try again.');
+    expect(screen.getByTestId('programme-facts')).toBeTruthy();
+    expect(view.container.querySelectorAll('.programme-wave .run-row').length).toBe(1);
+    find.mockImplementation(async () => ({ ok: true as const, exact: null, runs: [hit()], reviewsOf: [], next: null }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(find).toHaveBeenCalledTimes(2);
+  });
+
+  it('at a desk Waiting on you and Stored secrets sit under Goals, and Runs in the other column (o8)', async () => {
+    const { readers } = readersOf([answerRow()]);
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} readers={readers} />);
+    await screen.findByTestId('programme-facts');
+    const two = view.container.querySelector('.pv-two')!;
+    const main = two.querySelector(':scope > .pv-main')!;
+    expect(main.querySelector('[aria-label="Goals"], .pg-goals')).not.toBeNull();
+    expect(main.querySelector('section[aria-label="Waiting on you"]')).not.toBeNull();
+    expect(main.querySelector('[data-testid="programme-runs"]')).toBeNull();
+    expect(two.querySelector(':scope > [data-testid="programme-runs"]')).not.toBeNull();
+    const css = stripComments(readFileSync(path.join(__dirname, '../src/ledgers/ledgers.css'), 'utf8'));
+    expect(css).toMatch(/\.pv-two \{ display: grid; grid-template-columns: minmax\(0, 1\.05fr\) minmax\(0, 1fr\);/);
+    expect(css).toMatch(/@media \(max-width: 900px\) \{ \.pv-two \{ grid-template-columns: minmax\(0, 1fr\); \} \}/);
+  });
+
+  describe('Resume sits once on the head (F25, A46, A55, A60)', () => {
+    const gone = coord({ status: 'dead', lifecycle: 'orphan' });
+    it('shows from coordinatorGone, once, and no row carries it', async () => {
+      const { readers } = readersOf([answerRow({ coordinatorGone: true })]);
+      const view = render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1 }, { id: 2, wave: 3 }), sessions: [coord()] })} readers={readers} />);
+      const facts = await screen.findByTestId('programme-facts');
+      await waitFor(() => expect(resumeButtons().length).toBe(1));
+      expect(facts.contains(resumeButtons()[0]!)).toBe(true);
+      expect(view.container.querySelector('.run-resume')).toBeNull();
+      expect(within(screen.getByTestId('programme-runs')).queryByRole('button', { name: /resume/i })).toBeNull();
+    });
+    it('an owner-gone row carries Abandon and never Resume', async () => {
+      const { readers } = readersOf([answerRow({ coordinatorGone: true })]);
+      const stuck = { reason: 'owner-gone', cause: null, since: Date.now() - 86_400_000, closes: null };
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 10, stuck, coordinatorGone: true }), sessions: [gone] })} readers={readers} />);
+      await waitFor(() => expect(resumeButtons().length).toBe(1));
+      const rows = within(screen.getByTestId('programme-runs'));
+      expect(rows.getByRole('button', { name: 'Abandon run 10' })).toBeTruthy();
+      expect(rows.queryByRole('button', { name: /resume/i })).toBeNull();
+    });
+    it('a claimant with no fleet row still shows it', async () => {
+      const { readers } = readersOf([answerRow({ coordinatorGone: true })]);
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1 }), sessions: [] })} readers={readers} />);
+      await waitFor(() => expect(resumeButtons().length).toBe(1));
+    });
+    it('a live coordinator shows none', async () => {
+      const { readers } = readersOf([answerRow({ coordinatorGone: false })]);
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1 }), sessions: [coord()] })} readers={readers} />);
+      await screen.findByTestId('programme-facts');
+      expect(resumeButtons()).toEqual([]);
+    });
+    it('an older server with no field reads coordinatorPresence', async () => {
+      const { readers } = readersOf([answerRow()]);
+      const deadStore = heard({ runs: runs({ id: 1 }), sessions: [gone] });
+      render(<ProgrammeScreen slug="prog-a" store={deadStore} readers={readers} />);
+      await waitFor(() => expect(resumeButtons().length).toBe(1));
+      cleanup();
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1 }), sessions: [] })} readers={readers} />);
+      await screen.findByTestId('programme-facts');
+      expect(resumeButtons()).toEqual([]);
+    });
+    it('coordinatorGone false hides it over a presence of dead, as a substrate fault sends (D-7370)', async () => {
+      const { readers } = readersOf([answerRow({ coordinatorGone: false })]);
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: runs({ id: 1 }), sessions: [gone] })} readers={readers} />);
+      await screen.findByTestId('programme-facts');
+      expect(resumeButtons()).toEqual([]);
+    });
+    it('an all-terminal programme with a gone coordinator shows it on its head, and a frame not yet heard hides it', async () => {
+      const ended = answerRow({ coordinatorGone: true, ending: { outcome: 'complete', waves: 2, neverStarted: 0, closedBy: null }, currentWave: null });
+      const { readers } = readersOf([ended], [hit({ id: 7 })]);
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: [], sessions: [gone] })} readers={readers} />);
+      await waitFor(() => expect(resumeButtons().length).toBe(1));
+      cleanup();
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: [], runsFrameSeen: false, sessions: [gone] })} readers={readers} />);
+      await screen.findByTestId('programme-facts');
+      expect(resumeButtons()).toEqual([]);
+    });
+    it('Resume from the head of an all-terminal programme calls the reclaim for its newest run\'s claimant', async () => {
+      const ended = answerRow({ coordinatorGone: true, ending: { outcome: 'complete', waves: 2, neverStarted: 0, closedBy: null }, currentWave: null });
+      const { readers } = readersOf([ended], [hit({ id: 6, wave: 1 }), hit({ id: 7, wave: 2 })]);
+      const reclaim = vi.spyOn(api, 'reclaimRun').mockResolvedValue({ program: 'prog-a', runIds: [6, 7], from: 'coord-a', to: 'coord-b' });
+      render(<ProgrammeScreen slug="prog-a" store={heard({ runs: [], sessions: [gone, coord({ id: 'coord-b' })] })} readers={readers} />);
+      await waitFor(() => expect(resumeButtons().length).toBe(1));
+      fireEvent.click(resumeButtons()[0]!);
+      expect(await screen.findByText(/coord-a claims run 7/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /cannot be revived/i }));
+      fireEvent.change(await screen.findByRole('combobox', { name: /hand run 7 to a coordinator/i }), { target: { value: 'coord-b' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Reclaim' }));
+      await waitFor(() => expect(reclaim).toHaveBeenCalledWith(7, 'coord-b'));
+    });
   });
 });

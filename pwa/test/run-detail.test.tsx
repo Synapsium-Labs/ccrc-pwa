@@ -11,6 +11,7 @@ import { runWhen } from '../src/fleet/runDetailWords';
 import { App } from '../src/app';
 import { navigate } from '../src/lib/router';
 import { runRow } from './ledgersFixture';
+import { fleetSession } from './fleetFixture';
 
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
 const mk = () => createFleetStore({ makeSocket });
@@ -467,5 +468,68 @@ describe('Abandon on the run page (wave B3, spec 9.1, 8.4)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Abandon run 410' }));
     expect(await screen.findByText('closed by you: overtaken')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Abandon' })).toBeNull();
+  });
+});
+
+// Resume on the run page (the runs rebuild, Task 19, D-8075; spec 2026-11-04 §8.4, §9.5, A46, A55, A60, D-1146). `resumeShown` is
+// the one decider: the server's verdict on the coordinator, and the run open or its programme with no open run.
+describe('Resume on the run page', () => {
+  const GONE = { id: 'coord-a', project: 'project-a', role: 'coordinator', status: 'dead', lifecycle: 'orphan' };
+  const LIVE = { id: 'coord-a', project: 'project-a', role: 'coordinator', status: 'idle', lifecycle: 'running' };
+  const page = async (r: RunSummary, o: { sessions?: Record<string, unknown>[]; live?: RunSummary[]; runsFrameSeen?: boolean; fleetFrameSeen?: boolean } = {}) => {
+    const store = mk();
+    act(() => {
+      store.setState({
+        sessions: (o.sessions ?? []).map((s) => fleetSession(s as never)), fleetFrameSeen: o.fleetFrameSeen ?? true,
+        runs: o.live ?? [], runsFrameSeen: o.runsFrameSeen ?? true,
+      });
+    });
+    reads(r);
+    render(<RunDetailScreen id={r.id} store={store} />);
+    await screen.findByRole('heading', { level: 1, name: `Run ${r.id}` });
+  };
+  const resume = () => screen.queryByRole('button', { name: 'Resume run 410' });
+  const claimed = (over: Partial<RunSummary> = {}) => run({ claimedBy: 'coord-a', ...over } as Partial<RunSummary>);
+
+  it('Resume shows on the run page from coordinatorGone', async () => {
+    await page(claimed({ coordinatorGone: true }), { sessions: [LIVE] });
+    expect(resume()).not.toBeNull();
+  });
+  it('a live coordinator shows no Resume', async () => {
+    await page(claimed({ coordinatorGone: false }), { sessions: [LIVE] });
+    expect(resume()).toBeNull();
+  });
+  it('a claimant with no fleet row still shows Resume', async () => {
+    await page(claimed({ coordinatorGone: true }), { sessions: [] });
+    expect(resume()).not.toBeNull();
+  });
+  it('an older server with no field reads coordinatorPresence', async () => {
+    await page(claimed(), { sessions: [GONE] });
+    expect(resume()).not.toBeNull();
+    cleanup();
+    await page(claimed(), { sessions: [] });
+    expect(resume()).toBeNull();
+  });
+  it('coordinatorGone false hides Resume over a presence of dead, as a substrate fault sends (D-7370)', async () => {
+    await page(claimed({ coordinatorGone: false }), { sessions: [GONE] });
+    expect(resume()).toBeNull();
+  });
+  it('a closed run of an all-terminal programme shows it, and a closed run beside an open wave shows none (D-1146)', async () => {
+    const done = claimed({ state: 'done', closedAt: T0 + 1000, coordinatorGone: true } as Partial<RunSummary>);
+    await page(done, { sessions: [GONE], live: [] });
+    expect(resume()).not.toBeNull();
+    cleanup();
+    await page(done, { sessions: [GONE], live: [run({ id: 411, program: 'programme-a' })] });
+    expect(resume()).toBeNull();
+  });
+  it('a runs frame not yet heard hides it', async () => {
+    await page(claimed({ coordinatorGone: true }), { sessions: [GONE], runsFrameSeen: false });
+    expect(resume()).toBeNull();
+  });
+  it('opens the sheet with its lead sentence, and sends nothing by opening it', async () => {
+    await page(claimed({ coordinatorGone: true }), { sessions: [GONE] });
+    fireEvent.click(resume()!);
+    expect(await screen.findByText(/claims run 410/)).toBeTruthy();
+    expect(screen.getByText('Only if this work should go on. A dead programme is abandoned, not handed over.')).toBeTruthy();
   });
 });

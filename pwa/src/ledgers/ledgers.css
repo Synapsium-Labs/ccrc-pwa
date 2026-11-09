@@ -241,6 +241,32 @@
 .pv-head .pv-sub { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .pv-two { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
 @media (max-width: 900px) { .pv-two { grid-template-columns: minmax(0, 1fr); } }
+/* The Goals page's columns (the runs rebuild, Task 19, o8): Goals, Waiting on you and Stored secrets stack in the first, and the
+   Runs section is the other. Under 900 everything stacks in that order. */
+.pv-main { display: grid; gap: var(--sp-3); min-width: 0; align-content: start; }
+/* The head's run facts (spec §8.5): the card's elements, the coordinator, the wave counts, a pending-close line per reason and
+   Resume. A full-width row of the head, wrapping; the controls keep the tap floor. */
+.pv-head .pv-facts { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-3); min-width: 0; }
+.pv-head .pv-facts p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.pv-head .pv-lamp { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-counts { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-coordinator { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); }
+.pv-head .pv-word[data-word='stuck'] { color: var(--status-attention-text); }
+.pv-head .pv-line { flex: 1 1 100%; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.pv-head .pv-pending { flex: 1 1 100%; font-size: var(--fs-2xs); color: var(--ink-secondary); }
+.pv-head .pv-marker {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pv-head .pv-coordinator-link {
+  display: inline-flex; align-items: center; min-height: var(--tap-min); color: var(--ink-primary);
+  text-decoration: underline; text-underline-offset: 2px;
+}
+/* The Runs section's open waves: a wave per entry, newest first, its reviews indented beneath. */
+.pv-runs .programme-waves { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .programme-wave { display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .runs-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.pv-runs .programme-reviews { margin-inline-start: var(--sp-4); }
 .pv-card {
   display: grid; gap: var(--sp-2); padding: var(--sp-3); min-width: 0; background: var(--bg-surface); color: var(--ink-primary);
   border: 1px solid var(--edge-subtle); border-radius: var(--r-md);

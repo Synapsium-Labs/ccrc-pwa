@@ -24,7 +24,7 @@
 // RunSummary's SHIPPED shape (`shared/api.ts`, PR I) diverges from the plan's
 // illustrative one on several points — no `waves` (it's `waveOf`), no
 // `holdReason` at all (never rides the wire — the reason string this file's
-// sibling docs keep citing, registry.ts:28, belongs to `FleetSession.held`,
+// sibling docs keep citing, the registry's hold reason, belongs to `FleetSession.held`,
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.
@@ -32,7 +32,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type RunSummary } from '../../shared/api';
 import {
-  FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave, programsWithOpenRun,
+  FINISHED_FOLD, anyDispatchPending, finishedClock, finishedMoreLabel, isRunClosed, programWave,
   programmeTitle, runState, runsByProgram, waveLabel, coordinatorOf, workerOf,
 } from '../src/fleet/runWords';
 import { AbandonSheet, abandonChildOf } from '../src/fleet/AbandonSheet';
@@ -40,7 +40,6 @@ import { coordinatorPresence } from '../src/fleet/presence';
 import { LiftCapSheet } from '../src/fleet/LiftCapSheet';
 import { ReviewCapBand } from '../src/fleet/ReviewCapBand';
 import { CoordBanner } from '../src/fleet/CoordBanner';
-import { ResumeSheet } from '../src/fleet/ResumeSheet';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import { inAppClick } from '../src/fleet/settingsText';
 import { navigate, useLocation } from '../src/lib/router';
@@ -195,10 +194,6 @@ function RunsBoard({
   // `SessionActionsSheet`'s single actions sheet uses rather than mounting
   // one sheet per row.
   const [abandonTarget, setAbandonTarget] = useState<RunSummary | null>(null);
-
-  // Spec §7.3: which run's ResumeSheet is open, or `null`. ONE sheet at screen
-  // level, reused across rows — `abandonTarget`'s own shape, one line up.
-  const [resumeTarget, setResumeTarget] = useState<RunSummary | null>(null);
 
   // D-6911: which run's LiftCapSheet is open, or `null`. ONE sheet at screen level, on `abandonTarget`'s idiom; the
   // "Waiting on you" band opens it.
@@ -393,7 +388,6 @@ function RunsBoard({
   // `CoordStore.runs`'s `closedLimit` is ASYMMETRIC BY DESIGN (review finding 24) — it caps the newest closed rows and drops
   // no active run at any age, so a truncated read can lose an archive row this door would have appeared on, never the open
   // row whose presence WITHHOLDS it.
-  const programsOpen = programsWithOpenRun(active);
   const hasAny = active.length > 0 || finished.length > 0;
   // I6 (residual): a failed Finished read is a fact about the FINISHED half specifically — the open half can be fully
   // answered by the live frame alone (`runsFrameSeen`) while Finished's `find` has failed outright. With the frame seen and no
@@ -436,14 +430,8 @@ function RunsBoard({
       key={run.id}
       run={run}
       nowMs={nowMs}
-      // The run's worker (`workerOf`, D-7182: an open run's bound worker, a finished run's by-id arm, D-7205) and its
-      // claimant (`coordinatorOf`, by id for every run, D-7207), so every row keeps today's coordinator and Resume door.
+      // The run's worker (`workerOf`, D-7182: an open run's bound worker, a finished run's by-id arm, D-7205).
       session={workerOf(run, sessionById)}
-      coordSession={coordinatorOf(run, sessionById)}
-      frameSeen={fleetFrameSeen}
-      // Unknown, not empty, until the frame answers: a Finished row offers no Resume while an open wave may exist.
-      programHasOpenRun={noSignalYet || programsOpen.has(run.program)}
-      onResume={setResumeTarget}
       current={run.id === openId}
     />
   );
@@ -584,7 +572,7 @@ function RunsBoard({
             const title = programmeTitle(program, list);
             // `role="group"`, NOT `<section aria-label>`: seven named regions
             // holding nothing turn the landmark rotor into dead ends
-            // (FleetScreen.tsx:288-294). The same reasoning, one screen over.
+            // (FleetScreen's program groups). The same reasoning, one screen over.
             return (
               <div key={program} className="runs-group" role="group" aria-label={`program ${title}`}>
                 <p className="runs-group-head">
@@ -623,7 +611,6 @@ function RunsBoard({
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
           the program, terminal ones included (contract R1), and the finished
           half of this board has no source but its `find` read. */}
-      <ResumeSheet run={resumeTarget} onClose={() => setResumeTarget(null)} onDone={() => { void loadCold(); }} />
       {/* D-6911: the live `runs` frame carries the lift on the watcher's next tick; `loadCold()` re-reads Finished
           for a session with no frame yet. */}
       <LiftCapSheet run={liftTarget} onClose={() => setLiftTarget(null)} onDone={() => { void loadCold(); }} />

@@ -55,16 +55,14 @@ describe('kept: across D-6170', () => {
     expect(within(rows(c)[0]!).getByRole('button', { name: 'Abandon run 7' })).toBeInTheDocument();
   });
 
-  it('kept: the resume door on an open run whose claimant is dead', async () => {
+  // Resume left the row (the runs rebuild, D-8075, Task 19; spec §9.5, F25): the programme page's head and the run page carry it.
+  it('no row carries Resume, whatever its claimant, open or all-terminal', async () => {
     const dead = fleetSession({ id: 'project-a-coordinator', project: 'project-a', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
     await board([run()], [], [dead]);
-    expect(screen.getByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();
-  });
-
-  it('kept: the resume door on an all-terminal programme whose claimant is dead', async () => {
-    const dead = fleetSession({ id: 'project-a-coordinator', project: 'project-a', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    expect(screen.queryByRole('button', { name: 'Resume run 7' })).toBeNull();
+    cleanup();
     await board([], [run({ state: 'done', closedAt: Date.now() - 1_000 })], [dead]);
-    expect(await screen.findByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume run 7' })).toBeNull();
   });
 
   it("kept: Abandon's accessible name carries the run number", async () => {

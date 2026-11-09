@@ -222,7 +222,7 @@ describe('the rows', () => {
     expect(cards.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('an owner-gone stuck run keeps its Resume door in its programme group (the band is a second view)', async () => {
+  it('an owner-gone stuck run keeps its row in its programme group (the band is a second view), and no row carries Resume', async () => {
     const store = makeStore();
     const dead = fleetSession({ id: 'project-a-coordinator', project: 'project-a', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
     act(() => {
@@ -232,7 +232,7 @@ describe('the rows', () => {
     const { container } = render(<RowsBoard store={store} loadRuns={vi.fn().mockResolvedValue({ runs: [] })} />);
     await act(async () => { await Promise.resolve(); });
     expect(container.querySelector('.runs-group')!.querySelector('li.run-row')).not.toBeNull();
-    expect(within(container.querySelector('.runs-group') as HTMLElement).getByRole('button', { name: 'Resume run 7' })).toBeInTheDocument();
+    expect(within(container.querySelector('.runs-group') as HTMLElement).queryByRole('button', { name: 'Resume run 7' })).toBeNull();
   });
 
   it('stuck never counts in a badge', async () => {

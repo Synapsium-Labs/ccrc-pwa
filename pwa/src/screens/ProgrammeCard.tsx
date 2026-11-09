@@ -12,7 +12,7 @@ import { programmeIsOpenable, programmePath, runsAdvancedPath, waitingPath } fro
 import { endingWords, type CardProgramme } from './usePrograms';
 import './programme-card.css';
 
-const GLYPH = { moving: '●', stalled: '○', stuck: '✕', paused: '‖' } as const;
+export const GLYPH = { moving: '●', stalled: '○', stuck: '✕', paused: '‖' } as const;
 
 /** Whether every open run is stuck or waits behind a stuck run (o5), so the card reads stuck. */
 export const everyOpenRunStuck = (open: CardProgramme['open']): boolean =>
@@ -67,7 +67,7 @@ export function ProgrammeCard({ card, nowMs, quietMs, paused, needs }: {
 }
 
 /** A fold on the board (§8.2 items 8 and 9): folded by default at every width, one toggle at the tap floor. */
-function Fold({ name, count, id, children }: { name: string; count: number; id: string; children: ReactNode }): ReactNode {
+export function Fold({ name, count, id, children }: { name: string; count: number | string; id: string; children: ReactNode }): ReactNode {
   const [open, setOpen] = useState(false);
   return (
     <div className="programme-fold" data-fold={id}>
