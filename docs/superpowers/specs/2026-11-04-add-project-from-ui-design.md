@@ -10,7 +10,8 @@ The operator asked for this: *"add a new project to ccrc, from a GitHub repo or 
 
 Today a project is a directory under the projects root on the fleet box. Only someone with a shell there can create one, by running `git clone` into `~/projects` by hand. The prototype adds one door for it:
 
-- **PWA:** an **Add project** row on the fleet screen, also shown in the first-run panel. It opens a sheet with two choices:
+- **PWA:** a **New project** door at the head of the fleet list and in the first-run panel, and an inline add in the
+  **Start a session** sheet (§2, redrawn 2026-11-09). The form has two choices:
   - **From GitHub:** `owner/repo`, a github.com URL, or the scheme-less `github.com/owner/repo` a browser's address bar gives.
   - **Empty:** a fresh `git init`.
   
@@ -35,12 +36,25 @@ The new directory is listed by the existing `GET /api/projects` walk. The route 
 
 ## 2. The user flow
 
+Redrawn on 2026-11-09, after the operator could not find the first prototype's grey row under the last project card.
+An operator adds a project because they want to work in it, so the main way in is the **Start a session** sheet, where
+they notice the project is missing. The fleet screen keeps a visible door at the head of its list.
+
 ```
  Fleet ─────────────────────────────
+  Projects               [ + New project ]   ← head over the list (Instrument: the door alone)
   [project cards …]
-  + Add project                       ← BareRow; also in the first-run panel
- ┌ Sheet: Add project ───────────────┐
- │ ( • ) From GitHub   (   ) Empty   │
+
+ ┌ Start a session · step 2 ─────────┐
+ │ [ example/new-thing           ]   │   ← search; a repo or a new name offers an add
+ │  +  Clone example/new-thing       │   ← one tap: clone, then pick it
+ │     From GitHub, as project …     │
+ │  +  New project                   │   ← when the search is blank: opens the form here
+ │  ❯  project-a …                   │
+ └───────────────────────────────────┘
+
+ ┌ Sheet: Add a project ─────────────┐   ← the fleet door's sheet; the same form, inline
+ │ ( • ) From GitHub   (   ) Empty   │     in the session sheet with "‹ Back to projects"
  │ Repository  [ owner/repo or URL ] │
  │ Name        [ repo            ]   │  ← prefilled from the repo, editable
  │ <refusal line, in the sheet>      │
@@ -48,9 +62,20 @@ The new directory is listed by the existing `GET /api/projects` walk. The route 
  └───────────────────────────────────┘
 ```
 
-- Success closes the sheet, shows the toast `Added <name>`, and refreshes the project list. The card appears with no sessions.
-- A refusal stays in the sheet, and the typed text is kept.
-- An empty project can take a session started in its main checkout through the existing **New session** sheet. It cannot take a workspace until it has a GitHub `origin`, because `ws-add` refuses with `no origin/HEAD`. The success toast for the Empty choice says so.
+- **The session sheet's search offers** (`projectSearchOffer`, `pwa/src/fleet/projectAddWords.ts`):
+  - A search that parses as a GitHub repository offers **Clone owner/repo**. When the repo's project already exists, the
+    sheet shows that project instead.
+  - A search that is a valid new name and matches no project offers **Create empty project <name>**.
+  - A tap fills the form and sends it. When the repo's own name cannot be a project's (`.github`), the tap opens the form
+    and waits for a name.
+- **On success in the session sheet:** the sheet goes back to its list, re-reads it and picks the new project.
+- **On success from the fleet door:** the sheet closes and shows the toast `Added project <name>`, with the action
+  **Start session**. That action opens the session sheet, which picks the project once an account is chosen. A project
+  in another pool is never picked for the operator: the sheet opens its disclosure instead.
+- A refusal stays in the form, and the typed text is kept.
+- An empty project can take a session started in its main checkout. It cannot take a workspace until it has a GitHub
+  `origin`, because `ws-add` refuses with `no origin/HEAD`. The success toast for the Empty choice says so.
+- The first-run panel (a fleet with no sessions) keeps its own **New project** button: it has no list to head.
 
 ## 3. The shared vocabulary (L0, `shared/projectAdd.ts`)
 

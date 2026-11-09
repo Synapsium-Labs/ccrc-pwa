@@ -3467,8 +3467,12 @@ would land (`New workspace on <project> — <account>, N% free`) or why nothing 
 beside `Runs ·` re-forecasts every card for one model class, and each card's **+** then asks for that class;
 **Coordinator row**, the default, is the request that names no class.
 
-**Add project**, at the foot of the project list and in the first-run panel, creates a project there:
-**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. It is
+**New project**, at the head of the project list and in the first-run panel, creates a project there:
+**From GitHub** (`owner/repo` or a github.com URL; the name defaults to the repo's) or **Empty**. The **Start a
+session** sheet adds one in place too: its list opens with a **New project** row, and a search that is a GitHub
+repository (or a new name nothing matches) offers **Clone owner/repo** (or **Create empty project**), which adds it
+and picks it in one tap. The fleet door's success toast carries **Start session**, which opens that sheet on the new
+project. It is
 `POST /api/projects` → `ccd project-add`, which clones or `git init`s a NEW directory under `~/projects` on the
 fleet box, never replacing an existing name; a private repository needs the fleet box user's own git credentials.
 An empty project takes sessions in its main checkout at once, but no workspace until it has a GitHub `origin`
