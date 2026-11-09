@@ -3,11 +3,12 @@
 // subcommands, never by import.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, statSync, utimesSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderMailNudge } from '../src/coord/envelope.js';
 import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX, MAIL_ENVELOPE_FENCE } from '../../shared/api.js';
+import { openCoordDb } from '../src/coord/db.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -164,5 +165,112 @@ describe('measure-autonomy transcripts', () => {
     expect(r.status).toBe(2);
     expect(existsSync(gone)).toBe(false);
     expect(existsSync(path.join(out, 'o'))).toBe(false);
+  });
+});
+
+// ── items: M3 and M6 over a fixture coord.db (built from MIGRATIONS through openCoordDb; never a live database) ──
+const T = (iso: string): number => Date.parse(iso);
+
+/** A fixture `coord.db`: programme `alpha` (one run open from 2026-11-02 10:00 to 2026-11-03 08:00 = 2 UTC days, 3 items,
+ *  1 ask released to the operator), programme `beta` (one run open 2026-11-04 01:00 to 05:00 = 1 day, nothing raised),
+ *  plus rows the counts must not take: an item raised before the window, an ask the coordinator answered. */
+function fixtureDb(): string {
+  const dbPath = path.join(mkTmp('ccrc-autonomy-db-'), 'coord.db');
+  const db = openCoordDb(dbPath);
+  const prog = db.prepare('INSERT INTO programs (slug, title, createdAt, state) VALUES (?, ?, ?, ?)');
+  prog.run('alpha', 'Alpha', T('2026-10-01T00:00:00Z'), 'active');
+  prog.run('beta', 'Beta', T('2026-10-01T00:00:00Z'), 'active');
+  const run = db.prepare('INSERT INTO runs (program, wave, project, state, openedAt) VALUES (?, 1, ?, ?, ?)');
+  const alphaRun = Number(run.run('alpha', 'demo', 'done', T('2026-11-02T10:00:00Z')).lastInsertRowid);
+  const betaRun = Number(run.run('beta', 'demo', 'done', T('2026-11-04T01:00:00Z')).lastInsertRowid);
+  const ev = db.prepare('INSERT INTO run_events (runId, at, fromState, toState, causedBy) VALUES (?, ?, ?, ?, ?)');
+  ev.run(alphaRun, T('2026-11-02T10:05:00Z'), 'planned', 'dispatched', 'coordinator');
+  ev.run(alphaRun, T('2026-11-03T08:00:00Z'), 'closing', 'done', 'coordinator');
+  ev.run(betaRun, T('2026-11-04T05:00:00Z'), 'closing', 'done', 'coordinator');
+  const item = db.prepare(
+    "INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, neededBy, state, raisedAt) " +
+    "VALUES (?, NULL, 'coord', 'decision', 't', 'w', '[]', 'soon', 'open', ?)");
+  for (const at of ['2026-11-02T11:00:00Z', '2026-11-02T12:00:00Z', '2026-11-03T07:00:00Z', '2026-10-20T09:00:00Z']) item.run('alpha', T(at));
+  const ask = db.prepare(
+    "INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, " +
+    "releasedAt, releaseReason) VALUES (?, 'child', ?, ?, 'k', 1, 'd', 'q', '[]', ?, ?, ?, ?, ?)");
+  ask.run(T('2026-11-02T13:00:00Z'), 'parent-1', alphaRun, 'released', null, null, T('2026-11-02T13:00:00Z'), 'parent-not-live');
+  ask.run(T('2026-11-02T14:00:00Z'), 'parent-1', alphaRun, 'answered', 'parent-1', T('2026-11-02T14:01:00Z'), null, null);
+  const feed = db.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body) VALUES ('e', ?, ?, 'run', ?, ?, 'b')");
+  let seq = 0;
+  const blocked = (iso: string, session: string, title = '⚠ coordinator blocked › ws'): void => { feed.run(++seq, T(iso), session, title); };
+  blocked('2026-11-03T10:05:00Z', 'c1');
+  blocked('2026-11-03T10:50:00Z', 'c1', '⚠ coordinator blocked (escalated) › ws');   // the same session-hour
+  blocked('2026-11-03T11:10:00Z', 'c1');
+  blocked('2026-11-03T10:30:00Z', 'c2');
+  blocked('2026-11-10T09:00:00Z', 'c1');                                             // the next week
+  blocked('2026-11-03T12:00:00Z', 'c1', '⚠ stall › ws');                             // another arm
+  db.close();
+  return dbPath;
+}
+const itemsRun = (args: string[]) => run(['items', ...args]);
+const WINDOW = ['--since', '2026-11-02', '--until', '2026-11-16'];
+
+describe('measure-autonomy items', () => {
+  it('reads M3 per programme-day: 2.0, 0.0 and 1.33 over all', () => {
+    const r = itemsRun(['--db', fixtureDb(), ...WINDOW]);
+    expect(r.status, r.stderr).toBe(0);
+    const t = rows(r.stdout);
+    expect(t['programmes']).toBe('2');
+    expect(t['m3-p1']).toBe('items=3 asks=1 days=2 value=2.0');
+    expect(t['m3-p2']).toBe('items=0 asks=0 days=1 value=0.0');
+    expect(t['m3-all']).toBe('items=3 asks=1 days=3 value=1.33');
+  });
+
+  it('prints no programme slug, only an ordinal', () => {
+    const r = itemsRun(['--db', fixtureDb(), ...WINDOW]);
+    expect(r.stdout).not.toMatch(/alpha|beta/);
+  });
+
+  it('does not count an item raised outside the window', () => {
+    const t = rows(itemsRun(['--db', fixtureDb(), ...WINDOW]).stdout);
+    expect(t['m3-p1']).toContain('items=3 ');
+    const wide = rows(itemsRun(['--db', fixtureDb(), '--since', '2026-10-01', '--until', '2026-11-16']).stdout);
+    expect(wide['m3-p1']).toContain('items=4 ');
+  });
+
+  it('does not count an ask the coordinator answered', () => {
+    const t = rows(itemsRun(['--db', fixtureDb(), ...WINDOW]).stdout);
+    expect(t['m3-p1']).toContain('asks=1 ');
+  });
+
+  it('reads M6 per week: coordinator-hours flagged by coord-blocked', () => {
+    const t = rows(itemsRun(['--db', fixtureDb(), ...WINDOW]).stdout);
+    // week of 2026-11-02: c1 at 10:00 and 11:00, c2 at 10:00 = 3; week of 2026-11-09: c1 = 1; the other arm is not counted
+    expect(t['m6-2026-11-02']).toBe('3');
+    expect(t['m6-2026-11-09']).toBe('1');
+  });
+
+  it('writes items.json only under --out', () => {
+    const db = fixtureDb();
+    const out = mkTmp('ccrc-autonomy-out-');
+    const r = itemsRun(['--db', db, ...WINDOW, '--out', path.join(out, 'o')]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(readdirSync(out, { recursive: true }).map(String).sort()).toEqual(['o', 'o/items.json']);
+    const j = JSON.parse(readFileSync(path.join(out, 'o', 'items.json'), 'utf8')) as { programmes: { slug: string }[] };
+    expect(j.programmes.map((x) => x.slug)).toEqual(['alpha', 'beta']);
+  });
+
+  it('leaves the database bytes and mtime unchanged', () => {
+    const db = fixtureDb();
+    utimesSync(db, 1_700_000_000, 1_700_000_000);
+    const before = { bytes: readFileSync(db), mtime: statSync(db).mtimeMs };
+    const r = itemsRun(['--db', db, ...WINDOW]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(db).equals(before.bytes)).toBe(true);
+    expect(statSync(db).mtimeMs).toBe(before.mtime);
+  });
+
+  it('exits 2 for a missing --db and creates no file', () => {
+    const dir = mkTmp('ccrc-autonomy-db-');
+    const gone = path.join(dir, 'coord.db');
+    const r = itemsRun(['--db', gone, ...WINDOW]);
+    expect(r.status).toBe(2);
+    expect(readdirSync(dir)).toEqual([]);
   });
 });
