@@ -34,6 +34,15 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan) | planned as run 1532; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Task 9 now writes Settings access and Task 10 closes. Before dispatch: amendment review, complete exact-tip checks and plan merge |
 
 ## Decisions & deviations
+- **2026-11-09 (2026-11-09 21:53 UTC): post-C16 entry closure and reviewed-plan receipt; A is not dispatched.**
+  - Source main remains `8b0fab68f1de802f3952b8ec24f2ee93f76a8574`: #2497 is independently proved merged at that commit, with head `43dfc2a51311f7e587636677998258491668429e`. Claims 3842, 3843, 3854 and 3855 are absent from the live claim list. This supersedes the earlier C16 waiting gate, not its preserved source/behavior constraints. Claim 3862 remains live for the five entry documents; no live A implementation-path overlap was measured. Recheck at dispatch and each shared-file task.
+  - #2346 R5 is `2a635691ddc3f602fca04894ee34c2d8af4ee272`; #2350 R4 remains `440c29f08f70ec6cdd952854208a698c3377e32d`. On these exact heads, all four required checks were completed/success at 21:41 UTC. This later ledger-only amendment requires its own exact-head checks; prior green is not transferred. Review-state census is remeasured before protected enqueue. No enqueue, merge or implementation is claimed here.
+  - Delivery 17071 closed all five substantive plan defects with no Critical/Important finding and two Minors. R5 fixes those Minors and the independently detected Task 8 source quotation. Delivery 17075 retains the actual reviewer invocation fields `model: opus`, `effort: high`, `subagent_type: general-purpose`, from the peer coordinator's tool call. The actual reviewer reported `claude-opus-5-5`; numeric effort 15 remains a separate observation, not an inferred mapping. This proves high was configured, not the absence of a later internal override. The R2/R3/R4 reads were fresh agents; the narrow R5 check resumed R4, not another independent approval.
+  - Delivery 17076 reports zero Critical/Important/Minor findings in the two-line R5 delta and released focus contract at library commit `50cef012aa671974473d19c2acd77f900e9d03af`: boolean/default-true insertion focus, no ready refocus, synchronous explicit command focus. It also found update() remounts with the original focus choice, without resampling. Current bridge never calls update(); Task 13's final pre-mount sample covers that usage, and a future update caller must revisit it. The peer read mount.ts/index.ts, not the frame side or published-tarball equivalence. These limits remain. Actual-base brief review below is separately owed; implementation's independent panel is not replaced.
+  - Coordinator source verification at `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` found every explicit Tasks 3–8 Find: 83 directives, 82 baseline, one Task 4 intermediate call deliberately deferred until Task 3, zero misses; browser click/wait adjacency also checked. This excludes prose-only instructions and is not test execution. The exact script is retained below, SHA256 `997c103d3280bd5b487b33a1a7d9e2c84b84e96b17d540b0daf3110130a1d0f5`, so a child is not dependent on coordinator scratch. Source-byte identity and Find checks are remeasured at actual dispatch BASE.
+  - Registry 1.1.0 integrity/tarball and the published non-prerelease v1.1.0 release were reread; Task 2 still verifies package attestation/signatures. Both original phone blocks and approved choices remain unchanged. Their combined result is does-not-hold, so production remains on request. No signing, old phone run, full-suite, install or deployed-acceptance claim is repeated.
+  - Existing run 1532 remains planned, no worker. Its late issued block is 8143–8146; the known definition below is recorded in the same allocation/publication act before dispatch. No replacement run or guessed number. The final actual-base brief review, exact-head checks and protected plan landing still gate A. Eventual child BASE may add the landed plan/ledger commits only if owned implementation bytes equal this source pin; any owned-source drift stops for a rebrief.
+  - **D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request.** Issued for existing run 1532; unused reserve 8144, 8145, 8146 (bare numbers). Task 10 reconciles this definition into the adoption plan and defines only reserve actually used.
 - **2026-11-09: delivery started under the operator's eight-hour autonomy mandate (coordinator entry work, not implementation).**
   - The instruction was received and entry work measured at 19:38 UTC; the intended window ends 2026-11-10 at 03:38 UTC. No scheduler or polling loop is implied. Dispatch ends the coordinator turn; mail wakes it.
   - Fresh main at entry is `ec07e0bdfc32f39af243c76543722c2c3c513556`; the previously inspected `ef96c7bc8251ba01335a32275fd1ab8d964b8309` still pinned the library at 1.0.0. Run 1532 remains planned with no worker. Planning/publication is not implementation.
@@ -614,16 +623,146 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 ## Current next-wave brief — A, library 1.1 take-up and Settings access
 
-- **Run:** 1532 (wave 17), planned, no worker. Keep the existing programme and run; do not create a replacement merely because planning continued.
-- **Entry:** amended #2346 and this completion envelope on main after amendment/brief review and complete exact-head checks. Release 1.1.0 is already published at `50cef012aa671974473d19c2acd77f900e9d03af`, run `42245203228` attempt 2 success, npm integrity in the take-up plan. Item 42 is done; no new signing/publication approval.
-- **Spec/plan:** completion design + completion Task 2; execute `2026-11-05-native-docs-reader-library-1-1-take-up.md` **Tasks 1–10**. Task 9 is the two Settings diagnostic rows, Task 10 closes. No W5b/W6/history implementation in A.
-- **Decisions/evidence:** Q1–Q3 approved item 48; both phone blocks retained verbatim. `E17-READING does-not-hold`, `E17-BLOCKS 2`, arm B with a block: production on request. Frame Aa only; actions in title details. Old auto/1.0.0 evidence is not after-ready/1.1.0 evidence. E18 retains every coverage limit, including library 0 of 1 attempted.
-- **Scope/claims:** use the amended take-up scope/file table, including SettingsIndex and the named Settings/command suites. Re-anchor the head on merged #2480 and C16, preserving their fit/truth/tap behavior; no edits under C16 claim 3842 until its independently proved merge and claim release; no scoped agreement substitutes for this C16 gate. Re-measure claims and dispatch main; no silent scope widening. Re-run the merged desk CSS/long-line and reader-tool cases when their selectors or layout change.
-- **Routing:** main Opus/high, native Sonnet/high implementers, Sonnet/medium only for mechanical documentation; per-task Opus/high boundary/navigation reviewers. Workflow off. Independent exact-tip review uses three Opus/high lenses and the completion contract's refuters; actual identities required, absent/mismatched lens unverified.
-- **Deviations:** allocate and define the run's known departures in one act before dispatch, carry its issued block. This planning document defines no unissued number. Reconcile the take-up plan's existing departure list against the current base.
-- **Acceptance:** real red/green and independent sequential guard mutations, saved-copy/hash restoration, three draw paths and unchanged auto instrument, one-bar phone constraints and two Settings doors/modified clicks, whole package/type/census/browser evidence, complete exact-tip CI, separate accepted review and queue landing bound to the verified head. No selected/skipped browser check is execution evidence.
-- **Branch discipline:** commit on the workspace's own branch, never a separate feature branch.
-- **After merge:** measure MERGED, notify the desktop navigation coordinator, open B1 before closing A; B1's entry is amended #2350 on main and A merged. F owns rollout/install/device evidence; no fresh phone block is demanded merely to repeat the supplied historical evidence.
+**Entry status:** proposed actual-base brief awaiting independent review; no dispatch. The source pin and approvals above are measured; protected plan landing and a fresh source/claim/CI/review census remain mandatory. Open B1 before A closes; the first rollout containing B1 is server-first. F owns deployed acceptance; retirement remains operator-only.
+
+### A — released library take-up and Settings access
+
+Run 1532, native-docs-reader wave 17. Execute only Tasks 1–10 of `docs/superpowers/plans/2026-11-05-native-docs-reader-library-1-1-take-up.md`, with completion Task 2 and its design. Read `docs/superpowers/programs/native-docs-reader.md` current A brief and its issued definition. No W5b, W6, history/diff or focus-repair implementation in A.
+
+#### Base and scope
+Source baseline `8b0fab68f1de802f3952b8ec24f2ee93f76a8574` is C16 #2497's merge; claims 3842/3843/3854/3855 released. Preserve #2480's merged desktop fitting too. Plan/ledger must be on main. Record actual child HEAD as BASE; owned implementation bytes must equal this pin, otherwise stop-and-ask. Claims showed no A overlap at preparation; recheck at dispatch and each shared-file task.
+
+Use the plan's full Files/byte-identical scope. No extra edit without scoped leave; `markup-census.test.ts` is run-only. Claim before subagent edits. The coordinator owns the ledger; scratch is session-temp.
+
+Task 1: all T1 predicates. Extract ledger “A Find-check artifact” Python to session temp, SHA256 `997c103d3280bd5b487b33a1a7d9e2c84b84e96b17d540b0daf3110130a1d0f5`; run `python3 -I <script> <plan> HEAD <fresh-receipt.json>` at repo root. Expected FINDS-OK: 83 directives, 82 baseline, one Task 4 interim Find deferred until Task 3. Miss → stop-and-ask. Before edits, fresh post-C16 PHH-FIGURE / T10-FIGURES worst BASE through ccrc test; no historical geometry substitution.
+
+CCRC_CHROME=$HOME/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome (existence checked; worker rechecks).
+
+#### Released dependency and approved decisions
+Exact `@synapsium-labs/docserver@1.1.0`, v1.1.0 at `50cef012aa671974473d19c2acd77f900e9d03af`, release run 42245203228 attempt 2 success. Registry/release re-read. Integrity `sha512-r2YCt15tGxOYKK1ONyZ/TzvpMdcC3bmUJvifmTdtrCPHxy8DG5nc65ImUi9RpPf+M82784HwMt52kdnkYcpqUg==`. Task 1/2 recheck registry/lock/tarball attestation/signatures; difference stops. No signing/publication repeat.
+
+Item 48 approved Q1–Q3: after-ready only if every supplied Mermaid block holds; otherwise on-request. Frame Aa only. Share/Export/View on GitHub in title details, no extra menu. Both original blocks follow verbatim. Record E17-READING does-not-hold; E17-BLOCKS 2; arm B with a block. Never average/replace the failure or treat auto/1.0.0 as after-ready/1.1.0 evidence. E18 coverage limits remain; no repeated historical phone request.
+
+#### Issued departure and routing
+Issued block 8143–8146. D-8143: retain the lab-draw auto mode and ready gap window. This departs from reader-lab design RL14, §8 and Later automatic-flip commitments; Task 8 amends all three. Auto/1.0.0 does not measure after-ready/1.1.0; production remains on request. Three reserve numbers 8144, 8145, 8146 remain unused; never mint mid-wave. Task 10 copies/reconciles the coordinator's definition and any reserve actually used, with unused numbers written bare. This is a late allocation for the existing planned run, not a new/reopened run.
+
+Shape: dependent implementation chain. Route class opus, effort high, subagent sonnet, workflow off, compact 40, browser on. Native sonnet/high implementers; only Task 8 mechanical docs may use sonnet/medium. Per-task reviewers: opus/high for 4/5/6/7/9; sonnet/high for 2/3; sonnet/medium for 8. Task 10 internal held-out pass: three opus/high lenses (correctness; spec/boundaries; reproduction/evidence), critical/important findings each receive three independent sonnet/high refuters and majority adjudication, minors one advisory refuter. Explicit model/effort on calls, never inherited/Fable; report actual model and retained configuration evidence. Missing/mismatched required reads are unverified. No worker Workflow. Subagent prompts forbid mail, pattern kills, gh writes, token argv and approval-prompting shell forms.
+
+#### Acceptance and return
+Follow plan red/green, independent sequential mutations and saved-copy/hash restore. Heavy suites/typecheck/browser/mutations through foreground ccrc test, timeout ≥600000 ms; bounded mutation time/process caps. Timeout/compile failure is not assertion-red. Task 9: two diagnostics after five sections, Array.from before map, shared row/copy owner, independent normal/modifier clicks, both skins, markup census and whole browser suite.
+
+Preserve desktop fitting, truthful selectors and coarse-pointer floors. Phone-born host-bar persists on widening; desk-born frame retains its bar on narrowing. At 412×915: title ≤61 px, console ≤48 px, tap floor 44; tablet/desktop deltas ≤1 px from fresh BASE. Keep three Mermaid paths and lab auto/ready instrument. A does not fix the lazy-mount focus carry; D Task 13 owns it. Do not call mount.update().
+
+Task 10: ONE PR, full-file privacy scan rc0/zero and mail before push/wave-done. Exact-tip fast CI; skipped browser is not execution. Return tip/PR, BASE+end figures, task/mutation evidence, deviations, actual review/configuration and failures/limits; stop changing/pushing pending ruling. Separate independent review/queue. No release/rollout/retirement. Commit on the workspace branch, never a separate feature branch.
+
+Commit last line: Co-Authored-By: Claude Code <noreply@anthropic.com>
+PR last line: 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+#### Original phone blocks
+
+```text
+reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         shared thread (longest gap 2994 ms in a 3000 ms spin; watchdog timer 2520 ms late; shared-thread evidence: gap and timer)
+  mermaid            does not hold (longest gap 217 ms, all six together; worst single: figure 4, 150 ms)
+    gaps ms          none 17 ready · trivial 100 ready · f1 133 ready · f2 133 ready · f3 133 ready · f4 150 ready · f5 142 ready · f6 125 ready · all 217 ready
+draw on open: needs one figure per task here; every single figure fits the budget
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+```text
+reader-lab 1 · Blink 156 · Android · 8 cores · worker yes · frame sandbox yes · csp attribute yes · library 0079625cc30a
+E18 walls: 7 of 7 hold; teardown signal holds
+  opaque-origin      holds
+  no-ambient-state   holds
+  no-cookie          holds (5 arrived, 0 with the cookie; the control carried it)
+  csp-27             holds (0 of 27 reached; 26 measured; not measured: iframe; library 0 of 1 attempted)
+  no-popup-top-nav   holds
+  no-self-navigate   holds (attempt seen: second load)
+  bridge-strays      holds (8 sent, 0 effects; observed navigate, hash, copy; store.set and a same-source-only listener not exercised)
+  self-nav-teardown  holds (second load fired)
+E17 responsive (mermaid budget 200 ms):
+  busy-frame         shared thread (longest gap 2992 ms in a 3000 ms spin; watchdog timer 2516 ms late; shared-thread evidence: gap and timer)
+  mermaid            holds (ready; longest gap 192 ms, all six together; worst single: figure 5, 150 ms)
+    gaps ms          none 17 ready · trivial 108 ready · f1 133 ready · f2 125 ready · f3 133 ready · f4 133 ready · f5 150 ready · f6 125 ready · all 192 ready
+draw on open: fits the budget here, though the frame shares the thread
+door: 48 counted, 0 ignored; session cookie sent
+```
+
+### A Find-check artifact
+
+Copy only the following Python fence to session temp, preserving its final newline. SHA256: `997c103d3280bd5b487b33a1a7d9e2c84b84e96b17d540b0daf3110130a1d0f5`. It uses immutable git reads only. Run from the repository root with plan path, actual BASE and a new receipt path. It deliberately excludes the Task 4 interim call until Task 3 creates it. Line ranges name this unchanged R5 adoption-plan byte sequence; a later plan revision requires a fresh inventory, not silent reuse.
+
+```python
+"""Check the adoption plan's explicit Find inventory against an immutable git base.
+No edits, tool execution beyond git show, or live/product calls.
+"""
+from pathlib import Path
+import subprocess, re, json, sys, hashlib, datetime
+plan=Path(sys.argv[1]); base=sys.argv[2]; output=Path(sys.argv[3])
+assert not output.exists(), 'Use a fresh receipt path.'
+lines=plan.read_text().splitlines(True)
+ranges=[(310,310,'pwa/test/reader-bridge.test.ts'),(323,430,'pwa/src/docs/reader/policy.ts'),(431,673,'pwa/src/docs/reader/bridge.ts'),(674,674,'pwa/src/readerLab/run.ts'),(807,943,'pwa/src/docs/ReaderFrame.tsx'),(944,980,'pwa/src/screens/DocsScreen.tsx'),(1036,1036,'pwa/test/docs-compact-head.test.tsx'),(1064,1064,'pwa/test/docs-desk-head.test.tsx'),(1097,1097,'pwa/test/tap-targets.test.tsx'),(1098,1098,'pwa/test/control-census.test.ts'),(1107,1107,'pwa/src/docs/docsText.ts'),(1128,1154,'pwa/src/docs/DocsHead.tsx'),(1155,1155,'pwa/src/docs/docsHeadWords.ts'),(1182,1349,'pwa/src/docs/DocsHead.tsx'),(1350,1393,'pwa/src/docs/docs.css'),(1394,1394,'pwa/design/audit.mjs'),(1405,1405,'pwa/src/docs/docs.css'),(1498,1501,'pwa/browser/reader-frame.browser.test.ts'),(1533,1594,'docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md'),(1596,1607,'docs/superpowers/specs/2026-10-01-native-docs-reader-design.md'),(1609,1619,'docs/superpowers/specs/2026-11-03-reader-lab-design.md')]
+cache={}; rows=[]; ignored=[]
+for idx,line in enumerate(lines):
+ n=idx+1
+ if not 300<=n<1620: continue
+ positions=list(re.finditer(r'\bFind\b',line))
+ for k,m in enumerate(positions):
+  tail=line[m.end():positions[k+1].start() if k+1<len(positions) else len(line)].rstrip('\n')
+  if ':' not in tail:
+   ignored.append({'line':n,'reason':'not a Find directive'});continue
+  prefix,suffix=tail.split(':',1); suffix=suffix.lstrip()
+  if n==618:
+   rows.append({'line':n,'phase':'after-task-3','baselineExcluded':True,'reason':'Task 4 Step 0 checks this after Task 3, as the plan explicitly says.'});continue
+  file='pwa/test/reader-bridge.test.ts' if n==476 else next((p for lo,hi,p in ranges if lo<=n<=hi),None)
+  assert file is not None,(n,'unmapped Find')
+  if suffix.startswith('`'):
+   ends=list(re.finditer(r'`(?=(?: — Replace|; Replace| inside the loop|\)| followed by|$))',suffix[1:]))
+   assert ends,(n,'unparsed inline Find')
+   text=suffix[1:1+ends[0].start()]
+  elif 'the line starting `' in suffix:
+   text=suffix.split('the line starting `',1)[1].split('`',1)[0]
+  else:
+   assert not suffix,(n,'unexpected Find suffix',suffix)
+   j=idx+1
+   while not lines[j].strip():j+=1
+   first=lines[j].strip()
+   if first.startswith('`') and not first.startswith('```'):
+    assert first.endswith('`'),(n,'unclosed following inline Find')
+    text=first[1:-1]
+   else:
+    assert lines[j].startswith('```'),(n,'no following Find fence')
+    j+=1; block=[]
+    while not lines[j].startswith('```'):block.append(lines[j]);j+=1
+    text=''.join(block).removesuffix('\n')  # Fence terminator newline is not part of a quoted substring.
+  assert text,(n,'empty Find')
+  if file not in cache: cache[file]=subprocess.check_output(['git','show',base+':'+file],text=True)
+  count=cache[file].count(text)
+  row={'line':n,'ordinal':k+1,'file':file,'text':text,'matches':count,'sha256':hashlib.sha256(text.encode()).hexdigest()}
+  rows.append(row)
+  if count!=1:print('FIND-MISS',n,file,'count',count,repr(text[:240]))
+# Also pin the prose-described browser adjacency, not just its click line.
+browser=cache['pwa/browser/reader-frame.browser.test.ts']
+click="    await frame.locator('.fig-render-btn').click();"
+assert browser.count(click)==1
+at=browser.index(click); next_line=browser[at:].splitlines()[1]
+assert 'waitForFunction' in next_line, next_line
+failures=[r for r in rows if not r.get('baselineExcluded') and r['matches']!=1]
+result={'measuredAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'planSha256':hashlib.sha256(plan.read_bytes()).hexdigest(),'base':base,'rows':rows,'ignoredMentions':ignored,'sourceSha256':{p:hashlib.sha256(t.encode()).hexdigest() for p,t in cache.items()},'browserClickFollowingLine':next_line,'coverage':'Every explicit Find directive in Tasks 3-8, including both same-line Finds; Task 4 interim Find is deliberately deferred. Prose-only implementation instructions are not represented as literal Find blocks.','state':'failed' if failures else 'verified'}
+output.write_text(json.dumps(result,indent=2,ensure_ascii=False)+'\n')
+print('FINDS-OK' if not failures else 'FINDS-FAILED',len(rows),'directives;',len(rows)-1,'baseline;',1,'interim;',len(failures),'misses')
+raise SystemExit(bool(failures))
+```
 
 ## Historical briefs below — retained audit, not current dispatch instructions
 
