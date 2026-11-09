@@ -35,6 +35,7 @@ function PlaceDoor({ place, here, count, word }: { place: Place; here: boolean; 
       className="phone-bar-door"
     >
       <span className="phone-bar-word" aria-hidden="true">{place.short ?? title}</span>
+      {count > 0 && ' '}
       {count > 0 && <CountBadge className="phone-bar-count" aria-hidden="true">{badgePrint(count)}</CountBadge>}
     </Door>
   );

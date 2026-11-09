@@ -11,8 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { fleetSession } from './fleetFixture';
+import type { RunSummary } from '../../shared/api';
 import { itemView, waitingView } from './ledgersFixture';
-import { labelInName } from './labelInName';
+import { labelInName, shownText } from './labelInName';
 import { declValue, ruleIn } from './cssRule';
 
 vi.mock('../src/lib/push', () => ({
@@ -135,7 +136,21 @@ for (const skin of [REFINED, INSTRUMENT] as const) {
       const name = door.getAttribute('aria-label')!;
       expect(door.querySelector('.phone-bar-count')).toHaveTextContent(/^99\+$/);
       expect(labelInName(door.querySelector('.phone-bar-word')!.textContent!, name)).toBe(true);
-      // No whole-text false pin: this skin joins the word and count with no space, so it would be vacuous (review 1689 F9).
+      // The whole shown text at a capped count ("Waiting99+") is not pinned: `labelInName` reads the name's words, and the name
+      // carries "120", so the pill's "99+" never matches it by design. The low-count case below holds the word-then-count space.
+    });
+
+    // Review 1689 F9: the word and the pill are separated by a space, so the door's whole shown text ("Runs 2") reads as
+    // words and is in its name ("Runs, 2 needs you"). The Waiting door's word is the short "Waiting", which is not run
+    // together with the count in its longer name, so the Runs door (word = title) is the one this holds.
+    it('at a low count the door\'s whole shown text is in its name (review 1689 F9)', () => {
+      atWidth(390);
+      mount('/');
+      const runs = [1, 2].map((id) => ({ id, program: 'p', state: 'working', closedAt: null, sessionId: null, claimedBy: 'sess-a' }) as unknown as RunSummary);
+      act(() => useFleetStore.setState({ sessions: [fleetSession({ id: 'sess-a', bucket: 'attention' })], fleetFrameSeen: true, runs, runsFrameSeen: true }));
+      const door = within(phoneBar()!).getByRole('button', { name: 'Runs, 2 needs you' });
+      expect(door.querySelector('.phone-bar-count')).toHaveTextContent(/^2$/);
+      expect(labelInName(shownText(door), door.getAttribute('aria-label')!)).toBe(true);
     });
 
     it('on a fleet with no sessions the Accounts and Inbox doors are there, the durable doors to both (D-161, D-2)', () => {
