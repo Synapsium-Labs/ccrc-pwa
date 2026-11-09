@@ -14119,3 +14119,7 @@ export interface CallView {
   overturnedAt: number | null;
   overturnNote: string | null;
 }
+
+/** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own
+ *  (null for the other two classes). */
+export interface CallRecordAnswer { ok: true; id: number; class: CoordCallClass; expiresAt: number | null }

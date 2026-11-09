@@ -99,7 +99,8 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TEN files register routes since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
+/** TWELVE files register routes since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
+ *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
  *  thirteen box-token routes since `link`, D-8141); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
  *  Check and the kill switch); SIX since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
@@ -118,6 +119,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('linear/routes.ts'),
   ...scanRoutes('coord/ledgersRoutes.ts'),
   ...scanRoutes('coord/reviewRoundsRoute.ts'),
+  ...scanRoutes('coord/coordCallsRoute.ts'),
   ...scanRoutes('accounts/routes.ts'),
   ...scanRoutes('linear/proxyRoutes.ts'),
   ...scanRoutes('readerLab/routes.ts'),
@@ -376,6 +378,8 @@ describe('the scanner is looking at something', () => {
     // no box token (the operator's Abandon run and Keep the run on an end-request item).
     // 19 since D-8194: `GET /api/items/:id`, one item by its id, the same registration, session-gated and NOT EXEMPT, no box token.
     expect(scanRoutes('coord/ledgersRoutes.ts').length).toBe(19);
+    // 1 in `coord/coordCallsRoute.ts` (D-8126, wave A3): `POST /api/coord/programmes/:slug/calls`, a box-token machine lane IN EXEMPT.
+    expect(scanRoutes('coord/coordCallsRoute.ts').length).toBe(1);
     // 3 in `accounts/routes.ts` (accounts plan Task A14, D-7732): `POST /api/accounts/:id/check`, `/enable` and
     // `/disable`, session-gated and NOT EXEMPT, no box token; each takes the account gate on the `account-v2` cap.
     // 8 since the write routes (accounts plan Task A17, D-7739): `POST /api/accounts`, `/:id/credential`, `/:id/set`,
@@ -585,7 +589,9 @@ describe('the scanner is looking at something', () => {
     // the gated count 124 -> 123 and the exempt-HTTP count 74 -> 75.
     // 203 since `GET /api/items/:id` (D-8194), one item by its id: session-gated, NOT EXEMPT, no box token: the HTTP half 199 -> 200,
     // the gated count 123 -> 124, the exempt-HTTP count stays 75.
-    expect(ROUTES.length).toBe(203);
+    // 204 since D-8126's `POST /api/coord/programmes/:slug/calls` (`coord/coordCallsRoute.ts`), a box-token machine lane IN EXEMPT: the HTTP half
+    // 200 -> 201, the gated count stays 124, the exempt-HTTP count 75 -> 76.
+    expect(ROUTES.length).toBe(204);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -655,6 +661,8 @@ describe('the scanner is looking at something', () => {
       'POST /api/items/:id/return', 'POST /api/items/:id/withdraw', 'POST /api/items/:id/blocking',
       'POST /api/programmes/:slug/spec', 'POST /api/programmes/:slug/modifications',
       'POST /api/programmes/:slug/modifications/merged',
+      // The eleventh file's one (the coordinator call record, D-8126): lost if `coord/coordCallsRoute.ts` stopped being read.
+      'POST /api/coord/programmes/:slug/calls',
       // The tenth file's five (the reader lab's door): a scanner that stopped reading `readerLab/routes.ts` would lose them all.
       'POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
       'GET /api/reader-lab/probe/:nonce/:name', 'POST /api/reader-lab/probe/:nonce/:name',
@@ -886,6 +894,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/auth/passkey/assert/start',
       'POST /api/claims',
       'POST /api/claims/:id/release',
+      'POST /api/coord/programmes/:slug/calls',
       'POST /api/coordinators/:session/intent',
       'POST /api/items/:id/blocking',
       'POST /api/items/:id/confirm',
@@ -947,7 +956,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and sixty-six with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and sixty-seven with notify, pools/epoch, updates/intent, the Linear proxy and the ledgers lanes', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1516,7 +1525,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 200 HTTP routes, not the 75 exempt.
+          //    is not itself flag-aware — the assertion that covers all 201 HTTP routes, not the 76 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

@@ -122,6 +122,7 @@ import { noticeSink, type NoticeSink } from '../notice.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
 import { endRequestHandler } from './endRequest.js';
+import { registerCoordCallsRoute } from './coordCallsRoute.js';
 import { readOperatorSecretMeta } from './ledgersSecrets.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
@@ -4724,6 +4725,8 @@ export function registerCoordRoutes(
     coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
     presenceOf, secretOf: (program, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, program, slot),
   });
+  // The coordinator call record (D-8126, wave A3): its handler lives in `coordCallsRoute.ts`, a lane source of its own.
+  registerCoordCallsRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, now: () => Date.now(), build: deps.build?.version ?? null });
 
   // D-8125: the coordinator's review-cap door; its handler lives in `reviewRoundsRoute.ts`.
   registerReviewRoundsRoute(app, {

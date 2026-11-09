@@ -90,6 +90,10 @@ const LINEAR_PROXY_SRC = read('server/src/linear/proxyRoutes.ts');
 /** The TENTH file that registers routes and the seventh lane source (D-8147): the linking standard's routes. Its one
  *  box-token lane is the session's read, `GET /api/linking`; the operator's write beside it is session-gated and no lane. */
 const LINKING_SRC = read('server/src/linking/routes.ts');
+/** The ELEVENTH file that registers routes and the eighth lane source (D-8126, wave A3): the coordinator call record's one route,
+ *  `POST /api/coord/programmes/:slug/calls`, a box-token machine lane. Handled like the ledgers' file: registered from
+ *  `registerCoordRoutes`, written in a file of its own, so a scan of `coord/routes.ts` alone would not see it. */
+const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -200,10 +204,11 @@ const TOKEN_LANES = lanesIn(TOKEN_SRC);
 const LEDGER_LANES = lanesIn(LEDGER_SRC);
 const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
 const LINKING_LANES = lanesIn(LINKING_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES];
+const CALLS_LANES = lanesIn(CALLS_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -309,7 +314,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // D-8147: GET /api/linking, a box-token lane in the linking file: sixty-five machine lanes in all.
   'sixty-five',
   // D-8126: GET /api/programmes/:slug/goals, a session-or-token read in the ledgers file: sixty-six machine lanes in all.
-  'sixty-six'];
+  'sixty-six',
+  // D-8126: POST /api/coord/programmes/:slug/calls, a box-token lane in the call record's file: sixty-seven machine lanes in all.
+  'sixty-seven'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -459,7 +466,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     ]);
     // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
