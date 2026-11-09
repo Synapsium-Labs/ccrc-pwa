@@ -311,7 +311,7 @@ export function StoredSecretRemove({ program, slot, onRemoved, removeSecret = re
 const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
   raise: 'Raised by the coordinator', block: 'Became blocking', unblock: 'No longer blocking', tick: 'You marked it done',
   confirm: 'The coordinator confirmed it', return: 'Sent back by the coordinator', withdraw: 'The coordinator withdrew it',
-  dismiss: 'You dismissed it',
+  dismiss: 'You dismissed it', act: 'You acted on it', decline: 'You declined it', settle: 'It settled on its own',
 };
 
 /** Text with its links drawn as links (`linkRuns`, PL10): an outside page in a new tab with no opener, through `openExternal`,
