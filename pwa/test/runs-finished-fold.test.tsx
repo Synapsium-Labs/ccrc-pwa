@@ -10,7 +10,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { Profiler } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { CoordCapsView, RunSummary } from '../../shared/api';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen, foundRows } from './runs-board';
 import { FINISHED_FOLD, finishedClock, finishedMoreLabel, runWarnings } from '../src/fleet/runWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
@@ -152,11 +152,11 @@ describe('the Finished group folds (D-6442)', () => {
     // live frame drops the active run, which is the board's own trigger for it.
     // A flag the click left set would pull focus to the heading with no click.
     const active = run({ id: 900, state: 'working', closedAt: null, dispatchedAt: T0 - 5_000 });
-    const reads = [closedRuns(45), closedRuns(30)];
+    const reads = [closedRuns(45), closedRuns(30)];   // Finished's two `find` reads
     const store = makeStore();
     act(() => { store.setState({ runs: [active], runsFrameSeen: true, fleetFrameSeen: true }); });
     render(<RunsScreen store={store} loadCaps={NO_CAPS}
-      loadRuns={async () => ({ runs: [active, ...(reads.shift() ?? [])] })} />);
+      loadRuns={async () => ({ runs: [active] })} loadFinished={async () => foundRows(reads.shift() ?? [])} />);
     await act(async () => { await Promise.resolve(); });
     const d = door()!;
     d.focus();

@@ -9,7 +9,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { ChildReclaimStatus, CoordCapsView, CoordStatus, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { childReclaimDoneRefreshDue, runHadChild } from '../src/fleet/runWords';
 import { childReclaimDoneAtOf } from '../src/fleet/childReclaimWords';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';

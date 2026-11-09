@@ -62,9 +62,9 @@ export function RunFindBox({ value, onChange }: { value: string; onChange: (text
   );
 }
 
-/** One result: "Run 410 · Programme A · wave 2", then the state word and its line. */
-function ResultRow({ run, q, openId }: { run: FoundRun; q: string; openId: number | null }): ReactNode {
-  const href = runPath(run.id, q);
+/** One result (Advanced's All runs list draws the same row, with `to` as its address): "Run 410 · Programme A · wave 2", then the state word and its line. */
+export function ResultRow({ run, q, openId, to }: { run: FoundRun; q: string; openId: number | null; to?: string }): ReactNode {
+  const href = to ?? runPath(run.id, q);
   const word = closeWords(run) ?? runStateWord(run as RunSummary);
   const closed = isRunClosed(run);
   const line = closed

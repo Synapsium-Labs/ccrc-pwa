@@ -11,6 +11,7 @@ import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isChildRecl
   type ChildMark, type ChildReclaimStatus, type ChildReclaimWord, type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary, type RunsPageAnswer, type SessionRun } from '../../../shared/api';
 import { formatAge, formatElapsed } from './formatReset';
 import { closeWords } from './closeWords';
+import type { CoordinatorPresence } from './presence';
 
 export const RUN_WORD: Record<RunState, string> = {
   planned: 'planned',
@@ -1081,4 +1082,10 @@ export function appendOlderRunPage<V extends RunPagesView>(stored: V, answer: Ru
   const fresh = new Set(added.map((r) => r.id));
   const held = stored.runs.filter((r) => !fresh.has(r.id));
   return { runs: [...held, ...added].sort(byId), nextBefore: answer.nextBefore ?? null };
+}
+
+/** The one reader of `RunSummary.coordinatorGone` (spec 9.1, A46, A60): the server's verdict decides, true and false alike,
+ *  and only an absent field (an older server) falls back to what the board sees of the coordinator. */
+export function coordinatorGoneOf(run: { coordinatorGone?: boolean }, presence: CoordinatorPresence): boolean {
+  return run.coordinatorGone ?? presence === 'dead';
 }

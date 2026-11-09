@@ -163,6 +163,8 @@ export const STALE_ARCHIVE_SWEEP_MS = 60 * 60_000;
  *  in-memory reader `RunVerdicts`. A minute, the census's own: a run's reason moves on the scale of an hour at the least, and
  *  a verdict may lag by one pass. It adds no statement to the 2-second tick. */
 export const RUN_STUCK_SWEEP_MS = 60_000;
+/** The runs-closed notice's drain (D-8073): a minute, as the stuck verdict's pass. */
+export const RUN_UNTOLD_SWEEP_MS = 60_000;
 
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
@@ -177,7 +179,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -311,6 +313,8 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The stuck verdict (D-8071, spec 2026-11-04 §7, A45): READ-ONLY, one pass at a time, on the registry pass. Its pass catches
   // its own failure with its own sentence, so no warnKey.
   { name: 'runStuck', cadenceMs: RUN_STUCK_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
+  // The runs-closed notice (D-8073, spec §11.7): one pass at a time; its pass catches its own failure, so no warnKey.
+  { name: 'runUntold', cadenceMs: RUN_UNTOLD_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
 ];
 
 export function laneRow(name: string): LaneRow {

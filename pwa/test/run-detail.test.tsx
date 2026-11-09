@@ -412,3 +412,60 @@ describe('the controls and the trail (Task 7a)', () => {
     expect(screen.getByText('you')).toBeInTheDocument();
   });
 });
+
+describe('Abandon on the run page (wave B3, spec 9.1, 8.4)', () => {
+  it('an open run shows Abandon', async () => {
+    const r = run();
+    reads(r);
+    await open(r);
+    expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
+  });
+
+  it('an open run with no verdict still shows Abandon', async () => {
+    const r = run({ stuck: undefined });
+    reads(r);
+    await open(r);
+    expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
+  });
+
+  it('an open run with a wrong stuck reason still shows Abandon', async () => {
+    const r = run({ stuck: { reason: 'not-a-reason-this-build-knows' } } as unknown as Partial<RunSummary>);
+    reads(r);
+    await open(r);
+    expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
+  });
+
+  it('a planned run with no session shows Abandon too, the wedge it exists for', async () => {
+    const r = run({ state: 'planned', sessionId: null });
+    reads(r);
+    await open(r);
+    expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
+  });
+
+  it('the page uses this same sheet: its title, buttons and the call to the abandon route', async () => {
+    const r = run();
+    reads(r);
+    const abandon = vi.spyOn(api, 'abandonRun').mockResolvedValue({ released: true });
+    await open(r);
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+    expect(await screen.findByText('Abandon run 410?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Keep it' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'See this run' })).toHaveAttribute('href', '/runs/410');
+    expect(abandon).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon run 410' }));
+    await vi.waitFor(() => expect(abandon).toHaveBeenCalledWith(410));
+  });
+
+  it('after an abandon the page shows the close', async () => {
+    const open_ = run();
+    const closed = run({ state: 'failed', closedAt: T0 + 3_600_000, closedBy: 'operator', closeDetail: 'abandon:overtaken' });
+    let abandoned = false;
+    reads(open_, { record: async () => record(abandoned ? closed : open_) });
+    vi.spyOn(api, 'abandonRun').mockImplementation(async () => { abandoned = true; return { released: true }; });
+    await open(open_);
+    fireEvent.click(screen.getByRole('button', { name: 'Abandon' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Abandon run 410' }));
+    expect(await screen.findByText('closed by you: overtaken')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Abandon' })).toBeNull();
+  });
+});

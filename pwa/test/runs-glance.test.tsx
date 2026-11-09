@@ -8,7 +8,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import type { CoordCapsView, FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });

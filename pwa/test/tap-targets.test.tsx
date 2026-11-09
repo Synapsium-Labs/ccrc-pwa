@@ -29,7 +29,7 @@ import { ArchiveScreen } from '../src/screens/ArchiveScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { renderFleet } from './fleetHost';
 import { MailScreen } from '../src/screens/MailScreen';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { CoordBanner } from '../src/fleet/CoordBanner';
 import { StartProgramSheet } from '../src/fleet/StartProgramSheet';
 import {

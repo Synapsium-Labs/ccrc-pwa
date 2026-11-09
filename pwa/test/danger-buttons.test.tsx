@@ -56,7 +56,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession =>
 describe('every destructive confirm is the danger variant', () => {
   it("Abandon's confirm", () => {
     render(<AbandonSheet run={run()} onClose={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Abandon' })).toHaveClass('btn-danger');
+    expect(screen.getByRole('button', { name: 'Abandon run 3' })).toHaveClass('btn-danger');
   });
 
   it("Archive's confirm", () => {

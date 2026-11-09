@@ -3300,6 +3300,24 @@ button.proj-card-pool::before {
   font-size: var(--fs-sm);
   color: var(--status-dead-text);
 }
+/* The abandon sheet's repeated row (D-8073): the run's name and context line, then the notes. They take the sheet's own
+   ground and ink; text wraps, nothing is ellipsised. */
+.abandon-sheet .abandon-name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.abandon-sheet .abandon-line,
+.abandon-sheet .abandon-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.abandon-sheet .abandon-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
 /* The ask's lines take the sheet's own ground and ink: no colour of their own. */
 .lift-cap-sheet .lift-cap-note,
 .lift-cap-sheet .lift-cap-findings {
@@ -4413,3 +4431,14 @@ button.proj-card-pool::before {
   font: var(--weight-medium) var(--fs-sm) / var(--lh-normal) var(--family-ui);
 }
 .acct-resume-line > span { flex: 1 1 12rem; min-width: 0; }
+
+/* The board's foot (§8.2 item 10): the one link to Advanced, a 44px target at every width. */
+.runs-foot { margin: var(--sp-3) 0 0; }
+.runs-foot .runs-foot-link { min-height: var(--tap-min); }
+
+/* Advanced's All runs (§8.6). Chips wrap on a phone; every control keeps the tap floor. */
+.ra-section { display: grid; gap: var(--sp-2); min-width: 0; }
+.ra-head { margin: 0; font: var(--weight-medium) var(--fs-page) / 1.3 var(--family-mono); }
+.ra-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.ra-chip[aria-pressed='true'] { background: var(--bg-surface); color: var(--ink-primary); box-shadow: inset 0 0 0 1px var(--accent); }
+.ra-older { justify-self: start; }

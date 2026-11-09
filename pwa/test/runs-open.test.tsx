@@ -9,7 +9,7 @@ import { FINISHED_FOLD } from '../src/fleet/runWords';
 import { ApiTimeout } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { runPath, runsRunHref } from '../src/lib/routes';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { clearScreenCache } from '../src/lib/screenCache';
 

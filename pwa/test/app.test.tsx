@@ -388,7 +388,7 @@ describe('ROUTES and the ladder, both ways', () => {
     // The reader lab (the reader lab plan, Task 10).
     '/settings/reader-lab',
     // One run's page (the runs rebuild, D-8072): a canonical number, its slash form, and the addresses that are no run page.
-    '/runs/410', '/runs/410/', '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
+    '/runs/410', '/runs/410/', '/runs/advanced', '/runs/advanced/', '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 

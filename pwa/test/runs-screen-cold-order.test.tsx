@@ -11,7 +11,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ChildReclaimStatus, CoordCapsView, CoordStatus, RunSummary } from '../../shared/api';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen, foundRows } from './runs-board';
 import { useColdRuns } from '../src/screens/useColdRuns';
 import { ApiTimeout } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -60,7 +60,8 @@ const boardWithTwoReadsInFlight = async () => {
       reject: async () => { await act(async () => { rej(new Error('network')); }); },
     });
   }));
-  render(<RunsScreen store={store} loadRuns={loadRuns} loadCaps={NO_CAPS} />);
+  // Finished reads `find` (Task 11); these reads are the paged arm's, whose whole rows carry the chip onto the Finished row.
+  render(<RunsScreen store={store} loadRuns={loadRuns} loadFinished={async () => foundRows([finished('pending')])} loadCaps={NO_CAPS} />);
   await waitFor(() => expect(loadRuns).toHaveBeenCalledTimes(1));
   await reads[0]!.resolve([finished('pending')]);
   await screen.findByRole('group', { name: /finished/i });

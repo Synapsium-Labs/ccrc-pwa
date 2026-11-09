@@ -50,6 +50,8 @@ const FIXTURE: AppFixture = {
     '/api/accounts': { accounts: [], projected: null, roster: [{ id: 'lane-a', label: 'lane-a', hue: 'cyan', homeAble: true, hidden: false }] },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a', repo: { state: 'named', slug: 'owner-a/repo-a' } }] },
     '/api/runs': { runs: RUNS, nextBefore: null }, '/api/claims': [],
+    // Finished reads `find` (Task 11): no closed run here, so the board's rows are the open ones alone.
+    '/api/runs/find': { ok: true, exact: null, runs: [], reviewsOf: [], next: null },
     // The run page the number lands on reads these four; a real server answers each in this shape.
     '/api/runs/1501/record': { ok: true, run: RUNS[0], events: [], reviewedBy: [], olderEvents: 0 },
     '/api/runs/1501': { ok: true, run: RUNS[0], spend: { measured: false, reason: 'no-sweep' } },
@@ -327,6 +329,121 @@ describe('a broad column keeps the list\'s place when a run opens (D-8072)', () 
       expect(after.rowTop).toBeGreaterThanOrEqual(0);
       expect(after.rowBottom).toBeLessThanOrEqual(after.vh);
       expect(errors).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+/** Closed runs for Advanced's All runs list: a few, so the chips and the rows lay out beside real text. */
+const CLOSED = Array.from({ length: 12 }, (_, i) => ({
+  id: 1400 + i, program: 'prog-a', programTitle: 'Programme A with a title long enough to wrap on a phone', runTitle: null, wave: 2, waveOf: 5,
+  kind: 'work', reviews: null, state: 'done', project: 'project-a', workspace: `ws-${1400 + i}`, branch: null,
+  claimedBy: 'project-a-coord', openedAt: NOW - 20 * H, closedAt: NOW - (i + 1) * H, closedBy: i % 2 === 0 ? 'operator' : 'sweep', closeDetail: null,
+}));
+const ADVANCED_FIXTURE: AppFixture = {
+  ...FIXTURE,
+  api: {
+    ...FIXTURE.api,
+    '/api/runs/find': { ok: true, exact: null, runs: [RUNS[0], ...CLOSED], reviewsOf: [], next: { beforeAt: NOW - 13 * H, beforeId: 1411 } },
+    '/api/runs/1400/record': { ok: true, run: CLOSED[0], events: [], reviewedBy: [], olderEvents: 0 },
+    '/api/runs/1400': { ok: true, run: CLOSED[0], spend: { measured: false, reason: 'no-sweep' } },
+    '/api/runs/1400/items': { ok: true, items: [] },
+    '/api/runs/1400/signals': FIXTURE.api['/api/runs/1501/signals'],
+  },
+};
+
+describe('the foot link to Advanced reaches a thumb (§8.2 item 10)', () => {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      it(`the foot link is reachable and 44px tall on a phone, ${skin} ${theme}`, async () => {
+        const { ctx, page, errors } = await openBoard(360, skin, theme);
+        try {
+          const link = page.getByRole('link', { name: 'Advanced' });
+          await link.scrollIntoViewIfNeeded();
+          const m = await link.evaluate((a) => {
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+            document.body.appendChild(probe);
+            const tap = probe.getBoundingClientRect().height;
+            probe.remove();
+            const r = a.getBoundingClientRect();
+            return { tap, h: r.height, w: r.width, top: r.top, bottom: r.bottom, vh: innerHeight, left: r.left, right: r.right, vw: innerWidth };
+          });
+          expect(m.h, 'at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
+          expect(m.tap).toBeGreaterThanOrEqual(44);
+          expect(m.right).toBeLessThanOrEqual(m.vw);
+          await link.click();
+          await page.waitForFunction(() => location.pathname === '/runs/advanced', undefined, { timeout: 20_000 });
+          expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
+    }
+  }
+});
+
+for (const width of MATRIX.widths) {
+  for (const skin of MATRIX.skins) {
+    for (const theme of MATRIX.themes) {
+      describe(`Advanced, ${skin} ${theme} at ${width}px`, () => {
+        it('lays All runs inside the window with the chips wrapping and every control at the tap floor', async () => {
+          const opened = await openApp(browser!, { skin, theme, width }, ADVANCED_FIXTURE);
+          const { ctx, page, errors } = opened;
+          try {
+            await page.goto(`${server!.origin}/runs/advanced`);
+            await page.locator('.ra-list .rf-link').first().waitFor({ timeout: 20_000 });
+            const m = await page.evaluate(() => {
+              const probe = document.createElement('div');
+              probe.style.cssText = 'position:absolute;visibility:hidden;min-height:var(--tap-min);width:1px';
+              document.body.appendChild(probe);
+              const tap = probe.getBoundingClientRect().height;
+              probe.remove();
+              const chips = [...document.querySelectorAll<HTMLElement>('.ra-chip')].map((c) => c.getBoundingClientRect());
+              const rows = [...document.querySelectorAll<HTMLElement>('.ra-list .rf-link')].map((a) => a.getBoundingClientRect());
+              const older = document.querySelector<HTMLElement>('.ra-older')?.getBoundingClientRect() ?? null;
+              return {
+                tap, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                chips: chips.map((r) => ({ top: Math.round(r.top), right: r.right, h: r.height })),
+                rowH: Math.min(...rows.map((r) => r.height)), rowRight: Math.max(...rows.map((r) => r.right)),
+                older: older === null ? null : { h: older.height },
+              };
+            });
+            expect(m.page, 'no sideways page scroll').toBeLessThanOrEqual(0);
+            expect(m.chips).toHaveLength(4);
+            for (const c of m.chips) {
+              expect(c.right, 'a chip ends inside the window').toBeLessThanOrEqual(m.vw);
+              expect(c.h, 'a chip at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
+            }
+            const lines = new Set(m.chips.map((c) => c.top)).size;
+            if (width <= 390) expect(lines, 'chips wrap on a phone').toBeGreaterThan(1);
+            expect(m.rowH, 'a row at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
+            expect(m.rowRight).toBeLessThanOrEqual(m.vw);
+            expect(m.older, 'Show older is offered while older runs remain').not.toBeNull();
+            expect(m.older!.h).toBeGreaterThanOrEqual(m.tap - 1);
+            expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
+          } finally {
+            await ctx.close();
+          }
+        });
+      });
+    }
+  }
+}
+
+describe('Advanced in a broad column opens a run beside its list', () => {
+  it('a row sets ?open=<id> and the run draws in the pane (Instrument, 1920)', async () => {
+    const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: 'dark', width: 1920 }, ADVANCED_FIXTURE);
+    try {
+      await page.goto(`${server!.origin}/runs/advanced`);
+      await page.locator('.ra-list .rf-link').first().waitFor({ timeout: 20_000 });
+      expect(await page.locator('.runs-column').getAttribute('data-column')).toBe('broad');
+      await page.locator('.ra-list .rf-link', { hasText: 'Run 1400' }).click();
+      await page.waitForFunction(() => location.search === '?open=1400', undefined, { timeout: 20_000 });
+      await page.locator('.runs-detail-pane .rd-head').waitFor({ timeout: 20_000 });
+      expect(await page.evaluate(() => location.pathname)).toBe('/runs/advanced');
+      expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
     } finally {
       await ctx.close();
     }

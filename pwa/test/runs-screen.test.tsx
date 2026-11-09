@@ -4,7 +4,8 @@ import { act, cleanup, render, screen, fireEvent, waitFor, within } from '@testi
 import { RUN_STATES, SPAWN_STALL_MS, type ChildReclaimStatus, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
 import { serverBinding, withBindingFrames } from './runBindingFixture';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen, foundRows } from './runs-board';
+import type { FindReader } from '../src/screens/useRunList';
 import { navigate } from '../src/lib/router';
 import { CHILD_RECLAIM_CHIP_GLYPH, CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, childReclaimChip, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, boundOpenRun, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
@@ -358,7 +359,13 @@ describe('the run board', () => {
         ? { runs: [r({ id: 7 })] }
         : { runs: [r({ id: 7, state: 'done', closedAt: Date.now() })] };
     });
-    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={loadRuns} />);
+    // Finished reads `find` (Task 11): it answers the same way, empty before the close and with the closed run after it.
+    let found = 0;
+    const loadFinished = async (): ReturnType<FindReader> => {
+      found += 1;
+      return foundRows(found === 1 ? [] : [r({ id: 7, state: 'done', closedAt: Date.now() })]);
+    };
+    render(<RunsScreen loadCaps={NO_CAPS} store={store} loadRuns={loadRuns} loadFinished={loadFinished} />);
     expect(await screen.findByTitle(/ · clear-cove$/)).toBeInTheDocument();
     act(() => { store.setState({ runs: [r({ id: 7 })], runsFrameSeen: true }); });
     expect(screen.getByTitle(/ · clear-cove$/)).toBeInTheDocument();

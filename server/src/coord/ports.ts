@@ -64,7 +64,7 @@ export type WatcherCoordMember =
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince'
   | 'deliveredUnacked'
-  | 'delivery' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'driftAwaitingReview'
+  | 'delivery' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'drainUntold' | 'driftAwaitingReview'
   | 'driftFindingRows' | 'driftFindingsOpenAt' | 'driftHeldQuestions' | 'driftOpenRuns' | 'driftOutstandingDeliveries'
   | 'driftPushesOnDay' | 'driftStallToldRows' | 'dueDeliveries' | 'firstMailIdWithPrefix' | 'foldPrLineage' | 'goneSince'
   | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
@@ -88,7 +88,7 @@ export type WatcherCoordMember =
   | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGoneSince' | 'setSession' | 'settleAsk' | 'settleNode' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallSettings' | 'stalledDispatchRunIds'
   | 'strandedClear' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'unlandedBriefs'
-  | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeParked';
+  | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeParked';
 
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A
  *  `CoordStore` is assignable to it; it is not assignable back (the store's private members). */

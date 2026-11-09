@@ -31,6 +31,7 @@ const FIXTURE: AppFixture = {
     '/api/feed': { events: [] },
     '/api/accounts': ACCOUNTS,
     '/api/runs': { runs: [] },
+    '/api/runs/find': { runs: [], next: null },
     '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
     '/api/claims': [],
     '/api/coord/caps': { ok: true, caps: { maxConcurrentWorkers: 4 }, usage: { running: 0 }, updatedAt: null },

@@ -7,7 +7,7 @@ import type { CoordCapsView, RunSummary } from '../../shared/api';
 import { ApiError, api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
 import { clearScreenCache } from '../src/lib/screenCache';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 
 const NOW = Date.now();

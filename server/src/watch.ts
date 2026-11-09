@@ -161,6 +161,7 @@ import type { ProvenancePair } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts } from './coord/runWire.js';
 import { createRunVerdicts, type RunVerdicts } from './coord/runVerdicts.js';
 import { runStuckPass } from './coord/runStuckPass.js';
+import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
@@ -2743,6 +2744,8 @@ export class FleetWatcher {
       void this.sweepOrphanTrees().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the STUCK VERDICT's pass (D-8071) — read-only, on its own row, and it reads no tick listing.
       void this.sweepRunStuck().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the runs-closed notice's drain (D-8073), on its own minute.
+      void this.sweepUntold().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
       // is ~4.3 s of sleeps per message plus one round trip per line
@@ -3236,7 +3239,7 @@ export class FleetWatcher {
         runId: m.runId,
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -5943,6 +5946,15 @@ export class FleetWatcher {
     }));
   }
 
+  /** The runs-closed notice's drain (D-8073, spec §11.7): one record-only mail per claimant per pass, to a claimant that reads alive. */
+  async sweepUntold(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('runUntold', () => untoldPass({
+      coord, measure: (id) => measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux }, id, Date.now()),
+    }));
+  }
+
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
   private async deadCoordinatorPass(
     coord: WatcherCoordPort, records: readonly SessionRecord[], names: readonly string[], now: number,
@@ -8063,8 +8075,11 @@ export class FleetWatcher {
           // returns before this loop, so it never wakes anything. A kickoff is system mail and wakes through here.
           // D-8122: the memory gate is asked inside the budget's admission; a delivery it holds names `wake-pressure`,
           // not `hibernated`, so the operator sees why the sleeper was not woken. Either way it stays outstanding.
+          // D-8073: a `wake = 'never'` delivery (a record: the runs-closed notice) is held under this gate and asks no wake,
+          // spends no budget and counts no floor; it goes out when the recipient wakes for any other reason.
           const lastWake = this.lastWakeAt.get(d.toId);
-          const wv = lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS ? this.wakeVerdict('auto', d.toId) : null;
+          const wv = d.wake === 'never' ? null
+            : lastWake === undefined || now - lastWake >= MAIL_WAKE_FLOOR_MS ? this.wakeVerdict('auto', d.toId) : null;
           if (wv !== null && wv.refused !== null && wv.refused !== 'wake-budget') gated(d, 'wake-pressure'); else gated(d, 'hibernated');
           if (wv?.admit === true) {
             const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));

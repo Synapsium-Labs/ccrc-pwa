@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import type { RunFindAnswer, RunHit, RunSummary } from '../../shared/api';
 import { api, ApiError } from '../src/lib/api';
 import { createFleetStore, useFleetStore, type FleetStore } from '../src/stores/fleet';
-import { RunsScreen } from '../src/screens/RunsScreen';
+import { RunsScreen } from './runs-board';
 import { parseRunNumber } from '../src/screens/useRunFind';
 import { runRow } from './ledgersFixture';
 

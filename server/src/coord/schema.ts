@@ -2322,6 +2322,31 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE INDEX runs_by_closed_at ON runs(closedAt DESC, id DESC) WHERE closedAt IS NOT NULL;
   `,
+  // ── 47: user_version 46 -> 47 ─────────────────────────────────────────────
+  // Telling the coordinator (D-8073; spec 2026-11-04 §11.7, the ruled plan's W1): `run_close_untold` holds one row per run
+  // an operator or the sweep closed, written by the close's own transaction (`CoordStore.closeRun`) and deleted in the
+  // transaction that queues the one notice (`untoldPass`), so a crash between the two still yields exactly one notice. A
+  // claimant that does not read alive keeps its rows until an heir takes the programme. `mail_deliveries.wake` is null or
+  // `never`: the mail sweep's hibernated gate holds a `never` delivery without asking `ccd ensure`.
+  //
+  // A NEW TABLE AND A NULLABLE COLUMN, nothing on an existing table that an older build would trip on: it opens a file at
+  // `user_version 47` by rule 3 (it warns, reads as-is and migrates nothing). Every earlier entry is frozen. RE-MEASURE the
+  // slot before the PR and before merge (it must print 46 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE run_close_untold (
+    runId    INTEGER NOT NULL PRIMARY KEY,
+    program  TEXT NOT NULL,
+    wave     INTEGER NOT NULL,
+    waveOf   INTEGER,
+    claimant TEXT NOT NULL,
+    cause    TEXT NOT NULL,
+    detail   TEXT,
+    at       INTEGER NOT NULL
+  );
+  ALTER TABLE mail_deliveries ADD COLUMN wake TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
