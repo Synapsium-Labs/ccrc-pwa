@@ -71,7 +71,7 @@ export const PROJECT_ADD_REFUSALS = ['bad-source', 'project-exists', 'outcome-un
 export type ProjectAddRefusal = (typeof PROJECT_ADD_REFUSALS)[number];
 
 /**
- * The Linear proxy's own words (#1444, spec §6.8): the twelve `/api/linear/proxy/*` routes (`linear/proxyRoutes.ts`)
+ * The Linear proxy's own words (#1444, spec §6.8): the thirteen `/api/linear/proxy/*` routes (`linear/proxyRoutes.ts`)
  * answer them through `refuseRoute` with a computed word (the router's, the operation table's, a Linear answer's), so
  * they are a typed vocabulary of their own rather than `GenericRefusal`s, whose "still sent" scan reads only literal
  * words at a send. The words the proxy shares with older routes (`unauthenticated`, the attribution three,

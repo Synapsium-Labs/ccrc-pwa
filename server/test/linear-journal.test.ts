@@ -191,6 +191,7 @@ describe('LinearJournal: pending, then the outcome (#1444, spec §7)', () => {
     const warn = quiet();
     expect(journal.pending(write({ target: null }))).toEqual({ ok: false, why: 'target' });
     expect(journal.pending(write({ op: 'comment', target: null, fields: ['body'] }))).toEqual({ ok: false, why: 'target' });
+    expect(journal.pending(write({ op: 'link', target: null, fields: ['url'] }))).toEqual({ ok: false, why: 'target' });
     expect(journal.pending(write({ op: 'create', target: null, fields: ['team', 'title'] }))).toMatchObject({ ok: true });
     expect(journal.pending(write({ op: 'create', target: 'BBB-3', fields: ['team', 'title', 'parent'] }))).toMatchObject({ ok: true });
     warn.mockRestore();
@@ -242,9 +243,12 @@ describe('LinearJournal: no free text reaches a row (#1444, spec §7)', () => {
       create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent'],
       update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent'],
       comment: ['body'],
+      link: ['url', 'title'],
     });
     expect(journal.pending(write({ fields: ['project', 'title', 'state'] }))).toMatchObject({ ok: true });
     expect(rowsOf(db).map((r) => r['fields'])).toEqual(['title,state,project']);
+    expect(journal.pending(write({ op: 'link', fields: ['title', 'url'] }))).toMatchObject({ ok: true });
+    expect(rowsOf(db).map((r) => r['fields'])).toEqual(['title,state,project', 'url,title']);
   });
 
   it('the ids keep their grammars: SAFE_RE for the pair, a UUID for the slot, a team key, an issue identifier', () => {
@@ -277,9 +281,9 @@ describe('LinearJournal: no free text reaches a row (#1444, spec §7)', () => {
 });
 
 describe('LinearJournal: result holds a created issue’s identifier or a created comment’s id, and nothing else (#1444, spec §7)', () => {
-  const settled = (op: 'create' | 'update' | 'comment', outcome: 'ok' | 'failed', result: string | null) => {
+  const settled = (op: 'create' | 'update' | 'comment' | 'link', outcome: 'ok' | 'failed', result: string | null) => {
     const { db, journal } = linearServicesFake({ clock: () => NOW });
-    const fields = op === 'comment' ? ['body'] : op === 'create' ? ['team', 'title'] : ['title'];
+    const fields = op === 'link' ? ['url'] : op === 'comment' ? ['body'] : op === 'create' ? ['team', 'title'] : ['title'];
     const w = journal.pending(write({ op, target: op === 'create' ? null : 'AAA-12', fields }));
     if (!w.ok) throw new Error('pending refused');
     const warn = quiet();
@@ -300,6 +304,13 @@ describe('LinearJournal: result holds a created issue’s identifier or a create
     expect(settled('comment', 'ok', COMMENT_ID)).toMatchObject({ ans: { ok: true }, row: { result: COMMENT_ID } });
     expect(settled('comment', 'ok', 'AAA-13').ans).toEqual({ ok: false, why: 'result' });
     expect(settled('comment', 'ok', 'looks good to me').ans).toEqual({ ok: false, why: 'result' });
+  });
+
+  it('an ok link takes the attachment’s UUID; an identifier or a URL is refused', () => {
+    expect(settled('link', 'ok', COMMENT_ID)).toMatchObject({ ans: { ok: true }, row: { result: COMMENT_ID } });
+    expect(settled('link', 'ok', 'AAA-13').ans).toEqual({ ok: false, why: 'result' });
+    expect(settled('link', 'ok', 'https://github.com/example-org/example-repo/pull/1').ans).toEqual({ ok: false, why: 'result' });
+    expect(settled('link', 'failed', COMMENT_ID).ans).toEqual({ ok: false, why: 'result' });
   });
 
   it('an update, and any row that did not end ok, takes no result', () => {

@@ -1,4 +1,4 @@
-// The Linear proxy's twelve routes (#1444, spec §6, §14 row 6; plan task LK9): each verb's happy path, and each
+// The Linear proxy's thirteen routes (#1444, spec §6, §14 row 6; plan task LK9): each verb's happy path, and each
 // failure word at its status (§6.8). Linear is the rig's stand-in (`linearProxyRig.ts`), answering every fixed
 // document in the spec's shape, except where a row says it answers with the FX capture's recordings
 // (`linearRecorded.ts`, `fixtures/linear/`; D-7684, D-7743): the happy path of every verb, and Linear's error answers.
@@ -38,7 +38,7 @@ const FX_KEY = 'lin_api_fixtureRecordedK3y5m7n9p1q3r5s7t9u1v3w5x7y9z1';
 const RECORDED_BY_OP: Readonly<Record<string, string>> = {
   Issue: 'read-issue', Search: 'read-search', Comments: 'read-comments', Statuses: 'read-statuses', Projects: 'read-projects',
   Labels: 'read-labels', Users: 'read-users', IssueCreate: 'mutation-issue-create', IssueUpdate: 'mutation-issue-update',
-  CommentCreate: 'mutation-comment-create', ResolveIssue: 'resolve-issue', ResolveIssueAndParent: 'resolve-issue-and-parent',
+  CommentCreate: 'mutation-comment-create', AttachmentLinkURL: 'mutation-attachment-link-url-constructed', ResolveIssue: 'resolve-issue', ResolveIssueAndParent: 'resolve-issue-and-parent',
   ResolveParent: 'resolve-parent', DirectoryStates: 'directory-states-page-1', DirectoryLabels: 'directory-labels-page-1',
   DirectoryProjects: 'directory-projects-page-1', DirectoryUsers: 'directory-users-page-1', KeyCheck: 'key-check-page-1',
 };
@@ -61,6 +61,7 @@ const recordedRig = async (over: Responder = () => null): Promise<ProxyRig> => {
 };
 
 /** The verbs that call Linear, and the ones answered from the store. */
+const PR_URL = 'https://github.com/example-org/example-repo/pull/1';
 const CALLING = LINEAR_VERBS.filter((v) => LINEAR_OPS[v].source === 'linear');
 const WRITES = LINEAR_VERBS.filter((v) => LINEAR_OPS[v].class === 'write');
 
@@ -181,6 +182,53 @@ describe('each verb\'s happy path (spec §5.4)', () => {
     expect(r.rows()).toMatchObject([{ op: 'comment', outcome: 'ok', result: IDS.comment, target: 'AAA-12' }]);
   });
 
+  it('link: the resolve, then attachmentLinkURL on the resolved id with the URL and title; the row holds the attachment id (D-8141)', async () => {
+    const r = await open();
+    const res = await r.call('link', { ref: 'AAA-12', body: { url: PR_URL, title: 'A pull request' } });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(bodyOf(res)).toEqual({ ok: true, linked: true });
+    expect(r.calls.map((c) => c.op)).toEqual(['ResolveIssue', 'AttachmentLinkURL']);
+    expect(r.calls[1]!.variables).toEqual({ issueId: IDS.issue, url: PR_URL, title: 'A pull request' });
+    expect(r.calls[1]!.body).not.toContain(LINEAR_PROVENANCE_LINE);
+    expect(r.rows()).toMatchObject([{ op: 'link', outcome: 'ok', result: IDS.attachment, target: 'AAA-12', fields: 'url,title', teamKey: 'AAA' }]);
+    const bare = await r.call('link', { ref: 'AAA-12' });
+    expect(bare.statusCode, bare.body).toBe(200);
+    expect(r.calls[3]!.variables).toEqual({ issueId: IDS.issue, url: PR_URL });
+  });
+
+  it('link refuses a URL that is not a GitHub pull request or issue as bad-field url (400), and nothing reaches Linear', async () => {
+    const r = await open();
+    for (const url of ['https://example.com/example-org/example-repo/pull/1', 'http://github.com/example-org/example-repo/pull/1',
+      'https://github.com/example-org/example-repo/pull/1?x=1', 'https://github.com.evil.example/a/b/pull/1', 'not a url', 12]) {
+      const res = await r.call('link', { ref: 'AAA-12', body: { url } });
+      expect([res.statusCode, bodyOf(res)['error'], bodyOf(res)['detail']], String(url)).toEqual([400, 'bad-field', 'url']);
+    }
+    const missing = await r.call('link', { ref: 'AAA-12', body: {} });
+    expect([missing.statusCode, bodyOf(missing)['detail']]).toEqual([400, 'url']);
+    expect(r.calls).toEqual([]);
+    expect(r.rows()).toEqual([]);
+  });
+
+  it('link with no key for the workspace is not-configured (501) and calls Linear for nothing', async () => {
+    rig = await proxyRig();
+    const res = await rig.call('link', { ref: 'AAA-12' });
+    expect([res.statusCode, bodyOf(res)['error']]).toEqual([501, 'not-configured']);
+    expect(rig.calls).toEqual([]);
+  });
+
+  it('link: an upstream error is refused in ccrc\'s words and journaled; Linear\'s text is in no answer', async () => {
+    const r = await open({ respond: (c) => (c.op === 'AttachmentLinkURL'
+      ? { body: { errors: [{ message: 'canary-link-text', extensions: { code: 'INPUT_ERROR' } }] } } : null) });
+    const res = await r.call('link', { ref: 'AAA-12' });
+    expect([res.statusCode, bodyOf(res)['error']]).toEqual([503, 'unreachable']);
+    expect(res.body).not.toContain('canary-link-text');
+    expect(r.rows()).toMatchObject([{ op: 'link', outcome: 'failed', code: 'unreachable', target: 'AAA-12' }]);
+    const down = await open({ respond: (c) => (c.op === 'AttachmentLinkURL' ? statusAnswer(500) : null) });
+    const res2 = await down.call('link', { ref: 'AAA-12' });
+    expect([res2.statusCode, bodyOf(res2)['error']]).toEqual([503, 'unreachable']);
+    expect(down.rows()).toMatchObject([{ op: 'link', outcome: 'unknown' }]);
+  });
+
   it('a write and a search answer masked when linear-egress changed the text sent, and the row counts it', async () => {
     const r = await open();
     const secret = `GH_TOKEN=${'x1'.repeat(20)}`;
@@ -245,10 +293,12 @@ describe('each verb\'s happy path (spec §5.4)', () => {
       title: 'FX capture child issue (updated)', description: 'Child issue updated by the FX fixture capture.', priority: 2,
       addLabels: ['Improvement'],
     } }, ['resolve-issue', 'mutation-issue-update']))['issue']).toMatchObject({ identifier: 'AAA-7' });
+    expect(await drive('link', { ref: 'AAA-7', body: { url: 'https://github.com/example-org/example-repo/pull/1', title: 'A pull request' } },
+      ['resolve-issue', 'mutation-attachment-link-url-constructed'])).toEqual({ ok: true, linked: true });
     expect(await drive('comment', { ref: 'AAA-7', body: { body: 'Comment written by the FX fixture capture.' } },
       ['resolve-issue', 'mutation-comment-create'])).toEqual({ ok: true, comment: { createdAt: '2026-11-02T14:56:22.781Z' } });
     expect(r.rows().filter((x) => x['outcome'] === 'ok').map((x) => [x['op'], x['result']])).toEqual([
-      ['create', 'AAA-6'], ['create', 'AAA-7'], ['update', null], ['comment', '00000000-0007-4000-8000-000000000001'],
+      ['create', 'AAA-6'], ['create', 'AAA-7'], ['update', null], ['link', '00000000-0008-4000-8000-0000000000a1'], ['comment', '00000000-0007-4000-8000-000000000001'],
     ]);
   });
 });

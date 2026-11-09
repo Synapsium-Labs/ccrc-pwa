@@ -27,7 +27,7 @@ export interface LinearWriteAsk {
     issue: string | null;
     /** The resolved parent's team when `parent` is set, else null. */
     parentTeamKey: string | null;
-    op: 'create' | 'update' | 'comment';
+    op: 'create' | 'update' | 'comment' | 'link';
   };
 }
 

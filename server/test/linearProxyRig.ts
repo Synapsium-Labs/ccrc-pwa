@@ -52,6 +52,7 @@ export const IDS = {
   issue: 'cccccccc-0000-4000-8000-00000000000c',
   parent: 'cccccccc-0000-4000-8000-0000000000aa',
   comment: 'dddddddd-0000-4000-8000-00000000000d',
+  attachment: 'dddddddd-0000-4000-8000-0000000000d1',
   state: 'eeeeeeee-0000-4000-8000-00000000000e',
   label: 'eeeeeeee-0000-4000-8000-0000000000e1',
   project: 'eeeeeeee-0000-4000-8000-0000000000e2',
@@ -104,6 +105,7 @@ export function defaultBody(op: string, vars: Record<string, unknown>, key: stri
     case 'IssueCreate': return { data: { issueCreate: { success: true, issue: issueNode('AAA-100') } } };
     case 'IssueUpdate': return { data: { issueUpdate: { success: true, issue: issueNode('AAA-12') } } };
     case 'CommentCreate': return { data: { commentCreate: { success: true, comment: { id: IDS.comment, createdAt: T1 } } } };
+    case 'AttachmentLinkURL': return { data: { attachmentLinkURL: { success: true, attachment: { id: IDS.attachment } } } };
     case 'ResolveIssue': return { data: { issue: resolvedNode(String(vars['id']), teamOfRef(String(vars['id']))) } };
     case 'ResolveIssueAndParent': return { data: {
       issue: resolvedNode(String(vars['id']), teamOfRef(String(vars['id']))),
@@ -235,6 +237,7 @@ export const BODIES: Readonly<Partial<Record<LinearVerb, unknown>>> = {
   create: { team: 'AAA', title: 'A fixture title' },
   update: { title: 'A new fixture title' },
   comment: { body: 'A fixture comment' },
+  link: { url: 'https://github.com/example-org/example-repo/pull/1' },
 };
 
 export async function proxyRig(o: ProxyRigOpts = {}): Promise<ProxyRig> {

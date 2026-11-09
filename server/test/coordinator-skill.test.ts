@@ -4364,3 +4364,32 @@ describe('the delegated-worktrees reference (delegation broker wave 5, PR8, W5-R
     }
   });
 });
+
+// ── the Linear link rule (D-8141) ──
+// Every PR a fleet session opens for ticketed work is linked to its ticket from the Linear side, in every repository,
+// with no tracker id in the public repo. The rule is stated in SKILL.md and, at the landing steps, in
+// wave-lifecycle.md §5; the `ccrc-linear` skill carries the verb. Each pin is deliberate: a reworded rule is re-pinned.
+describe('the coordinator links every ticketed PR from the Linear side (D-8141)', () => {
+  const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8');
+  const lifecycle = refs('wave-lifecycle.md');
+
+  it('SKILL.md names the verb, both keywords and the ban on the tracker id', () => {
+    expect(skill).toContain('**Link every pull request you open for ticketed work.**');
+    expect(skill).toContain('ccrc-api linear link <REF> --json -');
+    expect(skill).toContain('`Closes #<n>` when merging the');
+    expect(skill).toContain('`Refs #<n>` when a live check is still owed');
+    expect(skill).toContain('A tracker\nid never appears in a public repository');
+  });
+
+  it('the landing steps repeat it, and the verb is one the closed client table holds', () => {
+    expect(lifecycle).toContain('**Link the PR to its ticket, once, before it lands.**');
+    expect(lifecycle).toContain('ccrc-api linear link <REF> --json -');
+    expect(lifecycle).toContain('`Closes #<n>` when the merge meets the ticket\'s acceptance, `Refs #<n>`');
+    expect(clientRoutes().map((r) => r.key)).toContain('linear.link');
+    expect(linearSkill).toContain('| `linear link <REF> --json <f>` |');
+  });
+
+  it('none of the three states a Linear ticket id (the repository is public)', () => {
+    for (const text of [skill, lifecycle, linearSkill]) expect(text).not.toMatch(/\bCCRCP-[0-9]/);
+  });
+});

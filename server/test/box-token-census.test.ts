@@ -295,7 +295,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Delegation wave 5 PR8: the lease parent's Retain, fifty-eight machine lanes and sixty-one in all.
   'sixty-one',
   // D-8071: GET /api/runs/:id/record, a session-or-token read: sixty-two machine lanes in all.
-  'sixty-two'];
+  'sixty-two',
+  // D-8141: POST /api/linear/proxy/issues/:id/links, a box-token lane: sixty-three machine lanes in all.
+  'sixty-three'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -435,7 +437,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // projection read, the one handler in `update/routes.ts` that consults the
     // box token (design 2026-09-20 §12, decision 15).
     // …plus the Linear proxy's twelve since #1444 (plan task LK9), its own lane source, asserted on its own.
-    expect(LINEAR_PROXY_LANES, 'the Linear proxy is not being read, or a route lost its token check').toHaveLength(12);
+    expect(LINEAR_PROXY_LANES, 'the Linear proxy is not being read, or a route lost its token check').toHaveLength(13);
     // …and the programme ledgers' nine (plan PL3), every one of the nine routes in `coord/ledgersRoutes.ts` a lane, by name.
     expect(LEDGER_LANES.slice().sort(), 'the ledgers file lost a box-token lane, or gained one with no census row').toEqual([
       'GET /api/programmes/:slug/items', 'POST /api/items/:id/blocking', 'POST /api/items/:id/confirm',
@@ -1237,24 +1239,25 @@ describe('the accounts surface: twelve session-only doors, no box token (spec 20
 
 // ── the Linear proxy surface (#1444, plan task LK9; spec 2026-10-31 §6.2) ──────────────────────────────────────────────
 //
-// `server/src/linear/proxyRoutes.ts` is the EIGHTH file that registers routes and the fifth lane source: twelve routes,
+// `server/src/linear/proxyRoutes.ts` is the EIGHTH file that registers routes and the fifth lane source: thirteen routes (`link` since D-8141),
 // one per `ccrc-api linear` verb, and every one a box-token lane (R2: the token is checked in each route's own
 // `onRequest`, whatever `CCRC_AUTH` says, and no cookie stands in for it). So the census here is the update surface's
 // with the sense reversed: every registration is a lane, in both directions with the door list; every one is EXEMPT;
 // none is a session-only coordination write; and a registration planted without a token check is SEEN as no lane.
-describe('the Linear proxy surface: twelve box-token lanes, every one EXEMPT (spec 2026-10-31 §6.2)', () => {
+describe('the Linear proxy surface: thirteen box-token lanes, every one EXEMPT (spec 2026-10-31 §6.2)', () => {
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
-  /** The twelve, by method and path (spec §5.1). Hand-kept for the NAMES only: the cases below derive the same set from
+  /** The thirteen, by method and path (spec §5.1). Hand-kept for the NAMES only: the cases below derive the same set from
    *  the file and compare in both directions. */
   const LINEAR_PROXY_DOORS = [
     'GET /api/linear/proxy/workspaces', 'GET /api/linear/proxy/teams', 'GET /api/linear/proxy/issues/:id',
     'POST /api/linear/proxy/search', 'GET /api/linear/proxy/issues/:id/comments', 'GET /api/linear/proxy/statuses',
     'GET /api/linear/proxy/projects', 'GET /api/linear/proxy/labels', 'GET /api/linear/proxy/users',
     'POST /api/linear/proxy/issues', 'POST /api/linear/proxy/issues/:id', 'POST /api/linear/proxy/issues/:id/comments',
+    'POST /api/linear/proxy/issues/:id/links',
   ];
   const REGISTERED = registrationsIn(LINEAR_PROXY_SRC).map((r) => r.key);
 
-  it('linear/proxyRoutes.ts registers exactly the twelve doors, each once', () => {
+  it('linear/proxyRoutes.ts registers exactly the thirteen doors, each once', () => {
     expect(new Set(REGISTERED).size).toBe(REGISTERED.length);
     expect([...REGISTERED].sort()).toEqual([...LINEAR_PROXY_DOORS].sort());
   });

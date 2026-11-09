@@ -1,5 +1,5 @@
 /**
- * THE LINEAR PROXY (#1444, D-7670, D-7671, D-7672, D-7675, D-7682 R2; spec 2026-10-31 §6): the twelve
+ * THE LINEAR PROXY (#1444, D-7670, D-7671, D-7672, D-7675, D-7682 R2, D-8141; spec 2026-10-31 §6): the thirteen
  * `/api/linear/proxy/*` routes a fleet session's `ccrc-api linear …` verbs call, so that a session reaches Linear
  * through the key ccrc holds and never holds a key of its own.
  *
@@ -72,6 +72,7 @@ export const LINEAR_PROXY_ROUTES: Readonly<Record<LinearVerb, string>> = Object.
   create: 'POST /api/linear/proxy/issues',
   update: 'POST /api/linear/proxy/issues/:id',
   comment: 'POST /api/linear/proxy/issues/:id/comments',
+  link: 'POST /api/linear/proxy/issues/:id/links',
 });
 
 /** The outer limiter's bound (spec §6.7): it protects the server, not Linear; the rate service protects Linear. */
@@ -221,6 +222,7 @@ export function registerLinearProxyRoutes(app: FastifyInstance, deps: LinearProx
   app.post('/api/linear/proxy/issues', opts((req) => checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], LINEAR_PROXY_ROUTES.create)), (req, reply) => handle('create', req, reply));
   app.post('/api/linear/proxy/issues/:id', opts((req) => checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], LINEAR_PROXY_ROUTES.update)), (req, reply) => handle('update', req, reply));
   app.post('/api/linear/proxy/issues/:id/comments', opts((req) => checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], LINEAR_PROXY_ROUTES.comment)), (req, reply) => handle('comment', req, reply));
+  app.post('/api/linear/proxy/issues/:id/links', opts((req) => checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], LINEAR_PROXY_ROUTES.link)), (req, reply) => handle('link', req, reply));
 
   /** A refusal that carries a wait: `Retry-After` beside the word. */
   const refuseAfter = (reply: FastifyReply, word: RouteRefusal, seconds: number, extra: Record<string, unknown>): FastifyReply => {

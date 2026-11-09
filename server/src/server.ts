@@ -2102,7 +2102,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ccrcDir: deps.cfg.ccrcDir, gate: accountGate, rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
   });
-  // The Linear proxy's twelve box-token routes (#1444, spec §6), beside the connection's: the same rate service and
+  // The Linear proxy's thirteen box-token routes (#1444, spec §6), beside the connection's: the same rate service and
   // refresher, the one journal and the policy point, each passed through as it is (possibly absent, never a default),
   // the box token read at request time as every lane reads it, and `attributionVerdict` over this server's registry.
   registerLinearProxyRoutes(app, {

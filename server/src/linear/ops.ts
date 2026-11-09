@@ -37,9 +37,9 @@ import type { LinearRouteAsk } from './route.js';
 
 // ── the verbs ──
 
-/** The twelve verbs (spec §5.1), in the client's row order. THE ONE LIST: the table below has one row per entry. */
+/** The thirteen verbs (spec §5.1; `link` since D-8141), in the client's row order. THE ONE LIST: the table below has one row per entry. */
 export const LINEAR_VERBS = [
-  'workspaces', 'teams', 'issue', 'search', 'comments', 'statuses', 'projects', 'labels', 'users', 'create', 'update', 'comment',
+  'workspaces', 'teams', 'issue', 'search', 'comments', 'statuses', 'projects', 'labels', 'users', 'create', 'update', 'comment', 'link',
 ] as const;
 export type LinearVerb = (typeof LINEAR_VERBS)[number];
 export type LinearOpClass = 'read' | 'write';
@@ -61,6 +61,8 @@ export const LINEAR_TITLE_MAX_CHARS = 255;
 export const LINEAR_DESCRIPTION_MAX_BYTES = 64 * 1024;
 /** A comment's `body`: markdown, 1 byte to 16 KiB. */
 export const LINEAR_COMMENT_MAX_BYTES = 16 * 1024;
+/** A `link` body's `url`: an https GitHub pull-request or issue URL, at most this many characters (D-8141). */
+export const LINEAR_LINK_URL_MAX_CHARS = 200;
 /** `search.text`: at most 256 characters. */
 export const LINEAR_SEARCH_TEXT_MAX_CHARS = 256;
 /** `labels`, `addLabels`, `removeLabels`: at most 20 names or ids each. */
@@ -135,6 +137,8 @@ export const LINEAR_DOCUMENTS = Object.freeze({
   update: 'mutation IssueUpdate($id: String!, $input: IssueUpdateInput!) { '
     + `issueUpdate(id: $id, input: $input) { success issue { ${ISSUE_FIELDS} } } }`,
   comment: 'mutation CommentCreate($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id createdAt } } }',
+  link: 'mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) { '
+    + 'attachmentLinkURL(issueId: $issueId, url: $url, title: $title) { success attachment { id } } }',
   resolveIssue: `query ResolveIssue($id: String!) { issue(id: $id) { ${RESOLVED_FIELDS} } }`,
   resolveIssueAndParent: 'query ResolveIssueAndParent($id: String!, $parent: String!) { '
     + `issue(id: $id) { ${RESOLVED_FIELDS} } parent: issue(id: $parent) { ${RESOLVED_FIELDS} } }`,
@@ -265,6 +269,8 @@ export interface LinearBodyFields {
   title?: string;
   description?: string;
   body?: string;
+  /** `link` only: the GitHub pull-request or issue URL to attach (D-8141). */
+  url?: string;
   state?: string;
   priority?: number;
   /** A name, `me`, a UUID, or (update only) null, which unassigns. */
@@ -341,6 +347,11 @@ const limitRule: FieldRule = (v) =>
 const nullableName: FieldRule = (v) => (v === null ? ok(null) : nameRule(v));
 /** A v4 UUID, lowercase as Linear writes its ids: `IssueCreateInput.id` is documented as "UUID v4" (FX's introspection). */
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** A GitHub pull-request or issue URL and nothing else (D-8141): https, github.com, `owner/repo/pull|issues/N`, no
+ *  query, fragment, port or credentials, so what Linear is asked to fetch is a page of GitHub's and no other host. */
+const GITHUB_URL = /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}\/(?:pull|issues)\/[1-9][0-9]{0,8}$/;
+const githubUrlRule: FieldRule = (v) =>
+  (typeof v === 'string' && v.length <= LINEAR_LINK_URL_MAX_CHARS && GITHUB_URL.test(v) ? ok(v) : NO);
 const requestIdRule: FieldRule = (v) => (typeof v === 'string' && REQUEST_ID.test(v) ? ok(v) : NO);
 
 /** A cursor as a session holds it: base64url, no padding, so it passes the client's SAFE_RE (§5.4). */
@@ -387,6 +398,7 @@ const BODIES: Readonly<Partial<Record<LinearVerb, { fields: Readonly<Record<stri
     required: [],
   },
   comment: { fields: { body: markdownRule(1, LINEAR_COMMENT_MAX_BYTES) }, required: ['body'] },
+  link: { fields: { url: githubUrlRule, title: textRule(1, LINEAR_TITLE_MAX_CHARS) }, required: ['url'] },
 };
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -528,7 +540,7 @@ export interface LinearResolvePlan {
 
 export function linearResolvePlan(input: LinearOpInput): LinearResolvePlan | null {
   const parent = input.fields.parent ?? null;
-  if (input.op === 'comment' || (input.op === 'update' && parent === null)) {
+  if (input.op === 'comment' || input.op === 'link' || (input.op === 'update' && parent === null)) {
     return { document: LINEAR_DOCUMENTS.resolveIssue, variables: { id: input.ref }, issue: true, parent: false };
   }
   if (input.op === 'update') {
@@ -1126,6 +1138,33 @@ export const LINEAR_OPS: Readonly<{ [V in LinearVerb]: LinearOpRow & { op: V } }
     },
     fleetKeys: () => [],
   }) as LinearCallRow & { op: 'comment' },
+
+  link: callRow({
+    op: 'link', class: 'write', method: 'POST', ref: true, query: ['workspace'], body: Object.keys(BODIES.link!.fields),
+    document: LINEAR_DOCUMENTS.link, resolves: [LINEAR_DOCUMENTS.resolveIssue],
+    variables: (input, ctx) => {
+      const issue = ctx.resolved?.issue ?? null;
+      const url = input.fields.url;
+      if (issue === null || url === undefined) return { ok: false, word: 'unresolved' };
+      const title = input.fields.title;
+      return {
+        ok: true,
+        vars: { issueId: issue.id, url, ...(title === undefined ? {} : { title }) },
+        fields: title === undefined ? ['url'] : ['url', 'title'],
+      };
+    },
+    shape: (body) => {
+      const data = dataOf(body);
+      if (isWord(data)) return { ok: false, ...data };
+      const payload = data['attachmentLinkURL'];
+      if (!isPlainObject(payload)) return { ok: false, word: 'malformed' };
+      if (payload['success'] !== true) return { ok: false, word: 'unreachable' };
+      const a = payload['attachment'];
+      if (!isPlainObject(a) || !isLinearUuid(a['id'])) return { ok: false, word: 'malformed' };
+      return { ok: true, answer: { linked: true }, result: a['id'] };
+    },
+    fleetKeys: () => [],
+  }) as LinearCallRow & { op: 'link' },
 });
 
 // ── the validator (spec §5.2, §5.3) ──

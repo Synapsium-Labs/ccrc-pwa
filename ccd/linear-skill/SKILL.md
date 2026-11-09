@@ -47,6 +47,7 @@ body (a file, or `-` for stdin). The client adds this session's identity itself;
 | `linear create --json <f>` | file a new issue | `--workspace` |
 | `linear update <REF> --json <f>` | change an issue | `--workspace` |
 | `linear comment <REF> --json <f>` | comment on an issue | `--workspace` |
+| `linear link <REF> --json <f>` | attach a GitHub pull request or issue URL to an issue | `--workspace` |
 
 ## Bodies
 
@@ -61,6 +62,9 @@ Every body is a JSON object, and an unknown field is refused as `bad-field` with
   parent?}`: at least one field. `labels` replaces the set and cannot be combined with `addLabels` or `removeLabels`;
   `assignee: null` unassigns. Moving an issue to another team is not offered.
 - **comment** `{body}`: markdown, 1 byte to 16 KiB.
+- **link** `{url, title?}`: `url` an `https://github.com/<owner>/<repo>/pull/<n>` or `/issues/<n>` address and nothing else
+  (no query, no fragment, at most 200 characters); `title` 1 to 255 characters. It answers `{ok: true, linked: true}`.
+  Linear's GitHub integration then tracks the pull request from the ticket's side, with no ticket id in the repository.
 
 States, labels, projects and users are named as Linear names them, or by the `id` the list verbs give.
 
@@ -146,6 +150,15 @@ Move an issue to another state and say why in a comment:
 printf '%s\n' '{"state":"In Review"}' | ~/.local/bin/ccrc-api linear update AAA-12 --json - | jq -r '.ok, .issue.state.name'
 printf '%s\n' '{"body":"Ready for review: the fix is on the branch named in the pull request."}' \
   | ~/.local/bin/ccrc-api linear comment AAA-12 --json - | jq -r '.ok'
+```
+
+Link a pull request you opened to its ticket, so Linear's GitHub integration tracks it. In the PR body cite the ticket's
+GitHub mirror issue (`Closes #<n>` when the merge meets the ticket's acceptance, `Refs #<n>` when a live check is owed),
+never the ticket id:
+
+```bash
+printf '%s\n' '{"url":"https://github.com/example-org/example-repo/pull/1"}' \
+  | ~/.local/bin/ccrc-api linear link AAA-12 --json - | jq -r '.ok, .linked'
 ```
 
 When more than one workspace is configured, add `--workspace <urlKey>` to any of these; `linear workspaces` lists the

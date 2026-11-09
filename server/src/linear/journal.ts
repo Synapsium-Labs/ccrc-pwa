@@ -33,9 +33,9 @@ import { LINEAR_POLICY_REFUSALS } from './policyPoint.js';
  */
 
 /** Every op a row records: the three session writes, then the four Settings key acts. */
-export const LINEAR_JOURNAL_OPS = ['create', 'update', 'comment', 'key-add', 'key-replace', 'key-remove', 'key-check'] as const;
+export const LINEAR_JOURNAL_OPS = ['create', 'update', 'comment', 'link', 'key-add', 'key-replace', 'key-remove', 'key-check'] as const;
 export type LinearJournalOp = (typeof LINEAR_JOURNAL_OPS)[number];
-export type LinearWriteOp = Extract<LinearJournalOp, 'create' | 'update' | 'comment'>;
+export type LinearWriteOp = Extract<LinearJournalOp, 'create' | 'update' | 'comment' | 'link'>;
 
 /** `pending` until the route answers; then exactly one of the others. */
 export const LINEAR_JOURNAL_OUTCOMES = ['pending', 'ok', 'refused', 'denied', 'failed', 'unknown'] as const;
@@ -48,6 +48,7 @@ export const LINEAR_JOURNAL_FIELDS: Readonly<Record<LinearWriteOp, readonly stri
   create: ['team', 'title', 'description', 'state', 'priority', 'assignee', 'labels', 'project', 'parent'],
   update: ['title', 'description', 'state', 'priority', 'assignee', 'labels', 'addLabels', 'removeLabels', 'project', 'parent'],
   comment: ['body'],
+  link: ['url', 'title'],
 };
 
 export const LINEAR_JOURNAL_RETENTION_DAYS = 365;
@@ -84,7 +85,7 @@ export type LinearJournalSettle = { ok: true } | { ok: false; why: LinearJournal
 export type LinearJournalCode = RouteRefusal | LinearPolicyRefusal;
 
 const OPS: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OPS);
-const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment']);
+const WRITE_OPS: ReadonlySet<string> = new Set(['create', 'update', 'comment', 'link']);
 const SETTLED: ReadonlySet<string> = new Set(LINEAR_JOURNAL_OUTCOMES.filter((o) => o !== 'pending'));
 const CODES: ReadonlySet<string> = new Set<string>([...ROUTE_REFUSALS, ...LINEAR_POLICY_REFUSALS]);
 /** The client's SAFE_RE (`ccd/ccrc-api`), bounded as the mail path bounds a session id. */
@@ -124,7 +125,7 @@ function pendingRefusal(e: LinearPendingInput): LinearJournalRefusal | null {
   if (e.workspaceId !== null && !isUuid(e.workspaceId)) return 'workspace';
   if (write ? (e.teamKey !== null && !isTeamKey(e.teamKey)) : e.teamKey !== null) return 'team';
   if (e.target !== null && !isIdentifier(e.target)) return 'target';
-  if ((e.op === 'update' || e.op === 'comment') && e.target === null) return 'target';
+  if ((e.op === 'update' || e.op === 'comment' || e.op === 'link') && e.target === null) return 'target';
   if (!write && e.target !== null) return 'target';
   if (fieldsText(e.op, e.fields) === 'refused') return 'fields';
   return null;
@@ -136,7 +137,7 @@ function settleRefusal(op: string, outcome: LinearSettledOutcome, code: unknown,
   decisionId: unknown): LinearJournalRefusal | null {
   if (code !== undefined && (typeof code !== 'string' || !CODES.has(code) || outcome === 'ok')) return 'code';
   if (result !== null && result !== undefined) {
-    const fits = outcome === 'ok' && ((op === 'create' && isIdentifier(result)) || (op === 'comment' && isUuid(result)));
+    const fits = outcome === 'ok' && ((op === 'create' && isIdentifier(result)) || ((op === 'comment' || op === 'link') && isUuid(result)));
     if (!fits) return 'result';
   }
   if (masked !== null && masked !== undefined && !(Number.isSafeInteger(masked) && (masked as number) >= 0)) return 'masked';

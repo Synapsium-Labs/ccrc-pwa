@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, fifty-nine rows, and nothing else; the
+#   * The route comes from ROUTES below, sixty rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -88,7 +88,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Fifty-nine rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Sixty rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -215,10 +215,10 @@ declare -A ROUTES=(
   [goals.modify]='POST|/api/programmes/{id}/modifications|yes|-'
   [goals.merged]='POST|/api/programmes/{id}/modifications/merged|yes|-'
   # Linear, through the server's proxy and the key ccrc holds for each workspace (D-7669, #1444): sessions never sign
-  # in to Linear and never hold a key. Twelve rows, nine reads and three writes; the SERVER decides each row's class,
+  # in to Linear and never hold a key. Thirteen rows, nine reads and four writes; the SERVER decides each row's class,
   # never the method, which is why `search`, a read, is a POST: its text is free text, and free text never rides a URL
   # (SAFE_RE refuses it as a query value), so it goes in the `--json` body. `search` has its own path so no issue
-  # route's `{id}` can match it. The `{id}` on the four issue rows is an issue identifier (`AAA-12`), held to
+  # route's `{id}` can match it. The `{id}` on the five issue rows is an issue identifier (`AAA-12`), held to
   # LINEAR_REF_RE below before anything is sent. `workspace` is a declared query key on every row that acts in one
   # workspace, the POSTs included, and never a body field; only `workspaces`, which lists them all, takes none. Every
   # row carries the pane's identity in its QUERY, appended after the declared keys (the Linear block in `main`).
@@ -234,9 +234,10 @@ declare -A ROUTES=(
   [linear.create]='POST|/api/linear/proxy/issues|no|workspace'
   [linear.update]='POST|/api/linear/proxy/issues/{id}|yes|workspace'
   [linear.comment]='POST|/api/linear/proxy/issues/{id}/comments|yes|workspace'
+  [linear.link]='POST|/api/linear/proxy/issues/{id}/links|yes|workspace'
 )
 
-# A Linear issue identifier, the `<REF>` of the four issue rows (D-7669): a team key that starts with a letter, a hyphen,
+# A Linear issue identifier, the `<REF>` of the five issue rows (D-7669): a team key that starts with a letter, a hyphen,
 # then one to nine digits. Every match also matches SAFE_RE; this is the narrower check on those rows, so `AAA12`,
 # `AAA-` and `search` are refused here, locally, as `bad-ref` (D-7685), and never sent. The server checks it again. The classes are spelled
 # out, never ranges, for the reason `_api_server_cap` gives: under a UTF-8 locale a range may collate non-ASCII letters.

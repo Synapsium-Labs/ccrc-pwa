@@ -1,8 +1,8 @@
 // The recorded Linear fixtures (#1444, D-7684's FX act, D-7743; spec 2026-10-31 §4.1, §6.7).
 //
 // `fixtures/linear/` holds one file per answer the FX capture recorded from Linear on 2026-11-02, scrubbed to the
-// fixture vocabulary (README.md there says what was replaced and what was kept), plus ONE constructed answer, the
-// rate-limited one, whose file name says so. This file holds three things of them:
+// fixture vocabulary (README.md there says what was replaced and what was kept), plus TWO constructed answers, the
+// rate-limited one and the link mutation's (D-8141), whose file names say so. This file holds three things of them:
 //
 //   1. EVERY FILE PARSES, and is one record of the capture's shape: the request it sent and the answer it got, the
 //      raw body equal to the parsed one, the request body equal to the document and variables it names.
@@ -27,10 +27,12 @@ const TEXT = new Map(readdirSync(LINEAR_RECORD_DIR).sort().map((f) => [f, readFi
 const RECORDS = new Map<string, LinearRecord>(FILES.map((f) => [f, linearRecord(f)]));
 
 describe('every fixture parses, one capture record each', () => {
-  it('holds the recorded set and the one constructed answer', () => {
-    // 31 recorded answers (the capture's cleanup and cleanup-verify calls are not kept) and the constructed 429.
-    expect(FILES).toHaveLength(32);
-    expect(FILES.filter((f) => f.includes('constructed'))).toEqual(['error-429-ratelimited-constructed.json']);
+  it('holds the recorded set and the two constructed answers', () => {
+    // 31 recorded answers (the capture's cleanup and cleanup-verify calls are not kept), the constructed 429 and the
+    // constructed link mutation (D-8141).
+    expect(FILES).toHaveLength(33);
+    expect(FILES.filter((f) => f.includes('constructed'))).toEqual([
+      'error-429-ratelimited-constructed.json', 'mutation-attachment-link-url-constructed.json']);
   });
 
   it.each(FILES)('%s is a whole record', (f) => {
@@ -54,8 +56,23 @@ describe('every merged document has a fixture, byte for byte', () => {
   const recorded = (doc: string): string[] =>
     [...RECORDS.entries()].filter(([f, r]) => r.document === doc && !f.includes('constructed')).map(([f]) => f);
 
-  it.each(Object.entries(LINEAR_DOCUMENTS))('LINEAR_DOCUMENTS.%s', (_name, doc) => {
-    expect(recorded(doc)).not.toEqual([]);
+  /** THE ONE EXCEPTION to "recorded before it lands" (D-8141): the link mutation was written when no session may call
+   *  Linear, so its fixture is constructed from the schema. Remove this row when `mutation-attachment-link-url.json` is
+   *  recorded; the test below it fails the day both exist, so the exception cannot outlive the recording. */
+  const AWAITING_RECAPTURE: Readonly<Record<string, string>> = { link: 'mutation-attachment-link-url-constructed.json' };
+  const constructedFor = (doc: string): string[] =>
+    [...RECORDS.entries()].filter(([f, r]) => r.document === doc && f.includes('constructed')).map(([f]) => f);
+
+  it.each(Object.entries(LINEAR_DOCUMENTS))('LINEAR_DOCUMENTS.%s', (name, doc) => {
+    const waiting = AWAITING_RECAPTURE[name];
+    if (waiting === undefined) expect(recorded(doc)).not.toEqual([]);
+    else expect(constructedFor(doc)).toContain(waiting);
+  });
+
+  it('the recapture exception holds only while the document has no recording', () => {
+    for (const name of Object.keys(AWAITING_RECAPTURE)) {
+      expect(recorded(LINEAR_DOCUMENTS[name as keyof typeof LINEAR_DOCUMENTS]), name).toEqual([]);
+    }
   });
 
   /** The documents `client.ts` sends, read off the fetch seam: they are module constants, not exports. */
