@@ -2896,7 +2896,7 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
 
 
 describe('the compaction card — PreCompact and the helper (spec §3.1)', () => {
-  it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing', () => {
+  it('with a fresh graph and the helper, PreCompact writes the card (nonce first) and the mined set, and prints nothing (unarmed: PreCompact prints only when armed and scope main)', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
