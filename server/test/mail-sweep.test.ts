@@ -2630,6 +2630,91 @@ describe('sweepMail: the coordinator quiet window', () => {
     expect(literalSends(h.calls)).toEqual([NUDGE]);
     expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
   });
+
+  // Today's pace at each edge, through the lane, for all three subjects the
+  // gate can see: the claimant of an open run, a worker on someone else's run,
+  // and a plain session with no run at all. The numbers are LITERAL, never the
+  // mirrors above: a value change is a behaviour change and must turn this red
+  // (the mirrors are for the window cases, which may move with the values; an
+  // edge is the value).
+  describe("today's pace at each edge (MAIL_PACE characterization)", () => {
+    const SUBJECTS = [
+      { who: 'a claimant of an open run', seed: seedCoordinatorRun, quietMs: 15_000, cooldownMs: 30_000 },
+      { who: 'a worker on another run', seed: seedWorkerRun, quietMs: 60_000, cooldownMs: 120_000 },
+      { who: 'a plain session with no run', seed: (_c: CoordStore): void => {}, quietMs: 60_000, cooldownMs: 120_000 },
+    ] as const;
+
+    it.each(SUBJECTS)('$who: held as not-quiet 1 ms short of its quiet time', async ({ seed, quietMs }) => {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home, { statusUpdatedAt: NOW - (quietMs - 1) });
+      seed(coord);
+      const d = queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([]);
+      expect(deliveryRow(coord, d.id).lastGate).toBe('not-quiet');
+    });
+
+    it.each(SUBJECTS)('$who: delivered at exactly its quiet time', async ({ seed, quietMs }) => {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home, { statusUpdatedAt: NOW - quietMs });
+      seed(coord);
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+    });
+
+    it.each(SUBJECTS)('$who: held as cooldown 1 ms short of its cooldown', async ({ seed, cooldownMs }) => {
+      // Both `cooldownMs - 1` values are past the lane's own re-sweep gate
+      // (`MAIL_SWEEP_MS`), so the second sweep is admitted — asserted, not
+      // assumed, so a cadence change could not quietly make this case about a
+      // throttled lane instead of a cooldown.
+      expect(cooldownMs - 1).toBeGreaterThan(PAST_SWEEP_MS);
+      const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home);
+      seed(coord);
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+      advance(cooldownMs - 1);
+      seedLiveState(h.home, { statusUpdatedAt: Date.now() - 60_000 - 1_000 });
+      const d = queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+      expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
+    });
+
+    it.each(SUBJECTS)('$who: delivered again at exactly its cooldown', async ({ seed, cooldownMs }) => {
+      const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home);
+      seed(coord);
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+
+      advance(cooldownMs);
+      seedLiveState(h.home, { statusUpdatedAt: Date.now() - 60_000 - 1_000 });
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+    });
+  });
 });
 
 // ── Worker stall watch §4.1: `shell` is an idle main loop ─────────────────
