@@ -1600,7 +1600,7 @@ describe('Closed today, and the board\'s order (Task 20, spec §8.2 items 1 to 1
     const runs = [
       r({ id: 1, program: 'p-live', programTitle: 'Live', stuck: STUCK_NOW }),
       r({ id: 2, program: 'p-wait', programTitle: 'Wait', state: 'awaiting-review', waitsOn: 'coordinator', lastMoveAt: now - 3 * 86_400_000 }),
-      r({ id: 3, program: 'p-cap', programTitle: 'Cap', reviewCap: { rounds: 3, cap: 3, askedAt: now - 60_000, liftedAt: null } }),
+      r({ id: 3, program: 'p-cap', programTitle: 'Cap', reviewCap: { rounds: 3, cap: 3, askedAt: now - 60_000, liftedAt: null, granted: 0, askHandledAt: null, coordLift: null } }),
       r({ id: 4, program: 'p-quiet', programTitle: 'Quiet', sessionId: 'q', workspace: 'q' }),
     ];
     act(() => { store.setState({ runs, runsFrameSeen: true, conn: 'open', coord: { pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [] }, coordFrameSeen: true }); });
