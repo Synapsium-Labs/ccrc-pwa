@@ -375,6 +375,7 @@
 .wl .wl-call { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta); min-width: 0; }
 .wl .wl-call-line { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
 .wl .wl-call-seen { width: auto; min-height: 44px; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+.wl .wl-call-error { font-size: var(--fs-xs); color: var(--status-attention-text); }
 
 /* The Overturn… sheet (D-8126): options weighed with the chosen one marked, a note, and a refusal in words. */
 .wl .wl-call-overturn { width: auto; min-height: 44px; padding: 0 var(--sp-2); font-size: var(--fs-xs); }

@@ -21,7 +21,8 @@ import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
 import { RowMain, RowMeta } from './rowParts';
 import { EndRunControls, LiftCapControl, endRunOf, useItemActs, type ItemActs } from './ItemActs';
-import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callsOf } from './callWords';
+import { apiErrorText } from '../lib/api';
+import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsOf } from './callWords';
 import { OverturnSheet, type OverturnSend } from './OverturnSheet';
 import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
@@ -56,7 +57,7 @@ export interface WaitingScreenProps {
   readonly onOpenItem: (id: number, list: ItemList) => void;
   readonly onOpenSession: (id: string) => void;
   /** The operator's Seen on a big call (D-8126). Absent, the group draws its calls with no Seen control. */
-  readonly onSeen?: (id: number) => void;
+  readonly onSeen?: (id: number) => void | Promise<unknown>;
   /** The one correction door (`POST /api/digest/correct`), for Overturn… on a big call (D-8126). Absent, no call carries it. */
   readonly onOverturn?: OverturnSend;
 }
@@ -145,10 +146,21 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
  *  (D-8126). Never part of the blocking count or the summary: a call needs nothing from the operator but a glance. Each
  *  carries Seen, asked once; the row leaves for the cleared trail on the next frame. Nothing is drawn for none. */
 export function CallsGroup({ calls, now, onSeen, onOverturn }: {
-  calls: readonly CallView[]; now: number; onSeen?: (id: number) => void; onOverturn?: OverturnSend;
+  calls: readonly CallView[]; now: number; onSeen?: (id: number) => void | Promise<unknown>; onOverturn?: OverturnSend;
 }): ReactNode {
   const [asked, setAsked] = useState<ReadonlySet<number>>(new Set());
+  const [seenError, setSeenError] = useState<ReadonlyMap<number, string>>(new Map());
   const [overturning, setOverturning] = useState<CallView | null>(null);
+  /** Seen is asked once per call while it is in flight; a rejection (offline, `not-big`, `unknown-call`) frees the button and
+   *  says why on the row, because the server sends no `waiting` frame on a refusal. */
+  const askSeen = (id: number, send: (id: number) => void | Promise<unknown>): void => {
+    setAsked((prev) => new Set(prev).add(id));
+    setSeenError((prev) => { if (!prev.has(id)) return prev; const next = new Map(prev); next.delete(id); return next; });
+    void Promise.resolve(send(id)).catch((err: unknown) => {
+      setAsked((prev) => { const next = new Set(prev); next.delete(id); return next; });
+      setSeenError((prev) => new Map(prev).set(id, callRefusalText(err) ?? apiErrorText(err)));
+    });
+  };
   if (calls.length === 0) return null;
   return (
     <>
@@ -160,7 +172,10 @@ export function CallsGroup({ calls, now, onSeen, onOverturn }: {
             <span className="wl-call-line">{callLine(c, now)}</span>
             {onSeen !== undefined && (
               <BareRow className="wl-call-seen" disabled={asked.has(c.id)}
-                       onClick={() => { setAsked((prev) => new Set(prev).add(c.id)); onSeen(c.id); }}>{SEEN_WORD}</BareRow>
+                       onClick={() => askSeen(c.id, onSeen)}>{SEEN_WORD}</BareRow>
+            )}
+            {seenError.has(c.id) && (
+              <span className="wl-call-error" role="alert">{seenError.get(c.id)}</span>
             )}
             {onOverturn !== undefined && c.overturnedAt === null && (
               <BareRow className="wl-call-overturn" onClick={() => setOverturning(c)}>{OVERTURN_WORD}</BareRow>
@@ -182,7 +197,7 @@ export function CallsGroup({ calls, now, onSeen, onOverturn }: {
 export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, calls = [], onSeen, onOverturn }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
-  rowActs?: RowActs | null; calls?: readonly CallView[]; onSeen?: (id: number) => void; onOverturn?: OverturnSend;
+  rowActs?: RowActs | null; calls?: readonly CallView[]; onSeen?: (id: number) => void | Promise<unknown>; onOverturn?: OverturnSend;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);

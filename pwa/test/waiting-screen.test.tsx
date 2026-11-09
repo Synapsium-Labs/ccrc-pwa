@@ -546,6 +546,17 @@ describe('calls made for you (D-8126)', () => {
     expect(onSeen).toHaveBeenCalledWith(7);
   });
 
+  it('a rejected Seen re-enables the button and says why on the row', async () => {
+    const onSeen = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined);
+    open({ view: withItem({ calls: [call({ id: 7 })] }), onSeen });
+    const seen = screen.getByRole('button', { name: 'Seen' }) as HTMLButtonElement;
+    fireEvent.click(seen);
+    expect((await screen.findByRole('alert')).textContent).not.toBe('');
+    expect(seen.disabled).toBe(false);
+    fireEvent.click(seen);
+    expect(onSeen).toHaveBeenCalledTimes(2);
+  });
+
   it('a cleared call joins the Recently cleared trail, not the group', () => {
     open({ view: withItem({ calls: [], callsCleared: [call({ id: 3, chosen: 'files' })] }) });
     expect(screen.queryByText(/Calls made for you/)).toBeNull();
