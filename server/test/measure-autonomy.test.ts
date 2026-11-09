@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { renderMailNudge } from '../src/coord/envelope.js';
 import { IDLE_COMPACT_NUDGE_PROMPT, RESUME_PROMPT_PREFIX, MAIL_ENVELOPE_FENCE } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -45,6 +46,7 @@ describe('measure-autonomy transcripts', () => {
     const src = readFileSync(SCRIPT, 'utf8');
     expect(src).toContain(JSON.stringify(IDLE_COMPACT_NUDGE_PROMPT).slice(1, -1).replace(/\\"/g, '"'));
     expect(src).toContain(RESUME_PROMPT_PREFIX);
+    expect(src).toContain(`MAIL_NUDGE_HEAD = '${renderMailNudge('x').slice(0, 29)}'`);
     expect(src).toContain(`MAIL_FENCE = '${MAIL_ENVELOPE_FENCE}'`);
   });
 
@@ -79,6 +81,17 @@ describe('measure-autonomy transcripts', () => {
     expect(typed[0]!.hours).toBe(0.5);
     expect(typed[0]!.excerpt).toContain('Which of the two layouts');
     expect(table['typed-reply']).toMatch(/^count=1 /);
+  });
+
+  it('does not count a question followed by a harness-written row as an operator reply', () => {
+    const { waits } = census(tree('coord-harness'));
+    expect(waits.filter((w) => w.kind === 'typed-reply')).toHaveLength(0);
+  });
+
+  it('does not count a question followed by the mail lane\'s typed wake prompt', () => {
+    const fixture = readFileSync(path.join(FIXTURES, 'coord-a', 'session-a.jsonl'), 'utf8');
+    expect(fixture).toContain('ccrc-mail: you have new mail.');
+    expect(census(tree('coord-a')).waits.filter((w) => w.kind === 'typed-reply')).toHaveLength(1);
   });
 
   it('does not count a question followed by the idle-compaction nudge', () => {

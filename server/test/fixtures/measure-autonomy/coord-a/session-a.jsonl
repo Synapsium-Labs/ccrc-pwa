@@ -8,7 +8,7 @@
 {"type": "user", "uuid": "a-u-11", "timestamp": "2026-11-02T09:40:00.000Z", "message": {"role": "user", "content": "use the first"}}
 {"type": "assistant", "uuid": "a-a-12", "timestamp": "2026-11-02T09:50:00.000Z", "message": {"id": "a-msg-13", "role": "assistant", "content": [{"type": "text", "text": "Done with that. Anything else?"}], "stop_reason": "end_turn"}}
 {"type": "system", "subtype": "turn_duration", "uuid": "a-s-14", "timestamp": "2026-11-02T09:50:00.000Z"}
-{"type": "user", "uuid": "a-u-15", "timestamp": "2026-11-02T10:00:00.000Z", "message": {"role": "user", "content": "```ccrc-mail\nid: 1\nfrom: coord-x\nto: coord-a\nkind: info\nsubject: wake\n--\nbody\n```"}}
+{"type": "user", "uuid": "a-u-15", "timestamp": "2026-11-02T10:00:00.000Z", "message": {"role": "user", "content": "ccrc-mail: you have new mail. Use the client, never curl or raw HTTP: ~/.local/bin/ccrc-api mail list --to coord-a ; then per row use its deliveryId, NOT id: ~/.local/bin/ccrc-api mail fetch <deliveryId> and ~/.local/bin/ccrc-api mail ack <deliveryId> --json - with body {\"fromId\":\"coord-a\",\"fromUuid\":\"<your uuid>\"}. Invoke by that exact path."}}
 {"type": "assistant", "uuid": "a-a-16", "timestamp": "2026-11-02T10:10:00.000Z", "message": {"id": "a-msg-17", "role": "assistant", "content": [{"type": "text", "text": "Should the retry count be raised?"}], "stop_reason": "end_turn"}}
 {"type": "system", "subtype": "turn_duration", "uuid": "a-s-18", "timestamp": "2026-11-02T10:10:00.000Z"}
 {"type": "user", "uuid": "a-u-19", "timestamp": "2026-11-02T10:20:00.000Z", "message": {"role": "user", "content": "This session is being continued from a summary"}, "isCompactSummary": true}
