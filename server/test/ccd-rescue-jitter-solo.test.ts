@@ -40,9 +40,11 @@ const stampSwap = (id: string, agoS: number): void => {
   h.sh(`_reg_set ${id} lastswap $(( $(date +%s) - ${agoS} ))`);
 };
 
-/** Dispatch one swap for ID with `arm` and return its swap.log line; `pre` runs first in the same shell. */
+/** Dispatch one swap for ID with `arm` and return its swap.log line; `pre` runs first in the same shell.
+ *  The session's pending-dispatch claim (Task 8) is cleared first: each call stands for a fresh decision after the last
+ *  one's unit has finished, which is what `cmd_swap` does on its way out. */
 const dispatchLine = (arm: string, pre = '', env: NodeJS.ProcessEnv = {}): string => {
-  h.sh(`${STUBS}\n${pre}\n_dispatch_swap ${ID} claude-a ${arm}`, env);
+  h.sh(`${STUBS}\nrm -f "$HOME/.cc-sessions/${ID}.dispatching"\n${pre}\n_dispatch_swap ${ID} claude-a ${arm}`, env);
   const lines = dispatchLines();
   expect(lines.length).toBeGreaterThan(0);
   return lines[lines.length - 1]!;
@@ -145,6 +147,7 @@ describe('the setting, and the old spread (D-8123)', () => {
     ccrcEnv('CCRC_RESCUE_SOLO_JITTER_S=40\n');
     h.sh(`${STUBS}
       _dispatch_swap ${ID} claude-a rescue
+      rm -f "$REG/${ID}.dispatching"   # the first unit has finished (Task 8's claim)
       printf 'CCRC_RESCUE_SOLO_JITTER_S=3\\n' > "$HOME/.ccrc/ccrc.env"
       _dispatch_swap ${ID} claude-a rescue`);
     expect(dispatchLines().map((l) => /max=(\d+)$/.exec(l)?.[1])).toEqual(['40', '40']);
