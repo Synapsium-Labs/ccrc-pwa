@@ -209,7 +209,8 @@ const writeTargets = (line: string): string[] => {
   }
   return out;
 };
-const WRITER_WORD = /(?:^|[;&|({]\s*|\b(?:then|do|exec|command|sudo)\s+)(?:rm|mv|unlink|truncate|ln|cp|install|tee|dd)\b|(?:^|[;&|({]\s*)sed\s+(?:-[A-Za-z]*i|--in-place)/;
+const CMD_START = String.raw`(?:^\s*|[;&|({!]\s*|\b(?:then|do|else|exec|command|sudo|time|nohup|env)\s+)`;
+const WRITER_WORD = new RegExp(`${CMD_START}(?:rm|mv|unlink|truncate|ln|cp|install|tee|dd)\\b|${CMD_START}sed\\s+(?:-[A-Za-z]*i|--in-place)`);
 /** The lines that remove, move, truncate or write a path in the steer directory (seed or steer name in an operand or a redirection target). */
 const steerWriters = (text: string): string[] => {
   const names = steerNames(text);
@@ -234,12 +235,12 @@ describe('PX13: the hook never consumes, writes, moves or deletes a steer file (
   });
   it('the scanner sees each writing shape, and no reading one', () => {
     for (const bad of ['mv "$_hs_sf" /x', 'x && unlink "$_hs_sf"', 'truncate -s 0 "$_hs_sf"', 'tee "$_hs_sf" < in', 'cp in "$_hs_sf"', 'ln -s a "$_hs_sf"',
-      'dd of="$_hs_sf"', 'sed -i s/a/b/ "$_hs_sf"', ': > "$_hs_sf"', 'echo x >> "$_hs_sf"', 'echo x >| "$_hs_sf"', 'echo x &> "$_hs_sf"', 'exec 3<> "$_hs_sf"',
+      'dd of="$_hs_sf"', 'sed -i s/a/b/ "$_hs_sf"', '  rm -f -- "$_hs_sf"', '\tmv "$_hs_sf" /x', '  sed -i s/a/b/ "$_hs_sf"', '    if x; then\n      rm -f -- "$_hs_sf"\n    fi', 'x || rm "$_hs_sf"', '! rm "$_hs_sf"', 'else rm "$_hs_sf"', ': > "$_hs_sf"', 'echo x >> "$_hs_sf"', 'echo x >| "$_hs_sf"', 'echo x &> "$_hs_sf"', 'exec 3<> "$_hs_sf"',
       'printf x > "$HISTORY_STEER_DIR/x"', 'rm -rf "$HOME/.ccrc/history/steer"', 'if x; then rm "$_hs_sf"; fi']) {
       expect(steerWriters(`${SEED}${bad}`), bad).toHaveLength(1);
     }
     for (const ok of ['[[ -f "$_hs_sf" ]] && return 1', 'x=$(< "$_hs_sf")', 'cat "$_hs_sf" 2>&1', 'echo "$_hs_sf" >&2', 'echo "$_hs_sf" > /dev/null', '(( n >= 1 )) && echo "$_hs_sf"',
-      'rm -f -- "$other"', 'echo x > "$other"', '# rm "$_hs_sf"']) {
+      'rm -f -- "$other"', 'echo x > "$other"', '# rm "$_hs_sf"', '  # rm "$_hs_sf"', '  { IFS= read -r -d "" -n 8193 t; } 2>/dev/null < "$_hs_sf" && return 1', '  [[ -f "$_hs_sf" && -r "$_hs_sf" ]] || return 1']) {
       expect(steerWriters(`${SEED}${ok}`), ok).toEqual([]);
     }
   });
@@ -588,6 +589,12 @@ describe('the receipt: its grammar, its leaf, its place and its clock (O23 (d))'
     expect('ts' in rec, 'no clock could time it: the drain stamps it (ts_source received)').toBe(false);
     expect(rec).toMatchObject({ v: 1, ev: 'steer', id: ID, sid: SID, leaf: '' });
   });
+  it('an EPOCHREALTIME with no separator passes the hook\'s stamps but is no clock for the receipt: date is read instead', () => {
+    const payload = armed();
+    stubDate('echo 1700000007777');
+    expect(printed(run(payload, epochEnv('1700000001'))), 'the hook reaches the tail and prints').not.toBe('');
+    expect(oneReceipt()['ts'], 'the stub\'s value, not 1700000001170').toBe(1700000007777);
+  });
   it('CONTROL: an EPOCHREALTIME that parses is read before date', () => {
     const payload = armed();
     stubDate('echo 1700000009999');
@@ -654,6 +661,9 @@ describe('parity: the hook\'s copies equal lib\'s (D-8130 history-steer-hook-cop
     const at = src.indexOf('\n_hook_history_steer_read() {');
     const body = src.slice(at, src.indexOf('\n}\n', at));
     expect(body).toContain('[[ "${t:0:1}" != "{" ]] || return 1');
+    // Why the gate is behaviourally redundant, pinned too: the template's first line cannot begin `{`, so a `{` file already fails the
+    // first-line equality. Deleting the gate is an equivalent mutant (mutant (c)); PX17's rows cannot kill it, this source pin does.
+    expect(STEER_FIRST_LINE.startsWith('{')).toBe(false);
     expect(body).toContain("local LC_ALL=C");
     expect(body).toContain("read -r -d '' -n 8193");
   });
