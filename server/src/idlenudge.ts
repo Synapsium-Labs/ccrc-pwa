@@ -30,6 +30,7 @@ const IDLE_NUDGE_HOLD_MAP = {
   'no-marker': 'the turn marker is absent or did not read: no proof the turn finished',
   'turn-open': 'the turn marker is not `done`',
   background: 'the turn marker counts background work (bg is not 0)',
+  'run-blocked-on-operator': 'a run the session claims sits in a programme holding a blocking item: the operator is the next move',
   'tasks-unread': 'the task list could not be read',
   'no-open-tasks': 'the task list has no in_progress or pending item',
   'tasks-stale': 'the task list was last touched longer ago than TASKS_STALE_MS',
@@ -200,11 +201,20 @@ export type IdleNudgeLive =
   | { readonly ok: true; readonly word: string; readonly since: number | null }
   | { readonly ok: false };
 
+/** The session's claimed non-terminal runs (a coordinator's open work, which no task list records): `null` when it
+ *  claims none; `blocked` when any of their programmes holds a `blocking` open item; `lastEventAt` the newest
+ *  `run_events` time across them (null when none was written). `{ ok: false }` is a run read that failed. */
+export type IdleNudgeOpenRun =
+  | { readonly ok: true; readonly lastEventAt: number | null; readonly blocked: boolean }
+  | { readonly ok: false }
+  | null;
+
 export interface IdleNudgeFacts extends IdleNudgeRowFacts {
   readonly now: number;
   readonly live: IdleNudgeLive;
   readonly mark: IdleNudgeMark;
   readonly tasks: IdleNudgeTasks;
+  readonly openRun: IdleNudgeOpenRun;
   readonly compaction: CompactionTail;
   /** The durable record (a `nudge` feed row naming this compaction) or this process's attempted set. */
   readonly alreadyNudged: (key: string) => boolean;
@@ -225,9 +235,17 @@ export function decideIdleCompactNudge(f: IdleNudgeFacts): IdleNudgeVerdict {
   if (!f.mark.ok) return hold('no-marker');
   if (f.mark.state !== 'done') return hold('turn-open');
   if (f.mark.bg !== 0) return hold('background');
-  if (!f.tasks.ok) return hold('tasks-unread');
-  if (f.tasks.open === 0) return hold('no-open-tasks');
-  if (f.tasks.touchedAt === null || f.now - f.tasks.touchedAt > TASKS_STALE_MS) return hold('tasks-stale');
+  const run = f.openRun;
+  if (run !== null) {
+    // An open run is open work whatever the task list says (D-8126): the run's own newest event is the freshness fact.
+    if (!run.ok) return hold('unmeasured');
+    if (run.blocked) return hold('run-blocked-on-operator');
+    if (run.lastEventAt === null || f.now - run.lastEventAt > TASKS_STALE_MS) return hold('tasks-stale');
+  } else {
+    if (!f.tasks.ok) return hold('tasks-unread');
+    if (f.tasks.open === 0) return hold('no-open-tasks');
+    if (f.tasks.touchedAt === null || f.now - f.tasks.touchedAt > TASKS_STALE_MS) return hold('tasks-stale');
+  }
   const c = f.compaction;
   if (c.kind !== 'compaction') return hold('no-compaction');
   if (!isIdleCompaction(c)) return hold('not-idle-compaction');

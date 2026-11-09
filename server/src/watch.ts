@@ -38,7 +38,7 @@ import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
 import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
-  type CompactionTail, type IdleNudgeRowFacts,
+  type CompactionTail, type IdleNudgeRowFacts, type IdleNudgeOpenRun,
 } from './idlenudge.js';
 import { askActions } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
@@ -7198,7 +7198,8 @@ export class FleetWatcher {
     const live = liveRead.ok
       ? { ok: true as const, word: liveRead.state.status, since: liveRead.state.statusUpdatedAt }
       : { ok: false as const };
-    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const },
+    const openRun = this.idleNudgeOpenRun(coord, s.id);
+    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const }, openRun,
       compaction: { kind: 'none' as const }, alreadyNudged: () => false };
     // Stage 1: everything but the marker, the tasks and the tail. A hold here costs no further read.
     let v = decideIdleCompactNudge(base);
@@ -7207,9 +7208,10 @@ export class FleetWatcher {
       liveRead.ok ? { startedAt: liveRead.state.startedAt } : null);
     const mark = markRead.ok ? { ok: true as const, state: markRead.state, bg: markRead.bg } : { ok: false as const };
     v = decideIdleCompactNudge({ ...base, mark });
-    if (v.act === 'hold' && v.reason !== 'tasks-unread') return;
-    const taskRead = await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
-    const tasks = taskRead.listed
+    // A session with an open run is decided on the run, not the task list: the list is not read for it.
+    if (v.act === 'hold' && v.reason !== 'tasks-unread' && !(openRun !== null && v.reason === 'no-compaction')) return;
+    const taskRead = openRun !== null ? null : await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
+    const tasks = taskRead !== null && taskRead.listed
       ? { ok: true as const, open: taskRead.tasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
         touchedAt: taskRead.touchedAt ?? null }
       : { ok: false as const };
@@ -7242,6 +7244,24 @@ export class FleetWatcher {
     if (!res.ok) {
       this.pushOne({ kind: 'nudge', sessionId: s.id, project: s.project, title: '↻ Nudge not typed',
         body: idleNudgeRefusedBody(v.key, res.error), recordAlways: true, recordOnly: true }, this.activeProjects);
+    }
+  }
+
+  /** The nudge's open-run fact (D-8126): the non-terminal runs the session claims, whether any of their programmes
+   *  holds a blocking item, and the newest run event. A read that throws or fails is `{ ok: false }`, which holds. */
+  private idleNudgeOpenRun(store: WatcherCoordPort, id: string): IdleNudgeOpenRun {
+    try {
+      const claimed = store.openRunsOfClaimant(id);
+      if (!claimed.ok) return { ok: false };
+      if (claimed.runs.length === 0) return null;
+      const blocked = [...new Set(claimed.runs.map((r) => r.program))].some((p) => store.programmeHasBlockingItem(p));
+      let lastEventAt: number | null = null;
+      for (const run of claimed.runs) {
+        for (const e of store.runEvents(run.id)) if (lastEventAt === null || e.at > lastEventAt) lastEventAt = e.at;
+      }
+      return { ok: true, lastEventAt, blocked };
+    } catch {
+      return { ok: false };
     }
   }
 

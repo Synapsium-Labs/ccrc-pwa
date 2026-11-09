@@ -76,6 +76,7 @@ const happy = (over: Partial<IdleNudgeFacts> = {}): IdleNudgeFacts => ({
   live: { ok: true, word: 'idle', since: T_NOTICE },
   mark: { ok: true, state: 'done', bg: 0 },
   tasks: { ok: true, open: 2, touchedAt: NOW - 10 * 60_000 },
+  openRun: null,
   compaction: readCompactionTail(jsonl(IDLE_TAIL)),
   alreadyNudged: () => false,
   ...over,
@@ -113,6 +114,10 @@ describe('decideIdleCompactNudge: fires only when every hold is clear (D-5373)',
     ['tasks-stale', { tasks: { ok: true, open: 4, touchedAt: NOW - 3 * 24 * 3_600_000 } }],
     ['tasks-stale', { tasks: { ok: true, open: 4, touchedAt: NOW - TASKS_STALE_MS - 1 } }],
     ['tasks-stale', { tasks: { ok: true, open: 4, touchedAt: null } }],
+    ['run-blocked-on-operator', { openRun: { ok: true, lastEventAt: NOW - 60_000, blocked: true } }],
+    ['unmeasured', { openRun: { ok: false } }],
+    ['tasks-stale', { openRun: { ok: true, lastEventAt: NOW - TASKS_STALE_MS - 1, blocked: false } }],
+    ['tasks-stale', { openRun: { ok: true, lastEventAt: null, blocked: false } }],
     ['no-compaction', { compaction: { kind: 'none' } }],
     ['not-idle-compaction', { compaction: readCompactionTail(jsonl(MID_TURN_TAIL.filter((r) => r !== ROW.resumed))) }],
     ['turn-after', { compaction: readCompactionTail(jsonl([...IDLE_TAIL, ROW.resumed])) }],
@@ -130,6 +135,20 @@ describe('decideIdleCompactNudge: fires only when every hold is clear (D-5373)',
   });
   it('the freshness edge: touched exactly TASKS_STALE_MS ago is still fresh', () => {
     expect(decideIdleCompactNudge(happy({ tasks: { ok: true, open: 1, touchedAt: NOW - TASKS_STALE_MS } })).act).toBe('nudge');
+  });
+  it('an open run is open work (F7): no task list, an hour-old run event, nudges', () => {
+    const openRun = { ok: true as const, lastEventAt: NOW - 3_600_000, blocked: false };
+    expect(decideIdleCompactNudge(happy({ openRun, tasks: { ok: false } }))).toEqual({ act: 'nudge', key: 'b1' });
+    expect(decideIdleCompactNudge(happy({ openRun, tasks: { ok: true, open: 0, touchedAt: null } })).act).toBe('nudge');
+  });
+  it('the run freshness edge: an event exactly TASKS_STALE_MS ago is still fresh', () => {
+    const openRun = { ok: true as const, lastEventAt: NOW - TASKS_STALE_MS, blocked: false };
+    expect(decideIdleCompactNudge(happy({ openRun, tasks: { ok: false } })).act).toBe('nudge');
+  });
+  it('a blocked run holds before any later hold, and a failed run read holds despite a fresh task list', () => {
+    expect(decideIdleCompactNudge(happy({ openRun: { ok: true, lastEventAt: NOW, blocked: true }, compaction: { kind: 'none' } })))
+      .toEqual({ act: 'hold', reason: 'run-blocked-on-operator' });
+    expect(decideIdleCompactNudge(happy({ openRun: { ok: false } }))).toEqual({ act: 'hold', reason: 'unmeasured' });
   });
   it('every hold the vocabulary names is exercised above', () => {
     expect(new Set(cases.map(([r]) => r))).toEqual(new Set(IDLE_NUDGE_HOLDS));

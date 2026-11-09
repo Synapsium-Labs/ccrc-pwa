@@ -4,7 +4,7 @@
 // a fixture HOME, a scripted tmux Runner, a primed watcher, and `Date` faked alone. Fixture rows are the measured
 // shapes (`idleNudgeFixtures.ts`), with neutral content.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
@@ -18,7 +18,7 @@ import { redactCommand } from '../src/coord/redact.js';
 import { configDirFor } from '../src/config.js';
 import { transcriptPath } from '../src/transcript/resolve.js';
 import { IDLE_NUDGE_DISABLED_MARKER, idleNudgeFeedBody, idleNudgeRefusedBody } from '../src/idlenudge.js';
-import { IDLE_COMPACT_NUDGE_PROMPT, type FleetSession } from '../../shared/api.js';
+import { IDLE_COMPACT_NUDGE_PROMPT, TASKS_STALE_MS, type FleetSession } from '../../shared/api.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { IDLE_TAIL, ROW, T_NOTICE, T_STOP, jsonl } from './idleNudgeFixtures.js';
@@ -177,6 +177,74 @@ describe('sweepIdleCompactNudge: the happy path types once, journaled (D-5373)',
   it('the notice row is not required: trigger auto after a finished turn qualifies', async () => {
     const { h, w } = await rig();
     seedTranscript(h.home, IDLE_TAIL.filter((r) => r !== ROW.notice));
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+  });
+});
+
+/** One non-terminal run claimed by the session, its newest event placed `eventAgeMs` before NOW. */
+const seedOpenRun = (coord: CoordStore, eventAgeMs: number, program = 'demo-program'): number => {
+  const opened = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: 2, claimedBy: ID });
+  if (!('id' in opened)) throw new Error(`openRun refused: ${JSON.stringify(opened)}`);
+  coord.db.prepare(
+    "INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, 'planned', 'dispatched', 'coordinator', NULL)",
+  ).run(opened.id, NOW - eventAgeMs);
+  return opened.id;
+};
+const seedNoTasks = (home: string): void => {
+  rmSync(path.join(cfgDir(home), 'tasks'), { recursive: true, force: true });
+};
+
+describe('sweepIdleCompactNudge: a coordinator\'s open run counts as open work (D-8126)', () => {
+  it('a run that has no event yet is not fresh: held as tasks-stale', async () => {
+    const { h, coord, w } = await rig();
+    seedNoTasks(h.home);
+    const opened = coord.openRun({ program: 'demo-program', title: 'demo-program', project: 'demo', wave: 1, waveOf: 2, claimedBy: ID });
+    expect('id' in opened).toBe(true);
+    coord.db.prepare('DELETE FROM run_events').run();
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(h.calls)).toEqual([]);
+  });
+  it('no task list and an open run whose newest event is an hour old: nudged', async () => {
+    const { h, coord, w } = await rig();
+    seedNoTasks(h.home);
+    seedOpenRun(coord, 3_600_000);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
+  });
+  it('the run\'s programme holds a blocking item: run-blocked-on-operator, nothing typed', async () => {
+    const { h, coord, w } = await rig();
+    seedNoTasks(h.home);
+    const runId = seedOpenRun(coord, 3_600_000);
+    coord.raiseItem({ program: 'demo-program', runId, raisedBy: 'lane-a', kind: 'do', title: 'T', why: 'w', how: [], options: null, neededBy: 'blocking', soonLabel: null, secretSlot: null }, NOW);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(h.calls)).toEqual([]);
+    expect(nudgeRows(coord)).toEqual([]);
+  });
+  it('an unreadable run read holds: nothing typed even with a fresh task list', async () => {
+    const { h, coord, w } = await rig();
+    vi.spyOn(coord, 'openRunsOfClaimant').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(h.calls)).toEqual([]);
+  });
+  it('a run event older than TASKS_STALE_MS holds, even with a fresh task list', async () => {
+    const { h, coord, w } = await rig();
+    seedOpenRun(coord, TASKS_STALE_MS + 60_000);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(h.calls)).toEqual([]);
+  });
+  it('a session with no open run keeps the task holds: no task list types nothing', async () => {
+    const { h, w } = await rig();
+    seedNoTasks(h.home);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(anySends(h.calls)).toEqual([]);
+  });
+  it('once per compaction still holds for a run-open session', async () => {
+    const { h, coord, w } = await rig();
+    seedNoTasks(h.home);
+    seedOpenRun(coord, 3_600_000);
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    at(NOW + IDLE_NUDGE_SWEEP_MS);
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     expect(literalSends(h.calls)).toEqual([IDLE_COMPACT_NUDGE_PROMPT]);
   });
