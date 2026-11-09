@@ -105,7 +105,7 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
   const lines = tableLines(SRC);
 
   it('T1: the bash names are CCRC_SETTINGS, in order, every line well formed', () => {
-    expect(NAMES, 'D-8121 adds the two browser MCP settings, D-8122 the memory gate\'s four: 89 -> 95').toHaveLength(95);
+    expect(NAMES, 'D-8121 adds the two browser MCP settings, D-8122 the memory gate\'s four: 89 -> 95, D-8123 the limit rescue\'s two: 97').toHaveLength(97);
     expect(lines.filter((l) => !LINE.test(l)), 'lines that do not match').toEqual([]);
     expect(rowsOf(lines).map((r) => r.key)).toEqual(NAMES);
   });
@@ -123,13 +123,13 @@ describe('the class table: bash equals CCRC_SETTINGS and L0 (D16, spec 5.1)', ()
     ];
     for (const of of [l0, bash]) {
       expect({ value: of('value').length, origin: of('origin').length, 'is-set': of('is-set').length, omit: of('omit').length })
-        .toEqual({ value: 54, origin: 1, 'is-set': 12, omit: 28 });
+        .toEqual({ value: 56, origin: 1, 'is-set': 12, omit: 28 });
       expect(of('is-set').sort()).toEqual(IS_SET);
       expect(of('is-set'), 'D19: the test box URL is is-set (the spec\'s presence, D12; D-7921)').toContain('CCRC_TESTBOX_URL');
       expect(of('origin')).toEqual(['CCRC_RELEASE_BASE_URL']);
     }
-    expect(BOX_SETTINGS_SHOWN).toHaveLength(67);
-    expect(rowsOf(lines).filter((r) => r.cls !== 'omit')).toHaveLength(67);
+    expect(BOX_SETTINGS_SHOWN).toHaveLength(69);
+    expect(rowsOf(lines).filter((r) => r.cls !== 'omit')).toHaveLength(69);
   });
   it('T4: omit is the test box\'s own table, with roles none and applies run', () => {
     expect(TB_BOX_KEYS).toHaveLength(28);
@@ -248,13 +248,13 @@ describe('W: the closed set of words, and the writer\'s cut', () => {
     return memo;
   };
 
-  it('W1: the words _set_says prints for the 67 are BOX_SETTING_REFUSAL_WORDS, as a set, both ways', () => {
+  it('W1: the words _set_says prints for the 69 are BOX_SETTING_REFUSAL_WORDS, as a set, both ways', () => {
     const said_ = said();
-    expect(said_).toHaveLength(67);
+    expect(said_).toHaveLength(69);
     const words = new Set(said_.map(([, , w]) => w).filter((w) => w !== ''));
     expect([...words].sort()).toEqual([...BOX_SETTING_REFUSAL_WORDS].sort());
     expect(said_.filter(([, rc]) => rc === '1').map(([k]) => k).sort()).toEqual(['CCRC_KEEPALIVE_MODEL', 'CCRC_KEEPALIVE_PROMPT', 'CCRC_RELEASE_BASE_URL']);
-    expect(said_.filter(([, rc]) => rc === '0')).toHaveLength(64);
+    expect(said_.filter(([, rc]) => rc === '0')).toHaveLength(66);
     for (const [k, rc, w] of said_) expect(rc === '1' ? w : 'x', `${k}: rc 1 prints nothing`).toBe(rc === '1' ? '' : 'x');
     expect(new Set(BOX_SETTING_REFUSAL_WORDS).size, 'no duplicate').toBe(BOX_SETTING_REFUSAL_WORDS.length);
     for (const w of BOX_SETTING_REFUSAL_WORDS) {

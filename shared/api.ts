@@ -10316,11 +10316,12 @@ const BOX_SETTING_CLASS_MAP: Record<BoxSettingClass, true> = { value: true, orig
 export const BOX_SETTING_CLASSES: readonly BoxSettingClass[] = Object.keys(BOX_SETTING_CLASS_MAP) as BoxSettingClass[];
 
 /** The card's families, in the card's order (the map's insertion order: the order each first appears in the table below). */
-export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate';
+export type BoxSettingFamily = 'updates' | 'session-slice' | 'test-runs' | 'graph' | 'testbox' | 'keepalive' | 'usage-sweep' | 'carry-copies' | 'browser-tools' | 'memory-gate' | 'limit-rescue';
 const BOX_SETTING_FAMILY_MAP: Record<BoxSettingFamily, true> = {
   updates: true, 'session-slice': true, 'test-runs': true, graph: true, keepalive: true, 'usage-sweep': true, testbox: true, 'carry-copies': true,
   'browser-tools': true,
   'memory-gate': true,
+  'limit-rescue': true,
 };
 export const BOX_SETTING_FAMILIES: readonly BoxSettingFamily[] = Object.keys(BOX_SETTING_FAMILY_MAP) as BoxSettingFamily[];
 
@@ -10331,7 +10332,7 @@ export const BOX_SETTING_APPLIES: readonly BoxSettingApplies[] = Object.keys(BOX
 
 export interface BoxSettingSpec { cls: BoxSettingClass; family: BoxSettingFamily; roles: readonly NodeRole[]; applies: BoxSettingApplies }
 
-/** All 93 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
+/** All 97 of `CCRC_SETTINGS`, in its order. `roles` is the roles a setting is used on (bash `none` is `[]`, the omitted 28). */
 export const BOX_SETTING_TABLE = {
   CCRC_BACKUP_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
   CCRC_BACKUP_DATA_KEEP: { cls: 'value', family: 'updates', roles: ['fleet', 'server', 'both'], applies: 'run' },
@@ -10429,11 +10430,14 @@ export const BOX_SETTING_TABLE = {
   CCRC_WAKE_HEADROOM_MIN_GIB: { cls: 'value', family: 'memory-gate', roles: ['server', 'both'], applies: 'run' },
   CCRC_SWEEP_BATCH: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
   CCRC_SWEEP_PRESSURE_WAIT_S: { cls: 'value', family: 'memory-gate', roles: ['fleet', 'both'], applies: 'run' },
+  // D-8123: a lone rescue's random wait cap, and the minutes the fleet limit watchdog lets a limit sign stand (both read by ccd on the fleet box).
+  CCRC_RESCUE_SOLO_JITTER_S: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
+  CCRC_LIMIT_WATCHDOG_MIN: { cls: 'value', family: 'limit-rescue', roles: ['fleet', 'both'], applies: 'run' },
 } as const satisfies Record<string, BoxSettingSpec>;
 export type BoxSettingName = keyof typeof BOX_SETTING_TABLE;
 /** The widened view every consumer reads, so `BOX_SETTING_SPECS[k].roles.includes('server')` compiles for every key (C18). */
 export const BOX_SETTING_SPECS: Readonly<Record<BoxSettingName, BoxSettingSpec>> = BOX_SETTING_TABLE;
-/** Version 2's row list and order: every name the table does not omit (65). */
+/** Version 2's row list and order: every name the table does not omit (69). */
 export const BOX_SETTINGS_SHOWN: readonly BoxSettingName[] = (Object.keys(BOX_SETTING_TABLE) as BoxSettingName[]).filter((k) => BOX_SETTING_SPECS[k].cls !== 'omit');
 
 /** The words a refused row's `why` is one of (D22): every sentence `_set_says` prints for the shown keys, de-duplicated. A list on
@@ -10456,6 +10460,8 @@ export const BOX_SETTING_REFUSAL_WORDS = [
   'a whole number from 2 to 9999',
   'a whole number of GiB from 0 to 1024',
   'a whole number of bytes from 1 to 18 digits',
+  'a whole number of minutes from 0 to 1440',
+  'a whole number of seconds from 0 to 120',
   'a whole number of seconds from 0 to 3600',
   'a whole number of seconds from 0 to 9223372036854775807',
   'a whole number of seconds, 0 or more',

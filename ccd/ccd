@@ -18665,6 +18665,54 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
 # cannot become one file by accident.
 _pool_for() { local p; p=$(_reg_get "$1" pool); [[ -n "$p" ]] && echo "$p" || _default_pool "$1"; }
 
+# D-8123 (limit-swap-autofix, ruling 3): a lone rescue's jitter. SWAP_JITTER spreads a fleet-wide burst; a rescue that is
+# the only dispatch in flight is no burst, so it waits at most `CCRC_RESCUE_SOLO_JITTER_S` (a box setting, default 15,
+# read ONCE per process through the settings library as the browser-tools read is). The other-dispatch test is every OTHER
+# session's `lastswap` inside SWAP_JITTER + 60 s (a dispatch stamps it; a swap clears it), read with builtins only.
+# `_rescue_jitter_max <id> <arm>` sets RESCUE_JITTER_MAX (an out-variable, no subshell): SWAP_JITTER's own ceiling for
+# an affinity move, an unnamed arm or another dispatch in flight; min(SWAP_JITTER, setting) for a `rescue` or `watchdog`
+# dispatch with none. A SWAP_JITTER that is 0 or not a number means no delay at all, as before.
+# `_jitter_draw <max>` prints one draw from 0..max (its own function: a test pins the bound by returning max).
+declare -gA _CCD_LR_KNOB=()   # -g: a global even when ccd is sourced inside a function; KEY -> the validated value, memoised
+RESCUE_JITTER_MAX=0
+_jitter_draw() { echo $(( RANDOM % ($1 + 1) )); }
+_limit_rescue_knob_to() {   # var KEY default -> var = the box setting KEY (environment, else ~/.ccrc/ccrc.env, else default), validated, read once per process
+  local lib out v
+  if [[ -n "${_CCD_LR_KNOB[$2]+x}" ]]; then printf -v "$1" '%s' "${_CCD_LR_KNOB[$2]}"; return 0; fi
+  lib="${BASH_SOURCE[0]%/*}/lib/ccrc-settings.sh"
+  [[ -f "$lib" ]] || lib="$HOME/.local/libexec/ccrc/ccrc-settings.sh"
+  # A SUBSHELL: the library sets ccrc's own names (`CCD_OS`, `BOX_ENV_FILE`, `CCRC_SETTINGS`), which stay out of ccd.
+  # shellcheck disable=SC1090  # the library's path is chosen at run time: beside this ccd, else ~/.local/libexec/ccrc
+  if out=$( . "$lib" 2>/dev/null && declare -F _ccrc_knob _lr_ok _lr_says >/dev/null 2>&1 || exit 1
+            if _ccrc_knob "$2" "$3"; then
+              if _lr_ok "$2" "$KNOB"; then printf '%s' "$KNOB"
+              else echo "ccd: warn: $2 must be $(_lr_says "$2") — read as $3" >&2; printf '%s' "$3"; fi
+            else echo "ccd: warn: $KNOB_WHY — $2 read as $3" >&2; printf '%s' "$3"; fi ); then v="$out"
+  else
+    echo "ccd: warn: the settings reader (ccrc-settings.sh) is missing or broken — $2 read as $3; 'ccrc update --force' places it" >&2
+    v="$3"
+  fi
+  _CCD_LR_KNOB[$2]="$v"
+  printf -v "$1" '%s' "$v"
+}
+_rescue_jitter_max() {   # id arm -> RESCUE_JITTER_MAX
+  local id="${1-}" arm="${2-}" sj="${SWAP_JITTER:-0}" f other="" now t solo
+  RESCUE_JITTER_MAX=0
+  [[ "$sj" =~ ^[0-9]+$ && "$sj" -gt 0 ]] || return 0
+  RESCUE_JITTER_MAX=$sj
+  [[ "$arm" == rescue || "$arm" == watchdog ]] || return 0
+  _now_s_to now
+  for f in "$REG"/*.lastswap; do
+    [[ -f "$f" && ! -L "$f" && "${f##*/}" != "$id.lastswap" ]] || continue
+    _file_read_to t "$f" || continue
+    if [[ "$t" =~ ^[0-9]+$ && $((now - t)) -lt $((sj + 60)) ]]; then other=1; break; fi   # a torn field is no dispatch in flight
+  done
+  [[ -z "$other" ]] || return 0
+  _limit_rescue_knob_to solo CCRC_RESCUE_SOLO_JITTER_S 15
+  [[ "$solo" =~ ^[0-9]+$ && "$solo" -lt "$sj" ]] && RESCUE_JITTER_MAX=$solo
+  return 0
+}
+
 _dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes] — run `ccd swap` in ITS OWN transient systemd unit.
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
@@ -18676,9 +18724,12 @@ _dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes] — run
   # Cooldown is unaffected: callers stamp `lastswap` at dispatch time, and
   # SWAP_COOLDOWN (900s) dwarfs the jitter window, so nothing re-dispatches while
   # a delayed swap is still pending.
-  local jitter=0
-  [[ "${SWAP_JITTER:-0}" =~ ^[0-9]+$ && "${SWAP_JITTER:-0}" -gt 0 ]] && jitter=$(( RANDOM % (SWAP_JITTER + 1) ))
-  echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s)" >> "$REG/swap.log"
+  # A rescue (or the fleet watchdog's) that is the ONLY dispatch in flight draws from a shorter spread
+  # (`_rescue_jitter_max`, D-8123); the line says which spread applied (` max=<n>`).
+  local jitter=0 jmax=0
+  _rescue_jitter_max "$1" "${3-}"; jmax=$RESCUE_JITTER_MAX
+  [[ "$jmax" =~ ^[0-9]+$ && "$jmax" -gt 0 ]] && jitter=$(_jitter_draw "$jmax")
+  echo "$(date '+%F %T') dispatch $1 -> $2 (in ${jitter}s) max=${jmax}" >> "$REG/swap.log"
   # CCD_SWAP_AUTO=1 SAYS WHO CHOSE THIS TARGET — the tick's own automatic
   # pick, never an operator's typed one — and it exists so `cmd_swap`'s
   # in-unit refusal of such a pick can be LOUD (a marker and a banner)
@@ -19861,12 +19912,12 @@ _pane_limit_capture_to() {   # var id tail -> var = the whole visible pane iff t
   # returned ONLY when `_pane_limit_menu` holds on it, so the banner above an auto-opened menu is reachable while text in
   # the conversation, with no menu up, never is. The caller asks only the specific current-banner pattern of the result
   # (`_pane_limit_banner`); the broad `_pane_hard_blocked` stays on the tail.
-  local _v="$1" _id="$2" _tail="$3" _full
+  local _id="$2" _tail="$3" _full
   if [[ "$_tail" == *"Enter to confirm · Esc to cancel"* || "$_tail" == *"What do you want to do?"* ]]; then
     _full=$(tmux capture-pane -t "$(_tmux_t "$_id")" -p 2>/dev/null)
-    if _pane_limit_menu "$_full"; then printf -v "$_v" '%s' "$_full"; return 0; fi
+    if _pane_limit_menu "$_full"; then printf -v "$1" '%s' "$_full"; return 0; fi
   fi
-  printf -v "$_v" '%s' "$_tail"
+  printf -v "$1" '%s' "$_tail"
 }
 
 _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
