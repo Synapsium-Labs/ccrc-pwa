@@ -89,17 +89,24 @@ beyond what items 2, 3 and 5 produce.
 This supersedes the 2026-11-07 checkpoint below where they differ; the current route and the definition of done above
 stand. The evidence is under "Latest rulings and evidence — 2026-11-08 to 2026-11-09".
 
-- **W3/W4 drafts (run 1190, #1876).** Fold round 7 folded the operator's packages (items 90 to 94 and 96) into both
-  drafts. Seven reviews then ran, 1686, 1690, 1695, 1696, 1700, 1701 and 1702, with fix rounds 8 to 13 between them.
-  Every open decision is ruled except O4, each backend's compliance bar, which waits for the spike report's figures.
-  The drafts stand at `49b73ebc4`: review 1702 confirmed one wording residue, which the coordinator ruled stays (below).
-  Item 121 asks the operator to approve the W4 addendum and accept the W3 plan (definition of done, items 2 and 3).
-  Neither draft is approved yet, and nothing is built or armed.
+- **W3 plan and W4 addendum (run 1190, #1876): accepted and merged.** Fold round 7 folded the operator's packages
+  (items 90 to 94 and 96) into both drafts. Seven reviews then ran, 1686, 1690, 1695, 1696, 1700, 1701 and 1702, with
+  fix rounds 8 to 13 between them. On 2026-11-09 the operator answered item 121, "Approve both, land #1876 and start
+  the builds". So the W4 addendum is approved (CP-70) and the W3 plan accepted (CP-60). Before the merge the
+  coordinator ran the W3 plan's act 1 read-only, and the precompute path is not live (below). Fix round 14 recorded
+  the acceptance in both documents. #1876 merged through the merge queue at 12:31Z as `a760833a6`, at head
+  `5f80a91ac`, and run 1190 closed done at 19:42Z, after its MERGED mail. Every decision is ruled except O4, each
+  backend's compliance bar, which waits for the spike report's figures. Nothing is armed.
+- **W3-1 and the W4 plan are dispatched** (2026-11-09, 19:43Z). Run 1713 (wave 26, CP-61) builds W3-1, the steering
+  spike PR, with deviation numbers 8127 to 8138. Run 1714 (wave 27, CP-71) drafts the W4 implementation plan on a
+  docs PR. No W4 build starts before that plan is accepted.
 - **W1.** The operator ruled W1-k, W1-e and W1-h met (items 83 to 85). W1-f and W1-i were met on 2026-11-07, and W1-d
   is recorded. Two rows stay open: W1-b, re-measured over the week ending 2026-11-15, and W1-l, the operator's drill
   (item 86), whose result do-item 111 waits for.
 - **Held runs.** Runs 1233 and 1236 are closed as superseded and #1969 and #1975 are closed unmerged (item 87). Run
-  1190's drafts are the remaining held run, and run 1022 stays open until the final run.
+  1190 is done, its drafts accepted and merged. Holding run 1022 was ended with the abandon arm at 19:43Z, once W3's
+  first run was open (CP-26, CP-61). Runs 1713 and 1714 now hold the programme open, and its final run still closes
+  only when no other run is open (definition of done, item 4).
 - **The 2026-11-07 ledger update** (#2454) landed on 2026-11-08 at 21:04Z as `bda5e87a6`, on one new landing
   attempt the operator authorised (item 97).
 - **Recall use** was reported on 2026-11-07 (definition of done, item 5).
@@ -194,12 +201,14 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
 | W1-fix (CP-39b) | a sidecar over 8 MiB (`SIDECAR_READ_WHOLE_MAX`) is captured by the streamed arm, which reads into one reused piece | fleet | #1561 | **merged** 2026-10-26 12:55Z as `f70956cc3` at head `bb917402a`, release v0.0.725 (run 973; reviews 979 and 987; one fix round) |
 | W1-fix (CP-39c) | the export pass runs on its own slice of the run budget, and the check after a bind on a slice of its own | fleet | #1577 | **merged** 2026-10-26 as `ce7b94dab`, release v0.0.728 (run 982; review 999; accepted with no fix round); its live check passed on 2026-10-27 on v0.0.745: export due 0 and overdue 0 (597 due before), health PASS (§8) |
 | W1-fix (CP-39d) | grep drives each referrer arm from its scope; the sweep reads a registered session's mid-turn growth within a tick; W1-b's and W1-f's measures; the sweep's carried review items | fleet | #1693 | **merged** 2026-10-27 21:11Z as `5377d23c1` at head `a8e707cff`, release v0.0.767 (run 1039; reviews 1065 and 1088; one fix round); the final W2 release carries it (CP-35) |
-| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **held/unaccepted**, draft at `49b73ebc4`; run 1190 awaiting-review after fix round 13 and reviews 1686, 1690, 1695, 1696, 1700, 1701 and 1702, under the operator's cap lift and autonomy direction; every open decision is ruled but O4; item 121 asks the operator to approve the W4 addendum and accept the W3 plan; no implementation authority |
+| 22 | Conditional W3 steering plan and W4 addendum; preparation only | docs; no implementation | #1876 | **merged** 2026-11-09 12:31Z as `a760833a6` at head `5f80a91ac` (run 1190, done 19:42Z; reviews through 1702 and fix rounds 1 to 14, in the dated entries). The operator approved the W4 addendum and accepted the W3 plan (item 121); act 1 ran first: the precompute path is not live |
 | 23 | Seven-day W2 authority amendment and start checklist | docs; no runtime/default change | #1969 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1233 closed as failed; branch kept |
 | 24 | Prospective seven-day live-runbook amendment | docs; no live act | #1975 | **closed unmerged** as superseded (item 87, 2026-11-08); run 1236 closed as failed; branch kept |
 | 25 | Incremental-ingestion semantic/restart and prepared-line regression coverage | one test file; unchanged runtime | #2063 | **merged** 2026-11-01 19:04:40Z as `a3d7ed1e2d7d1b8c65459c326b2352cda7ea2791`, exact reviewed head `67038e4a3706a556c03b76fa2e22c3668bbc0fd2`; run 1320 **done/released**, item 1/1, review rounds 1/3; review 1321 done/released; accepted MERGED mail preceded final close |
-| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; accepted plan/review still required; focused steering spike and per-backend operator arming retained |
-| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; approved addendum, accepted plan/review and B4 live still required |
+| 26 | W3-1: the steering spike PR (template, steer file, print and receipt, refs repair, spike report; W3 plan Tasks 1A, 1F, 1B, 1C and 1D). It prints into a compaction only on a session the operator arms | fleet (hook) | — | **dispatched** 2026-11-09 19:43Z (run 1713, CP-61); deviation numbers 8127 to 8138 |
+| 27 | The W4 implementation plan (CP-71), drafted from the approved addendum | docs | — | **dispatched** 2026-11-09 19:43Z (run 1714); a draft docs PR; no W4 build before it is accepted |
+| 7 | W3: steering (session-written leaves) | fleet (hook) | — | W2 study waived as progress prerequisite; plan **accepted and merged** (#1876, item 121); W3-1 building (wave 26); focused steering spike and per-backend operator arming retained |
+| 8 | W4: subagents and `touched` | fleet | — | W2 study waived as progress prerequisite; addendum **approved and merged** (#1876, item 121); its plan drafting (wave 27); accepted plan/review and B4 live still required |
 
 ## Decisions & deviations
 
@@ -284,6 +293,7 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
   | 11 | 16836 | `168f0e3ec` | 42541450423 | 1700 | 2: a stale untimed-receipt premise in Task 1B; the lane-map command's escaped pipe. 3 advisory, one of them informational |
   | 12 | 16851 | `d5bb24aa9` | 42544125244 | 1701 | 2: the coordinator's "today's" wording implied a comparison no code makes; Task 2 kept the same sentence. 1 advisory |
   | 13 | 16856 | `49b73ebc4` | 42546129809 | 1702 | 1: the O23 row's option (a) keeps the same phrase, ruled to stay |
+  | 14 (land-prep) | 16911 | `5f80a91ac` | 42613263313, attempt 2 | none | none: byte-equal to the coordinator's expected text (below) |
 
   The guards the worker ran in each of rounds 7 to 13, from `server/`: 728 of 729 in the documentation guards, the
   one failure being deviation-refs' D-7011 to D-7019 report, the stale-merge-base false positive diagnosed in the
@@ -292,6 +302,79 @@ No live-state cleanup is performed on the assumption that evaluation artefacts a
   figures came from a lens using borrowed modules, which it disclosed as unverified. So the worker's runs and CI's
   fast run are the evidence. The review reports are copied under the
   coordinator's clips, since a reviewer's copy is lost when its workspace is reclaimed.
+
+- **Item 121 (2026-11-09): the W4 addendum approved and the W3 plan accepted.** The operator answered "Approve both,
+  land #1876 and start the builds" (mail 16906). The coordinator re-measured the drafts before confirming, and
+  confirmed the item at 12:07Z.
+- **Act 1, the precompute re-measurement (W3 plan Task 1E; CP-60).** The re-measure found that the W3 plan forbids its
+  own merge until act 1 has run, a gate item 121's text did not name. CP-60 makes that re-measure the coordinator's,
+  and the operator's permission of 2026-10-25 allows read-only history measurements. So the coordinator ran it
+  read-only at 11:46Z, and wrote nothing to the store, a transcript or a build.
+  - The installed version is 2.1.319. No pin is set: the launcher runs each lane's own recorded build, else the
+    highest installed. 21 of the 28 Claude Code processes whose command line names a build ran 2.1.319.
+  - The anchor is unchanged in 2.1.319's bundle: a PreCompact print forfeits the reuse (`reuse:"miss_hook"`), as spec
+    §7.2 says.
+  - A precomputed compaction sets `compactMetadata.precomputed` on its `compact_boundary` row. The history store does
+    not keep that field: all 5,006 stored boundary blobs hold only "Conversation compacted". So the count was read
+    from the transcripts on the session-hosting node, de-duplicated by uuid.
+  - **0 of 3,793** distinct boundaries carry the field, including all 177 written by 2.1.319. The precompute path is
+    not live, and O3 stands as ruled. The spike report re-takes the count over its cohort's range. Limit: a transcript
+    that retention already deleted is not counted.
+  - The evidence file is in the coordinator's clips. An independent re-derivation matched the counts.
+- **Fix round 14, the land-prep (mail 16911).** The round was bounded to the two documents:
+  - a dated note at the top of each, recording the approval and act 1;
+  - five status lines that the acceptance would have left stale;
+  - the PR's title, and marking the PR ready.
+
+  The coordinator wrote the expected documents before sending the round. The worker's commit `5f80a91ac`
+  fast-forwards from `49b73ebc4` and is byte-equal to them. No review ran on this round. It carries only the
+  coordinator's own text recording the operator's answer, and the drafts' content was last reviewed at `49b73ebc4`
+  (review 1702). This is the coordinator's reading, recorded here.
+  - Ask 341: the round's first CI attempt was red only on one server shard's vitest `EnvironmentTeardownError`,
+    after all 1,001 of that shard's tests had passed. The brief had said not to rerun. The coordinator ruled option
+    0, rerun the failed jobs once, which lifted its own instruction for that once. Attempt 2 was green, and
+    wave-done 16926 followed.
+- **#1876 landed.** At 12:21Z the coordinator advanced run 1190 to awaiting-review and then to merging, at
+  `5f80a91ac`, and the server re-measured each move. The verdict (`BOUND_S=0`) read the native-queue route.
+  `gh pr merge 1876 --match-head-commit 5f80a91ac` enqueued it at 12:21:54Z, and it merged at 12:31:29Z as
+  `a760833a6`. No server `merged:` mail reached the coordinator. It found the merge by reading the PR at 19:42Z, sent
+  the worker its MERGED mail (17015), and then closed run 1190 final: done, released, child reclaimed.
+- **W3-1 and the W4 plan dispatched (2026-11-09, 19:43Z).** Both runs were opened at 12:22Z, before run 1190 closed.
+  At dispatch, no claim on the project overlapped either run's files.
+  - Run 1713, wave 26 (CP-61), builds W3-1, the spike PR: W3 plan Tasks 1A, 1F, 1B, 1C and 1D. It is routed by the
+    matrix row for a worker executing a spec'd plan: Opus at high effort, Sonnet implementers, workflows off. Its
+    per-task reviewer is Opus, above the row's Sonnet, because this code prints into live compactions.
+  - Deviation numbers 8127 to 8138 were allocated at run-open. This ledger writes them without the `D-` prefix
+    until W3-1's merge defines them, because a tracked mention of an undefined number raises the allocator's prose
+    seed (deviation-refs' floor check). The coordinator approves the plan's eight W3-1 departures and numbers them:
+    - 8127, `history-steer-module`;
+    - 8128, `history-steer-on-the-card-lifecycle`;
+    - 8129, `history-steer-range-text`;
+    - 8130, `history-steer-hook-copies`;
+    - 8131, `history-steer-recall-off-tail-copy`;
+    - 8132, `history-steer-spike-report`;
+    - 8133, `history-steer-spike-per-leaf-figures`;
+    - 8134, `history-steer-spike-pr-scope`.
+
+    The worker defines them in the plan's "Deviations found" section in its first commit. Numbers 8135 to 8138 are held
+    by the coordinator: a departure found while building is a stop, and takes one of them only on the coordinator's
+    licence. `history-steer-breaker-first-derivation` is W3-2's and stays unnumbered.
+  - The coordinator's scope ruling: W3-1's claim on `ccd/history/sweep.mjs` takes all three of Task 1B Step 5's
+    carries, the `recallOffKind` merge included, and the PR body says so.
+  - Run 1714, wave 27 (CP-71), drafts `docs/superpowers/plans/2026-11-09-ccrc-history-w4-subagents-touched.md` from
+    the approved addendum, one task group for each PR of its section 8 (W4-1 to W4-4), on a draft docs PR. It is
+    routed Opus at high effort, with Sonnet subagents at medium effort for fact checks and workflows off.
+  - The measurements the W4 rulings wait on are steps in that plan. Three are the coordinator's read-only acts on the
+    installed Claude Code version, modelled on act 1:
+    - P12 (b): whether the launch result names the run id, and when it arrives; else (c);
+    - whether the meta carries `agent_type`; else NULL;
+    - the live `node_refs` row count.
+
+    They gate CP-73's canonical share, not W4-1's merge, and no build worker measures live state.
+- **Holding run 1022 ended (CP-26, CP-61).** Once run 1713 was open, the coordinator ended run 1022 with the abandon
+  arm at 19:43Z, as CP-26 and CP-61 direct. The current route keeps run 1022 open "until an authorised
+  continuity-preserving successor/disposition". Under those two rows, W3's first run is that successor. Runs 1713
+  and 1714 hold the programme open.
 
 ### Latest rulings and evidence — 2026-11-07
 
@@ -2145,7 +2228,8 @@ holds over an earlier one for the same item.
   and W1 integrity remain. Archive fidelity is not proof of active-context semantic fidelity.
 - **Ledger and feature separation.** Programme status belongs on a `ledger/ccrc-history` branch/PR, never inside
   #2063 or the old coordinator branch. Close a producer only after exact-head merge proof, and send its MERGED mail
-  before close can reclaim its child. Keep run 1022 open. Do not turn the held preparation drafts into successors
+  before close can reclaim its child. Run 1022 was ended under CP-26 and CP-61 on 2026-11-09, once W3's first run
+  was open; open each run before the previous one closes. Do not turn the held preparation drafts into successors
   or dispatch new work merely to avoid their caps/refusal.
 - **Order.** Part A merged first (#300), then B1 (#315), then B2 (#404), then B3 (#425), then B4 (#623), then 5h-1
   (#737), then 5h-2 (#1010), then W2-1 (#1105), which builds on them and on W2-3 (#856) and W2-4 (#826). W2-2a (fleet
@@ -2271,14 +2355,15 @@ holds over an earlier one for the same item.
    pilot/assignment or a seven-day observation to unlock W3/W4. Record **evaluation not run**, never W2 PASS or
    FAIL. Do not lower scoring thresholds or change shipped evaluation code. Keep W3's focused pre-activation spike,
    W4's approved-addendum/export requirements, ordinary tests, independent reviews and W1 integrity obligations.
-2. Preserve the capped/unaccepted preparation in #1876 and #1969, and the unsent correction for #1975 after its
-   refused routing act. No implicit cap reset, accepted draft or refusal recovery. W2-only amendments are no longer
-   needed for the waived study; disposition of their PRs/runs is separate from this ruling. W3's accepted plan and
-   W4's approved addendum must reflect the new progress route without evading outstanding findings.
+2. #1876 merged on 2026-11-09 as the accepted W3 plan and the approved W4 addendum (item 121), and #1969 and #1975
+   are closed unmerged (item 87). Next, on each wave-done from run 1713 (W3-1) and run 1714 (the W4 plan): re-measure
+   it, then dispatch a held-out review run. W3-1's held numbers, 8135 to 8138, are licensed only by the
+   coordinator. The W4 plan's three read-only measurements are the coordinator's acts, and they gate CP-73.
 3. Test-only #2063 and run 1320 are complete: independently proven exact-head merge, accepted MERGED mail before
    accepted final close, `done/released` and a separately read terminal row. Review 1321 is also done/released.
    Do not repeat enqueue, mail, close or review, or read the worker diff in the coordinator. Retain the minor
-   advisories and evidence limits. Keep 1022 open. Finish the separate ledger PR only through its own fresh review,
+   advisories and evidence limits. Run 1022 was ended on 2026-11-09 (CP-26, CP-61); open each run before the
+   previous one closes. Finish the separate ledger PR only through its own fresh review,
    checks and repository landing gates; no ledger merge is yet proven.
 4. Keep the five research enhancement drafts unfiled while filing is postponed. Do not repeat completed research
    or access investigations. Further audit/design work starts with current-code and in-flight-work evidence. A
