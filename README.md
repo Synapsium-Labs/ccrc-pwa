@@ -1517,6 +1517,17 @@ download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
 `attestation: 'none'` safe.
 
+**The review cap (D-8125).** A work run takes three review runs; the fourth is refused with `cap-review-rounds` and one
+operator ask. Two doors extend it. The operator's lift (`POST /api/coord/review-cap`, session-gated, no box token) removes
+the cap for that run. The run's coordinator may instead extend it with `POST /api/runs/:id/review-rounds` (box token,
+`ccrc-api runs review-rounds`; the caller is the run's claiming coordinator or its programme's live coordinator, attributed by the
+session's id and uuid, re-measured against the registry): a one-line `reason` is required, and each call adds three more
+rounds, only at a reached cap, so the coordinator re-judges every three rounds. A coordinator lift is journalled in the
+run's record with its reason and the rounds before and after, sends a record-only feed notice, closes the operator's ask
+as handled by the coordinator, and shows on the run page as "cap lifted by its coordinator". `CCRC_REVIEW_CAP_COORD_LIFT=off`
+turns the coordinator's door off fleet-wide; the operator's lift is unaffected. The grant is stored as a granted-rounds
+count (schema migration 48).
+
 **Adding a passkey** is Accounts → **Your sign-in** → **Add a passkey on this device**, shown
 only where the browser can create one (WebAuthn Level 2, which needs a secure context). On an
 armed box with no passkey yet, the fleet screen shows such a browser a line reading *Passphrase

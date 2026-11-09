@@ -410,3 +410,14 @@ The setting is read once at start (`cfg.reviewCapCoordLift`); the answer to `off
 - **The setting is read at server start.** Changing `CCRC_REVIEW_CAP_COORD_LIFT` in `ccrc.env` takes effect on the
   server's next restart, as D-8122's server-read settings do.
 - **Settings are written in `~/.ccrc/ccrc.env`.** The console card shows the value; it does not write it.
+
+## As built
+
+- Eight code tasks and this docs task landed as separate commits on one branch; every task kept the plan's interfaces
+  (`coordLiftVerdict`, migration 48, `registerReviewRoundsRoute`, `reviewCapCoordLiftOf`, `runs review-rounds`, the
+  `review-rounds-v1` cap, `coordLiftLine`).
+- Migration slot: re-measured against `origin/main` at the end of the wave (47 entries there, 48 here); no renumbering.
+- Departures from the plan text: none beyond fixture typing in `server/test/review-cap.test.ts` (the `coordLiftVerdict`
+  fixture is typed as the verdict input so the tests-inclusive typecheck is clean).
+- Known limits are as listed above; the Mac-only failures (push-copy, mail-sweep, history-replay, agent deploy-verify
+  D3b-e) are recorded, not fixed.
