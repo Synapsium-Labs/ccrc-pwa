@@ -51,6 +51,9 @@ What the read of `main` at 217fc7d29 found, beside the rulings:
    `success`, `neutral` or `skipped` as passing. An admin merge bypasses GitHub's own judgement of the required set,
    so the door asks more: a required name is green only when every run and status for it on the head reads
    `success`. A required check a path filter skipped refuses the door (`checks-not-green`).
+   **Superseded by review (same day):** the door now uses GitHub's and the verdict's passing set (`success`, `neutral`,
+   `skipped`), because the stricter rule made the verdict say `passing`, the stop `approval-missing`, and the door refuse a
+   path-filtered required job, which sent the operator back to merging by hand. The journal keeps the word (`lint:skipped`).
 4. **Nothing in the fleet reads GitHub permissions today.** No `permissions.admin`, `viewerPermission` or
    `mergeQueue` read exists in ccd, the server or the agent. The door is the first. Measured from a workstation on
    2026-11-09: `GET /repos/{o}/{r}` answers `permissions.admin` and the four `allow_*` settings in one read, and GraphQL

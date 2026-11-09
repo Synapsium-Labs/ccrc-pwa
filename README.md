@@ -5599,19 +5599,29 @@ guess. The door is a `ccd` verb instead: `ccd pr-admin-merge --repo <owner/repo>
 a coordinator from its own session. It runs `gh` itself, which no hook sees, and it makes every check before the one
 merge it can make, cheapest and local first, refusing at the first that fails: the argument shapes; the setting
 (`CCRC_ADMIN_MERGE`, below); that the caller is a coordinator (named by its tmux pane, with no child marker and no hold
-that names a programme wave, read as the hook reads a hold); that the fleet's GitHub identity holds admin on the
+that names a programme wave, read as the hook reads a hold). The caller and the switch come from the process, never from
+the environment the command line sets: the pane is asked of the fleet's default tmux socket by path (`TMUX` and
+`TMUX_TMPDIR` are ignored), the pane's own process must be this process or one of its ancestors (so a coordinator's pane id
+typed on a worker's command line names a pane the worker is not in), the registry, the journal and `ccrc.env` are read
+under the account's home from the password database (never `$HOME`), and `tmux`, `ps`, `id` and `getent` are found on a
+fixed system `PATH`; that the fleet's GitHub identity holds admin on the
 repository (`permissions.admin` of the repository read); that the PR is open, not a draft, and at the head named; that
 the base branch has no merge queue, whether set by a ruleset's `merge_queue` rule, by GitHub's `mergeQueue` read for
 the branch; that no review is in the changes-requested state; that every required check
-(from rulesets and classic protection alike) is `success` on that head; and that the repository allows a merge method
-the door will use, a merge commit preferred and a squash only where the repository allows nothing else (a rebase-only
-repository is refused). Just before the merge it reads the PR again, and runs `gh pr merge <n> -R <owner/repo> --admin
+(from rulesets and classic protection alike) passes on that head, a skipped or neutral conclusion counting as passing
+exactly as GitHub and the landing verdict count it (the journal keeps the word, `lint:skipped`); that the base carries
+none of the rules `--admin` would get past and the door cannot judge for itself (a ruleset's `workflows`,
+`code_scanning`, `required_deployments` or `required_signatures`, classic signed commits, conversation resolution in
+either), and, where strict up-to-date applies (a ruleset's `strict_required_status_checks_policy` or classic
+`required_status_checks.strict`), that the head is not behind the base (a compare read); and that the repository allows
+a merge method the door will use, a merge commit preferred and a squash only where the repository allows nothing else
+(a rebase-only repository is refused, and so is one that allows a squash and a rebase but no merge commit). Just before the merge it reads the PR again, and runs `gh pr merge <n> -R <owner/repo> --admin
 --<method> --match-head-commit <sha>`, so a push that lands after the checks cannot slip in; then it reads the PR back.
 Its stdout is exactly one line. `MERGED <owner/repo>#<n> head=<sha> method=<m> merge=<oid> checks=<…>` (rc 0), or
 `REFUSED <reason>: <detail>` (rc 2) with `<reason>` one of `setting-off`, `setting-unread`, `caller-unknown`,
 `not-coordinator`, `unreadable`, `not-admin`, `not-open`, `draft`, `not-at-head`, `merge-queue`,
-`protection-unreadable`, `changes-requested`, `checks-not-green`, `method-none`, `rebase-only`, `head-moved`,
-`github-refused` or `unproven`; `unproven` means `gh` answered but the read-back does not show the merge at that head,
+`protection-unreadable`, `unenforced-rules`, `behind-base`, `changes-requested`, `checks-not-green`, `method-none`,
+`rebase-only`, `squash-not-only`, `head-moved`, `github-refused` or `unproven`; `unproven` means `gh` answered but the read-back does not show the merge at that head,
 so it is reported and never retried. Every call that got past the argument shapes leaves one line in `$REG/swap.log`:
 `admin-merge <who>: <owner/repo>#<n> head=<sha> method=<m> checks=<…> result=merged merge=<oid>`, or
 `admin-merge-refused <who or ?>: <owner/repo>#<n> head=<sha> reason=<reason>`. The hook's worker deny covers the door as

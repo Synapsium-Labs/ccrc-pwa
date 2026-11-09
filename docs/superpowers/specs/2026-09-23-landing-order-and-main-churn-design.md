@@ -925,10 +925,16 @@ Decided on the operator's ruling, 2026-11-09 (D-8124):
     lands through the queue, so a repository that lands through its queue keeps doing so.
 20. **Conditions, all read at merge time on the exact head.** Every required check green on that head; no review in the
     changes-requested state; the PR not a draft; the merge pinned with `--match-head-commit <sha>`; the repository's allowed method
-    respected, a merge commit preferred and a squash only where the repository allows nothing else.
+    respected, a merge commit preferred and a squash only where the repository allows nothing else (a squash beside a rebase, with
+    no merge commit, is a refusal). "Green" is GitHub's own passing set (`success`, `neutral`, `skipped`), as the verdict reads it.
+    `--admin` also gets past strict up-to-date, required workflows, code scanning, required deployments, signed commits and
+    conversation resolution, so the door refuses a base that carries any rule it cannot judge, and under strict up-to-date a head
+    that is behind the base.
 21. **Who, and through what.** Coordinators only; a worker still cannot merge at all. The hook keeps refusing a raw `--admin` and
     `gh api` merges, and the one gated door is `ccd pr-admin-merge`, which refuses with a typed reason and journals each call.
-    The coordinator skill sends it the `approval-missing` stop and no other.
+    The coordinator skill sends it the `approval-missing` stop and no other. The caller is derived from the process (the default
+    tmux socket by path, the pane's process an ancestor of the door's own, the account's home from the password database), not from
+    environment variables the command line sets.
 
 ## 12. Failure modes named
 

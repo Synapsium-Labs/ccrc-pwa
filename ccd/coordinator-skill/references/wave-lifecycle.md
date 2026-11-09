@@ -1534,8 +1534,12 @@ line, once the landing line (above) answers `pinned` at the head you bind, run
 from your own session, in the foreground. It checks for itself that the setting
 is on, that you are a coordinator, that the fleet's GitHub identity is an admin
 of the repository, that its base has no merge queue, that the PR is open, not a
-draft and at that head, that no review requests changes, and that every required
-check is `success` on that head; it then merges with the repository's method,
+draft and at that head, that no review requests changes, that every required
+check passes on that head (a skipped or neutral one counts, as GitHub counts it),
+that its base carries no rule the door cannot judge (required workflows, code
+scanning, deployments, signed commits, conversation resolution) and, where strict
+up-to-date applies, that the head is not behind the base, and that the repository
+allows a merge commit or allows only a squash; it then merges with that method,
 pinned to the head, and journals it. Its one line decides: `MERGED …` is proven
 as every route is (MERGED at `handoffCommit`, step 3); `REFUSED <reason>: …`
 leaves the stop standing, reported as `approval-missing` with the door's line;
