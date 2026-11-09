@@ -31,7 +31,7 @@
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
+import { BACKENDS, CARD_ATTACHMENT_MAX_BYTES, CARD_MEASURE_ROWS, EXIT, PARSE_STATUS, PROV_VERSION, SCHEMA_ADDED, UUID_RE, canonicalJson, cardIdsIn, cardWindowComplete, decideCardDelivery, eofAfterBoundary, makePairIndex, parseBlocks, producerOfCopy, redactField, selectBlock, sha256Hex, summaryParts, summaryRowFor } from '../ccd/history/lib.mjs';
 import { StoreError, blobPlainTextMeasured, openReader, userVersion } from '../ccd/history/store.mjs';
 import { epochOfUuid, holdingCopyOf } from '../ccd/history/derive.mjs';
 import { expandEntryBody } from '../ccd/history/recall.mjs';
@@ -419,11 +419,18 @@ export const COUNTER_FORMS = Object.freeze({
     optional: Object.freeze([]),
     run: (flags) => combineCommand(flags),
   }),
+  // W3 Task 1D: every flag required, none optional. `--out` names a FILE that does not exist yet (the report is one JSON
+  // document, 0600), not a directory as count's and combine's `--out` does.
+  spike: Object.freeze({
+    required: Object.freeze(['db', 'session', 'since', 'until', 'out']),
+    optional: Object.freeze([]),
+    run: (flags) => spikeCommand(flags),
+  }),
 });
 export const COUNTER_SUBCOMMANDS = Object.freeze(Object.keys(COUNTER_FORMS));
 
 function checkFormFlags(sub, flags) {
-  const form = ALL_FORMS[sub];
+  const form = COUNTER_FORMS[sub];
   for (const k of form.required) if (flags[k] === undefined) refuse('args-invalid', `${k}-required`);
   for (const k of Object.keys(flags)) if (!form.required.includes(k) && !form.optional.includes(k)) refuse('args-invalid', `--${k} is not a ${sub} flag`);
 }
@@ -1147,16 +1154,10 @@ function rootOf(s, sessionPk) {
   return pk;
 }
 
-/** The pair index lib's redactField reads, from the stored pairs alone (makePairIndex's shape: length to the set of hex
- *  digests; no belt, since this report reads no secret file), built once and only when a text needs redacting. */
+/** The pair index lib's redactField reads, lib's own makePairIndex over the stored pairs. The belt is off on purpose: this
+ *  report reads no secret file and never a secret value. Built once, and only when a text needs redacting. */
 function storedPairIndex(s) {
-  const byLen = new Map();
-  for (const r of s.pairs.all()) {
-    const len = Number(r.len);
-    if (!byLen.has(len)) byLen.set(len, new Set());
-    byLen.get(len).add(Buffer.from(r.sha256).toString('hex'));
-  }
-  return { byLen, belt: null };
+  return makePairIndex(s.pairs.all().map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') })), null);
 }
 
 /** O17 (a), O20 (b): what one span's stored text shows of a cut. A tag the rule tests is `<analysis>` (any span) and
@@ -1580,16 +1581,6 @@ function spikeInt(name, text) {
   return n;
 }
 
-/** The spike form: every flag required, none optional. `--out` names a FILE that does not exist yet (the report is one
- *  JSON document, 0600), not a directory as the counters' own `--out` does. */
-export const SPIKE_FORM = Object.freeze({
-  required: Object.freeze(['db', 'session', 'since', 'until', 'out']),
-  optional: Object.freeze([]),
-  run: (flags) => spikeCommand(flags),
-});
-/** Every subcommand's form: the counters' two, and the spike. COUNTER_SUBCOMMANDS stays the counters' own pair. */
-const ALL_FORMS = Object.freeze({ ...COUNTER_FORMS, spike: SPIKE_FORM });
-
 /** spike: the flags; a fresh --out; the store read-only; the report in memory; and only then --out, written once, 0600, as
  *  the envelope's canonical JSON and one newline. stderr carries `sha256 <hex>` of the bytes written. */
 export function spikeCommand(flags) {
@@ -1638,8 +1629,8 @@ export const COUNTER_MEASURES = Object.freeze({
 export function main(argv, deps = COUNT_DEPS) {
   try {
     process.umask(0o077);
-    const { sub, flags } = parseArgs(argv, { specs: COUNTER_FLAG_SPECS, subs: Object.keys(ALL_FORMS) });
-    return ALL_FORMS[sub].run(flags, deps);
+    const { sub, flags } = parseArgs(argv, { specs: COUNTER_FLAG_SPECS, subs: COUNTER_SUBCOMMANDS });
+    return COUNTER_FORMS[sub].run(flags, deps);
   } catch (e) {
     if (e instanceof DriverRefusal) {
       process.stderr.write(`${PREFIX}: ${e.word}: ${e.detail}\n`);
