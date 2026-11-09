@@ -192,6 +192,9 @@ describe('a zero count joined or spaced carries no label (review 1601 F1, F2; de
     ['tests passed: 0 out of 12'],
     ['tests passed: 0%'],
     ['tests passed: 0 of twelve'],
+    // A plural number word is a count too (Task C16 fix round 1, review 1722 F5): A4's word end must not cut it.
+    ['tests failed: 0 of hundreds of cases'],
+    ['CI passed: 0 of thousands'],
     ['tests passed: 0 (of 12)'],
     ['tests passed: 0 (out of 12)'],
     ['tests failed: 0 — all good'],

@@ -254,11 +254,12 @@ function sentenceQuestions(prose: string, quiet: readonly Span[]): Uint8Array {
  *  text's end, or a line break), or a whole word, digits included, with any `.`, `-` or `/` joining it to more word
  *  characters (`10`, `v0.0.1003`, `no-op`, `docs/no.md` are each one word; review 1592 F3). */
 const NEGATION_TOKEN = /([.!?;,:](?=\s|$)|\n)|[\p{L}\p{M}\p{N}_]+(?:[.\-/][\p{L}\p{M}\p{N}_]+)*/gu;
-/** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2). */
+/** The number words a count of zero may be "of" ("passed: 0 of twelve"; review 1601 F2), the plurals of a hundred and a
+ *  thousand among them ("failed: 0 of hundreds"; review 1722 F5). */
 const NUMBER_WORDS = [
   'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen',
   'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty',
-  'seventy', 'eighty', 'ninety', 'hundred', 'thousand',
+  'seventy', 'eighty', 'ninety', 'hundred', 'hundreds', 'thousand', 'thousands',
 ];
 /** A colon right after a status word and a count of zero behind it: `0`, `zero` or `none`, followed by "of N" or
  *  "out of N" (N in digits or a number word), "(of N)", "/N" with or without spaces, `%`, a dash clause, or the
