@@ -246,9 +246,9 @@ export function AccountsScreen(): ReactNode {
   const order = troubleFirst(rowOrder(roster, accounts ?? []), (w) => answerOf(w).word);
 
   // The arrival at a lane (T2c, D-6329, Q14): a lane card opens `/accounts?lane=<id>`, and the screen scrolls that
-  // lane's row into view, focuses it and marks it with one accent edge, through `useArrival` (the mechanism the runs board's
-  // `?run=` shares, chat reading Task L, D-8062). The rows are drawn only once the poll lands (`order` is empty until then),
-  // so the lane's row exists only from then. An unknown lane arrives nowhere.
+  // lane's row into view, focuses it and marks it with one accent edge, through `useArrival` (extracted from this screen in
+  // chat reading Task L, D-8062; this screen is its one caller). The rows are drawn only once the poll lands (`order` is
+  // empty until then), so the lane's row exists only from then. An unknown lane arrives nowhere.
   const search = useLocation().search;
   const lane = laneParam(search);
   const laneRowExists = lane !== null && accounts != null && order.includes(lane);
