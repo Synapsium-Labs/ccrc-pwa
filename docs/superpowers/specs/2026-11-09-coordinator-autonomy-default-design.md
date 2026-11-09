@@ -1,8 +1,9 @@
 # Coordinators decide by default: autonomy as the standing rule
 
-**Spec** · 2026-11-09 · Status: rev 2, draft for the operator's review. The rules in §2 to §4 are the operator's
-rulings of 2026-11-09 (D-8126). Everything marked "author's call" waits on the operator's approval of this spec, and
-four questions are open for the operator (§15) · Rev 2 (2026-11-09): a builder's check applied. The answers it found
+**Spec** · 2026-11-09 · Status: rev 3, approved by the operator on 2026-11-09. The rules in §2 to §4 are the operator's
+rulings of 2026-11-09 (D-8126). The operator approved the spec with every "author's call" in it on 2026-11-09 and
+answered three of the four questions of §15 the same day (recorded in §14 under D-8126); one question stays open (§15)
+· Rev 3 (2026-11-09): the operator's answers written in · Rev 2 (2026-11-09): a builder's check applied. The answers it found
 in the repository are written in, its smaller points are settled as author's calls, its contradictions and inventory
 gaps are fixed, and what only the operator can answer is listed in §15 · Owner: the coordinator that drives the build
 · Linear: none · Ledger entry: `docs/superpowers/plans/2026-11-09-coordinator-autonomy-default.md` defines D-8126
@@ -188,7 +189,7 @@ so a parked thread needs no other wake.
 
 | # | Class (ruled) | Includes | Examples from real items | Meanwhile |
 |---|---|---|---|---|
-| O1 | **Irreversible or outward-facing acts** | Acts the repository's SAFETY rules forbid to sessions (`CLAUDE.md`, "SAFETY — sacred, never violate"), and acts on the live boxes: reaping, removing, expiring or reclaiming workspaces; touching units or tmux; account management; rolling or selecting a Claude Code build; `ccrc history` writes; deploys and rollouts; writing live box config, including touching a stall-watch or lane arming marker. Publishing: making a repository or package public, cutting a release, a public page. Messaging people (where that line falls for comments and tracker writes is open, §15 Q3). | "May I write the landing config with `lineage=off` on the live box?"; "May I make it public?" | Builds and reviews everything up to the act. The PR is ready; the act waits. |
+| O1 | **Irreversible or outward-facing acts** | Acts the repository's SAFETY rules forbid to sessions (`CLAUDE.md`, "SAFETY — sacred, never violate"), and acts on the live boxes: reaping, removing, expiring or reclaiming workspaces; touching units or tmux; account management; rolling or selecting a Claude Code build; `ccrc history` writes; deploys and rollouts; writing live box config, including touching a stall-watch or lane arming marker. Publishing: making a repository or package public, cutting a release, a public page. Messaging people. Comments on other people's PRs and issues in public repositories, and tracker writes that mirror to public GitHub issues, are not in this class: they are routine (operator, 2026-11-09). | "May I write the landing config with `lineage=off` on the live box?"; "May I make it public?" | Builds and reviews everything up to the act. The PR is ready; the act waits. |
 | O2 | **Spend beyond plan** | Usage credits, including any "Switch to usage credits" and any escalation to a model billed on credits. Paid services. New accounts. | "Should this design go to the credits-billed model per your policy?" | Continues on the plan's own models and accounts. The rest of the programme does not wait. |
 | O3 | **The programme's goals, scope or definition of done** | Approving a spec. Changing a spec's goals, its scope or its definition of done. Approving or changing the definition of done. Starting work outside the definition of done. Dropping or cutting a definition-of-done item. Accepting a known limit that leaves a definition-of-done item unmet. Starting a new programme. Choosing what the programme does next once its definition of done holds. Any other change to behaviour the spec describes is a big call (§5.4), not O3. | "Do you approve the spec, with my calls D11 to D22?"; "Ship ordinary values now and leave the secret store until a feature needs it?"; "The next wave is outside your definition of done. Shall I start it?" | Works every item inside the current definition of done. When the definition of done holds, it closes the programme, as step 7 says. |
 | O4 | **Credentials and access** | Secrets (only through a `secret` item; a secret never reaches a coordinator). Sign-ins and account auth. Repository settings: rulesets, branch protection, merge methods, auto-merge (clause 15). Who may act on a programme: handing it to another session after a lost id (`resume.md` §6). Delegated worktrees: attaching a lease, saying a worktree is not delegated, and any act on a worktree in conflict (`references/delegated-worktrees.md`, "The operator's acts"). Granting or removing people's access. | "A required approval is missing and the repo has no admin door" (outside D-8124's door); "This account's lane needs a sign-in" (`spawnState: login`); "Should I revoke these people's access?" | Routes work to lanes and repositories it can use; the blocked thread waits. |
@@ -206,11 +207,13 @@ so a parked thread needs no other wake.
 part of building, not publishing:
 - pushing branches, and opening, updating and landing PRs by the route clause 15 gives;
 - replying to review bots on the programme's own PRs;
-- mailing other coordinators and sessions through ccrc.
+- mailing other coordinators and sessions through ccrc;
+- commenting on PRs and issues in public repositories where people other than the operator take part, such as an
+  outside contributor's PR (operator, 2026-11-09);
+- tracker issue and comment writes through `ccrc-api linear`, including those that mirror to public GitHub issues
+  (operator, 2026-11-09).
 
-Two cases are open for the operator (§15 Q3): comments on PRs and issues where people other than the operator take
-part, and tracker writes through `ccrc-api linear` that mirror to public issues. Until that answer, the skill keeps
-today's behaviour for both.
+Both of the last two are written under the public-repository rules the repository already sets.
 
 ## 4. Physically blocked (ruled), and the self-healing tried first
 
@@ -403,7 +406,7 @@ added in rev 2.
 
 | # | Where | Today | New disposition | The recovery path, or why it stays |
 |---|---|---|---|---|
-| 1 | `SKILL.md` clause 4; "When something is wrong" `paused`; `wave-lifecycle.md` §2 `paused` | Stop, report, touch nothing | Split by cause; what continues is open (§15 Q2) | Dispatch answers `paused` for two causes. The coordinator reads whether `$REG/coordinator-paused` exists (a read it may make). **Present:** the operator's pause, kept. No dispatch, no in-place bind and no self-work (D-6096) in any answer to Q2; whether landing and other non-dispatch threads continue is Q2. **Absent:** the registry was unlistable, a fault: P3 backoff with a time wake, then dispatch again. |
+| 1 | `SKILL.md` clause 4; "When something is wrong" `paused`; `wave-lifecycle.md` §2 `paused` | Stop, report, touch nothing | Split by cause; under the operator's pause, non-dispatch work continues (operator, 2026-11-09) | Dispatch answers `paused` for two causes. The coordinator reads whether `$REG/coordinator-paused` exists (a read it may make). **Present:** the operator's pause, kept for dispatch: no dispatch, no in-place bind and no self-work on new waves (D-6096). Non-dispatch work continues: landing already-reviewed PRs, reviews, docs. **Absent:** the registry was unlistable, a fault: P3 backoff with a time wake, then dispatch again. |
 | 2 | `wave-lifecycle.md` §2 `mail-disabled` | Stop, report | Keep (operator-only) | The operator's kill switch. |
 | 3 | Clause 8; `resume.md` §2 and §6 `claimed-by-another` | Stop and report; the operator hands over from the console | Physical (P4), keeping the handover operator-only (O4) | Try the id-preserving revive first (`resume.md` §3). Otherwise park the thread and work the rest. The handover door is the runs rebuild's: the Resume door and its picker reach a programme with no open run (§9.5, A55, A56), and its lane raises the items with their controls (§10, A59, A62). Nothing new is built here. |
 | 4 | Clause 11; the ask lane in `wave-lifecycle.md` ("decline … a NEW decision", "if answering would require guessing rather than reading") | Release to the operator | Self-recover | Rule from the goals (§5). Working an answer out from the goals is reading, not guessing. Release only O1 to O6. Clause 11's words change (§9.1). |
@@ -440,7 +443,7 @@ added in rev 2.
 | 35 | §2, `intent-held` | Mail the holder; dispatch only on its word or the operator's | Self-recover | The two coordinators settle it between themselves. The holder's word decides. Silence parks the thread and the rest continues. Only a disagreement between them about cross-programme scope is the operator's (O3). |
 | 36 | §2, `spawnState` `login` or `blocked` | Tell the operator; do not re-dispatch onto that lane | Split | The account is O4 and gets an item. The wave: close the dispatched run as failed (allowed for a dispatched run), then open it fresh without `sessionId`. Placement skips the lane, because ccd's placement filter (§8.3 item 4) skips a lane whose newest `spawnState` is `login` or `blocked`. |
 | 37 | §2, `spawnState: narrow` | Ask the operator to widen the pane | Self-recover, then physical | Give it the ordinary window, then close as failed and open fresh as row 36. A `do` item is raised only if it repeats, and never as blocking. |
-| 38 | §2, `skillState: absent` ("report before you treat the wave as briefed"; "running the installer is a human act") | Report first | Self-recover; who installs is open (§15 Q1) | The wave is briefed: the brief carries the branch line for exactly this case. If the operator allows it, the agent installs the skill on that home (§8.3 item 5). If not, a non-blocking `do` item. Either way the coordinator goes on. |
+| 38 | §2, `skillState: absent` ("report before you treat the wave as briefed"; "running the installer is a human act") | Report first | Self-recover (operator, 2026-11-09) | The wave is briefed: the brief carries the branch line for exactly this case. The agent runs the skill installer on that home itself (§8.3 item 5). On `failed`, a non-blocking `do` item. Either way the coordinator goes on. |
 | 39 | §2, the answer's `sessionId` differs from `<project>-<slug>` (older server) | Stop and report | Physical (P4) | Record it with `wakeOn: update`. |
 | 40 | §4, `branch-unmeasurable` repeating | Needs a human | Self-recover, then physical | Back off (P3), then P4. |
 | 41 | §4, `ejection-not-merging` | Report to the operator | Self-recover | Re-read the run and act on the state it is in. |
@@ -451,7 +454,7 @@ added in rev 2.
 | 46 | Clause 3 and §6, reaping | Never | Guard | A SAFETY rule. Never relaxed. |
 | 47 | `resume.md` §6, the id is lost | Stop and report | Keep (O4) | The handover is the operator's, through the runs rebuild's Resume door and picker (row 3). Park the thread; nothing new is built here. |
 | 48 | `resume.md` §2, the dead-coordinator lane | Armed by the operator | Unchanged | Already ruled. |
-| 49 | `routing-matrix.md`, Debugging: "the third attempt is a rung a human chooses — the session reports the ceiling and stops" | Stop | Open (§15 Q4) | If D-8126 supersedes the 2026-09-22 instruction: only the jump to a credits-billed model stays the operator's (O2); the coordinator continues with `max` by the mechanical rule, a fresh-context worker, a narrower reproduction, and failing all of those parks the item and goes on with the rest of the programme. If it does not: the ceiling stays a stop for that thread only (R6), raised as a `decide` item. |
+| 49 | `routing-matrix.md`, Debugging: "the third attempt is a rung a human chooses — the session reports the ceiling and stops" | Stop | Open (§15 Q4); the operator's instruction stands | Until the operator answers, the third attempt is a rung a human chooses: the ceiling stops that thread only (R6), raised as a `decide` item, and the rest of the programme goes on. Not built while Q4 is open: if D-8126 is ruled to supersede the 2026-09-22 instruction, only the jump to a credits-billed model would stay the operator's (O2), and the coordinator would continue with `max` by the mechanical rule, a fresh-context worker and a narrower reproduction before parking the item. |
 | 50 | `peer-protocol.md`, a claim holder `deliverable: no:<reason>` ("escalate to the operator") | Escalate | Self-recover | Work the uncontested paths and wait for the claim's `expiresAt`. Only a claim that never expires is P4. |
 | 51 | `mail-envelope.md`, parked mail | The operator is told after about 15 min | Unchanged | A delivery fault the server already reports; the sender keeps working. |
 | 52 | Server, the stall watch's `coord-blocked` arm | Reports only (D-6942) | Unchanged, plus a count | It keeps reporting. Its push also counts an R7 breach when the hold is a pending dialog on a pinned programme (§10, M2). The acting rung is on `coord-ball` (row 59). |
@@ -582,11 +585,12 @@ added in rev 2.
 4. **ccd's placement skips a lane that cannot spawn** (author's call). `_ws_least_loaded` skips a lane whose newest
    recorded `spawnState` is `login` or `blocked`, until a later spawn on that lane reads otherwise. Without it, rows
    36 and 37's fresh open could land on the same lane again.
-5. **The skill installs itself on a home where it is absent** (author's proposal; open, §15 Q1). When a dispatch's
+5. **The skill installs itself on a home where it is absent** (author's proposal; allowed by the operator,
+   2026-11-09). When a dispatch's
    preflight measures `skillState: absent`, the agent gains a frame that runs the skill installer for that lane's
    home. The answer reports `installed` or `failed`. The skill installer is not a Claude Code build roll, so D-5696
-   does not forbid it, but `wave-lifecycle.md` calls running it "a human act". If the operator keeps it human,
-   this item is not built and row 38 stays a non-blocking `do` item.
+   does not forbid it. `wave-lifecycle.md` calls running it "a human act"; the operator's answer supersedes that line,
+   which A5 rewrites. On `failed`, row 38 raises a non-blocking `do` item.
 
 The handover item that rev 1 proposed here is dropped: the runs rebuild already provides the coordinator-gone Resume
 door with its picker (§9.5, A55, A56) and the lane items that carry a working control (§10, A59, A62).
@@ -606,14 +610,15 @@ Build the fleet-capacity plan's remaining tasks in its own order, keeping every 
 
 W1-1 and W1-1b (D-6091, D-6092) are already built. OA-F2 and OA-F3 are read-only measurements a session may take.
 Every deploy, and OA-F4, is the operator's (O1). All seven of §3.5(e)'s reasons stay. Reason 1 says a review is never
-done inline. Reason 6 says the pause is the operator's stop; how it reads beside row 1 waits on §15 Q2, and D-6096's
-rule that the pause binds the in-place bind holds in every answer.
+done inline. Reason 6 says the pause is the operator's stop; the operator's answer of 2026-11-09 reads it as a stop for dispatch, the
+in-place bind and self-work on new waves, while non-dispatch work continues (row 1). D-6096's rule that the pause
+binds the in-place bind holds, and W1-5 words reason 6 to match clause 4.
 
 ## 9. How the rule reaches running coordinators
 
 ### 9.1 The skill
 
-- **Clause 21, a new contract sentence** (author's draft; the operator approves the words, §15 Q1, and
+- **Clause 21, a new contract sentence** (the operator approved these words on 2026-11-09, and
   `server/test/coordinator-skill.test.ts` pins them verbatim). "These twenty sentences" becomes "twenty-one", and
   that test's number-word list grows by one.
 
@@ -631,7 +636,9 @@ rule that the pause binds the in-place bind holds in every answer.
   > on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.
 
 - **The clauses that change with it:**
-  - **Clause 4 and the `paused` entry:** split by cause (row 1); the rest waits on §15 Q2.
+  - **Clause 4 and the `paused` entry:** split by cause (row 1). Under the operator's pause, dispatch, the in-place
+    bind and self-work on new waves stay forbidden, and non-dispatch work continues: landing already-reviewed PRs,
+    reviews, docs (operator, 2026-11-09).
   - **Clause 11:** "rule only from what you can read: the spec, the plan, the ledger, the branch, the programme's
     goals and definition of done, and your own prior rulings". Release only what clause 21 makes the operator's.
   - **Clause 19:** questions to the operator are items, never a turn ending on a question.
@@ -640,7 +647,7 @@ rule that the pause binds the in-place bind holds in every answer.
   - **"When something is wrong":** each entry rewritten to §7's disposition.
   - **The description:** §3.5(e)'s exception.
 - **The references move with the skill:** `wave-lifecycle.md` (§7, rows 1, 12 to 45 and 56 to 58), `resume.md` (rows
-  3 and 47), `routing-matrix.md` (row 49, after §15 Q4), `peer-protocol.md` (row 50) and `delegated-worktrees.md`
+  3 and 47), `routing-matrix.md` (row 49: unchanged while §15 Q4 is open), `peer-protocol.md` (row 50) and `delegated-worktrees.md`
   (row 60, unchanged words). `references/decision-procedure.md` is new and holds §5 (with §5.1's split rule, §5.2's
   standing operator preferences and §5.7) and §3's lists, so the clause stays one paragraph.
 - **Constraints on the skill text** (from the tests and pins that already exist):
@@ -738,9 +745,9 @@ act (O1); the plan names them per wave so the operator can schedule them.
 | A2 | Server: `doneWhen` on the pin; the goals read opened to the box token (D-149's pattern) and widened; `ccrc-api goals show` | nothing | server deploy |
 | A3 | Server: `coordinator_calls` (migration 49 or later), its route and `ccrc-api calls record`, the digest's `call` line kind and correction arm | A2 | server deploy |
 | A4 | Console: "Calls made for you" on Waiting on you, Overturn… and Seen on each call, the run page's calls section | A3 | server deploy (the console ships with it) |
-| A5 | Skill: clause 21 and its pin, the clause 4, 11, 19 and 20 rewrites, `decision-procedure.md`, §7's rows in the skill and references | A2, A3, D-8125 merged; §15 Q1 to Q4 answered | the skill install on the fleet box |
+| A5 | Skill: clause 21 and its pin, the clause 4, 11, 19 and 20 rewrites, `decision-procedure.md`, §7's rows in the skill and references | A2, A3, D-8125 merged; §15 Q1 to Q3 answered (2026-11-09); row 49 keeps today's words while Q4 is open | the skill install on the fleet box |
 | A6 | Server: `coord-ball`'s mail rung (dark), the nudge's run-based holds, `block` wakes on the existing lanes and their expiry | A3 | server deploy; touching `stall-watch-w2-live` to make the rung send |
-| A7 | Server and agent: the dead-dispatch pass takes the orphaned spawns; ccd's placement filter; the skill self-install only if §15 Q1 allows it | none of the above | agent lane first, then server (the deploy order is agent-first); the pass's switch in Settings if it is not already on |
+| A7 | Server and agent: the dead-dispatch pass takes the orphaned spawns; ccd's placement filter; the skill self-install (§8.3 item 5, allowed 2026-11-09) | none of the above | agent lane first, then server (the deploy order is agent-first); the pass's switch in Settings if it is not already on |
 | A8 | Fleet-capacity W1-2, W1-3, W1-4, W1-4b and W1-5 (D-6093 to D-6097), in that plan's order and under its gates | that plan's own gates; OA-F2 and OA-F3 measured read-only | a server deploy per task; OA-F4 after W1-5 |
 | A9 | Hook: the roster line and `CARD_ROLE`; the rollout mail | A5 | agent lane deploy |
 | A10 | Measure at 30 days; adjust the routine-or-big line if M5 is over target; decide R7's hook deny from M2 | A1 to A9 | none |
@@ -750,7 +757,7 @@ D-8123, D-8124 and D-8125 are in flight and are not rebuilt here. A5 cites them 
 **The D-number rule.** `server/test/deviation-refs.test.ts` takes the high-water from definition lines in
 `docs/superpowers/plans/*.md` only, and fails any tracked file that cites a higher number. This spec's PR therefore
 carries `docs/superpowers/plans/2026-11-09-coordinator-autonomy-default.md`, which holds D-8126's definition line and
-becomes the A1 plan once the open questions are answered. With D-8126 defined there, the high-water is 8126 and the
+becomes the A1 plan once its tasks are written. With D-8126 defined there, the high-water is 8126 and the
 spec's citations of D-8123 to D-8125 pass. This spec lands after the D-8123, D-8124 and D-8125 plans where it can,
 so that each cited number already has its own entry.
 
@@ -787,6 +794,18 @@ so that each cited number already has its own entry.
       is built.
   - **Related, in flight:** D-8125 (coordinators lift review caps themselves), D-8123 (the limit watchdog), D-8124
     (the admin-merge door).
+  - **The operator's answers to §15, 2026-11-09:**
+    1. **Approved as written,** with the author's calls R6, R7 and C1 to C25 and the words of clause 21 (§9.1). The
+       agent may run the coordinator-skill installer itself where a dispatch measures `skillState: absent`: row 38
+       self-heals, and §8.3 item 5 is built.
+    2. **Under the operator's pause, non-dispatch work continues:** landing already-reviewed PRs, reviews, docs.
+       Dispatch, the in-place bind and self-work on new waves stay forbidden. This sets clause 4, row 1 and the
+       skill's `paused` entry.
+    3. **Comments on other people's PRs and issues in public repositories, and tracker writes that mirror to public
+       GitHub, are both routine,** not operator-only. This sets C2 and the O1 line.
+    4. **Not yet answered:** whether D-8126 supersedes the 2026-09-22 debugging ceiling. Row 49 stays as the
+       operator's instruction stands (the third attempt is a rung a human chooses), the change is not built, and the
+       question stays in §15.
 
 **What this spec supersedes or changes.** Each is named so that no older text is left saying the opposite:
 - **Clause 11's "if answering would require guessing rather than reading, decline"** and its default of releasing
@@ -797,13 +816,16 @@ so that each cited number already has its own entry.
 - **The skill's `cap-concurrency` entry, "stop, say so, and wait to be woken",** and the description's "never use it
   to do a wave's own work". Superseded by the 2026-10-20 ruling as built (D-6095 to D-6097).
 - **Clause 19's turn ending on a question, and AskUserQuestion on a pinned programme.** Changed by R7.
-- **`wave-lifecycle.md`'s "running the installer is a human act"** (row 38). Changed only if the operator allows the
-  self-install (§15 Q1).
-- **`routing-matrix.md`'s 2026-09-22 debugging ceiling** (row 49). Superseded only if the operator confirms it (§15
-  Q4).
-- **Clause 4's reading of the pause as a full stop** (row 1). The split by cause is the author's call; what continues
-  under the operator's pause waits on §15 Q2.
+- **`wave-lifecycle.md`'s "running the installer is a human act"** (row 38). Changed: the operator allowed the
+  self-install on 2026-11-09.
+- **`routing-matrix.md`'s 2026-09-22 debugging ceiling** (row 49). Not superseded: the question is open (§15 Q4) and
+  the instruction stands.
+- **Clause 4's reading of the pause as a full stop,** and fleet-capacity §3.5(e) reason 6's "reports and waits"
+  (row 1). Changed: under the operator's pause, non-dispatch work continues (operator, 2026-11-09). Dispatch, the
+  in-place bind and self-work on new waves stay forbidden, so D-6096 holds.
 - **The autonomy-window proposals** #1628 and #1824. Superseded by R1.
+
+Every "author's call" below was approved by the operator with the spec on 2026-11-09.
 
 | # | Decision | Chosen | By |
 |---|---|---|---|
@@ -815,7 +837,7 @@ so that each cited number already has its own entry.
 | R6 | Scope of a stop | A thread, never the programme | Author's call |
 | R7 | Dialogs | None once the Goals pin exists; allowed in the brainstorm phase; a skill rule first, a hook deny only if M2 stays above 0 after 2 weeks | Author's call |
 | C1 | Extra operator-only classes | O5, a fact only the operator holds; O6, overriding a person | Author's call |
-| C2 | What is plainly not outward-facing | Pushes, PRs, landing, replies to review bots, mail between sessions. Comments where other people take part, and tracker writes, are open (§15 Q3) | Author's call, in part open |
+| C2 | What is plainly not outward-facing | Pushes, PRs, landing, replies to review bots, mail between sessions; comments on other people's PRs and issues in public repositories; tracker writes, including those that mirror to public GitHub | Author's call; the last two the operator, 2026-11-09 |
 | C3 | Healing steps and backoff schedule | §4's steps; backoff of 1, 2, 4, 8, 15 and 30 min, then every 30 min, each a `block` call with a time wake; a non-blocking `do` item after 4 h | Author's call |
 | C4 | Tie-breakers and rule conflicts | §5.3's order; the later of two conflicting rulings governs | Author's call |
 | C5 | The routine-or-big line | §5.4's list; a change to goals, scope or done is O3, any other change to spec behaviour is big and a deviation | Author's call |
@@ -824,12 +846,12 @@ so that each cited number already has its own entry.
 | C8 | The overturn door | The digest correction route, extended with a `call` row kind; Overturn… with a confirm; Seen in one tap | Author's call |
 | C9 | The goals read | The operator's route made exempt-but-authenticated for the box token, as D-149 did for the runs read; no second route; no ownership check on the read | Author's call |
 | C10 | The definition of done | A stored `doneWhen` copy on the pin; a ledger section; for older programmes a verbatim copy when the spec states one, else a draft plus an approval item | Author's call |
-| C11 | Detectors that act | `coord-ball` gains a coordinator mail rung (20 min, again 30 min later), dark behind `stall-watch-w2-live`; the nudge's run-based holds; the dead-dispatch pass takes orphaned spawns; ccd's placement filter. The skill self-install is open (§15 Q1) | Author's call |
+| C11 | Detectors that act | `coord-ball` gains a coordinator mail rung (20 min, again 30 min later), dark behind `stall-watch-w2-live`; the nudge's run-based holds; the dead-dispatch pass takes orphaned spawns; ccd's placement filter; the skill self-install where a dispatch measures it absent | Author's call; the self-install the operator, 2026-11-09 |
 | C12 | Wakes for parked threads | `block` calls with a wake condition, served by the existing wake lanes; a time wake lapses at its time, a condition wake on clearing or after 24 h | Author's call |
 | C13 | Delivery | Clause 21 plus a reference file; a fixed roster-card line; the `CARD_ROLE` text; the idle roll; one rollout mail | Author's call |
-| C14 | Disposition of each stop point | §7's table | Author's call (rows 12, 18 and 24 follow D-8125, R5 and D-8124; rows 1, 38 and 49 wait on §15) |
+| C14 | Disposition of each stop point | §7's table | Author's call (rows 12, 18 and 24 follow D-8125, R5 and D-8124; rows 1 and 38 follow the operator's answers of 2026-11-09; row 49 waits on §15 Q4) |
 | C15 | Measures and targets | §10 | Author's call |
-| C16 | The pause | Split by cause (the pause file present or absent); no dispatch, in-place bind or self-work under the operator's pause. What else continues is open (§15 Q2) | Author's call, in part open |
+| C16 | The pause | Split by cause (the pause file present or absent); under the operator's pause no dispatch, in-place bind or self-work on new waves, and non-dispatch work continues: landing already-reviewed PRs, reviews, docs | Author's call; what continues the operator, 2026-11-09 |
 | C17 | The review cap | Lift only for regressions or gaps in the PR's own claim; otherwise the cutoff and known limits; the door's three refusals as §5.7 | Author's call |
 | C18 | Standing operator preferences | Written in plain words into `decision-procedure.md` (§5.2) | Author's call |
 | C19 | The split rule | One rule for the coordinator, the census and M4 (§5.1) | Author's call |
@@ -842,7 +864,10 @@ so that each cited number already has its own entry.
 
 ## 15. Open for the operator
 
-Most important first. The build changes with each answer, and A5 waits on all four.
+Questions 1 to 3 were answered on 2026-11-09 and are recorded in §14 under D-8126. Question 4 stays open; until it is
+answered, row 49 keeps the operator's instruction and its change is not built.
+
+Answered 2026-11-09:
 
 1. **Approve this spec, the words of clause 21, and the skill self-install.** Do you approve the spec with the
    author's calls R6, R7 and C1 to C25, and the words of clause 21 (§9.1), which the pinning test will hold verbatim?
@@ -859,6 +884,9 @@ Most important first. The build changes with each answer, and A5 waits on all fo
    public repository where people other than the operator take part, such as an outside contributor's PR; and
    tracker issue and comment writes through `ccrc-api linear`, which mirror to public GitHub issues. Is either, or
    both, an operator-only act? The answer sets the routine/O1 line in the skill and C2.
+
+Open:
+
 4. **Does D-8126 supersede the 2026-09-22 debugging ceiling?** `references/routing-matrix.md` records the operator's
    instruction that "the third attempt is a rung a human chooses". This spec's row 49 would have the coordinator
    continue (max effort, a fresh-context worker, a narrower reproduction), keeping only the jump to a credits-billed
@@ -869,10 +897,14 @@ Most important first. The build changes with each answer, and A5 waits on all fo
 ### Agreed
 
 - R1 to R5, the operator's rulings of 2026-11-09 (D-8126).
+- The spec, with R6, R7, C1 to C25 and the words of clause 21, approved on 2026-11-09.
+- §15 Q1 to Q3, answered on 2026-11-09: the skill self-installs where absent (row 38); non-dispatch work continues
+  under the operator's pause (row 1); comments on others' PRs and issues and tracker writes that mirror to public
+  GitHub are routine (C2, O1).
 
 ### Waiting on you
 
-- The four questions in §15.
+- §15 Q4: does D-8126 supersede the 2026-09-22 debugging ceiling (row 49)?
 
 ### Later
 
