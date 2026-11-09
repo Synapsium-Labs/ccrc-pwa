@@ -19323,7 +19323,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # expires it once a credential file ccd can name changes (D-3524) — no spawn.
     if [[ "$hrc" -eq 0 && " ${SWAP_TARGET_SKIP:-} " != *" $home "* ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
-      && ! _authdead "$home" && _avail "$home"; then
+      && ! _authdead "$home" && _avail "$home" \
+      && { [[ "${CCD_RESCUE_MEASURED_ONLY:-}" != 1 ]] || [[ -n "$(_limit_score "$home")" ]]; }; then   # D-8123: a wake move wants MEASURED room only, so an unmeasured home is not "recovered"
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
       # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling
@@ -19435,6 +19436,10 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       _pool_ok "$cand" "$pps" || continue
       _account_ok "$cand" || continue
       _avail "$cand" || continue
+      # D-8123: `CCD_RESCUE_MEASURED_ONLY=1` (the wake move's `_wake_ceiling_move`) skips an UNMEASURED candidate:
+      # the rank-last rule below keeps it eligible for a rescue that has nowhere else to go, but a session that is
+      # not yet running has no stuck pane to strand, so it moves only to room somebody has measured.
+      [[ "${CCD_RESCUE_MEASURED_ONLY:-}" == 1 && -z "$(_limit_score "$cand")" ]] && continue
       # POOL FIRST, THEN SERVICEABILITY, and after `_avail` for the same reason
       # `_ws_least_loaded` puts it after `_pool_ok`: serviceability never widens
       # eligibility, it only narrows it. A candidate `_avail` has already
@@ -24486,6 +24491,7 @@ _swap_end_cause() {   # -> this swap's cause word: swap-manual | swap-auto-home 
   case "${CCD_SWAP_ARM:-}" in
     affinity) printf 'swap-auto-home' ;;
     rescue)   printf 'swap-auto-rescue' ;;
+    wake)     printf 'swap-auto' ;;   # D-8123: the wake move is named by its arm but takes the generic word; a new cause word would be a server contract
     *)        printf 'swap-auto' ;;
   esac
 }
@@ -26689,7 +26695,13 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # measurements is the point.
   _lc_done start "$id" "" meas.mode "$mode" meas.wrapper "$(_reg_get "$id" wrapper)"
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
-    local rc; _supervised_start "$id"; rc=$?
+    local rc
+    # D-8123: a start onto an account at its ceiling moves first (see `_wake_ceiling_move`); the dispatched swap spawns it.
+    if _wake_ceiling_move "$id"; then
+      echo "started $id ($mode) — its account is at its ceiling; moving it to $WAKE_MOVE_TARGET"
+      return 0
+    fi
+    _supervised_start "$id"; rc=$?
     # `started` stays unconditional here too (Task 4's own invariant, restated below): a
     # supervised start that never even reaches the in-unit cmd_ensure — the crash-looped FAILED
     # unit this task's own StartLimitBurst is designed to produce, or `_supervised_start`'s own
@@ -26845,7 +26857,13 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # supervised. `cmd_swap`'s tail (ccd:12599) reaches this from inside a transient systemd-run unit
   # and correctly takes the supervised branch — which is why the guard is not INVOCATION_ID.
   if [[ "${CCD_IN_UNIT:-}" != 1 ]]; then
-    local rc; _supervised_start "$id"; rc=$?
+    local rc
+    # D-8123: a wake onto an account at its ceiling moves first (see `_wake_ceiling_move`); the dispatched swap spawns it.
+    if _wake_ceiling_move "$id"; then
+      echo "ensured $id (its account is at its ceiling; moving it to $WAKE_MOVE_TARGET)"
+      return 0
+    fi
+    _supervised_start "$id"; rc=$?
     # `started` stays unconditional (Task 4's invariant, ccd:11908) on this path too — see cmd_start's
     # matching comment for why the in-unit cmd_ensure setting it is not enough on its own.
     _reg_claim "$id"
@@ -30309,6 +30327,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
         fi ;;
       rescue)
         _swap_rescue_act_gate "$id" "$cur" || return 0 ;;
+      wake) ;;   # D-8123: nothing is running to back off from or to re-queue, so no act gate; the carry's own pre-flights still apply
     esac
     if ! _route_degrade_at_move "$id" "${CCD_SWAP_DFROM:-}" "${CCD_SWAP_DTO:-}"; then
       _swap_lastswap_restore "$id"
@@ -30738,6 +30757,56 @@ _hib_wake_clear() {   # id — a start or an ensure ends a hibernation: `.hibern
   rm -f -- "$REG/$1.hibernated"
   local now; _now_s_to now
   _reg_set "$1" woke "$now" || true
+  return 0
+}
+
+_wake_ceiling_move() {   # id -> rc 0 a move was dispatched (the caller returns 0 and spawns nothing; WAKE_MOVE_TARGET names where) | 1 nothing to do (the caller spawns as before)
+  # D-8123. A session woken or started onto an account that already reads at SWAP_CEILING would come up, hit the
+  # banner inside a minute and only then be rescued (a coordinator woke onto a seven-day 100 and needed a hand swap
+  # 15 s after its banner). The settle (`_spawn_start`'s `_serviceable` rc 1) runs INSIDE the session's own unit,
+  # which cannot stop itself to move, and only lowers the model class. So the move is made here, by the verbs that
+  # ASK the unit to spawn (`cmd_ensure`, `cmd_start`), with the same figure test the settle reads (`_avail`: a KNOWN
+  # half at SWAP_CEILING), so a session with no class is covered too. The settle's `_route_degrade` stays as the
+  # backstop for an in-unit revival.
+  #
+  # rc 1, and the caller spawns as today, when: this is the swap's own `|| cmd_ensure` fallback re-entering
+  # (CCD_WAKE_MOVE=1: it must never move twice); the row has never run (no `started`: there is no transcript to
+  # carry, and `ccd swap` would refuse it); the session is alive (a live pane is the rescue's business, and nothing
+  # here may stop it); the account has headroom; or no account has MEASURED room (`CCD_RESCUE_MEASURED_ONLY=1`
+  # skips an unmeasured candidate and an unmeasured home). A no-room answer is logged once per wake.
+  #
+  # NO KEYS ARE SENT, ever: the move ends nothing that is running and resumes the conversation on the target through
+  # `ccd swap`, the rescue's one act. The hold file and a manual-swap pin do not stop it: a session started on an
+  # account at its ceiling is evacuated by the limit rescue a minute later anyway, and both let a limit evacuate.
+  #
+  # The swap runs in its OWN transient unit, with no jitter (nothing is running to herd), so a long carry never
+  # runs inside the caller's timeout. If the swap refuses before its teardown the session would stay down, so the
+  # same unit falls back to `ccd ensure` (CCD_WAKE_MOVE=1: it spawns where it is).
+  local id="$1" wrapper home hrc five seven target trc now prev q started
+  WAKE_MOVE_TARGET=""
+  [[ "${CCD_WAKE_MOVE:-}" == 1 ]] && return 1
+  _reg_get_to started "$id" started; [[ "$started" == 1 ]] || return 1
+  _alive "$id" && return 1
+  _reg_get_to wrapper "$id" wrapper; [[ -n "$wrapper" ]] || return 1
+  _avail "$wrapper" && return 1
+  _home_measured_to home "$id"; hrc=$?
+  _limit_field_to five "$wrapper" five 0; _limit_field_to seven "$wrapper" seven 0
+  _now_s_to now
+  target=$(CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
+  if [[ -z "$target" || "$target" == "$wrapper" ]] || (( trc != 0 && trc != 6 )); then
+    echo "$(date '+%F %T') wake-ceiling-stay $id: $wrapper at its ceiling and no account has measured room" >> "$REG/swap.log"
+    return 1
+  fi
+  _reg_get_to prev "$id" lastswap
+  _reg_set "$id" lastswap "$now"
+  echo "$(date '+%F %T') wake-rescue $id: $wrapper (ceiling five=${five:-?} seven=${seven:-?}) -> $target [home=$home]" >> "$REG/swap.log"
+  printf -v q '%q' "$prev"
+  if ! _svc_run_detached bash -c "CCD_WAKE_MOVE=1 CCD_SWAP_AUTO=1 CCD_SWAP_ARM=wake CCD_SWAP_PREV=$q '$HOME/.local/bin/ccd' swap '$id' '$target' >>'$REG/swap.log' 2>&1 || CCD_WAKE_MOVE=1 '$HOME/.local/bin/ccd' ensure '$id' >>'$REG/swap.log' 2>&1"; then
+    echo "$(date '+%F %T') dispatch FAILED for $id -> $target (wake)" >> "$REG/swap.log"
+    if [[ "$prev" =~ ^[0-9]+$ ]]; then _reg_set "$id" lastswap "$prev"; else rm -f -- "$REG/$id.lastswap"; fi
+    return 1
+  fi
+  WAKE_MOVE_TARGET="$target"
   return 0
 }
 
