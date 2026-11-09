@@ -208,5 +208,14 @@ middle crumbs, then the page's name, then a second line. One commit per numbered
 6. **F8**: the stale comments in docs.css and `docs-desk-css.test.ts` (9080302c2).
 7. **F9 (a) and (b)**: the inline-style definition caught, and the via asked to exist (4749a8105).
 
+Two reds came after the items. The whole browser suite's first full run at the final code had one failure: inspector-hide's
+"1920px, hiding at the newest turn keeps the reader at the newest turn" ("expected 26 to be less than or equal to 4"), in a
+file this PR does not touch, at a load of about 5. It was green 3 of 3 alone and was ruled a load flake (16864). Then CI at
+6ff258a9d failed css-vars: `var(--docs-crumbs-n, 3)` named a property only `Crumbs`' inline style sets, and css-vars
+requires every `var()` to name one a stylesheet defines. The gates run before that push were the named unit files, which
+do not include css-vars, not the whole pwa unit suite. The fix declares `--docs-crumbs-n: initial;` in
+`.docs-full .docs-crumbs`, as shell.css declares `--lane-card-min`: the inline style still outranks it, and without it the
+floor is three's (ruled 16867; the round's second push, this commit). The whole pwa unit suite then ran before that push.
+
 The coordinator carries F5 (a touch user cannot read the may-differ marker's words) as `touch-marker-words`, and F9 (d)
 (the control census's class for `.docs-fresh` and `.docs-copy`). F9 (e) needs nothing: the PR is squash-merged.

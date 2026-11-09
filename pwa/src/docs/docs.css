@@ -176,6 +176,10 @@
 .docs-full > .docs-head-bar { container: docs-head / inline-size; flex-wrap: wrap; }
 .docs-full > .docs-head-bar :focus-visible { outline-offset: -2px; }
 .docs-full .docs-crumbs {
+  /* `--docs-crumbs-n` is declared here with no value of its own (`initial`), as `--lane-card-min` is in shell.css, and
+     `Crumbs`' inline style always outranks it with the number it draws: the count stays written once, in `Crumbs`, and
+     the token is still one a stylesheet defines (css-vars.test.ts). Without the inline style the floor is three's. */
+  --docs-crumbs-n: initial;
   flex: 1 1 calc(var(--docs-crumbs-n, 3) * (var(--tap-min) + 1ch + 2 * var(--sp-1)) + 1ch - var(--sp-1));
   min-width: 0; max-width: max-content; overflow: hidden;
 }
