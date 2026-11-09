@@ -300,7 +300,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'version-unverified': 409, 'approval-released': 409, 'parent-changed': 409, 'guard-forbidden': 409,
   'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
-  'not-coordinator': 409, 'digest-unreadable': 503,
+  'not-coordinator': 409, 'digest-unreadable': 503, 'unknown-call': 404,
   // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed
   // in and not fresh (never 401, which raises the login screen over a live session), 429 for a spent budget, 409
   // for the passphrase arm on a box with a passkey, and 501 for a dark gate, the status the other auth routes

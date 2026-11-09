@@ -200,7 +200,7 @@ describe('the digest reads the question tables (coord/digest.ts#buildDigest, #co
     const ids = seedDay(coord);
     const built = buildDigest(coord, w.fromMs, w.toMs);
     if (!built.ok) throw new Error(built.detail);
-    expect(built.digest.totals).toEqual({ decisions: 6, answers: 2, allows: 1, denies: 1, handOvers: 1, lapses: 1, guardForbidden: 1 });
+    expect(built.digest.totals).toEqual({ decisions: 6, answers: 2, allows: 1, denies: 1, handOvers: 1, lapses: 1, calls: 0, guardForbidden: 1 });
     expect(built.digest.byCoordinator).toEqual([{ coordinator: PARENT, decisions: 5 }, { coordinator: PARENT2, decisions: 1 }]);
     expect(built.digest.lines.map((l) => [l.rowKind, l.id, l.kind, l.coordinator, l.at])).toEqual([
       ['ask', ids.a1, 'answer', PARENT, at(1)],

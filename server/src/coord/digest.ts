@@ -20,6 +20,7 @@ import type { WatcherCoordPort } from './ports.js';
 import { redactCommand } from './redact.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { ApprovalRow, AskRow, CoordStore } from './store.js';
+import { callDecision } from './coordCalls.js';
 import { decidedIn, forCorrection } from './questions.js';
 
 /** The digest's own kebab words (its line kinds and its refusals), for `mail-routes.test.ts`'s scan of every quoted
@@ -135,12 +136,22 @@ export function buildDigest(store: WatcherCoordPort, dayStartMs: number, dayEndM
       answer: null, reason: r.reason === null ? null : redactCommand(r.reason), corrected: r.corrected,
     });
   }
-  const order: Record<DigestRowKind, number> = { ask: 0, approval: 1 };
+  // D-8126: a big call is one line (`callDecision`); routine and block calls are never lines and never counted.
+  for (const row of store.bigCallsIn(dayStartMs, dayEndMs)) {
+    const d = callDecision(row);
+    if (d === null || !inWindow(d.at)) continue;
+    lines.push({
+      rowKind: 'call', id: row.id, kind: d.kind, at: d.at, coordinator: row.madeBy, childId: '',
+      text: redactCommand(row.question ?? ''), tool: null, class: null,
+      answer: redactCommand(row.chosen), reason: redactCommand(row.why), corrected: row.overturnedAt !== null,
+    });
+  }
+  const order: Record<DigestRowKind, number> = { ask: 0, approval: 1, call: 2 };
   lines.sort((a, b) => a.at - b.at || order[a.rowKind] - order[b.rowKind] || a.id - b.id);
   const count = (k: DigestLineKind): number => lines.filter((l) => l.kind === k).length;
   const totals: DigestTotals = {
     decisions: lines.length, answers: count('answer'), allows: count('allow'), denies: count('deny'),
-    handOvers: count('hand-over'), lapses: count('lapse'), guardForbidden,
+    handOvers: count('hand-over'), lapses: count('lapse'), calls: count('big-call'), guardForbidden,
   };
   const per = new Map<string, number>();
   for (const l of lines) per.set(l.coordinator, (per.get(l.coordinator) ?? 0) + 1);
@@ -193,6 +204,8 @@ export function digestPushCopy(day: string, t: DigestTotals, driftOpen = 0, clos
   const parts = [
     [t.answers, 'answered'], [t.allows, 'allowed'], [t.denies, 'denied'], [t.handOvers, 'handed over'], [t.lapses, 'lapsed'],
   ].filter(([n]) => (n as number) > 0).map(([n, w]) => `${n} ${w}`);
+  // D-8126: "1 call made" / "N calls made", named only when there is some.
+  if (t.calls > 0) parts.push(`${t.calls} ${t.calls === 1 ? 'call' : 'calls'} made`);
   // D-5923: drift is named only when there is some, and never counts as a decision.
   if (driftOpen > 0) parts.push(`${driftOpen} out of step`);
   // D-8077: the run-close lane's closes, in one line of their own after the decisions.
@@ -215,7 +228,7 @@ export function parseDigestCorrectBody(raw: unknown):
   { ok: true; body: DigestCorrectBody } | { ok: false; why: 'bad-request' | 'oversize' } {
   if (raw === null || typeof raw !== 'object') return { ok: false, why: 'bad-request' };
   const b = raw as Record<string, unknown>;
-  if (b['rowKind'] !== 'ask' && b['rowKind'] !== 'approval') return { ok: false, why: 'bad-request' };
+  if (b['rowKind'] !== 'ask' && b['rowKind'] !== 'approval' && b['rowKind'] !== 'call') return { ok: false, why: 'bad-request' };
   const id = b['id'];
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) return { ok: false, why: 'bad-request' };
   if (typeof b['text'] !== 'string') return { ok: false, why: 'bad-request' };
@@ -227,7 +240,7 @@ export function parseDigestCorrectBody(raw: unknown):
 
 export type DigestCorrectResult =
   | { ok: true; mailId: number; deliveryId: number; to: string }
-  | { ok: false; why: 'unknown-ask' | 'unknown-approval' | 'not-coordinator' | 'duplicate' | 'digest-unreadable' };
+  | { ok: false; why: 'unknown-ask' | 'unknown-approval' | 'unknown-call' | 'not-coordinator' | 'duplicate' | 'digest-unreadable' };
 
 /** The correction (spec §10): durable system mail from `operator` to the row's coordinator (the held-for claimant,
  *  never the child), kind `finding`, the subject naming the row, the operator's text verbatim; and the row marked
@@ -241,6 +254,11 @@ export function correctDigestRow(coord: CoordStore, b: DigestCorrectBody): Diges
     if (read.row === null) return { ok: false, why: 'unknown-ask' };
     if (askDecision(read.row.ask) === null) return { ok: false, why: 'not-coordinator' };
     coordinator = read.row.ask.parentId;
+  } else if (b.rowKind === 'call') {
+    const row = coord.callById(b.id);
+    if (row === null) return { ok: false, why: 'unknown-call' };
+    if (callDecision(row) === null) return { ok: false, why: 'not-coordinator' };
+    coordinator = row.madeBy;
   } else {
     const read = forCorrection(coord, 'approval', b.id);
     if (!read.ok) return { ok: false, why: 'digest-unreadable' };
@@ -252,6 +270,6 @@ export function correctDigestRow(coord: CoordStore, b: DigestCorrectBody): Diges
   // D-5493 (4): said, never silently dropped as `queueSystemMail`'s dedupe would.
   if (coord.hasOutstandingMail('operator', null, coordinator, subject)) return { ok: false, why: 'duplicate' };
   const q = coord.correctWithMail(b.rowKind, b.id, () => insertSystemMailTx(coord, null,
-    { fromId: 'operator', toId: coordinator, runId: null, kind: 'finding', subject, body: b.text }));
+    { fromId: 'operator', toId: coordinator, runId: null, kind: 'finding', subject, body: b.text }), b.text);
   return { ok: true, mailId: q.mailId, deliveryId: q.deliveryId, to: coordinator };
 }

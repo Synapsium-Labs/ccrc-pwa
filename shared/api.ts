@@ -13201,17 +13201,18 @@ export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
  *  `allow`, `deny`  an approval the held-for coordinator ruled, signed by the server;
  *  `hand-over`  the coordinator released the question or approval itself (`declined`);
  *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
- *               coordinator that the coordinator never answered, whoever acted after).
+ *               coordinator that the coordinator never answered, whoever acted after);
+ *  `big-call`   a big call the coordinator recorded and carried on from (D-8126): routine and block calls are never lines.
  * A row the operator answered while it was still held is not a line, and neither is a row minted released.
  */
-export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse'] as const;
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call'] as const;
 export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 
 /** Which table a digest line came from, and so which id space `id` is in. */
-export type DigestRowKind = 'ask' | 'approval';
+export type DigestRowKind = 'ask' | 'approval' | 'call';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
-const DIGEST_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true };
+const DIGEST_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true, call: true };
 export const DIGEST_ROW_KINDS: readonly DigestRowKind[] = Object.keys(DIGEST_ROW_KIND_MAP) as DigestRowKind[];
 
 /** A digest line on the wire. Every text field is redacted (`redactCommand`) when the digest is built, whatever the
@@ -13244,6 +13245,8 @@ export interface DigestTotals {
   readonly denies: number;
   readonly handOvers: number;
   readonly lapses: number;
+  /** The big calls coordinators made in the window (D-8126); each is a line and counts into `decisions`. */
+  readonly calls: number;
   readonly guardForbidden: number;
 }
 
@@ -13293,8 +13296,9 @@ export const DIGEST_COMMAND_CHARS = 160;
 /** The digest routes' own refusal words, each answered at its one status by `REFUSAL_STATUS` (`shared/refusal.ts`):
  *  `not-coordinator`    the row is not a coordinator's decision (the operator answered it while it was held, or it was
  *                       minted released): there is no coordinator to correct.
- *  `digest-unreadable`  the asks or approvals rows could not be read back. */
-export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable'] as const;
+ *  `digest-unreadable`  the asks or approvals rows could not be read back.
+ *  `unknown-call`       a correction on a `call` row that does not exist (D-8126). */
+export const DIGEST_REFUSALS = ['not-coordinator', 'digest-unreadable', 'unknown-call'] as const;
 export type DigestRefusal = (typeof DIGEST_REFUSALS)[number];
 
 /** The server box's override of the digest hour, under its `~/.ccrc`: one integer, 0 to 23 (UTC). */

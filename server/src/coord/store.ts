@@ -9372,14 +9372,15 @@ export class CoordStore {
 
   /** The correction's mark (spec §10, §11), in ONE transaction with the mail that carries it: `queue` inserts the
    *  system mail (`insertSystemMailTx`, which opens no transaction of its own), then the row is marked `corrected`,
-   *  kept, and counted as a wrong ruling. A throw in either rolls both back, so a marked row always has its mail. */
-  correctWithMail<T>(rowKind: 'ask' | 'approval', id: number, queue: () => T): T {
+   *  kept, and counted as a wrong ruling. A `call` is overturned instead (`overturnCallTx`, with the operator's `note`). A throw in either rolls both back, so a marked row always has its mail. */
+  correctWithMail<T>(rowKind: 'ask' | 'approval' | 'call', id: number, queue: () => T, note = ''): T {
     return tx(this.db, () => {
       const queued = queue();
       // Two literal statements, never a table named by interpolation (`delegation-wave3`'s closed scope census reads
       // every UPDATE's table off its text).
       if (rowKind === 'ask') this.db.prepare('UPDATE asks SET corrected = 1 WHERE id = ?').run(id);
-      else this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
+      else if (rowKind === 'approval') this.db.prepare('UPDATE approvals SET corrected = 1 WHERE id = ?').run(id);
+      else this.overturnCallTx(id, note, Date.now());
       return queued;
     });
   }
@@ -10700,6 +10701,7 @@ export class CoordStore {
   insertCall(program: string, madeBy: string, call: NewCall, build: string | null, now: number): number { return calls.insertCall(this.db, program, madeBy, call, build, now); }
   callsForRun(runId: number): CallRow[] { return calls.callsForRun(this.db, runId); }
   bigCallsFor(program: string | null, limit: number): CallRow[] { return calls.bigCallsFor(this.db, program, limit); }
+  bigCallsIn(fromMs: number, toMs: number): CallRow[] { return calls.bigCallsIn(this.db, fromMs, toMs); }
   callsForOperator(now: number): { open: CallRow[]; cleared: CallRow[] } { return calls.callsForOperator(this.db, now); }
   liveBlocksOf(madeBy: string, now: number): CallRow[] { return calls.liveBlocksOf(this.db, madeBy, now); }
   callById(id: number): CallRow | null { return calls.callById(this.db, id); }

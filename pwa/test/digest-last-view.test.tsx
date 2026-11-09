@@ -17,7 +17,7 @@ const line = (id: number, text: string): DigestLine => ({
 } as DigestLine);
 const digest = (day: string, text: string): DigestAnswer => ({
   v: 1, day, hourUtc: 7, fromMs: Date.parse(`${day}T07:00:00Z`) - 86_400_000, toMs: Date.parse(`${day}T07:00:00Z`),
-  totals: { decisions: 1, answers: 1, allows: 0, denies: 0, handOvers: 0, lapses: 0, guardForbidden: 0 },
+  totals: { decisions: 1, answers: 1, allows: 0, denies: 0, handOvers: 0, lapses: 0, calls: 0, guardForbidden: 0 },
   byCoordinator: [{ coordinator: 'project-a-calm-mesa', decisions: 1 }],
   lines: [line(1, text)], sentAt: Date.parse(`${day}T07:00:30Z`), pushed: true,
 } as DigestAnswer);
