@@ -367,3 +367,11 @@
   .pg-goals .pg-goals-mod { grid-template-columns: minmax(0, 1fr); }
   .pg-goals .pg-goals-mod > :not(.pg-goals-date) { grid-column: 1; }
 }
+
+/* Calls made for you (D-8126): a collapsed group below a programme's rows; Seen is a plain button on each call. */
+.wl-calls { border-top: 1px dashed var(--edge-strong); padding-top: var(--sp-1); min-width: 0; }
+.wl .wl-calls-sum { font-size: var(--fs-xs); color: var(--ink-secondary); cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.wl-calls-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.wl .wl-call { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-meta); min-width: 0; }
+.wl .wl-call-line { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
+.wl .wl-call-seen { width: auto; min-height: 44px; padding: 0 var(--sp-2); font-size: var(--fs-xs); }

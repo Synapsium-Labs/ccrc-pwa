@@ -4,7 +4,7 @@
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { ArchiveAnswer, CallView, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsView, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
@@ -1000,6 +1000,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `ApiError` like every non-2xx, and the item is unchanged. */
     tickItem: (id: number, answer?: string) =>
       postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
+    /** `POST /api/calls/:id/seen` (D-8126): the operator's Seen on a big call; idempotent. A refusal (`not-big`,
+     *  `unknown-call`) rejects with an `ApiError` like every non-2xx. Session-gated when armed. */
+    markCallSeen: (id: number) => postJson<{ readonly ok: true; readonly call: CallView | null }>(`/api/calls/${id}/seen`),
     /** `GET /api/programmes/:slug/goals` (PL4; PL5b): one programme's Goals, the spec it pins, its "In short" and the dated
      *  list of what changed since approval, as the `waiting` frame carries them. The programme view reads it on arrival.
      *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */

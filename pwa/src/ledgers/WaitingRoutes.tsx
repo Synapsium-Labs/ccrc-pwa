@@ -112,7 +112,8 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
     <WaitingScreen view={drawn?.view ?? view} sessions={drawn?.sessions ?? sessions} runs={runs} now={now} unavailable={unavailable}
                    programme={programme} {...notCurrent}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
-                   onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))} />
+                   onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))}
+                   onSeen={(id) => { void api.markCallSeen(id).catch(() => undefined); }} />
   );
 }
 

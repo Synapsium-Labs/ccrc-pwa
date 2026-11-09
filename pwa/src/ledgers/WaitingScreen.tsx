@@ -5,9 +5,9 @@
 // join the same way, from their `limitWait` record, D-8123) and runs, and the page clock. It routes nowhere itself: the
 // shell passes what opening an item or a session does, so this file imports no route (ring L4, no decisions: every
 // grouping, count and label is `ledgerWords.ts`'s).
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { BareRow } from '@ccrc/ui';
-import type { FleetSession, RunSummary } from '../../../shared/api';
+import type { CallView, FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
@@ -21,6 +21,7 @@ import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
 import { RowMain, RowMeta } from './rowParts';
 import { EndRunControls, LiftCapControl, endRunOf, useItemActs, type ItemActs } from './ItemActs';
+import { CALLS_GROUP_WORDS, SEEN_WORD, callLine, callsOf } from './callWords';
 import { programmeSpecHref } from './ledgerLinks';
 import './ledgers.css';
 
@@ -53,6 +54,8 @@ export interface WaitingScreenProps {
   /** Opens an item, naming the list it is opened from (plan PL9): the item's previous and next follow that list. */
   readonly onOpenItem: (id: number, list: ItemList) => void;
   readonly onOpenSession: (id: string) => void;
+  /** The operator's Seen on a big call (D-8126). Absent, the group draws its calls with no Seen control. */
+  readonly onSeen?: (id: number) => void;
 }
 
 /** The rail's key for the group of sessions that are in no programme (a programme slug can never be this). */
@@ -135,13 +138,39 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
   );
 }
 
+/** "Calls made for you (N)": the big calls a coordinator made on the operator's behalf, collapsed, below a programme's rows
+ *  (D-8126). Never part of the blocking count or the summary: a call needs nothing from the operator but a glance. Each
+ *  carries Seen, asked once; the row leaves for the cleared trail on the next frame. Nothing is drawn for none. */
+export function CallsGroup({ calls, now, onSeen }: {
+  calls: readonly CallView[]; now: number; onSeen?: (id: number) => void;
+}): ReactNode {
+  const [asked, setAsked] = useState<ReadonlySet<number>>(new Set());
+  if (calls.length === 0) return null;
+  return (
+    <details className="wl-calls" data-calls={calls.length}>
+      <summary className="wl-calls-sum">{CALLS_GROUP_WORDS(calls.length)}</summary>
+      <ul className="wl-calls-list">
+        {calls.map((c) => (
+          <li key={c.id} className="wl-call" data-call={c.id}>
+            <span className="wl-call-line">{callLine(c, now)}</span>
+            {onSeen !== undefined && (
+              <BareRow className="wl-call-seen" disabled={asked.has(c.id)}
+                       onClick={() => { setAsked((prev) => new Set(prev).add(c.id)); onSeen(c.id); }}>{SEEN_WORD}</BareRow>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, calls = [], onSeen }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
-  rowActs?: RowActs | null;
+  rowActs?: RowActs | null; calls?: readonly CallView[]; onSeen?: (id: number) => void;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -159,6 +188,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
         <SpecLink href={specHref} programme={title} className="wl-gspec" />
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} />
+      <CallsGroup calls={calls} now={now} {...(onSeen === undefined ? {} : { onSeen })} />
     </section>
   );
 }
@@ -166,10 +196,10 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
 /** "Recently cleared": what the coordinator confirmed in the last seven days, each struck through with when. `where` names the
  *  programme beside a row where the list holds several; the list filtered to one programme leaves it out. Nothing is drawn for
  *  none. */
-export function ClearedTrail({ items, where, now }: {
-  items: readonly ItemView[]; where?: (item: ItemView) => string; now: number;
+export function ClearedTrail({ items, where, now, calls = [] }: {
+  items: readonly ItemView[]; where?: (item: ItemView) => string; now: number; calls?: readonly CallView[];
 }): ReactNode {
-  if (items.length === 0) return null;
+  if (items.length === 0 && calls.length === 0) return null;
   return (
     <section className="wl-cleared" aria-label={CLEARED_HEADING}>
       <h3 className="wl-cleared-title">{CLEARED_HEADING}</h3>
@@ -183,6 +213,11 @@ export function ClearedTrail({ items, where, now }: {
             </li>
           );
         })}
+        {calls.map((c) => (
+          <li key={`c${c.id}`} className="wl-cleared-row" data-call={c.id}>
+            <span aria-hidden="true">✓ </span>{callLine(c, now)}
+          </li>
+        ))}
       </ul>
     </section>
   );
@@ -227,6 +262,17 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   // The pills count what is drawn (`shownSummary`, review 1537 F4): under a filter, that filter's share alone.
   const words = summaryWords(shownSummary(shown));
   const empty = groups.length === 0;
+  // Calls never make a group of their own on the rows' account: a programme with calls and no rows draws its calls apart
+  // (and never moves the summary, the rail counts or the "Nothing needs you." line, which count what waits on the operator).
+  const callPrograms = [...new Set((view.calls ?? []).map((c) => c.program))];
+  const callsApart = noProgramme ? [] : callPrograms.filter((p) => !groups.some((g) => g.program === p) && (list.programme === null || list.programme === p));
+  const apartBlock = callsApart.map((p) => (
+    <section key={p} className="wl-group wl-calls-apart" data-program={p} aria-label={programmeTitle(p, heardRuns)}>
+      <div className="wl-ghead"><h2 className="wl-gtitle">{programmeTitle(p, heardRuns)}</h2></div>
+      <CallsGroup calls={callsOf(view, p).open} now={now} {...(props.onSeen === undefined ? {} : { onSeen: props.onSeen })} />
+    </section>
+  ));
+  const clearedCalls = noProgramme ? [] : (view.callsCleared ?? []).filter((c) => list.programme === null || c.program === list.programme);
   return (
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
@@ -263,17 +309,20 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
                              hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs}
+                             calls={g.program === null ? [] : callsOf(view, g.program).open}
+                             {...(props.onSeen === undefined ? {} : { onSeen: props.onSeen })}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
               </div>
             </div>
           </>
         )}
+      {apartBlock}
       {/* The trail follows the filter (PL11, D-7986): the programme's page lost its own trail, so the list filtered to one
           programme holds that programme's, without naming it on every row, and the sessions in no programme have none. */}
       {list.programme !== null
-        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} />
-        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />}
+        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} calls={clearedCalls} now={now} />
+        : <ClearedTrail items={noProgramme ? [] : view.cleared} calls={clearedCalls} now={now} where={(c) => programmeTitle(c.program, heardRuns)} />}
       {sheets}
     </div>
   );

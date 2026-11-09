@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { WAITS_ON_WORDS } from '../../shared/ledgers';
+import type { CallView } from '../../shared/api';
+import { WAITS_ON_WORDS, type WaitingView } from '../../shared/ledgers';
 import { fleetHues } from '../src/fleet/programmeBoxes';
 import { WaitingScreen } from '../src/ledgers/WaitingScreen';
 import { fleetSession } from './fleetFixture';
@@ -502,5 +503,58 @@ describe('the controls on /waiting (Task 24)', () => {
   it('a review cap sits under the programme filter it belongs to', () => {
     open({ runs: [cap(12)], programme: 'other', view: waitingView({ items: [itemView({ id: 1, program: 'other' })] }) });
     expect(document.querySelector('[data-run="12"]')).toBeNull();
+  });
+});
+
+describe('calls made for you (D-8126)', () => {
+  const call = (over: Partial<CallView> = {}): CallView => ({
+    id: 1, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big', question: 'Which store?', options: ['sql', 'files'],
+    chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null,
+    overturnedAt: null, overturnNote: null, ...over,
+  });
+  const withItem = (extra: Partial<WaitingView>): WaitingView => waitingView({
+    items: [itemView({ id: 1, program: 'prog-a', title: 'A blocking thing', neededBy: 'blocking' })], ...extra,
+  });
+
+  it('two unseen big calls draw one collapsed group, (2), below the programme rows', () => {
+    open({ view: withItem({ calls: [call({ id: 1 }), call({ id: 2, chosen: 'files' })] }) });
+    const group = screen.getByRole('region', { name: /prog-a/ });
+    const details = group.querySelector('details')!;
+    expect(details.hasAttribute('open')).toBe(false);
+    expect(within(group).getByText('Calls made for you (2)')).toBeTruthy();
+    const list = group.querySelector('.wl-items')!;
+    expect(list.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('calls never count as blocking and never end the "nothing needs you" line', () => {
+    open({ view: waitingView({ calls: [call({ id: 1 })] }) });
+    expect(screen.getByText('Nothing needs you.')).toBeTruthy();
+    expect(screen.getByText('Calls made for you (1)')).toBeTruthy();
+    cleanup();
+    open({ view: withItem({ calls: [call({ id: 1 }), call({ id: 2 })] }) });
+    expect(screen.getByRole('button', { name: /All programmes/ }).textContent).toMatch(/1$/);
+    expect(document.querySelector('.wl-summary')!.textContent).not.toMatch(/call/i);
+  });
+
+  it('Seen posts once per call', () => {
+    const onSeen = vi.fn();
+    open({ view: withItem({ calls: [call({ id: 7 })] }), onSeen });
+    const seen = screen.getByRole('button', { name: 'Seen' });
+    fireEvent.click(seen);
+    fireEvent.click(seen);
+    expect(onSeen).toHaveBeenCalledTimes(1);
+    expect(onSeen).toHaveBeenCalledWith(7);
+  });
+
+  it('a cleared call joins the Recently cleared trail, not the group', () => {
+    open({ view: withItem({ calls: [], callsCleared: [call({ id: 3, chosen: 'files' })] }) });
+    expect(screen.queryByText(/Calls made for you/)).toBeNull();
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText(/Chose: files/)).toBeTruthy();
+  });
+
+  it('draws no group with none, on an older view with no calls fields', () => {
+    open({ view: withItem({}) });
+    expect(screen.queryByText(/Calls made for you/)).toBeNull();
   });
 });
